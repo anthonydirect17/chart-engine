@@ -406,7 +406,9 @@ public static class WindowHarness
             MidSession();
             BackfillWaitsAndRetries();
             GateAfterTimeout();
-            GateLateAtOpen();
+            GateLateAtOpen(Et(2026, 9, 29, 18, 5, 0), true);
+            GateLateAtOpen(Et(2026, 9, 29, 9, 28, 0), false);   // re-review 3: 09:28 is inside the quiet time (from 09:25)
+            WindowLateQuietTimes();
             StuckStrandsNothing();
             WindowCap();
             TimeoutRace();
@@ -774,7 +776,7 @@ public static class WindowHarness
         BarsRequest bf = null;
         Check(cb < 0 && !Books().Contains("\"stuck\":\"window") && WaitFor(() => (bf = Find(m0, r => IsTrades(r) && ByDate(r))) != null, 3000),
             "X1: its late answer is dropped at once (not copied: no callback time), and then the queued backfill goes");
-        Check(!Sent().Any(x => x.Contains("\"type\":\"historyLate\"")), "item 12: the late answer at 11:00 ET (inside 09:30 to 16:00): the page is NOT told to load again");
+        Check(!Sent().Any(x => x.Contains("\"type\":\"historyLate\"")), "item 12: the late answer at 11:00 ET (inside 09:25 to 16:00): the page is NOT told to load again");
         if (bf != null) bf.Answer(Answer(tape, 0, 800), ErrorCode.NoError);
         WaitFor(() => Books().Contains("\"state\":\"done\""), 3000);
         ChartBridgeServer.BackfillOn = false; ChartBridgeServer.WindowTimeoutMs = 120000; ChartBridgeServer.WindowFirstGuess = 200000;
@@ -785,9 +787,15 @@ public static class WindowHarness
     // history; NinjaTrader's late answer frees the gate and the page is told ONCE to load again ("historyLate", its sub); its new
     // load asks through the gate at once (the failure's retry delay does not hold it back) and gets the trades. A second late
     // answer within 5 minutes does not tell the page again.
-    static void GateLateAtOpen()
+    static void WindowLateQuietTimes()
     {
-        DateTime t0 = Et(2026, 9, 29, 18, 5, 0);
+        Func<int, int, int, bool> q = (d, h, mi) => ChartBridgeServer.InWindowLateQuiet(new DateTime(2026, 9, d, h, mi, 0));
+        Check(!q(29, 9, 24) && q(29, 9, 25) && q(29, 9, 28) && q(29, 15, 59) && !q(29, 16, 0) && !q(29, 18, 5) && !q(26, 9, 28),
+              "item 12: no reload message 09:25 to 16:00 ET on a weekday (5 minutes before the open), any time on the weekend or outside");
+    }
+
+    static void GateLateAtOpen(DateTime t0, bool told)
+    {
         List<Trade> tape = Walk(t0, 3000, 82, 100);
         simNow = t0;
         ChartBridgeServer.ResetBooks(ChartBridgeTime.ToUtc(t0).AddMinutes(-10));
@@ -803,10 +811,17 @@ public static class WindowHarness
             BarsRequest w = null;
             WaitFor(() => (w = Find(m0, r => IsTrades(r) && ByCount(r))) != null);
             Live(tape, 0, 300);
-            Check(WaitFor(() => Ready(Sent(), "811"), 3000) && Sent().Any(x => x.Contains("Tick history failed")), "item 12: at 18:05 ET the window is not answered in time: the page goes live without tick history");
+            string at = t0.ToString("HH:mm") + " (NinjaTrader time)";
+            Check(WaitFor(() => Ready(Sent(), "811"), 3000) && Sent().Any(x => x.Contains("Tick history failed")), "item 12: at " + at + " the window is not answered in time: the page goes live without tick history");
             Check(w != null, "item 12: the window request went out (by count)");
             if (w == null) return;
             w.Answer(Answer(tape, 0, 300), ErrorCode.NoError);   // the late answer
+            if (!told)
+            {
+                Thread.Sleep(500);
+                Check(!Sent().Any(x => x.Contains("\"type\":\"historyLate\"")), "item 12: the late answer at " + at + " (09:28 ET, inside 09:25 to 16:00): the page is NOT told to load again");
+                return;
+            }
             Check(WaitFor(() => Sent().Any(x => x.Contains("{\"type\":\"historyLate\",\"root\":\"MNQ\",\"sub\":811}")), 3000) && Sent().Count(x => x.Contains("\"type\":\"historyLate\"")) == 1,
                   "item 12: the late answer frees the gate and the page is told once to load again (historyLate, its sub 811)");
             int m1 = MadeCount();

@@ -4052,7 +4052,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         // open) is told ONCE to load again ("historyLate", as 0.6.8's minute history) when that late answer frees the gate. The new
         // load asks through the gate as every load does (the failure's retry delay does not hold it back). Never 09:30 to 16:00 New
         // York time on a weekday (no new tick request in trading hours from this); at most once a page and instrument in
-        // WindowLateGapMs; a load no longer the page's is skipped.
+        // WindowLateGapMs; a load no longer the page's is skipped. The quiet time starts at 09:25 (5 minutes before the open), so a new ask
+        // can never land just after 09:30.
         public static int WindowLateGapMs = 300000;
         private static readonly List<Load> WindowLateLoads = new List<Load>();
         private static readonly Dictionary<string, double> WindowLateAt = new Dictionary<string, double>();
@@ -4065,7 +4066,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             if (et.DayOfWeek == DayOfWeek.Saturday || et.DayOfWeek == DayOfWeek.Sunday) return false;
             TimeSpan tod = et.TimeOfDay;
-            return tod >= new TimeSpan(9, 30, 0) && tod < new TimeSpan(16, 0, 0);
+            return tod >= new TimeSpan(9, 25, 0) && tod < new TimeSpan(16, 0, 0);   // re-review 3: from 09:25, so no ask lands just after 09:30
         }
         private static void WindowLateRetry()
         {
@@ -4075,7 +4076,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             DateTime et = TimeZoneInfo.ConvertTimeFromUtc(ChartBridgeTime.ToUtc(NowNt()), ChartBridgeTime.Eastern);
             if (InWindowLateQuiet(et))
             {
-                foreach (string root in loads.Select(x => x.Root).Distinct()) HistoryNote(root, "the late tick answer freed the gate inside 09:30 to 16:00 ET: tick charts are not told to load again (they load again on a reload)");
+                foreach (string root in loads.Select(x => x.Root).Distinct()) HistoryNote(root, "the late tick answer freed the gate inside 09:25 to 16:00 ET: tick charts are not told to load again (they load again on a reload)");
                 return;
             }
             double now = ChartBridgeTime.NowUtcMs(), was;
