@@ -54,7 +54,8 @@ not list is refused and the page shows the refusal once.
   The Desk's reason first (`desk_reason`), as a malformed one already was; `/diag` counts them and names the file, and the Account
   page reads `/diag` each minute and says how many and where. The keeping runs before the batch leaves the queue and never throws
   out of the send: a failure in it is logged and counted in `/diag` (`desk.keepRejectedFailed`, `orderRecord.keepRejectedFailed`),
-  and the batch The Desk took is never sent again. `test/desk-send.test.js`, `nt8/check/RecordHarness.cs`.
+  and the batch The Desk took is never sent again. A reason with an escape the keeping cannot undo is kept as The Desk sent it.
+  `test/desk-send.test.js`, `nt8/check/RecordHarness.cs`.
 - **A group's trade tags go only to the members that trade** (C-D, `live/workspace.js` `groupTagMembers`): never a benched member,
   never a copier follower (on or off). `test/group-tags.test.js`.
 - **The Account page says when this PC sends no fills to The Desk** (C-C): `postFills` is off by default in `config.txt` (the default

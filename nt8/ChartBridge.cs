@@ -2153,8 +2153,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         // The Desk answers 200 with a "rejected" list for fills it could not store: say so once per answer. 0.6.10 (Anthony 2026-10-30,
         // C-B): each rejected fill is also appended to rejected_fills.jsonl with The Desk's reason, as the 400/422 path keeps a bad one, so
         // none is dropped unseen; /diag desk.rejectedByDesk counts them and desk.rejectedFile names the file.
-        // 0.6.10 (review): the keeping runs before Remove(batch), so it must never throw: an exception in it (The Desk's answer, the
-        // file) would land in the send's catch and the batch The Desk already took would be sent again. Logged once per answer and
+        // 0.6.10 (review): the keeping runs before Remove(batch), so it must never throw: an exception in it (The Desk's answer it
+        // cannot read, the file not written; a reason with an odd escape is kept as sent, ReasonText) would land in the send's catch and the batch The Desk already took would be sent again. Logged once per answer and
         // counted in /diag (desk.keepRejectedFailed); the batch still leaves the queue. True when it ran through.
         internal static bool NoteRejectedSafe(string text, string[] batch)
         {
@@ -2194,13 +2194,20 @@ namespace NinjaTrader.NinjaScript.AddOns
                 string sent = batch[i] ?? "";
                 if (!sent.StartsWith("{")) continue;
                 Match why = ReasonRx.Match(item.Value);
-                string reason = why.Success ? Regex.Unescape(why.Groups[1].Value) : "no reason given";
+                string reason = why.Success ? ReasonText(why.Groups[1].Value) : "no reason given";
                 lines.Add("{\"desk_reason\":" + CbJson.Str(reason) + (sent.Length > 2 ? "," + sent.Substring(1) : "}"));
             }
             if (lines.Count == 0) return 0;
-            try { File.AppendAllLines(file, lines); }
-            catch (Exception ex) { ChartBridgeServer.Log("could not keep the rejected items in " + Path.GetFileName(file) + ": " + ex.Message); return 0; }
+            File.AppendAllLines(file, lines);   // 0.6.10 (review): a failed write goes to NoteRejectedSafe (logged, counted in keepRejectedFailed)
             return lines.Count;
+        }
+
+        // 0.6.10 (review): The Desk's reason as text: JSON's escapes undone; one Regex.Unescape will not read (\q and the like) keeps the raw
+        // text as The Desk sent it, so the rejected item is still kept
+        internal static string ReasonText(string raw)
+        {
+            try { return Regex.Unescape(raw); }
+            catch (ArgumentException) { return raw; }
         }
     }
 

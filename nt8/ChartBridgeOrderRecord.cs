@@ -602,8 +602,8 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         // 0.6.10 (Anthony 2026-10-30, C-B): each order event The Desk rejected inside its 200 is appended to rejected_orders.jsonl with
         // The Desk's reason (as the 400/413/422 path sets one aside), never dropped unseen.
-        // 0.6.10 (review): the keeping runs before Remove(batch), so it must never throw: an exception in it (The Desk's answer, the
-        // file) would land in the send's catch and the batch The Desk already took would be sent again. Logged once per answer and
+        // 0.6.10 (review): the keeping runs before Remove(batch), so it must never throw: an exception in it (The Desk's answer it
+        // cannot read, the file not written; a reason with an odd escape is kept as sent, ChartBridgeDesk.ReasonText) would land in the send's catch and the batch The Desk already took would be sent again. Logged once per answer and
         // counted in /diag (orderRecord.keepRejectedFailed); the batch still leaves the queue. True when it ran through.
         internal static bool NoteRejectedSafe(string text, string[] batch)
         {

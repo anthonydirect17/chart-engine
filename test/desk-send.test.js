@@ -33,6 +33,10 @@ test('0.6.10 C-B: ChartBridge keeps each item The Desk rejects inside a 200, bef
   const cb = read('nt8/ChartBridge.cs'), rec = read('nt8/ChartBridgeOrderRecord.cs');
   assert.match(cb, /NoteRejectedSafe\(text, batch\);[^\n]*\n\s*Remove\(batch\);/);
   assert.match(rec, /NoteRejectedSafe\(text, batch\);[^\n]*\n\s*Remove\(batch\);/);
+  /* 0.6.10 (review): an odd escape in The Desk's reason keeps the raw text; a file that cannot be written reaches NoteRejectedSafe */
+  assert.match(cb, /string reason = why\.Success \? ReasonText\(why\.Groups\[1\]\.Value\)/);
+  assert.match(cb, /internal static string ReasonText\(string raw\)\s*\{\s*try \{ return Regex\.Unescape\(raw\); \}\s*catch \(ArgumentException\) \{ return raw; \}/);
+  assert.match(cb, /\n\s*File\.AppendAllLines\(file, lines\);/);
   /* 0.6.10 (review): the keeping can never send the accepted batch again: caught, logged, counted in /diag */
   for (const src of [cb, rec]) {
     assert.match(src, /internal static bool NoteRejectedSafe\(string text, string\[\] batch\)\s*\{\s*try \{ NoteRejected\(text, batch\); return true; \}\s*catch \(Exception ex\)\s*\{\s*Interlocked\.Increment\(ref keepRejectedFailed\);/);

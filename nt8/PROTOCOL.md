@@ -1022,7 +1022,8 @@ The Desk answers `200` for but lists in its `rejected` list (`{index, reason, ..
 Desk's words first (`{"desk_reason":"...", ...the fill...}`), before the batch leaves the queue; `/diag` `desk.rejectedByDesk` counts
 them since the start and `desk.rejectedFile` names the file, and the Account page says so (chart 1.40.0). The keeping never stops the
 batch The Desk took from leaving the queue: if it fails (an answer it cannot read, the file), it is logged and counted in
-`desk.keepRejectedFailed`, and the batch is never sent again (the same for the order record, `orderRecord.keepRejectedFailed`). Fills from every watched account are
+`desk.keepRejectedFailed`, and the batch is never sent again (the same for the order record, `orderRecord.keepRejectedFailed`). A
+reason with an escape ChartBridge cannot undo is kept as The Desk sent it (not counted as a failure). Fills from every watched account are
 sent: The Desk's Accounts menu decides which accounts count. ChartBridge sends no commission (NinjaTrader's
 figure is its own commission template, not what was charged).
 0.6.9: a fill of a group entry's order (its entry or a leg) adds `decision_id` ("d" and 12 hex characters) after `order_id` and
