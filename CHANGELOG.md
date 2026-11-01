@@ -1,5 +1,42 @@
 # Changelog
 
+## Unreleased (next chart release and the next ChartBridge build): the bar trail exit option
+
+Anthony's task "Strategy creator: bar trail option" and his decisions of 2026-11-01. Versions are bumped at the release. It needs
+the next ChartBridge build (an F5; an older one refuses `barTrail` as an unknown key, so nothing is sent with a strategy it cannot
+run) and a Desk that takes the `barTrail` key in its strategies document (the Desk of the Sunday 11-01 release refuses it, and the
+Strategies screen says so and keeps the edit). See `nt8/PROTOCOL.md`, "The bar trail".
+
+- **Bar trail in Settings > Order Strategies** (`live/workspace.js`, `live/order-strategies.js`): instead of Trailing (one trail per
+  strategy), the stop behind the lowest low (a long) or highest high (a short) of the last 1 to 50 completed bars, an offset of 0
+  to 100 ticks beyond, optionally only once the open profit reached 0 to 2000 ticks. Bars: Minute bars of any size that divides the
+  hour (1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30, 60) or NinjaTrader's Range bars of 1 to 400 ticks. Tick and volume bars are not
+  offered (Anthony: not now). The Desk's document gains `barTrail {bars, offsetTicks, type, size, startTicks}` (absent without one);
+  ChartBridge gets `barTrail`, `barTrailOffset`, `barTrailType`, `barTrailSize`, `barTrailStart`.
+- **ChartBridge builds the bars itself** from its live trades (New York wall time), moves the stop only at a bar close, never
+  loosens it, never at or through the last trade, under every rule breakeven and trailing follow. Partial bars (after a start or a
+  feed drop) are never used.
+- **Phantom range bars are ignored** (Anthony: the stop is never moved to a price that never traded). The rule: a phantom bar is a
+  range bar no trade was in; ChartBridge builds the bars trade by trade and knows this exactly (the bars one trade makes to fill a
+  jump of more than one range, all but the one holding the trade). They are never counted among the last N bars, and every bar
+  the trail uses counts by the highest and lowest prices that traded in it, not NinjaTrader's drawn edges at exactly the range.
+- **Range bars from the session open, else "not proven yet"**: a range bar counts only once ChartBridge's build is proven
+  NinjaTrader's own (from the session's first trade when ChartBridge saw the session open, or a swing of more than the range each
+  way, the page's `RangeSync`). Until then the stop stays where it is and the ticket says "Bar trail not proven yet: ..." in the
+  warning colour (`managed` gains `barTrail {state, text}`). A feed drop makes them unproven again.
+- **The bar trail ends at the session close** (Anthony: all trades close by the end of the day): at the next session's first trade
+  every bar kind starts over with nothing from the session before, and an entry still open then is no longer moved by the bar trail
+  (the stop stays where it is; the ticket says "Bar trail ended at the session close"). ChartBridge does not flatten an Order
+  Strategy position at the close, as before (its stop and target stay working).
+- **Nothing unsupported fails silently** (the known issue "the 17th kind fails silently"): ChartBridge builds at most 16 bar kinds
+  a market at once; a kind no live entry uses now gives its place, and an entry that would need a 17th kind in use at once is
+  refused at placement with the reason (it used to be taken and never moved). The page never reads an unknown bar type as minute
+  bars, names it in the refusal ("tick bars are not supported"), and the Strategies screen names any strategy in The Desk's
+  document it cannot use, and why ("Not shown, this chart cannot use it: ...").
+- Tests: `nt8/check/StrategiesHarness.cs` (minute and range bars, the phantom rule, a jump of several ranges, not proven yet, the
+  session close, the 17th kind), `test/order-strategies.test.js`, `npm run smoke:strategies` (the ticket's bar trail line, screenshot
+  `test/out/strategies-bar-trail-not-proven-1366.png`).
+
 ## ChartBridge 0.6.10 and chart 1.40.0 (2026-11-01): the account lifecycle (Blown and Promoted), ONH and ONL, the NQ tick file
 
 Anthony's decisions of 2026-10-30 (D1 to D5, the contract shared with The Desk): a prop eval is marked **Blown** or **Promoted**

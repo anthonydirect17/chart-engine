@@ -2833,10 +2833,10 @@ namespace NinjaTrader.NinjaScript.AddOns
                 double rx = ChartBridgeTime.NowUtcMs();
                 DateTime utc = ChartBridgeTime.ToUtc(e.Time);
                 string root = RootOf(e.Instrument);
-                ChartBridgeOrders.NoteLast(root, e.Price);
+                double t = ChartBridgeTime.EtSeconds(utc);
+                ChartBridgeOrders.NoteLast(root, e.Price, t);   // next build: the trade's New York time, for the bar trail's bars
                 int method, cat;
                 int side = SideTagger(root).Tag(e.Price, e.Time, e.Bid, e.Ask, out method, out cat);
-                double t = ChartBridgeTime.EtSeconds(utc);
                 string json = "{\"type\":\"tick\",\"root\":" + CbJson.Str(root) +
                     ",\"t\":" + CbJson.Num3(t) +
                     ",\"u\":" + CbJson.Num3(ChartBridgeTime.UtcMs(utc)) +
@@ -4543,6 +4543,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             Interlocked.Exchange(ref feedDown, 1);   // a session that starts before the feed is back is not whole
             if (MarketClosedNow()) { Log("data feed: " + why + " while the market is closed; no trade was missed"); return; }   // S-B
             ChartBridgeTicks.NoteFeedDrop();   // the NQ tick file's next chunk says the capture may have a hole
+            ChartBridgeOrders.BarTrailFeedDropped(root);   // next build: the bar trail's bars start over (a bar across the drop is not whole)
             HtfFeedDropped(root);   // 0.3.7: the forming higher-timeframe bars miss trades: asked again at the next request
             List<RootBook> list; lock (Books) list = Books.Values.Where(b => root == null || b.Root == root).ToList();
             double et = ChartBridgeTime.EtSeconds(DateTime.UtcNow);

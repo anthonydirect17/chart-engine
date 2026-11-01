@@ -143,7 +143,9 @@
 //   simulated bot that never misses a heartbeat; on=0 drops it), /test/bot-signal?id=&action=fired&side=sell&kind=limit&p=
 //   &stop=12&target=24&reason= (a signal, handled by the mode), /test/bot-proposal?... (the same, always proposed: a
 //   proposal on demand), /test/bot-withdraw?id=, /test/account?name=EVAL-A&connection=lost|connected|disabled,
-//   /test/restart?lost=1 (managed strategies resume, or with lost=1 cannot), /test/v3 (the v3 state as JSON).
+//   /test/restart?lost=1 (managed strategies resume, or with lost=1 cannot), /test/v3 (the v3 state as JSON),
+//   /test/bar-trail?state=notProven&text=... (next release: ChartBridge's word on the bar trail for every live managed entry,
+//   as `managed` `barTrail`; state= empty takes it away; the fake builds no bars).
 //   --agents=demo                   (with --v3) ChartBridge 0.5.0's agent channel (contract AGENT_CHANNEL v1, docs/AGENT_TAB.md):
 //                                   config.txt's `agents` list; hello says fake-0.5.4. The made-up accounts SIM-AG1 and SIM-AG2 (Sim, checked)
 //                                   are added for agents to take; every agent starts on None (no account file; ChartBridge 0.5.7) in shadow.
@@ -858,6 +860,7 @@ const server = http.createServer((req, res) => {
     else if (V3 && p === '/test/unserved') { const a = desk.acct.get(q.get('account')); if (a) { a.unserved = (q.get('names') || '').split(',').map(x => x.trim()).filter(Boolean); desk.sendAccounts(); } }   // 0.6.6: contracts it holds that ChartBridge does not serve (made up)
     else if (V3 && p === '/test/nt-room') { const n = q.get('account'); if (q.get('v') === '') desk.gr.ntRoom.delete(n); else desk.gr.ntRoom.set(n, +q.get('v')); desk.groupsChanged(); }   // 0.6.6: NinjaTrader's own figure for an account (made up)
     else if (V3 && p === '/test/restart') desk.simulateRestart(q.get('lost') === '1');
+    else if (V3 && p === '/test/bar-trail') desk.setBarTrailState(q.get('state') || '', q.get('text'));
     else if (V3 && p === '/test/v3') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ accounts: desk.accountsMsg(), copier: desk.copierMsg(), bot: desk.botMsg(), managed: [...desk.managed.values()].map(x => desk.managedMsg(x)),
