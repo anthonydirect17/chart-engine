@@ -146,6 +146,13 @@ const S_KEYS = ['id', 'name', 'stop', 'targets', 'breakeven', 'trail', 'hotkey']
    ChartBridge, never loosened. Optional: a strategy without it has no `barTrail` key at all (never null), so a document
    without bar trails is byte for byte what The Desk took before. Never with `trail` (one trail per strategy). */
 const BAR_TRAIL_MAX = 50, BAR_OFFSET_MAX = 100;
+/* Anthony 2026-11-01 ("It should be able to trail both, or any bar timeframe for that matter"; "Yes, an option at least"): the
+   bar kind, `type` 'minute' (`size` minutes, those that divide the hour) or 'range' (`size` ticks, NinjaTrader's Range bars), both
+   or neither (neither: 1 minute bars, as the first build), and `startTicks` (optional, 0 or absent: at once), the open profit in
+   ticks before it starts. ChartBridge's keys: barTrailType, barTrailSize, barTrailStart. */
+const BAR_TYPES = ['minute', 'range'], BAR_MINUTES = [1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30, 60], BAR_RANGE_MAX = 400, BAR_START_MAX = 2000;
+const barKind = bt => ({ type: bt && bt.type === 'range' ? 'range' : 'minute', size: bt && isInt(bt.size) ? bt.size : 1 });
+const barKindText = bt => { const k = barKind(bt); return k.type === 'range' ? k.size + '-range' : k.size + ' min'; };
 const emptyStrategiesDoc = () => ({ rev: 0, strategies: [] });
 /** A strategy name as The Desk keeps it: runs of spaces as one, trimmed. */
 const strategyName = v => (typeof v === 'string' ? v.replace(/\s+/g, ' ').trim() : '');
@@ -203,9 +210,15 @@ function checkStrategy(s, ctx) {
   }
   if (own(s, 'barTrail')) {
     const bt = s.barTrail;
-    if (!exactKeys(bt, ['bars', 'offsetTicks'])) return bad('barTrail', 'The bar trail needs bars and offset ticks.');
+    const bk = isObj(bt) ? Object.keys(bt) : [];
+    if (!isObj(bt) || !own(bt, 'bars') || !own(bt, 'offsetTicks') || bk.some(k => !['bars', 'offsetTicks', 'type', 'size', 'startTicks'].includes(k))) return bad('barTrail', 'The bar trail needs bars and offset ticks (and may have a bar type and size, and a start).');
     if (!wholeIn(bt.bars, 1, BAR_TRAIL_MAX)) return bad('barTrail', 'The bar trail must be a whole number of bars from 1 to ' + BAR_TRAIL_MAX + '.');
     if (!wholeIn(bt.offsetTicks, 0, BAR_OFFSET_MAX)) return bad('barOffset', 'The bar trail\'s offset must be a whole number of ticks from 0 to ' + BAR_OFFSET_MAX + '.');
+    if (own(bt, 'type') !== own(bt, 'size')) return bad('barType', 'The bar trail\'s bar type and size go together.');
+    if (own(bt, 'type') && !BAR_TYPES.includes(bt.type)) return bad('barType', 'The bar trail\'s bars are minute or range bars.');
+    if (own(bt, 'type') && bt.type === 'minute' && !BAR_MINUTES.includes(bt.size)) return bad('barSize', 'Minute bars for the bar trail are 1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30 or 60 minutes.');
+    if (own(bt, 'type') && bt.type === 'range' && !wholeIn(bt.size, 1, BAR_RANGE_MAX)) return bad('barSize', 'Range bars for the bar trail are a whole number of ticks from 1 to ' + BAR_RANGE_MAX + '.');
+    if (own(bt, 'startTicks') && !wholeIn(bt.startTicks, 0, BAR_START_MAX)) return bad('barStart', 'The bar trail\'s start must be a whole number of ticks from 0 to ' + BAR_START_MAX + ' (0: at once).');
     if (tr !== null) return bad('barTrail', 'One trail per strategy: Trailing or Bar trail, not both.');
   }
   if (s.hotkey !== null) {
@@ -255,10 +268,14 @@ function toWire(s) {
   s.targets.forEach((t, i) => { w['t' + (i + 1)] = t.ticks; w['t' + (i + 1) + 'Share'] = t.sharePct; });
   if (s.breakeven) { w.beAfter = s.breakeven.afterTicks; w.bePlus = s.breakeven.plusTicks; }
   if (s.trail) { w.trailAfter = s.trail.startTicks; w.trailBy = s.trail.byTicks; w.trailStep = s.trail.stepTicks; }
-  if (s.barTrail) { w.barTrail = s.barTrail.bars; w.barTrailOffset = s.barTrail.offsetTicks; }
+  if (s.barTrail) {
+    const k = barKind(s.barTrail);
+    w.barTrail = s.barTrail.bars; w.barTrailOffset = s.barTrail.offsetTicks; w.barTrailType = k.type; w.barTrailSize = k.size;
+    if (s.barTrail.startTicks > 0) w.barTrailStart = s.barTrail.startTicks;
+  }
   return w;
 }
-const WIRE_KEYS = ['name', 'stop', 'stopLimit', 't1', 't1Share', 't2', 't2Share', 't3', 't3Share', 'beAfter', 'bePlus', 'trailAfter', 'trailBy', 'trailStep', 'barTrail', 'barTrailOffset'];
+const WIRE_KEYS = ['name', 'stop', 'stopLimit', 't1', 't1Share', 't2', 't2Share', 't3', 't3Share', 'beAfter', 'bePlus', 'trailAfter', 'trailBy', 'trailStep', 'barTrail', 'barTrailOffset', 'barTrailType', 'barTrailSize', 'barTrailStart'];
 /**
  * ChartBridge's check of `order.strategy` (PROTOCOL.md "Order Strategies", the key table), the same rules in the same
  * order, so the page refuses what ChartBridge would: null, or the reason. `maxBracketTicks` (0 for none): every distance
@@ -307,6 +324,16 @@ function checkWire(s, maxBracketTicks) {
   if (hn !== ho) return 'barTrail and barTrailOffset go together.';
   if (hn && maxB && s.barTrailOffset > maxB) return 'barTrailOffset must be at most ' + maxB + ' (maxBracketTicks in config.txt).';
   if (hn && tr) return 'barTrail and trailAfter are refused together: one trail per strategy.';
+  /* Anthony 2026-11-01: the bar kind and the start (ChartBridgeStrategies.cs ParseStrategy, the same rules) */
+  const ht = s.barTrailType !== undefined, hz = s.barTrailSize !== undefined, hs = s.barTrailStart !== undefined;
+  if ((ht || hz || hs) && !hn) return 'barTrailType, barTrailSize and barTrailStart need barTrail.';
+  if (ht && !BAR_TYPES.includes(s.barTrailType)) return 'barTrailType must be "minute" or "range".';
+  if (hz && !isInt(s.barTrailSize)) return 'barTrailSize must be a whole number.';
+  if (ht !== hz) return 'barTrailType and barTrailSize go together.';
+  if (ht && s.barTrailType === 'minute' && !BAR_MINUTES.includes(s.barTrailSize)) return 'barTrailSize for minute bars must be 1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30 or 60.';
+  if (ht && s.barTrailType === 'range' && (s.barTrailSize < 1 || s.barTrailSize > BAR_RANGE_MAX)) return 'barTrailSize for range bars must be a whole number of ticks from 1 to ' + BAR_RANGE_MAX + '.';
+  if (hs && (!isInt(s.barTrailStart) || s.barTrailStart < 0 || s.barTrailStart > BAR_START_MAX)) return 'barTrailStart must be a whole number of ticks from 0 to ' + BAR_START_MAX + '.';
+  if (hs && maxB && s.barTrailStart > maxB) return 'barTrailStart must be at most ' + maxB + ' (maxBracketTicks in config.txt).';
   return null;
 }
 /** One line for a strategy: "Stop 16 STL+2 · T1 8 50% · T2 20 50% · BE 8+1 · Trail 12/6/2". */
@@ -316,7 +343,7 @@ function describe(s) {
   s.targets.forEach((t, i) => parts.push('T' + (i + 1) + ' ' + t.ticks + (s.targets.length > 1 ? ' ' + t.sharePct + '%' : '')));
   if (s.breakeven) parts.push('BE ' + s.breakeven.afterTicks + '+' + s.breakeven.plusTicks);
   if (s.trail) parts.push('Trail ' + s.trail.startTicks + '/' + s.trail.byTicks + '/' + s.trail.stepTicks);
-  if (s.barTrail) parts.push('Bar trail ' + s.barTrail.bars + (s.barTrail.bars === 1 ? ' bar' : ' bars') + (s.barTrail.offsetTicks ? ' +' + s.barTrail.offsetTicks : ''));
+  if (s.barTrail) parts.push('Bar trail ' + s.barTrail.bars + ' x ' + barKindText(s.barTrail) + (s.barTrail.offsetTicks ? ' +' + s.barTrail.offsetTicks : '') + (s.barTrail.startTicks > 0 ? ' from ' + s.barTrail.startTicks : ''));
   return parts.join(' · ');
 }
 /** A new strategy's id: letters and digits The Desk accepts, unique among `others`. */
@@ -504,7 +531,7 @@ function createDesk(o) {
 
 return { SWITCHES, cleanSwitches, deskSyncOn, KEY_ACTIONS, KEY_IDS, keyName, MODIFIERS, ENTRY_MODS, isCombo, comboMods, usesMod,
   emptyHotkeysDoc, cleanHotkeysDoc, hotkeyConflict, keyFromEvent, modifierConflict, checkHotkeysDoc,
-  STRATEGY_MAX, NAME_MAX, BAR_TRAIL_MAX, BAR_OFFSET_MAX, emptyStrategiesDoc, strategyName, checkStrategy, checkStrategiesDoc, cleanStrategiesDoc,
+  STRATEGY_MAX, NAME_MAX, BAR_TRAIL_MAX, BAR_OFFSET_MAX, BAR_TYPES, BAR_MINUTES, BAR_RANGE_MAX, BAR_START_MAX, barKind, emptyStrategiesDoc, strategyName, checkStrategy, checkStrategiesDoc, cleanStrategiesDoc,
   toWire, WIRE_KEYS, checkWire, describe, newId, resolveKey, clickFamily, KIND_TEXT, baseKind, entryKind, kindFor,
   managedLine, mergeLine, DESK_KEYS, DESK_DEFAULT, deskUrl, createDesk };
 });

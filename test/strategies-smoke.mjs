@@ -285,7 +285,8 @@ try {
   check(await A.$eval('#sg-barTrail', e => e.disabled) && await A.$eval('#sg-barOffset', e => e.disabled), 'Bar trail off: its boxes are off');
   await fill('name', 'Bars 2');
   await A.check('#sg-btOn'); await wait(100);
-  check(!(await A.$eval('#sg-barTrail', e => e.disabled)) && (await A.inputValue('#sg-barTrail')) === '2' && (await A.inputValue('#sg-barOffset')) === '1', 'Bar trail on: last 2 bars, 1 tick beyond (the defaults)');
+  check(!(await A.$eval('#sg-barTrail', e => e.disabled)) && (await A.inputValue('#sg-barTrail')) === '2' && (await A.inputValue('#sg-barOffset')) === '1' &&
+    (await A.inputValue('#sg-barType')) === 'minute' && (await A.inputValue('#sg-barSize')) === '1' && (await A.inputValue('#sg-barStart')) === '0', 'Bar trail on: last 2 bars of 1 minute, 1 tick beyond, at once (the defaults)');
   await A.check('#sg-trOn'); await wait(100);
   check(/One trail per strategy: Trailing or Bar trail, not both\./.test(await err()), 'one trail per strategy: ' + await err());
   await A.uncheck('#sg-trOn'); await wait(100);
@@ -294,6 +295,16 @@ try {
   await fill('barTrail', 3); await fill('barOffset', 101);
   check(/offset must be a whole number of ticks from 0 to 100/.test(await err()), 'offset 0 to 100');
   await fill('barOffset', 2);
+  /* Anthony 2026-11-01: any bar kind (minute or range) and a start */
+  await fill('barSize', 7);
+  check(/Minute bars for the bar trail are 1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30 or 60 minutes\./.test(await err()) && (await A.getAttribute('#sg-barSize', 'aria-invalid')) === 'true', 'minute sizes that divide the hour, the box marked');
+  await A.selectOption('#sg-barType', 'range'); await wait(100);
+  check((await A.textContent('#sg-barSizeU')) === 'tick range', 'Range: the size reads in ticks');
+  await fill('barSize', 401);
+  check(/Range bars for the bar trail are a whole number of ticks from 1 to 400\./.test(await err()), 'range 1 to 400 ticks');
+  await fill('barSize', 40); await fill('barStart', 2001);
+  check(/start must be a whole number of ticks from 0 to 2000 \(0: at once\)/.test(await err()), 'the start 0 to 2000 ticks');
+  await fill('barStart', 8);
   await A.setViewportSize({ width: 1366, height: 768 }); await wait(300);
   await A.screenshot({ path: path.join(out, 'strategies-bar-trail-1366.png') });
   await A.setViewportSize({ width: 1920, height: 1080 }); await wait(300);
@@ -306,9 +317,14 @@ try {
   await A.click('#sg-save');
   await until(async () => /^Saved Bars 2 in The Desk/.test(await err()), 'Bars 2 saved');
   const bars2 = desk.docs.strategies.strategies.find(x => x.name === 'Bars 2');
-  check(bars2 && JSON.stringify(bars2.barTrail) === '{"bars":3,"offsetTicks":2}' && bars2.trail === null, 'saved with barTrail { bars 3, offsetTicks 2 }: ' + JSON.stringify(bars2));
-  check(bars2 && JSON.stringify(OS.toWire(bars2)) === JSON.stringify({ name: 'Bars 2', stop: 16, stopLimit: null, t1: 32, t1Share: 100, barTrail: 3, barTrailOffset: 2 }), 'to ChartBridge as barTrail 3, barTrailOffset 2');
-  check(/Bar trail 3 bars \+2/.test(await A.$eval('#sg-list [data-sg="' + (bars2 ? bars2.id : '') + '"]', e => e.textContent).catch(() => '')), 'its one line in the list says Bar trail 3 bars +2');
+  check(bars2 && JSON.stringify(bars2.barTrail) === '{"bars":3,"offsetTicks":2,"type":"range","size":40,"startTicks":8}' && bars2.trail === null, 'saved with barTrail { bars 3, offsetTicks 2, range 40, startTicks 8 }: ' + JSON.stringify(bars2));
+  check(bars2 && JSON.stringify(OS.toWire(bars2)) === JSON.stringify({ name: 'Bars 2', stop: 16, stopLimit: null, t1: 32, t1Share: 100, barTrail: 3, barTrailOffset: 2, barTrailType: 'range', barTrailSize: 40, barTrailStart: 8 }), 'to ChartBridge as barTrail 3, barTrailOffset 2, range 40, start 8');
+  const keysWhy = checkKeysV3({ type: 'order', cid: 'x', account: 'Sim101', root: 'MNQ', side: 'buy', kind: 'market', qty: 1, strategy: OS.toWire(bars2) });
+  check(!keysWhy, 'the fake bridge\'s strict keys take it: ' + (keysWhy || 'ok'));
+  check(/Bar trail 3 x 40-range \+2 from 8/.test(await A.$eval('#sg-list [data-sg="' + (bars2 ? bars2.id : '') + '"]', e => e.textContent).catch(() => '')), 'its one line in the list says Bar trail 3 x 40-range +2 from 8');
+  /* reopened: the form shows the kind and the start as saved */
+  await A.click('#sg-list [data-sg="' + bars2.id + '"]'); await wait(200);
+  check((await A.inputValue('#sg-barType')) === 'range' && (await A.inputValue('#sg-barSize')) === '40' && (await A.inputValue('#sg-barStart')) === '8', 'reopened: Range 40, start 8');
   await A.click('#sg-del'); await wait(200); await A.click('#sg-del');
   await until(async () => /^Deleted Bars 2\./.test(await err()), 'Bars 2 deleted');
   await A.click('#sg-list [data-sg="' + runner.id + '"]'); await wait(200);

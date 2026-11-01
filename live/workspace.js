@@ -1743,7 +1743,7 @@ function placeAtPointer(side, family) {
 
 /* ---------------- Settings > Order Strategies...: build and change them (saved in The Desk, shared by every PC) */
 const SG = { open: false, id: '', dirty: false, closeAsked: false, delAsked: '' };
-const SG_FIELDS = ['name', 'stop', 'stopType', 'limitOffset', 't1', 's1', 't2', 's2', 't3', 's3', 'beOn', 'beAfter', 'bePlus', 'trOn', 'trailAfter', 'trailBy', 'trailStep', 'btOn', 'barTrail', 'barOffset', 'hotkey'];
+const SG_FIELDS = ['name', 'stop', 'stopType', 'limitOffset', 't1', 's1', 't2', 's2', 't3', 's3', 'beOn', 'beAfter', 'bePlus', 'trOn', 'trailAfter', 'trailBy', 'trailStep', 'btOn', 'barTrail', 'barType', 'barSize', 'barOffset', 'barStart', 'hotkey'];
 const sgEl = f => $('sg-' + f);
 function openStrategies() {
   closePops();
@@ -1763,7 +1763,9 @@ function openStrategies() {
       <div class="sg-row sg-sum" id="sg-sum"></div>
       <div class="sg-row"><label class="sg-lbl"><input type="checkbox" id="sg-beOn"> Breakeven</label><span class="sg-u">after</span>${num('beAfter', 'Breakeven after, ticks in profit', 2000)}<span class="sg-u">ticks, stop to entry +</span>${num('bePlus', 'Breakeven plus, ticks', 100)}</div>
       <div class="sg-row"><label class="sg-lbl"><input type="checkbox" id="sg-trOn"> Trailing</label><span class="sg-u">after</span>${num('trailAfter', 'Trailing starts after, ticks in profit', 2000)}<span class="sg-u">by</span>${num('trailBy', 'Trails by, ticks', 2000)}<span class="sg-u">steps of</span>${num('trailStep', 'Steps of, ticks', 2000)}</div>
-      <div class="sg-row"><label class="sg-lbl"><input type="checkbox" id="sg-btOn"> Bar trail</label><span class="sg-u">last</span>${num('barTrail', 'Bar trail: the last completed 1 minute bars', 50)}<span class="sg-u">1 min bars,</span>${num('barOffset', 'Bar trail offset, ticks beyond their low (long) or high (short)', 100)}<span class="sg-u">ticks beyond, at each bar close</span></div>
+      <div class="sg-row"><label class="sg-lbl"><input type="checkbox" id="sg-btOn"> Bar trail</label><span class="sg-u">last</span>${num('barTrail', 'Bar trail: how many completed bars', 50)}<span class="sg-u">bars of</span>
+        <select class="ws-sel" id="sg-barType" aria-label="Bar trail: the bar type"><option value="minute">Minute</option><option value="range">Range</option></select>${num('barSize', 'Bar trail: the bar size, minutes or range ticks', 400)}<span class="sg-u" id="sg-barSizeU">min</span></div>
+      <div class="sg-row"><span class="sg-lbl"></span>${num('barOffset', 'Bar trail offset, ticks beyond their low (long) or high (short)', 100)}<span class="sg-u">ticks beyond, from</span>${num('barStart', 'Bar trail starts once the open profit reaches this many ticks (0: at once); it moves only at a bar close', 2000)}<span class="sg-u">ticks profit (0: at once)</span></div>
       <div class="sg-row"><label class="sg-lbl" for="sg-hotkey">Hotkey</label><input class="sg-hk" id="sg-hotkey" type="text" readonly autocomplete="off" spellcheck="false" placeholder="None" aria-describedby="sg-err"><button type="button" class="ws-btn" id="sg-hkClear">Clear</button><span class="sg-u">picks it on the ticket</span></div>
     </div></div>
     <p class="ws-err" id="sg-err" role="alert"></p>
@@ -1823,6 +1825,7 @@ function fillStrategy(x) {
   sgEl('beOn').checked = !!(x && x.breakeven); v('beAfter', x && x.breakeven ? x.breakeven.afterTicks : 8); v('bePlus', x && x.breakeven ? x.breakeven.plusTicks : 1);
   sgEl('trOn').checked = !!(x && x.trail); v('trailAfter', x && x.trail ? x.trail.startTicks : 12); v('trailBy', x && x.trail ? x.trail.byTicks : 8); v('trailStep', x && x.trail ? x.trail.stepTicks : 2);
   sgEl('btOn').checked = !!(x && x.barTrail); v('barTrail', x && x.barTrail ? x.barTrail.bars : 2); v('barOffset', x && x.barTrail ? x.barTrail.offsetTicks : 1);   // next release: the bar trail
+  { const k = OS.barKind(x && x.barTrail); v('barType', k.type); v('barSize', k.size); v('barStart', x && x.barTrail && x.barTrail.startTicks ? x.barTrail.startTicks : 0); }   // Anthony 2026-11-01: any bar kind, a start
   v('hotkey', x && x.hotkey ? x.hotkey : '');
   SG.dirty = false; SG.closeAsked = false; SG.delAsked = '';
   sgErr('', '');
@@ -1847,7 +1850,10 @@ function formStrategy() {
     targets, breakeven: sgEl('beOn').checked ? { afterTicks: n('beAfter'), plusTicks: n('bePlus') } : null,
     trail: sgEl('trOn').checked ? { startTicks: n('trailAfter'), byTicks: n('trailBy'), stepTicks: n('trailStep') } : null,
     hotkey: sgEl('hotkey').value || null };
-  if (sgEl('btOn').checked) s.barTrail = { bars: n('barTrail'), offsetTicks: n('barOffset') };   // next release: only when on (no key otherwise)
+  if (sgEl('btOn').checked) {   // next release: only when on (no key otherwise); the kind always, the start only above 0
+    s.barTrail = { bars: n('barTrail'), offsetTicks: n('barOffset'), type: sgEl('barType').value === 'range' ? 'range' : 'minute', size: n('barSize') };
+    if (n('barStart') !== 0) s.barTrail.startTicks = n('barStart');
+  }
   return { gap, s };
 }
 /* The Desk's rules as typed (the first problem, and its box marked); ChartBridge's own limit (maxBracketTicks) as a warning */
@@ -1857,7 +1863,8 @@ function checkForm() {
   sgEl('limitOffset').disabled = market || deskMode() !== 'desk'; $('sg-loU').classList.toggle('sg-dim', market);
   for (const f of ['beAfter', 'bePlus']) sgEl(f).disabled = !sgEl('beOn').checked || deskMode() !== 'desk';
   for (const f of ['trailAfter', 'trailBy', 'trailStep']) sgEl(f).disabled = !sgEl('trOn').checked || deskMode() !== 'desk';
-  for (const f of ['barTrail', 'barOffset']) sgEl(f).disabled = !sgEl('btOn').checked || deskMode() !== 'desk';
+  for (const f of ['barTrail', 'barType', 'barSize', 'barOffset', 'barStart']) sgEl(f).disabled = !sgEl('btOn').checked || deskMode() !== 'desk';
+  $('sg-barSizeU').textContent = sgEl('barType').value === 'range' ? 'tick range' : 'min';
   const { gap, s } = formStrategy();
   const sum = s.targets.reduce((a, t) => a + (isFinite(t.sharePct) ? t.sharePct : 0), 0);
   $('sg-sum').textContent = 'Shares add up to ' + sum + '%' + (sum === 100 ? '.' : ' (they must add up to 100%).');

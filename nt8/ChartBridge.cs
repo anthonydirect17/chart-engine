@@ -2833,10 +2833,10 @@ namespace NinjaTrader.NinjaScript.AddOns
                 double rx = ChartBridgeTime.NowUtcMs();
                 DateTime utc = ChartBridgeTime.ToUtc(e.Time);
                 string root = RootOf(e.Instrument);
-                ChartBridgeOrders.NoteLast(root, e.Price, e.Time);   // next build: the trade's time, for the bar trail's 1 minute bars
+                double t = ChartBridgeTime.EtSeconds(utc);
+                ChartBridgeOrders.NoteLast(root, e.Price, t);   // next build: the trade's New York time, for the bar trail's bars
                 int method, cat;
                 int side = SideTagger(root).Tag(e.Price, e.Time, e.Bid, e.Ask, out method, out cat);
-                double t = ChartBridgeTime.EtSeconds(utc);
                 string json = "{\"type\":\"tick\",\"root\":" + CbJson.Str(root) +
                     ",\"t\":" + CbJson.Num3(t) +
                     ",\"u\":" + CbJson.Num3(ChartBridgeTime.UtcMs(utc)) +

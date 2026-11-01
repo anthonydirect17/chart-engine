@@ -1238,7 +1238,7 @@ test('0.4.0 B1: switches on by default; the off line gives 0.3.8 (every hook is 
   assert.match(fnBody('PlaceOrderLocked'), /string newKind = OrderTypesOn \? NewKindProblem\(/);
   assert.match(scode, /private static string\[\] WithV3Keys\(string type, string\[\] allowed\)\s*\{\s*if \(type == "order" && OrderTypesOn\)/);
   assert.match(sBodies('MovesNewKind'), /\(OrderTypesOn && IsEntryName\(o\.Name\)\) \|\| \(StrategiesOn && IsStrategyLeg\(o\.Name\)\)/);
-  assert.match(fnBody('NoteLast'), /if \(StrategiesOn\) StrategyTrade\(root, price, time == DateTime\.MinValue \? 0 : time\.Ticks\);/);   // next build: the trade's time (the bar trail)
+  assert.match(fnBody('NoteLast'), /if \(StrategiesOn\) StrategyTrade\(root, price, et\);/);   // next build: the trade's New York time (the bar trail)
   // the v3 message goes to v3 pages only
   // integration: the one v3 handshake and send (lane B2's ChartBridgeV3); no stub left
   assert.match(sBodies('ManagedChanged'), /ChartBridgeV3\.SendToV3Traders\(ManagedJson\(m\)\)/);

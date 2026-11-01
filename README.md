@@ -498,7 +498,9 @@ chart page's order bar did until 1.22.0 (`live/trade.js`), so everything below a
   ticket shows plainly when ChartBridge manages it, resumed it after a restart, or could not (NOT MANAGED: manage the
   stop by hand).
   Next release: a **Bar trail** row (instead of Trailing, one trail per strategy): the stop behind the low (long) or high
-  (short) of the last N completed 1 minute bars, an offset in ticks beyond, moved only at a bar close and never loosened.
+  (short) of the last N completed bars of the kind picked (Minute bars of 1 to 60 minutes, or NinjaTrader's Range bars of 1
+  to 400 ticks), an offset in ticks beyond, optionally only once the open profit reached a number of ticks, moved only at a
+  bar close and never loosened.
   It needs ChartBridge of the next build (an older one refuses it) and a Desk that takes the `barTrail` key (an older one
   refuses the save, said under the form); see `nt8/PROTOCOL.md`, "The bar trail".
 - **Merge** (`merge`): a Merge button on the ticket and a Merge key. ChartBridge joins the stops and targets of the

@@ -89,7 +89,7 @@ export const KEYS = Object.assign({}, V2_KEYS, {
   agentRules: ['type', 'cid', 'agent', 'roots', 'maxQtyNQ', 'maxQtyMNQ', 'maxQtyES', 'maxQtyMES', 'entryFrom', 'entryUntil', 'flatAt', 'maxExpireSec', 'maxTrades', 'maxLosses'],
 });
 Object.assign(KEYS, GROUP_KEYS);   // 0.5.8: groupSave, groupDelete, accountGroup, accountLimits
-export const STRATEGY_KEYS = ['name', 'stop', 'stopLimit', 't1', 't1Share', 't2', 't2Share', 't3', 't3Share', 'beAfter', 'bePlus', 'trailAfter', 'trailBy', 'trailStep', 'barTrail', 'barTrailOffset'];
+export const STRATEGY_KEYS = ['name', 'stop', 'stopLimit', 't1', 't1Share', 't2', 't2Share', 't3', 't3Share', 'beAfter', 'bePlus', 'trailAfter', 'trailBy', 'trailStep', 'barTrail', 'barTrailOffset', 'barTrailType', 'barTrailSize', 'barTrailStart'];
 export const BOOL_KEYS = { memberBench: ['benched'], accountTrade: ['on'], accountArchive: ['confirm'], copierFollower: ['on'], botKill: ['on'], agentKill: ['on'] };
 const OPT_BOOL_KEYS = { agentAccount: ['league'], groupSave: ['noHedge'] };   // 0.6.7: noHedge optional in groupSave (check_groupSave asks it of an older ChartBridge)   // 0.6.2: true or false when present
 export const BOT_KEYS = {
@@ -168,6 +168,16 @@ export function checkStrategy(s, maxB) {
   if (hn !== ho) return 'barTrail and barTrailOffset go together.';
   if (hn && maxB > 0 && s.barTrailOffset > maxB) return 'barTrailOffset must be at most ' + maxB + ' (maxBracketTicks in config.txt).';
   if (hn && tr) return 'barTrail and trailAfter are refused together: one trail per strategy.';
+  // Anthony 2026-11-01: the bar kind and the start (ParseStrategy's rules)
+  const ht = s.barTrailType !== undefined, hz = s.barTrailSize !== undefined, hst = s.barTrailStart !== undefined;
+  if ((ht || hz || hst) && !hn) return 'barTrailType, barTrailSize and barTrailStart need barTrail.';
+  if (ht && s.barTrailType !== 'minute' && s.barTrailType !== 'range') return 'barTrailType must be "minute" or "range".';
+  if (hz && !isInt(s.barTrailSize)) return 'barTrailSize must be a whole number.';
+  if (ht !== hz) return 'barTrailType and barTrailSize go together.';
+  if (ht && s.barTrailType === 'minute' && ![1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30, 60].includes(s.barTrailSize)) return 'barTrailSize for minute bars must be 1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30 or 60.';
+  if (ht && s.barTrailType === 'range' && (s.barTrailSize < 1 || s.barTrailSize > 400)) return 'barTrailSize for range bars must be a whole number of ticks from 1 to 400.';
+  if (hst && (!isInt(s.barTrailStart) || s.barTrailStart < 0 || s.barTrailStart > 2000)) return 'barTrailStart must be a whole number of ticks from 0 to 2000.';
+  if (hst && maxB > 0 && s.barTrailStart > maxB) return 'barTrailStart must be at most ' + maxB + ' (maxBracketTicks in config.txt).';
   return null;
 }
 export const targetsOf = s => [1, 2, 3].filter(i => s['t' + i] !== undefined).map(i => ({ ticks: s['t' + i], share: s['t' + i + 'Share'] }));

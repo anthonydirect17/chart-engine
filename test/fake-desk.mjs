@@ -52,7 +52,12 @@ function check(which, d, oldDesk) {
     if (!exact(s, KEYS) && (oldDesk || !exact(s, KEYS.concat(['barTrail'])))) return 'strategies[' + i + '] has unknown or missing keys';
     if ('barTrail' in s) {
       const b = s.barTrail;
-      if (!exact(b, ['bars', 'offsetTicks']) || !Number.isInteger(b.bars) || b.bars < 1 || b.bars > 50 || !Number.isInteger(b.offsetTicks) || b.offsetTicks < 0 || b.offsetTicks > 100) return 'strategies[' + i + '] barTrail needs bars 1 to 50 and offsetTicks 0 to 100';
+      const bk = b && typeof b === 'object' ? Object.keys(b) : [];
+      if (!b || !('bars' in b) || !('offsetTicks' in b) || bk.some(k => !['bars', 'offsetTicks', 'type', 'size', 'startTicks'].includes(k)) || !Number.isInteger(b.bars) || b.bars < 1 || b.bars > 50 || !Number.isInteger(b.offsetTicks) || b.offsetTicks < 0 || b.offsetTicks > 100) return 'strategies[' + i + '] barTrail needs bars 1 to 50 and offsetTicks 0 to 100';
+      /* Anthony 2026-11-01: type 'minute' (1 to 60, dividing the hour) or 'range' (1 to 400 ticks) with size, both or neither; startTicks 0 to 2000 */
+      if (('type' in b) !== ('size' in b)) return 'strategies[' + i + '] barTrail type and size go together';
+      if ('type' in b && !(b.type === 'minute' && [1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30, 60].includes(b.size)) && !(b.type === 'range' && Number.isInteger(b.size) && b.size >= 1 && b.size <= 400)) return 'strategies[' + i + '] barTrail type and size are minute 1 to 60 or range 1 to 400';
+      if ('startTicks' in b && !(Number.isInteger(b.startTicks) && b.startTicks >= 0 && b.startTicks <= 2000)) return 'strategies[' + i + '] barTrail startTicks must be 0 to 2000';
       if (s.trail !== null) return 'strategies[' + i + '] has trail and barTrail: one trail per strategy';
     }
     if (!exact(s.stop, ['ticks', 'type', 'limitOffsetTicks'])) return 'strategies[' + i + '] stop needs ticks, type and limitOffsetTicks';
