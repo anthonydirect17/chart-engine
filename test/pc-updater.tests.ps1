@@ -1141,6 +1141,35 @@ Test 'the daily time: 17:05 New York is 21:05 UTC in summer and 22:05 UTC in win
   Assert ((ConvertFrom-NewYorkTime '09:30' ([datetime]'2026-12-15')).ToUniversalTime().ToString('HH:mm') -eq '14:30') 'another time'
 }
 
+# Chart 1.41.0 (task #72): the day is New York's own date at that moment, whatever this PC's clock is. Each edge is given
+# as a UTC moment and as the same moment on this PC's clock; both must give New York's date (it failed on a UTC clock from
+# 2026-11-01 00:00 to 04:00 UTC, when this PC's date was 11-01 and New York's still 10-31). The status line (Get-DailyLines)
+# and the daily triggers worked out for that moment must agree: no NO TRIGGER and no DRIFTED.
+Test 'New York''s date, not this PC''s, picks the day: the DST end (2026-11-01) and DST start (2027-03-14) edges, the status line and the triggers agree' {
+  $inv = [Globalization.CultureInfo]::InvariantCulture
+  $edges = @(
+    @{ at = '2026-11-01T02:00:00Z'; nine = '2026-10-31 13:00'; five = '2026-10-31 21:00'; why = 'DST end, New York still 10-31 (EDT)' },
+    @{ at = '2026-11-01T03:59:00Z'; nine = '2026-10-31 13:00'; five = '2026-10-31 21:00'; why = 'DST end, a minute before New York''s midnight' },
+    @{ at = '2026-11-01T04:00:00Z'; nine = '2026-11-01 14:00'; five = '2026-11-01 22:00'; why = 'DST end, New York''s 11-01 (EST that day)' },
+    @{ at = '2026-11-01T21:40:00Z'; nine = '2026-11-01 14:00'; five = '2026-11-01 22:00'; why = 'DST end, later that day' },
+    @{ at = '2027-03-14T04:59:00Z'; nine = '2027-03-13 14:00'; five = '2027-03-13 22:00'; why = 'DST start, New York still 03-13 (EST)' },
+    @{ at = '2027-03-14T05:00:00Z'; nine = '2027-03-14 13:00'; five = '2027-03-14 21:00'; why = 'DST start, New York''s 03-14 (EDT that day)' })
+  foreach ($e in $edges) {
+    $utc = [DateTimeOffset]::Parse($e.at, $inv).UtcDateTime
+    $pc = $utc.ToLocalTime()
+    foreach ($at in @($utc, $pc)) {
+      $n = (ConvertFrom-NewYorkTime '09:00' $at).ToUniversalTime().ToString('yyyy-MM-dd HH:mm', $inv)
+      $f = (ConvertFrom-NewYorkTime '17:00' $at).ToUniversalTime().ToString('yyyy-MM-dd HH:mm', $inv)
+      Assert ($n -eq $e.nine -and $f -eq $e.five) "$($e.why) at $($e.at) ($($at.Kind)): 09:00 and 17:00 New York are $n and $f UTC, wanted $($e.nine) and $($e.five)"
+    }
+    $local = @(Get-DailyLocal @('09:00', '17:00') $pc)
+    $task = [pscustomobject]@{ Triggers = @($local | ForEach-Object { [pscustomobject]@{ CimClass = [pscustomobject]@{ CimClassName = 'MSFT_TaskDailyTrigger' }; StartBoundary = $_.ToString('yyyy-MM-ddTHH:mm:ss', $inv) } }) }
+    $lines = @(Get-DailyLines $task @('09:00', '17:00') $pc)
+    $hm = @($local | ForEach-Object { $_.ToString('HH:mm', $inv) })
+    Assert ($lines.Count -eq 2 -and $lines[0] -like "09:00 New York time, $($hm[0]) on this PC's clock, next run *" -and $lines[1] -like "17:00 New York time, $($hm[1]) on this PC's clock, next run *") "$($e.why): the status line and the triggers agree: $($lines -join ' / ')"
+  }
+}
+
 Test 'the daily times are 09:00 and 17:00 New York by default (Anthony 2026-10-23), an explicit -DailyAt wins, and an old pin reads as Get-PinTimes says' {
   Assert ((@($DailyAt) -join '|') -eq '09:00,17:00' -and $script:DailyAtDefault -eq '09:00,17:00') "default $DailyAt / $($script:DailyAtDefault)"
   $exe = (Get-Process -Id $PID).Path
@@ -1681,7 +1710,7 @@ Test 'the automatic run adds the 17:00 check to its own hidden task (the schedul
   function Test-Elevated { return $script:Elevated }
   $script:Elevated = $false
   $inv = [Globalization.CultureInfo]::InvariantCulture
-  function L([string]$Ny) { return (ConvertFrom-NewYorkTime $Ny).ToString('yyyy-MM-ddTHH:mm:ss', $inv) }
+  function L([string]$Ny, [datetime]$Day = (Get-Date)) { return (ConvertFrom-NewYorkTime $Ny $Day).ToString('yyyy-MM-ddTHH:mm:ss', $inv) }   # the triggers as register makes them on that day
   function New-DailyStub([string]$Sb) { return [pscustomobject]@{ CimClass = [pscustomobject]@{ CimClassName = 'MSFT_TaskDailyTrigger' }; StartBoundary = $Sb; Kind = 'daily' } }
   $logonT = [pscustomobject]@{ CimClass = [pscustomobject]@{ CimClassName = 'MSFT_TaskLogonTrigger' }; StartBoundary = ''; Kind = 'logon' }
   # a task as Get-ScheduledTask returns it: its action, user and triggers (the sign-in one first)
@@ -1776,11 +1805,13 @@ Test 'the automatic run adds the 17:00 check to its own hidden task (the schedul
     # status: both times, their clock time and next run; a missing one and a stray one said
     $now = [datetime]'2026-10-23 12:00'
     $l9 = (ConvertFrom-NewYorkTime '09:00' $now).ToString('HH:mm', $inv); $l17 = (ConvertFrom-NewYorkTime '17:00' $now).ToString('HH:mm', $inv)
-    Set-Stub $wscript $hidden @((New-DailyStub (L '09:00')), (New-DailyStub (L '17:00')))
+    # the triggers as made on that same day (1.41.0, task #72: made today they are an hour off 10-23's on a clock that is not New
+    # York's once New York's DST has ended, and status then rightly says DRIFTED)
+    Set-Stub $wscript $hidden @((New-DailyStub (L '09:00' $now)), (New-DailyStub (L '17:00' $now)))
     $lines = @(Get-DailyLines $script:StubTask @('09:00', '17:00') $now)
     Assert ($lines.Count -eq 2 -and $lines[0] -eq "09:00 New York time, $l9 on this PC's clock, next run $(Get-NextDailyRun $l9 $now)" -and $lines[1] -eq "17:00 New York time, $l17 on this PC's clock, next run $(Get-NextDailyRun $l17 $now)") "lines: $($lines -join ' / ')"
     Assert ((Get-NextDailyRun '09:00' $now) -eq '2026-10-24 09:00' -and (Get-NextDailyRun '17:00' $now) -eq '2026-10-23 17:00') 'the next run: later today, or tomorrow'
-    Set-Stub $wscript $hidden @((New-DailyStub (L '09:00')), (New-DailyStub '2026-01-01T03:00:00'))
+    Set-Stub $wscript $hidden @((New-DailyStub (L '09:00' $now)), (New-DailyStub '2026-01-01T03:00:00'))
     $lines = @(Get-DailyLines $script:StubTask @('09:00', '17:00') $now)
     Assert ($lines.Count -eq 3 -and $lines[1] -match '^17:00 New York time, .*NO TRIGGER at that time yet' -and $lines[2] -match 'a daily trigger at 03:00 .*DRIFTED, the next run moves it') "lines: $($lines -join ' / ')"
     # register: one daily trigger per time
