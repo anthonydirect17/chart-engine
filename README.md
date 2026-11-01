@@ -497,7 +497,7 @@ chart page's order bar did until 1.22.0 (`live/trade.js`), so everything below a
   breakeven and trailing. Build them in **Settings > Order Strategies...**; each can have a key that picks it. The
   ticket shows plainly when ChartBridge manages it, resumed it after a restart, or could not (NOT MANAGED: manage the
   stop by hand).
-  Next release: a **Bar trail** row (instead of Trailing, one trail per strategy): the stop behind the low (long) or high
+  1.41.0: a **Bar trail** row (instead of Trailing, one trail per strategy): the stop behind the low (long) or high
   (short) of the last N completed bars of the kind picked (Minute bars of 1 to 60 minutes, or NinjaTrader's Range bars of 1
   to 400 ticks), an offset in ticks beyond, optionally only once the open profit reached a number of ticks, moved only at a
   bar close and never loosened. Only prices that traded are used: range bars' phantom bars (no trade in them) are left out
@@ -505,7 +505,7 @@ chart page's order bar did until 1.22.0 (`live/trade.js`), so everything below a
   session open); until then the ticket says the bar trail is "not proven yet" and the stop stays where it is. The bar trail
   ends at the session close (the ticket says so). A bar kind ChartBridge cannot build is refused with the reason, and a
   strategy in The Desk this chart cannot use is named on the Strategies screen.
-  It needs ChartBridge of the next build (an older one refuses it) and a Desk that takes the `barTrail` key (an older one
+  It needs ChartBridge 0.6.11 (an older one refuses it) and a Desk that takes the `barTrail` key (an older one
   refuses the save, said under the form); see `nt8/PROTOCOL.md`, "The bar trail".
 - **Merge** (`merge`): a Merge button on the ticket and a Merge key. ChartBridge joins the stops and targets of the
   position into one set at the first leg's prices; the ticket shows the result (merged, restored or failed).
@@ -516,7 +516,7 @@ chart page's order bar did until 1.22.0 (`live/trade.js`), so everything below a
   (where ChartBridge already sends the fills; shown in Settings). When The Desk does not answer, the last copy read is
   used and shown read only; nothing you change is lost silently (it says it was not saved).
 
-## The League tab: a past day (next release)
+## The League tab: a past day (1.41.0)
 
 The League tab (1.35.0, `?tab=league`) shows the shadow league's live day. A link can open a **past session date**, read
 only: `http://localhost:8765/?tab=league&day=YYYY-MM-DD` (the same on `/live/`). This is the format The Desk's Agent Stats

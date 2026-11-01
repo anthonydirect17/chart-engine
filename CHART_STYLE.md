@@ -709,7 +709,7 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   after the close. Then one MNQ chart (the chart as everywhere) and a 420 px column: each seat's day (a 3 px left edge in its
   color), the API spend against the caps, the week and month table, the decision log (a refusal in amber). The seat colors are
   used only for the league's letters, legend and marks; no green or red in the view.
-- **A past day in the League view (next release, Anthony's task "League view opens a given past day"):** the page's address
+- **A past day in the League view (1.41.0, Anthony's task "League view opens a given past day"):** the page's address
   `?tab=league&day=YYYY-MM-DD` (The Desk's Agent Stats day rows link to it) opens the view on that session date, read only.
   After the legend: "Past day YYYY-MM-DD · read only" in the same dashed tint box as SHADOW (11 px mono), then a "Back to
   today" button (the top bar's button look). The chart head says whether the chart's history (its 5 days) holds the day ("...

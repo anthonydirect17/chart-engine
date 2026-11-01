@@ -1,4 +1,4 @@
-# ChartBridge protocol (v1 market data and fills, v2 orders, v3 accounts, strategies, copier and bot, 0.5.0 agents, 0.5.1 accounts, 0.5.8 prop groups, 0.6.0 group trading, 0.6.1 a group's Type and default hero, 0.6.3 the audit fixes, 0.6.4 the no-trade-record alarm and Merge on an off follower, 0.6.8 the minute book, 0.6.10 the account lifecycle and the NQ tick file)
+# ChartBridge protocol (v1 market data and fills, v2 orders, v3 accounts, strategies, copier and bot, 0.5.0 agents, 0.5.1 accounts, 0.5.8 prop groups, 0.6.0 group trading, 0.6.1 a group's Type and default hero, 0.6.3 the audit fixes, 0.6.4 the no-trade-record alarm and Merge on an off follower, 0.6.8 the minute book, 0.6.10 the account lifecycle and the NQ tick file, 0.6.11 the bar trail and the narrower 1 second request)
 
 ChartBridge is a NinjaTrader 8 add-on. It serves the live chart page at `http://localhost:8765/` and
 talks to it over one WebSocket at `ws://localhost:8765/ws`. Everything stays on the local machine.
@@ -1110,7 +1110,7 @@ is also in `barsRoots` is sent (`nt8/ChartBridgeBars.cs`).
   `MergePolicy.DoNotMerge`, from 12:00 AM of the session's own date in NinjaTrader's time zone (never before the open) to the
   session's close (never past now). History: until 0.6.10 it asked from 12:00 AM of the open's date; 0.6.10 asked from the open
   itself (18:00 New York), and NinjaTrader still answered with the whole session before as well, since it turns a by-date
-  request's from into 12:00 AM of its date and answers whole trading days. **Next build (narrow request):** the from is 12:00 AM
+  request's from into 12:00 AM of its date and answers whole trading days. **0.6.11 (narrow request):** the from is 12:00 AM
   of the date the session ends on (in Chicago or New York time that is the session's own trading day, which NinjaTrader starts
   at the 18:00 open), so the answer is the session alone. The answer must still reach the open: when its first trade in the
   session is more than 10 minutes after the open (`Cover1sMinutes`), or it has none, nothing of it is sent, one Output line says
@@ -1212,7 +1212,7 @@ at least 16) bounds the `ticks/` folder next to `config.txt`.
   it reads the files again, so a sender of an earlier start still running can never write the same `cut <seq>` with other bytes.
 
   ```json
-  {"v":1,"source":"chartbridge","bridge":"0.6.10","pc":"WORK","root":"NQ","contract":"NQ 12-26","tick":0.25,
+  {"v":1,"source":"chartbridge","bridge":"0.6.11","pc":"WORK","root":"NQ","contract":"NQ 12-26","tick":0.25,
    "session":"2026-10-30","run":"a1b2c3d4e5f6","seq":12,"count":1834,"volume":2301,
    "first":1793397600123,"last":1793397779950,"lost":0,"gaps":0,
    "sides":{"bidAsk":1700,"tickRule":130,"none":4},"cols":["u","p","v","s"],"ticks":[[1793397600123,25000.25,1,1]]}
@@ -1242,7 +1242,7 @@ at least 16) bounds the `ticks/` folder next to `config.txt`.
   until the next start.
 
   ```json
-  {"v":1,"source":"chartbridge","bridge":"0.6.10","pc":"WORK","root":"NQ","contract":"NQ 12-26","tick":0.25,
+  {"v":1,"source":"chartbridge","bridge":"0.6.11","pc":"WORK","root":"NQ","contract":"NQ 12-26","tick":0.25,
    "session":"2026-10-30","set":"0a1b2c3d4e5f","part":1,"parts":48,"setTicks":951234,"setVolume":1203456,
    "first":1793397600001,"last":1793480399990,
    "check":{"status":"filled","liveTicks":950001,"liveVolume":1202001,"histTicks":951234,"histVolume":1203456,
@@ -1964,9 +1964,9 @@ what the open position needs.
 | `t1Share`, `t2Share`, `t3Share` | whole percent, 1 to 100 | one per target given, none otherwise; they add up to exactly 100 |
 | `beAfter`, `bePlus` | whole ticks; `beAfter` 1 or more, `bePlus` 0 or more and below `beAfter` | both or neither: after `beAfter` ticks of profit, the stop goes to entry plus `bePlus` |
 | `trailAfter`, `trailBy`, `trailStep` | whole ticks, each 1 or more | all three or none: once `trailAfter` ticks in profit, the stop trails `trailBy` ticks behind the best price, moving only in steps of `trailStep` ticks or more |
-| `barTrail`, `barTrailOffset` (next build) | `barTrail` whole bars, 1 to 50; `barTrailOffset` whole ticks, 0 to 100 | both or neither, and never with `trailAfter` (one trail per strategy): the **bar trail**, the stop behind the lowest low (a long) or the highest high (a short) of the last `barTrail` completed bars of its kind, `barTrailOffset` ticks beyond it, set only at a bar close (below) |
-| `barTrailType`, `barTrailSize` (next build, Anthony 2026-11-01) | `"minute"` with 1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30 or 60 (minutes), or `"range"` with 1 to 400 (ticks) | both or neither, only with `barTrail`; neither: 1 minute bars (the first build's strategies read the same) |
-| `barTrailStart` (next build, Anthony 2026-11-01) | whole ticks, 0 to 2000 (at most `maxBracketTicks`) | only with `barTrail`; absent or 0: the bar trail works at once; else it starts once the pair's open profit (its best price since the fill, the measure `trailAfter` uses) has reached it at a bar close |
+| `barTrail`, `barTrailOffset` (0.6.11) | `barTrail` whole bars, 1 to 50; `barTrailOffset` whole ticks, 0 to 100 | both or neither, and never with `trailAfter` (one trail per strategy): the **bar trail**, the stop behind the lowest low (a long) or the highest high (a short) of the last `barTrail` completed bars of its kind, `barTrailOffset` ticks beyond it, set only at a bar close (below) |
+| `barTrailType`, `barTrailSize` (0.6.11, Anthony 2026-11-01) | `"minute"` with 1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30 or 60 (minutes), or `"range"` with 1 to 400 (ticks) | both or neither, only with `barTrail`; neither: 1 minute bars (the first build's strategies read the same) |
+| `barTrailStart` (0.6.11, Anthony 2026-11-01) | whole ticks, 0 to 2000 (at most `maxBracketTicks`) | only with `barTrail`; absent or 0: the bar trail works at once; else it starts once the pair's open profit (its best price since the fill, the measure `trailAfter` uses) has reached it at a bar close |
 
 Every distance is at most `maxBracketTicks` when it is set. A strategy is refused on an order that would reduce the
 position (as a bracket). Refusals name the key ("t2Share must be a whole percent from 1 to 100").
@@ -1993,7 +1993,7 @@ loosens), never to a price at or through the last trade (it waits for the next t
 NinjaTrader rejects leaves the stop where it was and raises a `status` `warn`; it is tried once more on the next eligible
 move, and a second rejection halts moves for that stop (fix1).
 
-**The bar trail** (next build, Anthony's task "Strategy creator: bar trail option" and his answers of 2026-11-01: "It should be
+**The bar trail** (0.6.11, Anthony's task "Strategy creator: bar trail option" and his answers of 2026-11-01: "It should be
 able to trail both, or any bar timeframe for that matter", a start "Yes, an option at least", and with the tick trail "No"; then
 his decisions of 2026-11-01: any minute size that divides the hour and NinjaTrader's Range bars, tick and volume bars not now;
 phantom range bars ignored; range bars from the session open, else "not proven yet"; the trail ends at the session close; an
@@ -2085,7 +2085,7 @@ entry left from before it is recovered exactly as before, and one that cannot be
 
 | server to page | fields | when |
 |---|---|---|
-| `managed` | `id` (the entry's order id), `account`, `root`, `side`, `name` (the strategy's), `strategy` (the flat object as sent), `state` (`waiting` entry not filled, `active`, `resumed`, `unmanaged`, `done`), `pairs`: `[{bucket, qty, fill, stopId, stop, targetId, target, be (*bool*, moved to breakeven), trailing (*bool*)}]`, `best` (price or null), `text` (null, or why), and (next build, only with a bar trail) `barTrail` `{state: on|building|notProven|ended|none, text}` (see "The bar trail") | to signed-in v3 pages after `auth` (every live managed entry), on every change |
+| `managed` | `id` (the entry's order id), `account`, `root`, `side`, `name` (the strategy's), `strategy` (the flat object as sent), `state` (`waiting` entry not filled, `active`, `resumed`, `unmanaged`, `done`), `pairs`: `[{bucket, qty, fill, stopId, stop, targetId, target, be (*bool*, moved to breakeven), trailing (*bool*)}]`, `best` (price or null), `text` (null, or why), and (0.6.11, only with a bar trail) `barTrail` `{state: on|building|notProven|ended|none, text}` (see "The bar trail") | to signed-in v3 pages after `auth` (every live managed entry), on every change |
 
 A `plan` on a strategy entry is refused in 0.4.0 (lead's default: cancel and place it again).
 
@@ -4218,10 +4218,10 @@ only, never through the tunnel; CORS for `http://localhost:8765` and `http://127
 | `targets[0..2].ticks`, `.sharePct` | `t1`..`t3`, `t1Share`..`t3Share` |
 | `breakeven.afterTicks`, `.plusTicks` | `beAfter`, `bePlus` (both left out for `null`) |
 | `trail.startTicks`, `.byTicks`, `.stepTicks` | `trailAfter`, `trailBy`, `trailStep` (all left out for `null`) |
-| `barTrail.bars`, `.offsetTicks` (next release; the key is absent without a bar trail, never `null`) | `barTrail`, `barTrailOffset` (both left out when absent) |
+| `barTrail.bars`, `.offsetTicks` (1.41.0; the key is absent without a bar trail, never `null`) | `barTrail`, `barTrailOffset` (both left out when absent) |
 | `barTrail.type`, `.size` (both or neither; neither: minute 1), `.startTicks` (absent or 0: at once) | `barTrailType`, `barTrailSize` (always sent with a bar trail), `barTrailStart` (only above 0) |
 
-**The bar trail in The Desk's document (next release, a Desk change needed):** a strategy may carry one more key,
+**The bar trail in The Desk's document (1.41.0, a Desk change needed):** a strategy may carry one more key,
 `barTrail: {bars, offsetTicks}` (bars 1 to 50, offsetTicks 0 to 100), only when it has a bar trail, and never with a
 `trail` that is not `null`; inside it, optionally, `type` and `size` together (`"minute"` with 1, 2, 3, 4, 5, 6, 10, 12, 15,
 20, 30 or 60, or `"range"` with 1 to 400 ticks; absent: 1 minute bars, so a document of the first bar trail build reads the

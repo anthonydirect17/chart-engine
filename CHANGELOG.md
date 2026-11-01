@@ -1,11 +1,14 @@
 # Changelog
 
-## Unreleased (next chart release and the next ChartBridge build): the bar trail exit option
+## ChartBridge 0.6.11 and chart 1.41.0 (2026-11-01): the bar trail exit option, a past day in the League view, a narrower 1 second request, the updater's DST edge
 
-Anthony's task "Strategy creator: bar trail option" and his decisions of 2026-11-01. Versions are bumped at the release. It needs
-the next ChartBridge build (an F5; an older one refuses `barTrail` as an unknown key, so nothing is sent with a strategy it cannot
-run) and a Desk that takes the `barTrail` key in its strategies document (the Desk of the Sunday 11-01 release refuses it, and the
-Strategies screen says so and keeps the edit). See `nt8/PROTOCOL.md`, "The bar trail".
+Four items. The bar trail is Anthony's task "Strategy creator: bar trail option" and his decisions of 2026-11-01. It needs
+ChartBridge 0.6.11 (an F5; an older one refuses `barTrail` as an unknown key, so nothing is sent with a strategy it cannot run) and
+a Desk that takes the `barTrail` key in its strategies document (the Desk of the Sunday 11-01 release refuses it, and the
+Strategies screen says so and keeps the edit). See `nt8/PROTOCOL.md`, "The bar trail". ChartBridge 0.6.11 is a recompile (F5);
+the page works with ChartBridge 0.6.2 or newer (`minChartBridge` stays 0.6.2), only the bar trail needs 0.6.11.
+
+**1. The bar trail exit option** (ChartBridge 0.6.11 and the page):
 
 - **Bar trail in Settings > Order Strategies** (`live/workspace.js`, `live/order-strategies.js`): instead of Trailing (one trail per
   strategy), the stop behind the lowest low (a long) or highest high (a short) of the last 1 to 50 completed bars, an offset of 0
@@ -36,6 +39,48 @@ Strategies screen says so and keeps the edit). See `nt8/PROTOCOL.md`, "The bar t
 - Tests: `nt8/check/StrategiesHarness.cs` (minute and range bars, the phantom rule, a jump of several ranges, not proven yet, the
   session close, the 17th kind), `test/order-strategies.test.js`, `npm run smoke:strategies` (the ticket's bar trail line, screenshot
   `test/out/strategies-bar-trail-not-proven-1366.png`).
+
+**2. The League view opens a given past day** (page only, Anthony's task "League view opens a given past day"):
+
+- **`?tab=league&day=YYYY-MM-DD`** (`live/league.js`, `live/workspace.js`; the link The Desk's Agent Stats day rows give) opens the
+  League view on that session date, read only, from The Desk's `GET /api/chart-league?date=YYYY-MM-DD`. A reload keeps the day;
+  closing the tab drops it from the address, so the next open is the live day.
+- **The day is checked first:** the form, a real calendar date, not after the league's current session date (New York, from 17:00
+  the next date, a weekend rolls to Monday). A bad one is said plainly in the problem line and the live day shows, and The Desk is
+  not asked for it. The current session's own date is the live view; after 17:00 the session that just closed opens as a past day.
+  A Desk answer with no date is never shown as the past day.
+- **Labelled and honest:** "Past day YYYY-MM-DD · read only" with **Back to today**; the live status (positions, flags, the spend)
+  is today's and not shown for a past day ("Seat (as of now)"); a day with no paper trade and no decision says "No league record
+  for YYYY-MM-DD ... Not enough data to show that day." The chart counts a session as in its history only when it holds a bar of
+  it (18:00 New York of the day before to 17:00) and says when it holds none.
+- **Never on the live charts:** a past day is never drawn as the faint league marks, nor read by the Agents strip.
+- Tests: `test/league.test.js`, `npm run smoke:league`, the fake Desk takes `?date=` (`test/fake-desk.mjs`). README and
+  `CHART_STYLE.md` document the link.
+
+**3. ChartBridge 0.6.11 asks NinjaTrader for a narrower 1 second range** (`nt8/ChartBridgeBars.cs`):
+
+- NinjaTrader turns a by-date request's from into 12:00 AM of its date and answers whole trading days, so 0.6.10's request from
+  the 18:00 open still brought the whole session before. The tick request for the 1 second bars now starts at 12:00 AM of the
+  session's own date in NinjaTrader's time (never before the open): the session alone.
+- **It must still reach the open:** an answer whose first trade in the session is more than 10 minutes after the open
+  (`Cover1sMinutes`), or that has none, is never sent; one Output line says so and the next pass asks that session from the open
+  itself (0.6.10's request). A restart tries the narrow request first again.
+- `/diag` `bars.oneSecond.lastBuild` says which was asked ("the session's own trading day" or "from the open: the narrow request
+  did not reach it"); `lastSent` keeps listing MNQ with NQ ("none yet" until The Desk takes a set). The 1-minute bars are
+  unchanged. Tests: `nt8/check/BarsHarness.cs` (a stand-in NinjaTrader that answers whole trading days, the fallback, MNQ in
+  `lastSent`), `test/nt8-ticks.test.js`.
+
+**4. The PC updater's DST edge** (task #72, `nt8/update-pc.ps1`):
+
+- `ConvertFrom-NewYorkTime` took this PC's calendar date as New York's. On a PC whose clock is not New York time the two differ for
+  a few hours around midnight, and across a DST change (2026-11-01 00:00 to 04:00 UTC: New York still on 10-31, daylight time)
+  the daily checks and the status line were worked out with the other side's offset, an hour off. It now takes New York's own
+  date at that moment (this PC's clock, or a UTC time), so the daily triggers, the automatic run's check of them and `status`
+  agree on every clock. A PC on New York time was never affected.
+- Tests: `test/pc-updater.tests.ps1` pins the DST end (2026-11-01) and DST start (2027-03-14) edges, each as a UTC moment and as
+  the same moment on the PC's clock, and checks the status line and the triggers made for the same moment agree. The status
+  test builds its stand-in triggers for the day it asks status about (made today they are an hour off 2026-10-23's on a clock
+  that is not New York's once New York's DST has ended, and status then rightly says DRIFTED).
 
 ## ChartBridge 0.6.10 and chart 1.40.0 (2026-11-01): the account lifecycle (Blown and Promoted), ONH and ONL, the NQ tick file
 

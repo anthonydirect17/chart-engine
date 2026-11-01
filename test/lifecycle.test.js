@@ -363,17 +363,20 @@ test('0.6.10: the remove-only relief and Hide leaving the group are in the sourc
   assert.match(ag, /if \(why != null && FindAccount\(m\) == null && ChartBridgeOrders\.Enabled && !ChartBridgeOrders\.IsNeverTradable\(m\)\) why = null;/);
   assert.match(a, /ChartBridgeGroups\.HideAndLeave\(/);
   assert.match(a, /notListed/);
-  assert.match(read('nt8/ChartBridge.cs'), /public const string Version = "0\.6\.10";/);
+  assert.match(read('nt8/ChartBridge.cs'), /public const string Version = "0\.6\.1[01]";/);   // 0.6.11: the bar trail and the narrower 1 second request (the account lifecycle unchanged)
   assert.ok(p.includes('### The account lifecycle (0.6.10)'));
   for (const k of ['notListed', 'remove-only', 'HideAndLeave']) assert.ok(p.includes(k), k);
 });
 
-test('1.40.0: versions and the changelog', () => {
-  assert.equal(JSON.parse(read('package.json')).version, '1.40.0');
-  assert.match(read('src/chart-engine.js'), /const VERSION = '1\.40\.0';/);
-  /* the first released heading (an Unreleased entry for the next release may sit above it until that release) */
-  assert.match(read('CHANGELOG.md'), /^# Changelog\n\n(## Unreleased [^\n]*\n(?!## )[\s\S]*?\n)?## ChartBridge 0\.6\.10 and chart 1\.40\.0 \(2026-11-01\)/);
+test('versions and the changelog (1.40.0, now 1.41.0)', () => {
+  assert.equal(JSON.parse(read('package.json')).version, '1.41.0');   // 1.41.0: the bar trail, a past League day, the narrower 1 second request, the updater's DST edge
+  assert.match(read('src/chart-engine.js'), /const VERSION = '1\.41\.0';/);
+  assert.match(read('src/chart-engine.js'), /^\/\*!\n \* chart-engine 1\.41\.0\n/);
+  /* the first released heading (an Unreleased entry for the next release may sit above it until that release), 1.40.0 under it */
+  assert.match(read('CHANGELOG.md'), /^# Changelog\n\n(## Unreleased [^\n]*\n(?!## )[\s\S]*?\n)?## ChartBridge 0\.6\.11 and chart 1\.41\.0 \(2026-11-01\)[^\n]*\n(?!## )[\s\S]*?\n## ChartBridge 0\.6\.10 and chart 1\.40\.0 \(2026-11-01\)/);
+  assert.match(read('nt8/ChartBridge.cs'), /public const string Version = "0\.6\.11";/);
   const compat = JSON.parse(read('live/COMPAT.json'));
-  assert.equal(compat.page, '1.40.0'); assert.equal(compat.minChartBridge, '0.6.2');
+  assert.equal(compat.page, '1.41.0'); assert.equal(compat.minChartBridge, '0.6.2');
+  assert.deepEqual(compat.history.slice(0, 2).map(h => h.page + ' ' + h.minChartBridge), ['1.41.0 0.6.2', '1.40.0 0.6.2']);
   for (const f of ['live/accounts.js', 'live/multi-account.js', 'nt8/PROTOCOL.md', 'CHANGELOG.md', 'test/lifecycle.test.js']) assert.ok(!/[\u2013\u2014]/.test(read(f)), f + ': no en or em dashes');
 });
