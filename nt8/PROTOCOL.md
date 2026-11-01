@@ -1955,6 +1955,9 @@ what the open position needs.
 | `t1Share`, `t2Share`, `t3Share` | whole percent, 1 to 100 | one per target given, none otherwise; they add up to exactly 100 |
 | `beAfter`, `bePlus` | whole ticks; `beAfter` 1 or more, `bePlus` 0 or more and below `beAfter` | both or neither: after `beAfter` ticks of profit, the stop goes to entry plus `bePlus` |
 | `trailAfter`, `trailBy`, `trailStep` | whole ticks, each 1 or more | all three or none: once `trailAfter` ticks in profit, the stop trails `trailBy` ticks behind the best price, moving only in steps of `trailStep` ticks or more |
+| `barTrail`, `barTrailOffset` (next build) | `barTrail` whole bars, 1 to 50; `barTrailOffset` whole ticks, 0 to 100 | both or neither, and never with `trailAfter` (one trail per strategy): the **bar trail**, the stop behind the lowest low (a long) or the highest high (a short) of the last `barTrail` completed bars of its kind, `barTrailOffset` ticks beyond it, set only at a bar close (below) |
+| `barTrailType`, `barTrailSize` (next build, Anthony 2026-11-01) | `"minute"` with 1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30 or 60 (minutes), or `"range"` with 1 to 400 (ticks) | both or neither, only with `barTrail`; neither: 1 minute bars (the first build's strategies read the same) |
+| `barTrailStart` (next build, Anthony 2026-11-01) | whole ticks, 0 to 2000 (at most `maxBracketTicks`) | only with `barTrail`; absent or 0: the bar trail works at once; else it starts once the pair's open profit (its best price since the fill, the measure `trailAfter` uses) has reached it at a bar close |
 
 Every distance is at most `maxBracketTicks` when it is set. A strategy is refused on an order that would reduce the
 position (as a bracket). Refusals name the key ("t2Share must be a whole percent from 1 to 100").
@@ -1980,6 +1983,46 @@ loosens), never to a price at or through the last trade (it waits for the next t
 500 ms (lead's default), always with `change` on the working stop at the broker (a stop-limit keeps its offset). A move
 NinjaTrader rejects leaves the stop where it was and raises a `status` `warn`; it is tried once more on the next eligible
 move, and a second rejection halts moves for that stop (fix1).
+
+**The bar trail** (next build, Anthony's task "Strategy creator: bar trail option" and his answers of 2026-11-01: "It should be
+able to trail both, or any bar timeframe for that matter", a start "Yes, an option at least", and with the tick trail "No"). No
+spec in Drive; the rules below are the conservative reading.
+
+- **The bars.** ChartBridge builds the bars itself from the trades it sees (the same live trades as everything else), per root
+  and bar kind, with each trade's New York wall time (`ChartBridgeTime.EtSeconds`, the chart's convention, so neither daylight
+  saving nor NinjaTrader's own time zone moves an edge). 1 minute bars are built always; any other kind from the first trade
+  after a strategy entry needs it, and kept for the run (at most 16 kinds a root; past that an entry's bar trail never moves).
+- **Minute bars** (`barTrailSize` minutes, sizes that divide the hour, so the clock's edges are the session's 18:00 ET edges as
+  NinjaTrader aligns them): closed at the bar's end, end-inclusive (a trade at 10:05:00 is in the bar ending 10:05, as
+  NinjaTrader and the minute book). A bar closes when the first trade of a later bar arrives (a span with no trade has no bar);
+  a late trade (an earlier bar) is left out.
+- **Range bars** (`barTrailSize` ticks): NinjaTrader 8's Range bar type exactly as `docs/RANGE_BARS.md` sets out from its
+  `@RangeBarsType.cs` (Break at EOD on, Anthony's setting), the rules the chart page's own range bars follow
+  (`live/bar-builder.js`): a trade inside the range (between high less the range and low plus the range) joins the bar; a trade
+  past low plus the range finishes the bar at exactly the range (high and close at low plus the range, even when that price did
+  not trade) and the next bar opens one tick above; while the trade is still more than a range away, **phantom bars** of exactly
+  the range fill the gap, each opening one tick past the one before, and the last holds the trade and is the forming bar (the
+  mirror below). Phantom bars are completed bars, as on NinjaTrader's chart. The first trade of a new session (18:00 ET) opens
+  a new bar at its price with no phantom fill, and the bar before is finished as it is (it can be short of the range). Range
+  bars depend on where the build starts, so a bar counts only once it is proven NinjaTrader's own: from the **sync point**,
+  the session's first trade, or a swing of more than the range each way (a rise of more than the range from the low so far to a
+  high, then a fall of more than the range below that high, or the mirror), the page's `RangeSync` (proven there against full
+  builds). Bars opened at or after the sync trade count; the bar it finishes and every bar before do not.
+- **Partial bars are never used:** the first bar after a start, the bar forming at a feed drop, and the first bar after the
+  feed is back (its span may have begun while the feed was down) are partial; range bars are unproven again after a drop. A
+  feed drop forgets every bar before it and drops a bar level not sent yet, so the trail waits for `barTrail` whole (proven) bars
+  after the drop. The time is New York wall time; at a daylight saving change CME is shut (2 AM on a Sunday).
+- **The level.** At each close of its kind with at least `barTrail` completed bars, each pair's level is the lowest low (a long)
+  or the highest high (a short) of the last `barTrail` bars, `barTrailOffset` ticks beyond, snapped to the tick grid on the
+  loose side; it only ever tightens. With `barTrailStart`, a close sets no level until the pair's open profit (best price since
+  the fill against the fill, in ticks, the `trailAfter` measure) has reached it. The bars may include bars from before the fill.
+- **The move**, by the rules of breakeven and trailing: only when tighter than the stop (never loosens), never at or through the
+  last trade (it waits for the next trade, at the level the close set), at most one move per 500 ms, one move in flight, a
+  rejection as above. With breakeven, the tighter level wins. The tick trail (`trailAfter`) is refused with it.
+- `managed` says `trailing: true` once the stop is at its bar level. A restart forgets the bars (it waits for `barTrail` whole
+  bars again; the stop stays where it is meanwhile). A ChartBridge before this build refuses `barTrail` as an unknown key, and one
+  of the first bar trail build refuses `barTrailType`, `barTrailSize` and `barTrailStart`, so nothing is sent with a strategy it
+  cannot run. Tick and volume bars are not offered (a question for Anthony).
 
 **Saved for a restart**: `managed.txt` next to `config.txt`, one line per managed entry, `<tag>\t<strategy as the flat
 JSON object sent>\t<best price per pair>\t<saved UTC ms>` (and `\tmerged` once a Merge ran on it, fix1), written whole through a temp file off NinjaTrader's thread (at
@@ -4137,6 +4180,17 @@ only, never through the tunnel; CORS for `http://localhost:8765` and `http://127
 | `targets[0..2].ticks`, `.sharePct` | `t1`..`t3`, `t1Share`..`t3Share` |
 | `breakeven.afterTicks`, `.plusTicks` | `beAfter`, `bePlus` (both left out for `null`) |
 | `trail.startTicks`, `.byTicks`, `.stepTicks` | `trailAfter`, `trailBy`, `trailStep` (all left out for `null`) |
+| `barTrail.bars`, `.offsetTicks` (next release; the key is absent without a bar trail, never `null`) | `barTrail`, `barTrailOffset` (both left out when absent) |
+| `barTrail.type`, `.size` (both or neither; neither: minute 1), `.startTicks` (absent or 0: at once) | `barTrailType`, `barTrailSize` (always sent with a bar trail), `barTrailStart` (only above 0) |
+
+**The bar trail in The Desk's document (next release, a Desk change needed):** a strategy may carry one more key,
+`barTrail: {bars, offsetTicks}` (bars 1 to 50, offsetTicks 0 to 100), only when it has a bar trail, and never with a
+`trail` that is not `null`; inside it, optionally, `type` and `size` together (`"minute"` with 1, 2, 3, 4, 5, 6, 10, 12, 15,
+20, 30 or 60, or `"range"` with 1 to 400 ticks; absent: 1 minute bars, so a document of the first bar trail build reads the
+same) and `startTicks` (0 to 2000; absent or 0: at once). The page writes `type` and `size` always and `startTicks` only above 0. A strategy without a bar trail has no `barTrail` key, so a document with none is exactly what
+The Desk took before. The Desk of the Sunday 11-01 release (`thedesk/chart_settings.py`, exact keys) refuses a strategy with
+the key (400, "unknown or missing keys"); the page says so and keeps the edit. The Desk needs to accept the key with these
+rules before Anthony can save a bar trail.
 
 Copilot's one-key accept and reject are not keys in D2's draft hotkeys document yet (an open item for the lead); until
 they are, the page shows Accept and Reject buttons and `botAnswer` is the same either way.

@@ -61,6 +61,8 @@ test('checkWire: the same verdict and the same words as ChartBridge\'s check (te
       const v = pick(nums);
       if (v !== undefined) s[k] = v;
     }
+    if (rnd(5) === 0) { for (const k of ['barTrail', 'barTrailOffset']) { const v = pick(nums); if (v !== undefined) s[k] = v; } }   // next release: the bar trail
+    if (rnd(6) === 0) { const ty = pick(['minute', 'range', 'tick', 5, undefined]); if (ty !== undefined) s.barTrailType = ty; for (const k of ['barTrailSize', 'barTrailStart']) { const v = pick(nums); if (v !== undefined) s[k] = v; } }   // 2026-11-01: kind and start
     if (rnd(4) === 0) { s.t1 = 8; s.t1Share = 50; s.t2 = 16; s.t2Share = 50; delete s.t3; delete s.t3Share; }
     for (const maxB of [0, 300]) {
       const want = V.checkStrategy(s, maxB), got = OS.checkWire(s, maxB);
@@ -507,4 +509,92 @@ test('the workspace loads order-strategies.js before trade.js, and the install l
   const css = read('live/workspace.css'), block = css.slice(css.indexOf('1.16.0 (ChartBridge 0.4.0): Order Strategies'));
   assert.doesNotMatch(block, /transition\s*:|animation\s*:|@keyframes/);
   assert.doesNotMatch(read('live/order-strategies.js'), /requestAnimationFrame|transition|animate\(/);
+});
+
+/* ---------------- next release: the bar trail (Anthony's task "Strategy creator: bar trail option") */
+test('the bar trail: an optional barTrail { bars, offsetTicks }, never null, never with the tick trail; to ChartBridge as barTrail and barTrailOffset', () => {
+  const bt = strat({ trail: null, barTrail: { bars: 3, offsetTicks: 2 } });
+  assert.equal(OS.checkStrategy(bt, {}), null);
+  assert.deepEqual(OS.toWire(bt), { name: 'Scalp 2', stop: 16, stopLimit: 2, t1: 8, t1Share: 50, t2: 20, t2Share: 50, beAfter: 8, bePlus: 1, barTrail: 3, barTrailOffset: 2, barTrailType: 'minute', barTrailSize: 1 },
+    'backward compatible: a bar trail with no kind (the first build\'s document) is 1 minute bars');
+  assert.equal(OS.checkWire(OS.toWire(bt), 0), null);
+  assert.equal(OS.describe(bt), 'Stop 16 STL+2 · T1 8 50% · T2 20 50% · BE 8+1 · Bar trail 3 x 1 min +2');
+  assert.equal(OS.describe(strat({ trail: null, barTrail: { bars: 1, offsetTicks: 0 } })), 'Stop 16 STL+2 · T1 8 50% · T2 20 50% · BE 8+1 · Bar trail 1 x 1 min');
+  assert.ok(!('barTrail' in OS.toWire(SCALP)) && !('barTrailOffset' in OS.toWire(SCALP)), 'a strategy without it sends neither key');
+  const why = (over) => OS.checkStrategy(strat(Object.assign({ trail: null }, over)), {});
+  const needs = 'The bar trail needs bars and offset ticks (and may have a bar type and size, and a start).';
+  assert.deepEqual(why({ barTrail: null }), { field: 'barTrail', text: needs }, 'null is refused: no key means no bar trail');
+  assert.deepEqual(why({ barTrail: { bars: 2 } }), { field: 'barTrail', text: needs });
+  assert.equal(why({ barTrail: { bars: 0, offsetTicks: 1 } }).field, 'barTrail');
+  assert.equal(why({ barTrail: { bars: 51, offsetTicks: 1 } }).text, 'The bar trail must be a whole number of bars from 1 to 50.');
+  assert.equal(why({ barTrail: { bars: 2.5, offsetTicks: 1 } }).field, 'barTrail');
+  assert.deepEqual(why({ barTrail: { bars: 2, offsetTicks: 101 } }), { field: 'barOffset', text: 'The bar trail\'s offset must be a whole number of ticks from 0 to 100.' });
+  assert.equal(why({ barTrail: { bars: 2, offsetTicks: -1 } }).field, 'barOffset');
+  assert.deepEqual(OS.checkStrategy(strat({ barTrail: { bars: 2, offsetTicks: 1 } }), {}), { field: 'barTrail', text: 'One trail per strategy: Trailing or Bar trail, not both.' });
+  assert.match(OS.checkStrategy(strat({ barTrail: { bars: 2, offsetTicks: 1 }, extra: 1 }), {}).text, /needs exactly/);
+  // a document read with one keeps it; a document without any is as before
+  const doc = OS.cleanStrategiesDoc({ rev: 3, strategies: [bt, strat({ id: 'b', name: 'B', hotkey: null })] });
+  assert.equal(doc.strategies.length, 2);
+  assert.equal(OS.checkStrategiesDoc(doc, null), '');
+  // ChartBridge's words: both or neither, never with trailAfter, maxBracketTicks on the offset
+  assert.equal(OS.checkWire({ name: 'S', stop: 8, barTrail: 2 }, 0), 'barTrail and barTrailOffset go together.');
+  assert.equal(OS.checkWire({ name: 'S', stop: 8, barTrail: 2, barTrailOffset: 1, trailAfter: 8, trailBy: 4, trailStep: 1 }, 0), 'barTrail and trailAfter are refused together: one trail per strategy.');
+  assert.equal(OS.checkWire({ name: 'S', stop: 8, barTrail: 2, barTrailOffset: 40 }, 30), 'barTrailOffset must be at most 30 (maxBracketTicks in config.txt).');
+});
+
+test('the bar trail: the C# reads and refuses it with the same rules (ChartBridgeStrategies.cs)', () => {
+  const cs = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'ChartBridgeStrategies.cs'), 'utf8');
+  assert.match(cs, /"trailStep", "barTrail", "barTrailOffset", "barTrailType", "barTrailSize", "barTrailStart" \};/);
+  assert.match(cs, /public const int BarTrailMax = 50, BarTrailOffsetMax = 100,/);
+  assert.match(cs, /barTrail and trailAfter are refused together: one trail per strategy/);
+  assert.match(cs, /if \(s\.BarTrail > 0 && p\.BarLevel > 0 && Tighter\(m\.Buy, p\.BarLevel, stopNow\)/, 'sent by MoveDue, under every rule of a move');
+  const ws = fs.readFileSync(path.join(__dirname, '..', 'live', 'workspace.js'), 'utf8');
+  assert.match(ws, /s\.barTrail = \{ bars: n\('barTrail'\), offsetTicks: n\('barOffset'\), type: sgEl\('barType'\)\.value === 'range' \? 'range' : 'minute', size: n\('barSize'\) \};/);
+  assert.match(ws, /if \(n\('barStart'\) !== 0\) s\.barTrail\.startTicks = n\('barStart'\);/);
+});
+
+/* ---------------- Anthony 2026-11-01: any bar kind (minute or NinjaTrader's range) and an optional start */
+test('the bar trail\'s kind and start: in The Desk\'s document, to ChartBridge, in one line; the same refusals as ChartBridge', async () => {
+  const V = await V3;
+  const bt = (b) => strat({ trail: null, barTrail: b });
+  const r40 = bt({ bars: 3, offsetTicks: 2, type: 'range', size: 40 });
+  assert.equal(OS.checkStrategy(r40, {}), null);
+  assert.equal(OS.describe(r40), 'Stop 16 STL+2 · T1 8 50% · T2 20 50% · BE 8+1 · Bar trail 3 x 40-range +2');
+  assert.deepEqual(OS.toWire(r40), { name: 'Scalp 2', stop: 16, stopLimit: 2, t1: 8, t1Share: 50, t2: 20, t2Share: 50, beAfter: 8, bePlus: 1, barTrail: 3, barTrailOffset: 2, barTrailType: 'range', barTrailSize: 40 });
+  const m5 = bt({ bars: 2, offsetTicks: 0, type: 'minute', size: 5, startTicks: 8 });
+  assert.equal(OS.checkStrategy(m5, {}), null);
+  assert.equal(OS.describe(m5), 'Stop 16 STL+2 · T1 8 50% · T2 20 50% · BE 8+1 · Bar trail 2 x 5 min from 8');
+  assert.equal(OS.toWire(m5).barTrailStart, 8);
+  assert.ok(!('barTrailStart' in OS.toWire(bt({ bars: 2, offsetTicks: 0, type: 'minute', size: 5, startTicks: 0 }))), 'a start of 0 is at once: no key');
+  for (const s of [r40, m5]) { assert.equal(OS.checkWire(OS.toWire(s), 0), null); assert.equal(V.checkStrategy(OS.toWire(s), 0), null, 'the fake bridge takes it'); }
+  const why = b => OS.checkStrategy(bt(b), {});
+  assert.deepEqual(why({ bars: 2, offsetTicks: 1, type: 'range' }), { field: 'barType', text: 'The bar trail\'s bar type and size go together.' });
+  assert.deepEqual(why({ bars: 2, offsetTicks: 1, size: 40 }), { field: 'barType', text: 'The bar trail\'s bar type and size go together.' });
+  assert.deepEqual(why({ bars: 2, offsetTicks: 1, type: 'tick', size: 40 }), { field: 'barType', text: 'The bar trail\'s bars are minute or range bars.' });
+  assert.deepEqual(why({ bars: 2, offsetTicks: 1, type: 'minute', size: 7 }), { field: 'barSize', text: 'Minute bars for the bar trail are 1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30 or 60 minutes.' });
+  assert.deepEqual(why({ bars: 2, offsetTicks: 1, type: 'range', size: 401 }), { field: 'barSize', text: 'Range bars for the bar trail are a whole number of ticks from 1 to 400.' });
+  assert.equal(why({ bars: 2, offsetTicks: 1, type: 'range', size: 0 }).field, 'barSize');
+  assert.deepEqual(why({ bars: 2, offsetTicks: 1, startTicks: 2001 }), { field: 'barStart', text: 'The bar trail\'s start must be a whole number of ticks from 0 to 2000 (0: at once).' });
+  assert.equal(why({ bars: 2, offsetTicks: 1, startTicks: -1 }).field, 'barStart');
+  assert.equal(why({ bars: 2, offsetTicks: 1, extra: 1 }).field, 'barTrail');
+  /* the first build's document (no kind, no start) still loads, and reads as 1 minute bars */
+  const old = OS.cleanStrategiesDoc({ rev: 2, strategies: [bt({ bars: 3, offsetTicks: 2 })] });
+  assert.equal(old.strategies.length, 1);
+  assert.deepEqual(OS.barKind(old.strategies[0].barTrail), { type: 'minute', size: 1 });
+  /* ChartBridge's words for the wire keys */
+  const W = o => OS.checkWire(Object.assign({ name: 'S', stop: 8 }, o), 0);
+  assert.equal(W({ barTrailType: 'range', barTrailSize: 40 }), 'barTrailType, barTrailSize and barTrailStart need barTrail.');
+  assert.equal(W({ barTrail: 2, barTrailOffset: 1, barTrailType: 'hour', barTrailSize: 1 }), 'barTrailType must be "minute" or "range".');
+  assert.equal(W({ barTrail: 2, barTrailOffset: 1, barTrailType: 'range' }), 'barTrailType and barTrailSize go together.');
+  assert.equal(W({ barTrail: 2, barTrailOffset: 1, barTrailType: 'range', barTrailSize: '40' }), 'barTrailSize must be a whole number.');
+  assert.equal(W({ barTrail: 2, barTrailOffset: 1, barTrailType: 'minute', barTrailSize: 7 }), 'barTrailSize for minute bars must be 1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30 or 60.');
+  assert.equal(W({ barTrail: 2, barTrailOffset: 1, barTrailType: 'range', barTrailSize: 401 }), 'barTrailSize for range bars must be a whole number of ticks from 1 to 400.');
+  assert.equal(W({ barTrail: 2, barTrailOffset: 1, barTrailStart: 2001 }), 'barTrailStart must be a whole number of ticks from 0 to 2000.');
+  assert.equal(OS.checkWire({ name: 'S', stop: 8, barTrail: 2, barTrailOffset: 1, barTrailStart: 40 }, 30), 'barTrailStart must be at most 30 (maxBracketTicks in config.txt).');
+  /* the C# has the same keys and limits */
+  const cs = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'ChartBridgeStrategies.cs'), 'utf8');
+  assert.match(cs, /"barTrail", "barTrailOffset", "barTrailType", "barTrailSize", "barTrailStart" \};/);
+  assert.match(cs, /BarRangeMax = 400, BarStartMax = 2000;/);
+  assert.match(cs, /BarMinuteSizes = \{ 1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30, 60 \};/);
+  assert.deepEqual(OS.BAR_MINUTES, [1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30, 60]);
 });
