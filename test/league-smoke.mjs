@@ -15,7 +15,8 @@
 // 1 min; the League chart is NQ 1 min too ("NQ 1 min (league trades MNQ)"), so opening the tab sends no new NQ subscribe and no MNQ
 // minute subscribe (it joins the NQ line's load); the Agents panel's Drone sky reads NQ bars. The sample marks are at the NQ
 // sample's prices (the league's MNQ prices are the same index).
-// Screenshots test/out/league-*.png.
+// Next release (Anthony's task "League view opens a given past day"): ?tab=league&day=YYYY-MM-DD opens that day read only, labelled,
+// with Back to today; a day with no record says so; a bad day is refused and said. Screenshots test/out/league-*.png.
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -23,6 +24,8 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { TEST_PIN, enterPin } from './smoke-pin.mjs';
 import { startDesk } from './fake-desk.mjs';
+import { createRequire } from 'node:module';
+const LC = createRequire(import.meta.url)('../live/league.js');   // LeagueCore in Node (the session of a bar)
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = +(process.env.LEAGUE_SMOKE_PORT || 8815), DP = PORT + 40;
@@ -240,6 +243,70 @@ try {
   await p.waitForSelector('.cb-pin-key', { timeout: 15000 }); await enterPin(p, TEST_PIN);
   await until(() => p.evaluate(() => document.body.classList.contains('lg-on')), '?tab=league opens the League tab', 20000);
   check(true, 'a reload keeps the League tab');
+  /* a past day (?tab=league&day=YYYY-MM-DD, The Desk's Agent Stats links here): read only, labelled, the way back to today, a day
+     with no record said plainly, a bad day refused. The SAMPLE past day's trades sit on the sample bars of the newest earlier date */
+  const sessionNow = await p.evaluate(() => window.LeagueCore.sessionToday());   // review LOW 1: the league's session date
+  const dayOf = t => LC.sessionOfBar(t);   // review LOW 3: a bar's session (18:00 opens the next date's)
+  const olderBars = bars.filter(b => dayOf(b.t) < sessionNow);
+  const pastDate = olderBars.length > 20 ? dayOf(olderBars[olderBars.length - 1].t) : '2026-10-22';
+  const onPast = bars.filter(b => dayOf(b.t) === pastDate);
+  const pt = k => onPast.length > k ? onPast[onPast.length - k] : null;
+  desk.leagueDays = { [pastDate]: { shadow: 'SHADOW: no orders', folder: { set: true, ok: true, problem: null }, date: pastDate,
+    status: desk.league.status, day: { date: pastDate, closed: true, note: null }, league: desk.league.league,
+    trades: pt(20) ? [{ id: 'p-O-1', seat: 'O', side: 'short', contracts: 2, fill_t: pt(20).t * 1000, fill_px: pt(20).c, stop_px: pt(20).c + 12, target_px: pt(20).c - 24, exit_t: pt(8).t * 1000, exit_px: pt(8).c, exit_reason: 'target', r: 2, relation: 'own' }] : [],
+    open: [], decisions: [{ id: 'pd1', seat: 'O', time: '10:20:00', trigger: 'grid', latency_s: 5.5, call_ok: true, refused: null, answer: { action: 'enter', side: 'short', stop_points: 12, target_points: 24, reasoning: 'made up for the past-day smoke' }, contracts: 2 }] } };
+  const asked = () => desk.log.filter(x => x.which === 'chart-league' && x.date).map(x => x.date);
+  await p.goto(`http://localhost:${PORT}/live/?layout=Lg&tab=league&day=${pastDate}`);
+  await p.waitForSelector('.cb-pin-key', { timeout: 15000 }); await enterPin(p, TEST_PIN);
+  await until(() => p.evaluate(d => document.body.classList.contains('lg-on') && window.workspace.league().past === d && window.workspace.league().decisions === 1, pastDate), 'the League view on the past day ' + pastDate, 20000);
+  check(asked().includes(pastDate), 'a past day reads GET /api/chart-league?date=' + pastDate);
+  const ptext = await p.$eval('#lgView', e => e.innerText);
+  check(await p.isVisible('#lgView [data-k="past"]') && (await p.textContent('#lgView [data-k="past"]')) === 'Past day ' + pastDate + ' · read only', 'labelled: Past day ' + pastDate + ' · read only');
+  check(await p.isVisible('#lgView [data-k="today"]'), 'the Back to today button');
+  check(/past day: the live status is not kept per day/.test(ptext) && !/LONG 3 MNQ/.test(ptext) && !/Flag for you/.test(ptext), 'a past day shows no live status (no position, no flag of today)');
+  check(/the live spend is not kept per day here/.test(ptext) && !/\$3\.00 of \$9\.50 today/.test(ptext), 'a past day shows no spend of today');
+  check(/made up for the past-day smoke/.test(ptext) && !/made up: no edge at the level/.test(ptext), 'the decision log is the past day\'s only');
+  check(new URL(p.url()).searchParams.get('day') === pastDate && new URL(p.url()).searchParams.get('tab') === 'league', 'the address keeps ?tab=league&day=' + pastDate);
+  if (pt(20)) {
+    check((await p.evaluate(() => window.workspace.league().marks)) === 2, 'the past day\'s marks for the chart: one fill, one exit (the chart opens at its live edge; the day is to its left)');
+    const cpast = await until(() => p.$eval('#lgView [data-k="cpast"]', e => (!e.hidden && e.textContent ? e.textContent : null)), 'the chart\'s past-day note', 10000);
+    check(cpast === pastDate + ' is in the chart\'s history: drag the chart back to it.', 'the chart says the day is in its history: ' + cpast);
+  } else console.log('  note: the sample bars hold no earlier date; the past-day marks were not checked');
+  check((await p.evaluate(() => window.workspace.leagueGhostTrades())) !== 1, 'the past day is never the faint marks\' day');
+  await p.screenshot({ path: path.join(out, 'league-past-1366.png') });
+  await p.click('#lgView [data-k="today"]');
+  await until(() => p.evaluate(() => window.workspace.league().past === null && window.workspace.league().date === '2026-10-22' && window.workspace.league().trades > 0), 'Back to today: the live day');
+  check(!(await p.isVisible('#lgView [data-k="past"]')) && !(await p.isVisible('#lgView [data-k="today"]')) && !new URL(p.url()).searchParams.has('day') && new URL(p.url()).searchParams.get('tab') === 'league', 'Back to today: the label goes, the address drops the day, the view stays');
+  /* a day with no record: said plainly, never a guess */
+  const emptyDate = pastDate > '2026-10-19' ? '2026-10-19' : '2026-01-05';
+  await p.goto(`http://localhost:${PORT}/live/?layout=Lg&tab=league&day=${emptyDate}`);
+  await p.waitForSelector('.cb-pin-key', { timeout: 15000 }); await enterPin(p, TEST_PIN);
+  const emptyText = await until(() => p.$eval('#lgView [data-k="problem"]', e => (!e.hidden && /No league record/.test(e.textContent) ? e.textContent : null)), 'the empty past day said', 20000);
+  check(emptyText === 'No league record for ' + emptyDate + ': no paper trade and no decision. Not enough data to show that day.', 'a day with no record: ' + emptyText);
+  check((await p.evaluate(() => window.workspace.league().marks)) === 0, 'no marks for it');
+  await p.screenshot({ path: path.join(out, 'league-past-empty-1366.png') });
+  /* closing the view drops the day: the next open is the live day */
+  await p.click('#wsLeagueTab');
+  await until(() => p.evaluate(() => !document.body.classList.contains('lg-on')), 'closed');
+  check(!new URL(p.url()).searchParams.has('day') && !new URL(p.url()).searchParams.has('tab'), 'closed: the address keeps neither tab nor day');
+  await p.click('#wsLeagueTab');
+  await until(() => p.evaluate(() => window.workspace.league().past === null && window.workspace.league().date === '2026-10-22' && window.workspace.league().trades > 0), 'opened again: the live day');
+  /* a bad day: refused, said, the live view */
+  for (const [bad, said] of [['2026-02-30', /2026-02-30, which is not a calendar date\. Showing today\./], ['2099-01-02', /2099-01-02, which is after the current session/], ['yesterday', /not a date \(YYYY-MM-DD\)/]]) {
+    const before = asked().length;
+    await p.goto(`http://localhost:${PORT}/live/?layout=Lg&tab=league&day=${bad}`);
+    await p.waitForSelector('.cb-pin-key', { timeout: 15000 }); await enterPin(p, TEST_PIN);
+    const t = await until(() => p.$eval('#lgView [data-k="problem"]', e => (!e.hidden && e.textContent ? e.textContent : null)), 'the bad day ' + bad + ' said', 20000);
+    await until(() => p.evaluate(() => window.workspace.league().date === '2026-10-22' && window.workspace.league().trades > 0), 'the live day under it', 15000);
+    check(said.test(t || '') && (await p.evaluate(() => window.workspace.league().past)) === null && asked().length === before && !(await p.isVisible('#lgView [data-k="past"]')), 'a bad day (' + bad + ') is refused and said, the live view shows, The Desk is never asked for it: ' + t);
+  }
+  await p.screenshot({ path: path.join(out, 'league-past-bad-1366.png') });
+  /* review LOW 1: the current session's own date (after 17:00 New York the next date, a weekend Monday) is the live view, never refused */
+  await p.goto(`http://localhost:${PORT}/live/?layout=Lg&tab=league&day=${sessionNow}`);
+  await p.waitForSelector('.cb-pin-key', { timeout: 15000 }); await enterPin(p, TEST_PIN);
+  await until(() => p.evaluate(() => document.body.classList.contains('lg-on') && window.workspace.league().date === '2026-10-22' && window.workspace.league().trades > 0), 'the current session\'s date: the live view', 20000);
+  check((await p.evaluate(() => window.workspace.league().past)) === null && (await p.evaluate(() => window.workspace.league().dayProblem)) === '', 'the current session\'s date (' + sessionNow + ') opens the live view, not refused');
+
   /* The Desk without a league folder: said plainly */
   desk.league = { shadow: 'SHADOW: no orders', folder: { set: false, ok: false, problem: null }, trades: [], open: [], decisions: [] };
   await p.evaluate(() => window.workspace.league && 0);

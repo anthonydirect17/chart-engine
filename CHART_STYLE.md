@@ -709,6 +709,17 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   after the close. Then one MNQ chart (the chart as everywhere) and a 420 px column: each seat's day (a 3 px left edge in its
   color), the API spend against the caps, the week and month table, the decision log (a refusal in amber). The seat colors are
   used only for the league's letters, legend and marks; no green or red in the view.
+- **A past day in the League view (next release, Anthony's task "League view opens a given past day"):** the page's address
+  `?tab=league&day=YYYY-MM-DD` (The Desk's Agent Stats day rows link to it) opens the view on that session date, read only.
+  After the legend: "Past day YYYY-MM-DD · read only" in the same dashed tint box as SHADOW (11 px mono), then a "Back to
+  today" button (the top bar's button look). The chart head says whether the chart's history (its 5 days) holds the day ("...
+  is in the chart's history: drag the chart back to it.", or that the history starts after it); the chart itself opens at
+  its live edge as always. Each seat's line says the live status is not kept per day; the spend line says the same; the table
+  head reads "Seat (as of now)". A day with no paper trade and no decision says, in the amber problem line, "No league record
+  for YYYY-MM-DD: no paper trade and no decision. Not enough data to show that day." A day that is not a date, not a calendar
+  date, or after the league's current session date (New York, from 17:00 the next date, a weekend Monday) is said in that line
+  and the live day shows; the current session's own date is the live view. A session the chart's history spans but holds no
+  bar of says "The chart holds no bar of the YYYY-MM-DD session: no marks drawn for it."
 - **The league's marks (1.35.0):** on an overlay canvas over the chart, drawn after each frame the chart draws (the chart's
   own canvas and look untouched): a hollow circle at a paper fill and a hollow diamond at its exit, 8 px, 1.5 px stroke in the
   seat's color with its letter inside (600 10 px mono); the stop as a dashed line (4 3) and the target as a dotted line (1 3) at

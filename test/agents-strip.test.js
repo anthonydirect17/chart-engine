@@ -235,7 +235,7 @@ test('the page: Agents in + Add panel, one a layout, installed, read only, no da
   assert.match(ws, /agents: \(\) => \(agentDesk && agentDesk\.glances \? agentDesk\.glances\(\)/, 'the strip asks for every agent\'s glance at once');
   assert.match(read('live/agent.js'), /glances: \(\) => \{ const f = fillsDay\(\), r = risksDay\(\); return agents\.ids\(\)\.map\(id => glanceOf\(id, f, r\)\)/, 'one read of the day\'s fills for all');
   assert.match(ws, /const LG_TIMEOUT_MS = 10000;/); assert.match(ws, /Promise\.race\(\[limit, /); assert.match(ws, /clearTimeout\(giveUp\); LG\.busy = false;/);
-  assert.match(ws, /if \(!on\) \{ if \(leagueView\.day\(\)\) LG\.day = leagueView\.day\(\); if \(!LG\.busy\) leaguePoll\(\); \}/, 'the League view\'s close guarded by busy');
+  assert.match(ws, /if \(!on\) \{ if \(leagueView\.liveDay\(\)\) LG\.day = leagueView\.liveDay\(\); if \(!LG\.busy\) leaguePoll\(\); \}/, 'the League view\'s close guarded by busy (and never a past day: next release)');
   /* 1.38.0: the Drone sky (live/agents-sky.js): loaded after the cards, installed, read only, its own frame loop and nothing else */
   assert.ok(html.indexOf('<script src="agents-strip.js"></script>') < html.indexOf('<script src="agents-sky.js"></script>') && html.indexOf('<script src="agents-sky.js"></script>') < html.indexOf('<script src="workspace.js"></script>'));
   assert.ok(files.www.some(x => x.from === 'live/agents-sky.js' && x.to === 'agents-sky.js'), 'agents-sky.js installed');

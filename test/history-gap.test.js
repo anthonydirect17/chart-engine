@@ -25,7 +25,7 @@ test('1.38.1: the page says a LOADING that waits, shows no hole notice (Anthony:
 
 test('1.38.1 (Anthony 2026-10-23): the League chart and the Drone sky are NQ 1 min; the seats\' MNQ prices drawn unconverted', () => {
   const lg = read('live/league.js');
-  assert.match(lg, /root: 'NQ', busy: false \}/);
+  assert.match(lg, /root: 'NQ', busy: false[,}]/);
   assert.match(lg, />NQ 1 min \(league trades MNQ\)</);
   assert.match(lg, /view: \{ root: S\.root, tf: 'm1' \}/, 'the League chart keeps the 1 min view: 5 days, no ticks (LivePrefs.daysFor)');
   assert.equal(LP.daysFor('m1'), 5);

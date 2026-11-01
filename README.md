@@ -506,6 +506,25 @@ chart page's order bar did until 1.22.0 (`live/trade.js`), so everything below a
   (where ChartBridge already sends the fills; shown in Settings). When The Desk does not answer, the last copy read is
   used and shown read only; nothing you change is lost silently (it says it was not saved).
 
+## The League tab: a past day (next release)
+
+The League tab (1.35.0, `?tab=league`) shows the shadow league's live day. A link can open a **past session date**, read
+only: `http://localhost:8765/?tab=league&day=YYYY-MM-DD` (the same on `/live/`). This is the format The Desk's Agent Stats
+day rows link to (The Desk's `#/lab/agents/...`; the chart page is ChartBridge's own page, so the link works on the
+trading PC). The page reads `GET /api/chart-league?date=YYYY-MM-DD` from The Desk (which already takes it).
+
+- The day is checked first: `YYYY-MM-DD`, a real calendar date, not after the league's current session date (New York time,
+  from 17:00 the next date, a weekend rolls to Monday). A bad one is said plainly and the live day shows; The Desk is not asked
+  for it. The current session's own date opens the live view; after 17:00 the session that just closed opens as a past day.
+- The chart counts a session as in its history only when it holds a bar of that session (18:00 New York of the day before to
+  17:00 of the day).
+- A past day is labelled "Past day YYYY-MM-DD · read only" with a **Back to today** button; closing the tab drops the day
+  from the address, so the next open is the live day. A reload keeps it.
+- It shows that day's paper trades (on the NQ 1 min chart, when its 5-day history reaches the day: drag back to it) and its
+  decisions. The live status (positions, flags, the spend) is today's, never that day's, so it is not shown for a past day.
+- A day with no paper trade and no decision says "No league record for YYYY-MM-DD ... Not enough data to show that day."
+- A past day is never drawn as the faint league marks on the live charts, nor read by the Agents strip.
+
 ## The Bot tab (1.16.0)
 
 With ChartBridge 0.4.0 (its bot channel is on by default; `bot = off` in `config.txt` turns it off), the workspace has a
