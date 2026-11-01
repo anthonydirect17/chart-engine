@@ -128,6 +128,36 @@ function openEntryFills(fills, posQty) {
   return open;
 }
 
+/**
+ * 1.40.0 (Anthony 2026-10-30): a group's fills as ONE mark per group fill, as a single account's are drawn: at the average fill price
+ * across the members (weighted by contracts), with the contracts summed; `members` lists each account's own fill ({ account, qty,
+ * price }) for the hover. The page's fill messages carry no decision id (ChartBridge 0.6.9 kept every message to the page byte for
+ * byte), so a group fill is the members' fills of the same side whose times are within `windowSec` (2 s) of its first fill. Only the
+ * group's current members count (benched ones too: their past fills belong to the group's trades); an account that has since left the
+ * group is not in the list, so its fills are not drawn on the group's chart (they stay on its own). fills: [{ t (s), price, side, qty,
+ * root, account }]; groupMembers: account names. Sorted by time.
+ */
+function groupFillMarks(fills, groupMembers, windowSec) {
+  const win = isFinite(windowSec) && windowSec >= 0 ? windowSec : 2;
+  const set = new Set((groupMembers || []).filter(m => typeof m === 'string' && m));
+  const list = (fills || []).filter(f => f && set.has(f.account) && (f.side === 'buy' || f.side === 'sell') && +f.qty > 0 && isFinite(f.price) && isFinite(f.t)).slice().sort((a, b) => a.t - b.t);
+  const out = [], open = { buy: null, sell: null };
+  for (const f of list) {
+    let m = open[f.side];
+    if (!m || f.t - m.t > win) { m = { t: f.t, side: f.side, root: f.root, qty: 0, price: 0, cost: 0, account: 'group', members: [] }; open[f.side] = m; out.push(m); }
+    const q = +f.qty;
+    m.qty += q; m.cost += q * f.price; m.price = m.cost / m.qty;
+    m.members.push({ account: f.account, qty: q, price: f.price });
+  }
+  for (const m of out) delete m.cost;
+  return out;
+}
+/** 1.40.0: a group fill's hover: "Group buy 3 @ 25,000.25: SIM-A 2 @ 25,000.00, SIM-B 1 @ 25,000.75" (fmt: the price's format) */
+function groupFillWords(m, fmt) {
+  const p = typeof fmt === 'function' ? fmt : (x => String(x));
+  return 'Group ' + m.side + ' ' + m.qty + ' @ ' + p(m.price) + ': ' + m.members.map(x => x.account + ' ' + x.qty + ' @ ' + p(x.price)).join(', ');
+}
+
 /** Cancel all for an account and root: one cancel per order, and one per OCO pair (the partner goes with it). */
 /* Cancel all while a position is open keeps every order on the closing side (sells while long, buys while
    short): those are the position's stop and target, from the chart or from NinjaTrader. Returns the ids
@@ -477,5 +507,5 @@ function hotkeyAction(keys, combo) {
 }
 
 return { HOTKEY_ACTIONS, hotkeyKeyName, hotkeyCombo, parseHotkey, hotkeyRefused, isChartKey, cleanHotkeys, hotkeyFromEvent, hotkeyAction, flattenAllRoots,
-  MAX_BRACKET_TICKS, NO_CAP, bracketCap, planIdOf, plannedLines, planDrag, BRACKET_RATIOS, BRACKET_PRESET_MAX, BRACKET_PRESET_NAME_MAX, QTY_CHOICES, ratioOf, ratioBracket, bracketPresetName, defaultPresetName, cleanBracketPresets, qtyOptions, breakEvenPrice, breakEvenLegs, breakEvenAllowed, paceChunks, isWorking, bracketAllowed, opensPosition, placeKind, maxQtyFor, checkQty, cleanBracket, defaultAccount, openEntryFills, cancelAllIds, orderEvent, legSummary, protectionLine, repeatGuard };
+  MAX_BRACKET_TICKS, NO_CAP, bracketCap, planIdOf, plannedLines, planDrag, BRACKET_RATIOS, BRACKET_PRESET_MAX, BRACKET_PRESET_NAME_MAX, QTY_CHOICES, ratioOf, ratioBracket, bracketPresetName, defaultPresetName, cleanBracketPresets, qtyOptions, breakEvenPrice, breakEvenLegs, breakEvenAllowed, paceChunks, isWorking, bracketAllowed, opensPosition, placeKind, maxQtyFor, checkQty, cleanBracket, defaultAccount, openEntryFills, groupFillMarks, groupFillWords, cancelAllIds, orderEvent, legSummary, protectionLine, repeatGuard };
 });

@@ -247,7 +247,7 @@ try {
         t.textContent = 'LucidDaily 150K Eval Intraday DLL Off'; const r = t.scrollWidth <= t.clientWidth + 1 ? 'whole' : 'cut'; t.textContent = was; return r; }, AP);
       console.log('  info: "LucidDaily 150K Eval Intraday DLL Off" beside Change at 1366: ' + longW + ' (cut is fine, whole in the tooltip)');
       /* 1.34.0: the row shows the tightest room in whole dollars; the whole text (every room, with cents) first in its tooltip */
-      const roomTips = await p.$$eval(`${AP} .apg-acc .apg-rtext`, els => els.map(e => ({ text: e.textContent, cut: e.scrollWidth > e.clientWidth + 1, first: (e.title || '').split('\n')[0] })));
+      const roomTips = await p.$$eval(`${AP} .apg-acc .apg-rtext`, els => els.map(e => ({ text: e.textContent, cut: e.scrollWidth > e.clientWidth + 1, first: ((e.querySelector('[title]') || {}).title || '').split('\n')[0] })));
       check(roomTips.length > 0 && roomTips.every(x => x.text === '-' || (x.first && /daily|floor|target|DD|DL/.test(x.first) && !x.cut)), 'the Room short and whole on the row, its whole text first in its tooltip: ' + JSON.stringify(roomTips));
       console.log('  info: Room at 1366: ' + colW.room + ' px; cut cells: ' + roomTips.filter(x => x.cut).length + ' of ' + roomTips.length);
       await p.screenshot({ path: path.join(out, 'settings-types-text-1366.png') });
@@ -372,7 +372,7 @@ try {
       /* a static type (SIM-F1: 25K static, drawdown 1,500): account size less the drawdown; My daily none, saying what it replaces */
       await p.fill(`${AP} input[data-act="my-daily"][data-id="SIM-F1"]`, '400'); await p.press(`${AP} input[data-act="my-daily"][data-id="SIM-F1"]`, 'Enter'); await p.click(`${AP} .apg-foot`);
       await until(async () => (await received()).types.accountLimits === 3, 'SIM-F1 My daily 400 by hand');
-      await until(async () => /to floor|daily/.test(await p.$eval(`${AP} .gr-row[data-k="SIM-F1"] .apg-room`, e => e.textContent)), 'SIM-F1\'s own limits back from ChartBridge');
+      await until(async () => /^(DD|D) \$/.test(await p.$eval(`${AP} .gr-row[data-k="SIM-F1"] .apg-room`, e => e.textContent)), 'SIM-F1\'s own limits back from ChartBridge');
       await p.click(`${AP} [data-act="apply-type"][data-id="SIM-F1"]`);
       const t4 = await until(askText, 'the static question');
       check(/to SIM-F1: My floor \$23,500 \(a static drawdown: account size \$25,000 less the drawdown \$1,500\), My daily none \(it has no daily loss limit; it replaces your \$400\)\./.test(t4 || ''), 'static: size less the drawdown; My daily none says what it replaces: ' + t4);

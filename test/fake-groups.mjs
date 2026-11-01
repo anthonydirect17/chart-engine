@@ -254,6 +254,7 @@ export function installGroups(Desk) {
     check_accountGroup(m) {
       if (typeof m.account !== 'string' || !this.acct.has(m.account)) return 'no account ' + m.account;
       if (!('group' in m) || (m.group !== null && typeof m.group !== 'string')) return 'group must be a group id or null (None)';
+      if (m.group !== null && this.acct.get(m.account).unlisted) return 'no account ' + m.account;   // 0.6.10: remove-only for one NinjaTrader does not list
       if (m.highClose !== undefined && m.group === null) return 'highClose goes with joining a group only';
       if (m.highClose !== undefined) { const w = this.groupMoney(m, 'highClose', false); if (w) return w; }
       if (m.group === null && RULE_KEYS.some(k => k in m)) return 'rules go with joining a group only';   // 0.6.5

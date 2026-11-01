@@ -2070,6 +2070,12 @@ public static class AgentHarness
             Restart(); Mode("manrae", "auto");
             P("{\"type\":\"agentAccount\",\"cid\":\"gc\",\"agent\":\"manrae\",\"group\":\"g1\",\"keepMode\":\"auto\"}");
             Check(PageReject().Contains("group Lucid: SIM-C is agent demob's account: each agent has its own") && M.Account == "SIM-E", "0.6.0: a group with another agent's account: refused, nothing changed: " + PageReject());
+            // 0.6.10 (audit 3): a member NinjaTrader does not list (SIM-0, first by name) no longer blocks the group; the claims by name still do
+            WriteGroup("SIM-0", "SIM-A", "SIM-B", "SIM-C");
+            P("{\"type\":\"agentAccount\",\"cid\":\"gc2\",\"agent\":\"manrae\",\"group\":\"g1\",\"keepMode\":\"auto\"}");
+            Check(PageReject().Contains("group Lucid: SIM-C is agent demob's account") && !PageReject().Contains("SIM-0 is not in NinjaTrader") && M.Account == "SIM-E",
+                  "0.6.10: a member not in NinjaTrader does not block; another agent's member still does: " + PageReject());
+            WriteGroup("SIM-A", "SIM-B", "SIM-C");
             Gone(Path.Combine(Dir, "agent-demob-account.txt"));
             Restart(); Mode("manrae", "auto");
             int w0 = Count(agentOut, "welcome"), s0 = Count(agentOut, "accountState");

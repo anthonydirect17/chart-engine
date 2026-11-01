@@ -854,6 +854,7 @@ const server = http.createServer((req, res) => {
     else if (V3 && AGENTS.length && p.startsWith('/test/agent')) return agentControl(p, q, req, res);
     else if (V3 && p === '/test/bot-withdraw') desk.botMessage({ type: 'withdraw', id: q.get('id') || '', reason: q.get('reason') || 'Sample: the entry is no longer valid' });
     else if (V3 && p === '/test/account') desk.setConnection(q.get('name'), q.get('connection') || 'lost');
+    else if (V3 && p === '/test/unlist-account') { const a = desk.acct.get(q.get('name')); if (a) { a.unlisted = q.get('on') !== '0'; desk.refreshAccounts(); desk.sendAccounts(); } }   // 0.6.10: NinjaTrader no longer lists it (made up)
     else if (V3 && p === '/test/unserved') { const a = desk.acct.get(q.get('account')); if (a) { a.unserved = (q.get('names') || '').split(',').map(x => x.trim()).filter(Boolean); desk.sendAccounts(); } }   // 0.6.6: contracts it holds that ChartBridge does not serve (made up)
     else if (V3 && p === '/test/nt-room') { const n = q.get('account'); if (q.get('v') === '') desk.gr.ntRoom.delete(n); else desk.gr.ntRoom.set(n, +q.get('v')); desk.groupsChanged(); }   // 0.6.6: NinjaTrader's own figure for an account (made up)
     else if (V3 && p === '/test/restart') desk.simulateRestart(q.get('lost') === '1');

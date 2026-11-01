@@ -247,6 +247,7 @@ public static class GroupsHarness
             Bench();         // 0.6.7 (Anthony 2026-10-22): the bench, no hedging always on, a group with no rules of its own, the risk percent while flat
             FirmLimits();    // 0.6.6 (Anthony 2026-10-20): his own entries: the firm's max only; the machines': a known breach only; the daily loss alert
             FirmFloor();     // 0.6.6 (Anthony 2026-10-20): the firm's rules on an account in no group, the computed floor first, firmMinimum
+            Lifecycle();     // 0.6.10 (Anthony 2026-10-30, the account lifecycle): remove-only for an account NinjaTrader no longer lists, Hide leaves the group, the preview as placed
         }
         catch (Exception ex) { Check(false, "groups harness threw: " + ex); }
         finally
@@ -2100,5 +2101,136 @@ public static class GroupsHarness
         Flat();
         ChartBridgeGroups.GapMs = 10000;
         ClockEt(2026, 10, 14, 10, 0);
+    }
+
+    // 0.6.10 (Anthony 2026-10-30, D2: Blown or Promoted takes the account out of its group): a member NinjaTrader no longer lists can
+    // leave its group (never join); Hide takes a member out of its group and its bench place in the same step; a group preview sizes
+    // only the members gate 2 lets trade (as the placement asks it). Made-up accounts (SIM-A to SIM-D) and made-up money.
+    static string HideMsg(string account) { return "{\"type\":\"accountArchive\",\"cid\":\"h\",\"account\":\"" + account + "\",\"confirm\":true}"; }
+    static void Acc(string type, string json) { lock (page.Actions) page.Actions.Clear(); ChartBridgeAccounts.OnMessage(page, type, json); }
+    static void Lifecycle()
+    {
+        Flat();
+        ChartBridgeGroups.GapMs = 1e12;
+        string p = Path.Combine(folder, "groups.txt"), mp = Path.Combine(folder, "account-marks.txt");
+        Gone(p); Gone(mp); File.Delete(p + ".good");
+        File.WriteAllText(p, ChartBridgeGroups.Header + "\n#\ngroup\tg1\tLucid\ton\t-\t2000\teod\t3000\t50000\t-\t-\teval\t-\t10\n");
+        ClockEt(2026, 10, 30, 9, 0); Restart();
+        foreach (Account a in new[] { simA, simB, simC, simD }) a.Connection.Status = ConnectionStatus.Connected;
+        foreach (Account a in new[] { simA, simB, simC }) Money(a, 50500, 0, 0);
+        Clear();
+        foreach (string n in new[] { "SIM-A", "SIM-B", "SIM-C" }) G("accountGroup", JoinRules(n, "\"g1\"", "51000", R("50000", "0", "2000", "eod", "50100", "3000", ",\"typeId\":\"made-up-50k\"")));
+        G("memberBench", Bench("SIM-B", "true"));
+        Check(Rejection() == "" && ChartBridgeGroups.GroupOf("SIM-A") == "g1" && ChartBridgeGroups.GroupOf("SIM-C") == "g1" && FileText().Contains("member\tSIM-B\tg1\tbenched"), "LIFE setup: Lucid holds SIM-A, SIM-C and SIM-B on the bench: " + Rejection());
+
+        // audit 1: SIM-B gone from NinjaTrader, and a new NinjaTrader session: it is not listed
+        Account.All.Remove(simB);
+        try
+        {
+            ChartBridgeAccounts.StartNow(ChartBridgeTime.NowUtcMs()); ChartBridgeAccounts.SessionStartMs = ChartBridgeTime.NowUtcMs() + 1; ChartBridgeAccounts.SessionId = "harness-life";
+            foreach (Account a in Account.All) ChartBridgeAccounts.SeenConnected(a);
+            Check(!ChartBridgeAccounts.Listed("SIM-B") && ChartBridgeAccounts.Listed("SIM-A") && ChartBridgeGroups.GroupOf("SIM-B") == "g1", "LIFE: SIM-B is not in NinjaTrader and not listed, still a member of Lucid");
+            Clear(); G("accountGroup", Join("sim-b", "null", null));
+            Check(Rejection() == "" && ChartBridgeGroups.GroupOf("SIM-B") == null && !FileText().Contains("SIM-B") && !ChartBridgeGroups.BenchedOf("g1").Contains("SIM-B") && NinjaTrader.Code.Output.Lines.Any(x => x.Contains("SIM-B is in no group now, left Lucid")),
+                  "0.6.10 audit 1: a member NinjaTrader no longer lists leaves its group (named in any case), its bench place and its own rules with it: " + Rejection() + " " + FileText().Replace("\t", "<TAB>"));
+            Clear(); G("accountGroup", JoinRules("SIM-B", "\"g1\"", null, R("50000", "0", "2000", "eod", "50100", "3000", "")));
+            Check(Rejection().Contains("no account SIM-B") && ChartBridgeGroups.GroupOf("SIM-B") == null, "0.6.10 audit 1: joining still needs it listed: " + Rejection());
+            Clear(); G("accountGroup", Join("NOBODY-2", "null", null));
+            Check(Rejection().Contains("no account NOBODY-2"), "0.6.10 audit 1: leaving needs a member (an unknown account in no group: refused as before)");
+        }
+        finally { Account.All.Add(simB); ChartBridgeAccounts.SeenConnected(simB); }
+
+        // audit 7 and audit 4 need the checkmarks (accountChecks on)
+        ChartBridgeSwitches.Note("accountChecks", "on");
+        try
+        {
+            Restart();
+            Tick();
+            List<ChartBridgeOrders.GroupSeat> seats;
+            string gn, err;
+            double rp;
+            Clear(); Acc("accountTrade", "{\"type\":\"accountTrade\",\"cid\":\"t\",\"account\":\"SIM-A\",\"on\":false}");
+            seats = ChartBridgeOrders.GroupPlan("g1", "MNQ", true, 40, out gn, out rp, out err);
+            ChartBridgeOrders.GroupSeat sa = seats == null ? null : seats.FirstOrDefault(x => x.Account == "SIM-A");
+            Check(sa != null && sa.Size == 0 && sa.Out != null && sa.Out.Contains("SIM-A is not checked for trading"), "0.6.10 audit 7: an unchecked member sits out the preview, as the placement refuses it: " + (sa == null ? err : sa.Out));
+            Clear(); Acc("accountTrade", "{\"type\":\"accountTrade\",\"cid\":\"t\",\"account\":\"SIM-A\",\"on\":true}");
+            seats = ChartBridgeOrders.GroupPlan("g1", "MNQ", true, 40, out gn, out rp, out err);
+            sa = seats == null ? null : seats.FirstOrDefault(x => x.Account == "SIM-A");
+            Check(Rejection() == "" && sa != null && (sa.Out == null || !sa.Out.Contains("not checked")), "0.6.10 audit 7: checked: no longer out for that: " + Rejection() + (sa == null ? err : sa.Out + " " + sa.Size));
+
+            // audit 4: Hide takes a member out of its group, in the same step; refused while it holds anything (it stays in its group)
+            Pos(simA, mnq, 1);
+            Clear(); Acc("accountArchive", HideMsg("SIM-A"));
+            Check(Rejection().Contains("SIM-A has a position or working orders: only a flat account can be hidden") && ChartBridgeGroups.GroupOf("SIM-A") == "g1" && FileText().Contains("member\tSIM-A\tg1"),
+                  "0.6.10 audit 4: Hide of a member in a trade: refused, still in Lucid: " + Rejection());
+            Pos(simA, mnq, 0);
+            Clear(); Acc("accountArchive", HideMsg("SIM-A"));
+            string acc = AccountsNow();
+            Check(Rejection() == "" && ChartBridgeGroups.GroupOf("SIM-A") == null && !FileText().Contains("SIM-A") && acc.Contains("{\"name\":\"SIM-A\",\"at\":") && Entry(acc, "SIM-A") == "",
+                  "0.6.10 audit 4: Hide of a flat member: hidden and out of Lucid in one step (groups.txt, the accounts list): " + Rejection() + " " + FileText().Replace("\t", "<TAB>"));
+            Clear(); G("memberBench", Bench("SIM-C", "true"));
+            Clear(); Acc("accountArchive", HideMsg("SIM-C"));
+            Check(Rejection() == "" && ChartBridgeGroups.GroupOf("SIM-C") == null && !ChartBridgeGroups.BenchedOf("g1").Contains("SIM-C") && !FileText().Contains("SIM-C"), "0.6.10 audit 4: a member on the bench leaves the bench with it: " + Rejection());
+            Clear(); Acc("accountArchive", HideMsg("SIM-D"));
+            Check(Rejection() == "" && AccountsNow().Contains("{\"name\":\"SIM-D\",\"at\":"), "0.6.10 audit 4: Hide of an account in no group: as before: " + Rejection());
+            foreach (string n in new[] { "SIM-A", "SIM-C", "SIM-D" }) Acc("accountUnarchive", "{\"type\":\"accountUnarchive\",\"cid\":\"u\",\"account\":\"" + n + "\"}");
+            Check(!AccountsNow().Contains("{\"name\":\"SIM-A\",\"at\":"), "LIFE: shown again");
+
+            // 0.6.10 (review): Hide of a member NinjaTrader does not list (a == null in HideAndLeave): no stale hold, it leaves its group
+            // (its bench place and own rules with it) and is hidden in the same step
+            Clear(); G("accountGroup", JoinRules("SIM-B", "\"g1\"", "51000", R("50000", "0", "2000", "eod", "50100", "3000", ",\"typeId\":\"made-up-50k\"")));
+            G("memberBench", Bench("SIM-B", "true"));
+            Check(Rejection() == "" && ChartBridgeGroups.GroupOf("SIM-B") == "g1" && FileText().Contains("member\tSIM-B\tg1\tbenched"), "LIFE (review) setup: SIM-B back in Lucid, on the bench: " + Rejection());
+            Account.All.Remove(simB);
+            try
+            {
+                Clear(); Acc("accountArchive", HideMsg("SIM-B"));
+                string accB = AccountsNow();
+                Check(Rejection() == "" && ChartBridgeGroups.GroupOf("SIM-B") == null && !ChartBridgeGroups.BenchedOf("g1").Contains("SIM-B") && !FileText().Contains("SIM-B") &&
+                      accB.Contains("{\"name\":\"SIM-B\",\"at\":") && NinjaTrader.Code.Output.Lines.Any(x => x.Contains("SIM-B left Lucid as it was hidden")),
+                      "0.6.10 (review): Hide of a member NinjaTrader does not list: out of Lucid (and its bench place) and hidden in one step: " + Rejection() + " " + FileText().Replace("\t", "<TAB>"));
+            }
+            finally { Account.All.Add(simB); ChartBridgeAccounts.SeenConnected(simB); }
+            Acc("accountUnarchive", "{\"type\":\"accountUnarchive\",\"cid\":\"u\",\"account\":\"SIM-B\"}");
+
+            // 0.6.10 (review): groups.txt cannot be written inside HideAndLeave. Nothing placed meanwhile: ChangeAndSave puts memory back,
+            // HideAndLeave returns its "nothing was changed" before archive runs: still in Lucid (memory and file), not hidden. Nothing half done.
+            Clear(); G("accountGroup", JoinRules("SIM-A", "\"g1\"", "51000", R("50000", "0", "2000", "eod", "50100", "3000", ",\"typeId\":\"made-up-50k\"")));
+            Check(Rejection() == "" && ChartBridgeGroups.GroupOf("SIM-A") == "g1", "LIFE (review) setup: SIM-A back in Lucid: " + Rejection());
+            string beforeHide = FileText();
+            try
+            {
+                ChartBridgeGroups.WriteForHarness = () => { throw new IOException("the disk is full (made up)"); };
+                Clear(); Acc("accountArchive", HideMsg("SIM-A"));
+                string accA = AccountsNow();
+                Check(Rejection().Contains("groups.txt could not be saved (the disk is full (made up)); nothing was changed") && ChartBridgeGroups.GroupOf("SIM-A") == "g1" && FileText() == beforeHide &&
+                      !accA.Contains("{\"name\":\"SIM-A\",\"at\":") && Entry(accA, "SIM-A") != "",
+                      "0.6.10 (review): Hide when groups.txt cannot be written: refused with the write's reason, still in Lucid (memory and file), not hidden: " + Rejection());
+                // something placed on SIM-A during the write (a fill): the change stays in memory (the alarm, saved with the next change);
+                // asked again, SIM-A is in a trade now, so it is not hidden (Hide waits until it is flat), and the reply says so
+                ChartBridgeGroups.WriteForHarness = () => { Pos(simA, mnq, 1); throw new IOException("the disk is full (made up)"); };
+                Clear(); Acc("accountArchive", HideMsg("SIM-A"));
+                string accK = AccountsNow();
+                Check(Rejection().Contains("SIM-A left its group; not hidden: it is in a trade now; Hide it once flat (changed, but groups.txt could not be saved (the disk is full (made up)): SIM-A is in a trade (+1 MNQ) since the change, so it stays in effect") &&
+                      ChartBridgeGroups.GroupOf("SIM-A") == null && FileText() == beforeHide && !accK.Contains("{\"name\":\"SIM-A\",\"at\":") && Entry(accK, "SIM-A") != "",
+                      "0.6.10 (review): a failed write after SIM-A traded during it: out of Lucid in memory (the file one change behind), not hidden while in a trade, said: " + Rejection());
+                ChartBridgeGroups.WriteForHarness = null;
+                Pos(simA, mnq, 0);
+                Clear(); Acc("accountArchive", HideMsg("SIM-A"));
+                Check(Rejection() == "" && AccountsNow().Contains("{\"name\":\"SIM-A\",\"at\":"), "0.6.10 (review): flat again, Hide hides it: " + Rejection());
+            }
+            finally { ChartBridgeGroups.WriteForHarness = null; Pos(simA, mnq, 0); }
+            Clear(); G("accountGroup", JoinRules("SIM-D", "\"g1\"", "51000", R("50000", "0", "2000", "eod", "50100", "3000", ",\"typeId\":\"made-up-50k\"")));   // a change: groups.txt saved again
+            Check(!FileText().Contains("SIM-A") && FileText().Contains("member\tSIM-D\tg1"), "0.6.10 (review): the next change saves it: SIM-A not in groups.txt: " + Rejection());
+            Acc("accountUnarchive", "{\"type\":\"accountUnarchive\",\"cid\":\"u\",\"account\":\"SIM-A\"}");
+        }
+        finally
+        {
+            ChartBridgeSwitches.Note("accountChecks", "off");
+            Restart();
+            Flat();
+            ChartBridgeGroups.GapMs = 10000;
+            ClockEt(2026, 10, 14, 10, 0);
+        }
     }
 }

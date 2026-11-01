@@ -34,10 +34,23 @@ test('0.6.9: recording only: the order files and the stop record are the 0.6.8 f
   if (!/public const string Version = "0\.6\.9";/.test(read('ChartBridge.cs'))) return;   // a later release may change them
   const want = {
     'ChartBridgeStops.cs': 'f2d74c58a904a5ba448ca5ebceb05f25b01d55642ddfdf1323b0c7dbf95f5d3c',
-    'ChartBridgeOrders.cs': '67db397ca470ccb1a0bd3624e2b420bd951c18e776fa5ed12e77c7b98139e771',
+    // ChartBridgeOrders.cs: changed for 0.6.10 (the Placing mark, Sunday 11-01 item 10); the record code in it is untouched
     'ChartBridgeCopier.cs': 'dc9ee92ee64c98effc74cc4aa6cc4f5965ba50746c5fbd2c48b795334decaceb',
     'ChartBridgeBot.cs': '33ca2af1f1867f14ab188f659ad63210933801b62c951234255972111fef84b1',
     'ChartBridgeAgents.cs': 'e8d50518b699546240e3ab570168e1bb82edd2960951f1cda98d020ee5d5ecf2',
+    'ChartBridgeStrategies.cs': '588a308895185587f795276a0479d41c9ebc1843bd53ad6d7c06c8aa935d386a',
+    'ChartBridgeMerge.cs': '7aa31e37d38c1875eb236e1575d20f49ed31c1e2c08fc9d265d5aa7e0a32952c',
+  };
+  for (const [f, h] of Object.entries(want)) assert.strictEqual(crypto.createHash('sha256').update(read(f).replace(/\r/g, '')).digest('hex'), h, f + ' is the 0.6.8 file');
+});
+
+test('0.6.10: the files this release does not touch are still the 0.6.8 files, byte for byte (while ChartBridge is 0.6.10)', () => {
+  if (!/public const string Version = "0\.6\.10";/.test(read('ChartBridge.cs'))) return;   // a later release may change them
+  // 0.6.10 changed ChartBridgeOrders.cs (the Placing mark), ChartBridgeCopier.cs and ChartBridgeAgents.cs (the account lifecycle);
+  // the order record code is untouched (the 0.6.9 guards above still hold)
+  const want = {
+    'ChartBridgeStops.cs': 'f2d74c58a904a5ba448ca5ebceb05f25b01d55642ddfdf1323b0c7dbf95f5d3c',
+    'ChartBridgeBot.cs': '33ca2af1f1867f14ab188f659ad63210933801b62c951234255972111fef84b1',
     'ChartBridgeStrategies.cs': '588a308895185587f795276a0479d41c9ebc1843bd53ad6d7c06c8aa935d386a',
     'ChartBridgeMerge.cs': '7aa31e37d38c1875eb236e1575d20f49ed31c1e2c08fc9d265d5aa7e0a32952c',
   };
@@ -59,11 +72,11 @@ test('0.6.9: the decision id: the group entry\'s PlaceOrder call unchanged, set 
 test('0.6.9: the 1 second bars: NQ and MNQ, through the gate, only 16:15 to 18:00 ET on weekdays and on the weekend, their own path and queue', () => {
   const b = read('ChartBridgeBars.cs');
   assert.match(b, /private static string\[\] DefaultRoots1s\(\) \{ return new string\[\] \{ "NQ", "MNQ" \}; \}/);
-  assert.match(body(b, 'private static void Plan1s('), /nowEt = NowEt\(\);[^\n]*\n\s*if \(!In1sStartWindow\(nowEt\)\) \{ state1s = "waiting: 1 second bars go 16:15 to 18:00 ET/);
-  assert.match(body(b, 'private static void Plan1s('), /if \(!In1sStartWindow\(NowEt\(\)\)\)[^\n]*\n\s*Outcome o = Fetch1s\(j, stopping\);/, 'the clock read again right before a request');
+  assert.match(body(b, 'private static bool Plan1s('), /nowEt = NowEt\(\);[^\n]*\n\s*if \(!In1sStartWindow\(nowEt\)\) \{ state1s = "waiting: 1 second bars go 16:15 to 18:00 ET/);
+  assert.match(body(b, 'private static bool Plan1s('), /if \(!In1sStartWindow\(NowEt\(\)\)\)[^\n]*\n\s*Outcome o = Fetch1s\(j, stopping\);/, 'the clock read again right before a request');
   assert.match(b, /public static TimeSpan StartMargin1s = TimeSpan\.FromMinutes\(10\);/);
   assert.match(body(b, 'public static bool In1sWindow('), /return tod >= new TimeSpan\(16, 15, 0\) && tod < TimeSpan\.FromHours\(18\);/);
-  assert.match(body(b, 'private static void Plan1s('), /return;   \/\/ one a pass/);
+  assert.match(body(b, 'private static bool Plan1s('), /return true;   \/\/ one a pass/);
   assert.match(body(b, 'private static Outcome Fetch1s('), /ChartBridgeServer\.GateBars\("1s " \+ j\.Key, inst, fromNt, toNt, Request1sTimeoutMs, stopping, t, bars => BuildSeconds\(bars, fromMs, toMs\)\)/);
   assert.match(b, /"\/api\/bars-1s"/);
   assert.match(body(b, 'public static void Flush(Func<bool> stopping)\n        {\n            if (!ChartBridgeBars.OneSecondOn)'), /if \(!ChartBridgeBars\.In1sWindow\(/, 'the sends keep the same window');

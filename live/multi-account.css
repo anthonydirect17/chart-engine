@@ -66,3 +66,7 @@
 .ma-jrow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
 .ma-jhigh { width: 96px; height: 26px; text-align: right; }
 .ma-jrow .ws-btn { height: 26px; }
+/* 1.40.0 (audit 6): a member NinjaTrader does not list now: its chip says so and Remove (out of the group) sits under it */
+.ma-chip.missing { border-style: dashed; }
+.ma-dead { flex: 1 0 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 11px; color: var(--ws-text2); }
+.ma-dead .ws-btn { height: 24px; }

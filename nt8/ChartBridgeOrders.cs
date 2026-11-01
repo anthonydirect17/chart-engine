@@ -285,7 +285,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         public static void Clear()
         {
-            lock (Sync) { IdOf.Clear(); ById.Clear(); CidOf.Clear(); BracketOfEntry.Clear(); PairOfLeg.Clear(); LegBorn.Clear(); Settled.Clear(); Ours.Clear(); SeenFilled.Clear(); NotedFilled.Clear(); UnnotedSince.Clear(); LateSaid.Clear(); ExecSeq.Clear(); PosSeq.Clear(); GapSince.Clear(); Managed.Clear(); Uncovered.Clear(); Alarmed.Clear(); FlatSince.Clear(); LostTargets.Clear(); OcoWeCancel.Clear(); FirstGone.Clear(); }
+            lock (Sync) { Placing.Clear(); IdOf.Clear(); ById.Clear(); CidOf.Clear(); BracketOfEntry.Clear(); PairOfLeg.Clear(); LegBorn.Clear(); Settled.Clear(); Ours.Clear(); SeenFilled.Clear(); NotedFilled.Clear(); UnnotedSince.Clear(); LateSaid.Clear(); ExecSeq.Clear(); PosSeq.Clear(); GapSince.Clear(); Managed.Clear(); Uncovered.Clear(); Alarmed.Clear(); FlatSince.Clear(); LostTargets.Clear(); OcoWeCancel.Clear(); FirstGone.Clear(); }
             lock (Moves) { Moves.Clear(); LastPos.Clear(); HeldAtWatch.Clear(); }
             lock (Last) Last.Clear();
             lock (Suspect) Suspect.Clear();
@@ -859,6 +859,11 @@ namespace NinjaTrader.NinjaScript.AddOns
             string name = "CB#" + tag + (bot ? " bot" : kind == "market" ? "" : " atm") + (strat != null ? StrategyNamePart(strat) : " s" + stopTicks + " t" + targetTicks) + KindSuffix(kind);   // 0.4.0 bot: "bot" names a bot entry   // 0.4.0 B1: sg, sl, mit   // 0.4.0 fix1 (F5): "sg s20", the stop ticks in the name
             if (agent != null) { name = "CB#" + tag + " ag:" + agent + " s" + stopTicks + " t" + targetTicks; ChartBridgeAgents.NotePlan(tag, agentPlan); }   // 0.5.0 agents: "CB#1a2b3c4d ag:manrae s8 t16" (any kind; recovery reads it as a v2 entry); its plan id for "planId"
             if (kind != "market" && strat == null) { SetPlan(tag, stopTicks, targetTicks); planTag = tag; }   // in memory now; PlaceOrder writes the file after PlaceLock
+            // 0.6.10: the Placing mark. NinjaTrader reports a new order the moment CreateOrder makes it, before the Sync block below
+            // registers its bracket and strategy; the restart recovery leaves an entry this run is still placing alone (IsPlacing).
+            // The body is not indented one more step, so the lines below stay as they were.
+            lock (Sync) Placing.Add(tag);
+            try {
             OrderType type = OrderTypeOf(kind);   // 0.4.0 B1: also StopLimit and MIT
             Order order = account.CreateOrder(inst, isBuy ? OrderAction.Buy : OrderAction.Sell, type, OrderEntry.Manual, TimeInForce.Day, qty,
                 kind == "limit" ? price : kind == "stopLimit" ? limitPx : 0, kind == "stop" || NewKind(kind) ? price : 0, "", name, NinjaTrader.Core.Globals.MaxDate, null);
@@ -883,6 +888,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             ChartBridgeServer.Log((bot ? "bot " : agent != null ? "agent " + agent + " " : "") + "order sent: " + side + " " + qty + " " + root + " " + kind + (kind == "market" ? "" : " @ " + CbJson.Num(price)) +
                 (strat != null ? " with strategy " + strat.Json : wantsLegs ? " with bracket stop " + stopTicks + " / target " + targetTicks + " ticks" : "") + " on " + account.Name);
             return null;
+            } finally { lock (Sync) Placing.Remove(tag); }   // 0.6.10: the Placing mark ends with the placement, sent or refused
         }
 
         // A price in a planned_brackets.txt line kept from 0.3.7: 0 for none, else the price with no trailing zeros.
@@ -1231,6 +1237,25 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
         }
 
+        // 0.6.10: the tags of the entries this run is placing (PlaceOrderLocked, from just before CreateOrder until the order is
+        // sent or refused; guarded by Sync). NinjaTrader reports a new order as soon as it is created, before its bracket and
+        // strategy are registered: without this mark the restart recovery took it for an entry left from before a restart and
+        // said "could not be resumed after the restart". The set is memory only, so after a real restart it is empty and every
+        // entry NinjaTrader lists is recovered as before.
+        private static readonly HashSet<string> Placing = new HashSet<string>();
+
+        private static bool IsPlacing(Order o)
+        {
+            Match m = PlacingTagRx.Match(o != null ? o.Name ?? "" : "");
+            if (!m.Success) return false;
+            lock (Sync) return Placing.Contains(m.Groups[1].Value);
+        }
+
+        private static readonly Regex PlacingTagRx = new Regex("^CB#([0-9a-f]{8}) ");
+
+        // The harness: how many entries are being placed right now (0 once every placement has ended).
+        public static int PlacingCount { get { lock (Sync) return Placing.Count; } }
+
         // Rebuild a bracket from the order names after a recompile or restart (the in-memory state is
         // gone): the entry's name gives the ticks; each leg's name gives its fill increment, so the
         // covered contracts and their prices come back exactly, and working pairs are re-linked. Reads the
@@ -1354,6 +1379,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             if (!known)
             {
+                if (IsPlacing(entry)) return;   // 0.6.10: reported while this run is still placing it (not a restart): its placement registers it
                 List<Pair> pairs;
                 bool lost = false, deferred;
                 Bracket rec = Recover(entry, out pairs, out deferred);
@@ -1528,6 +1554,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (BracketOfEntry.TryGetValue(entry, out br)) return br;
                 if (Settled.Contains(entry)) return null;
             }
+            if (IsPlacing(entry)) return null;   // 0.6.10: still being placed by this run: never recovered as if after a restart
             List<Pair> pairs;
             bool deferred;
             Bracket rec = Recover(entry, out pairs, out deferred);

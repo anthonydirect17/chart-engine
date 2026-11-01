@@ -642,14 +642,20 @@ namespace NinjaTrader.NinjaScript.AddOns
             else lock (Mem) { Rec r; if (Recs.TryGetValue(name, out r)) name = r.Name; }
             if (Archived(name)) return name + " is archived already";
             if (a == null && !Known(name)) return "no account " + name;
-            bool unsure;
-            string why = HideRefusal(name, a, ReadClaims(), out unsure);
-            if (why != null) return why;
-            double now = ChartBridgeTime.NowUtcMs();
-            if (!SetStateIf(name, "archived", now, st => st != "archived")) return name + " is archived already";
-            NoteChange(name, "archived", "by the page");
-            AfterCheckmark();
-            return null;
+            // 0.6.10 (the account lifecycle, D2): a member of a group leaves it in the same step (ChartBridgeGroups.HideAndLeave, under the
+            // groups lock order); the claims files are read first, outside those locks
+            Claims claims = ReadClaims();
+            bool done = false;
+            string key = name, stale = a == null && LastSeen(name) == "busy" ? "; NinjaTrader does not list it and it was last seen with a position or working orders: if NinjaTrader lists it again holding anything, it is listed again by itself (unchecked) so its exits work" : "";
+            string why = ChartBridgeGroups.HideAndLeave(key, a, () => { bool unsure; return HideRefusal(key, a, claims, out unsure); }, () =>
+            {
+                if (!SetStateIf(key, "archived", ChartBridgeTime.NowUtcMs(), st => st != "archived")) return key + " is archived already";
+                done = true;
+                NoteChange(key, "archived", "by the page" + stale);
+                return null;
+            });
+            if (done) AfterCheckmark();
+            return why;
         }
 
         // Show (0.5.1): an archived account back, active and unchecked. It is listed once it has been seen Connected this session.
@@ -668,8 +674,12 @@ namespace NinjaTrader.NinjaScript.AddOns
                 Live l;
                 if (Lives.TryGetValue(name, out l)) { l.Gone = false; l.GoneWhy = null; l.GoneSince = 0; l.BadSince = -1; }
             }
-            NoteChange(name, "shown", "by the page; unchecked");
+            // 0.6.10 (audit 5): an account not seen Connected this NinjaTrader session is not listed until it is; it is said so (to the
+            // pages too, as a status line) and the accounts message carries it in notListed until then, so it never just vanishes
+            bool seen = SeenThisSession(name);
+            NoteChange(name, "shown", "by the page; unchecked" + (seen ? "" : "; listed once NinjaTrader has it connected this session"));
             AfterCheckmark();
+            if (!seen) Info(name + " is shown again: it is listed once NinjaTrader has it connected this session (until then it is under Not in NinjaTrader now on the Accounts tab), unchecked");
             return null;
         }
 
@@ -677,8 +687,11 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static string HideRefusal(string name, Account a, Claims claims, out bool unsure)
         {
             unsure = false;
-            if (a != null ? Busy(a) : LastSeen(name) == "busy")
-                return name + (a != null ? " has" : " was last seen with") + " a position or working orders: only a flat account can be hidden (exits always work)";
+            // 0.6.10 (the account lifecycle): an account NinjaTrader does not list at all (a == null) is no longer held by what it was last
+            // seen with (a blown eval the firm took away stayed "busy" for good): it may be hidden, and if NinjaTrader lists it again
+            // holding anything it is listed again at once, unchecked, so its exits work (CheckGone). What NinjaTrader lists is read now.
+            if (a != null && Busy(a))
+                return name + " has a position or working orders: only a flat account can be hidden (exits always work)";
             string claim = claims.Why(name, out unsure);
             return claim != null ? claim + ": it cannot be hidden" : null;
         }
@@ -1083,6 +1096,21 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (Mem) archived = Recs.Values.Where(r => r.State == "archived").OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase).Select(r => new Rec { Name = r.Name, State = r.State, ChangedMs = r.ChangedMs }).ToList();
             for (int i = 0; i < archived.Count; i++)
                 b.Append(i > 0 ? "," : "").Append("{\"name\":").Append(CbJson.Str(archived[i].Name)).Append(",\"at\":").Append(archived[i].ChangedMs.ToString(CultureInfo.InvariantCulture)).Append('}');
+            // 0.6.10 (audit 5, the account lifecycle): every account accounts.txt keeps, not hidden, that is not listed because NinjaTrader
+            // has not had it connected this session (a Show of one, or an account the firm took away): its name, its checkmark and when
+            // it was last seen connected (UTC ms, null when not known). Off records not seen for 30 days are forgotten (Prune).
+            b.Append("],\"notListed\":[");
+            List<string[]> unseen = new List<string[]>();
+            lock (Mem)
+                foreach (Rec r in Recs.Values.OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase))
+                {
+                    if (r.State == "archived" || ChartBridgeOrders.IsNeverTradable(r.Name) || SeenThisSession(r.Name)) continue;   // Mem is taken again inside: the same thread
+                    double at;
+                    bool had = ConnectedAt.TryGetValue(r.Name, out at);
+                    unseen.Add(new[] { r.Name, r.State, had ? ((long)at).ToString(CultureInfo.InvariantCulture) : "null" });
+                }
+            for (int i = 0; i < unseen.Count; i++)
+                b.Append(i > 0 ? "," : "").Append("{\"name\":").Append(CbJson.Str(unseen[i][0])).Append(",\"trade\":").Append(unseen[i][1] == "trade" ? "true" : "false").Append(",\"lastConnected\":").Append(unseen[i][2]).Append('}');
             return b.Append("]}").ToString();
         }
 

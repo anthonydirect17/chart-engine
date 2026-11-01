@@ -261,8 +261,10 @@ export class OrderDeskV3 extends OrderDesk {
     return null;
   }
   accountsMsg() {
-    return { type: 'accounts', list: [...this.acct.values()].filter(a => a.state !== 'archived').sort((x, y) => x.name < y.name ? -1 : 1).map(a => this.accountMsg(a)),
-      archived: [...this.acct.values()].filter(a => a.state === 'archived').map(a => ({ name: a.name, at: a.archivedAt })) };
+    /* 0.6.10: an account NinjaTrader no longer lists (a.unlisted, /test/unlist-account) is not in the list; it is in notListed */
+    return { type: 'accounts', list: [...this.acct.values()].filter(a => a.state !== 'archived' && !a.unlisted).sort((x, y) => x.name < y.name ? -1 : 1).map(a => this.accountMsg(a)),
+      archived: [...this.acct.values()].filter(a => a.state === 'archived').map(a => ({ name: a.name, at: a.archivedAt })),
+      notListed: [...this.acct.values()].filter(a => a.state !== 'archived' && a.unlisted).map(a => ({ name: a.name, trade: !!a.trade, lastConnected: a.since || null })) };
   }
   /** to v3 pages from the own origin, signed in or not */
   sendAccounts() { const m = this.accountsMsg(); for (const c of this.conns()) if (c.v3 && c.origin === this.origin()) this.send(c, m); if (this.gr) this.sendGroups(); }
@@ -474,6 +476,7 @@ export class OrderDeskV3 extends OrderDesk {
   do_accountArchive(m) {
     const a = this.acct.get(m.account); a.state = 'archived'; a.archivedAt = this.now(); a.trade = false;
     this.copier.followers.delete(a.name);
+    if (this.gr && this.gr.members.has(a.name)) { this.gr.members.delete(a.name); this.gr.benched.delete(a.name); this.gr.own.delete(a.name); this.gr.peaks.delete(a.name); }   // 0.6.10: Hide leaves the group
     this.logLine('accounts', a.name, 'archived by the page');
     this.refreshAccounts(); this.sendAccounts();
   }

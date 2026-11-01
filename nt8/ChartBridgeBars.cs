@@ -182,7 +182,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static string[] DefaultRoots() { return new string[] { "NQ", "MNQ", "ES", "MES" }; }
         private static string[] DefaultRoots1s() { return new string[] { "NQ", "MNQ" }; }
 
-        public static void ResetConfig() { Enabled = false; Roots = DefaultRoots(); Pc = ""; oneSecondOff = false; Roots1s = DefaultRoots1s(); }
+        public static void ResetConfig() { Enabled = false; Roots = DefaultRoots(); Pc = ""; oneSecondOff = false; Roots1s = DefaultRoots1s(); lock (Planned1s) Planned1s.Clear(); }
 
         // Called by ChartBridgeConfig.Load; true when the key is one of these.
         public static bool ReadConfig(string key, string val)
@@ -659,7 +659,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             catchUpDone = true;
             waitingForGate = null;
             state = "idle";
-            Plan1s(stopping, nowEt, sessions);   // 0.6.9: then the 1 second bars, never in regular trading hours
+            bool asked1s = Plan1s(stopping, nowEt, sessions);   // 0.6.9: then the 1 second bars, never in regular trading hours
+            if (!asked1s && !stopping()) ChartBridgeTicks.PlanDay(stopping);   // the NQ tick file's final pull: one request a pass at most, the same window
         }
 
         // ---------------------------------------------------------- 0.6.9: the 1 second bars' worker part
@@ -669,15 +670,18 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static volatile string state1s = "off", lastBuild1s = "", error1s = "";
         public static string Key1s(string key) { return "1s " + key; }   // the retry records' key (never the same as a 1-minute key)
 
-        private static void Plan1s(Func<bool> stopping, DateTime nowEt, List<DateTime> sessions)
+        // True when it asked NinjaTrader (or waits at the gate) this pass: then the tick file's final pull waits for the next pass.
+        private static bool Plan1s(Func<bool> stopping, DateTime nowEt, List<DateTime> sessions)
         {
-            if (!OneSecondOn) { state1s = "off"; return; }
+            if (!OneSecondOn) { state1s = "off"; return false; }
             nowEt = NowEt();   // review of #71 (MEDIUM 2): the pass's 1-minute requests may have taken minutes: the clock now, not the pass's start
-            if (!In1sStartWindow(nowEt)) { state1s = "waiting: 1 second bars go 16:15 to 18:00 ET on weekdays and on the weekend (a request starts by 17:50)"; return; }
+            if (!In1sStartWindow(nowEt)) { state1s = "waiting: 1 second bars go 16:15 to 18:00 ET on weekdays and on the weekend (a request starts by 17:50)"; return false; }
             string[] roots = Roots1s.Where(r => Roots.Contains(r)).ToArray();   // only roots whose 1-minute bars go too (barsRoots)
-            foreach (BarsJob j in Wanted(sessions, roots, FillJobs(sessions)))
+            List<BarsJob> wanted1s = Wanted(sessions, roots, FillJobs(sessions));
+            lock (Planned1s) { if (Planned1s.Count > 50) Planned1s.Clear(); foreach (BarsJob j in wanted1s) Planned1s.Add(j.Contract); }
+            foreach (BarsJob j in wanted1s)
             {
-                if (stopping()) return;
+                if (stopping()) return true;
                 if (ChartBridgeBars1sQueue.IsDone(j.Key) || ChartBridgeBars1sQueue.IsWaiting(j.Key) || ChartBridgeBars1sQueue.IsRefused(j.Key)) continue;
                 DateTime notBefore;
                 string k = Key1s(j.Key);
@@ -686,12 +690,13 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if (GaveUp.Contains(k)) continue;
                     if (RetryAt.TryGetValue(k, out notBefore) && UtcNow() < notBefore) continue;
                 }
-                if (!In1sStartWindow(NowEt())) { state1s = "waiting: 1 second bars go 16:15 to 18:00 ET on weekdays and on the weekend (a request starts by 17:50)"; return; }   // and again right before it
+                if (!In1sStartWindow(NowEt())) { state1s = "waiting: 1 second bars go 16:15 to 18:00 ET on weekdays and on the weekend (a request starts by 17:50)"; return false; }   // and again right before it
                 Outcome o = Fetch1s(j, stopping);
                 if (o == Outcome.Done) { try { ChartBridgeBars1sQueue.Flush(stopping); } catch (Exception ex) { Note1s("1 second bars send error: " + ex.Message); } }
-                return;   // one a pass
+                return true;   // one a pass
             }
             state1s = "idle";
+            return false;
         }
 
         private static void Note1s(string text) { error1s = text; ChartBridgeServer.Log(text); }
@@ -726,7 +731,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             DateTime nowUtc = UtcNow(), openUtc, closeUtc;
             SessionUtc(j.Session, out openUtc, out closeUtc);
             TimeZoneInfo ntZone = NinjaTrader.Core.Globals.GeneralOptions.TimeZoneInfo;
-            DateTime fromNt = TimeZoneInfo.ConvertTimeFromUtc(openUtc, ntZone).Date;   // whole trading days from 12:00 AM: the 18:00 open is in it
+            // Sunday 11-01 (item 11): from the session's open itself, NinjaTrader's time. From 12:00 AM of the open's date NinjaTrader gave the
+            // whole session before as well (its whole trading days); the rows are cut to the session by time either way.
+            DateTime fromNt = TimeZoneInfo.ConvertTimeFromUtc(openUtc, ntZone);
             DateTime toNt = TimeZoneInfo.ConvertTimeFromUtc(closeUtc, ntZone);
             DateTime nowNt = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(nowUtc, DateTimeKind.Utc), ntZone);
             if (toNt > nowNt) toNt = nowNt;
@@ -771,6 +778,20 @@ namespace NinjaTrader.NinjaScript.AddOns
             return Outcome.Done;
         }
 
+        // Sunday 11-01 (decided 2026-11-01): /diag lastSent lists every contract the 1 second pull covers, "none yet" where The Desk
+        // has not taken a set of it (so a missing MNQ is never mistaken for a fault): the front contract of each of its roots (Roots1s
+        // that are in barsRoots) and every contract a pass planned (a contract with fills too).
+        private static readonly HashSet<string> Planned1s = new HashSet<string>();
+        private static List<string> Covered1s()
+        {
+            List<string> out1 = new List<string>();
+            if (!OneSecondOn) return out1;
+            DateTime today = NowEt().Date;
+            foreach (string r in Roots1s.Where(r => Roots.Contains(r))) out1.Add(FrontContract(r, today));
+            lock (Planned1s) out1.AddRange(Planned1s);
+            return out1;
+        }
+
         public static string Diag1sJson()
         {
             int gaveUp; lock (RetryAt) gaveUp = GaveUp.Count(k => k.StartsWith("1s ", StringComparison.Ordinal));
@@ -779,7 +800,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             return "{\"on\":" + (OneSecondOn ? "true" : "false") +
                 ",\"state\":" + CbJson.Str(state1s ?? "") +
                 ",\"roots\":[" + string.Join(",", Roots1s.Select(r => CbJson.Str(r)).ToArray()) + "]" +
-                ",\"lastSent\":" + ChartBridgeBars1sQueue.LastSentJson() +
+                ",\"lastSent\":" + ChartBridgeBars1sQueue.LastSentJson(Covered1s()) +
                 ",\"waitingSets\":" + ChartBridgeBars1sQueue.Waiting() +
                 ",\"waitingParts\":" + ChartBridgeBars1sQueue.WaitingParts() +
                 ",\"setAside\":" + ChartBridgeBars1sQueue.SetAsideCount() +
@@ -882,6 +903,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 ",\"gaveUp\":" + gaveUp +
                 ",\"lastRequest\":" + CbJson.Str(lastRequest ?? "") +
                 ",\"lastError\":" + CbJson.Str(err) +
+                ",\"pc\":" + CbJson.Str(PcName()) + ",\"pcFrom\":" + CbJson.Str(string.IsNullOrEmpty(Pc) ? "computer name" : "config.txt") +   // Sunday 11-01: the name every Desk message carries (The Desk knows WORK by it), for the install job to check
                 ",\"oneSecond\":" + Diag1sJson() + "}";   // 0.6.9
         }
     }
@@ -1313,14 +1335,17 @@ namespace NinjaTrader.NinjaScript.AddOns
         public static int WaitingParts() { lock (Sync) return Sets.Sum(s => s.Parts - s.Next); }
         public static long SetAsideCount() { return Interlocked.Read(ref setAside); }
         public static string SendError() { return sendError ?? ""; }
-        public static string LastSentJson()
+        // The latest session The Desk took, per contract; each contract of `covered` The Desk has not taken a set of yet: "none yet".
+        public static string LastSentJson() { return LastSentJson(null); }
+        public static string LastSentJson(IEnumerable<string> covered)
         {
             Dictionary<string, string> last = new Dictionary<string, string>();
+            if (covered != null) foreach (string c in covered) if (!string.IsNullOrEmpty(c)) last[c] = "none yet";
             lock (Sync)
                 foreach (string k in Sent)
                 {
                     string day = k.Substring(0, 10), contract = k.Substring(11), was;
-                    if (!last.TryGetValue(contract, out was) || string.CompareOrdinal(day, was) > 0) last[contract] = day;
+                    if (!last.TryGetValue(contract, out was) || was == "none yet" || string.CompareOrdinal(day, was) > 0) last[contract] = day;
                 }
             return "{" + string.Join(",", last.OrderBy(kv => kv.Key, StringComparer.Ordinal).Select(kv => CbJson.Str(kv.Key) + ":" + CbJson.Str(kv.Value)).ToArray()) + "}";
         }

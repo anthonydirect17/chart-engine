@@ -201,3 +201,24 @@
 /* in the drawer the type, the limits and their buttons take the width they need */
 .apg-drawer .apg-type, .apg-drawer .apg-my { overflow: visible; }
 .apg-drawer .apg-type .apg-ttext { flex: none; overflow: visible; }
+/* 1.40.0 (the account lifecycle): Blown and Promoted in the drawer, the outcome pill, what ChartBridge still has to do, and the
+   accounts NinjaTrader does not list now (audit 8). No green or red here: an outcome is no P&L and no trade side (house style V2) */
+.apg-outbtn { font-size: 11px; padding: 1px 8px; }
+.apg-outc { font: 700 9.5px/1 var(--ws-sans); letter-spacing: .08em; padding: 3px 5px; border-radius: 3px; border: 1px solid var(--ws-line2); color: var(--ws-muted); }
+.apg-outc-blown { color: var(--ws-warn, #E8B85C); border-color: #8A6A2A; }
+.apg-outc-promoted { color: var(--ws-gold-text, #E2C687); border-color: var(--ws-gold-border, rgba(201, 165, 92, .28)); }
+.apg-life { margin: 0 0 8px; padding: 8px 10px; border: 1px solid #8A6A2A; border-radius: 8px; background: var(--ws-warn-ground, #1C150A); font-size: 12px; }
+.apg-life p { margin: 0 0 6px; }
+.apg-life li { white-space: normal; }
+/* 1.40.0 (Anthony 2026-10-29): the Room cell's two limits on one line, the tighter in amber (red when the whole cell is red) */
+.apg-room:not(.apg-red) .apg-tight { color: var(--ws-warn, #E8B85C); font-weight: 600; }
+.apg-rsep { color: var(--ws-muted); }
+.apg-raw { flex: none; margin-left: 6px; font-size: 11px; }   /* 1.40.0 (C-E): the account's own name beside its label */
+.apg-fltick { font-size: 11px; padding: 0 6px; }
+.apg-fltick.on { border-color: var(--ws-warn, #E8B85C); color: var(--ws-warn, #E8B85C); }
+.apg-fl-row.apg-fl-needs { white-space: normal; }
+.apg-nl-g .gr-row { grid-template-columns: minmax(64px, 1fr) minmax(0, 1.3fr) minmax(0, 2.6fr); }
+.apg-nl-g .gr-row.apg-ask, .apg-nl-g .gr-row.apg-secrow { grid-template-columns: minmax(0, 1fr); }
+.apg-nlbtns { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 4px 6px; white-space: normal !important; }
+.ws-panel.gr-narrow .apg-nl-g .gr-row:not(.apg-ask):not(.apg-secrow) { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.ws-panel.gr-narrow .apg-nlbtns { grid-column: 1 / -1; justify-content: flex-start; }

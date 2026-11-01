@@ -10,6 +10,8 @@
 //      follower's quantity), the Log; the Quote board's rows NQ, ES, then YM to ZB with ZN and ZB in 32nds
 //   2. every off line written (--v3-off=...; the switches are on by default since 2026-10-07): no checkbox, no Hide or Show, no Cancel, no Copier tab, no box or list at all on the page
 //   3. ChartBridge 0.3.8 (no v3): the page says what it needs, opens no connection of its own; the Quote board NQ and ES only
+//   6. 1.40.0: Blown in the drawer (an in-page confirm, The Desk's PUT, out of its group, hidden), a refused step shown, and the
+//      accounts NinjaTrader does not list (Not in NinjaTrader now: Remove from group, the follower off and removed)
 // Screenshots in test/out/accounts-*.png.
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
@@ -59,7 +61,7 @@ const DESK = { accounts: [
 ] };
 /* 1.35.0: The Desk's floors (made-up numbers, sample data): EVAL-A's, one ChartBridge does not list, and The Desk's own skip */
 const FLOORS = { accounts: [
-  { account: 'EVAL-A', prop: 'Sample 50K', floor: 49600, source: 'the firm dashboard on 2026-10-13, then 2 tracked round trips (sample)', note: null },
+  { account: 'EVAL-A', prop: 'Sample 50K', floor: 49600, basis: 'net', source: 'the firm dashboard on 2026-10-13, then 2 tracked round trips (sample)', note: null },
   { account: 'NOPE-X', prop: 'NOPE-X', floor: 48000, source: 'sample' }],
   skipped: [{ account: null, prop: 'Sample 150K', why: 'not linked to a fills account on The Desk\'s Prop screen' }] };
 async function openWs(ctx, port, layout) {
@@ -104,7 +106,8 @@ try {
   // the limit warning: The Desk's trailing drawdown 15,000 and ChartBridge's room 2,500: 83 percent used
   await until(async () => (await rows(page, '.apg-acc-g')).find(r => r.k === 'FUNDED-C' && /apg-amber/.test(r.cls)), 'FUNDED-C amber');
   const fc = (await rows(page, '.apg-acc-g')).find(r => r.k === 'FUNDED-C');
-  check(fc && /83% used/.test(fc.text), 'FUNDED-C amber at 83 percent of the room used (' + (fc && fc.text) + ')');
+  const fcTip = await page.$eval(`${AP} .gr-row[data-k="FUNDED-C"] .apg-rtext [title]`, e => e.title).catch(() => '');
+  check(fc && /DD \$2,500/.test(fc.text) && /AMBER: 83% of the room used/.test(fcTip), 'FUNDED-C amber at 83 percent of the room used, the percent in the hover (1.40.0: the cell shows the rooms only): ' + (fc && fc.text));
   // the chart's warning, on the ticket's account
   await until(() => page.evaluate(() => window.workspace.ticket().held), 'the ticket held');
   await until(() => page.$eval('.ws-panel[data-id="tk"] [data-tk-id="oAcct"]', s => [...s.options].some(o => o.value === 'FUNDED-C')), 'FUNDED-C in the ticket\'s accounts');
@@ -268,8 +271,8 @@ try {
   const grp = await p4.$eval(`${AP} select.apg-grp[data-id="EVAL-A"]`, e => ({ v: e.value, opts: [...e.options].map(o => o.textContent) }));
   check(grp.v === 'g1' && grp.opts.join() === 'None,Lucid,Apex', 'EVAL-A in Lucid; the dropdown offers None and every group (' + JSON.stringify(grp) + ')');
   /* 1.34.0: the row shows the tightest room in whole dollars with a bar; its tooltip every room (daily, floor, target) */
-  const roomA = await p4.$eval(`${AP} .gr-row[data-k="EVAL-A"] .apg-rtext`, e => ({ text: e.textContent, tip: e.title }));
-  check(/^\$[\d,]+ (daily|to floor)$/.test(roomA.text) && /daily · .* to floor · .* to target/.test(roomA.tip), 'the room from ChartBridge\'s own numbers: the tightest on the row, daily, to floor, to target in its tooltip (' + JSON.stringify(roomA) + ')');
+  const roomA = await p4.$eval(`${AP} .gr-row[data-k="EVAL-A"] .apg-rtext`, e => ({ text: e.textContent, tip: (e.querySelector('[title]') || {}).title || '', tight: [...e.querySelectorAll('.apg-tight')].map(x => x.textContent) }));
+  check(/^DD \$[\d,]+ · D \$[\d,]+$/.test(roomA.text) && roomA.tight.length === 1 && /daily · .* to floor · .* to target/.test(roomA.tip), '1.40.0: the room from ChartBridge\'s own numbers: both on one line, DD then D, the tighter marked; daily, to floor, to target in its tooltip (' + JSON.stringify(roomA) + ')');
   check(!!(await p4.$(`${AP} .gr-row[data-k="EVAL-A"] .apg-track .apg-bar`)), '1.34.0: a bar of the room used under it');
   check(await p4.$(`${AP} .gr-row[data-k="dr|Sim101"] input[data-act="my-floor"]`) !== null && await p4.$(`${AP} .gr-row[data-k="dr|EVAL-A"] input[data-act="my-floor"]`) === null, 'My floor and My daily only for an account in no group (in its drawer)');
   // G2 (b): putting SIM-F1 in Lucid asks for its highest close once, prefilled
@@ -287,7 +290,7 @@ try {
   await p4.fill(`${AP} input[data-act="my-floor"][data-id="Sim101"]`, '95000');
   await p4.press(`${AP} input[data-act="my-floor"][data-id="Sim101"]`, 'Enter');
   await p4.click(`${AP} .apg-foot`);
-  await until(async () => /to floor/.test(await p4.$eval(`${AP} .gr-row[data-k="Sim101"] .apg-room`, e => e.textContent)), 'Sim101\'s room to its own floor');
+  await until(async () => /^DD \$/.test(await p4.$eval(`${AP} .gr-row[data-k="Sim101"] .apg-room`, e => e.textContent)), 'Sim101\'s room to its own floor');
   // 1.37.0: Settings has no Account groups (1.26.0 to 1.36.0): a group is made, set and deleted on the Multi-Account panel (smoke:multi-account)
   await p4.click('#wsSet');
   check(!(await p4.$('#wsGroupsSec')) && !(await p4.$('#wsGroups')), 'Settings has no Account groups section (the Multi-Account panel has them)');
@@ -358,7 +361,7 @@ try {
   /* 1.35.0 (G): once the firm minimum is set, NinjaTrader's figure (it never locks) is no flag; it stays in the Room's hover */
   const gone = await until(async () => { const t = await p5.$eval(`${AP} .gr-row[data-k="EVAL-A"] .apg-flag`, e => e.title).catch(() => ''); return !/NinjaTrader shows/.test(t) ? 'gone' : null; }, 'the NinjaTrader flag goes once the minimum is set', 8000);
   check(gone === 'gone', '1.35.0: no "NinjaTrader shows X to the floor" flag once the firm minimum is set');
-  const roomHover = await p5.$eval(`${AP} .gr-row[data-k="EVAL-A"] .apg-rtext`, e => e.title);
+  const roomHover = await p5.$eval(`${AP} .gr-row[data-k="EVAL-A"] .apg-rtext [title]`, e => e.title);
   check(/NinjaTrader shows \$1,885\.50 to the floor \(its own trailing figure, which never locks\); the firm minimum \$49,500\.00 was set from this page/.test(roomHover), 'NinjaTrader\'s figure stays in the Room\'s hover: ' + roomHover.split('\n').pop());
   /* 1.35.0 (C): Update floors from The Desk: shown first, nothing sent until Send, then ChartBridge's own firmMinimum */
   const before2 = await control(CL_PORT, 'received');
@@ -396,6 +399,131 @@ try {
   check(await p5.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'no sideways scroll at 1366');
   await p5.screenshot({ path: path.join(out, 'accounts-11-clean-drawer-1366.png') });
   await ctx5.close();
+  }
+
+  /* ================================================================ 6. 1.40.0 (Anthony 2026-10-30, the account lifecycle): Blown in
+     the drawer (asks in the page, then The Desk's PUT), ChartBridge brought into line (out of its group, hidden), a refusal shown
+     once, and the accounts NinjaTrader no longer lists (the fake's /test/unlist-account) with Remove from group and the follower's
+     Turn off and Remove. Made-up accounts and The Desk's rows made up here */
+  {
+  console.log('1.40.0: the account lifecycle and the accounts NinjaTrader does not list, ChartBridge 0.6.10, at 1366 x 768');
+  const LC_PORT = PORT + 5;
+  await startBridge(LC_PORT, ['--v3', '--trading', '--test-controls', '--bench', '--bench-groups', '--version=0.6.10', '--max-qty=MNQ:9,NQ:9',
+    '--trade-accounts=SIM-A,SIM-B,SIM-C,SIM-D,SIM-E,SIM-F,SIM-G,SIM-H,SIM-F1,SIM-F2', '--test-pin=' + TEST_PIN]);
+  const lucid = (id, name) => ({ id, firm: 'Lucid', name, version: 1, status: 'checked' });
+  const outcome = new Map();   // The Desk's outcomes, as its PUT sets them
+  const desk6 = () => ({ accounts: [
+    { account: 'SIM-A', firm: 'Lucid', archived: false, accountType: lucid('sample-lucid-150k', 'Flex 150K Eval'), source: {}, outcome: outcome.get('SIM-A') || null },
+    { account: 'SIM-B', firm: 'Lucid', archived: false, accountType: lucid('sample-lucid-50k', 'Flex 50K Eval'), source: {}, outcome: outcome.get('SIM-B') || null },
+    { account: 'SIM-C', firm: 'Lucid', archived: false, accountType: lucid('sample-lucid-25k-daily', 'Flex 25K Daily'), source: {}, outcome: null },
+    { account: 'EVAL-A', firm: 'Firm A', archived: false, accountType: null, source: { trailing_drawdown: 'prop' }, outcome: outcome.get('EVAL-A') || null },
+    { account: 'SIM-G', firm: 'Lucid', archived: false, accountType: null, source: {}, outcome: null },
+  ] });
+  const puts = [];
+  const ctx6 = await browser.newContext({ viewport: { width: 1366, height: 768 } });
+  await ctx6.addInitScript(seed, [{ Acc: { panels: [{ id: 'ap', type: 'accounts', x: 0, y: 0, w: 12, h: 6 }] } }]);
+  const p6 = await ctx6.newPage();
+  p6.on('pageerror', e => fail('page error: ' + e.message));
+  const cors = { 'Access-Control-Allow-Origin': 'http://localhost:' + LC_PORT, 'Access-Control-Allow-Methods': 'GET, PUT, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type' };
+  await p6.route('http://localhost:8800/api/chart-accounts', r => r.fulfill({ status: 200, contentType: 'application/json', headers: cors, body: JSON.stringify(desk6()) }));
+  await p6.route(/http:\/\/localhost:8800\/api\/accounts\/[^/]+\/outcome$/, r => {
+    if (r.request().method() === 'OPTIONS') return r.fulfill({ status: 204, headers: cors });
+    const name = decodeURIComponent(r.request().url().split('/api/accounts/')[1].split('/')[0]), body = JSON.parse(r.request().postData() || '{}');
+    puts.push({ name, body, method: r.request().method() });
+    outcome.set(name, body.outcome);
+    return r.fulfill({ status: 200, contentType: 'application/json', headers: cors, body: JSON.stringify({ account: name, outcome: body.outcome }) });
+  });
+  /* Sunday item A: the fake Desk's PUT /api/chart-accounts/listed (with its OPTIONS), as The Desk answers it */
+  const listedPuts = [];
+  await p6.route('http://localhost:8800/api/chart-accounts/listed', r => {
+    if (r.request().method() === 'OPTIONS') return r.fulfill({ status: 204, headers: cors });
+    const body = JSON.parse(r.request().postData() || '{}');
+    listedPuts.push({ method: r.request().method(), body, type: r.request().headers()['content-type'] });
+    return r.fulfill({ status: 200, contentType: 'application/json', headers: cors, body: JSON.stringify({ kept: body.accounts || [], left_out: [] }) });
+  });
+  await p6.goto(`http://localhost:${LC_PORT}/live/?layout=Acc`);
+  await p6.waitForSelector('.cb-pin-key', { timeout: 15000 }); await enterPin(p6, TEST_PIN);
+  await p6.waitForFunction(() => document.getElementById('wsConn').classList.contains('live'), null, { timeout: 40000 });
+  await until(async () => (await rows(p6, '.apg-acc-g')).some(r => r.k === 'SIM-B'), 'SIM-B on the Accounts tab');
+  const lp = await until(() => listedPuts[0], 'the listed accounts to The Desk');
+  const ln = lp && Array.isArray(lp.body.accounts) ? lp.body.accounts : [];
+  check(lp && lp.method === 'PUT' && /application\/json/.test(lp.type || '') && ln.includes('EVAL-A') && !ln.some(n => /^\s*(sim|playback)/i.test(n)) && ln.join() === ln.slice().sort().join(),
+    'Sunday A: PUT /api/chart-accounts/listed with the accounts ChartBridge lists, Sim and Playback left out, sorted: ' + JSON.stringify(lp && lp.body));
+  await wait(400);
+  check(listedPuts.length === 1, 'Sunday A: sent once (the list unchanged): ' + listedPuts.length);
+  await p6.click(`${AP} button[data-act="sim-toggle"]`).catch(() => {});
+  // the drawer: Blown and Promoted only for an account with a prop account on The Desk
+  await p6.click(`${AP} button[data-act="drawer"][data-id="SIM-B"]`);
+  const btns = await until(() => p6.$$eval(`${AP} .gr-row[data-k="dr|SIM-B"] button[data-act="outcome"]`, els => els.length ? els.map(e => e.textContent) : null), 'Blown and Promoted in SIM-B\'s drawer');
+  check(btns && btns.join(',') === 'Blown,Promoted', '1.40.0: the drawer of an account with a prop account on The Desk: Blown and Promoted (' + JSON.stringify(btns) + ')');
+  await p6.click(`${AP} button[data-act="drawer"][data-id="SIM-G"]`);
+  await until(() => p6.$(`${AP} .gr-row[data-k="dr|SIM-G"]`), 'SIM-G\'s drawer');
+  check(!(await p6.$(`${AP} .gr-row[data-k="dr|SIM-G"] button[data-act="outcome"]`)), '1.40.0: no prop account on The Desk (no type, no prop number): no Blown or Promoted');
+  await p6.click(`${AP} button[data-act="drawer"][data-id="SIM-B"]`);
+  await p6.click(`${AP} .gr-row[data-k="dr|SIM-B"] button[data-act="outcome"][data-v="blown"]`);
+  const ask = await until(() => p6.$eval(`${AP} .gr-row[data-k="out|SIM-B|blown"]`, e => e.textContent), 'the in-page confirm');
+  check(/^Mark SIM-B Blown on The Desk\? It leaves its group and the copier and is hidden on this page; its trades, fees and history stay on The Desk\./.test(ask || '') && puts.length === 0, '1.40.0: Blown asks first, in the page; nothing sent yet: ' + ask);
+  await p6.screenshot({ path: path.join(out, 'accounts-14-blown-ask-1366.png') });
+  /* 1.40.0 (Anthony 2026-10-29): the Room cell, both limits on one line (SIM-C: its own daily and drawdown) */
+  const roomC = await p6.$eval(`${AP} .gr-row[data-k="SIM-C"] .apg-rtext`, e => ({ text: e.textContent, tight: [...e.querySelectorAll('.apg-tight')].map(x => x.textContent), one: e.getBoundingClientRect().height < 24 }));
+  check(/^DD \$[\d,]+ · D \$[\d,]+$/.test(roomC.text) && roomC.tight.length === 1 && roomC.one, '1.40.0: the Room cell: "DD $x · D $y" on one line, the tighter in amber: ' + JSON.stringify(roomC));
+  await p6.locator(`${AP} .apg-acc-g`).screenshot({ path: path.join(out, 'accounts-17-room-cell-1366.png') });
+  const g0 = ((await control(LC_PORT, 'received')).groupMsgs || []).length;
+  await p6.click(`${AP} button[data-act="outcome-yes"][data-id="SIM-B"]`);
+  await until(() => puts.length === 1, 'the PUT to The Desk');
+  check(puts[0] && puts[0].method === 'PUT' && puts[0].name === 'SIM-B' && JSON.stringify(puts[0].body) === '{"outcome":"blown"}', '1.40.0: Mark Blown: PUT /api/accounts/SIM-B/outcome {"outcome":"blown"}: ' + JSON.stringify(puts[0]));
+  const leave = await until(async () => ((await control(LC_PORT, 'received')).groupMsgs || []).slice(g0).find(m => m.type === 'accountGroup' && m.account === 'SIM-B'), 'SIM-B out of Lucid');
+  check(leave && leave.group === null, '1.40.0: then out of its group (accountGroup with no group): ' + JSON.stringify(leave));
+  const hid = await until(async () => (await v3(LC_PORT)).accounts.archived.some(a => a.name === 'SIM-B') ? true : null, 'SIM-B hidden');
+  /* the page re-renders after ChartBridge's accounts message: wait for it (review: checked at once, this was flaky) */
+  const shown = hid && await until(async () => !(await rows(p6, '.apg-acc-g')).some(r => r.k === 'SIM-B') && !!(await p6.$(`${AP} .apg-arch-g [data-k="a|SIM-B"]`)), 'SIM-B out of the rows and under Hidden');
+  check(!!shown, '1.40.0: then hidden: out of the rows, under Hidden');
+  // a step ChartBridge would refuse (EVAL-A holds a position): shown, nothing sent
+  const a0 = ((await control(LC_PORT, 'received')).types.accountArchive || 0);
+  await p6.click(`${AP} button[data-act="drawer"][data-id="EVAL-A"]`);
+  await p6.click(`${AP} .gr-row[data-k="dr|EVAL-A"] button[data-act="outcome"][data-v="promoted"]`);
+  await p6.click(`${AP} button[data-act="outcome-yes"][data-id="EVAL-A"]`);
+  const box = await until(() => p6.$eval(`${AP} .apg-life`, e => /EVAL-A \(Promoted on The Desk\): not hidden yet: EVAL-A has a position or working orders/.test(e.textContent) ? e.textContent : null).catch(() => null), 'EVAL-A\'s refusal shown');
+  check(!!box && ((await control(LC_PORT, 'received')).types.accountArchive || 0) === a0, '1.40.0: a step ChartBridge would refuse is shown above the rows, nothing sent: ' + box);
+  await p6.screenshot({ path: path.join(out, 'accounts-15-lifecycle-1366.png') });
+  /* 1.40.0 (review): a Promoted eval in a group trade stays in its group (a group Close or Flatten still covers it) until it is flat
+     with no working orders; the box says it waits; once flat it leaves by itself */
+  await control(LC_PORT, 'elsewhere', { account: 'SIM-A', root: 'MNQ', side: 'buy', kind: 'market', qty: 1 });
+  await until(async () => (await v3(LC_PORT)).accounts.list.some(a => a.name === 'SIM-A' && (a.positions || []).some(x => x.qty)), 'SIM-A long 1 MNQ');
+  const ga = ((await control(LC_PORT, 'received')).groupMsgs || []).length;
+  await p6.click(`${AP} button[data-act="drawer"][data-id="SIM-A"]`);
+  await p6.click(`${AP} .gr-row[data-k="dr|SIM-A"] button[data-act="outcome"][data-v="promoted"]`);
+  await p6.click(`${AP} button[data-act="outcome-yes"][data-id="SIM-A"]`);
+  const wbox = await until(() => p6.$eval(`${AP} .apg-life`, e => /SIM-A \(Promoted on The Desk\): out of its group: waits until SIM-A is flat with no working orders/.test(e.textContent) ? e.textContent : null).catch(() => null), 'SIM-A waits until flat');
+  await wait(500);
+  const early = ((await control(LC_PORT, 'received')).groupMsgs || []).slice(ga).filter(m => m.type === 'accountGroup' && m.account === 'SIM-A');
+  check(!!wbox && early.length === 0, '1.40.0: a Promoted member in a trade stays in its group, the box says it waits until flat, nothing sent: ' + wbox);
+  await control(LC_PORT, 'elsewhere', { account: 'SIM-A', root: 'MNQ', side: 'sell', kind: 'market', qty: 1 });
+  const lateA = await until(async () => ((await control(LC_PORT, 'received')).groupMsgs || []).slice(ga).find(m => m.type === 'accountGroup' && m.account === 'SIM-A'), 'SIM-A leaves Lucid once flat');
+  check(lateA && lateA.group === null, '1.40.0: flat again: it leaves its group by itself: ' + JSON.stringify(lateA));
+  // the accounts NinjaTrader no longer lists: a member and a follower that is on
+  await control(LC_PORT, 'unlist-account', { name: 'SIM-C' });
+  await control(LC_PORT, 'unlist-account', { name: 'SIM-F1' });
+  const nl = await until(async () => { const r = await rows(p6, '.apg-nl-g'); return r.some(x => x.k === 'nl|SIM-C') && r.some(x => x.k === 'nl|SIM-F1') ? r : null; }, 'Not in NinjaTrader now');
+  check(nl && /in Lucid/.test(nl.find(x => x.k === 'nl|SIM-C').text) && /copier follower \(on\)/.test(nl.find(x => x.k === 'nl|SIM-F1').text), '1.40.0 (audit 8): Not in NinjaTrader now lists the member (in Lucid) and the follower (on): ' + JSON.stringify(nl && nl.map(x => x.text)));
+  check(!!(await p6.$(`${AP} [data-k="nl|SIM-C"] button[data-act="nl-leave"]`)) && !!(await p6.$(`${AP} [data-k="nl|SIM-F1"] button[data-act="nl-foff"]`)) && !!(await p6.$(`${AP} [data-k="nl|SIM-C"] button[data-act="outcome"]`)),
+    '1.40.0: Remove from group, Turn follower off, and Blown and Promoted for the one with a prop account');
+  await p6.screenshot({ path: path.join(out, 'accounts-16-not-listed-1366.png') });
+  await p6.click(`${AP} button[data-act="nl-leave"][data-id="SIM-C"]`);
+  await until(async () => !(await rows(p6, '.apg-nl-g')).some(x => x.k === 'nl|SIM-C'), 'SIM-C out of Lucid (and out of the section)');
+  const rmc = ((await control(LC_PORT, 'received')).groupMsgs || []).filter(m => m.type === 'accountGroup' && m.account === 'SIM-C');
+  check(rmc.length === 1 && rmc[0].group === null, '1.40.0: Remove from group: accountGroup with no group, and SIM-C leaves the section (ChartBridge\'s groups no longer hold it)');
+  await p6.click(`${AP} button[data-act="nl-foff"][data-id="SIM-F1"]`);
+  await until(() => p6.$(`${AP} button[data-act="nl-fremove"][data-id="SIM-F1"]`), 'Remove follower once it is off');
+  await p6.click(`${AP} button[data-act="nl-fremove"][data-id="SIM-F1"]`);
+  await until(async () => !(await rows(p6, '.apg-nl-g')).some(x => x.k === 'nl|SIM-F1'), 'SIM-F1 removed as a follower');
+  check(!(await v3(LC_PORT)).copier.followers.some(f => f.account === 'SIM-F1'), '1.40.0: Turn follower off, then Remove follower: SIM-F1 is no follower on ChartBridge');
+  check(await p6.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'no sideways scroll at 1366');
+  await p6.setViewportSize({ width: 900, height: 768 }); await wait(400);
+  /* the workspace's top bar is wider than 900 px of its own; the new rows must fit their panel */
+  const fits = await p6.$eval(AP, e => { const R = e.getBoundingClientRect().right; return [...e.querySelectorAll('.apg-life, .apg-nl-g, .apg-nl-g .gr-row, .apg-nl-g button')].every(x => x.getBoundingClientRect().right <= R + 1); });
+  check(fits, '1.40.0: at 900 px the box and the Not in NinjaTrader now rows fit inside the panel');
+  await ctx6.close();
   }
 
   /* ================================================================ 3. ChartBridge 0.3.8: no v3 */

@@ -464,6 +464,8 @@ public static class AccountsHarness
         Check(ChartBridgeAccounts.Checked("EVAL-A") && ChartBridgeAccounts.Checked("FUNDED-B"), "restart, not connected for 60 s: the saved checkmarks stay (never connected this run, not Gone)");
         string acc = ChartBridgeAccounts.AccountsJson(Account.All.ToList(), 0);
         Check(Entry(acc, "EVAL-A") == "" && Entry(acc, "FUNDED-B") == "" && Entry(acc, "Sim101") != "", "0.5.1: a new session: an account not connected yet (in NinjaTrader or not) is not listed; accounts.txt keeps its checkmark");
+        Check(acc.Contains("\"notListed\":[") && acc.Contains("{\"name\":\"EVAL-A\",\"trade\":true,\"lastConnected\":") && acc.Contains("{\"name\":\"FUNDED-B\",\"trade\":true,\"lastConnected\":") && !acc.Contains("{\"name\":\"Sim101\",\"trade\":true,\"lastConnected\""),
+              "0.6.10: notListed: each account accounts.txt keeps that NinjaTrader has not had connected this session, its checkmark and last connected time (never one listed): " + acc.Substring(acc.IndexOf("\"notListed\"")));
         int calls = evalA.Calls.Count;
         Send(page, Order("EVAL-A", "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1"));
         Check(Rejected("EVAL-A is not connected") && evalA.Calls.Count == calls, "not connected yet: an order is refused by the normal gate");
@@ -926,10 +928,34 @@ public static class AccountsHarness
         e3.Positions.Add(new Position { Instrument = mnq, MarketPosition = MarketPosition.Long, Quantity = 1, AveragePrice = 25000 });
         ChartBridgeAccounts.Tick(t5 + 33000);
         Account.All.Remove(e3);
+        sent.Clear();
         Send(page, Hide("TEST-EVAL-3"));
-        Check(Rejected("TEST-EVAL-3 was last seen with a position or working orders: only a flat account can be hidden"), "0.5.1: Hide of an account NinjaTrader no longer lists, last seen with a position: refused");
-        Account.All.Add(e3); e3.Positions.Clear();
+        Check(!sent.Any(x => x.Contains("\"type\":\"reject\"")) && ArchivedNow("TEST-EVAL-3") && Log_().Contains("\tTEST-EVAL-3\tarchived\tby the page; NinjaTrader does not list it and it was last seen with a position or working orders"),
+              "0.6.10: Hide of an account NinjaTrader no longer lists, last seen with a position: accepted (no stale hold), the log says what it was last seen with");
+        Account.All.Add(e3);
+        sent.Clear();
+        ChartBridgeAccounts.Tick(t5 + 33500);
+        Check(!ArchivedNow("TEST-EVAL-3") && Entry(Accounts(), "TEST-EVAL-3").Contains("\"trade\":false") && sent.Any(x => x.Contains("TEST-EVAL-3 was archived, but NinjaTrader shows a position or working orders on it")),
+              "0.6.10: listed again holding the position: back at once, unchecked, warned (its exits work)");
+        e3.Positions.Clear();
         ChartBridgeAccounts.Tick(t5 + 34000);
+        // 0.6.10 (audit 5): Show of an account NinjaTrader has not had connected this session: shown, said so, and in notListed until then
+        Send(page, Hide("TEST-EVAL-3"));
+        Check(ArchivedNow("TEST-EVAL-3"), "0.6.10: TEST-EVAL-3 hidden again");
+        Account.All.Remove(e3);
+        NewSession(t5 + 34500);
+        sent.Clear();
+        Send(page, Show("TEST-EVAL-3"));
+        string acc3 = ChartBridgeAccounts.AccountsJson(Account.All.ToList(), 0);
+        Check(!sent.Any(x => x.Contains("\"type\":\"reject\"")) && Entry(acc3, "TEST-EVAL-3") == "" && !acc3.Contains("{\"name\":\"TEST-EVAL-3\",\"at\":") && acc3.Contains("{\"name\":\"TEST-EVAL-3\",\"trade\":false,\"lastConnected\":") &&
+              sent.Any(x => x.Contains("\"level\":\"info\"") && x.Contains("TEST-EVAL-3 is shown again: it is listed once NinjaTrader has it connected this session")) &&
+              Log_().Contains("\tTEST-EVAL-3\tshown\tby the page; unchecked; listed once NinjaTrader has it connected this session\n"),
+              "0.6.10: Show of an account not connected this session: not listed, not hidden, in notListed; the pages are told it shows once NinjaTrader lists it; logged");
+        Account.All.Add(e3);
+        ChartBridgeAccounts.SeenConnected(e3);
+        Check(ChartBridgeAccounts.Listed("TEST-EVAL-3") && !ChartBridgeAccounts.AccountsJson(Account.All.ToList(), 0).Contains("{\"name\":\"TEST-EVAL-3\",\"trade\""), "0.6.10: connected again: listed, out of notListed");
+        foreach (Account x in Account.All.ToList()) ChartBridgeAccounts.SeenConnected(x);
+        ChartBridgeAccounts.Tick(t5 + 35000);
 
         // 0.5.5: the one-time conversion of the retired accounts line is gone. A run with no accounts-detail.txt (what started
         // 0.5.1's conversion) hides nothing and says nothing of an accounts line; accounts-detail.txt holds the connected times only

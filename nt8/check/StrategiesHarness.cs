@@ -111,6 +111,7 @@ public static class StrategiesHarness
             RestartFills();
             SavedBeforeSent();   // fix1 (F5)
             DoneRace();          // fix1
+            PlacingNotRestart(); // 0.6.10
             Done();
             Check(!sentV2.Any(m => m.Contains("\"type\":\"managed\"")), "a v2 page never gets a managed message");
         }
@@ -823,6 +824,64 @@ public static class StrategiesHarness
         foreach (Order o in a.Orders) if (o.OrderState != OrderState.Filled) o.OrderState = OrderState.Cancelled;
         SetPos(a, 0, 0);
         Trade(25000);
+    }
+
+    // 0.6.10: NinjaTrader reports a new order the moment it is created, before ChartBridge registers its strategy (WORK's log).
+    // That report is not a restart: no "could not be resumed" alarm, the page never sees it unmanaged, and the entry is managed
+    // as usual. After a real restart the same entry, its line lost, is still recovered and still said.
+    static void PlacingNotRestart()
+    {
+        Config(false, true);
+        Trade(25000);
+        Account a = NewAccount("SIM-U7");
+        int reported = 0;
+        a.OnCreate = o => { reported++; Update(a, o); };   // as NinjaTrader: OrderUpdate, Initialized, inside CreateOrder
+        sent.Clear();
+        Msg("order", Ord("SIM-U7", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":24990,\"strategy\":{\"name\":\"Fresh\",\"stop\":8,\"t1\":16,\"t1Share\":100,\"beAfter\":4,\"bePlus\":0}"));
+        Check(reported == 1 && a.Calls.Count == 1 && a.Orders.Count == 1, "the new entry is reported at creation and sent: " + string.Join(" | ", a.Calls));
+        Order e = a.Orders[0];
+        string t = Tag(e);
+        Check(!sent.Any(m => m.Contains("could not be resumed")) && !Error("CB#" + t), "no restart alarm for an entry being placed: " + string.Join(" | ", sent.Where(x => x.Contains("error"))));
+        Check(!Managed().Any(m => m.Contains("\"state\":\"unmanaged\"")), "the page never sees it unmanaged: " + string.Join(" | ", Managed()));
+        Check(Managed().Any(m => m.Contains("\"account\":\"SIM-U7\"") && m.Contains("\"state\":\"waiting\"")), "it waits for its fill, managed: " + string.Join(" | ", Managed()));
+        Check(ChartBridgeOrders.PlacingCount == 0, "the Placing mark ends with the placement");
+        Check(File.ReadAllLines(ManagedFile).Any(l => l.StartsWith(t + "\t")), "its managed.txt line is written");
+        int n = a.Calls.Count;
+        Fill(a, e, 1, 24990);
+        SetPos(a, 1, 24990);
+        List<string> legs = After(a, n);
+        Check(legs.Count == 2 && legs[0].StartsWith("submit CB#" + t + " stop f1 q1 p24990 k1 Sell StopMarket 1 L0 S24988") && legs[1].StartsWith("submit CB#" + t + " target f1 q1 p24990 k1 Sell Limit 1 L24994"),
+              "its fill gets the strategy's stop and target: " + string.Join(" | ", legs));
+        Order stop = a.Orders.First(o => o.Name.Contains(" stop "));
+        int k = a.Calls.Count;
+        Tick(600); Trade(24992); Tick(600); Trade(24992.25);
+        Check(a.Calls.Count == k + 1 && a.Calls.Last() == "change " + stop.Name + " L0 S24990 Q0", "and breakeven moves its stop (managed, not unmanaged): " + a.Calls.Last());
+        Confirm(a, stop, 24990);
+        foreach (Order o in a.Orders) if (o.OrderState != OrderState.Filled) o.OrderState = OrderState.Cancelled;
+        SetPos(a, 0, 0);
+        ChartBridgeOrders.CheckLegs(clock);
+
+        // a refused placement (managed.txt cannot be written) also ends its mark, with no alarm
+        ChartBridgeOrders.ManagedWriteFault = () => "the disk is full";
+        sent.Clear();
+        n = a.Calls.Count;
+        try { Msg("order", Ord("SIM-U7", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":24990,\"strategy\":{\"name\":\"Refused\",\"stop\":8}")); }
+        finally { ChartBridgeOrders.ManagedWriteFault = null; }
+        Check(Rejected("managed.txt could not be saved") && a.Calls.Count == n && ChartBridgeOrders.PlacingCount == 0 && !sent.Any(m => m.Contains("could not be resumed")),
+              "a refused strategy entry: no alarm, nothing sent, the mark ended: " + Last());
+
+        // a real restart: an entry left from before it, its line lost, is still recovered and still said (the mark is memory only)
+        Msg("order", Ord("SIM-U7", "\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":24985,\"strategy\":{\"name\":\"Orphan\",\"stop\":8}"));
+        Order orphan = a.Orders.Last();
+        a.OnCreate = null;
+        File.Delete(ManagedFile);
+        Restart();
+        sent.Clear();
+        ChartBridgeOrders.CheckLegs(clock);
+        Check(Error("MNQ SIM-U7: Order Strategy entry CB#" + Tag(orphan) + " could not be resumed after the restart (managed.txt has no line for it)"),
+              "after a real restart a genuinely orphaned strategy entry is still recovered and said: " + string.Join(" | ", sent.Where(x => x.Contains("error"))));
+        orphan.OrderState = OrderState.Cancelled; Update(a, orphan);
+        ChartBridgeOrders.CheckLegs(clock);
     }
 
     // ------------------------------------------------------------ done: the legs gone, the page told, the line removed
