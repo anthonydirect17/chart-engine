@@ -68,8 +68,11 @@ test('tick file: installed, compiled by the checks, no em or en dashes', () => {
     assert.doesNotMatch(read(...f), /[–—]/, f.join('/') + ': no em or en dashes');
 });
 
-test('1 second bars (item 11): the tick request starts at the session open, not 12:00 AM of the day before', () => {
+test('1 second bars (item 11, next build narrowed): from 12:00 AM of the session\'s own date (never before the open), from the open itself when that answer misses the open; never the day before', () => {
   const f = between(bars, 'private static Outcome Fetch1s(', 'public static string Diag1sJson(');
-  assert.match(f, /DateTime fromNt = TimeZoneInfo\.ConvertTimeFromUtc\(openUtc, ntZone\);/);
+  assert.match(f, /DateTime openNt = TimeZoneInfo\.ConvertTimeFromUtc\(openUtc, ntZone\);/);
+  assert.match(f, /DateTime fromNt = wide \? openNt : NarrowFrom1s\(openNt, toNt\);/);
+  assert.match(bars, /public static DateTime NarrowFrom1s\(DateTime openNt, DateTime closeNt\) \{ DateTime d = closeNt\.Date; return d > openNt \? d : openNt; \}/);
+  assert.match(f, /if \(!wide && \(sb == null \|\| sb\.Rows\.Count == 0 \|\| sb\.Rows\[0\]\.T > fromMs \+ Cover1sMinutes \* 60000L\)\)/, 'a narrow answer that misses the open is never sent');
   assert.ok(!/ConvertTimeFromUtc\(openUtc, ntZone\)\.Date/.test(f));
 });

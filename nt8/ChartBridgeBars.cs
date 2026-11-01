@@ -182,7 +182,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static string[] DefaultRoots() { return new string[] { "NQ", "MNQ", "ES", "MES" }; }
         private static string[] DefaultRoots1s() { return new string[] { "NQ", "MNQ" }; }
 
-        public static void ResetConfig() { Enabled = false; Roots = DefaultRoots(); Pc = ""; oneSecondOff = false; Roots1s = DefaultRoots1s(); lock (Planned1s) Planned1s.Clear(); }
+        public static void ResetConfig() { Enabled = false; Roots = DefaultRoots(); Pc = ""; oneSecondOff = false; Roots1s = DefaultRoots1s(); lock (Planned1s) Planned1s.Clear(); lock (Wide1s) Wide1s.Clear(); }
 
         // Called by ChartBridgeConfig.Load; true when the key is one of these.
         public static bool ReadConfig(string key, string val)
@@ -721,7 +721,17 @@ namespace NinjaTrader.NinjaScript.AddOns
                 (gaveUp ? "; tried " + MaxTries + " times, not asked again until ChartBridge restarts" : "; trying again in " + RetryMinutes + " minutes"));
         }
 
-        // The session's trades from NinjaTrader (1 tick, Last, whole trading days from the open's date to the close, never past now), made
+        // Next build (narrow request): NinjaTrader turns a by-date request's from into 12:00 AM of its date and answers whole trading
+        // days, so a from at the open (18:00 New York, the day before the session's date) still brought the whole session before. The
+        // request now starts at 12:00 AM of the session's own date in NinjaTrader's time (the trading day the session is, never before
+        // the open), so the answer is the session alone. The answer must still reach the open: its first trade in the session no more
+        // than Cover1sMinutes after it, else that job is asked once more from the open itself (the 0.6.10 request, the wide one) on the
+        // next pass. A restart tries the narrow request again first.
+        public static int Cover1sMinutes = 10;
+        private static readonly HashSet<string> Wide1s = new HashSet<string>();   // jobs whose narrow answer did not reach the open
+        public static DateTime NarrowFrom1s(DateTime openNt, DateTime closeNt) { DateTime d = closeNt.Date; return d > openNt ? d : openNt; }
+
+        // The session's trades from NinjaTrader (1 tick, Last, whole trading days from the session's date to the close, never past now), made
         // into 1 second rows on NinjaTrader's thread (BuildSeconds), then split into messages and queued (bars1s/) here.
         private static Outcome Fetch1s(BarsJob j, Func<bool> stopping)
         {
@@ -733,8 +743,11 @@ namespace NinjaTrader.NinjaScript.AddOns
             TimeZoneInfo ntZone = NinjaTrader.Core.Globals.GeneralOptions.TimeZoneInfo;
             // Sunday 11-01 (item 11): from the session's open itself, NinjaTrader's time. From 12:00 AM of the open's date NinjaTrader gave the
             // whole session before as well (its whole trading days); the rows are cut to the session by time either way.
-            DateTime fromNt = TimeZoneInfo.ConvertTimeFromUtc(openUtc, ntZone);
+            DateTime openNt = TimeZoneInfo.ConvertTimeFromUtc(openUtc, ntZone);
             DateTime toNt = TimeZoneInfo.ConvertTimeFromUtc(closeUtc, ntZone);
+            bool wide;
+            lock (Wide1s) wide = Wide1s.Contains(j.Key);
+            DateTime fromNt = wide ? openNt : NarrowFrom1s(openNt, toNt);   // next build: the session's own trading day
             DateTime nowNt = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(nowUtc, DateTimeKind.Utc), ntZone);
             if (toNt > nowNt) toNt = nowNt;
             long fromMs = (long)Math.Round(ChartBridgeTime.UtcMs(openUtc)), toMs = (long)Math.Round(ChartBridgeTime.UtcMs(closeUtc));
@@ -760,6 +773,16 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (t.GateStuck) { state1s = "waiting for the gate: " + t.Error; return Outcome.Wait; }
             if (t.Error != null) { Later1s(j, t.Error); return Outcome.Later; }
             SecondsBuild sb = t.Built as SecondsBuild;
+            if (!wide && (sb == null || sb.Rows.Count == 0 || sb.Rows[0].T > fromMs + Cover1sMinutes * 60000L))
+            {
+                // the narrow answer did not reach the open (or had nothing): asked from the open itself on the next pass, never sent as it is
+                lock (Wide1s) Wide1s.Add(j.Key);
+                string first = sb == null || sb.Rows.Count == 0 ? "no trade in the session" : "its first trade in the session " + Math.Round((sb.Rows[0].T - fromMs) / 60000.0) + " minutes after the open";
+                state1s = "asking again from the open: 1s " + j.Key;
+                Note1s("1 second bars for " + inst.FullName + " session " + j.Session.ToString("yyyy-MM-dd", Inv) + ": the request from " + fromNt.ToString("yyyy-MM-dd HH:mm", Inv) +
+                       " NinjaTrader time did not reach the open (" + first + "); asked again from the open itself on the next pass");
+                return Outcome.Wait;
+            }
             if (sb == null || sb.Rows.Count == 0) { Later1s(j, "NinjaTrader has no trades for it"); return Outcome.Later; }
             if (stopping()) return Outcome.Stopped;
             string root = (inst.MasterInstrument.Name ?? j.Root).ToUpperInvariant();
@@ -768,9 +791,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             string err = ChartBridgeBars1sQueue.Queue(j.Key, parts);
             if (err != null) { Later1s(j, "could not save the 1 second bars: " + err); return Outcome.Later; }
             lock (RetryAt) { string k = Key1s(j.Key); RetryAt.Remove(k); Tries.Remove(k); LoggedFailure.Remove(k); }
+            lock (Wide1s) Wide1s.Remove(j.Key);
             error1s = "";
             lastBuild1s = j.Key + ": " + sb.Trades + " trades, " + sb.Rows.Count + " seconds, " + parts.Count + " messages, " + sb.Outside + " trades outside the session left out" +
-                          " (asked " + fromNt.ToString("yyyy-MM-dd HH:mm", Inv) + " to " + toNt.ToString("yyyy-MM-dd HH:mm", Inv) + " NinjaTrader time), sides " + sb.Method +
+                          " (asked " + fromNt.ToString("yyyy-MM-dd HH:mm", Inv) + " to " + toNt.ToString("yyyy-MM-dd HH:mm", Inv) + " NinjaTrader time, " + (wide ? "from the open: the narrow request did not reach it" : "the session's own trading day") + "), sides " + sb.Method +
                           " (bidAsk " + sb.BidAsk + ", tickRule " + sb.TickRule + ", none " + sb.None + "), built in " + Math.Round(t.BuildMs) + " ms on NinjaTrader's thread" +
                           (sb.QuoteError != null ? "; NinjaTrader gave no bid and ask with the trades (" + sb.QuoteError + ")" : "");
             ChartBridgeServer.Log("1 second bars for " + inst.FullName + " session " + j.Session.ToString("yyyy-MM-dd", Inv) + ": " + lastBuild1s.Substring(j.Key.Length + 2) + "; queued for The Desk");
