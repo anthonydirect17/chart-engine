@@ -151,8 +151,15 @@ const BAR_TRAIL_MAX = 50, BAR_OFFSET_MAX = 100;
    or neither (neither: 1 minute bars, as the first build), and `startTicks` (optional, 0 or absent: at once), the open profit in
    ticks before it starts. ChartBridge's keys: barTrailType, barTrailSize, barTrailStart. */
 const BAR_TYPES = ['minute', 'range'], BAR_MINUTES = [1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30, 60], BAR_RANGE_MAX = 400, BAR_START_MAX = 2000;
-const barKind = bt => ({ type: bt && bt.type === 'range' ? 'range' : 'minute', size: bt && isInt(bt.size) ? bt.size : 1 });
-const barKindText = bt => { const k = barKind(bt); return k.type === 'range' ? k.size + '-range' : k.size + ' min'; };
+/* No type and no size: 1 minute bars (the first build's document). A type the chart does not support (tick, volume, anything
+   else) is never read as minute bars: barKind says so ({ type, size, supported: false }) and the checks refuse it by name. */
+const barKind = bt => {
+  if (!bt || (!own(bt, 'type') && !own(bt, 'size'))) return { type: 'minute', size: 1, supported: true };
+  const type = typeof bt.type === 'string' ? bt.type : String(bt.type), size = bt.size;
+  const supported = (type === 'minute' && BAR_MINUTES.includes(size)) || (type === 'range' && isInt(size) && size >= 1 && size <= BAR_RANGE_MAX);
+  return { type, size, supported };
+};
+const barKindText = bt => { const k = barKind(bt); return !k.supported ? k.size + ' ' + k.type + ' (not supported)' : k.type === 'range' ? k.size + '-range' : k.size + ' min'; };
 const emptyStrategiesDoc = () => ({ rev: 0, strategies: [] });
 /** A strategy name as The Desk keeps it: runs of spaces as one, trimmed. */
 const strategyName = v => (typeof v === 'string' ? v.replace(/\s+/g, ' ').trim() : '');
@@ -215,7 +222,7 @@ function checkStrategy(s, ctx) {
     if (!wholeIn(bt.bars, 1, BAR_TRAIL_MAX)) return bad('barTrail', 'The bar trail must be a whole number of bars from 1 to ' + BAR_TRAIL_MAX + '.');
     if (!wholeIn(bt.offsetTicks, 0, BAR_OFFSET_MAX)) return bad('barOffset', 'The bar trail\'s offset must be a whole number of ticks from 0 to ' + BAR_OFFSET_MAX + '.');
     if (own(bt, 'type') !== own(bt, 'size')) return bad('barType', 'The bar trail\'s bar type and size go together.');
-    if (own(bt, 'type') && !BAR_TYPES.includes(bt.type)) return bad('barType', 'The bar trail\'s bars are minute or range bars.');
+    if (own(bt, 'type') && !BAR_TYPES.includes(bt.type)) return bad('barType', 'The bar trail\'s bars are minute or range bars' + (typeof bt.type === 'string' && bt.type ? ': ' + bt.type + ' bars are not supported.' : '.'));
     if (own(bt, 'type') && bt.type === 'minute' && !BAR_MINUTES.includes(bt.size)) return bad('barSize', 'Minute bars for the bar trail are 1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30 or 60 minutes.');
     if (own(bt, 'type') && bt.type === 'range' && !wholeIn(bt.size, 1, BAR_RANGE_MAX)) return bad('barSize', 'Range bars for the bar trail are a whole number of ticks from 1 to ' + BAR_RANGE_MAX + '.');
     if (own(bt, 'startTicks') && !wholeIn(bt.startTicks, 0, BAR_START_MAX)) return bad('barStart', 'The bar trail\'s start must be a whole number of ticks from 0 to ' + BAR_START_MAX + ' (0: at once).');
@@ -257,6 +264,25 @@ function cleanStrategiesDoc(v) {
     if (checkStrategy(s, { others: out.strategies })) continue;
     ids.add(s.id);
     out.strategies.push(s);
+  }
+  return out;
+}
+/**
+ * Next release (Anthony 2026-11-01: a bar kind or size the chart does not support is said plainly, never dropped in silence):
+ * the strategies of a document as read that cleanStrategiesDoc leaves out, each [{ name, text }] with the reason in The Desk's
+ * words (a bar trail on tick or volume bars, a size the bar trail does not take, any other rule). Never throws.
+ */
+function strategiesLeftOut(v) {
+  if (!isObj(v) || !Array.isArray(v.strategies)) return [];
+  const kept = [], ids = new Set(), out = [];
+  for (const s of v.strategies) {
+    const name = isObj(s) && typeof s.name === 'string' && strategyName(s.name) ? strategyName(s.name) : 'A strategy';
+    if (kept.length >= STRATEGY_MAX) { out.push({ name, text: 'Past the ' + STRATEGY_MAX + ' strategies the chart takes.' }); continue; }
+    if (!isObj(s)) { out.push({ name, text: 'Not a strategy.' }); continue; }
+    if (ids.has(s.id)) { out.push({ name, text: 'Its id is used twice.' }); continue; }
+    const why = checkStrategy(s, { others: kept });
+    if (why) { out.push({ name, text: why.text }); continue; }
+    ids.add(s.id); kept.push(s);
   }
   return out;
 }
@@ -424,6 +450,17 @@ function kindFor(chartKind, family) {
 }
 
 /* ---------------- what ChartBridge says back: managed strategies and merges, in plain words */
+/* next release: ChartBridge's word on the bar trail (`managed` `barTrail` {state, text}, only with a bar trail): on, building
+   (fewer whole bars than asked yet), notProven (range bars not yet known to be NinjaTrader's own from the session open: the stop
+   stays where it is, Anthony 2026-11-01), ended (the session closed: it no longer moves the stop), none (no bars for it). Every
+   state but on is said on the ticket in ChartBridge's words; notProven, ended and none in the warning colour. */
+const BAR_STATE_WARN = ['notProven', 'ended', 'none'];
+function barTrailNote(m) {
+  const b = m && m.barTrail && typeof m.barTrail === 'object' ? m.barTrail : null;
+  if (!b || b.state === 'on' || typeof b.state !== 'string') return { text: '', warn: false };
+  const t = typeof b.text === 'string' && b.text ? b.text : b.state === 'notProven' ? 'not proven yet' : b.state;
+  return { text: ' · Bar trail ' + t, warn: BAR_STATE_WARN.includes(b.state) };
+}
 /** The ticket's line for a `managed` message: { text, level } ('' text for one that is done). */
 function managedLine(m) {
   if (!m || m.state === 'done') return { text: '', level: '' };
@@ -431,9 +468,10 @@ function managedLine(m) {
   const be = n ? m.pairs.filter(p => p && p.be).length : 0, tr = n ? m.pairs.filter(p => p && p.trailing).length : 0;
   const how = n ? ': ' + n + ' pair' + (n > 1 ? 's' : '') + (be ? ', ' + be + ' at breakeven' : '') + (tr ? ', ' + tr + ' trailing' : '') : '';
   const why = typeof m.text === 'string' && m.text ? ' (' + m.text + ')' : '';
-  if (m.state === 'waiting') return { text: name + ': waiting for the fill', level: '' };
-  if (m.state === 'active') return { text: name + ' managing' + how, level: '' };
-  if (m.state === 'resumed') return { text: name + ' resumed after a restart' + how + why, level: 'warn' };
+  const bt = barTrailNote(m);
+  if (m.state === 'waiting') return { text: name + ': waiting for the fill' + bt.text, level: bt.warn ? 'warn' : '' };
+  if (m.state === 'active') return { text: name + ' managing' + how + bt.text, level: bt.warn ? 'warn' : '' };
+  if (m.state === 'resumed') return { text: name + ' resumed after a restart' + how + why + bt.text, level: 'warn' };
   if (m.state === 'unmanaged') return { text: name + ' NOT MANAGED: ' + (typeof m.text === 'string' && m.text ? m.text.replace(/\.?\s*Manage it by hand\.?$/i, '') : 'breakeven and trailing are off') + '. Manage the stop by hand.', level: 'error' };
   return { text: name + ': ' + String(m.state) + why, level: '' };
 }
@@ -472,7 +510,8 @@ function createDesk(o) {
   const st = o.storage, timeout = o.timeoutMs || 5000;
   const get = k => { try { return st ? st.getItem(k) : null; } catch (e) { return null; } };
   const set = (k, v) => { try { if (!st) return false; st.setItem(k, v); return true; } catch (e) { return false; } };
-  const desk = { reach: 'unknown', error: '' };
+  /* leftOut: the strategies the last read or save left out ([{ name, text }], strategiesLeftOut), said on the Strategies screen */
+  const desk = { reach: 'unknown', error: '', leftOut: { hotkeys: [], strategies: [] } };
   const readCache = () => { try { const v = JSON.parse(get(DESK_KEYS.cache)); return isObj(v) ? v : {}; } catch (e) { return {}; } };
   let last = DESK_DEFAULT;
   desk.url = () => last;
@@ -506,6 +545,7 @@ function createDesk(o) {
     if (r.status !== 200 || !isObj(r.body)) return down(r, DOCS[which].what);
     desk.reach = 'ok'; desk.error = '';
     const doc = DOCS[which].clean(r.body);
+    if (which === 'strategies') desk.leftOut.strategies = strategiesLeftOut(r.body);
     keep(which, doc);
     return { ok: true, doc };
   };
@@ -514,6 +554,7 @@ function createDesk(o) {
     if (r.status === 200 && isObj(r.body)) {
       desk.reach = 'ok'; desk.error = '';
       const d = DOCS[which].clean(r.body);
+      if (which === 'strategies') desk.leftOut.strategies = strategiesLeftOut(r.body);
       keep(which, d);
       return { ok: true, doc: d };
     }
@@ -533,5 +574,5 @@ return { SWITCHES, cleanSwitches, deskSyncOn, KEY_ACTIONS, KEY_IDS, keyName, MOD
   emptyHotkeysDoc, cleanHotkeysDoc, hotkeyConflict, keyFromEvent, modifierConflict, checkHotkeysDoc,
   STRATEGY_MAX, NAME_MAX, BAR_TRAIL_MAX, BAR_OFFSET_MAX, BAR_TYPES, BAR_MINUTES, BAR_RANGE_MAX, BAR_START_MAX, barKind, emptyStrategiesDoc, strategyName, checkStrategy, checkStrategiesDoc, cleanStrategiesDoc,
   toWire, WIRE_KEYS, checkWire, describe, newId, resolveKey, clickFamily, KIND_TEXT, baseKind, entryKind, kindFor,
-  managedLine, mergeLine, DESK_KEYS, DESK_DEFAULT, deskUrl, createDesk };
+  managedLine, barTrailNote, strategiesLeftOut, mergeLine, DESK_KEYS, DESK_DEFAULT, deskUrl, createDesk };
 });

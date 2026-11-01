@@ -65,7 +65,7 @@ public static class StrategiesHarness
     {
         ChartBridgeOrders.ResetConfig();
         ChartBridgeOrders.ReadConfig("trading", "true");
-        ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, SIM-S1, SIM-S2, SIM-S3, SIM-S4, SIM-S5, SIM-S6, SIM-S7, SIM-S8, SIM-S9, SIM-T1, SIM-T2, SIM-T3, SIM-T4, SIM-T5, SIM-T6, SIM-T7, SIM-T8, SIM-U1, SIM-U2, SIM-U3, SIM-U4, SIM-U5, SIM-U6, SIM-U7, SIM-B1, SIM-B2, SIM-B3, SIM-B4, SIM-B5, SIM-B6, SIM-B7");
+        ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, SIM-S1, SIM-S2, SIM-S3, SIM-S4, SIM-S5, SIM-S6, SIM-S7, SIM-S8, SIM-S9, SIM-T1, SIM-T2, SIM-T3, SIM-T4, SIM-T5, SIM-T6, SIM-T7, SIM-T8, SIM-U1, SIM-U2, SIM-U3, SIM-U4, SIM-U5, SIM-U6, SIM-U7, SIM-B1, SIM-B2, SIM-B3, SIM-B4, SIM-B5, SIM-B6, SIM-B7, SIM-K1, SIM-K2, SIM-K3, SIM-K4");
         ChartBridgeOrders.ReadConfig("maxQty.MNQ", "6");
         ChartBridgeSwitches.Note("orderTypes", orderTypes ? "on" : "off");   // integration: ChartBridgeConfig.Load records every v3 switch in ChartBridgeSwitches
         ChartBridgeSwitches.Note("strategies", strategies ? "On" : "off");
@@ -485,6 +485,8 @@ public static class StrategiesHarness
         Order stop = a.Orders[1];
         Check(a.Calls[1].Contains(" Sell StopMarket 1 L0 S24996 "), "long 1 at 25000 with a 2 bar trail: stop 24996: " + a.Calls[1]);
         Check(Managed().Any(m => m.Contains("\"barTrail\":2,\"barTrailOffset\":1,\"barTrailType\":\"minute\",\"barTrailSize\":1}")), "backward compatible: a strategy with no bar kind (the first build's) is 1 minute bars, and the managed message says so");
+        Check(Managed().Last(m => m.Contains("\"account\":\"SIM-B1\"")).Contains("\"barTrail\":{\"state\":\"building\",\"text\":\"waiting for 2 whole 1 minute bars\"}"),
+              "the bar trail's state on the chart: waiting for 2 whole bars: " + Managed().Last(m => m.Contains("\"account\":\"SIM-B1\"")));
         int n = a.Calls.Count;
         Tick(1000); TradeAt(10, 2, 5, 25001);           // closes B: one whole bar, the trail needs two
         Check(ChartBridgeOrders.BarTrailBars("MNQ") == 1 && a.Calls.Count == n, "one completed bar of two: no move");
@@ -494,7 +496,7 @@ public static class StrategiesHarness
         Check(a.Calls.Count == n + 1 && a.Calls.Last() == "change " + stop.Name + " L0 S24999.25 Q0", "the bar close: the stop to the lowest low of the last 2 bars less 1 tick (24999.25): " + a.Calls.Last());
         sent.Clear();
         Confirm(a, stop, 24999.25);
-        Check(Managed().Any(m => m.Contains("\"stop\":24999.25") && m.Contains("\"trailing\":true")), "confirmed: managed says trailing");
+        Check(Managed().Any(m => m.Contains("\"stop\":24999.25") && m.Contains("\"trailing\":true") && m.Contains("\"barTrail\":{\"state\":\"on\",\"text\":null}")), "confirmed: managed says trailing, the bar trail on");
         Tick(1000); TradeAt(10, 3, 30, 25005);          // bar D: high 25005
         Tick(1000); TradeAt(10, 4, 0, 25002);           // 10:04:00 exactly is still bar D (end-inclusive): its low 25002
         Check(a.Calls.Count == n + 1, "a new high inside the bar: no move until the bar closes");
@@ -604,42 +606,72 @@ public static class StrategiesHarness
         SetPos(a, 0, 0);
 
         // Range 4 (MNQ 1 point), NinjaTrader's rules: unproven bars never used, the sync by a swing of more than the range each way,
-        // a bar finished at exactly the range, the next one tick on, phantom bars through a gap, a short trailing their highs
+        // a bar finished at exactly the range, the next one tick on, phantom bars through a gap. Anthony 2026-11-01: the trail uses
+        // only prices that traded: a bar's traded high and low (not NinjaTrader's drawn edges), and phantom bars (no trade in them)
+        // are left out. A short with a 1 bar trail, so the last completed bar alone sets the level.
         Account b = NewAccount("SIM-B5");
-        Entry(b, false, "\"name\":\"R4\",\"stop\":16,\"t1\":80,\"t1Share\":100,\"barTrail\":2,\"barTrailOffset\":0,\"barTrailType\":\"range\",\"barTrailSize\":4", 25021);
+        Entry(b, false, "\"name\":\"R4\",\"stop\":16,\"t1\":80,\"t1Share\":100,\"barTrail\":1,\"barTrailOffset\":0,\"barTrailType\":\"range\",\"barTrailSize\":4", 25021);
         Order sstop = b.Orders[1];
         Check(b.Calls[1].Contains(" Buy StopMarket 1 L0 S25025 "), "short 1 at 25021 with a range 4 bar trail: stop 25025: " + b.Calls[1]);
+        Check(ChartBridgeOrders.BarTrailKinds("MNQ") == 3, "the range 4 kind is made at placement (beside 1 and 5 minute): " + ChartBridgeOrders.BarTrailKinds("MNQ"));
         int nb = b.Calls.Count;
         Tick(1000); TradeAt(11, 0, 1, 25020);           // the range bars start here (open 25020), not proven NinjaTrader's yet
+        Check(Managed().Last(m => m.Contains("\"account\":\"SIM-B5\"")).Contains("\"barTrail\":{\"state\":\"notProven\",\"text\":\"not proven yet:"),
+              "range bars ChartBridge has not seen from the session open: managed says not proven yet: " + Managed().Last(m => m.Contains("\"account\":\"SIM-B5\"")));
         Tick(1000); TradeAt(11, 0, 2, 25020.5);
         Tick(1000); TradeAt(11, 0, 3, 25021.25);        // past low + range (25021): that bar finished at 25021, the next opens a tick on
         Tick(1000); TradeAt(11, 0, 4, 25022.5);         // past 25021.25 + range: finished at 25022.25, the next opens at 25022.5
         Check(ChartBridgeOrders.BarTrailBars("MNQ", "range", 4) == 0 && b.Calls.Count == nb, "range: bars before the sync point are never used (" + ChartBridgeOrders.BarTrailBars("MNQ", "range", 4) + ")");
         Tick(1000); TradeAt(11, 0, 5, 25021);           // a rise of more than the range from the low, then a fall of more than it below the high: synced
         Check(ChartBridgeOrders.BarTrailBars("MNQ", "range", 4) == 0, "range: the bar finished on the sync trade is not proven either");
-        Tick(1000); TradeAt(11, 0, 6, 25020);           // finishes the first proven bar (25021.25 .. 25020.25, exactly the range)
+        Check(Managed().Last(m => m.Contains("\"account\":\"SIM-B5\"")).Contains("\"barTrail\":{\"state\":\"building\""), "proven by the swing: managed says it waits for a whole bar");
+        Tick(1000); TradeAt(11, 0, 6, 25020);           // finishes the first proven bar: drawn 25021.25 .. 25020.25 (exactly the range), only 25021 traded in it
         List<double[]> done = ChartBridgeOrders.BarTrailDone("MNQ", "range", 4);
-        Check(done.Count == 1 && done[0][0] == 25021.25 && done[0][1] == 25020.25 && b.Calls.Count == nb,
-              "range: the first proven bar opened a tick below the bar before (25021.25) and finished at exactly the range (25020.25); one bar of two, no move: " + string.Join(" ", done.Select(x => x[0] + "/" + x[1]).ToArray()));
-        Tick(1000); TradeAt(11, 0, 7, 25017.5);         // a gap down through more than the range: the bar finished at 25019, a phantom bar 25018.75 .. 25017.75, then the trade's bar
+        Check(done.Count == 1 && done[0][0] == 25021 && done[0][1] == 25021,
+              "range: the first proven bar, as traded (25021 .. 25021, not NinjaTrader's drawn 25021.25 .. 25020.25, neither of which traded): " + string.Join(" ", done.Select(x => x[0] + "/" + x[1]).ToArray()));
+        Check(b.Calls.Count == nb + 1 && b.Calls.Last() == "change " + sstop.Name + " L0 S25021 Q0", "range: the short's stop to that bar's traded high (25021), a price that traded: " + b.Calls.Last());
+        Confirm(b, sstop, 25021);
+        Check(Managed().Last(m => m.Contains("\"account\":\"SIM-B5\"")).Contains("\"barTrail\":{\"state\":\"on\""), "the bars are ready: managed says on");
+        Tick(1000); TradeAt(11, 0, 7, 25017.5);         // a gap down through more than the range: the bar finished (25020 traded), a phantom bar
+                                                         // 25018.75 .. 25017.75 (no trade in it), then the trade's bar
         done = ChartBridgeOrders.BarTrailDone("MNQ", "range", 4);
-        Check(done.Count == 3 && done[1][0] == 25020 && done[1][1] == 25019 && done[2][0] == 25018.75 && done[2][1] == 25017.75,
-              "range: a gap fills with a phantom bar of exactly the range, one tick on (NinjaTrader's rule): " + string.Join(" ", done.Select(x => x[0] + "/" + x[1]).ToArray()));
-        Check(b.Calls.Count == nb + 1 && b.Calls.Last() == "change " + sstop.Name + " L0 S25020 Q0", "range: a short's stop to the highest high of the last 2 completed bars (the phantom one among them): 25020: " + b.Calls.Last());
+        Check(done.Count == 2 && done[1][0] == 25020 && done[1][1] == 25020 && ChartBridgeOrders.BarTrailPhantoms("MNQ", "range", 4) == 1,
+              "THE PHANTOM RULE: the phantom bar NinjaTrader draws in the gap had no trade: left out; the last completed bar is the one that traded (25020): " + string.Join(" ", done.Select(x => x[0] + "/" + x[1]).ToArray()));
+        Check(b.Calls.Count == nb + 2 && b.Calls.Last() == "change " + sstop.Name + " L0 S25020 Q0",
+              "the short's stop to 25020, the last bar that traded (counted, the phantom bar would have put it at 25018.75, a price that never traded): " + b.Calls.Last());
         Confirm(b, sstop, 25020);
         Tick(1000); TradeAt(11, 0, 8, 25018);           // inside the forming bar: no bar closes, no move
-        Check(b.Calls.Count == nb + 1, "range: inside the forming bar nothing moves");
-        // a feed drop: every kind starts over; range bars wait for a new sync; the session's first trade (18:00 ET) syncs at once
+        Check(b.Calls.Count == nb + 2, "range: inside the forming bar nothing moves");
+        // a gap up through several ranges in one trade: every bar it makes but the last is a phantom bar
+        long ph = ChartBridgeOrders.BarTrailPhantoms("MNQ", "range", 4);
+        Tick(1000); TradeAt(11, 0, 9, 25022.75);        // from the bar 25017.5 .. 25018: finished at 25018.5, phantom 25018.75 .. 25019.75,
+                                                         // 25020 .. 25021, 25021.25 .. 25022.25, then 25022.5 holding the trade
+        done = ChartBridgeOrders.BarTrailDone("MNQ", "range", 4);
+        Check(ChartBridgeOrders.BarTrailPhantoms("MNQ", "range", 4) == ph + 3 && done.Count == 3 && done[2][0] == 25018 && done[2][1] == 25017.5,
+              "a jump of several ranges: 3 phantom bars left out, the finished bar kept as traded (25018 .. 25017.5): " + string.Join(" ", done.Select(x => x[0] + "/" + x[1]).ToArray()));
+        Check(b.Calls.Count == nb + 2, "a level through the last trade (a short at 25018 under 25022.75) is never sent");
+        // a feed drop: every kind starts over; range bars are not proven again until a swing or the next session's open
         ChartBridgeOrders.BarTrailFeedDropped("MNQ");
         Check(ChartBridgeOrders.BarTrailBars("MNQ", "range", 4) == 0 && ChartBridgeOrders.BarTrailBars("MNQ", "minute", 5) == 0, "a feed drop: every bar kind starts over");
-        Tick(1000); TradeAt(16, 58, 0, 25016);          // after the drop: a bar not proven
-        Tick(1000); TradeAt(16, 58, 30, 25014.75);      // breaks down: the unproven bar is not used
-        Check(ChartBridgeOrders.BarTrailBars("MNQ", "range", 4) == 0, "range after a drop: bars not proven are never used");
+        Check(Managed().Last(m => m.Contains("\"account\":\"SIM-B5\"")).Contains("\"barTrail\":{\"state\":\"notProven\""), "after a feed drop, range bars are not proven yet again, and managed says so");
+        Tick(1000); TradeAt(16, 58, 0, 25022);          // after the drop: a bar not proven
+        Tick(1000); TradeAt(16, 58, 30, 25020.75);      // breaks down: the unproven bar is not used
+        Check(ChartBridgeOrders.BarTrailBars("MNQ", "range", 4) == 0 && b.Calls.Count == nb + 2, "range after a drop: bars not proven are never used");
+
+        // Anthony 2026-11-01, every trade closes by the end of the day: the bar trail ends at the session close. The short is still
+        // open at 18:00 (it should not be): the new session's first trade starts every kind over and ends its bar trail
         Tick(1000); TradeAt(18, 0, 1, 25016);           // the 18:00 session's first trade: a new bar at its price, proven (Break at EOD)
-        Tick(1000); TradeAt(18, 0, 2, 25017.25);        // past 25016 + range: the first proven bar finished (25017 .. 25016)
+        Check(Managed().Last(m => m.Contains("\"account\":\"SIM-B5\"")).Contains("\"barTrail\":{\"state\":\"ended\",\"text\":\"ended at the session close"),
+              "the session closed with the short open: managed says its bar trail ended: " + Managed().Last(m => m.Contains("\"account\":\"SIM-B5\"")));
+        Tick(1000); TradeAt(18, 0, 2, 25017.25);        // past 25016 + range: the first proven bar of the new session (only 25016 traded)
         done = ChartBridgeOrders.BarTrailDone("MNQ", "range", 4);
-        Check(done.Count == 1 && done[0][0] == 25017 && done[0][1] == 25016, "range: the session's first trade starts a proven bar at its price; finished at exactly the range: " + string.Join(" ", done.Select(x => x[0] + "/" + x[1]).ToArray()));
+        Check(done.Count == 1 && done[0][0] == 25016 && done[0][1] == 25016, "range: the session's first trade starts a proven bar at its price, nothing kept from the session before: " + string.Join(" ", done.Select(x => x[0] + "/" + x[1]).ToArray()));
+        Tick(1000); TradeAt(18, 0, 3, 25016);           // closes 25017.25 .. 25017.25: a 1 bar trail would set 25017.25, below the stop and over this trade
+        Check(b.Calls.Count == nb + 2 && sstop.StopPrice == 25020, "ended at the session close: a bar of the new session never moves the stop (it stays at 25020)");
+        Check(ChartBridgeOrders.BarTrailBars("MNQ") == 0, "the 1 minute bars start over at the session open too (nothing carried past the close)");
         SetPos(b, 0, 0);
+        Tick(1000); TradeAt(18, 1, 1, 25016.25);        // closes the 18:00 to 18:01 minute: whole, as the session's first bar (ChartBridge saw the open)
+        Check(ChartBridgeOrders.BarTrailBars("MNQ") == 1, "the session's first 1 minute bar is whole when ChartBridge saw the session open");
 
         // the start: a long with barTrailStart 8 ticks; a bar close while the open profit (its best since the fill) is under 8 sets no level
         Account c = NewAccount("SIM-B6");
@@ -669,6 +701,55 @@ public static class StrategiesHarness
         Check(d.Calls.Count == nd + 1 && d.Calls.Last() == "change " + dstop.Name + " L0 S25039.25 Q0", "the start (short): at the next close the stop to that bar's high (25039.25): " + d.Calls.Last());
         Confirm(d, dstop, 25039.25);
         SetPos(d, 0, 0);
+        BarKindRoom();
+    }
+
+    // ------------------------------------------------------------ the 17th bar kind (Anthony 2026-11-01: never silently doing nothing)
+    // ChartBridge builds at most 16 bar kinds a market at once. A kind no live entry uses gives its place to a new one; an entry that
+    // would need a 17th kind in use at once is refused at placement, with the reason, and nothing reaches the account.
+    static void BarKindRoom()
+    {
+        Config(false, true);
+        List<Order> resting = new List<Order>();
+        Account[] accts = { NewAccount("SIM-K1"), NewAccount("SIM-K2"), NewAccount("SIM-K3"), NewAccount("SIM-K4") };
+        Tick(1000); TradeAt(19, 0, 0, 25050);
+        int inUse = ChartBridgeOrders.BarTrailKinds("MNQ");
+        Check(inUse == 3, "before: 1 minute, 5 minute and range 4 bars held: " + inUse);
+        // resting buy limits far under the market (never filled here), each on its own range size: 13 more kinds make 16; then the
+        // 5 minute and range 4 kinds, whose entries' bar trails ended at the session close, give their places to range 23 and 24
+        for (int i = 0; i < 15; i++)
+        {
+            Account a = accts[i / 4];
+            sent.Clear();
+            Msg("order", Ord(a.Name, "\"side\":\"buy\",\"kind\":\"limit\",\"price\":25000,\"qty\":1,\"strategy\":{\"name\":\"K" + i + "\",\"stop\":16,\"t1\":40,\"t1Share\":100,\"barTrail\":1,\"barTrailOffset\":0,\"barTrailType\":\"range\",\"barTrailSize\":" + (10 + i) + "}"));
+            Check(!Rejected("") && ChartBridgeOrders.BarTrailKinds("MNQ") == Math.Min(16, 4 + i), "a bar trail on range " + (10 + i) + " is taken (" + ChartBridgeOrders.BarTrailKinds("MNQ") + " kinds held): " + Last());
+            resting.Add(a.Orders.Last());
+        }
+        Check(ChartBridgeOrders.BarTrailBars("MNQ", "minute", 5) == 0 && ChartBridgeOrders.BarTrailDone("MNQ", "range", 4).Count == 0 && ChartBridgeOrders.BarTrailKinds("MNQ") == 16,
+              "kinds no live entry uses (5 minute, range 4) gave their places; 16 held, every one in use");
+        // every kind is in use now: the 17th is refused, plainly, and nothing reaches the account
+        Account k4 = accts[3];
+        int calls = k4.Calls.Count;
+        sent.Clear();
+        Msg("order", Ord(k4.Name, "\"side\":\"buy\",\"kind\":\"limit\",\"price\":25000,\"qty\":1,\"strategy\":{\"name\":\"K17\",\"stop\":16,\"t1\":40,\"t1Share\":100,\"barTrail\":1,\"barTrailOffset\":0,\"barTrailType\":\"minute\",\"barTrailSize\":15}"));
+        Check(Rejected("the bar trail on 15 minute bars cannot run: ChartBridge builds at most 16 bar kinds on MNQ at once and open strategy entries use them all") && k4.Calls.Count == calls,
+              "the 17th kind in use at once is refused plainly, nothing sent: " + Last());
+        // a kind already held is no new kind: taken
+        sent.Clear();
+        Msg("order", Ord(k4.Name, "\"side\":\"buy\",\"kind\":\"limit\",\"price\":25000,\"qty\":1,\"strategy\":{\"name\":\"K10b\",\"stop\":16,\"t1\":40,\"t1Share\":100,\"barTrail\":1,\"barTrailOffset\":0,\"barTrailType\":\"range\",\"barTrailSize\":10}"));
+        Check(!Rejected(""), "a kind already held (range 10) is taken: " + Last());
+        resting.Add(k4.Orders.Last());
+        // one entry done (its resting entry cancelled): its kind gives its place, and the 15 minute bar trail is taken
+        Order r = resting[12];   // range 22's only entry
+        r.OrderState = OrderState.Cancelled; Update(accts[3], r);
+        ChartBridgeOrders.CheckLegs(clock);
+        sent.Clear();
+        Msg("order", Ord(k4.Name, "\"side\":\"buy\",\"kind\":\"limit\",\"price\":25000,\"qty\":1,\"strategy\":{\"name\":\"K17\",\"stop\":16,\"t1\":40,\"t1Share\":100,\"barTrail\":1,\"barTrailOffset\":0,\"barTrailType\":\"minute\",\"barTrailSize\":15}"));
+        Check(!Rejected("") && ChartBridgeOrders.BarTrailKinds("MNQ") == 16 && ChartBridgeOrders.BarTrailBars("MNQ", "range", 22) == 0,
+              "once range 22 is no longer used, the 15 minute kind takes its place: " + Last());
+        resting.Add(k4.Orders.Last());
+        foreach (Account a in accts) foreach (Order o in a.Orders) if (o.OrderState != OrderState.Filled && o.OrderState != OrderState.Cancelled) { o.OrderState = OrderState.Cancelled; Update(a, o); }
+        ChartBridgeOrders.CheckLegs(clock);
     }
 
     // ------------------------------------------------------------ breakeven, then trailing

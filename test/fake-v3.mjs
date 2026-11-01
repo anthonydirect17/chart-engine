@@ -578,7 +578,16 @@ export class OrderDeskV3 extends OrderDesk {
   }
   managedMsg(x) {
     return { type: 'managed', id: x.entry.id, account: x.entry.account, root: x.entry.root, side: x.entry.side, name: x.s.name, strategy: x.s, state: x.state,
-      pairs: x.pairs.map(p => ({ bucket: p.bucket, qty: p.qty, fill: p.fill, stopId: p.stopId, stop: p.stop, targetId: p.targetId, target: p.target, be: p.be, trailing: p.trailing })), best: x.best, text: x.text };
+      pairs: x.pairs.map(p => ({ bucket: p.bucket, qty: p.qty, fill: p.fill, stopId: p.stopId, stop: p.stop, targetId: p.targetId, target: p.target, be: p.be, trailing: p.trailing })), best: x.best, text: x.text,
+      ...(x.barTrail ? { barTrail: x.barTrail } : {}) };
+  }
+  /** next release, /test/bar-trail: ChartBridge's word on the bar trail ({ state, text }) for every live managed entry; '' takes it away */
+  setBarTrailState(state, text) {
+    for (const x of this.managed.values()) {
+      if (x.state === 'done') continue;
+      x.barTrail = state ? { state, text: text === null || text === undefined ? null : text } : null;
+      this.broadcastV3(this.managedMsg(x));
+    }
   }
   /** breakeven and trailing on every trade (PROTOCOL.md: never back, never through the last trade, 500 ms apart) */
   tick(root, price) {

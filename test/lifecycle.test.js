@@ -371,7 +371,8 @@ test('0.6.10: the remove-only relief and Hide leaving the group are in the sourc
 test('1.40.0: versions and the changelog', () => {
   assert.equal(JSON.parse(read('package.json')).version, '1.40.0');
   assert.match(read('src/chart-engine.js'), /const VERSION = '1\.40\.0';/);
-  assert.match(read('CHANGELOG.md'), /^# Changelog\n\n## ChartBridge 0\.6\.10 and chart 1\.40\.0 \(2026-11-01\)/);
+  /* the first released heading (an Unreleased entry for the next release may sit above it until that release) */
+  assert.match(read('CHANGELOG.md'), /^# Changelog\n\n(## Unreleased [^\n]*\n(?!## )[\s\S]*?\n)?## ChartBridge 0\.6\.10 and chart 1\.40\.0 \(2026-11-01\)/);
   const compat = JSON.parse(read('live/COMPAT.json'));
   assert.equal(compat.page, '1.40.0'); assert.equal(compat.minChartBridge, '0.6.2');
   for (const f of ['live/accounts.js', 'live/multi-account.js', 'nt8/PROTOCOL.md', 'CHANGELOG.md', 'test/lifecycle.test.js']) assert.ok(!/[\u2013\u2014]/.test(read(f)), f + ': no en or em dashes');

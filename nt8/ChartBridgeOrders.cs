@@ -820,6 +820,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (off != null) return off;
                 string bad = ParseStrategy(strategyBody, out strat);
                 if (bad != null) return bad;
+                bad = BarTrailPlaceProblem(root, strat, tick);   // next build: the bar trail's bars made now, or the plain reason they cannot be
+                if (bad != null) return bad;
                 stopTicks = strat.Stop + Math.Max(0, strat.StopLimit); targetTicks = strat.MaxTarget;   // for the leg-at-or-below-zero check
             }
             if (stopTicks > 0 || targetTicks > 0)

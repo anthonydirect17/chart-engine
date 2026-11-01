@@ -1753,6 +1753,7 @@ function openStrategies() {
   d.innerHTML = `<form class="ws-dlg ws-sg" method="dialog" aria-label="Order Strategies">
     <h2>Order Strategies <span id="sg-where"></span></h2>
     <p class="ws-help" id="sg-desk"></p>
+    <p class="ws-help" id="sg-left" role="status"></p>
     <div class="sg-cols"><div class="sg-list" id="sg-list" role="group" aria-label="Strategies"></div>
     <div class="sg-form" id="sg-form">
       <div class="sg-row"><label class="sg-lbl" for="sg-name">Name</label><input class="sg-name" id="sg-name" type="text" maxlength="40" autocomplete="off" spellcheck="false"></div>
@@ -1811,6 +1812,10 @@ function renderStrategies() {
   const mode = deskMode(), ro = mode !== 'desk', list = stratList();
   $('sg-where').textContent = ro ? 'read only' : 'shared by every PC through The Desk';
   $('sg-desk').textContent = mode === 'readonly' ? DESK.error + ' These are the last copy read, read only.' : mode === 'local' ? 'The Desk has not answered on this browser yet: nothing to show or save. ' + (DESK.error || '') : list.length + ' of ' + OS.STRATEGY_MAX + '. Shift+click and the order keys send the one active on the ticket.';
+  /* next release (Anthony 2026-11-01): a strategy The Desk holds that this chart cannot use (a bar trail on tick or volume bars, a
+     size it does not take) is named with why, never dropped in silence */
+  const left = DESK.leftOut && Array.isArray(DESK.leftOut.strategies) ? DESK.leftOut.strategies : [];
+  $('sg-left').textContent = left.length ? 'Not shown, this chart cannot use ' + (left.length > 1 ? 'them' : 'it') + ': ' + left.map(x => x.name + ' (' + x.text.replace(/\.$/, '') + ')').join('; ') + '. Saving here saves the list without ' + (left.length > 1 ? 'them' : 'it') + '.' : '';
   $('sg-list').innerHTML = list.map(x => `<button type="button" class="ws-btn sg-item" data-sg="${esc(x.id)}" aria-pressed="${x.id === SG.id}"><b>${esc(x.name)}</b><span>${esc(OS.describe(x))}</span></button>`).join('') +
     (ro || list.length >= OS.STRATEGY_MAX ? '' : `<button type="button" class="ws-btn sg-item sg-new" data-sg="+" aria-pressed="${!SG.id}">+ New strategy</button>`);
   for (const f of SG_FIELDS) sgEl(f).disabled = ro;

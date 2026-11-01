@@ -1985,44 +1985,73 @@ NinjaTrader rejects leaves the stop where it was and raises a `status` `warn`; i
 move, and a second rejection halts moves for that stop (fix1).
 
 **The bar trail** (next build, Anthony's task "Strategy creator: bar trail option" and his answers of 2026-11-01: "It should be
-able to trail both, or any bar timeframe for that matter", a start "Yes, an option at least", and with the tick trail "No"). No
-spec in Drive; the rules below are the conservative reading.
+able to trail both, or any bar timeframe for that matter", a start "Yes, an option at least", and with the tick trail "No"; then
+his decisions of 2026-11-01: any minute size that divides the hour and NinjaTrader's Range bars, tick and volume bars not now;
+phantom range bars ignored; range bars from the session open, else "not proven yet"; the trail ends at the session close; an
+unsupported bar kind or size said plainly). No spec in Drive; the rules below are the conservative reading.
 
 - **The bars.** ChartBridge builds the bars itself from the trades it sees (the same live trades as everything else), per root
   and bar kind, with each trade's New York wall time (`ChartBridgeTime.EtSeconds`, the chart's convention, so neither daylight
-  saving nor NinjaTrader's own time zone moves an edge). 1 minute bars are built always; any other kind from the first trade
-  after a strategy entry needs it, and kept for the run (at most 16 kinds a root; past that an entry's bar trail never moves).
+  saving nor NinjaTrader's own time zone moves an edge). 1 minute bars are built always; any other kind from its entry's
+  placement on, and kept for the run while there is room: at most 16 kinds a root, and a kind no live entry uses gives its place
+  to a new one. **An entry that would need a 17th kind in use at once is refused at placement**, nothing sent, with the reason
+  ("the bar trail on 15 minute bars cannot run: ChartBridge builds at most 16 bar kinds on MNQ at once and open strategy entries
+  use them all (...); use one of those, or place it once one of those entries is done"). Before this it was taken and its bar
+  trail never moved, with nothing said.
 - **Minute bars** (`barTrailSize` minutes, sizes that divide the hour, so the clock's edges are the session's 18:00 ET edges as
   NinjaTrader aligns them): closed at the bar's end, end-inclusive (a trade at 10:05:00 is in the bar ending 10:05, as
   NinjaTrader and the minute book). A bar closes when the first trade of a later bar arrives (a span with no trade has no bar);
   a late trade (an earlier bar) is left out.
 - **Range bars** (`barTrailSize` ticks): NinjaTrader 8's Range bar type exactly as `docs/RANGE_BARS.md` sets out from its
-  `@RangeBarsType.cs` (Break at EOD on, Anthony's setting), the rules the chart page's own range bars follow
-  (`live/bar-builder.js`): a trade inside the range (between high less the range and low plus the range) joins the bar; a trade
-  past low plus the range finishes the bar at exactly the range (high and close at low plus the range, even when that price did
-  not trade) and the next bar opens one tick above; while the trade is still more than a range away, **phantom bars** of exactly
-  the range fill the gap, each opening one tick past the one before, and the last holds the trade and is the forming bar (the
-  mirror below). Phantom bars are completed bars, as on NinjaTrader's chart. The first trade of a new session (18:00 ET) opens
-  a new bar at its price with no phantom fill, and the bar before is finished as it is (it can be short of the range). Range
-  bars depend on where the build starts, so a bar counts only once it is proven NinjaTrader's own: from the **sync point**,
-  the session's first trade, or a swing of more than the range each way (a rise of more than the range from the low so far to a
-  high, then a fall of more than the range below that high, or the mirror), the page's `RangeSync` (proven there against full
-  builds). Bars opened at or after the sync trade count; the bar it finishes and every bar before do not.
+  `@RangeBarsType.cs` (Break at EOD on, Anthony's setting) decides where each bar starts and ends: a trade inside the range
+  (between high less the range and low plus the range) joins the bar; a trade past low plus the range finishes the bar at
+  exactly the range and the next bar opens one tick above; while the trade is still more than a range away, phantom bars of
+  exactly the range fill the gap, each opening one tick past the one before, and the last holds the trade and is the forming
+  bar (the mirror below). The first trade of a new session (18:00 ET) opens a new bar at its price with no phantom fill.
+- **The phantom rule** (Anthony 2026-11-01: the stop is never moved to a price that never traded). A phantom bar is a range bar
+  no trade was in. ChartBridge builds the bars trade by trade, so it knows this exactly, never from prices: the bars one trade
+  makes to fill a jump of more than one range, all but the last (the one that holds the trade), have no trade in them
+  (NinjaTrader gives them volume 0). They are left out of the trail entirely: never counted among the last `barTrail` bars,
+  their prices never used. And for every range bar the trail does use, its high and low are the **highest and lowest prices that
+  traded in it**, not the edges NinjaTrader draws: a bar a jump finished keeps its traded high (or low), not the untraded edge at
+  exactly the range, and a bar that opened one tick past an edge starts from the trade it holds, not from its untraded open. So
+  a level is always a traded price, `barTrailOffset` ticks beyond.
+- **Range bars must be NinjaTrader's own: "not proven yet".** Range bars depend on where the build starts; NinjaTrader builds
+  them from the session's first trade (18:00 ET). A bar counts only once ChartBridge's build is proven to be NinjaTrader's: from
+  the session's first trade when ChartBridge saw the session open (the trade before it on that root was in an earlier session),
+  or from a swing of more than the range each way (a rise of more than the range from the low so far to a high, then a fall of
+  more than the range below that high, or the mirror; the page's `RangeSync`, proven in `docs/RANGE_BARS.md` and checked
+  there against full builds). Bars opened at or after that trade count; the bar it finishes and every bar before do not. Until
+  then the stop stays where it is and `managed` says `barTrail` `notProven` ("not proven yet: ..."), which the chart shows on
+  the ticket in the warning colour. A feed drop makes range bars unproven again.
 - **Partial bars are never used:** the first bar after a start, the bar forming at a feed drop, and the first bar after the
-  feed is back (its span may have begun while the feed was down) are partial; range bars are unproven again after a drop. A
-  feed drop forgets every bar before it and drops a bar level not sent yet, so the trail waits for `barTrail` whole (proven) bars
-  after the drop. The time is New York wall time; at a daylight saving change CME is shut (2 AM on a Sunday).
+  feed is back (its span may have begun while the feed was down) are partial (the first bar of a session ChartBridge saw open is
+  whole). A feed drop forgets every bar before it and drops a bar level not sent yet, so the trail waits for `barTrail` whole
+  (proven) bars after the drop. The time is New York wall time; at a daylight saving change CME is shut (2 AM on a Sunday).
+- **The session close** (Anthony 2026-11-01: all trades close by the end of the day). The bar trail ends at the session close:
+  at the first trade of a later session on a root (sessions start at 18:00 ET; CME closes at 17:00 ET and nothing trades
+  between), every bar kind there starts over with no bar from the session before (minute and range alike), and every bar
+  trail entry already filled is **ended**: its level is dropped, the bar trail never moves its stop again (the stop stays where
+  it is), and `managed` says `barTrail` `ended` ("ended at the session close: ..."), in the warning colour on the chart.
+  ChartBridge does not close the position itself: an Order Strategy's stop and target stay working (GTC) as before, and closing
+  by the end of the day is Anthony's (or the firm's) to do.
 - **The level.** At each close of its kind with at least `barTrail` completed bars, each pair's level is the lowest low (a long)
   or the highest high (a short) of the last `barTrail` bars, `barTrailOffset` ticks beyond, snapped to the tick grid on the
   loose side; it only ever tightens. With `barTrailStart`, a close sets no level until the pair's open profit (best price since
-  the fill against the fill, in ticks, the `trailAfter` measure) has reached it. The bars may include bars from before the fill.
+  the fill against the fill, in ticks, the `trailAfter` measure) has reached it. The bars may include bars from before the fill
+  (of the same session).
 - **The move**, by the rules of breakeven and trailing: only when tighter than the stop (never loosens), never at or through the
   last trade (it waits for the next trade, at the level the close set), at most one move per 500 ms, one move in flight, a
   rejection as above. With breakeven, the tighter level wins. The tick trail (`trailAfter`) is refused with it.
-- `managed` says `trailing: true` once the stop is at its bar level. A restart forgets the bars (it waits for `barTrail` whole
-  bars again; the stop stays where it is meanwhile). A ChartBridge before this build refuses `barTrail` as an unknown key, and one
-  of the first bar trail build refuses `barTrailType`, `barTrailSize` and `barTrailStart`, so nothing is sent with a strategy it
-  cannot run. Tick and volume bars are not offered (a question for Anthony).
+- **What the pages are told:** `managed` says `trailing: true` once the stop is at its bar level, and carries `barTrail`
+  `{state, text}` for a strategy with a bar trail (none otherwise): `on` (text null), `building` ("waiting for 3 whole 5 minute
+  bars"), `notProven`, `ended`, or `none` ("not running: no room for ... bars": only for an entry resumed after a restart when
+  every kind is in use). A new `managed` goes out whenever the state or its text changes. A restart forgets the bars (it waits
+  for `barTrail` whole bars again; the stop stays where it is meanwhile). A ChartBridge before this build refuses `barTrail` as
+  an unknown key, and one of the first bar trail build refuses `barTrailType`, `barTrailSize` and `barTrailStart`, so nothing is
+  sent with a strategy it cannot run. Tick and volume bars are not offered (Anthony 2026-11-01: not now): `barTrailType` other
+  than `"minute"` or `"range"` is refused by name, and the page names a strategy in The Desk's document it cannot use (Settings >
+  Order Strategies: "Not shown, this chart cannot use it: ...").
 
 **Saved for a restart**: `managed.txt` next to `config.txt`, one line per managed entry, `<tag>\t<strategy as the flat
 JSON object sent>\t<best price per pair>\t<saved UTC ms>` (and `\tmerged` once a Merge ran on it, fix1), written whole through a temp file off NinjaTrader's thread (at
@@ -2047,7 +2076,7 @@ entry left from before it is recovered exactly as before, and one that cannot be
 
 | server to page | fields | when |
 |---|---|---|
-| `managed` | `id` (the entry's order id), `account`, `root`, `side`, `name` (the strategy's), `strategy` (the flat object as sent), `state` (`waiting` entry not filled, `active`, `resumed`, `unmanaged`, `done`), `pairs`: `[{bucket, qty, fill, stopId, stop, targetId, target, be (*bool*, moved to breakeven), trailing (*bool*)}]`, `best` (price or null), `text` (null, or why) | to signed-in v3 pages after `auth` (every live managed entry), on every change |
+| `managed` | `id` (the entry's order id), `account`, `root`, `side`, `name` (the strategy's), `strategy` (the flat object as sent), `state` (`waiting` entry not filled, `active`, `resumed`, `unmanaged`, `done`), `pairs`: `[{bucket, qty, fill, stopId, stop, targetId, target, be (*bool*, moved to breakeven), trailing (*bool*)}]`, `best` (price or null), `text` (null, or why), and (next build, only with a bar trail) `barTrail` `{state: on|building|notProven|ended|none, text}` (see "The bar trail") | to signed-in v3 pages after `auth` (every live managed entry), on every change |
 
 A `plan` on a strategy entry is refused in 0.4.0 (lead's default: cancel and place it again).
 

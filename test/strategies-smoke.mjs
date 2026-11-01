@@ -361,6 +361,22 @@ try {
   check((await got(A, 'reject')).length === 0, 'ChartBridge took it');
   await until(async () => /Runner 3T managing: 3 pairs/.test(await tk(A, 'managed').textContent()), 'managed line', 6000);
   check(/Runner 3T managing: 3 pairs/.test(await tk(A, 'managed').textContent()), 'the managed state near the position: ' + await tk(A, 'managed').textContent());
+  /* next release (Anthony 2026-11-01): ChartBridge's word on the bar trail, said on the ticket: range bars not proven yet, the trail
+     ended at the session close, in the warning colour; waiting for bars plainly; on says nothing more (the fake builds no bars) */
+  const NP = 'not proven yet: ChartBridge has not seen these 40 tick range bars from the session open (or a swing that proves them NinjaTrader\'s), so the stop stays where it is';
+  await control('bar-trail', { state: 'notProven', text: NP }); await wait(400);
+  const np = await tk(A, 'managed').textContent();
+  check(np.startsWith('Runner 3T managing: 3 pairs') && np.includes(' · Bar trail ' + NP) && /warn/.test(await tk(A, 'managed').getAttribute('class')), 'bar trail not proven yet, plainly, in the warning colour: ' + np);
+  await A.setViewportSize({ width: 1366, height: 768 }); await wait(300);
+  await A.screenshot({ path: path.join(out, 'strategies-bar-trail-not-proven-1366.png') });
+  await A.setViewportSize({ width: 1920, height: 1080 }); await wait(300);
+  await control('bar-trail', { state: 'ended', text: 'ended at the session close: it no longer moves the stop, which stays where it is' }); await wait(400);
+  check(/ · Bar trail ended at the session close: it no longer moves the stop, which stays where it is$/.test(await tk(A, 'managed').textContent()) && /warn/.test(await tk(A, 'managed').getAttribute('class')), 'bar trail ended at the session close, in the warning colour: ' + await tk(A, 'managed').textContent());
+  await control('bar-trail', { state: 'building', text: 'waiting for 3 whole 5 minute bars' }); await wait(400);
+  check(/ · Bar trail waiting for 3 whole 5 minute bars$/.test(await tk(A, 'managed').textContent()) && !/warn|error/.test(await tk(A, 'managed').getAttribute('class')), 'bar trail waiting for its bars, plainly: ' + await tk(A, 'managed').textContent());
+  await control('bar-trail', { state: 'on' }); await wait(400);
+  check(/^Runner 3T managing: 3 pairs[^·]*$/.test(await tk(A, 'managed').textContent()), 'bar trail on: nothing more said: ' + await tk(A, 'managed').textContent());
+  await control('bar-trail', { state: '' }); await wait(200);
   await control('restart', {}); await wait(600);
   check(/Runner 3T resumed after a restart/.test(await tk(A, 'managed').textContent()), 'resumed, plainly: ' + await tk(A, 'managed').textContent());
   await control('restart', { lost: '1' }); await wait(600);
