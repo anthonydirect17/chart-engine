@@ -1,6 +1,17 @@
 # Changelog
 
-## Unreleased (2026-11-02): fit stop and target, the bar trail follow-ups, the Gap harness race, the feed delay split smoke, the bar trail line on the ticket
+## ChartBridge 0.6.12 and chart 1.42.0 (2026-11-02): Fit stop and target, the bar trail follow-ups, the bar trail line on the ticket
+
+In plain words: each chart now has a small toggle next to the price scale padlock. On (the default) the chart zooms out to keep
+your stop and target in view, as it always has; off, the chart stays where you put it and a stop or target off screen shows as a
+small marker at the top or bottom edge with its price. The bar trail also got its follow-ups: an entry filled in the first moments
+of a new session no longer has its bar trail ended by mistake, and the ticket's bar trail line now fits (the full reason is in its
+tooltip). Two test checks that failed now and then (check:orders' Gap fallback, smoke:workspace's feed delay split) were fixed in
+the tests themselves; the page and ChartBridge were right.
+
+Install: the PC updater installs the page from green main as usual. ChartBridge 0.6.12 is a recompile: run the updater with
+`-InstallChartBridge`, then F5 in NinjaTrader. The page works with ChartBridge 0.6.2 or newer (`minChartBridge` stays 0.6.2); only
+the session fix needs 0.6.12.
 
 **1. Fit stop and target, a toggle beside the price scale lock** (page only):
 
@@ -30,9 +41,7 @@ marker at the top or bottom edge with its price; the toggle beside the lock, the
   `fit-off-markers-top.png`, `fit-off-markers-bottom.png`); `smoke:headroom` checks the toggle beside the lock, saved and
   read back after a reload.
 
-**2. The 1.42 fixes** (ChartBridge and the page):
-
-ChartBridge's changes need an F5 when released.
+**2. The 1.42 fixes** (ChartBridge 0.6.12 and the page):
 
 - **The session of a fill from its own execution** (`nt8/ChartBridgeStrategies.cs` PlaceStrategyLegs, `FillSession`,
   `StrategyExecution`; `nt8/ChartBridge.cs` Deliver). The session an entry first filled in was the earlier of the PC clock's and

@@ -227,9 +227,9 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   order, the position's stop and target legs and the planned stop and target lines ("zoom to brackets", Anthony: on HOME
   the stop sat off the chart), and no longer the VWAP (one far from price squashed the candles). 1.16.0 (Anthony): it also
   takes in the large-order bubbles in view (only those, at their drawn radius), so no bubble crosses the top of the plot.
-  Unreleased (Anthony 2026-11-02): taking in the orders is the **Fit stop and target** toggle beside the padlock, on by
+  1.42.0 (Anthony 2026-11-02): taking in the orders is the **Fit stop and target** toggle beside the padlock, on by
   default (as above); off, the scale fits the candles (and bubbles) only and the view never moves for an order line.
-- **Order edge markers (Unreleased, with Fit stop and target off):** an order line off the price scale (a stop, a target, a
+- **Order edge markers (1.42.0, with Fit stop and target off):** an order line off the price scale (a stop, a target, a
   planned line or a working entry) is a marker at the plot's top right edge (above the view) or bottom right edge (below),
   6 px in from the price axis and 4 px from the edge, the VWAP marker's shape: 16 px tall, radius 3, on the legend ground, a
   small triangle pointing to the line and its short name and price in 500 10px mono ("STP 20,084.00", "TGT 19,999.50",
@@ -550,7 +550,7 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
 - **Price scale lock (1.14.0, review D2):** a 24 x 20 px padlock centred in the corner under the price axis (beside the
   time axis; nothing else is drawn there): unlocked, an open padlock in the quiet grey `#7F8C9C`, the text color and a
   `#2A3645` border on hover; locked, a closed padlock in `#B69CFF` on `#1A1230` with a `#3B2A6B` border (1.39.0: the same gold). Saved per chart.
-- **Fit stop and target (Unreleased, Anthony 2026-11-02):** a 24 x 20 px toggle left of the padlock, 4 px between, the two
+- **Fit stop and target (1.42.0, Anthony 2026-11-02):** a 24 x 20 px toggle left of the padlock, 4 px between, the two
   centred together in that corner (the padlock alone, with the toggle off by option, stays centred as before); the padlock's
   look exactly: on (the default), a top and a bottom line with an arrow out to each, in the quiet grey, the text color and a
   border on hover; off, the arrows folded in, in the padlock's locked gold (`#E2C687` on `#17140E`, `#3C321E` border), as the
