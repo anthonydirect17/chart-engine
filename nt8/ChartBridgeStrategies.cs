@@ -436,6 +436,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static volatile int managedCount;
         public const double MoveGapMs = 500, MoveConfirmMs = 5000;
         public static Func<double> StrategyClock;     // test hook: the clock for the move rules (unused in NinjaTrader)
+        public static Action FillGapForHarness;       // test hook: called between a fill's execution read and StratLock (unused in NinjaTrader)
         public static bool StrategyInline;            // test hook: moves and managed.txt writes on the calling thread (unused in NinjaTrader)
 
         private static double SNow() { Func<double> c = StrategyClock; return c != null ? c() : ChartBridgeTime.NowUtcMs(); }
@@ -629,6 +630,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             bool revived;
             double fillEt = EtNowSeconds();
             long execSession = m.Session == 0 ? FillSession(m.Entry) : 0;   // 1.42: read before StratLock (the account's own lock)
+            Action gap = FillGapForHarness;
+            if (gap != null) gap();
+            bool guessed;
             lock (StratLock)
             {
                 if (m.Session == 0)
@@ -657,6 +661,14 @@ namespace NinjaTrader.NinjaScript.AddOns
                 m.Quiet = false;
                 if (m.State == "waiting") m.State = m.NoMoves ? "unmanaged" : "active";
                 revived = ReviveLocked(m);   // fix1: called done between the lookup and here: back, with these pairs
+                guessed = m.SessionGuessed;
+            }
+            // 1.42 review LOW 2: an execution delivered between FillSession above and StratLock found no guessed entry
+            // (StrategyExecution) and was let go: read the list again, and take it as StrategyExecution does (ExecSessionLocked)
+            if (guessed)
+            {
+                long listed = FillSession(m.Entry);   // outside StratLock (the account's own lock)
+                if (listed > 0) lock (StratLock) ExecSessionLocked(m, listed);
             }
             if (revived) ChartBridgeServer.Log("strategy entry CB#" + m.Tag + " on " + where + ": its record was called done as this fill came; kept with its new legs");
             br.Account.Submit(send.ToArray());
@@ -924,29 +936,37 @@ namespace NinjaTrader.NinjaScript.AddOns
         // execution; that entry's session was then the clock's or the latest trade's (SessionGuessed). Its execution now gives the
         // session it filled in, the earlier of this execution's and any listed before it. Only a bar trail entry of this run whose
         // bar trail has not ended: an ended one is never started again, and a session saved before a restart is never changed.
-        internal static void StrategyExecution(Order order, string orderId, DateTime time)
+        // account: the execution's account (Deliver's); the entry's own account must be that one too (review LOW 3: never an
+        // OrderId alone).
+        internal static void StrategyExecution(string account, Order order, string orderId, DateTime time)
         {
-            if (managedCount == 0 || (order == null && string.IsNullOrEmpty(orderId))) return;
+            if (managedCount == 0 || string.IsNullOrEmpty(account) || (order == null && string.IsNullOrEmpty(orderId))) return;
             MEntry hit = null;
             lock (StratLock)
                 foreach (MEntry m in ManagedByTag.Values)
-                    if (m.SessionGuessed && m.Entry != null && (object.ReferenceEquals(m.Entry, order) || (!string.IsNullOrEmpty(orderId) && m.Entry.OrderId == orderId))) { hit = m; break; }
+                    if (m.SessionGuessed && m.Entry != null && m.Account != null && m.Account.Name == account &&
+                        (object.ReferenceEquals(m.Entry, order) || (!string.IsNullOrEmpty(orderId) && m.Entry.OrderId == orderId))) { hit = m; break; }
             if (hit == null) return;
             long d = SessionOfNt(time), listed = FillSession(hit.Entry);
             if (d == 0) return;
             if (listed > 0 && listed < d) d = listed;
-            bool ended = false;
-            lock (StratLock)
-            {
-                if (!hit.SessionGuessed) return;
-                hit.SessionGuessed = false;
-                if (hit.BarEnded || hit.S == null || hit.S.BarTrail <= 0 || hit.Session == d) return;
-                hit.Session = d;
-                saveDirty = true;
-                long rootNow;
-                if (hit.Root != null && hit.Pairs.Count > 0 && RootSession.TryGetValue(hit.Root, out rootNow) && d < rootNow) ended = EndBarTrailsLocked(hit.Root, rootNow);
-            }
+            bool ended;
+            lock (StratLock) ended = ExecSessionLocked(hit, d);
             if (ended) ManagedChanged(hit, true);
+        }
+
+        // StratLock held. A guessed session (SessionGuessed) taken from its execution's session d (StrategyExecution, and the fill
+        // that read the list again): once only; never for an entry whose bar trail has ended (never started again). An execution
+        // of a session before the latest trade seen on root (that session's close has passed) ends its bar trail at once, also
+        // when d is the session it was guessed in (review LOW 4). True when a bar trail was ended (the caller tells the pages).
+        private static bool ExecSessionLocked(MEntry m, long d)
+        {
+            if (!m.SessionGuessed || d <= 0) return false;
+            m.SessionGuessed = false;
+            if (m.BarEnded || m.S == null || m.S.BarTrail <= 0) return false;
+            if (m.Session != d) { m.Session = d; saveDirty = true; }
+            long rootNow;
+            return m.Root != null && m.Pairs.Count > 0 && RootSession.TryGetValue(m.Root, out rootNow) && d < rootNow && EndBarTrailsLocked(m.Root, rootNow);
         }
 
         private static readonly Dictionary<string, List<TrailBars>> BarsByRoot = new Dictionary<string, List<TrailBars>>();   // root -> its bar kinds

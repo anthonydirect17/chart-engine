@@ -1437,12 +1437,16 @@ public static class StrategiesHarness
         lock (a.Executions) a.Executions.Add(x);
         return x;
     }
+    static void ExecUpdate(Account a, Execution x)   // ChartBridge's ExecutionUpdate handler (Deliver, then StrategyExecution)
+    {
+        typeof(ChartBridgeServer).GetMethod("OnExecutionUpdate", PS).Invoke(null, new object[] { a, new ExecutionEventArgs { Execution = x, ExecutionId = x.ExecutionId, OrderId = x.OrderId, Time = x.Time, Price = x.Price, Quantity = 1, MarketPosition = MarketPosition.Long } });
+    }
     static Order Placed(Account a, string strategy) { Msg("order", Ord(a.Name, "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1,\"strategy\":{" + strategy + "}")); return a.Orders.Last(); }
 
     static void FillSessions()
     {
         Config(false, true);
-        ChartBridgeOrders.ReadConfig("tradeAccounts", "SIM-W1, SIM-W2, SIM-W3, SIM-W4, SIM-W5");
+        ChartBridgeOrders.ReadConfig("tradeAccounts", "SIM-W1, SIM-W2, SIM-W3, SIM-W4, SIM-W5, SIM-W6, SIM-W7, SIM-W8, SIM-W9, SIM-W10");
         NtClock();
         // the 11-05 session's last trades, the feed up (a drop marked before is cleared by a trade of the same session 10 s later)
         Tick(1000); TradeAtN(11, 5, 16, 58, 0, 25700);
@@ -1468,21 +1472,78 @@ public static class StrategiesHarness
         Fill(w3, e3, 1, 25700); SetPos(w3, 1, 25700);
         Order stop3 = w3.Orders[1];
         Execution x3 = ListExec(w3, e3, EtN(11, 5, 18, 0, 0.3), "XW3");
-        typeof(ChartBridgeServer).GetMethod("OnExecutionUpdate", PS).Invoke(null, new object[] { w3, new ExecutionEventArgs { Execution = x3, ExecutionId = x3.ExecutionId, OrderId = x3.OrderId, Time = x3.Time, Price = x3.Price, Quantity = 1, MarketPosition = MarketPosition.Long } });
+        ExecUpdate(w3, x3);
+        // review LOW 2: a fill at 18:00:00.3 whose execution is listed and delivered after the fill read the list (none yet) and
+        // before it took StratLock (the hook stands in for that gap): the fill reads the list again and takes the new session
+        Account w10 = NewAccount("SIM-W10");
+        Order e10 = Placed(w10, Bar1);
+        bool gapRan = false;
+        ChartBridgeOrders.FillGapForHarness = () =>
+        {
+            ChartBridgeOrders.FillGapForHarness = null;
+            gapRan = true;
+            ExecUpdate(w10, ListExec(w10, e10, EtN(11, 5, 18, 0, 0.3), "XW10"));
+        };
+        try { Fill(w10, e10, 1, 25700); } finally { ChartBridgeOrders.FillGapForHarness = null; }
+        SetPos(w10, 1, 25700);
+        Order stopW10 = w10.Orders[1];
+        // W6: a fill at 18:00:00.2 reported with no execution listed (its session guessed: the session before); its execution
+        // comes only after the session's first trade has ended its bar trail (below)
+        Account w6 = NewAccount("SIM-W6");
+        Order e6 = Placed(w6, Bar1);
+        Fill(w6, e6, 1, 25700); SetPos(w6, 1, 25700);
         ChartBridgeOrders.SaveManagedNow();
-        Check(LineOf(e1).EndsWith("\tsession:" + next) && LineOf(e3).EndsWith("\tsession:" + next) && LineOf(e2).EndsWith("\tsession:" + before),
-              "1.42: the session saved is the execution's own (18:00:00.2 and 18:00:00.3: " + next + "; 17:59:59: " + before + "): " + LineOf(e1) + " | " + LineOf(e3) + " | " + LineOf(e2));
-        int n1 = w1.Calls.Count, n2 = w2.Calls.Count, n3 = w3.Calls.Count;
+        Check(gapRan && LineOf(e1).EndsWith("\tsession:" + next) && LineOf(e3).EndsWith("\tsession:" + next) && LineOf(e10).EndsWith("\tsession:" + next) && LineOf(e2).EndsWith("\tsession:" + before),
+              "1.42: the session saved is the execution's own (18:00:00.2 and 18:00:00.3, also one delivered between the fill's read and its lock: " + next + "; 17:59:59: " + before + "): " +
+              LineOf(e1) + " | " + LineOf(e3) + " | " + LineOf(e10) + " | " + LineOf(e2));
+        Check(LineOf(e6).EndsWith("\tsession:" + before), "1.42: a fill with no execution listed: its session is guessed, the earlier of the clock's and the latest trade's (" + before + "): " + LineOf(e6));
+        int n1 = w1.Calls.Count, n2 = w2.Calls.Count, n3 = w3.Calls.Count, n10 = w10.Calls.Count, n6 = w6.Calls.Count;
         Tick(1000); TradeAtN(11, 5, 18, 0, 0.5, 25700);   // the session's first trade (the open seen)
-        Check(!LastManaged(w1).Contains("\"state\":\"ended\"") && !LastManaged(w3).Contains("\"state\":\"ended\""),
-              "1.42: an entry filled at 18:00:00.2 (or 18:00:00.3, its execution after its fill) before the session's first trade keeps its bar trail: " + LastManaged(w1) + " | " + LastManaged(w3));
+        Check(LastManaged(w6).Contains("\"barTrail\":{\"state\":\"ended\""), "W6: the guessed entry's bar trail ends at the open: " + LastManaged(w6));
+        // W6: its execution (18:00:00.2, the new session) comes now: an ended bar trail is never started again
+        ExecUpdate(w6, ListExec(w6, e6, EtN(11, 5, 18, 0, 0.2), "XW6"));
+        ChartBridgeOrders.SaveManagedNow();
+        Check(LineOf(e6).EndsWith("\tbarEnded") && LastManaged(w6).Contains("\"barTrail\":{\"state\":\"ended\""),
+              "W6: an execution after its bar trail ended never starts it again (barEnded kept in managed.txt): " + LineOf(e6) + " | " + LastManaged(w6));
+        // W7: an entry filled with the PC clock and the latest trade both in the new session and no execution listed (guessed: the
+        // new session), whose execution is of the session before: ended at once. First an execution with its OrderId on another
+        // account (review LOW 3): never taken for it.
+        Account w7 = NewAccount("SIM-W7");
+        Order e7 = Placed(w7, Bar1);
+        e7.OrderId = "W7ORDER";                          // NinjaTrader's order id (the stand-in leaves it empty), shared below by an execution on another account
+        Fill(w7, e7, 1, 25700); SetPos(w7, 1, 25700);
+        Order stop7 = w7.Orders[1];
+        Check(!LastManaged(w7).Contains("\"state\":\"ended\""), "W7 setup: guessed in the new session, its bar trail runs: " + LastManaged(w7));
+        ExecUpdate(w2, new Execution { Order = null, OrderId = e7.OrderId, Instrument = mnq, MarketPosition = MarketPosition.Long, Quantity = 1, Price = 25700, Time = NtAt(EtN(11, 5, 17, 59, 59.8)), ExecutionId = "XW7other" });
+        Check(!LastManaged(w7).Contains("\"state\":\"ended\""), "LOW 3: an execution on another account with the entry's OrderId is never taken for it: " + LastManaged(w7));
+        ExecUpdate(w7, ListExec(w7, e7, EtN(11, 5, 17, 59, 59.8), "XW7"));
+        Check(LastManaged(w7).Contains("\"barTrail\":{\"state\":\"ended\""), "W7: its execution is of the session before the latest trade's: its bar trail ends at once: " + LastManaged(w7));
+        int n7 = w7.Calls.Count;
+        // W9 (review LOW 4): the PC clock behind the feed: guessed in the session before (the clock's), its execution says the same
+        // session, which is before the latest trade's: ended at once (not left to the next session's first trade)
+        Account w9 = NewAccount("SIM-W9");
+        Order e9 = Placed(w9, Bar1);
+        At(EtN(11, 5, 17, 59, 59.9));
+        Fill(w9, e9, 1, 25700); SetPos(w9, 1, 25700);
+        At(EtN(11, 5, 18, 0, 0.6));
+        ChartBridgeOrders.SaveManagedNow();
+        Check(LineOf(e9).EndsWith("\tsession:" + before) && !LastManaged(w9).Contains("\"state\":\"ended\""), "W9 setup: guessed in the session before (the clock's): " + LineOf(e9) + " | " + LastManaged(w9));
+        ExecUpdate(w9, ListExec(w9, e9, EtN(11, 5, 17, 59, 59.9), "XW9"));
+        Check(LastManaged(w9).Contains("\"barTrail\":{\"state\":\"ended\""), "W9: its execution is of its guessed session, before the latest trade's: its bar trail ends at once: " + LastManaged(w9));
+        int n9 = w9.Calls.Count;
+        Check(!LastManaged(w1).Contains("\"state\":\"ended\"") && !LastManaged(w3).Contains("\"state\":\"ended\"") && !LastManaged(w10).Contains("\"state\":\"ended\""),
+              "1.42: an entry filled at 18:00:00.2 (or 18:00:00.3, its execution after its fill or in the fill's gap) before the session's first trade keeps its bar trail: " + LastManaged(w1) + " | " + LastManaged(w3) + " | " + LastManaged(w10));
         Check(LastManaged(w2).Contains("\"barTrail\":{\"state\":\"ended\""), "1.42: an entry filled at 17:59:59 still ends at the open: " + LastManaged(w2));
         Tick(1000); TradeAtN(11, 5, 18, 0, 30, 25701);
         Tick(1000); TradeAtN(11, 5, 18, 1, 5, 25702);     // closes 18:00 to 18:01 (whole: the open was seen), low 25700
         Check(w1.Calls.Count == n1 + 1 && w1.Calls.Last() == "change " + stop1.Name + " L0 S25700 Q0", "1.42: the 18:00:00.2 entry trails on the session's first bar (25700): " + string.Join(" ; ", w1.Calls.Skip(n1).ToArray()));
         Check(w3.Calls.Count == n3 + 1 && w3.Calls.Last() == "change " + stop3.Name + " L0 S25700 Q0", "1.42: so does the one whose execution came after its fill: " + string.Join(" ; ", w3.Calls.Skip(n3).ToArray()));
+        Check(w10.Calls.Count == n10 + 1 && w10.Calls.Last() == "change " + stopW10.Name + " L0 S25700 Q0", "LOW 2: so does the one whose execution came in the fill's gap: " + string.Join(" ; ", w10.Calls.Skip(n10).ToArray()));
         Check(w2.Calls.Count == n2, "1.42: the 17:59:59 entry's stop never moves in the new session: " + string.Join(" ; ", w2.Calls.Skip(n2).ToArray()));
-        Confirm(w1, stop1, 25700); Confirm(w3, stop3, 25700);
+        Check(w6.Calls.Count == n6, "W6: the stop of the entry whose bar trail ended never moves after its late execution: " + string.Join(" ; ", w6.Calls.Skip(n6).ToArray()));
+        Check(w7.Calls.Count == n7, "W7: the stop of the entry ended at once never moves on the next bar close: " + string.Join(" ; ", w7.Calls.Skip(n7).ToArray()));
+        Check(w9.Calls.Count == n9, "W9: nor does the one guessed from a clock behind the feed: " + string.Join(" ; ", w9.Calls.Skip(n9).ToArray()));
+        Confirm(w1, stop1, 25700); Confirm(w3, stop3, 25700); Confirm(w10, stopW10, 25700);
         // a. an execution of the session before (17:59:59.5) whose fill is handled after the new session's first trade: ended at once
         Account w4 = NewAccount("SIM-W4");
         Order e4 = Placed(w4, Bar1);
@@ -1508,8 +1569,13 @@ public static class StrategiesHarness
         Check(LastManaged(w5).Contains("\"state\":\"resumed\"") && !LastManaged(w5).Contains("\"barTrail\":{"), "1.42: the entry with no bar trail resumes after the restart with no session field: " + LastManaged(w5));
         Check(LastManaged(w1).Contains("\"state\":\"resumed\"") && !LastManaged(w1).Contains("\"state\":\"ended\""), "1.42: the bar trail entry with its session saved resumes, its bar trail not ended: " + LastManaged(w1));
         Check(LastManaged(w4).Contains("\"barTrail\":{\"state\":\"ended\""), "1.42: the ended one stays ended: " + LastManaged(w4));
+        // W8 (restart): an execution delivered after a restart for a restored entry (a time of the session before) leaves its
+        // saved session as it is (a session saved before a restart is never changed)
+        ExecUpdate(w1, ListExec(w1, e1, EtN(11, 5, 17, 59, 0), "XW1late"));
+        ChartBridgeOrders.SaveManagedNow();
+        Check(LineOf(e1).EndsWith("\tsession:" + next) && !LastManaged(w1).Contains("\"state\":\"ended\""), "1.42: after a restart an execution for a restored entry leaves its saved session unchanged: " + LineOf(e1) + " | " + LastManaged(w1));
         // (a bar trail entry whose line has no session is recovered ended: TrailReview's "an old line with no session", SIM-R6)
-        Close(w1); Close(w2); Close(w3); Close(w4); Close(w5);
+        Close(w1); Close(w2); Close(w3); Close(w4); Close(w5); Close(w6); Close(w7); Close(w10); Close(w9);
     }
 
     // ------------------------------------------------------------ done: the legs gone, the page told, the line removed

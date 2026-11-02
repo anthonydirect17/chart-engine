@@ -51,7 +51,11 @@ marker at the top or bottom edge with its price; the toggle beside the lock, the
   NinjaTrader has not listed the execution yet as the fill is handled, the old rule stands and the execution, when ChartBridge
   receives it, corrects the session; never for a bar trail already ended (never started again) or a session saved before a
   restart. An execution of a session before a trade already seen on the root ends the bar trail at once (the fill was handled
-  after the open, so the open's trade could not end it).
+  after the open, so the open's trade could not end it), also when it is the session that was guessed. An execution delivered
+  while the fill was being handled (after it read the list, before it saved the session) is not lost: the fill reads the list
+  again and takes it by the same rules (`ExecSessionLocked`, shared with `StrategyExecution`). An execution is matched to its
+  entry by the entry's order and its account, never by the order id alone. The strategies harness checks each of these
+  (SIM-W6 to SIM-W10).
 - **`session:` only for a bar trail** (`SessionFields`). managed.txt writes `session:<day>` and `barEnded` only for an entry whose
   strategy has a bar trail, so a rollback to ChartBridge 0.6.10 (which skips a line with them as unreadable and recovers that
   entry as unmanaged) affects only bar trail entries; a line 0.6.11 wrote for any other entry loses them at the next write. A

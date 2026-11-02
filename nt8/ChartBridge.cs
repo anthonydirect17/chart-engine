@@ -5681,7 +5681,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             foreach (ChartBridgeClient c in Clients.Values) c.Send(json);
             try { ChartBridgeBot.OnExec(account, inst, side, qty, price, orderId, json); } catch (Exception ex) { Log("bot fill error: " + ex.Message); }   // 0.4.0 bot: its trades, losses and fills
             try { ChartBridgeAgents.OnExec(account, inst, side, qty, price, orderId, json); } catch (Exception ex) { Log("agent fill error: " + ex.Message); }   // 0.5.0 agents: each agent's trades, losses and fills
-            try { ChartBridgeOrders.StrategyExecution(execOrder, orderId, time); } catch (Exception ex) { Log("strategy fill error: " + ex.Message); }   // 1.42: an Order Strategy entry's session from its execution's own time
+            try { ChartBridgeOrders.StrategyExecution(account, execOrder, orderId, time); } catch (Exception ex) { Log("strategy fill error: " + ex.Message); }   // 1.42: an Order Strategy entry's session from its execution's own time
             if (!ChartBridgeConfig.PostFills) return;
             string desk = DeskFillJson(account, inst, side, qty, price, time, id, orderId, execOrder);
             if (deskBatch != null) deskBatch.Add(desk); else ChartBridgeDesk.Queue(desk);
