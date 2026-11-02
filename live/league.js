@@ -77,7 +77,7 @@ function cleanDay(j, past) {
   if (!j || typeof j !== 'object') { out.problem = 'The Desk sent nothing the page can read.'; return out; }
   out.date = typeof j.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(j.date) ? j.date : '';
   const f = j.folder && typeof j.folder === 'object' ? j.folder : {};
-  /* next release (Anthony 2026-11-02, a false alarm): since The Desk moved to HOMESERVER (2026-10-27) it reads the league from the
+  /* 1.42.1 (Anthony 2026-11-02, a false alarm): since The Desk moved to HOMESERVER (2026-10-27) it reads the league from the
      copy WORK's League Mirror task posts, and answers folder { set: false, ok: true, problem: null, source: 'mirror' }. `ok` true is
      never a problem, whatever `set` says; otherwise The Desk's own `problem` text is said. Only an older Desk (set false, no ok, no
      problem) gets the page's own sentence, which never sends Anthony to set a folder on WORK. */

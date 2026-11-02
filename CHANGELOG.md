@@ -1,8 +1,14 @@
 # Changelog
 
-## Unreleased (2026-11-02): the bar trail lines on the ticket, short; no false "folder is not set" warning with the League Mirror
+## chart 1.42.1 (2026-11-02): the bar trail lines on the ticket, short; no false "folder is not set" warning with the League Mirror (page only, no F5)
 
-No version bump (the next release takes this). Page only, no F5.
+In plain words: two small fixes on the page. The order ticket's bar trail line now says just "Bar trail ended" or "Bar trail
+waiting for bars", so it fits the narrowest ticket at 1366 x 768 instead of losing its third line; ChartBridge's full words are in
+the line's tooltip. And the League view and the Drone sky no longer say "The league's folder is not set" while the league is
+working: The Desk reads WORK's League Mirror copy and says all is well, and the page now believes it.
+
+Install: the PC updater installs the page from green main as usual; no F5 needed. Page only: no ChartBridge file changes, so
+nothing needs a recompile. ChartBridge stays 0.6.12; `minChartBridge` stays 0.6.2 (COMPAT.json follows the page to 1.42.1).
 
 **1. The bar trail ended and waiting lines on the ticket, short:**
 
