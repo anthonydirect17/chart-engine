@@ -307,13 +307,29 @@ try {
   await until(() => p.evaluate(() => document.body.classList.contains('lg-on') && window.workspace.league().date === '2026-10-22' && window.workspace.league().trades > 0), 'the current session\'s date: the live view', 20000);
   check((await p.evaluate(() => window.workspace.league().past)) === null && (await p.evaluate(() => window.workspace.league().dayProblem)) === '', 'the current session\'s date (' + sessionNow + ') opens the live view, not refused');
 
-  /* The Desk without a league folder: said plainly */
-  desk.league = { shadow: 'SHADOW: no orders', folder: { set: false, ok: false, problem: null }, trades: [], open: [], decisions: [] };
-  await p.evaluate(() => window.workspace.league && 0);
+  /* The Desk on HOMESERVER reading the copy WORK's League Mirror posts (set false, ok true, source mirror): the day, no warning */
+  const live = desk.league;
+  desk.league = Object.assign({}, live, { folder: { set: false, ok: true, problem: null, source: 'mirror' } });
   await p.click('#wsLeagueTab'); await p.click('#wsLeagueTab');
-  const nofolder = await until(() => p.$eval('#lgView [data-k="problem"]', e => (!e.hidden && /folder is not set/.test(e.textContent) ? e.textContent : null)), 'no folder said', 20000);
-  check(!!nofolder, 'no league folder on The Desk: said plainly: ' + nofolder);
+  await until(() => p.evaluate(() => document.body.classList.contains('lg-on') && window.workspace.league().trades > 0), 'the mirror: the day shows', 20000);
+  await new Promise(r => setTimeout(r, 1500));
+  const mirrorWarn = await p.$eval('#lgView [data-k="problem"]', e => (e.hidden ? '' : e.textContent));
+  check(mirrorWarn === '' && (await p.evaluate(() => window.workspace.league().problem)) === '', 'the mirror (set false, ok true): no warning: "' + mirrorWarn + '"');
+  await p.screenshot({ path: path.join(out, 'league-mirror-1366.png') });
+
+  /* The Desk with nothing to read: its own words said plainly */
+  const deskSays = 'The league\'s folder is not set, and no league files have arrived from WORK yet.';
+  desk.league = { shadow: 'SHADOW: no orders', folder: { set: false, ok: false, problem: deskSays, source: null }, trades: [], open: [], decisions: [] };
+  await p.click('#wsLeagueTab'); await p.click('#wsLeagueTab');
+  const nofolder = await until(() => p.$eval('#lgView [data-k="problem"]', (e, want) => (!e.hidden && e.textContent === want ? e.textContent : null), deskSays), 'nothing to read said', 20000);
+  check(!!nofolder, 'nothing to read on The Desk: its own words said plainly: ' + nofolder);
   await p.screenshot({ path: path.join(out, 'league-nofolder-1366.png') });
+
+  /* an older Desk (set false, no ok, no problem): the page's sentence, never "set a folder on WORK" */
+  desk.league = { shadow: 'SHADOW: no orders', folder: { set: false }, trades: [], open: [], decisions: [] };
+  await p.click('#wsLeagueTab'); await p.click('#wsLeagueTab');
+  const oldDesk = await until(() => p.$eval('#lgView [data-k="problem"]', e => (!e.hidden && e.textContent === 'No league files have reached The Desk yet.' ? e.textContent : null)), 'an older Desk said', 20000);
+  check(!!oldDesk, 'an older Desk with no league files: said plainly, no folder to set: ' + oldDesk);
   await ctx.close();
 } catch (e) {
   fail('threw: ' + (e && e.stack || e));

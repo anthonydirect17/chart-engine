@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased (2026-11-02): no false "folder is not set" warning when The Desk reads the League Mirror
+
+In plain words: the League view and the Agents panel's Drone sky said "The league's folder is not set on The Desk (Lab, Shadow
+league, on WORK)." while the league was working. Since The Desk moved to HOMESERVER (2026-10-27) it reads the league from the copy
+WORK's League Mirror task posts, so it has no folder set and says so (`set` false) while also saying all is well (`ok` true,
+`source` "mirror"). The page now trusts `ok`: no warning then. Page only, no F5.
+
+- **The page** (`live/league.js`, `cleanDay`): `folder.ok` true is never a problem, whatever `folder.set` says. Otherwise The
+  Desk's own `folder.problem` text is shown (trimmed to 200 characters as before), e.g. "The league's folder is not set, and no
+  league files have arrived from WORK yet." Only an older Desk that sends `set` false with no `ok` and no `problem` gets the page's
+  own sentence, now "No league files have reached The Desk yet." (it no longer tells Anthony to set a folder on WORK). The League
+  view and the Drone sky's warning both read this one value, so both are fixed.
+- Tests: `test/league.test.js` (the mirror answer gives no problem and its day as read; set false with ok false shows The Desk's
+  text, trimmed; a set folder that cannot be found shows The Desk's text; an older Desk gets the new sentence),
+  `test/league-smoke.mjs` (a mirror-shaped answer shows the day with no warning; nothing to read shows The Desk's words; an older
+  Desk shows the new sentence; screenshot `league-mirror-1366.png`), `test/agents-strip-smoke.mjs` (a mirror-shaped answer keeps
+  the seats in the Drone sky with no warning).
+
 ## ChartBridge 0.6.12 and chart 1.42.0 (2026-11-02): Fit stop and target, the bar trail follow-ups, the bar trail line on the ticket
 
 In plain words: each chart now has a small toggle next to the price scale padlock. On (the default) the chart zooms out to keep
