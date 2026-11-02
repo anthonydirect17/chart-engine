@@ -380,11 +380,17 @@ try {
   check(fit.lines <= 2 && fit.inside, '1366 x 768, the ticket ' + fit.w + ' px wide: the bar trail line fits (' + fit.lines + ' lines, inside the panel: ' + fit.inside + ')');
   await A.screenshot({ path: path.join(out, 'strategies-bar-trail-not-proven-1366.png') });
   await control('bar-trail', { state: 'ended', text: 'ended at the session close: it no longer moves the stop, which stays where it is' }); await wait(400);
+  /* next release (Anthony 2026-11-02): ended says just "Bar trail ended" ("ended at the session close" wrapped to 3 lines here
+     and the panel cut the third off); two lines at most, all of it inside the panel (height and width), the whole reason in the
+     tooltip, the warning colour */
   fit = await btFits();
-  check(fit.lines <= 3 && fit.inWidth, '1366 x 768: the ended line wraps inside the ticket\'s width (' + fit.lines + ' lines; its last line under the panel\'s scroll edge in this 3 row ticket: ' + !fit.inside + ')');
+  check(fit.lines <= 2 && fit.inside && fit.inWidth, '1366 x 768, the ticket ' + fit.w + ' px wide: the ended line fits (' + fit.lines + ' lines, inside the panel: ' + fit.inside + ', inside its width: ' + fit.inWidth + ')');
+  const en = await tk(A, 'managed').textContent();
+  check(en === 'Runner 3T managing: 3 pairs · Bar trail ended' && await tk(A, 'managed').getAttribute('title') === 'Runner 3T managing: 3 pairs · Bar trail ended at the session close: it no longer moves the stop, which stays where it is' && /warn/.test(await tk(A, 'managed').getAttribute('class')),
+    '1366 x 768: bar trail ended, in the warning colour, ChartBridge\'s whole reason in the tooltip: ' + en);
   await A.screenshot({ path: path.join(out, 'strategies-bar-trail-ended-1366.png') });
   await A.setViewportSize({ width: 1920, height: 1080 }); await wait(300);
-  check(/ · Bar trail ended at the session close$/.test(await tk(A, 'managed').textContent()) && /: it no longer moves the stop, which stays where it is$/.test(await tk(A, 'managed').getAttribute('title')) && /warn/.test(await tk(A, 'managed').getAttribute('class')), 'bar trail ended at the session close, in the warning colour, the whole in the tooltip: ' + await tk(A, 'managed').textContent());
+  check(/ · Bar trail ended$/.test(await tk(A, 'managed').textContent()) && /: it no longer moves the stop, which stays where it is$/.test(await tk(A, 'managed').getAttribute('title')) && /warn/.test(await tk(A, 'managed').getAttribute('class')), 'bar trail ended, in the warning colour, the whole in the tooltip: ' + await tk(A, 'managed').textContent());
   await control('bar-trail', { state: 'building', text: 'waiting for 3 whole 5 minute bars' }); await wait(400);
   check(/ · Bar trail waiting for 3 whole 5 minute bars$/.test(await tk(A, 'managed').textContent()) && !/warn|error/.test(await tk(A, 'managed').getAttribute('class')), 'bar trail waiting for its bars, plainly: ' + await tk(A, 'managed').textContent());
   await control('bar-trail', { state: 'on' }); await wait(400);

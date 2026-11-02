@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased (2026-11-02): the bar trail ended line on the ticket, short
+
+No version bump (the next release takes this). Page only.
+
+- **"Bar trail ended", the reason in the tooltip** (`live/order-strategies.js` `barTrailNote`). Anthony 2026-11-02: the ended
+  state reads just "Bar trail ended" on the order ticket. 1.42.0 showed ChartBridge's words up to their first colon ("Bar trail
+  ended at the session close"), which wrapped to 3 lines in the narrowest ticket (219 px at 1366 x 768) and the panel cut the
+  third line off. ChartBridge's whole reason stays in the line's tooltip and the line stays in the warning colour. "Bar trail not
+  proven yet", "Bar trail not running" and the waiting for bars state are unchanged.
+- **Tests:** `test/order-strategies.test.js` checks the short ended line (with ChartBridge's words, with words without a colon,
+  and with none); `smoke:strategies` checks the ended line at 1366 is at most 2 lines and fully inside the ticket's panel (height
+  and width), with the whole reason in its tooltip and the warning colour (`strategies-bar-trail-ended-1366.png`).
+
 ## ChartBridge 0.6.12 and chart 1.42.0 (2026-11-02): Fit stop and target, the bar trail follow-ups, the bar trail line on the ticket
 
 In plain words: each chart now has a small toggle next to the price scale padlock. On (the default) the chart zooms out to keep
