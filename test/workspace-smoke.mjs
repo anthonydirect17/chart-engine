@@ -59,9 +59,9 @@ const sockets = async page => (await allSockets(page)).filter(k => !k.auth);
    exchange (the exchange clock set 2.31 s back, --clock-offset, so the browser on the same clock keeps its own delay right; its
    pcClock says so): where the top bar has room (2560 x 1440) the line splits "feed N ms = clock +2310 ms, real M ms" with no
    colour (the late number is the clock's) and "PC clock off by 2.3 s" shows; with no room for the split, "M ms real" and the
-   split in the tooltip, Flatten all still in the window: at 1366 x 768 (1.24.0) and, since Flatten every account took its room in
-   the top bar (1.34.0), at 1920 x 1080 too (the split there needs about 15 to 20 px more than the bar has; the line follows its
-   1.24.0 rule, the split only while the bar has room); told the clock is nearer (a larger real delay) the feed turns amber at 1 s
+   split in the tooltip, Flatten all still in the window: at 1366 x 768 (1.24.0); at 1920 x 1080, since Flatten every account took
+   its room in the top bar (1.34.0), the split needs about as much room as the bar has, so either outcome is checked by the 1.24.0
+   rule (the split only while the bar has room; which one turns on the live numbers of the moment); told the clock is nearer (a larger real delay) the feed turns amber at 1 s
    and red at 3 s of real delay; with no answer the feed is as before and the tooltip says why. */
 /* 1.38.1 (WORK 2026-10-23): a 1 min chart whose ChartBridge sends minute history ending 30 minutes early (--minute-lag-min=30, as
    NinjaTrader's minute answer did; the fake has no minute book, like ChartBridge before 0.6.8) and is slow to go ready
@@ -125,10 +125,15 @@ async function clockPart() {
     });
     const parts = t => { const m = /^(-?\d+) ms = clock ([+-]?\d+) ms, real (-?\d+) ms( [A-Z]+)?$/.exec(t); return m ? { feed: +m[1], clock: +m[2], real: +m[3] } : null; };
     const AMBER = 'rgb(232, 184, 92)', RED = 'rgb(255, 92, 122)';   // --ws-warn, --ws-sell
-    // 1920 x 1080 (1.42: since 1.34.0's Flatten every account the bar has no room for the split here): "M ms real", the split in the tooltip
-    let s = await read(), x = null;
-    check(/^-?\d+ ms real( [A-Z]+)?$/.test(s.feed) && /: feed \d+ ms = clock \+2310 ms, real/.test(s.tip) && s.cls === '' && s.color !== AMBER && s.color !== RED,
-      '1920 x 1080, the PC clock 2.31 s ahead: no room for the split beside Flatten every account: the real delay (' + s.feed + '), no colour, the split in the tooltip');
+    // 1920 x 1080 (1.42: since 1.34.0's Flatten every account the split needs about as much room as the bar has here, so
+    // whether it fits turns on the live numbers of the moment, the local delay and its p95 among them): either outcome, each by
+    // the 1.24.0 rule. With room, the split, its parts adding up; without, "M ms real" and the split in the tooltip. Never cut.
+    let s = await read(), x = parts(s.feed);
+    const fits = !!x, fill = await p.evaluate(() => { const f = document.querySelector('.ws-top > .ws-fill'); return f ? Math.round(f.getBoundingClientRect().width) : -1; });
+    check((fits ? x.clock === 2310 && x.feed === x.clock + x.real && x.real >= 0 && x.real < 300
+                : /^-?\d+ ms real( [A-Z]+)?$/.test(s.feed) && /: feed \d+ ms = clock \+2310 ms, real/.test(s.tip)) && s.cls === '' && s.color !== AMBER && s.color !== RED,
+      '1920 x 1080, the PC clock 2.31 s ahead: ' + (fits ? 'room for the split, the parts adding up' : 'no room for the split beside Flatten every account: the real delay, the split in the tooltip') +
+      ', no colour (' + s.feed + ', local ' + s.local + ', free ' + fill + ' px)');
     check(s.warn === 'PC clock off by 2.3 s' && s.warnColor === AMBER && s.warnSeen && s.statRight <= s.keysLeft && s.flatRight <= s.vw, '1920 x 1080: "PC clock off by 2.3 s", amber, in sight; the line ends before KEYS; Flatten all in the window');
     await shot(p, 'workspace-clock-split-1920x1080.png');
     // 2560 x 1440: room for the split

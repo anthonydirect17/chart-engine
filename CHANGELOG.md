@@ -68,10 +68,11 @@ marker at the top or bottom edge with its price; the toggle beside the lock, the
   case, held data older than 5 s and ChartBridge closed it as not keeping up (by design), dropping the load's history; this
   case, Fallback, Race and Timeouts now start on a fresh page, as the later cases already did. The check itself is unchanged.
 - **smoke:workspace, "the feed delay split"** (5 checks failed on main). The page is right: since Flatten every account took its
-  room in the top bar (1.34.0), the split "N ms = clock +2310 ms, real M ms" needs about 15 to 20 px more at 1920 x 1080 than the
-  bar has, and the line follows its 1.24.0 rule (the split only while the bar has room, else "M ms real" with the split in the
-  tooltip), as at 1366. The smoke now checks that at 1920 x 1080 and the split, its colours and the note's give-way at
-  2560 x 1440, where the bar has room. No page change.
+  room in the top bar (1.34.0), the split "N ms = clock +2310 ms, real M ms" needs about as much room at 1920 x 1080 as the bar
+  has, and the line follows its 1.24.0 rule (the split only while the bar has room, else "M ms real" with the split in the
+  tooltip), as at 1366. Whether it fits at 1920 turns on the live numbers of the moment (the local delay and its p95 among
+  them), so the smoke takes either outcome there, each checked by that rule, and checks the split, its colours and the note's
+  give-way at 2560 x 1440, where the bar always has room. No page change.
 - **The bar trail line on the ticket fits** (`live/order-strategies.js` barTrailNote and managedLine, `live/workspace.js`
   setText). ChartBridge's whole reason ran to 8 lines in a ticket 2 cells wide at 1366 x 768 and the panel cut it off after
   "Bar trail not proven yet:". The ticket now says ChartBridge's words up to their first colon ("not proven yet", "ended at the
