@@ -424,6 +424,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             public int NameStop;                  // fix1 (F5): the stop ticks the entry's name carries (recovery when S is lost), 0 for none
             public bool BarEnded;                 // the bar trail ended at the session close (Anthony 2026-11-01): it never moves the stop again; saved in managed.txt ("barEnded")
             public long Session;                  // the session (SessionDay) the entry first filled in, 0 when not known; saved in managed.txt ("session:<day>")
+            public bool SessionGuessed;           // 1.42: Session is the clock's or the latest trade's (no execution listed at the fill): its execution may correct it
             public string BarSaid;                // the bar trail's state the pages were last told (BarStateLocked's literal)
         }
 
@@ -627,19 +628,32 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             bool revived;
             double fillEt = EtNowSeconds();
+            long execSession = m.Session == 0 ? FillSession(m.Entry) : 0;   // 1.42: read before StratLock (the account's own lock)
             lock (StratLock)
             {
                 if (m.Session == 0)
                 {
-                    // review HIGH 1: the session it first filled in, saved in managed.txt: the earlier of the clock's and the latest trade's
-                    // seen on root (the earlier ends the bar trail sooner, never later); 0 when neither is known (then ended at the next
-                    // session's first trade, or at a restart)
-                    long seen, clock = double.IsNaN(fillEt) ? 0 : SessionDay(fillEt);
-                    if (root != null && RootSession.TryGetValue(root, out seen) && (clock == 0 || seen < clock)) clock = seen;
-                    m.Session = clock;
+                    // review HIGH 1: the session it first filled in, saved in managed.txt. 1.42: from NinjaTrader's own time of its first
+                    // execution (an entry filled at 18:00:00.2 whose execution comes before the session's first trade is in the new
+                    // session; before 1.42 it got the earlier of the clock's and the latest trade's, the session before, and its bar
+                    // trail was ended at once). With no execution listed yet: the earlier of the clock's and the latest trade's seen on
+                    // root as before (the earlier ends the bar trail sooner, never later), taken again from the execution when it comes
+                    // (StrategyExecution); 0 when none is known (then ended at the next session's first trade, or at a restart)
+                    if (execSession > 0) m.Session = execSession;
+                    else
+                    {
+                        long seen, clock = double.IsNaN(fillEt) ? 0 : SessionDay(fillEt);
+                        if (root != null && RootSession.TryGetValue(root, out seen) && (clock == 0 || seen < clock)) clock = seen;
+                        m.Session = clock;
+                        m.SessionGuessed = true;
+                    }
                     saveDirty = true;
                 }
                 m.Pairs.AddRange(made);
+                // 1.42: its execution is of a session before a trade already seen on root (its fill handled after the open): that
+                // session's close has passed, so its bar trail ends now (the open's trade ended the others before this fill came)
+                long rootNow;
+                if (execSession > 0 && root != null && m.Session == execSession && RootSession.TryGetValue(root, out rootNow) && execSession < rootNow) EndBarTrailsLocked(root, rootNow);
                 m.Quiet = false;
                 if (m.State == "waiting") m.State = m.NoMoves ? "unmanaged" : "active";
                 revived = ReviveLocked(m);   // fix1: called done between the lookup and here: back, with these pairs
@@ -874,6 +888,66 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         // The session a New York wall time is in: sessions start at 18:00 ET (the day number of the session's 18:00 start, plus one).
         internal static long SessionDay(double et) { return (long)Math.Floor((et + 86400 - 64800) / 86400); }
+
+        // 1.42: the session of a NinjaTrader time (an execution's Time, in NinjaTrader's time zone), through ChartBridgeTime's
+        // ToUtc and EtSeconds as every trade; 0 when it cannot be told.
+        private static long SessionOfNt(DateTime nt)
+        {
+            if (nt <= DateTime.MinValue || nt >= DateTime.MaxValue) return 0;
+            try { double et = ChartBridgeTime.EtSeconds(ChartBridgeTime.ToUtc(nt)); return double.IsNaN(et) || !(et > 0) ? 0 : SessionDay(et); }
+            catch (Exception) { return 0; }
+        }
+
+        // 1.42: the session of an entry's first execution as NinjaTrader lists it (the executions whose Order is the entry or that
+        // carry its OrderId, as FillsOf); 0 when none is listed or the list cannot be read. Reads the account's list under its own
+        // lock: call without StratLock.
+        private static long FillSession(Order entry)
+        {
+            if (entry == null || entry.Account == null) return 0;
+            List<Execution> list;
+            try { lock (entry.Account.Executions) list = entry.Account.Executions.ToList(); }
+            catch (Exception) { return 0; }
+            string id = entry.OrderId;
+            long first = 0;
+            foreach (Execution x in list)
+            {
+                if (x == null || !(object.ReferenceEquals(x.Order, entry) || (!string.IsNullOrEmpty(id) && x.OrderId == id))) continue;
+                long d = SessionOfNt(x.Time);
+                if (d == 0) return 0;   // one it cannot tell: never a guess from the others
+                if (first == 0 || d < first) first = d;
+            }
+            return first;
+        }
+
+        // 1.42: every execution ChartBridge delivers (ChartBridgeServer.Deliver: the account's ExecutionUpdate event and its 2 s poll).
+        // NinjaTrader may report an entry's fill (OnOrderUpdate, where its legs go and its session is set) before it lists the
+        // execution; that entry's session was then the clock's or the latest trade's (SessionGuessed). Its execution now gives the
+        // session it filled in, the earlier of this execution's and any listed before it. Only a bar trail entry of this run whose
+        // bar trail has not ended: an ended one is never started again, and a session saved before a restart is never changed.
+        internal static void StrategyExecution(Order order, string orderId, DateTime time)
+        {
+            if (managedCount == 0 || (order == null && string.IsNullOrEmpty(orderId))) return;
+            MEntry hit = null;
+            lock (StratLock)
+                foreach (MEntry m in ManagedByTag.Values)
+                    if (m.SessionGuessed && m.Entry != null && (object.ReferenceEquals(m.Entry, order) || (!string.IsNullOrEmpty(orderId) && m.Entry.OrderId == orderId))) { hit = m; break; }
+            if (hit == null) return;
+            long d = SessionOfNt(time), listed = FillSession(hit.Entry);
+            if (d == 0) return;
+            if (listed > 0 && listed < d) d = listed;
+            bool ended = false;
+            lock (StratLock)
+            {
+                if (!hit.SessionGuessed) return;
+                hit.SessionGuessed = false;
+                if (hit.BarEnded || hit.S == null || hit.S.BarTrail <= 0 || hit.Session == d) return;
+                hit.Session = d;
+                saveDirty = true;
+                long rootNow;
+                if (hit.Root != null && hit.Pairs.Count > 0 && RootSession.TryGetValue(hit.Root, out rootNow) && d < rootNow) ended = EndBarTrailsLocked(hit.Root, rootNow);
+            }
+            if (ended) ManagedChanged(hit, true);
+        }
 
         private static readonly Dictionary<string, List<TrailBars>> BarsByRoot = new Dictionary<string, List<TrailBars>>();   // root -> its bar kinds
         private static readonly Dictionary<string, long> RootSession = new Dictionary<string, long>();   // root -> the session of the latest trade seen
@@ -1779,10 +1853,22 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         private const string ManagedNotRead = "managed.txt not read yet";
 
-        // Review HIGH 1: the optional session fields of a managed.txt line ("" for neither).
-        private static string SessionFields(long session, bool barEnded)
+        // Review HIGH 1: the optional session fields of a managed.txt line ("" for neither). 1.42: only for an entry whose strategy has
+        // a bar trail (nothing else reads them), so a rollback to a ChartBridge before 0.6.11, which skips a line with them as
+        // unreadable, recovers only bar trail entries as unmanaged; every other entry's line reads there as before.
+        private static string SessionFields(bool barTrail, long session, bool barEnded)
         {
+            if (!barTrail) return "";
             return (session > 0 ? "\tsession:" + session.ToString(CultureInfo.InvariantCulture) : "") + (barEnded ? "\tbarEnded" : "");
+        }
+
+        // 1.42: a line read and not yet recovered: does its strategy have a bar trail? (Unreadable: no; such a line's entry is never
+        // resumed, and its session fields are kept only for a bar trail.)
+        private static bool LineHasBarTrail(ManagedLine l)
+        {
+            StratParams s;
+            try { return l.Json != null && l.Json.Length >= 2 && ParseStrategy(l.Json.Substring(1, l.Json.Length - 2), out s) == null && s != null && s.BarTrail > 0; }
+            catch (Exception) { return false; }
         }
 
         private static string WriteManagedOnce()
@@ -1799,13 +1885,13 @@ namespace NinjaTrader.NinjaScript.AddOns
                     {
                         if (m.S == null) continue;
                         string best = string.Join(",", m.Pairs.Select(p => "f" + p.F + "k" + p.K + ":" + p.Best.ToString("R", CultureInfo.InvariantCulture)));
-                        lines.Add(m.Tag + "\t" + m.S.Json + "\t" + (best.Length > 0 ? best : "-") + "\t" + ((long)now).ToString(CultureInfo.InvariantCulture) + (m.Merged ? "\tmerged" : "") + SessionFields(m.Session, m.BarEnded));
+                        lines.Add(m.Tag + "\t" + m.S.Json + "\t" + (best.Length > 0 ? best : "-") + "\t" + ((long)now).ToString(CultureInfo.InvariantCulture) + (m.Merged ? "\tmerged" : "") + SessionFields(m.S.BarTrail > 0, m.Session, m.BarEnded));
                     }
                     foreach (KeyValuePair<string, ManagedLine> kv in ManagedLines)
                         if (!ManagedByTag.ContainsKey(kv.Key))
                         {
                             string best = string.Join(",", kv.Value.Best.Select(b => b.Key + ":" + b.Value.ToString("R", CultureInfo.InvariantCulture)));
-                            lines.Add(kv.Key + "\t" + kv.Value.Json + "\t" + (best.Length > 0 ? best : "-") + "\t" + ((long)kv.Value.At).ToString(CultureInfo.InvariantCulture) + (kv.Value.Merged ? "\tmerged" : "") + SessionFields(kv.Value.Session, kv.Value.BarEnded));
+                            lines.Add(kv.Key + "\t" + kv.Value.Json + "\t" + (best.Length > 0 ? best : "-") + "\t" + ((long)kv.Value.At).ToString(CultureInfo.InvariantCulture) + (kv.Value.Merged ? "\tmerged" : "") + SessionFields(LineHasBarTrail(kv.Value), kv.Value.Session, kv.Value.BarEnded));
                         }
                     saveDirty = false;
                     lastSaveMs = now;

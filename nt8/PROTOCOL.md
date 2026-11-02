@@ -2061,7 +2061,13 @@ unsupported bar kind or size said plainly). No spec in Drive; the rules below ar
   fills and no saved session (a line written before this field, or a session not known): the safe side, the stop is never moved
   by a bar of a later session. Its breakeven and tick trail resume as before. The first trade ChartBridge sees on a root after a
   start or restart also ends the bar trail of every entry there filled in an earlier session (ChartBridge may have been stopped
-  at the close). The session an entry fills in is the earlier of the PC clock's and the latest trade's seen on its root.
+  at the close). The session an entry fills in is the session of its first execution's own time (NinjaTrader's `Execution.Time`,
+  through the same New York wall time as every trade; 1.42: before, the earlier of the PC clock's and the latest trade's seen on
+  its root, so an entry filled at 18:00:00.2 whose execution came before the session's first trade got the session before and its
+  bar trail was ended at once). When NinjaTrader has not listed the execution yet as the fill is handled, it is the earlier of
+  the PC clock's and the latest trade's as before, taken again from the execution when ChartBridge receives it (only while that
+  bar trail has not ended: an ended bar trail never starts again, and a session saved before a restart is never changed). An
+  execution of a session before a trade already seen on the root (the fill handled after the open) ends the bar trail at once.
   ChartBridge does not close the position itself: an Order Strategy's stop and target stay working (GTC) as before, and closing
   by the end of the day is Anthony's (or the firm's) to do.
 - **The level.** At each close of its kind with at least `barTrail` completed bars, each pair's level is the lowest low (a long)
@@ -2086,7 +2092,10 @@ unsupported bar kind or size said plainly). No spec in Drive; the rules below ar
 JSON object sent>\t<best price per pair>\t<saved UTC ms>` (and `\tmerged` once a Merge ran on it, fix1; then, 1.41.0, each
 optional and in this order, `\tsession:<day>`, the session the entry first filled in as a whole number (the day of the session's
 18:00 ET start since 1970, plus one), and `\tbarEnded` once its bar trail ended; a line without them is read as before, and a
-ChartBridge before 0.6.11 skips a line with them as unreadable, so it recovers that entry as `unmanaged`, the stop where it is), written whole through a temp file off NinjaTrader's thread (at
+ChartBridge before 0.6.11 skips a line with them as unreadable, so it recovers that entry as `unmanaged`, the stop where it is;
+1.42: both are written only for an entry whose strategy has a bar trail, so a rollback to 0.6.10 affects only bar trail entries,
+and a line 0.6.11 wrote for an entry without one loses them when the file is next written; a bar trail entry with fills and no
+saved session is still recovered with its bar trail ended), written whole through a temp file off NinjaTrader's thread (at
 placement, at each fill, and at most once a second as the best price moves); a line goes when its entry is done and its
 legs are gone. **On a restart (F5, a crash)** with a managed position open, ChartBridge recovers the legs from their
 names as in v2 and the parameters from `managed.txt`, takes the best price as the larger of the saved one and the trades
