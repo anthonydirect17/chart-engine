@@ -226,6 +226,7 @@ public static class GapHarness
     // The book starts after NinjaTrader's last bar (ChartBridge started at 10:50): today's path, and the hole recorded in /diag and history.log only.
     static void Fallback()
     {
+        FreshPage();   // 1.42: never a page left closed (not keeping up) by the cases before it under load (see TailKeptAfter)
         simNow = Et(10, 50, 0);
         ChartBridgeServer.ResetBooks(ChartBridgeTime.ToUtc(simNow));
         foreach (Trade x in tape.Where(x => x.T >= Et(10, 50, 0) && x.T < Et(11, 8, 0))) Live(x);
@@ -249,8 +250,18 @@ public static class GapHarness
     // 0.6.8, the fallback's own fix: the last trades miss NinjaTrader's last minute (a hole in the tick data there) but hold every
     // minute after it. Before 0.6.8 the whole rebuild was dropped with that minute (rebuilt volume 0 under NinjaTrader's), and the
     // chart had no bar from it to the live one; now NinjaTrader's bar is kept and the later minutes come from the same trades.
+    // 1.42 (the check failed about 2 to 3 runs in 12 under load): the harness raced itself, not ChartBridge. (1) It answered the last
+    // trades with trades to 11:08:05 and fed the ones from about 11:08:03 live only after that answer, while the load's Finish (a
+    // thread pool continuation) marks the page ready. When Finish won, those trades were not held any more: they went out live
+    // and were also in the rebuilt minutes, counted twice (28429 of 28386). NinjaTrader sees a trade live before it is in an
+    // answer (FirstMinute's "0.3.3 order"), so every trade to 11:08:05 is now live before the answer, and only later trades
+    // (held or live, once either way) come after it. (2) Under heavy load the page from the first case, never drained, held
+    // data older than MaxLagMs and ChartBridge closed it as not keeping up (by design), so this load's history was dropped:
+    // a fresh page. (3) The read waits on the page's Pending lock (MarkReady sends "ready", the released trades and the seam
+    // under it), not a 50 ms sleep.
     static void TailKeptAfter()
     {
+        FreshPage();
         simNow = Et(10, 50, 0);
         ChartBridgeServer.ResetBooks(ChartBridgeTime.ToUtc(simNow));
         foreach (Trade x in tape.Where(x => x.T >= Et(10, 50, 0) && x.T < Et(11, 8, 0))) Live(x);
@@ -262,14 +273,16 @@ public static class GapHarness
         foreach (Trade x in held.Take(20)) Live(x);
         Reqs(r0).First(IsMinute).Answer(NtMinutes(tape, Et(9, 31, 0), Et(10, 40, 0)), ErrorCode.NoError);
         BarsRequest last = null;
-        WaitFor(() => (last = Reqs(r0).FirstOrDefault(IsLastTrades)) != null, 1000);
-        // the last trades: from 10:38:30, none in (10:39, 10:40], then every trade from 10:40 to 11:08:05 (some already held)
+        Check(WaitFor(() => (last = Reqs(r0).FirstOrDefault(IsLastTrades)) != null, 3000), "fallback, the last trades miss NinjaTrader's last minute: the last trades are asked");
+        // the last trades: from 10:38:30, none in (10:39, 10:40], then every trade from 10:40 to 11:08:05 (some already held), each
+        // seen live before the answer holds it
+        foreach (Trade x in held.Skip(20).Where(x => x.T <= Et(11, 8, 5))) Live(x);
         List<Trade> ticks = tape.Where(x => x.T > Et(10, 40, 0) && x.T <= Et(11, 8, 5)).ToList();
         ticks.Insert(0, new Trade { T = Et(10, 38, 30), P = 21440, V = 1 });
-        last.Answer(TicksOf(ticks), ErrorCode.NoError);
-        foreach (Trade x in held.Skip(20)) Live(x);
+        if (last != null) last.Answer(TicksOf(ticks), ErrorCode.NoError);
+        foreach (Trade x in held.Skip(20).Where(x => x.T > Et(11, 8, 5))) Live(x);
         WaitFor(() => Index(Sent(), "\"type\":\"ready\"") >= 0, 3000);
-        Thread.Sleep(50);
+        lock (client.Pending) { }   // MarkReady is done: "ready", the released trades and the seam are all out
         Wire w = Read(Sent());
         string seam = LastSeam();
         List<double> starts = w.Bars.Select(b => b[0]).ToList();
@@ -283,6 +296,7 @@ public static class GapHarness
     // The copy against live trades on another thread: no trade in both, none in neither.
     static void Race()
     {
+        FreshPage();   // 1.42: never a page left closed (not keeping up) by the cases before it under load (see TailKeptAfter)
         simNow = Et(6, 0, 0);
         ChartBridgeServer.ResetBooks(ChartBridgeTime.ToUtc(simNow));
         List<Trade> pre = Tape(Et(10, 39, 0.5), Et(11, 0, 0), 150, 31);
@@ -757,6 +771,7 @@ public static class GapHarness
         try
         {
             ChartBridgeServer.MinuteTimeoutMs = 300; ChartBridgeServer.TailTimeoutMs = 300;
+            FreshPage();   // 1.42: never a page left closed (not keeping up) by the cases before it under load (see TailKeptAfter)
             simNow = Et(6, 0, 0);
             ChartBridgeServer.ResetBooks(ChartBridgeTime.ToUtc(simNow));
             foreach (Trade x in tape.Where(x => x.T < Et(11, 8, 0))) Live(x);
