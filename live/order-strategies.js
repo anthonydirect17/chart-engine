@@ -453,16 +453,26 @@ function kindFor(chartKind, family) {
 /* next release: ChartBridge's word on the bar trail (`managed` `barTrail` {state, text}, only with a bar trail): on, building
    (fewer whole bars than asked yet), notProven (range bars not yet known to be NinjaTrader's own from the session open: the stop
    stays where it is, Anthony 2026-11-01), ended (the session closed: it no longer moves the stop), none (no bars for it). Every
-   state but on is said on the ticket in ChartBridge's words; notProven, ended and none in the warning colour. */
+   state but on is said on the ticket in ChartBridge's words; notProven, ended and none in the warning colour. 1.42: on the ticket
+   only ChartBridge's words up to their first ": " ("not proven yet", "ended at the session close", "not running"), the whole of
+   them in the line's tooltip (`tip`), as the ticket does with long text: the reason ran to 8 lines in a ticket 2 cells wide at
+   1366 and was cut off by the panel. */
 const BAR_STATE_WARN = ['notProven', 'ended', 'none'];
 function barTrailNote(m) {
   const b = m && m.barTrail && typeof m.barTrail === 'object' ? m.barTrail : null;
-  if (!b || b.state === 'on' || typeof b.state !== 'string') return { text: '', warn: false };
-  const t = typeof b.text === 'string' && b.text ? b.text : b.state === 'notProven' ? 'not proven yet' : b.state;
-  return { text: ' · Bar trail ' + t, warn: BAR_STATE_WARN.includes(b.state) };
+  if (!b || b.state === 'on' || typeof b.state !== 'string') return { text: '', warn: false, tip: '' };
+  const full = typeof b.text === 'string' && b.text ? b.text : b.state === 'notProven' ? 'not proven yet' : b.state;
+  const cut = full.indexOf(': '), t = cut > 0 ? full.slice(0, cut) : full;
+  return { text: ' · Bar trail ' + t, warn: BAR_STATE_WARN.includes(b.state), tip: t !== full ? ' · Bar trail ' + full : '' };
 }
-/** The ticket's line for a `managed` message: { text, level } ('' text for one that is done). */
+/** The ticket's line for a `managed` message: { text, level } ('' text for one that is done), and `tip` (the line with the bar
+ *  trail's whole reason, for the tooltip) only when the line says less of it. */
 function managedLine(m) {
+  const r = managedText(m), bt = barTrailNote(m);
+  if (r.text && bt.tip && r.text.endsWith(bt.text)) r.tip = r.text.slice(0, r.text.length - bt.text.length) + bt.tip;
+  return r;
+}
+function managedText(m) {
   if (!m || m.state === 'done') return { text: '', level: '' };
   const n = Array.isArray(m.pairs) ? m.pairs.length : 0, name = typeof m.name === 'string' ? m.name : 'strategy';
   const be = n ? m.pairs.filter(p => p && p.be).length : 0, tr = n ? m.pairs.filter(p => p && p.trailing).length : 0;

@@ -759,7 +759,8 @@ that is New York time: 10:31 ET on Sep 29, 2026 is `Date.UTC(2026, 8, 29, 10, 31
 | `rightOffset`, `barSpacing` | `8`, `7` | Empty bars past the last bar; starting bar width in px. |
 | `room` | none | 1.14.0: empty room right of the last bar in CSS px, the same at every zoom (replaces `rightOffset` when set; the live page uses 80). |
 | `grid` | `true` | 1.14.0: the price and time grid lines (the live page turns them off by default). |
-| `fitOrders` | `true` | 1.14.0: the auto-fit price scale takes in every order price (working orders, bracket legs, planned lines), eased like any re-fit. The VWAP never sizes the scale. |
+| `fitOrders` | `true` | 1.14.0: the auto-fit price scale takes in every order price (working orders, bracket legs, planned lines), eased like any re-fit. The VWAP never sizes the scale. 1.42.0: `false` fits the candles only; an order line off the scale is an edge marker (`orderEdges()`). Toggled on the chart with Fit stop and target, beside the padlock. |
+| `fitButton` | as `lockButton` | 1.42.0: the Fit stop and target toggle left of the padlock in the corner under the price axis. |
 | `motion` | `{ zoom: 75, fit: 120, candle: 55, follow: 110, friction: 325 }` | Time constants in ms. These are the approved feel; change with care. |
 | `unit` | `'pt'` | Suffix on trade result chips. Set `label` on a trade to override. |
 | `pointValue` | `0` | Dollars per point, for the position line's open P&L (or pass it to `setPosition`). |
@@ -774,7 +775,9 @@ that is New York time: 10:31 ET on Sep 29, 2026 is `Date.UTC(2026, 8, 29, 10, 31
 `lastBar()` · `atr(period)` (the closed bars' ATR, NinjaTrader's) · `setFitTop(px)` (room kept at the top of the
 price scale) · `getFitTop()` · `on('bubble', fn)` (the large-order bubble under the mouse, or null) · `bubbleHover()` · `bubbles()` ·
 `setProfileLines({ poc, vah, val })` · `getProfileLines()` (the developing profile lines) · `setVwapSource(fn)` (a page's own VWAP per bar) · `redraw()` ·
-`setScaleLock(on)` · `scaleLock()` · `on('scaleLock', fn)` (the price scale lock; option `lockButton`) · 1.16.0:
+`setScaleLock(on)` · `scaleLock()` · `on('scaleLock', fn)` (the price scale lock; option `lockButton`) · 1.42.0:
+`setFitOrders(on)` · `fitOrders()` · `on('fitOrders', fn)` (Fit stop and target, the toggle beside the lock; option `fitButton`) ·
+`orderEdges()` (with the fit off, the order lines off the scale as drawn: `[{ id, price, up, text, x, y, w, h }]`) · 1.16.0:
 `on('drawn', fn)` (after each frame drawn) · `vwapAt(i)` (the VWAP drawn at bar i); the auto-fit keeps the bubbles in
 view inside the plot (`util.fitRange`'s `bub`); the delta core's bars carry `big` (the largest single trade)
 
@@ -870,6 +873,7 @@ npm run smoke:update     # "Update ready: reload when flat" with an open positio
 npm run smoke:bot        # the Bot tab against the fake's v3 bot channel: strip, Library, panel, proposals, pop-out, switch off
 npm run smoke:quoterows  # a Quote board's markets menu: hide YM and ZN on one board, reload, the other board unaffected
 npm run smoke:v038       # the page with a ChartBridge without v3: no new control, no v3 message; V115_ROOT=dir compares the orders with 1.15.0
+npm run smoke:fit        # Fit stop and target: on, the stop and target in view; off, edge markers, the view still, a drag unchanged
 npm run perf:bot         # the Bot tab's entrance and Library playing while its live chart draws: the chart's gates hold
 node test/perf-live.mjs --view=range --et=01:30   # the full measurement (frames, ticks, GC, heap); --root=DIR for another checkout
 npm run check:nt8        # compile ChartBridge as C# 5 against stand-in NinjaTrader types (needs mono-mcs)

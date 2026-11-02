@@ -1,4 +1,4 @@
-# ChartBridge protocol (v1 market data and fills, v2 orders, v3 accounts, strategies, copier and bot, 0.5.0 agents, 0.5.1 accounts, 0.5.8 prop groups, 0.6.0 group trading, 0.6.1 a group's Type and default hero, 0.6.3 the audit fixes, 0.6.4 the no-trade-record alarm and Merge on an off follower, 0.6.8 the minute book, 0.6.10 the account lifecycle and the NQ tick file, 0.6.11 the bar trail and the narrower 1 second request)
+# ChartBridge protocol (v1 market data and fills, v2 orders, v3 accounts, strategies, copier and bot, 0.5.0 agents, 0.5.1 accounts, 0.5.8 prop groups, 0.6.0 group trading, 0.6.1 a group's Type and default hero, 0.6.3 the audit fixes, 0.6.4 the no-trade-record alarm and Merge on an off follower, 0.6.8 the minute book, 0.6.10 the account lifecycle and the NQ tick file, 0.6.11 the bar trail and the narrower 1 second request, 0.6.12 the bar trail follow-ups)
 
 ChartBridge is a NinjaTrader 8 add-on. It serves the live chart page at `http://localhost:8765/` and
 talks to it over one WebSocket at `ws://localhost:8765/ws`. Everything stays on the local machine.
@@ -1212,7 +1212,7 @@ at least 16) bounds the `ticks/` folder next to `config.txt`.
   it reads the files again, so a sender of an earlier start still running can never write the same `cut <seq>` with other bytes.
 
   ```json
-  {"v":1,"source":"chartbridge","bridge":"0.6.11","pc":"WORK","root":"NQ","contract":"NQ 12-26","tick":0.25,
+  {"v":1,"source":"chartbridge","bridge":"0.6.12","pc":"WORK","root":"NQ","contract":"NQ 12-26","tick":0.25,
    "session":"2026-10-30","run":"a1b2c3d4e5f6","seq":12,"count":1834,"volume":2301,
    "first":1793397600123,"last":1793397779950,"lost":0,"gaps":0,
    "sides":{"bidAsk":1700,"tickRule":130,"none":4},"cols":["u","p","v","s"],"ticks":[[1793397600123,25000.25,1,1]]}
@@ -1242,7 +1242,7 @@ at least 16) bounds the `ticks/` folder next to `config.txt`.
   until the next start.
 
   ```json
-  {"v":1,"source":"chartbridge","bridge":"0.6.11","pc":"WORK","root":"NQ","contract":"NQ 12-26","tick":0.25,
+  {"v":1,"source":"chartbridge","bridge":"0.6.12","pc":"WORK","root":"NQ","contract":"NQ 12-26","tick":0.25,
    "session":"2026-10-30","set":"0a1b2c3d4e5f","part":1,"parts":48,"setTicks":951234,"setVolume":1203456,
    "first":1793397600001,"last":1793480399990,
    "check":{"status":"filled","liveTicks":950001,"liveVolume":1202001,"histTicks":951234,"histVolume":1203456,
@@ -2061,7 +2061,13 @@ unsupported bar kind or size said plainly). No spec in Drive; the rules below ar
   fills and no saved session (a line written before this field, or a session not known): the safe side, the stop is never moved
   by a bar of a later session. Its breakeven and tick trail resume as before. The first trade ChartBridge sees on a root after a
   start or restart also ends the bar trail of every entry there filled in an earlier session (ChartBridge may have been stopped
-  at the close). The session an entry fills in is the earlier of the PC clock's and the latest trade's seen on its root.
+  at the close). The session an entry fills in is the session of its first execution's own time (NinjaTrader's `Execution.Time`,
+  through the same New York wall time as every trade; 0.6.12: before, the earlier of the PC clock's and the latest trade's seen on
+  its root, so an entry filled at 18:00:00.2 whose execution came before the session's first trade got the session before and its
+  bar trail was ended at once). When NinjaTrader has not listed the execution yet as the fill is handled, it is the earlier of
+  the PC clock's and the latest trade's as before, taken again from the execution when ChartBridge receives it (only while that
+  bar trail has not ended: an ended bar trail never starts again, and a session saved before a restart is never changed). An
+  execution of a session before a trade already seen on the root (the fill handled after the open) ends the bar trail at once.
   ChartBridge does not close the position itself: an Order Strategy's stop and target stay working (GTC) as before, and closing
   by the end of the day is Anthony's (or the firm's) to do.
 - **The level.** At each close of its kind with at least `barTrail` completed bars, each pair's level is the lowest low (a long)
@@ -2086,7 +2092,10 @@ unsupported bar kind or size said plainly). No spec in Drive; the rules below ar
 JSON object sent>\t<best price per pair>\t<saved UTC ms>` (and `\tmerged` once a Merge ran on it, fix1; then, 1.41.0, each
 optional and in this order, `\tsession:<day>`, the session the entry first filled in as a whole number (the day of the session's
 18:00 ET start since 1970, plus one), and `\tbarEnded` once its bar trail ended; a line without them is read as before, and a
-ChartBridge before 0.6.11 skips a line with them as unreadable, so it recovers that entry as `unmanaged`, the stop where it is), written whole through a temp file off NinjaTrader's thread (at
+ChartBridge before 0.6.11 skips a line with them as unreadable, so it recovers that entry as `unmanaged`, the stop where it is;
+0.6.12: both are written only for an entry whose strategy has a bar trail, so a rollback to 0.6.10 affects only bar trail entries,
+and a line 0.6.11 wrote for an entry without one loses them when the file is next written; a bar trail entry with fills and no
+saved session is still recovered with its bar trail ended), written whole through a temp file off NinjaTrader's thread (at
 placement, at each fill, and at most once a second as the best price moves); a line goes when its entry is done and its
 legs are gone. **On a restart (F5, a crash)** with a managed position open, ChartBridge recovers the legs from their
 names as in v2 and the parameters from `managed.txt`, takes the best price as the larger of the saved one and the trades

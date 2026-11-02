@@ -227,6 +227,16 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   order, the position's stop and target legs and the planned stop and target lines ("zoom to brackets", Anthony: on HOME
   the stop sat off the chart), and no longer the VWAP (one far from price squashed the candles). 1.16.0 (Anthony): it also
   takes in the large-order bubbles in view (only those, at their drawn radius), so no bubble crosses the top of the plot.
+  1.42.0 (Anthony 2026-11-02): taking in the orders is the **Fit stop and target** toggle beside the padlock, on by
+  default (as above); off, the scale fits the candles (and bubbles) only and the view never moves for an order line.
+- **Order edge markers (1.42.0, with Fit stop and target off):** an order line off the price scale (a stop, a target, a
+  planned line or a working entry) is a marker at the plot's top right edge (above the view) or bottom right edge (below),
+  6 px in from the price axis and 4 px from the edge, the VWAP marker's shape: 16 px tall, radius 3, on the legend ground, a
+  small triangle pointing to the line and its short name and price in 500 10px mono ("STP 20,084.00", "TGT 19,999.50",
+  "SL", "TP" for a planned line, "BUY LMT" / "SELL STP" for an entry), the triangle and text in the line's side color
+  with a 1 px border in that color dashed as its axis tag (3/2 a stop, 2/3 a planned line at 70%, solid a limit). Several at
+  one edge stack 2 px apart, the farthest price outermost, under (or over) the VWAP's marker; the corner readout keeps
+  clear of them. A marker is drawn only, nothing is sent from it; lines in view are drawn and dragged as ever.
 - Legend top-left over the chart, on `rgba(8,11,16,0.78)`, radius 8: symbol, timeframe, status pill;
   then time, O H L C, change and percent, volume; then VWAP and the trade under the cursor. It shows
   the bar under the crosshair, or the forming bar when the pointer is away. On phones it drops its
@@ -540,6 +550,14 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
 - **Price scale lock (1.14.0, review D2):** a 24 x 20 px padlock centred in the corner under the price axis (beside the
   time axis; nothing else is drawn there): unlocked, an open padlock in the quiet grey `#7F8C9C`, the text color and a
   `#2A3645` border on hover; locked, a closed padlock in `#B69CFF` on `#1A1230` with a `#3B2A6B` border (1.39.0: the same gold). Saved per chart.
+- **Fit stop and target (1.42.0, Anthony 2026-11-02):** a 24 x 20 px toggle left of the padlock, 4 px between, the two
+  centred together in that corner (the padlock alone, with the toggle off by option, stays centred as before); the padlock's
+  look exactly: on (the default), a top and a bottom line with an arrow out to each, in the quiet grey, the text color and a
+  border on hover; off, the arrows folded in, in the padlock's locked gold (`#E2C687` on `#17140E`, `#3C321E` border), as the
+  state that holds the view. Tooltip "Fit stop and target: on. The price scale zooms out to keep working orders, stops and
+  targets in view (click to turn off)" / "Fit stop and target: off. The view never moves for an order; a line off the chart
+  shows as a marker at the top or bottom edge (click to turn on)". Saved per chart as the padlock is (`live-fit-orders-v1`,
+  only the charts switched off), so a layout saved before it fits as it always did.
 - Drag the price axis to stretch price (auto-fit off; chart drag then pans price too). 1.14.0: while following live, a
   new trade that takes the forming bar within 12 px of the header or the bottom brings the auto-fit back (eased), and
   so does going back to live. Double-click

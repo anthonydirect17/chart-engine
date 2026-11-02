@@ -57,10 +57,12 @@ const sockets = async page => (await allSockets(page)).filter(k => !k.auth);
 
 /* 1.24.0 (build list #77): the feed delay split, on a fake ChartBridge 0.5.6 of its own whose PC clock runs 2.31 s ahead of the
    exchange (the exchange clock set 2.31 s back, --clock-offset, so the browser on the same clock keeps its own delay right; its
-   pcClock says so): at 1920 x 1080 the line splits "feed N ms = clock +2310 ms, real M ms" with no colour (the late number is
-   the clock's) and "PC clock off by 2.3 s" shows; at 1366 x 768, with no room for the split, "M ms real" and the split in the
-   tooltip, Flatten all still in the window; told the clock is nearer (a larger real delay) the feed turns amber at 1 s and red
-   at 3 s of real delay; with no answer the feed is as before and the tooltip says why. */
+   pcClock says so): where the top bar has room (2560 x 1440) the line splits "feed N ms = clock +2310 ms, real M ms" with no
+   colour (the late number is the clock's) and "PC clock off by 2.3 s" shows; with no room for the split, "M ms real" and the
+   split in the tooltip, Flatten all still in the window: at 1366 x 768 (1.24.0); at 1920 x 1080, since Flatten every account took
+   its room in the top bar (1.34.0), the split needs about as much room as the bar has, so either outcome is checked by the 1.24.0
+   rule (the split only while the bar has room; which one turns on the live numbers of the moment); told the clock is nearer (a larger real delay) the feed turns amber at 1 s
+   and red at 3 s of real delay; with no answer the feed is as before and the tooltip says why. */
 /* 1.38.1 (WORK 2026-10-23): a 1 min chart whose ChartBridge sends minute history ending 30 minutes early (--minute-lag-min=30, as
    NinjaTrader's minute answer did; the fake has no minute book, like ChartBridge before 0.6.8) and is slow to go ready
    (--load-delay-ms): while LOADING past 10 s the chart says "Waiting for NinjaTrader's NQ history (N s)"; at ready it shows no
@@ -123,13 +125,26 @@ async function clockPart() {
     });
     const parts = t => { const m = /^(-?\d+) ms = clock ([+-]?\d+) ms, real (-?\d+) ms( [A-Z]+)?$/.exec(t); return m ? { feed: +m[1], clock: +m[2], real: +m[3] } : null; };
     const AMBER = 'rgb(232, 184, 92)', RED = 'rgb(255, 92, 122)';   // --ws-warn, --ws-sell
+    // 1920 x 1080 (1.42: since 1.34.0's Flatten every account the split needs about as much room as the bar has here, so
+    // whether it fits turns on the live numbers of the moment, the local delay and its p95 among them): either outcome, each by
+    // the 1.24.0 rule. With room, the split, its parts adding up; without, "M ms real" and the split in the tooltip. Never cut.
     let s = await read(), x = parts(s.feed);
-    check(!!x && x.clock === 2310 && x.feed === x.clock + x.real && x.real >= 0 && x.real < 300, '1920 x 1080, the PC clock 2.31 s ahead: the feed split, the parts adding up: feed ' + s.feed + ' (local ' + s.local + ')');
+    const fits = !!x, fill = await p.evaluate(() => { const f = document.querySelector('.ws-top > .ws-fill'); return f ? Math.round(f.getBoundingClientRect().width) : -1; });
+    check((fits ? x.clock === 2310 && x.feed === x.clock + x.real && x.real >= 0 && x.real < 300
+                : /^-?\d+ ms real( [A-Z]+)?$/.test(s.feed) && /: feed \d+ ms = clock \+2310 ms, real/.test(s.tip)) && s.cls === '' && s.color !== AMBER && s.color !== RED,
+      '1920 x 1080, the PC clock 2.31 s ahead: ' + (fits ? 'room for the split, the parts adding up' : 'no room for the split beside Flatten every account: the real delay, the split in the tooltip') +
+      ', no colour (' + s.feed + ', local ' + s.local + ', free ' + fill + ' px)');
+    check(s.warn === 'PC clock off by 2.3 s' && s.warnColor === AMBER && s.warnSeen && s.statRight <= s.keysLeft && s.flatRight <= s.vw, '1920 x 1080: "PC clock off by 2.3 s", amber, in sight; the line ends before KEYS; Flatten all in the window');
+    await shot(p, 'workspace-clock-split-1920x1080.png');
+    // 2560 x 1440: room for the split
+    await p.setViewportSize({ width: 2560, height: 1440 }); await p.waitForTimeout(1300);
+    s = await read(); x = parts(s.feed);
+    check(!!x && x.clock === 2310 && x.feed === x.clock + x.real && x.real >= 0 && x.real < 300, '2560 x 1440, the PC clock 2.31 s ahead: the feed split, the parts adding up: feed ' + s.feed + ' (local ' + s.local + ')');
     check(s.cls === '' && s.color !== AMBER && s.color !== RED, 'no colour: the late number is the clock\'s (' + s.color + ')');
     check(s.warn === 'PC clock off by 2.3 s' && s.warnColor === AMBER && s.warnSeen, 'the warning "PC clock off by 2.3 s", amber, in sight: ' + s.warn);
     check(/PC clock: 2310 ms ahead of time\.windows\.com \(checked by ChartBridge at \d\d:\d\d:\d\d ET, round trip 32 ms\)/.test(s.tip) && /Windows can fix it/.test(s.tip) && /MNQ: feed \d+ ms = clock \+2310 ms, real/.test(s.tip), 'the tooltip says what was checked, when, and each instrument\'s split');
     check(s.statRight <= s.keysLeft && s.flatRight <= s.vw, 'the line ends before KEYS; Flatten all in the window');
-    await shot(p, 'workspace-clock-split-1920x1080.png');
+    await shot(p, 'workspace-clock-split-2560x1440.png');
     // 1366 x 768: no room for the split beside everything else: "M ms real", the split in the tooltip, Flatten all in the window
     await p.setViewportSize({ width: 1366, height: 768 }); await p.waitForTimeout(1300);
     s = await read();
@@ -162,11 +177,11 @@ async function clockPart() {
       await bar(w + ' x ' + h + ', no clock warning, a long note');
     }
     await ctl('pc-clock?offsetMs=-2310');
-    await p.setViewportSize({ width: 1920, height: 1080 });
+    await p.setViewportSize({ width: 2560, height: 1440 });
     await p.waitForFunction(() => document.getElementById('wsNote').hidden, null, { timeout: 8000 });   // the split waits for a note to go
     await p.waitForTimeout(1100);
     s = await read();
-    check(!!parts(s.feed), '1920 x 1080, the note gone: the split again (' + s.feed + ')');
+    check(!!parts(s.feed), '2560 x 1440, the note gone: the split again (' + s.feed + ')');
     // told the clock is only 0.5 s ahead: about 1.8 s of the delay is real (ship Wi-Fi): amber
     await ctl('pc-clock?offsetMs=-500'); await p.waitForTimeout(1300);
     s = await read(); x = parts(s.feed);
@@ -175,7 +190,7 @@ async function clockPart() {
     await ctl('pc-clock?offsetMs=1000'); await p.waitForTimeout(1300);
     s = await read(); x = parts(s.feed);
     check(!!x && x.clock === -1000 && x.real >= 3000 && s.cls === 'bad' && s.color === RED, 'a real delay over 3 s: the feed red (' + s.feed + ', ' + s.color + ')');
-    await shot(p, 'workspace-clock-red-1920x1080.png');
+    await shot(p, 'workspace-clock-red-2560x1440.png');
     // the clock's part back: no colour
     await ctl('pc-clock?offsetMs=-2300'); await p.waitForTimeout(1300);
     s = await read(); x = parts(s.feed);

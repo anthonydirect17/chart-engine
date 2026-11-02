@@ -1,5 +1,93 @@
 # Changelog
 
+## ChartBridge 0.6.12 and chart 1.42.0 (2026-11-02): Fit stop and target, the bar trail follow-ups, the bar trail line on the ticket
+
+In plain words: each chart now has a small toggle next to the price scale padlock. On (the default) the chart zooms out to keep
+your stop and target in view, as it always has; off, the chart stays where you put it and a stop or target off screen shows as a
+small marker at the top or bottom edge with its price. The bar trail also got its follow-ups: an entry filled in the first moments
+of a new session no longer has its bar trail ended by mistake. If your PC clock runs behind the market data, a fill in the first
+moments of a new session that ChartBridge cannot yet place in its session ends its bar trail at once (the safe side), so the stop
+never moves in the wrong session. The ticket's bar
+trail line now fits (the full reason is in its tooltip). Two test checks that failed now and then (check:orders' Gap fallback, smoke:workspace's feed delay split) were fixed in
+the tests themselves; the page and ChartBridge were right.
+
+Install: the PC updater installs the page from green main as usual. ChartBridge 0.6.12 is a recompile: run the updater with
+`-InstallChartBridge`, then F5 in NinjaTrader. The page works with ChartBridge 0.6.2 or newer (`minChartBridge` stays 0.6.2); only
+the session fix needs 0.6.12.
+
+**1. Fit stop and target, a toggle beside the price scale lock** (page only):
+
+Anthony 2026-11-02: "an option to have the chart zoom out to fit the stop and target like it is now, but an option to toggle
+that off as well, maybe near the lock on the bottom right". His answers: per chart, remembered with its layout the way the lock is;
+on by default (today's behavior); off, the scale is never changed for a stop or target and a line off screen shows as a small
+marker at the top or bottom edge with its price; the toggle beside the lock, the lock's size, look, hover and tooltip pattern.
+
+- **The engine** (`src/chart-engine.js`): the `fitOrders` option (1.14.0, the auto-fit takes in every working order, bracket leg
+  and planned line) can now change while the chart runs: `setFitOrders(on)`, `fitOrders()`, and `on('fitOrders', fn)` after a
+  click on the new toggle (option `fitButton`, by default as `lockButton`). Turning it on fits the scale again unless the lock is
+  on. Off, the auto-fit is the candles' (and the bubbles') only, exactly as with no orders.
+- **The toggle:** 24 x 20 px, left of the padlock, the two centred together in the corner under the price axis (the padlock alone
+  stays where it was). On: a top and a bottom line with an arrow out to each, quiet grey; off: the arrows folded in, in the locked
+  padlock's gold. Tooltip "Fit stop and target: on. ..." / "Fit stop and target: off. ...".
+- **Edge markers** (fit off): an order line off the scale is a marker at the plot's top or bottom right edge, the VWAP marker's
+  shape in the line's own color and its axis tag's border ("STP 20,084.00", "TGT 19,999.50"; dashed for a stop or planned
+  line), stacked farthest outermost, clear of the VWAP's marker; the corner readout keeps clear of them. `orderEdges()` returns
+  them as drawn. The view never moves for them; lines in view draw and drag as before.
+- **The page** (`live/live.js`): saved per chart in `live-fit-orders-v1` (`{ <paneId>: false }`, only the charts switched off,
+  as `live-scale-lock-v1` keeps the locked ones), read at start and on a change in another window. A layout saved before this
+  has no key and fits as it always did.
+- Docs: `CHART_STYLE.md` (the price scale, the edge markers, the toggle beside the padlock), `README.md` (options, API, smoke).
+- Tests: `test/fit-orders.test.js` (new: on takes in the stop and target, off the candles' scale exactly with edge markers at the
+  right edge with their prices, stacking under the VWAP marker, the toggle's place and states, saved per chart);
+  `npm run smoke:fit` (new, screenshots `fit-on.png`, `fit-off.png`, `fit-corner-on.png`, `fit-corner-off.png`,
+  `fit-off-markers-top.png`, `fit-off-markers-bottom.png`); `smoke:headroom` checks the toggle beside the lock, saved and
+  read back after a reload.
+
+**2. The 1.42 fixes** (ChartBridge 0.6.12 and the page):
+
+- **The session of a fill from its own execution** (`nt8/ChartBridgeStrategies.cs` PlaceStrategyLegs, `FillSession`,
+  `StrategyExecution`; `nt8/ChartBridge.cs` Deliver). The session an entry first filled in was the earlier of the PC clock's and
+  the latest trade's seen on its root, so an entry filled at 18:00:00.2 whose execution came before the session's first trade got
+  the session before, and its bar trail was ended at once. It is now the session of its first execution's own time
+  (NinjaTrader's `Execution.Time`, through `ChartBridgeTime.ToUtc` / `EtSeconds` and `SessionDay`, as every trade). When
+  NinjaTrader has not listed the execution yet as the fill is handled, the old rule stands and the execution, when ChartBridge
+  receives it, corrects the session; never for a bar trail already ended (never started again) or a session saved before a
+  restart. An execution of a session before a trade already seen on the root ends the bar trail at once (the fill was handled
+  after the open, so the open's trade could not end it), also when it is the session that was guessed. An execution delivered
+  while the fill was being handled (after it read the list, before it saved the session) is not lost: the fill reads the list
+  again and takes it by the same rules (`ExecSessionLocked`, shared with `StrategyExecution`). An execution is matched to its
+  entry by the entry's order and its account, never by the order id alone. A guessed session before the latest trade's (the PC
+  clock behind the feed) ends the bar trail at the fill itself, saved as `barEnded`, so a stop never moves in the new session
+  when its execution never comes (every fallback ends the trail sooner, never later; a guess equal to the latest trade's session
+  trails on). The fill and `ExecSessionLocked` share one rule (`SessionPassedLocked`). The strategies harness checks each of these
+  (SIM-W6 to SIM-W11).
+- **`session:` only for a bar trail** (`SessionFields`). managed.txt writes `session:<day>` and `barEnded` only for an entry whose
+  strategy has a bar trail, so a rollback to ChartBridge 0.6.10 (which skips a line with them as unreadable and recovers that
+  entry as unmanaged) affects only bar trail entries; a line 0.6.11 wrote for any other entry loses them at the next write. A
+  bar trail entry with fills and no saved session is still recovered with its bar trail ended. `nt8/PROTOCOL.md` says both.
+- **The strategies harness puts NinjaTrader's time zone back as it found it** (`StrategiesHarness.Run`), not null.
+- **check:orders, "fallback, the last trades miss NinjaTrader's last minute only"** failed about 2 to 3 runs in 12 under load,
+  on main too. The race was in the harness (`nt8/check/GapHarness.cs` TailKeptAfter), not ChartBridge: it answered the last
+  trades with trades to 11:08:05 and fed the trades from about 11:08:03 live only after that answer, racing the load's Finish (a
+  thread pool continuation) that marks the page ready. When Finish won, those trades were no longer held: they went out live and
+  were also in the rebuilt minutes (28429 of 28386, 15 trades twice). NinjaTrader sees a trade live before it is in an answer
+  (FirstMinute's "0.3.3 order"), so every trade to 11:08:05 is now fed before the answer and only later ones after it (held or
+  live, once either way), and the read waits on the page's Pending lock (MarkReady sends "ready", the released trades and the seam
+  under it) instead of a 50 ms sleep. Under heavy load a second cause showed: the case's page, never drained since the first
+  case, held data older than 5 s and ChartBridge closed it as not keeping up (by design), dropping the load's history; this
+  case, Fallback, Race and Timeouts now start on a fresh page, as the later cases already did. The check itself is unchanged.
+- **smoke:workspace, "the feed delay split"** (5 checks failed on main). The page is right: since Flatten every account took its
+  room in the top bar (1.34.0), the split "N ms = clock +2310 ms, real M ms" needs about as much room at 1920 x 1080 as the bar
+  has, and the line follows its 1.24.0 rule (the split only while the bar has room, else "M ms real" with the split in the
+  tooltip), as at 1366. Whether it fits at 1920 turns on the live numbers of the moment (the local delay and its p95 among
+  them), so the smoke takes either outcome there, each checked by that rule, and checks the split, its colours and the note's
+  give-way at 2560 x 1440, where the bar always has room. No page change.
+- **The bar trail line on the ticket fits** (`live/order-strategies.js` barTrailNote and managedLine, `live/workspace.js`
+  setText). ChartBridge's whole reason ran to 8 lines in a ticket 2 cells wide at 1366 x 768 and the panel cut it off after
+  "Bar trail not proven yet:". The ticket now says ChartBridge's words up to their first colon ("not proven yet", "ended at the
+  session close", "not running"), the whole of them in the line's tooltip, as the ticket does with long text; in the warning
+  colour as before. "Runner 3T managing: 3 pairs · Bar trail not proven yet" is two lines at the narrowest ticket (219 px).
+
 ## ChartBridge 0.6.11 and chart 1.41.0 (2026-11-01): the bar trail exit option, a past day in the League view, a narrower 1 second request, the updater's DST edge
 
 Four items. The bar trail is Anthony's task "Strategy creator: bar trail option" and his decisions of 2026-11-01. It needs
