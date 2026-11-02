@@ -65,7 +65,7 @@ public static class StrategiesHarness
     {
         ChartBridgeOrders.ResetConfig();
         ChartBridgeOrders.ReadConfig("trading", "true");
-        ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, SIM-S1, SIM-S2, SIM-S3, SIM-S4, SIM-S5, SIM-S6, SIM-S7, SIM-S8, SIM-S9, SIM-T1, SIM-T2, SIM-T3, SIM-T4, SIM-T5, SIM-T6, SIM-T7, SIM-T8, SIM-U1, SIM-U2, SIM-U3, SIM-U4, SIM-U5, SIM-U6, SIM-U7, SIM-B1, SIM-B2, SIM-B3, SIM-B4, SIM-B5, SIM-B6, SIM-B7, SIM-K1, SIM-K2, SIM-K3, SIM-K4");
+        ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, SIM-S1, SIM-S2, SIM-S3, SIM-S4, SIM-S5, SIM-S6, SIM-S7, SIM-S8, SIM-S9, SIM-T1, SIM-T2, SIM-T3, SIM-T4, SIM-T5, SIM-T6, SIM-T7, SIM-T8, SIM-U1, SIM-U2, SIM-U3, SIM-U4, SIM-U5, SIM-U6, SIM-U7, SIM-B1, SIM-B2, SIM-B3, SIM-B4, SIM-B5, SIM-B6, SIM-B7, SIM-K1, SIM-K2, SIM-K3, SIM-K4, SIM-R1, SIM-R2, SIM-R3, SIM-R4, SIM-R5, SIM-R6, SIM-R7, SIM-R8, SIM-R9, SIM-R10, SIM-R11");
         ChartBridgeOrders.ReadConfig("maxQty.MNQ", "6");
         ChartBridgeSwitches.Note("orderTypes", orderTypes ? "on" : "off");   // integration: ChartBridgeConfig.Load records every v3 switch in ChartBridgeSwitches
         ChartBridgeSwitches.Note("strategies", strategies ? "On" : "off");
@@ -113,12 +113,15 @@ public static class StrategiesHarness
             DoneRace();          // fix1
             PlacingNotRestart(); // 0.6.10
             BarTrail();          // next build (after the restarts: its entries stay managed)
+            TrailReview();       // review of PR #75: the session across a restart and a feed drop, the kind held, a flat position
             Done();
             Check(!sentV2.Any(m => m.Contains("\"type\":\"managed\"")), "a v2 page never gets a managed message");
         }
         catch (Exception ex) { Check(false, "strategies harness threw: " + ex); }
         finally
         {
+            ChartBridgeServer.ClockForHarness = null;
+            NinjaTrader.Core.GeneralOptionsClass.Zone = null;
             ChartBridgeOrders.StrategyInline = false;
             ChartBridgeOrders.StrategyClock = null;
             ChartBridgeOrders.ManagedReadFault = null;
@@ -467,13 +470,25 @@ public static class StrategiesHarness
 
     // ------------------------------------------------------------ the bar trail (next build)
     // A trade's New York wall time (made up): 30 October 2026, h:m:s, as ChartBridgeTime.EtSeconds gives it (the chart's convention).
-    static double Et(int d, int h, int m, double sec) { return (new DateTime(2026, 10, d, h, m, 0) - new DateTime(1970, 1, 1)).TotalSeconds + sec; }
-    static void TradeAt(int h, int m, int sec, double price) { ChartBridgeOrders.NoteLast("MNQ", price, Et(30, h, m, sec)); }
+    static double Et(int d, int h, int m, double sec) { return EtN(10, d, h, m, sec); }
+    static double EtN(int mo, int d, int h, int m, double sec) { return (new DateTime(2026, mo, d, h, m, 0) - new DateTime(1970, 1, 1)).TotalSeconds + sec; }
+    // The simulated NinjaTrader clock (New York time, NinjaTrader set to New York) follows the trades from the bar trail on: the
+    // session an entry fills in and the session at a restart are read from it (review HIGH 1), and a feed drop's time (HIGH 2).
+    static DateTime simNt = new DateTime(2026, 10, 30, 10, 0, 0);
+    static void NtClock()
+    {
+        NinjaTrader.Core.GeneralOptionsClass.Zone = ChartBridgeTime.Eastern;
+        ChartBridgeServer.ClockForHarness = () => simNt;
+    }
+    static void At(double et) { simNt = new DateTime(1970, 1, 1).AddSeconds(et); }
+    static void TradeAt(int h, int m, int sec, double price) { At(Et(30, h, m, sec)); ChartBridgeOrders.NoteLast("MNQ", price, Et(30, h, m, sec)); }
+    static void TradeAtN(int mo, int d, int h, int m, double sec, double price) { At(EtN(mo, d, h, m, sec)); ChartBridgeOrders.NoteLast("MNQ", price, EtN(mo, d, h, m, sec)); }
     const string BarTrailS = "\"name\":\"Bar trail\",\"stop\":16,\"t1\":40,\"t1Share\":100,\"barTrail\":2,\"barTrailOffset\":1";
 
     static void BarTrail()
     {
         Config(false, true);
+        NtClock();
         ChartBridgeOrders.BarTrailFeedDropped(null);   // start clean: no bar before this case
         Account a = NewAccount("SIM-B1");
         TradeAt(10, 0, 30, 25000);                      // the first bar seen (to 10:01) is partial: never used
@@ -580,7 +595,7 @@ public static class StrategiesHarness
         Fill(a, e, 1, fill); SetPos(a, buy ? 1 : -1, fill);
         return e;
     }
-    static void TradeAtD(int d, int h, int m, double sec, double price) { ChartBridgeOrders.NoteLast("MNQ", price, Et(d, h, m, sec)); }
+    static void TradeAtD(int d, int h, int m, double sec, double price) { TradeAtN(10, d, h, m, sec, price); }
 
     static void BarKinds()
     {
@@ -1195,6 +1210,220 @@ public static class StrategiesHarness
               "after a real restart a genuinely orphaned strategy entry is still recovered and said: " + string.Join(" | ", sent.Where(x => x.Contains("error"))));
         orphan.OrderState = OrderState.Cancelled; Update(a, orphan);
         ChartBridgeOrders.CheckLegs(clock);
+    }
+
+    // ------------------------------------------------------------ review of PR #75 (1.41.0, ChartBridge 0.6.11)
+    // Made-up accounts and prices. HIGH 1: a restart must never let a trade from an earlier session keep its bar trail (the session
+    // it filled in is saved in managed.txt; without it, the safe side). HIGH 2: a feed down across the 18:00 open (also a drop while
+    // the market is closed) must never make the first minute bar whole or range bars proven. LOW 3: a bar kind made for a placement
+    // is held until the placement ends. LOW 4: never a stop move while the account's position is flat.
+    const string Bar1 = "\"name\":\"R1m\",\"stop\":16,\"t1\":40,\"t1Share\":100,\"barTrail\":1,\"barTrailOffset\":0";
+    static string LastManaged(Account a) { return Managed().LastOrDefault(m => m.Contains("\"account\":\"" + a.Name + "\"")) ?? ""; }
+    static string LineOf(Order e) { return File.ReadAllLines(ManagedFile).FirstOrDefault(l => l.StartsWith(Tag(e) + "\t")) ?? ""; }
+    static void Close(Account a)
+    {
+        SetPos(a, 0, 0);
+        foreach (Order o in a.Orders) if (o.OrderState != OrderState.Filled && o.OrderState != OrderState.Cancelled) { o.OrderState = OrderState.Cancelled; Update(a, o); }
+        ChartBridgeOrders.CheckLegs(clock);
+    }
+
+    static void TrailReview()
+    {
+        Config(false, true);
+        NtClock();
+
+        // HIGH 1, the reviewer's repro: an entry filled 10-29 15:00 with a bar trail, ChartBridge restarted, trades 10-30 from 10:00
+        ChartBridgeOrders.BarTrailFeedDropped(null);
+        Account a = NewAccount("SIM-R1");
+        TradeAtD(29, 15, 0, 0, 25000);
+        Msg("order", Ord(a.Name, "\"side\":\"buy\",\"kind\":\"market\",\"qty\":1,\"strategy\":{" + BarTrailS + "}"));
+        Order e = a.Orders.Last(); Fill(a, e, 1, 25000); SetPos(a, 1, 25000);
+        ChartBridgeOrders.SaveManagedNow();
+        long s29 = ChartBridgeOrders.SessionDay(Et(29, 15, 0, 0));
+        Check(LineOf(e).EndsWith("\tsession:" + s29), "HIGH 1: managed.txt saves the session the entry filled in (session:" + s29 + "): " + LineOf(e));
+        Restart();
+        Tick(1000); TradeAtD(30, 10, 0, 30, 25000);       // the session of 10-30 (after 18:00 on 10-29)
+        ChartBridgeOrders.CheckLegs(clock);
+        Check(Managed().Any(m => m.Contains("SIM-R1") && m.Contains("\"state\":\"resumed\"")), "HIGH 1: after the restart breakeven and the tick trail resume as before: " + LastManaged(a));
+        Check(LastManaged(a).Contains("\"barTrail\":{\"state\":\"ended\""), "HIGH 1: its bar trail is recovered ended (filled in an earlier session): " + LastManaged(a));
+        int n = a.Calls.Count;
+        Tick(1000); TradeAtD(30, 10, 1, 10, 25001);
+        Tick(1000); TradeAtD(30, 10, 2, 10, 25002);
+        Tick(1000); TradeAtD(30, 10, 3, 10, 25003);
+        Tick(1000); TradeAtD(30, 10, 4, 10, 25004);
+        Check(a.Calls.Count == n, "HIGH 1 (repro R1): a bar trail entry from the 10-29 session never moves its stop in the 10-30 session after a restart: " + string.Join(" ; ", a.Calls.Skip(n).ToArray()));
+        ChartBridgeOrders.SaveManagedNow();
+        Check(LineOf(e).EndsWith("\tsession:" + s29 + "\tbarEnded"), "HIGH 1: managed.txt then says barEnded too: " + LineOf(e));
+        Close(a);
+
+        // HIGH 2, the reviewer's repro: the feed is down across the 18:00 open; it comes back at 18:20:30, part way into a minute
+        Account b = NewAccount("SIM-R2");
+        Tick(1000); TradeAtD(30, 16, 58, 0, 25010);
+        StrategyLong(b, "\"name\":\"R1m\",\"stop\":16,\"t1\":40,\"t1Share\":100,\"barTrail\":1,\"barTrailOffset\":0", 25010);
+        ChartBridgeOrders.BarTrailFeedDropped(null);
+        Close(b);
+        Account c = NewAccount("SIM-R3");
+        Tick(1000); TradeAtD(30, 18, 20, 30, 25020);    // the first trade after the feed is back (18:00 to 18:20:30 missed)
+        StrategyLong(c, Bar1, 25020);
+        Order cstop = c.Orders[1];
+        int nc = c.Calls.Count;
+        Tick(1000); TradeAtD(30, 18, 20, 50, 25021);
+        Tick(1000); TradeAtD(30, 18, 21, 5, 25022);     // closes the 18:20 to 18:21 bar, seen only from 18:20:30
+        Check(c.Calls.Count == nc && ChartBridgeOrders.BarTrailBars("MNQ") == 0,
+              "HIGH 2 (repro R2): the bar joined at 18:20:30 (feed back after the open) is partial and never moves the stop: bars " + ChartBridgeOrders.BarTrailBars("MNQ") + "; " + string.Join(" ; ", c.Calls.Skip(nc).ToArray()));
+        Tick(1000); TradeAtD(30, 18, 21, 40, 25023);
+        Tick(1000); TradeAtD(30, 18, 22, 5, 25024);     // closes the first whole bar (25022 .. 25023)
+        Check(c.Calls.Count == nc + 1 && c.Calls.Last() == "change " + cstop.Name + " L0 S25022 Q0", "HIGH 2: the next whole bar trails as usual (25022): " + c.Calls.Last());
+        Confirm(c, cstop, 25022);
+        Close(c);
+
+        // HIGH 1: a restart in the same session resumes the bar trail (its first bar after the start partial)
+        Restart();
+        Account r4 = NewAccount("SIM-R4");
+        TradeAtN(11, 2, 10, 0, 0, 25100);
+        Order e4 = StrategyLong(r4, Bar1, 25100);
+        Order stop4 = r4.Orders[1];
+        ChartBridgeOrders.SaveManagedNow();
+        Check(LineOf(e4).EndsWith("\tsession:" + ChartBridgeOrders.SessionDay(EtN(11, 2, 10, 0, 0))), "HIGH 1: the session saved: " + LineOf(e4));
+        Restart();
+        Tick(1000); TradeAtN(11, 2, 10, 0, 30, 25101);
+        ChartBridgeOrders.CheckLegs(clock);
+        Check(LastManaged(r4).Contains("\"state\":\"resumed\"") && LastManaged(r4).Contains("\"barTrail\":{\"state\":\"building\""), "HIGH 1: a restart in the same session: resumed, the bar trail building again: " + LastManaged(r4));
+        int n4 = r4.Calls.Count;
+        Tick(1000); TradeAtN(11, 2, 10, 1, 10, 25102);  // closes the partial bar (after the start)
+        Tick(1000); TradeAtN(11, 2, 10, 1, 40, 25102.5);
+        Tick(1000); TradeAtN(11, 2, 10, 2, 10, 25103);  // closes 25102 .. 25102.5
+        Check(r4.Calls.Count == n4 + 1 && r4.Calls.Last() == "change " + stop4.Name + " L0 S25102 Q0", "HIGH 1: a same-session restart still trails (25102): " + r4.Calls.Last());
+        Confirm(r4, stop4, 25102);
+        Close(r4);
+
+        // HIGH 1: ChartBridge restarted before the close of the entry's session (17:30), the next session's first trade ends it
+        Account r5 = NewAccount("SIM-R5");
+        Tick(1000); TradeAtN(11, 2, 15, 0, 0, 25200);
+        Order e5 = StrategyLong(r5, Bar1, 25200);
+        ChartBridgeOrders.SaveManagedNow();
+        At(EtN(11, 2, 17, 30, 0));
+        Restart();
+        ChartBridgeOrders.CheckLegs(clock);
+        Check(LastManaged(r5).Contains("\"state\":\"resumed\"") && !LastManaged(r5).Contains("\"state\":\"ended\""), "HIGH 1: restarted at 17:30 in its own session: resumed, not ended yet: " + LastManaged(r5));
+        int n5 = r5.Calls.Count;
+        Tick(1000); TradeAtN(11, 2, 18, 0, 5, 25201);   // the first trade this run is the next session's
+        Check(LastManaged(r5).Contains("\"barTrail\":{\"state\":\"ended\""), "HIGH 1: the first trade seen after the restart is a later session: the bar trail ended: " + LastManaged(r5));
+        Tick(1000); TradeAtN(11, 2, 18, 1, 10, 25202);
+        Tick(1000); TradeAtN(11, 2, 18, 1, 40, 25203);
+        Tick(1000); TradeAtN(11, 2, 18, 2, 10, 25204);
+        Tick(1000); TradeAtN(11, 2, 18, 3, 10, 25205);
+        Check(r5.Calls.Count == n5, "HIGH 1: restarted before the close, its stop never moves in the next session: " + string.Join(" ; ", r5.Calls.Skip(n5).ToArray()));
+        Check(LineOf(e5).Contains("\tbarEnded"), "HIGH 1: saved as barEnded at once: " + LineOf(e5));
+        Close(r5);
+
+        // HIGH 1: a line from before the session field (old managed.txt): a filled bar trail entry is recovered with its bar trail
+        // ended, even in the same session (the safe side)
+        Account r6 = NewAccount("SIM-R6");
+        Tick(1000); TradeAtN(11, 3, 10, 0, 0, 25300);
+        Order e6 = StrategyLong(r6, Bar1, 25300);
+        ChartBridgeOrders.SaveManagedNow();
+        File.WriteAllLines(ManagedFile, File.ReadAllLines(ManagedFile).Select(l => Regex.Replace(l, "\tsession:[0-9]+", "")).ToArray());
+        Check(!LineOf(e6).Contains("session:"), "an old line: " + LineOf(e6));
+        Restart();
+        Tick(1000); TradeAtN(11, 3, 10, 0, 30, 25301);
+        ChartBridgeOrders.CheckLegs(clock);
+        Check(LastManaged(r6).Contains("\"state\":\"resumed\"") && LastManaged(r6).Contains("\"barTrail\":{\"state\":\"ended\""), "HIGH 1: an old line with no session: resumed, the bar trail ended: " + LastManaged(r6));
+        int n6 = r6.Calls.Count;
+        Tick(1000); TradeAtN(11, 3, 10, 1, 10, 25302);
+        Tick(1000); TradeAtN(11, 3, 10, 2, 10, 25303);
+        Tick(1000); TradeAtN(11, 3, 10, 3, 10, 25304);
+        Check(r6.Calls.Count == n6, "HIGH 1: an old line with no session never moves the stop by the bar trail: " + string.Join(" ; ", r6.Calls.Skip(n6).ToArray()));
+        Close(r6);
+
+        // HIGH 2: ChartBridge started after 18:00: the first trade it sees is not the open; the first minute bar is partial, range
+        // bars are not proven
+        Restart();
+        Account r7 = NewAccount("SIM-R7");
+        Tick(1000); TradeAtN(11, 3, 18, 20, 30, 25400);
+        StrategyLong(r7, Bar1, 25400);
+        Account r8 = NewAccount("SIM-R8");
+        Entry(r8, true, "\"name\":\"R4\",\"stop\":16,\"t1\":80,\"t1Share\":100,\"barTrail\":1,\"barTrailOffset\":0,\"barTrailType\":\"range\",\"barTrailSize\":4", 25400);
+        int n7 = r7.Calls.Count;
+        Tick(1000); TradeAtN(11, 3, 18, 20, 50, 25401);
+        Tick(1000); TradeAtN(11, 3, 18, 21, 5, 25402);
+        Check(r7.Calls.Count == n7 && ChartBridgeOrders.BarTrailBars("MNQ") == 0, "HIGH 2: started at 18:20: the first minute bar is partial, no move");
+        Check(LastManaged(r8).Contains("\"barTrail\":{\"state\":\"notProven\""), "HIGH 2: started at 18:20: range bars not proven: " + LastManaged(r8));
+        Close(r7); Close(r8);
+
+        // HIGH 2: a feed drop while the market is closed (17:30, the break) is marked too: the open is not taken as seen
+        Tick(1000); TradeAtN(11, 4, 16, 59, 0, 25500);
+        At(EtN(11, 4, 17, 30, 0));
+        typeof(ChartBridgeServer).GetMethod("FeedDropped", PS).Invoke(null, new object[] { null, "a test drop in the break" });
+        typeof(ChartBridgeServer).GetField("feedDown", PS).SetValue(null, 0);
+        Account r9 = NewAccount("SIM-R9");
+        Tick(1000); TradeAtN(11, 4, 18, 0, 1, 25500);
+        StrategyLong(r9, Bar1, 25500);
+        Order stop9 = r9.Orders[1];
+        int n9 = r9.Calls.Count;
+        Tick(1000); TradeAtN(11, 4, 18, 0, 30, 25501);
+        Tick(1000); TradeAtN(11, 4, 18, 1, 5, 25502);   // closes 18:00 to 18:01: whole only if the open was seen
+        Check(r9.Calls.Count == n9 && ChartBridgeOrders.BarTrailBars("MNQ") == 0, "HIGH 2: a drop in the break: the first bar of the session is partial, no move: " + string.Join(" ; ", r9.Calls.Skip(n9).ToArray()));
+        Tick(1000); TradeAtN(11, 4, 18, 1, 40, 25502.5);
+        Tick(1000); TradeAtN(11, 4, 18, 2, 5, 25503);   // the first whole bar: 25502 .. 25502.5
+        Check(r9.Calls.Count == n9 + 1 && r9.Calls.Last() == "change " + stop9.Name + " L0 S25502 Q0", "HIGH 2: then whole bars trail as usual (25502): " + r9.Calls.Last());
+        Confirm(r9, stop9, 25502);
+        Close(r9);
+
+        // LOW 4: never a stop move while the position is flat (the tick trail and breakeven, and the bar trail)
+        Account r10 = NewAccount("SIM-R10");
+        Tick(1000); TradeAtN(11, 4, 18, 2, 20, 25600);
+        StrategyLong(r10, BeTrail, 25600);
+        Order stop10 = r10.Orders[1];
+        SetPos(r10, 0, 0);                               // flat (closed outside ChartBridge), the stop still working
+        int n10 = r10.Calls.Count;
+        Tick(1000); TradeAtN(11, 4, 18, 2, 30, 25602);  // 8 ticks: breakeven due
+        Tick(1000); TradeAtN(11, 4, 18, 2, 40, 25603);  // 12 ticks: the trail due
+        Check(r10.Calls.Count == n10, "LOW 4: breakeven and the tick trail never move a stop while the position is flat: " + string.Join(" ; ", r10.Calls.Skip(n10).ToArray()));
+        SetPos(r10, 1, 25600);
+        Tick(1000); TradeAtN(11, 4, 18, 2, 50, 25603);
+        Check(r10.Calls.Count == n10 + 1 && r10.Calls.Last().StartsWith("change " + stop10.Name + " L0 S"), "LOW 4: with the position open again it moves: " + r10.Calls.Last());
+        Confirm(r10, stop10, double.Parse(Regex.Match(r10.Calls.Last(), " S([0-9.]+) ").Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture));
+        Close(r10);
+        Account r11 = NewAccount("SIM-R11");
+        Tick(1000); TradeAtN(11, 4, 18, 3, 10, 25610);
+        StrategyLong(r11, Bar1, 25610);
+        Order stop11 = r11.Orders[1];
+        SetPos(r11, 0, 0);
+        int n11 = r11.Calls.Count;
+        Tick(1000); TradeAtN(11, 4, 18, 3, 40, 25611);
+        Tick(1000); TradeAtN(11, 4, 18, 4, 5, 25612);   // closes 25610 .. 25611: the level 25610
+        Check(r11.Calls.Count == n11, "LOW 4: the bar trail never moves a stop while the position is flat: " + string.Join(" ; ", r11.Calls.Skip(n11).ToArray()));
+        SetPos(r11, 1, 25610);
+        Tick(1000); TradeAtN(11, 4, 18, 4, 20, 25612);
+        Check(r11.Calls.Count == n11 + 1 && r11.Calls.Last() == "change " + stop11.Name + " L0 S25610 Q0", "LOW 4: open again: the bar level is sent (25610): " + r11.Calls.Last());
+        Confirm(r11, stop11, 25610);
+        Close(r11);
+
+        // LOW 3: a bar kind made for a placement under way is held until the placement ends: with every other place held by
+        // placements under way, a 17th kind is refused (never evicting a held one), and once they end it is taken
+        MethodInfo place = typeof(ChartBridgeOrders).GetMethod("BarTrailPlaceProblem", PS), parse = typeof(ChartBridgeOrders).GetMethod("ParseStrategy", PS);
+        Func<int, object> range = sz =>
+        {
+            object[] args = { "\"name\":\"K\",\"stop\":16,\"barTrail\":1,\"barTrailOffset\":0,\"barTrailType\":\"range\",\"barTrailSize\":" + sz, null };
+            string bad = (string)parse.Invoke(null, args);
+            if (bad != null || args[1] == null) throw new Exception("LOW 3: the strategy for range " + sz + " was refused: " + bad);
+            return args[1];
+        };
+        int size = 41;
+        for (int guard = 0; guard < 40 && ChartBridgeOrders.BarTrailKinds("MNQ") < ChartBridgeOrders.BarKindsMax; guard++) Check(place.Invoke(null, new object[] { "MNQ", range(size++), 0.25 }) == null, "LOW 3 setup: a kind made");
+        Check(ChartBridgeOrders.BarTrailKinds("MNQ") == ChartBridgeOrders.BarKindsMax, "LOW 3 setup: 16 kinds on MNQ");
+        ChartBridgeOrders.BarKindsPlaced();              // those placements ended (their entries never came): every kind but 1 minute is spare
+        int first = size;
+        for (int i = 0; i < ChartBridgeOrders.BarKindsMax - 1; i++) Check(place.Invoke(null, new object[] { "MNQ", range(size++), 0.25 }) == null, "LOW 3 setup: a new kind takes a spare place");
+        string why17 = (string)place.Invoke(null, new object[] { "MNQ", range(size), 0.25 });
+        Check(why17 != null && why17.Contains("cannot run"), "LOW 3: kinds held by placements under way are never given away: the next one is refused: " + why17);
+        bool allHeld = true;
+        for (int k = first; k < size; k++) allHeld &= (bool)typeof(ChartBridgeOrders).GetMethod("BarKindUsed", PS).Invoke(null, new object[] { "MNQ", "range", k });
+        Check(allHeld, "LOW 3: every kind made for a placement under way counts as in use until it ends");
+        ChartBridgeOrders.BarKindsPlaced();
+        Check((string)place.Invoke(null, new object[] { "MNQ", range(size), 0.25 }) == null, "LOW 3: once the placements end, a new kind takes a spare place");
+        ChartBridgeOrders.BarKindsPlaced();
     }
 
     // ------------------------------------------------------------ done: the legs gone, the page told, the line removed

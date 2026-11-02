@@ -4541,9 +4541,9 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static void FeedDropped(string root, string why)
         {
             Interlocked.Exchange(ref feedDown, 1);   // a session that starts before the feed is back is not whole
+            ChartBridgeOrders.BarTrailFeedDropped(root);   // the bar trail's bars start over (a bar across the drop is not whole); review HIGH 2: also while closed, so a session that opens before the feed is back is not taken as seen from its open
             if (MarketClosedNow()) { Log("data feed: " + why + " while the market is closed; no trade was missed"); return; }   // S-B
             ChartBridgeTicks.NoteFeedDrop();   // the NQ tick file's next chunk says the capture may have a hole
-            ChartBridgeOrders.BarTrailFeedDropped(root);   // next build: the bar trail's bars start over (a bar across the drop is not whole)
             HtfFeedDropped(root);   // 0.3.7: the forming higher-timeframe bars miss trades: asked again at the next request
             List<RootBook> list; lock (Books) list = Books.Values.Where(b => root == null || b.Root == root).ToList();
             double et = ChartBridgeTime.EtSeconds(DateTime.UtcNow);

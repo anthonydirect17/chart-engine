@@ -405,6 +405,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             public int Rejects;                   // fix1: moves NinjaTrader rejected (the first is tried once more on the next eligible move)
             public double LastMoveMs = double.MinValue, Pending, PendingAt;   // Pending: the level a move was sent to (0: none)
             public double BarLevel;               // the bar trail's level from the last bar close (0: none yet); only ever tightens
+            public bool NotOpenSaid;              // review LOW 4: a move let go as the position is not open was logged (once until one is sent)
         }
 
         private class MEntry
@@ -421,7 +422,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             public bool Paused;                   // PauseStrategies (Merge's swap freezes breakeven and trailing on its account and root)
             public bool Merged;                   // fix1 (F4): a Merge swap ran on its position; saved in managed.txt ("merged"), so a restart never resumes it
             public int NameStop;                  // fix1 (F5): the stop ticks the entry's name carries (recovery when S is lost), 0 for none
-            public bool BarEnded;                 // the bar trail ended at the session close (Anthony 2026-11-01): it never moves the stop again
+            public bool BarEnded;                 // the bar trail ended at the session close (Anthony 2026-11-01): it never moves the stop again; saved in managed.txt ("barEnded")
+            public long Session;                  // the session (SessionDay) the entry first filled in, 0 when not known; saved in managed.txt ("session:<day>")
             public string BarSaid;                // the bar trail's state the pages were last told (BarStateLocked's literal)
         }
 
@@ -624,8 +626,19 @@ namespace NinjaTrader.NinjaScript.AddOns
                 placed.Add("k" + k + " " + c + (hasTarget ? " target " + CbJson.Num(tp) : ""));
             }
             bool revived;
+            double fillEt = EtNowSeconds();
             lock (StratLock)
             {
+                if (m.Session == 0)
+                {
+                    // review HIGH 1: the session it first filled in, saved in managed.txt: the earlier of the clock's and the latest trade's
+                    // seen on root (the earlier ends the bar trail sooner, never later); 0 when neither is known (then ended at the next
+                    // session's first trade, or at a restart)
+                    long seen, clock = double.IsNaN(fillEt) ? 0 : SessionDay(fillEt);
+                    if (root != null && RootSession.TryGetValue(root, out seen) && (clock == 0 || seen < clock)) clock = seen;
+                    m.Session = clock;
+                    saveDirty = true;
+                }
                 m.Pairs.AddRange(made);
                 m.Quiet = false;
                 if (m.State == "waiting") m.State = m.NoMoves ? "unmanaged" : "active";
@@ -655,6 +668,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             List<KeyValuePair<MPair, double>> due = null;
             List<MEntry> touched = null, barTell = null;
             double now = SNow();
+            bool ended = false;
+            try {   // the body is not indented one more step, so the lines below stay as they were
             lock (StratLock)
             {
                 double[] hl;
@@ -664,15 +679,31 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (!double.IsNaN(et) && et > 0)
                 {
                     // the session (Anthony 2026-11-01: every trade closes by the end of the day): the first trade of a later session
-                    // than the last one seen on root starts every kind over and ends the bar trail of every entry filled before it
+                    // than the last one seen on root starts every kind over and ends the bar trail of every entry filled before it.
+                    // Review HIGH 1: the first trade seen this run (after a start or a restart) ends it too for every entry filled in an
+                    // earlier session (its saved session), as ChartBridge may not have been running at that session's close.
                     long d = SessionDay(et), was;
                     bool had = RootSession.TryGetValue(root, out was), open = had && d > was;
                     if (!had || d > was) RootSession[root] = d;
+                    double lastEt;
+                    if (!RootLastEt.TryGetValue(root, out lastEt) || et > lastEt) RootLastEt[root] = et;
+                    // Review HIGH 2: a feed drop marks a gap on root. A trade of the same session well after the drop (the feed was back
+                    // before the close) clears it; the next session's first trade while it is still marked was not seen from the open.
+                    double gapSince;
+                    bool gap = BarGapSince.TryGetValue(root, out gapSince);
+                    if (gap && had && d == was && et > gapSince + BarGapClearSec) { BarGapSince.Remove(root); gap = false; }
+                    if (open || !had) { if (EndBarTrailsLocked(root, d)) ended = true; }
                     EnsureBars(root);
                     List<TrailBars> list;
                     if (!(had && d < was) && BarsByRoot.TryGetValue(root, out list))   // a late trade of an earlier session builds nothing
                     {
-                        if (open) { foreach (TrailBars tb in list) tb.SessionOpen(d); EndBarTrailsLocked(root); }
+                        if (open)
+                        {
+                            // the feed was down across the open (or ChartBridge cannot tell): every kind starts over as after a drop, so the
+                            // first minute bar is partial and range bars are not proven, never whole or proven from this session's open
+                            if (gap) { foreach (TrailBars tb in list) tb.Reset(); BarGapSince.Remove(root); }
+                            else foreach (TrailBars tb in list) tb.SessionOpen(d);
+                        }
                         foreach (TrailBars tb in list) if (tb.Trade(et, price)) { if (closed == null) closed = new List<TrailBars>(); closed.Add(tb); }
                     }
                 }
@@ -698,6 +729,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if (moved) { if (touched == null) touched = new List<MEntry>(); touched.Add(m); }
                 }
             }
+            } finally { if (ended) SaveManagedSoon(true); }   // review HIGH 1: an ended bar trail is saved at once ("barEnded"), also on the early return
             if (touched != null) SaveManagedSoon(false);   // the best price: at most once a second
             if (barTell != null) foreach (MEntry m in barTell) ManagedChanged(m, false);   // the bar trail's state changed (building, on, not proven yet, ended)
             if (due == null) return;
@@ -845,6 +877,31 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         private static readonly Dictionary<string, List<TrailBars>> BarsByRoot = new Dictionary<string, List<TrailBars>>();   // root -> its bar kinds
         private static readonly Dictionary<string, long> RootSession = new Dictionary<string, long>();   // root -> the session of the latest trade seen
+        private static readonly Dictionary<string, double> RootLastEt = new Dictionary<string, double>();   // root -> the time (ET seconds) of the latest trade seen
+        // Review HIGH 2: root -> a feed drop not yet known to be over (the ET seconds it was marked at: the later of the clock and the
+        // last trade seen). Marked by every drop, also one while the market is closed; cleared by a trade of the same session more
+        // than BarGapClearSec after it (the feed came back before the close), or used up by the next session's first trade, which
+        // then starts the kinds over as after a drop (Reset) instead of as a session ChartBridge saw open (SessionOpen).
+        private static readonly Dictionary<string, double> BarGapSince = new Dictionary<string, double>();
+        public const double BarGapClearSec = 10;
+        // Review LOW 3: the bar kinds placements under way have made (BarTrailPlaceProblem) and their entries do not hold yet: never
+        // given to another kind until the placement ends, sent or refused (PlaceOrder calls BarKindsPlaced on its own thread, which
+        // lets go of that thread's kinds only). A kind is listed once per placement holding it.
+        private static readonly List<string> BarKindsPlacing = new List<string>();
+        [ThreadStatic] private static List<string> barKindsMine;
+        private static string BarKindKey(string root, string type, int size) { return (root ?? "") + "|" + type + "|" + size.ToString(CultureInfo.InvariantCulture); }
+
+        // The New York wall clock now, in ET seconds (the PC's clock; the harness's simulated NinjaTrader clock when it sets one); NaN
+        // when it cannot be read.
+        private static double EtNowSeconds()
+        {
+            try
+            {
+                Func<DateTime> fake = ChartBridgeServer.ClockForHarness;
+                return fake != null ? ChartBridgeTime.EtSeconds(ChartBridgeTime.ToUtc(fake())) : ChartBridgeTime.EtSeconds(DateTime.UtcNow);
+            }
+            catch (Exception) { return double.NaN; }
+        }
 
         internal static string BarKindText(string type, int size) { return type == "range" ? size + " tick range" : size + " minute"; }
 
@@ -853,7 +910,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             foreach (MEntry m in ManagedByTag.Values)
                 if (m.Root == root && m.S != null && m.S.BarTrail > 0 && !m.BarEnded && m.S.BarType == type && m.S.BarSize == size) return true;
-            return false;
+            return BarKindsPlacing.Contains(BarKindKey(root, type, size));   // review LOW 3: held for a placement under way
         }
 
         // StratLock held. The kind's bars on root, made when asked (tick: the instrument's). With BarKindsMax kinds already, a kind
@@ -898,7 +955,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (s.BarType != "minute" && s.BarType != "range") return "the bar trail's " + s.BarType + " bars are not supported (minute or range bars only)";
             lock (StratLock)
             {
-                if (BarsOf(root ?? "", s.BarType, s.BarSize, tick, true) != null) return null;
+                if (BarsOf(root ?? "", s.BarType, s.BarSize, tick, true) != null) { string k = BarKindKey(root, s.BarType, s.BarSize); BarKindsPlacing.Add(k); (barKindsMine ?? (barKindsMine = new List<string>())).Add(k); return null; }   // review LOW 3: held until the placement ends
                 List<TrailBars> list;
                 string inUse = BarsByRoot.TryGetValue(root ?? "", out list) ? string.Join(", ", list.Select(x => BarKindText(x.Type, x.Size)).ToArray()) : "";
                 return "the bar trail on " + BarKindText(s.BarType, s.BarSize) + " bars cannot run: ChartBridge builds at most " + BarKindsMax +
@@ -906,16 +963,33 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
         }
 
-        // StratLock held, at the first trade of a later session on root: every bar trail entry already filled is ended (its level
-        // dropped; the bar trail never moves its stop again).
-        private static void EndBarTrailsLocked(string root)
+        // Review LOW 3: PlaceOrder, once a placement ends (sent or refused): the kinds this thread's placement held are free again (an
+        // entry that was registered holds its kind itself from then on).
+        internal static void BarKindsPlaced()
         {
+            List<string> mine = barKindsMine;
+            if (mine == null || mine.Count == 0) return;
+            lock (StratLock) foreach (string k in mine) BarKindsPlacing.Remove(k);
+            mine.Clear();
+        }
+
+        // StratLock held, at the first trade of a later session on root, and at the first trade seen on root this run (review HIGH 1:
+        // ChartBridge may have been stopped across the close): every bar trail entry that filled in a session before d (or in a
+        // session not known) is ended (its level dropped; the bar trail never moves its stop again). True when one was ended: the
+        // caller saves managed.txt ("barEnded"), so a restart keeps it ended.
+        private static bool EndBarTrailsLocked(string root, long d)
+        {
+            bool any = false;
             foreach (MEntry m in ManagedByTag.Values)
             {
                 if (m.Root != root || m.S == null || m.S.BarTrail <= 0 || m.Pairs.Count == 0 || m.BarEnded) continue;
+                if (m.Session > 0 && m.Session >= d) continue;   // filled in this session: it trails on
                 m.BarEnded = true;
                 foreach (MPair p in m.Pairs) p.BarLevel = 0;
+                any = true;
             }
+            if (any) saveDirty = true;
+            return any;
         }
 
         // StratLock held. The bar trail's state for the pages (`managed` `barTrail`), or null without a bar trail:
@@ -960,8 +1034,19 @@ namespace NinjaTrader.NinjaScript.AddOns
         internal static void BarTrailFeedDropped(string root)
         {
             List<MEntry> tell = null;
+            double nowEt = EtNowSeconds();
             lock (StratLock)
             {
+                // review HIGH 2: the gap is marked on root (null: every root seen), so a session that opens before the feed is known to
+                // be back is never taken as seen from its open; a root never seen this run needs no mark (its first trade is not a
+                // session open: its first bar is partial and its range bars unproven)
+                foreach (string r in (root != null ? new[] { root } : RootSession.Keys.Concat(BarsByRoot.Keys).Distinct().ToArray()))
+                {
+                    double last, since = double.IsNaN(nowEt) ? double.MaxValue : nowEt;
+                    if (RootLastEt.TryGetValue(r, out last) && !(last <= since)) since = last;
+                    double was;
+                    if (!BarGapSince.TryGetValue(r, out was) || since > was) BarGapSince[r] = since;
+                }
                 foreach (KeyValuePair<string, List<TrailBars>> kv in BarsByRoot)
                     if (root == null || kv.Key == root) foreach (TrailBars tb in kv.Value) tb.Reset();
                 foreach (MEntry m in ManagedByTag.Values)
@@ -1079,6 +1164,18 @@ namespace NinjaTrader.NinjaScript.AddOns
                         lock (StratLock) d.Key.Pending = 0;
                         continue;
                     }
+                    // Review LOW 4: never a stop move on a position that is not open. The account's position on the contract must be on
+                    // the side this stop protects (long for a sell stop, short for a buy stop); flat, the other side, or not readable:
+                    // the move is let go (said once per stop), the stop stays where it is, and a later trade tries again.
+                    string notOpen = PositionNotOpen(stop);
+                    if (notOpen != null)
+                    {
+                        bool say;
+                        lock (StratLock) { d.Key.Pending = 0; say = !d.Key.NotOpenSaid; d.Key.NotOpenSaid = true; }
+                        if (say) ChartBridgeServer.Log("strategy stop move not sent: " + stop.Name + " on " + stop.Account.Name + " stays at " + CbJson.Num(stop.StopPrice) + " (" + notOpen + ")");
+                        continue;
+                    }
+                    lock (StratLock) d.Key.NotOpenSaid = false;
                     if (stop.OrderType == OrderType.StopLimit) stop.LimitPriceChanged = Round(stop.LimitPrice + (d.Value - stop.StopPrice), stop.Instrument.MasterInstrument.TickSize);
                     stop.StopPriceChanged = d.Value;
                     stop.Account.Change(new[] { stop });
@@ -1086,6 +1183,18 @@ namespace NinjaTrader.NinjaScript.AddOns
                 }
                 catch (Exception ex) { MoveFailed(stop, d.Value, "the change could not be sent: " + ex.Message); }
             }
+        }
+
+        // Review LOW 4: null when the account holds a position on the stop's contract on the side the stop protects; else why not.
+        // Read off NinjaTrader's thread with StratLock not held (SendMoves). Every trail (breakeven, the tick trail, the bar trail).
+        private static string PositionNotOpen(Order stop)
+        {
+            int pos;
+            try { pos = SignedPosition(stop.Account, stop.Instrument); }
+            catch (Exception ex) { return "the position could not be read: " + ex.Message; }
+            bool sellStop = stop.OrderAction == OrderAction.Sell || stop.OrderAction == OrderAction.SellShort;
+            if (sellStop ? pos > 0 : pos < 0) return null;
+            return pos == 0 ? "the position is flat" : "the position is on the other side (" + pos + ")";
         }
 
         // A move NinjaTrader rejected (or that could not be sent): the stop stays where it was. Fix1 (lead's direction): the first
@@ -1311,12 +1420,21 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             bool merged = why == null && line != null && line.Merged;   // fix1 (F4): a Merge ran on it: never resumed
             if (merged) why = MergedRestartText;
+            // Review HIGH 1: a bar trail entry that filled in an earlier session than now (the saved session), was ended before the
+            // restart ("barEnded"), or has fills and no saved session (a line from before this field, or none known): its bar trail
+            // stays ended (breakeven and the tick trail resume as before). The safe side: never a bar from a later session.
+            double nowEt = EtNowSeconds();
+            long nowSession = double.IsNaN(nowEt) ? 0 : SessionDay(nowEt), savedSession = line != null ? line.Session : 0;
+            bool filled = entry != null && entry.Filled > 0;
+            bool barEnded = s != null && s.BarTrail > 0 && line != null &&
+                            (line.BarEnded || (savedSession > 0 ? nowSession == 0 || savedSession < nowSession : filled || legs.Any(l => l.Role != "exit")));
             double tick = inst.MasterInstrument.TickSize;
             if (why == null) why = LegsMismatch(s, buy, legs, tick);
             if (why == null && !StrategiesOn) why = "Order Strategies are off in config.txt (strategies)";
             if (why == null && !Enabled) why = "trading is off in config.txt";
             MEntry m = new MEntry { Tag = tag, Entry = entry, Account = account, Instrument = inst, Buy = buy, Root = ChartBridgeServer.RootFor(inst), S = s, NoMoves = why != null, Merged = merged,
-                                    NameStop = entry != null ? NamedStopTicks(entry.Name) : 0 };   // fix1 (F5): the stop ticks from the name
+                                    NameStop = entry != null ? NamedStopTicks(entry.Name) : 0,   // fix1 (F5): the stop ticks from the name
+                                    BarEnded = barEnded, Session = savedSession };   // review HIGH 1
             double[] hl;
             lock (StratLock) { if (m.Root == null || !SinceStart.TryGetValue(m.Root, out hl)) hl = null; }
             foreach (RLeg l in legs)
@@ -1542,8 +1660,11 @@ namespace NinjaTrader.NinjaScript.AddOns
         // thread (at placement, at each fill, at most once a second as the best price moves, and every 2 s while it has
         // changed or a write failed). Read once at start with planned_brackets.txt (LoadPlans, a pool thread). A file that
         // exists but cannot be read is never rewritten that run. Lines older than 7 days are dropped when read.
-        private class ManagedLine { public string Json; public Dictionary<string, double> Best = new Dictionary<string, double>(); public double At; public bool Merged; }
+        private class ManagedLine { public string Json; public Dictionary<string, double> Best = new Dictionary<string, double>(); public double At; public bool Merged; public long Session; public bool BarEnded; }
         // Fix1 (F4): a fifth field "merged" marks an entry a Merge swap ran on (a line without it is read as before).
+        // Review HIGH 1 (1.41.0 / 0.6.11): then, each optional and in this order, "session:<day>" (the session the entry first filled
+        // in, SessionDay) and "barEnded" (its bar trail ended at a session close). A line without them is read as before; a bar trail
+        // entry with fills and no session is recovered with its bar trail ended (the safe side).
         private const string MergedRestartText = "merged before the restart: breakeven and trailing stay off for this position, every stop stays where it is (manage it by hand)";
         private static readonly Dictionary<string, ManagedLine> ManagedLines = new Dictionary<string, ManagedLine>();   // lines read and not yet recovered
         private static bool managedReadFailed, saveDirty;
@@ -1552,13 +1673,13 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static int saveQueued;
         private static readonly object ManagedFileLock = new object();
         public static Func<string> ManagedReadFault, ManagedWriteFault;   // test hooks (unused in NinjaTrader)
-        private static readonly Regex ManagedLineRx = new Regex("^([0-9a-f]{8})\t(\\{[^\t]*\\})\t([^\t]*)\t([0-9]{1,15})(\tmerged){0,1}$");   // fix1 (F4): optional "merged"
+        private static readonly Regex ManagedLineRx = new Regex("^([0-9a-f]{8})\t(\\{[^\t]*\\})\t([^\t]*)\t([0-9]{1,15})(\tmerged){0,1}(\tsession:[0-9]{1,9}){0,1}(\tbarEnded){0,1}$");   // fix1 (F4): optional "merged"; review HIGH 1: optional "session:<day>", "barEnded"
 
         private static string ManagedFile { get { return Path.Combine(ChartBridgeConfig.Folder, "managed.txt"); } }
 
         private static void ClearStrategies()
         {
-            lock (StratLock) { ManagedByTag.Clear(); ManagedLines.Clear(); SinceStart.Clear(); BarsByRoot.Clear(); RootSession.Clear(); RecentlyDone.Clear(); managedCount = 0; managedReadFailed = false; saveDirty = false; saveFailed = null; lastSaveMs = 0; }
+            lock (StratLock) { ManagedByTag.Clear(); ManagedLines.Clear(); SinceStart.Clear(); BarsByRoot.Clear(); RootSession.Clear(); RootLastEt.Clear(); BarGapSince.Clear(); BarKindsPlacing.Clear(); RecentlyDone.Clear(); managedCount = 0; managedReadFailed = false; saveDirty = false; saveFailed = null; lastSaveMs = 0; }
         }
 
         // LoadPlans (a pool thread, at start, before plansLoaded is set): read the lines into memory.
@@ -1585,7 +1706,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                                 if (!m.Success) { bad++; continue; }
                                 double at = double.Parse(m.Groups[4].Value, CultureInfo.InvariantCulture);
                                 if (now - at > PlanKeepMs) continue;
-                                ManagedLine line = new ManagedLine { Json = m.Groups[2].Value, At = at, Merged = m.Groups[5].Success };
+                                ManagedLine line = new ManagedLine { Json = m.Groups[2].Value, At = at, Merged = m.Groups[5].Success, BarEnded = m.Groups[7].Success,
+                                                                     Session = m.Groups[6].Success ? long.Parse(m.Groups[6].Value.Substring(9), CultureInfo.InvariantCulture) : 0 };
                                 if (m.Groups[3].Value != "-")
                                     foreach (string part in m.Groups[3].Value.Split(','))
                                     {
@@ -1657,6 +1779,12 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         private const string ManagedNotRead = "managed.txt not read yet";
 
+        // Review HIGH 1: the optional session fields of a managed.txt line ("" for neither).
+        private static string SessionFields(long session, bool barEnded)
+        {
+            return (session > 0 ? "\tsession:" + session.ToString(CultureInfo.InvariantCulture) : "") + (barEnded ? "\tbarEnded" : "");
+        }
+
         private static string WriteManagedOnce()
         {
             lock (ManagedFileLock)
@@ -1671,13 +1799,13 @@ namespace NinjaTrader.NinjaScript.AddOns
                     {
                         if (m.S == null) continue;
                         string best = string.Join(",", m.Pairs.Select(p => "f" + p.F + "k" + p.K + ":" + p.Best.ToString("R", CultureInfo.InvariantCulture)));
-                        lines.Add(m.Tag + "\t" + m.S.Json + "\t" + (best.Length > 0 ? best : "-") + "\t" + ((long)now).ToString(CultureInfo.InvariantCulture) + (m.Merged ? "\tmerged" : ""));
+                        lines.Add(m.Tag + "\t" + m.S.Json + "\t" + (best.Length > 0 ? best : "-") + "\t" + ((long)now).ToString(CultureInfo.InvariantCulture) + (m.Merged ? "\tmerged" : "") + SessionFields(m.Session, m.BarEnded));
                     }
                     foreach (KeyValuePair<string, ManagedLine> kv in ManagedLines)
                         if (!ManagedByTag.ContainsKey(kv.Key))
                         {
                             string best = string.Join(",", kv.Value.Best.Select(b => b.Key + ":" + b.Value.ToString("R", CultureInfo.InvariantCulture)));
-                            lines.Add(kv.Key + "\t" + kv.Value.Json + "\t" + (best.Length > 0 ? best : "-") + "\t" + ((long)kv.Value.At).ToString(CultureInfo.InvariantCulture) + (kv.Value.Merged ? "\tmerged" : ""));
+                            lines.Add(kv.Key + "\t" + kv.Value.Json + "\t" + (best.Length > 0 ? best : "-") + "\t" + ((long)kv.Value.At).ToString(CultureInfo.InvariantCulture) + (kv.Value.Merged ? "\tmerged" : "") + SessionFields(kv.Value.Session, kv.Value.BarEnded));
                         }
                     saveDirty = false;
                     lastSaveMs = now;

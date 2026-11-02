@@ -39,6 +39,28 @@ the page works with ChartBridge 0.6.2 or newer (`minChartBridge` stays 0.6.2), o
 - Tests: `nt8/check/StrategiesHarness.cs` (minute and range bars, the phantom rule, a jump of several ranges, not proven yet, the
   session close, the 17th kind), `test/order-strategies.test.js`, `npm run smoke:strategies` (the ticket's bar trail line, screenshot
   `test/out/strategies-bar-trail-not-proven-1366.png`).
+- **The review of PR #75** (the safe side: when ChartBridge cannot tell, the stop is not moved):
+  - **A restart never lets an earlier session's trade keep its bar trail** (HIGH 1, `nt8/ChartBridgeStrategies.cs`). Before, the
+    session close lived only in memory: an entry filled 10-29 with a bar trail, ChartBridge restarted, and the 10-30 session moved
+    its stop. `managed.txt` now keeps, as optional fields after `merged`, the session the entry first filled in (`session:<day>`)
+    and `barEnded` (written at once when it ends); a line without them reads as before. A recovered entry keeps its bar trail ended
+    when it was saved ended, filled in an earlier session than now, or has fills and no saved session (an older line); its
+    breakeven and tick trail resume as before. The first trade seen after a start also ends the bar trail of an entry filled in an
+    earlier session (ChartBridge restarted before the close). A same-session restart still resumes the bar trail.
+  - **A feed down across the 18:00 open never makes the first bar whole or range bars proven** (HIGH 2, `nt8/ChartBridge.cs`,
+    `nt8/ChartBridgeStrategies.cs`). Every feed drop marks a gap on its root, now also one while the market is closed (it used to
+    return before the bar trail heard of it); a trade of the same session more than 10 seconds later clears it. The next session's
+    first trade with the gap still marked starts every bar kind over as after a drop (the first minute bar partial, range bars not
+    proven) instead of as a session seen from its open. A ChartBridge started after 18:00 was already safe (its first trade is not
+    taken as the open); a test now holds that.
+  - **A bar kind made for a placement is held until the placement ends** (LOW 3): until its entry is registered, no other kind
+    (a resumed entry's, made on a trade) can take its place; the hold ends with the placement, sent or refused.
+  - **Never a stop move while the position is not open** (LOW 4, breakeven, the tick trail and the bar trail; a gap
+    older than this build): a move is sent only while the account holds a position on the stop's side; flat, the other side or not
+    readable, it is let go (one Output line per stop) and the stop stays where it is.
+  - The reviewer's two repro cases (R1, R2) are in `nt8/check/StrategiesHarness.cs` ("review of PR #75"), with a same-session
+    restart, a restart at 17:30 before the open, an old `managed.txt` line, a start after 18:00, a drop in the 17:00 to 18:00 break,
+    the kind held, and a flat position for both trails. `nt8/PROTOCOL.md` documents the fields, the gap rule and the flat rule.
 
 **2. The League view opens a given past day** (page only, Anthony's task "League view opens a given past day"):
 

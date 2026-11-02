@@ -3636,7 +3636,7 @@ function startLeague() {
       if (on) { closePops(); restoreMax(); if (botDesk && botDesk.shown()) botDesk.showTab(false); if (agentDesk && agentDesk.shown()) agentDesk.showTab(false); }
       tabUrl(on ? 'league' : '');
       placeTabBtn();                                        // the Bot button in the top bar meanwhile (one click to the Bot)
-      if (!on) { if (leagueView.liveDay()) LG.day = leagueView.liveDay(); if (!LG.busy) leaguePoll(); }   // never a past day   // the faint marks read on by themselves (a read under way schedules the next itself)
+      if (!on) { if (leagueView.liveDay()) LG.day = leagueView.liveDay(); if (!LG.busy) leaguePoll(); }   // never a past day; the faint marks read on by themselves (a read under way schedules the next itself)
     } });
 }
 /* the league's trades, faint, on the charts whose ⋯ switch is on (kept in this browser, off by default): one read of The Desk

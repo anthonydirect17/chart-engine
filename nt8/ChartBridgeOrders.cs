@@ -708,8 +708,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             // and its placing never interleave with another entry on a member
             // re-review 3: only entries wait on it: a page market exit (no bracket or strategy, the other side of the position by both
             // readings, at most the position) never does
+            try {   // review LOW 3: a bar kind this placement made stays held until it ends, sent or refused (BarKindsPlaced); not indented, so the lines stay as they were
             if (!bot && agent == null && !LooksLikeExit(top, bracketBody, strategyBody)) { lock (GroupEntryLock) lock (PlaceLock) why = PlaceOrderLocked(top, bracketBody, cid, strategyBody, bot, agent, agentPlan, out planTag, out placed); }
             else lock (PlaceLock) why = PlaceOrderLocked(top, bracketBody, cid, strategyBody, bot, agent, agentPlan, out planTag, out placed);   // two pages or tabs cannot both pass the cap check
+            } finally { BarKindsPlaced(); }
             if (planTag != null)
             {
                 // The record is what a recompile reads. Its name holds the same ticks, so a failed write does not refuse the

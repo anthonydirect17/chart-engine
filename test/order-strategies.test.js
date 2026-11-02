@@ -655,7 +655,16 @@ test('the C# bar trail: the phantom rule, the session close, not proven yet and 
   assert.match(cs, /THE PHANTOM RULE: a phantom bar is a range bar\s+\/\/\s+no trade was in/);
   assert.match(cs, /Phantoms\+\+;   \/\/ a phantom bar: no trade was in it, never used/);
   assert.match(cs, /if \(exact\) \{ Push\(th \* Tick, tl \* Tick\); done = true; \}/, 'a used bar keeps its traded high and low');
-  assert.match(cs, /if \(open\) \{ foreach \(TrailBars tb in list\) tb\.SessionOpen\(d\); EndBarTrailsLocked\(root\); \}/, 'the session open ends the bar trail of entries filled before it');
+  assert.match(cs, /if \(open \|\| !had\) \{ if \(EndBarTrailsLocked\(root, d\)\) ended = true; \}/, 'the session open (and the first trade seen after a start) ends the bar trail of entries filled in an earlier session');
+  // review of PR #75: HIGH 1, the session across a restart; HIGH 2, the gap rule; LOW 4, the flat rule
+  assert.match(cs, /if \(m\.Session > 0 && m\.Session >= d\) continue;   \/\/ filled in this session: it trails on/);
+  assert.match(cs, /\(\\tmerged\)\{0,1\}\(\\tsession:\[0-9\]\{1,9\}\)\{0,1\}\(\\tbarEnded\)\{0,1\}\$"\);/, 'managed.txt: optional session and barEnded after merged');
+  assert.match(cs, /line\.BarEnded \|\| \(savedSession > 0 \? nowSession == 0 \|\| savedSession < nowSession : filled \|\| legs\.Any/, 'a restart keeps an earlier session\'s bar trail ended (and one with no saved session)');
+  assert.match(cs, /if \(gap\) \{ foreach \(TrailBars tb in list\) tb\.Reset\(\); BarGapSince\.Remove\(root\); \}\s+else foreach \(TrailBars tb in list\) tb\.SessionOpen\(d\);/, 'a gap across the open: the kinds start over as after a drop');
+  assert.match(cs, /string notOpen = PositionNotOpen\(stop\);/, 'never a stop move while the position is not open');
+  const cb = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'ChartBridge.cs'), 'utf8');
+  const drop = cb.slice(cb.indexOf('private static void FeedDropped(string root, string why)'));
+  assert.ok(drop.indexOf('ChartBridgeOrders.BarTrailFeedDropped(root);') > 0 && drop.indexOf('ChartBridgeOrders.BarTrailFeedDropped(root);') < drop.indexOf('if (MarketClosedNow())'), 'a drop while the market is closed reaches the bar trail too');
   assert.match(cs, /return "notProven";/);
   assert.match(cs, /return "ended";/);
   assert.match(cs, /",\\"barTrail\\":\{\\"state\\":"/);

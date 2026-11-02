@@ -1992,6 +1992,10 @@ loosens), never to a price at or through the last trade (it waits for the next t
 500 ms (lead's default), always with `change` on the working stop at the broker (a stop-limit keeps its offset). A move
 NinjaTrader rejects leaves the stop where it was and raises a `status` `warn`; it is tried once more on the next eligible
 move, and a second rejection halts moves for that stop (fix1).
+**The flat rule** (1.41.0 review LOW 4, every trail: breakeven, the tick trail and the bar trail): a move is sent only while
+the account holds a position on the stop's contract on the side the stop protects (long for a sell stop, short for a buy
+stop). Flat, the other side, or a position that cannot be read: the move is not sent, the stop stays where it is, the Output
+window says so once per stop ("strategy stop move not sent: ... (the position is flat)"), and a later trade tries again.
 
 **The bar trail** (0.6.11, Anthony's task "Strategy creator: bar trail option" and his answers of 2026-11-01: "It should be
 able to trail both, or any bar timeframe for that matter", a start "Yes, an option at least", and with the tick trail "No"; then
@@ -2037,11 +2041,27 @@ unsupported bar kind or size said plainly). No spec in Drive; the rules below ar
   feed is back (its span may have begun while the feed was down) are partial (the first bar of a session ChartBridge saw open is
   whole). A feed drop forgets every bar before it and drops a bar level not sent yet, so the trail waits for `barTrail` whole
   (proven) bars after the drop. The time is New York wall time; at a daylight saving change CME is shut (2 AM on a Sunday).
+- **The gap rule** (1.41.0 review HIGH 2). "ChartBridge saw the session open" needs the feed up across 18:00, so every feed drop
+  marks a gap on its root (a drop of the whole connection: every root seen this run), **also a drop while the market is closed**
+  (the 17:00 to 18:00 break, a weekend or a holiday, where nothing else is marked as no trade was missed). The mark is cleared by
+  a trade of the same session more than 10 seconds after the drop (the later of the PC clock and the last trade seen then): the
+  feed was back before the close. While it is set, the next session's first trade is **not** taken as the session's open: every
+  bar kind starts over as after a feed drop, so the first minute bar is partial and range bars stay `notProven` until a swing
+  proves them; the bar trail of every entry filled before still ends as at any session close. The mark is then used up. A
+  ChartBridge started (or restarted) after 18:00 never takes its first trade as the open either (the trade before it is not
+  known): its first minute bar is partial and its range bars are not proven.
 - **The session close** (Anthony 2026-11-01: all trades close by the end of the day). The bar trail ends at the session close:
   at the first trade of a later session on a root (sessions start at 18:00 ET; CME closes at 17:00 ET and nothing trades
   between), every bar kind there starts over with no bar from the session before (minute and range alike), and every bar
   trail entry already filled is **ended**: its level is dropped, the bar trail never moves its stop again (the stop stays where
   it is), and `managed` says `barTrail` `ended` ("ended at the session close: ..."), in the warning colour on the chart.
+  **Across a restart** (1.41.0 review HIGH 1): `managed.txt` keeps the session each entry first filled in (`session:<day>`) and
+  `barEnded` once its bar trail ended (written at once when it ends). An entry recovered after a restart keeps its bar trail ended
+  when it was saved ended, when its saved session is earlier than the session of the PC clock at the recovery, or when it has
+  fills and no saved session (a line written before this field, or a session not known): the safe side, the stop is never moved
+  by a bar of a later session. Its breakeven and tick trail resume as before. The first trade ChartBridge sees on a root after a
+  start or restart also ends the bar trail of every entry there filled in an earlier session (ChartBridge may have been stopped
+  at the close). The session an entry fills in is the earlier of the PC clock's and the latest trade's seen on its root.
   ChartBridge does not close the position itself: an Order Strategy's stop and target stay working (GTC) as before, and closing
   by the end of the day is Anthony's (or the firm's) to do.
 - **The level.** At each close of its kind with at least `barTrail` completed bars, each pair's level is the lowest low (a long)
@@ -2051,7 +2071,7 @@ unsupported bar kind or size said plainly). No spec in Drive; the rules below ar
   (of the same session).
 - **The move**, by the rules of breakeven and trailing: only when tighter than the stop (never loosens), never at or through the
   last trade (it waits for the next trade, at the level the close set), at most one move per 500 ms, one move in flight, a
-  rejection as above. With breakeven, the tighter level wins. The tick trail (`trailAfter`) is refused with it.
+  rejection as above, and never while the position is not open (the flat rule, under "Breakeven and trailing"). With breakeven, the tighter level wins. The tick trail (`trailAfter`) is refused with it.
 - **What the pages are told:** `managed` says `trailing: true` once the stop is at its bar level, and carries `barTrail`
   `{state, text}` for a strategy with a bar trail (none otherwise): `on` (text null), `building` ("waiting for 3 whole 5 minute
   bars"), `notProven`, `ended`, or `none` ("not running: no room for ... bars": only for an entry resumed after a restart when
@@ -2063,7 +2083,10 @@ unsupported bar kind or size said plainly). No spec in Drive; the rules below ar
   Order Strategies: "Not shown, this chart cannot use it: ...").
 
 **Saved for a restart**: `managed.txt` next to `config.txt`, one line per managed entry, `<tag>\t<strategy as the flat
-JSON object sent>\t<best price per pair>\t<saved UTC ms>` (and `\tmerged` once a Merge ran on it, fix1), written whole through a temp file off NinjaTrader's thread (at
+JSON object sent>\t<best price per pair>\t<saved UTC ms>` (and `\tmerged` once a Merge ran on it, fix1; then, 1.41.0, each
+optional and in this order, `\tsession:<day>`, the session the entry first filled in as a whole number (the day of the session's
+18:00 ET start since 1970, plus one), and `\tbarEnded` once its bar trail ended; a line without them is read as before, and a
+ChartBridge before 0.6.11 skips a line with them as unreadable, so it recovers that entry as `unmanaged`, the stop where it is), written whole through a temp file off NinjaTrader's thread (at
 placement, at each fill, and at most once a second as the best price moves); a line goes when its entry is done and its
 legs are gone. **On a restart (F5, a crash)** with a managed position open, ChartBridge recovers the legs from their
 names as in v2 and the parameters from `managed.txt`, takes the best price as the larger of the saved one and the trades

@@ -2125,7 +2125,7 @@ if ($IsWin) {
       $o = New-ScheduledTaskTrigger -Daily -At ([datetime]'2026-12-15 17:05'); $o.StartBoundary = '2026-12-15T17:05:00-04:00'
       Set-ScheduledTask -TaskName $TaskName -Trigger (@($others) + @($o)) | Out-Null
       $nextUtc = (Get-ScheduledTaskInfo -TaskName $TaskName).NextRunTime
-      Microsoft.PowerShell.Utility\Write-Host "pc-updater dst: first winter run (2026-12-15), Task Scheduler's NextRunTime: wall-clock trigger $nextLocal; trigger with the summer offset -04:00 $nextUtc"
+      Microsoft.PowerShell.Utility\Write-Host "pc-updater dst: first winter run (2026-12-15), Task Scheduler's NextRunTime: wall-clock trigger $nextLocal; trigger with an explicit offset $nextUtc"
       # a trigger written with an offset (as New-ScheduledTaskTrigger does) is drift: the task's own next run rewrites it
       # (this test stands in for it: the pinned copy, not elevated)
       # Any explicit offset is the drift under test. Task Scheduler may rewrite the summer -04:00 on a winter date
