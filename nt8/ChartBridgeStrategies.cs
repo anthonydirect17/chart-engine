@@ -632,7 +632,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             long execSession = m.Session == 0 ? FillSession(m.Entry) : 0;   // 1.42: read before StratLock (the account's own lock)
             Action gap = FillGapForHarness;
             if (gap != null) gap();
-            bool guessed;
+            bool guessed, guessedNow = false;
             lock (StratLock)
             {
                 if (m.Session == 0)
@@ -650,14 +650,16 @@ namespace NinjaTrader.NinjaScript.AddOns
                         if (root != null && RootSession.TryGetValue(root, out seen) && (clock == 0 || seen < clock)) clock = seen;
                         m.Session = clock;
                         m.SessionGuessed = true;
+                        guessedNow = true;
                     }
                     saveDirty = true;
                 }
                 m.Pairs.AddRange(made);
                 // 1.42: its execution is of a session before a trade already seen on root (its fill handled after the open): that
-                // session's close has passed, so its bar trail ends now (the open's trade ended the others before this fill came)
-                long rootNow;
-                if (execSession > 0 && root != null && m.Session == execSession && RootSession.TryGetValue(root, out rootNow) && execSession < rootNow) EndBarTrailsLocked(root, rootNow);
+                // session's close has passed, so its bar trail ends now (the open's trade ended the others before this fill came).
+                // So does a guessed session before the latest trade's (the PC clock behind the feed): its execution may never come,
+                // and every fallback ends the trail sooner, never later (a guess equal to the latest trade's session trails on)
+                if ((execSession > 0 && m.Session == execSession) || guessedNow) SessionPassedLocked(m, m.Session);
                 m.Quiet = false;
                 if (m.State == "waiting") m.State = m.NoMoves ? "unmanaged" : "active";
                 revived = ReviveLocked(m);   // fix1: called done between the lookup and here: back, with these pairs
@@ -965,8 +967,17 @@ namespace NinjaTrader.NinjaScript.AddOns
             m.SessionGuessed = false;
             if (m.BarEnded || m.S == null || m.S.BarTrail <= 0) return false;
             if (m.Session != d) { m.Session = d; saveDirty = true; }
+            return SessionPassedLocked(m, d);
+        }
+
+        // StratLock held. The one rule for an entry's session d known at its fill or from its execution (the fill, its execution
+        // listed or guessed, and ExecSessionLocked): d before the session of the latest trade seen on root means d's close has
+        // passed, so the bar trail ends at once (EndBarTrailsLocked) and a stop never moves outside its session. True when a bar
+        // trail was ended (the caller saves managed.txt, "barEnded", and tells the pages).
+        private static bool SessionPassedLocked(MEntry m, long d)
+        {
             long rootNow;
-            return m.Root != null && m.Pairs.Count > 0 && RootSession.TryGetValue(m.Root, out rootNow) && d < rootNow && EndBarTrailsLocked(m.Root, rootNow);
+            return d > 0 && m.Root != null && m.Pairs.Count > 0 && RootSession.TryGetValue(m.Root, out rootNow) && d < rootNow && EndBarTrailsLocked(m.Root, rootNow);
         }
 
         private static readonly Dictionary<string, List<TrailBars>> BarsByRoot = new Dictionary<string, List<TrailBars>>();   // root -> its bar kinds

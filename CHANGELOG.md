@@ -5,8 +5,9 @@
 In plain words: each chart now has a small toggle next to the price scale padlock. On (the default) the chart zooms out to keep
 your stop and target in view, as it always has; off, the chart stays where you put it and a stop or target off screen shows as a
 small marker at the top or bottom edge with its price. The bar trail also got its follow-ups: an entry filled in the first moments
-of a new session no longer has its bar trail ended by mistake, and the ticket's bar trail line now fits (the full reason is in its
-tooltip). Two test checks that failed now and then (check:orders' Gap fallback, smoke:workspace's feed delay split) were fixed in
+of a new session no longer has its bar trail ended by mistake, and if your PC clock runs behind the market data, a fill that can
+only be placed in the session before ends its bar trail at once, so the stop never moves in the new session. The ticket's bar
+trail line now fits (the full reason is in its tooltip). Two test checks that failed now and then (check:orders' Gap fallback, smoke:workspace's feed delay split) were fixed in
 the tests themselves; the page and ChartBridge were right.
 
 Install: the PC updater installs the page from green main as usual. ChartBridge 0.6.12 is a recompile: run the updater with
@@ -54,8 +55,11 @@ marker at the top or bottom edge with its price; the toggle beside the lock, the
   after the open, so the open's trade could not end it), also when it is the session that was guessed. An execution delivered
   while the fill was being handled (after it read the list, before it saved the session) is not lost: the fill reads the list
   again and takes it by the same rules (`ExecSessionLocked`, shared with `StrategyExecution`). An execution is matched to its
-  entry by the entry's order and its account, never by the order id alone. The strategies harness checks each of these
-  (SIM-W6 to SIM-W10).
+  entry by the entry's order and its account, never by the order id alone. A guessed session before the latest trade's (the PC
+  clock behind the feed) ends the bar trail at the fill itself, saved as `barEnded`, so a stop never moves in the new session
+  when its execution never comes (every fallback ends the trail sooner, never later; a guess equal to the latest trade's session
+  trails on). The fill and `ExecSessionLocked` share one rule (`SessionPassedLocked`). The strategies harness checks each of these
+  (SIM-W6 to SIM-W11).
 - **`session:` only for a bar trail** (`SessionFields`). managed.txt writes `session:<day>` and `barEnded` only for an entry whose
   strategy has a bar trail, so a rollback to ChartBridge 0.6.10 (which skips a line with them as unreadable and recovers that
   entry as unmanaged) affects only bar trail entries; a line 0.6.11 wrote for any other entry loses them at the next write. A
