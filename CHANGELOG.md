@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased (2026-11-02): the bar trail ended line on the ticket, short
+## Unreleased (2026-11-02): the bar trail ended and waiting lines on the ticket, short
 
 No version bump (the next release takes this). Page only.
 
@@ -8,10 +8,18 @@ No version bump (the next release takes this). Page only.
   state reads just "Bar trail ended" on the order ticket. 1.42.0 showed ChartBridge's words up to their first colon ("Bar trail
   ended at the session close"), which wrapped to 3 lines in the narrowest ticket (219 px at 1366 x 768) and the panel cut the
   third line off. ChartBridge's whole reason stays in the line's tooltip and the line stays in the warning colour. "Bar trail not
-  proven yet", "Bar trail not running" and the waiting for bars state are unchanged.
+  proven yet" and "Bar trail not running" are unchanged.
+- **"Bar trail waiting for bars", the rest in the tooltip** (same function). Anthony 2026-11-02: while the bar trail waits for
+  its first whole bars, the ticket reads just "Bar trail waiting for bars". 1.42.0 showed ChartBridge's whole words ("Bar trail
+  waiting for 3 whole 5 minute bars"), which also wrapped to 3 lines at 1366 and lost the third. ChartBridge's words stay in the
+  line's tooltip and the line keeps its plain colour. If ChartBridge says something for this state that is not about waiting, the
+  ticket shows it as before.
 - **Tests:** `test/order-strategies.test.js` checks the short ended line (with ChartBridge's words, with words without a colon,
   and with none); `smoke:strategies` checks the ended line at 1366 is at most 2 lines and fully inside the ticket's panel (height
-  and width), with the whole reason in its tooltip and the warning colour (`strategies-bar-trail-ended-1366.png`).
+  and width), with the whole reason in its tooltip and the warning colour (`strategies-bar-trail-ended-1366.png`). The same
+  checks for the waiting line: short, ChartBridge's words in the tooltip, the plain colour, and other words for that state as
+  before (unit tests); at 1366 at most 2 lines, fully inside the panel, exact text and tooltip, the plain colour
+  (`strategies-bar-trail-waiting-1366.png`).
 
 ## ChartBridge 0.6.12 and chart 1.42.0 (2026-11-02): Fit stop and target, the bar trail follow-ups, the bar trail line on the ticket
 

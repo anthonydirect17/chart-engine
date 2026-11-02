@@ -389,10 +389,21 @@ try {
   check(en === 'Runner 3T managing: 3 pairs · Bar trail ended' && await tk(A, 'managed').getAttribute('title') === 'Runner 3T managing: 3 pairs · Bar trail ended at the session close: it no longer moves the stop, which stays where it is' && /warn/.test(await tk(A, 'managed').getAttribute('class')),
     '1366 x 768: bar trail ended, in the warning colour, ChartBridge\'s whole reason in the tooltip: ' + en);
   await A.screenshot({ path: path.join(out, 'strategies-bar-trail-ended-1366.png') });
+  /* next release (Anthony 2026-11-02): waiting says just "Bar trail waiting for bars" ("waiting for 3 whole 5 minute bars"
+     wrapped to 3 lines here and the panel cut the third off); two lines at most, all of it inside the panel (height and width),
+     ChartBridge's words in the tooltip, the plain colour */
+  await control('bar-trail', { state: 'building', text: 'waiting for 3 whole 5 minute bars' }); await wait(400);
+  fit = await btFits();
+  check(fit.lines <= 2 && fit.inside && fit.inWidth, '1366 x 768, the ticket ' + fit.w + ' px wide: the waiting line fits (' + fit.lines + ' lines, inside the panel: ' + fit.inside + ', inside its width: ' + fit.inWidth + ')');
+  const wt = await tk(A, 'managed').textContent();
+  check(wt === 'Runner 3T managing: 3 pairs · Bar trail waiting for bars' && await tk(A, 'managed').getAttribute('title') === 'Runner 3T managing: 3 pairs · Bar trail waiting for 3 whole 5 minute bars' && !/warn|error/.test(await tk(A, 'managed').getAttribute('class')),
+    '1366 x 768: bar trail waiting for bars, plainly, ChartBridge\'s words in the tooltip: ' + wt);
+  await A.screenshot({ path: path.join(out, 'strategies-bar-trail-waiting-1366.png') });
+  await control('bar-trail', { state: 'ended', text: 'ended at the session close: it no longer moves the stop, which stays where it is' }); await wait(400);
   await A.setViewportSize({ width: 1920, height: 1080 }); await wait(300);
   check(/ · Bar trail ended$/.test(await tk(A, 'managed').textContent()) && /: it no longer moves the stop, which stays where it is$/.test(await tk(A, 'managed').getAttribute('title')) && /warn/.test(await tk(A, 'managed').getAttribute('class')), 'bar trail ended, in the warning colour, the whole in the tooltip: ' + await tk(A, 'managed').textContent());
   await control('bar-trail', { state: 'building', text: 'waiting for 3 whole 5 minute bars' }); await wait(400);
-  check(/ · Bar trail waiting for 3 whole 5 minute bars$/.test(await tk(A, 'managed').textContent()) && !/warn|error/.test(await tk(A, 'managed').getAttribute('class')), 'bar trail waiting for its bars, plainly: ' + await tk(A, 'managed').textContent());
+  check(/ · Bar trail waiting for bars$/.test(await tk(A, 'managed').textContent()) && / · Bar trail waiting for 3 whole 5 minute bars$/.test(await tk(A, 'managed').getAttribute('title')) && !/warn|error/.test(await tk(A, 'managed').getAttribute('class')), 'bar trail waiting for its bars, plainly, the whole in the tooltip: ' + await tk(A, 'managed').textContent());
   await control('bar-trail', { state: 'on' }); await wait(400);
   check(/^Runner 3T managing: 3 pairs[^·]*$/.test(await tk(A, 'managed').textContent()), 'bar trail on: nothing more said: ' + await tk(A, 'managed').textContent());
   await control('bar-trail', { state: '' }); await wait(200);

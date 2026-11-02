@@ -458,13 +458,17 @@ function kindFor(chartKind, family) {
    them in the line's tooltip (`tip`), as the ticket does with long text: the reason ran to 8 lines in a ticket 2 cells wide at
    1366 and was cut off by the panel. Next release (Anthony 2026-11-02): ended says just "Bar trail ended" on the ticket (its
    words up to the colon, "ended at the session close", still wrapped to 3 lines in the ticket 219 px wide at 1366 and the panel
-   cut the third off); the whole reason stays in the tooltip, the line stays in the warning colour. */
+   cut the third off); the whole reason stays in the tooltip, the line stays in the warning colour. Next release (Anthony
+   2026-11-02): building says just "Bar trail waiting for bars" on the ticket when ChartBridge's words say it is waiting (its
+   "waiting for 3 whole 5 minute bars" wrapped to 3 lines in the ticket 219 px wide at 1366 and the panel cut the third off); the
+   whole of ChartBridge's words in the tooltip, the line in the plain colour. Other words for building are said as before. */
 const BAR_STATE_WARN = ['notProven', 'ended', 'none'];
 function barTrailNote(m) {
   const b = m && m.barTrail && typeof m.barTrail === 'object' ? m.barTrail : null;
   if (!b || b.state === 'on' || typeof b.state !== 'string') return { text: '', warn: false, tip: '' };
   const full = typeof b.text === 'string' && b.text ? b.text : b.state === 'notProven' ? 'not proven yet' : b.state;
-  const cut = full.indexOf(': '), t = b.state === 'ended' ? 'ended' : cut > 0 ? full.slice(0, cut) : full;
+  const cut = full.indexOf(': ');
+  const t = b.state === 'ended' ? 'ended' : b.state === 'building' && /^waiting\b/i.test(full) ? 'waiting for bars' : cut > 0 ? full.slice(0, cut) : full;
   return { text: ' · Bar trail ' + t, warn: BAR_STATE_WARN.includes(b.state), tip: t !== full ? ' · Bar trail ' + full : '' };
 }
 /** The ticket's line for a `managed` message: { text, level } ('' text for one that is done), and `tip` (the line with the bar
