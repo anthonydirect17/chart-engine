@@ -604,13 +604,17 @@ test('the bar trail\'s state from ChartBridge is said on the ticket: not proven 
   const m = { type: 'managed', id: 'o1', name: 'Bars R40', state: 'active', pairs: [{ bucket: 1, qty: 1, fill: 25000, be: false, trailing: false }], text: null };
   assert.deepEqual(OS.managedLine(m), { text: 'Bars R40 managing: 1 pair', level: '' }, 'no barTrail key (a strategy without one, an older ChartBridge): as before');
   const NP = 'not proven yet: ChartBridge has not seen these 40 tick range bars from the session open (or a swing that proves them NinjaTrader\'s), so the stop stays where it is';
-  assert.deepEqual(OS.managedLine(Object.assign({}, m, { barTrail: { state: 'notProven', text: NP } })), { text: 'Bars R40 managing: 1 pair · Bar trail ' + NP, level: 'warn' });
+  assert.deepEqual(OS.managedLine(Object.assign({}, m, { barTrail: { state: 'notProven', text: NP } })), { text: 'Bars R40 managing: 1 pair · Bar trail not proven yet', level: 'warn', tip: 'Bars R40 managing: 1 pair · Bar trail ' + NP },
+    '1.42: the ticket says ChartBridge\'s words up to their first colon, the whole in the tooltip');
   assert.deepEqual(OS.managedLine(Object.assign({}, m, { barTrail: { state: 'notProven', text: null } })), { text: 'Bars R40 managing: 1 pair · Bar trail not proven yet', level: 'warn' }, 'never silent, even without ChartBridge\'s words');
-  assert.deepEqual(OS.managedLine(Object.assign({}, m, { barTrail: { state: 'ended', text: 'ended at the session close: it no longer moves the stop, which stays where it is' } })).level, 'warn');
-  assert.deepEqual(OS.managedLine(Object.assign({}, m, { barTrail: { state: 'none', text: 'not running: no room for 15 minute bars on MNQ (at most 16 bar kinds at once); the stop stays where it is' } })).level, 'warn');
+  const EN = 'ended at the session close: it no longer moves the stop, which stays where it is', NR = 'not running: no room for 15 minute bars on MNQ (at most 16 bar kinds at once); the stop stays where it is';
+  assert.deepEqual(OS.managedLine(Object.assign({}, m, { barTrail: { state: 'ended', text: EN } })), { text: 'Bars R40 managing: 1 pair · Bar trail ended at the session close', level: 'warn', tip: 'Bars R40 managing: 1 pair · Bar trail ' + EN });
+  assert.deepEqual(OS.managedLine(Object.assign({}, m, { barTrail: { state: 'none', text: NR } })), { text: 'Bars R40 managing: 1 pair · Bar trail not running', level: 'warn', tip: 'Bars R40 managing: 1 pair · Bar trail ' + NR });
   assert.deepEqual(OS.managedLine(Object.assign({}, m, { barTrail: { state: 'building', text: 'waiting for 3 whole 5 minute bars' } })), { text: 'Bars R40 managing: 1 pair · Bar trail waiting for 3 whole 5 minute bars', level: '' });
   assert.deepEqual(OS.managedLine(Object.assign({}, m, { barTrail: { state: 'on', text: null } })), { text: 'Bars R40 managing: 1 pair', level: '' });
-  assert.deepEqual(OS.managedLine(Object.assign({}, m, { state: 'waiting', barTrail: { state: 'notProven', text: NP } })), { text: 'Bars R40: waiting for the fill · Bar trail ' + NP, level: 'warn' });
+  assert.deepEqual(OS.managedLine(Object.assign({}, m, { state: 'waiting', barTrail: { state: 'notProven', text: NP } })), { text: 'Bars R40: waiting for the fill · Bar trail not proven yet', level: 'warn', tip: 'Bars R40: waiting for the fill · Bar trail ' + NP });
+  const rs = OS.managedLine(Object.assign({}, m, { state: 'resumed', text: 'ChartBridge restarted', barTrail: { state: 'ended', text: EN } }));
+  assert.deepEqual(rs, { text: 'Bars R40 resumed after a restart: 1 pair (ChartBridge restarted) · Bar trail ended at the session close', level: 'warn', tip: 'Bars R40 resumed after a restart: 1 pair (ChartBridge restarted) · Bar trail ' + EN });
   assert.equal(OS.managedLine(Object.assign({}, m, { state: 'resumed', text: 'ChartBridge restarted', barTrail: { state: 'building', text: 'waiting for 1 whole 1 minute bar' } })).level, 'warn');
 });
 
