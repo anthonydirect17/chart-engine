@@ -1,5 +1,52 @@
 # Changelog
 
+## chart 1.42.1 (2026-11-02): the bar trail lines on the ticket, short; no false "folder is not set" warning with the League Mirror (page only, no F5)
+
+In plain words: two small fixes on the page. The order ticket's bar trail line now says just "Bar trail ended" or "Bar trail
+waiting for bars", so it fits the narrowest ticket at 1366 x 768 instead of losing its third line; ChartBridge's full words are in
+the line's tooltip. And the League view and the Drone sky no longer say "The league's folder is not set" while the league is
+working: The Desk reads WORK's League Mirror copy and says all is well, and the page now believes it.
+
+Install: the PC updater installs the page from green main as usual; no F5 needed. Page only: no ChartBridge file changes, so
+nothing needs a recompile. ChartBridge stays 0.6.12; `minChartBridge` stays 0.6.2 (COMPAT.json follows the page to 1.42.1).
+
+**1. The bar trail ended and waiting lines on the ticket, short:**
+
+- **"Bar trail ended", the reason in the tooltip** (`live/order-strategies.js` `barTrailNote`). Anthony 2026-11-02: the ended
+  state reads just "Bar trail ended" on the order ticket. 1.42.0 showed ChartBridge's words up to their first colon ("Bar trail
+  ended at the session close"), which wrapped to 3 lines in the narrowest ticket (219 px at 1366 x 768) and the panel cut the
+  third line off. ChartBridge's whole reason stays in the line's tooltip and the line stays in the warning colour. "Bar trail not
+  proven yet" and "Bar trail not running" are unchanged.
+- **"Bar trail waiting for bars", the rest in the tooltip** (same function). Anthony 2026-11-02: while the bar trail waits for
+  its first whole bars, the ticket reads just "Bar trail waiting for bars". 1.42.0 showed ChartBridge's whole words ("Bar trail
+  waiting for 3 whole 5 minute bars"), which also wrapped to 3 lines at 1366 and lost the third. ChartBridge's words stay in the
+  line's tooltip and the line keeps its plain colour. If ChartBridge says something for this state that is not about waiting, the
+  ticket shows it as before.
+- **Tests:** `test/order-strategies.test.js` checks the short ended line (with ChartBridge's words, with words without a colon,
+  and with none); `smoke:strategies` checks the ended line at 1366 is at most 2 lines and fully inside the ticket's panel (height
+  and width), with the whole reason in its tooltip and the warning colour (`strategies-bar-trail-ended-1366.png`). The same
+  checks for the waiting line: short, ChartBridge's words in the tooltip, the plain colour, and other words for that state as
+  before (unit tests); at 1366 at most 2 lines, fully inside the panel, exact text and tooltip, the plain colour
+  (`strategies-bar-trail-waiting-1366.png`).
+
+**2. No false "folder is not set" warning when The Desk reads the League Mirror:**
+
+In plain words: the League view and the Agents panel's Drone sky said "The league's folder is not set on The Desk (Lab, Shadow
+league, on WORK)." while the league was working. Since The Desk moved to HOMESERVER (2026-10-27) it reads the league from the copy
+WORK's League Mirror task posts, so it has no folder set and says so (`set` false) while also saying all is well (`ok` true,
+`source` "mirror"). The page now trusts `ok`: no warning then. Page only, no F5.
+
+- **The page** (`live/league.js`, `cleanDay`): `folder.ok` true is never a problem, whatever `folder.set` says. Otherwise The
+  Desk's own `folder.problem` text is shown (trimmed to 200 characters as before), e.g. "The league's folder is not set, and no
+  league files have arrived from WORK yet." Only an older Desk that sends `set` false with no `ok` and no `problem` gets the page's
+  own sentence, now "No league files have reached The Desk yet." (it no longer tells Anthony to set a folder on WORK). The League
+  view and the Drone sky's warning both read this one value, so both are fixed.
+- Tests: `test/league.test.js` (the mirror answer gives no problem and its day as read; set false with ok false shows The Desk's
+  text, trimmed; a set folder that cannot be found shows The Desk's text; an older Desk gets the new sentence),
+  `test/league-smoke.mjs` (a mirror-shaped answer shows the day with no warning; nothing to read shows The Desk's words; an older
+  Desk shows the new sentence; screenshot `league-mirror-1366.png`), `test/agents-strip-smoke.mjs` (a mirror-shaped answer keeps
+  the seats in the Drone sky with no warning).
+
 ## ChartBridge 0.6.12 and chart 1.42.0 (2026-11-02): Fit stop and target, the bar trail follow-ups, the bar trail line on the ticket
 
 In plain words: each chart now has a small toggle next to the price scale padlock. On (the default) the chart zooms out to keep

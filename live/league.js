@@ -70,15 +70,19 @@ function cleanTrade(t, open) {
 
 /**
  * The Desk's GET /api/chart-league as the view uses it: { date, problem, status, day, league, trades, open, decisions }. Never
- * throws. `problem` is what to say when there is nothing (no folder set, no session yet), else ''.
+ * throws. `problem` is what to say when there is nothing (no league files on The Desk, no session yet), else ''.
  */
 function cleanDay(j, past) {
   const out = { date: '', problem: '', status: null, day: null, league: null, trades: [], open: [], decisions: [] };
   if (!j || typeof j !== 'object') { out.problem = 'The Desk sent nothing the page can read.'; return out; }
   out.date = typeof j.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(j.date) ? j.date : '';
   const f = j.folder && typeof j.folder === 'object' ? j.folder : {};
-  if (f.set === false) out.problem = 'The league\'s folder is not set on The Desk (Lab, Shadow league, on WORK).';
-  else if (typeof f.problem === 'string' && f.problem) out.problem = f.problem.slice(0, 200);
+  /* 1.42.1 (Anthony 2026-11-02, a false alarm): since The Desk moved to HOMESERVER (2026-10-27) it reads the league from the
+     copy WORK's League Mirror task posts, and answers folder { set: false, ok: true, problem: null, source: 'mirror' }. `ok` true is
+     never a problem, whatever `set` says; otherwise The Desk's own `problem` text is said. Only an older Desk (set false, no ok, no
+     problem) gets the page's own sentence, which never sends Anthony to set a folder on WORK. */
+  if (typeof f.problem === 'string' && f.problem) out.problem = f.problem.slice(0, 200);
+  else if (f.ok !== true && f.set === false) out.problem = 'No league files have reached The Desk yet.';
   /* a past day: status.json is the league's LIVE status (today's positions, flags and spend), never that day's, so it is left out */
   out.status = !past && j.status && typeof j.status === 'object' ? j.status : null;
   out.past = !!past;

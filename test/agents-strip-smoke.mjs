@@ -47,7 +47,7 @@ const hms = ms => new Date(ms).toISOString().slice(11, 19);
 
 /* the SAMPLE league day around now; px: NQ's price on the page (1.38.1; the league's MNQ prices are the same index); extra: { pass: [seat, id, why] played later, trail: S's stop moved
    up, date: another date } */
-const extra = { passes: [], trail: 0, date: null, closed: false, hStopped: false };
+const extra = { passes: [], trail: 0, date: null, closed: false, hStopped: false, mirror: false };
 let base = null;
 function sampleDay(px) {
   const now = etNow(), at = m => (base || now) - m * 60000, date = extra.date || new Date(now).toISOString().slice(0, 10);
@@ -65,7 +65,8 @@ function sampleDay(px) {
   decisions.sort((a, b) => a.t - b.t);
   const fill = Math.round((px - 4) * 4) / 4, stop = fill + extra.trail;
   return {
-    shadow: 'SHADOW: no orders', folder: { set: true, ok: true, problem: null }, date,
+    /* extra.mirror: The Desk on HOMESERVER reading the copy WORK's League Mirror posts (no folder set, ok) */
+    shadow: 'SHADOW: no orders', folder: extra.mirror ? { set: false, ok: true, problem: null, source: 'mirror' } : { set: true, ok: true, problem: null }, date,
     day: { date, closed: extra.closed, note: extra.closed ? 'Sample: the made-up day closed' : null },
     status: { date, now: hms(now), feed: 'live', seats: {
       H: { status: 'active', stopped: extra.hStopped ? 'Sample: the made-up daily loss stop' : null, flag: 'Sample data, made up for the smoke', decisions: 58, entries: 0, flex: { phase: 'eval', balance: 50000, today_pnl: 0, room_to_floor: 2000 }, position: null, resting: null },
@@ -154,6 +155,14 @@ try {
     check(st.bars >= 24 && st.bars <= 90 && st.barsRoot === 'NQ' && st.root === 'NQ', '1.38.1: the pillars: ' + st.bars + ' NQ minute bars (' + st.barsRoot + ')');
     check(st.size.cw === Math.round(st.size.w * st.size.dpr) && Number.isInteger(st.size.cw) && Math.abs(st.size.cw / st.size.dpr - st.size.w) < 1e-9, 'the canvas on whole device pixels: ' + JSON.stringify(st.size));
   }
+  /* The Desk on HOMESERVER reading the League Mirror's copy (set false, ok true, source mirror): the seats stay, no warning in the strip */
+  extra.mirror = true; desk.league = sampleDay(px);
+  const reads0 = desk.log.filter(x => x.which === 'chart-league').length;
+  await until(() => desk.log.filter(x => x.which === 'chart-league').length > reads0 || null, 'a league read of the mirror-shaped answer', 40000);
+  await wait(1000);
+  const mw = await p.$eval(SKY + ' [data-k="warn"]', e => (e.hidden ? '' : e.textContent));
+  const ms = await sky();
+  check(mw === '' && ms && ms.drones.slice(0, 3).map(d => d.key).join(',') === 'seat:H,seat:S,seat:O', 'the mirror (set false, ok true): the seats show, no warning in the strip: "' + mw + '"');
   const feed1 = await p.evaluate(() => window.workspace.feed());
   check(feed1.opened - feed0.opened <= 1 && feed1.lines.some(L => L.root === 'NQ' && L.state === 'open'),
     '1.38.1: the bars come from the NQ quote line: at most its one instrument socket is new on this layout with no NQ chart (' + feed0.opened + ' before, ' + feed1.opened + ' after; lines ' + feed1.lines.map(L => L.root).join(', ') + ')');
