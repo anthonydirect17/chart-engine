@@ -2128,7 +2128,10 @@ if ($IsWin) {
       Microsoft.PowerShell.Utility\Write-Host "pc-updater dst: first winter run (2026-12-15), Task Scheduler's NextRunTime: wall-clock trigger $nextLocal; trigger with the summer offset -04:00 $nextUtc"
       # a trigger written with an offset (as New-ScheduledTaskTrigger does) is drift: the task's own next run rewrites it
       # (this test stands in for it: the pinned copy, not elevated)
-      Assert ((& $xmlBoundary) -match '-04:00$') 'the offset trigger is in place'
+      # Any explicit offset is the drift under test. Task Scheduler may rewrite the summer -04:00 on a winter date
+      # (seen after DST ended on 2026-11-01), so the offset's value is not what this checks.
+      $sbOffset = & $xmlBoundary
+      Assert ($sbOffset -match '[+-]\d\d:\d\d$') "the offset trigger is in place: $sbOffset"
       $keepSelf = $script:UpdaterSelf
       function Test-Elevated { return $false }
       $script:UpdaterSelf = Join-Path $script:P.Bin 'update-pc.ps1'
