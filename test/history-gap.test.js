@@ -25,7 +25,7 @@ test('1.38.1: the page says a LOADING that waits, shows no hole notice (Anthony:
 
 test('1.38.1 (Anthony 2026-10-23): the League chart and the Drone sky are NQ 1 min; the seats\' MNQ prices drawn unconverted', () => {
   const lg = read('live/league.js');
-  assert.match(lg, /root: 'NQ', busy: false \}/);
+  assert.match(lg, /root: 'NQ', busy: false[,}]/);
   assert.match(lg, />NQ 1 min \(league trades MNQ\)</);
   assert.match(lg, /view: \{ root: S\.root, tf: 'm1' \}/, 'the League chart keeps the 1 min view: 5 days, no ticks (LivePrefs.daysFor)');
   assert.equal(LP.daysFor('m1'), 5);
@@ -37,7 +37,7 @@ test('1.38.1 (Anthony 2026-10-23): the League chart and the Drone sky are NQ 1 m
 
 test('0.6.8: ChartBridge keeps a minute book per instrument and joins it to NinjaTrader\'s minute answer at one seam', () => {
   const cs = read('nt8/ChartBridge.cs');
-  assert.match(cs, /public const string Version = "0\.6\.([89]|10)";/);   // 0.6.9: the history path unchanged (recording only); 0.6.10: the account lifecycle (no history change)
+  assert.match(cs, /public const string Version = "0\.6\.([89]|1[01])";/);   // 0.6.9: the history path unchanged (recording only); 0.6.10: the account lifecycle (no history change); 0.6.11: the bar trail, the 1 second request (no history change)
   // stamped at the close, end-inclusive, as TailFromTicks and NinjaTrader
   assert.match(cs, /public static long CloseOf\(long t\) \{ long rem = t % Minute; return rem == 0 \? t : t - rem \+ Minute; \}/);
   // fed under the book's lock in OnMarketData, reset on a feed drop

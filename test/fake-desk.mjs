@@ -3,7 +3,8 @@
 // document with a `rev`, the stored rev + 1 on a PUT, 409 on a stale rev, 400 with { detail } on a bad shape, CORS for a
 // localhost page (the real one allows http://localhost:8765 and http://127.0.0.1:8765 only; a test page has another port).
 // Sample data only. With `down` set it answers nothing (the connection is dropped), as a Desk that is not running.
-//   const desk = await startDesk(port, { hotkeys, strategies });  desk.docs, desk.log, desk.down = true, desk.bump(which), desk.close()
+//   const desk = await startDesk(port, { hotkeys, strategies });  desk.docs, desk.log, desk.down = true, desk.bump(which), desk.close();
+//   desk.oldDesk = true: a Desk before the bar trail (a barTrail key refused, 400)
 // Chart 1.30.0 (wave 5, SPEC "account types"): the account types ledger as the spec's API contract gives it, for the chart page only:
 //   GET /api/account-types ({"v":1,"types":[...every field...],"asOf"}; archived left out unless ?all=1), GET /api/chart-accounts
 //   (rows gain "accountType": {id, firm, name, version, status} or null) and PUT /api/accounts/{account}/account-type
@@ -11,7 +12,8 @@
 //   (version + 1; a checked type goes back to not_checked). Made-up firm values and SIM-A style accounts only.
 // Chart 1.35.0: notes on POST /api/trade-tags (dim "note") come back apart under `notes` on GET, as The Desk's; desk.refuseTags
 //   (a function of a record: a reason, or '') refuses records as The Desk's `rejected`; GET /api/chart-floors answers seed.floors
-//   ({accounts, skipped}); GET /api/chart-league answers seed.league (the SAMPLE league day: status, trades, open, decisions).
+//   ({accounts, skipped}); GET /api/chart-league answers seed.league (the SAMPLE league day: status, trades, open, decisions); with ?date=,
+//   desk.leagueDays[date] or that date with no record.
 import http from 'node:http';
 
 /* Chart 1.32.0: a few more firms and plans for the type picker (Firm, Plan, Size), named as The Desk names its types ("<Plan>
@@ -33,7 +35,8 @@ export function emptyDocs() {
   return { hotkeys: { rev: 0, keys: Object.fromEntries(KEY_IDS.map(k => [k, ''])), modifiers: { limit: '', stop: '' } }, strategies: { rev: 0, strategies: [] } };
 }
 /* The Desk's own checks, written apart from the page's (a shape check is enough for a fake) */
-function check(which, d) {
+/* oldDesk: The Desk before the bar trail (it refuses a barTrail key, as The Desk of the Sunday 11-01 release does) */
+function check(which, d, oldDesk) {
   if (which === 'hotkeys') {
     if (!exact(d, ['rev', 'keys', 'modifiers'])) return 'the hotkeys need exactly rev, keys and modifiers';
     if (!exact(d.keys, KEY_IDS)) return 'keys has unknown or missing actions';
@@ -45,7 +48,19 @@ function check(which, d) {
   if (!exact(d, ['rev', 'strategies']) || !Array.isArray(d.strategies) || d.strategies.length > 24) return 'the strategies need exactly rev and strategies (at most 24)';
   for (let i = 0; i < d.strategies.length; i++) {
     const s = d.strategies[i];
-    if (!exact(s, ['id', 'name', 'stop', 'targets', 'breakeven', 'trail', 'hotkey'])) return 'strategies[' + i + '] has unknown or missing keys';
+    const KEYS = ['id', 'name', 'stop', 'targets', 'breakeven', 'trail', 'hotkey'];
+    /* next release: an optional barTrail { bars 1 to 50, offsetTicks 0 to 100 }, never with trail (the chart's checkStrategy) */
+    if (!exact(s, KEYS) && (oldDesk || !exact(s, KEYS.concat(['barTrail'])))) return 'strategies[' + i + '] has unknown or missing keys';
+    if ('barTrail' in s) {
+      const b = s.barTrail;
+      const bk = b && typeof b === 'object' ? Object.keys(b) : [];
+      if (!b || !('bars' in b) || !('offsetTicks' in b) || bk.some(k => !['bars', 'offsetTicks', 'type', 'size', 'startTicks'].includes(k)) || !Number.isInteger(b.bars) || b.bars < 1 || b.bars > 50 || !Number.isInteger(b.offsetTicks) || b.offsetTicks < 0 || b.offsetTicks > 100) return 'strategies[' + i + '] barTrail needs bars 1 to 50 and offsetTicks 0 to 100';
+      /* Anthony 2026-11-01: type 'minute' (1 to 60, dividing the hour) or 'range' (1 to 400 ticks) with size, both or neither; startTicks 0 to 2000 */
+      if (('type' in b) !== ('size' in b)) return 'strategies[' + i + '] barTrail type and size go together';
+      if ('type' in b && !(b.type === 'minute' && [1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30, 60].includes(b.size)) && !(b.type === 'range' && Number.isInteger(b.size) && b.size >= 1 && b.size <= 400)) return 'strategies[' + i + '] barTrail type and size are minute 1 to 60 or range 1 to 400';
+      if ('startTicks' in b && !(Number.isInteger(b.startTicks) && b.startTicks >= 0 && b.startTicks <= 2000)) return 'strategies[' + i + '] barTrail startTicks must be 0 to 2000';
+      if (s.trail !== null) return 'strategies[' + i + '] has trail and barTrail: one trail per strategy';
+    }
     if (!exact(s.stop, ['ticks', 'type', 'limitOffsetTicks'])) return 'strategies[' + i + '] stop needs ticks, type and limitOffsetTicks';
     if (!Array.isArray(s.targets) || !s.targets.length || s.targets.length > 3) return 'strategies[' + i + '] needs 1 to 3 targets';
     if (s.targets.reduce((a, t) => a + t.sharePct, 0) !== 100) return 'strategies[' + i + '] targets must add up to 100';
@@ -99,8 +114,15 @@ export async function startDesk(port, seed) {
       return desk.floors ? send(200, desk.floors) : send(404, { detail: 'Not Found' });
     }
     if (urlPath === '/api/chart-league' && req.method === 'GET') {
-      desk.log.push({ method: 'GET', which: 'chart-league' });
-      return desk.league ? send(200, desk.league) : send(404, { detail: 'Not Found' });
+      /* ?date=YYYY-MM-DD (The Desk's read_day): desk.leagueDays[date] (SAMPLE), else that date with no record, as The Desk answers */
+      const date = new URLSearchParams(query || '').get('date');
+      desk.log.push({ method: 'GET', which: 'chart-league', date: date || null });
+      if (!desk.league) return send(404, { detail: 'Not Found' });
+      if (date === null) return send(200, desk.league);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return send(400, { detail: 'date must be YYYY-MM-DD' });
+      const past = desk.leagueDays && desk.leagueDays[date];
+      return send(200, past || { shadow: 'SHADOW: no orders', folder: desk.league.folder, status: desk.league.status || null, date,
+        day: { date, closed: false, note: null }, league: desk.league.league || null, trades: [], open: [], decisions: [] });
     }
     if (urlPath === '/api/account-types' && req.method === 'GET') {
       desk.log.push({ method: 'GET', which: 'account-types' });
@@ -139,7 +161,7 @@ export async function startDesk(port, seed) {
       let d;
       try { d = JSON.parse(body); } catch (e) { return send(400, { detail: 'Bad JSON' }); }
       desk.log.push({ method: 'PUT', which, body: d });
-      const why = check(which, d);
+      const why = check(which, d, desk.oldDesk);
       if (why) return send(400, { detail: why });
       if (d.rev !== docs[which].rev) return send(409, { detail: 'stale rev ' + d.rev + ': the ' + which + ' are at rev ' + docs[which].rev + '. Read them again.' });
       docs[which] = Object.assign({}, d, { rev: d.rev + 1 });

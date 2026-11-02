@@ -141,6 +141,25 @@ function checkHotkeysDoc(doc, strategies) {
 const STRATEGY_MAX = 24, NAME_MAX = 40;
 const ID_RX = /^[A-Za-z0-9_-]{1,64}$/;
 const S_KEYS = ['id', 'name', 'stop', 'targets', 'breakeven', 'trail', 'hotkey'];
+/* next release (Anthony's task "Strategy creator: bar trail option"): `barTrail`, { bars, offsetTicks }, the stop behind the
+   low (long) or high (short) of the last `bars` completed 1 minute bars, `offsetTicks` beyond, moved only at a bar close by
+   ChartBridge, never loosened. Optional: a strategy without it has no `barTrail` key at all (never null), so a document
+   without bar trails is byte for byte what The Desk took before. Never with `trail` (one trail per strategy). */
+const BAR_TRAIL_MAX = 50, BAR_OFFSET_MAX = 100;
+/* Anthony 2026-11-01 ("It should be able to trail both, or any bar timeframe for that matter"; "Yes, an option at least"): the
+   bar kind, `type` 'minute' (`size` minutes, those that divide the hour) or 'range' (`size` ticks, NinjaTrader's Range bars), both
+   or neither (neither: 1 minute bars, as the first build), and `startTicks` (optional, 0 or absent: at once), the open profit in
+   ticks before it starts. ChartBridge's keys: barTrailType, barTrailSize, barTrailStart. */
+const BAR_TYPES = ['minute', 'range'], BAR_MINUTES = [1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30, 60], BAR_RANGE_MAX = 400, BAR_START_MAX = 2000;
+/* No type and no size: 1 minute bars (the first build's document). A type the chart does not support (tick, volume, anything
+   else) is never read as minute bars: barKind says so ({ type, size, supported: false }) and the checks refuse it by name. */
+const barKind = bt => {
+  if (!bt || (!own(bt, 'type') && !own(bt, 'size'))) return { type: 'minute', size: 1, supported: true };
+  const type = typeof bt.type === 'string' ? bt.type : String(bt.type), size = bt.size;
+  const supported = (type === 'minute' && BAR_MINUTES.includes(size)) || (type === 'range' && isInt(size) && size >= 1 && size <= BAR_RANGE_MAX);
+  return { type, size, supported };
+};
+const barKindText = bt => { const k = barKind(bt); return !k.supported ? k.size + ' ' + k.type + ' (not supported)' : k.type === 'range' ? k.size + '-range' : k.size + ' min'; };
 const emptyStrategiesDoc = () => ({ rev: 0, strategies: [] });
 /** A strategy name as The Desk keeps it: runs of spaces as one, trimmed. */
 const strategyName = v => (typeof v === 'string' ? v.replace(/\s+/g, ' ').trim() : '');
@@ -158,7 +177,7 @@ const NAME_BAD = /["\\\u0000-\u001f\u007f]/;
  */
 function checkStrategy(s, ctx) {
   const bad = (field, text) => ({ field, text });
-  if (!exactKeys(s, S_KEYS)) return bad('', 'A strategy needs exactly ' + S_KEYS.join(', ') + '.');
+  if (!exactKeys(s, S_KEYS) && !exactKeys(s, S_KEYS.concat(['barTrail']))) return bad('', 'A strategy needs exactly ' + S_KEYS.join(', ') + ' (and barTrail when it has a bar trail).');
   if (typeof s.id !== 'string' || !ID_RX.test(s.id)) return bad('', 'The id must be 1 to 64 letters, digits, - or _.');
   const name = strategyName(s.name);
   if (typeof s.name !== 'string' || !name || name.length > NAME_MAX) return bad('name', 'Type a name of 1 to 40 characters.');
@@ -195,6 +214,19 @@ function checkStrategy(s, ctx) {
     if (!exactKeys(tr, ['startTicks', 'byTicks', 'stepTicks'])) return bad('trailAfter', 'Trailing needs start, by and step ticks.');
     for (const [k, f, w] of [['startTicks', 'trailAfter', 'starts after'], ['byTicks', 'trailBy', 'trails by'], ['stepTicks', 'trailStep', 'steps of']])
       if (!wholeIn(tr[k], 1, 2000)) return bad(f, 'Trailing ' + w + ' must be a whole number of ticks from 1 to 2000.');
+  }
+  if (own(s, 'barTrail')) {
+    const bt = s.barTrail;
+    const bk = isObj(bt) ? Object.keys(bt) : [];
+    if (!isObj(bt) || !own(bt, 'bars') || !own(bt, 'offsetTicks') || bk.some(k => !['bars', 'offsetTicks', 'type', 'size', 'startTicks'].includes(k))) return bad('barTrail', 'The bar trail needs bars and offset ticks (and may have a bar type and size, and a start).');
+    if (!wholeIn(bt.bars, 1, BAR_TRAIL_MAX)) return bad('barTrail', 'The bar trail must be a whole number of bars from 1 to ' + BAR_TRAIL_MAX + '.');
+    if (!wholeIn(bt.offsetTicks, 0, BAR_OFFSET_MAX)) return bad('barOffset', 'The bar trail\'s offset must be a whole number of ticks from 0 to ' + BAR_OFFSET_MAX + '.');
+    if (own(bt, 'type') !== own(bt, 'size')) return bad('barType', 'The bar trail\'s bar type and size go together.');
+    if (own(bt, 'type') && !BAR_TYPES.includes(bt.type)) return bad('barType', 'The bar trail\'s bars are minute or range bars' + (typeof bt.type === 'string' && bt.type ? ': ' + bt.type + ' bars are not supported.' : '.'));
+    if (own(bt, 'type') && bt.type === 'minute' && !BAR_MINUTES.includes(bt.size)) return bad('barSize', 'Minute bars for the bar trail are 1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30 or 60 minutes.');
+    if (own(bt, 'type') && bt.type === 'range' && !wholeIn(bt.size, 1, BAR_RANGE_MAX)) return bad('barSize', 'Range bars for the bar trail are a whole number of ticks from 1 to ' + BAR_RANGE_MAX + '.');
+    if (own(bt, 'startTicks') && !wholeIn(bt.startTicks, 0, BAR_START_MAX)) return bad('barStart', 'The bar trail\'s start must be a whole number of ticks from 0 to ' + BAR_START_MAX + ' (0: at once).');
+    if (tr !== null) return bad('barTrail', 'One trail per strategy: Trailing or Bar trail, not both.');
   }
   if (s.hotkey !== null) {
     if (!isCombo(s.hotkey)) return bad('hotkey', 'The hotkey is not a key the chart can use.');
@@ -235,6 +267,25 @@ function cleanStrategiesDoc(v) {
   }
   return out;
 }
+/**
+ * Next release (Anthony 2026-11-01: a bar kind or size the chart does not support is said plainly, never dropped in silence):
+ * the strategies of a document as read that cleanStrategiesDoc leaves out, each [{ name, text }] with the reason in The Desk's
+ * words (a bar trail on tick or volume bars, a size the bar trail does not take, any other rule). Never throws.
+ */
+function strategiesLeftOut(v) {
+  if (!isObj(v) || !Array.isArray(v.strategies)) return [];
+  const kept = [], ids = new Set(), out = [];
+  for (const s of v.strategies) {
+    const name = isObj(s) && typeof s.name === 'string' && strategyName(s.name) ? strategyName(s.name) : 'A strategy';
+    if (kept.length >= STRATEGY_MAX) { out.push({ name, text: 'Past the ' + STRATEGY_MAX + ' strategies the chart takes.' }); continue; }
+    if (!isObj(s)) { out.push({ name, text: 'Not a strategy.' }); continue; }
+    if (ids.has(s.id)) { out.push({ name, text: 'Its id is used twice.' }); continue; }
+    const why = checkStrategy(s, { others: kept });
+    if (why) { out.push({ name, text: why.text }); continue; }
+    ids.add(s.id); kept.push(s);
+  }
+  return out;
+}
 
 /* ---------------- The Desk's strategy -> `order.strategy` (PROTOCOL.md "Shared settings", the table) */
 /** The flat object ChartBridge takes. `id` and `hotkey` stay on the page; a null breakeven or trail leaves its keys out. */
@@ -243,9 +294,14 @@ function toWire(s) {
   s.targets.forEach((t, i) => { w['t' + (i + 1)] = t.ticks; w['t' + (i + 1) + 'Share'] = t.sharePct; });
   if (s.breakeven) { w.beAfter = s.breakeven.afterTicks; w.bePlus = s.breakeven.plusTicks; }
   if (s.trail) { w.trailAfter = s.trail.startTicks; w.trailBy = s.trail.byTicks; w.trailStep = s.trail.stepTicks; }
+  if (s.barTrail) {
+    const k = barKind(s.barTrail);
+    w.barTrail = s.barTrail.bars; w.barTrailOffset = s.barTrail.offsetTicks; w.barTrailType = k.type; w.barTrailSize = k.size;
+    if (s.barTrail.startTicks > 0) w.barTrailStart = s.barTrail.startTicks;
+  }
   return w;
 }
-const WIRE_KEYS = ['name', 'stop', 'stopLimit', 't1', 't1Share', 't2', 't2Share', 't3', 't3Share', 'beAfter', 'bePlus', 'trailAfter', 'trailBy', 'trailStep'];
+const WIRE_KEYS = ['name', 'stop', 'stopLimit', 't1', 't1Share', 't2', 't2Share', 't3', 't3Share', 'beAfter', 'bePlus', 'trailAfter', 'trailBy', 'trailStep', 'barTrail', 'barTrailOffset', 'barTrailType', 'barTrailSize', 'barTrailStart'];
 /**
  * ChartBridge's check of `order.strategy` (PROTOCOL.md "Order Strategies", the key table), the same rules in the same
  * order, so the page refuses what ChartBridge would: null, or the reason. `maxBracketTicks` (0 for none): every distance
@@ -287,6 +343,23 @@ function checkWire(s, maxBracketTicks) {
   const tr = ['trailAfter', 'trailBy', 'trailStep'].filter(k => s[k] !== undefined).length;
   if (tr !== 0 && tr !== 3) return 'trailAfter, trailBy and trailStep go together.';
   if (tr) for (const k of ['trailAfter', 'trailBy', 'trailStep']) if ((why = whole(k, 1))) return why;
+  /* the bar trail (ChartBridge of the next build): both or neither, never with the tick trail */
+  const hn = s.barTrail !== undefined, ho = s.barTrailOffset !== undefined;
+  if (hn && (!isInt(s.barTrail) || s.barTrail < 1 || s.barTrail > BAR_TRAIL_MAX)) return 'barTrail must be a whole number of bars from 1 to ' + BAR_TRAIL_MAX + '.';
+  if (ho && (!isInt(s.barTrailOffset) || s.barTrailOffset < 0 || s.barTrailOffset > BAR_OFFSET_MAX)) return 'barTrailOffset must be a whole number of ticks from 0 to ' + BAR_OFFSET_MAX + '.';
+  if (hn !== ho) return 'barTrail and barTrailOffset go together.';
+  if (hn && maxB && s.barTrailOffset > maxB) return 'barTrailOffset must be at most ' + maxB + ' (maxBracketTicks in config.txt).';
+  if (hn && tr) return 'barTrail and trailAfter are refused together: one trail per strategy.';
+  /* Anthony 2026-11-01: the bar kind and the start (ChartBridgeStrategies.cs ParseStrategy, the same rules) */
+  const ht = s.barTrailType !== undefined, hz = s.barTrailSize !== undefined, hs = s.barTrailStart !== undefined;
+  if ((ht || hz || hs) && !hn) return 'barTrailType, barTrailSize and barTrailStart need barTrail.';
+  if (ht && !BAR_TYPES.includes(s.barTrailType)) return 'barTrailType must be "minute" or "range".';
+  if (hz && !isInt(s.barTrailSize)) return 'barTrailSize must be a whole number.';
+  if (ht !== hz) return 'barTrailType and barTrailSize go together.';
+  if (ht && s.barTrailType === 'minute' && !BAR_MINUTES.includes(s.barTrailSize)) return 'barTrailSize for minute bars must be 1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30 or 60.';
+  if (ht && s.barTrailType === 'range' && (s.barTrailSize < 1 || s.barTrailSize > BAR_RANGE_MAX)) return 'barTrailSize for range bars must be a whole number of ticks from 1 to ' + BAR_RANGE_MAX + '.';
+  if (hs && (!isInt(s.barTrailStart) || s.barTrailStart < 0 || s.barTrailStart > BAR_START_MAX)) return 'barTrailStart must be a whole number of ticks from 0 to ' + BAR_START_MAX + '.';
+  if (hs && maxB && s.barTrailStart > maxB) return 'barTrailStart must be at most ' + maxB + ' (maxBracketTicks in config.txt).';
   return null;
 }
 /** One line for a strategy: "Stop 16 STL+2 · T1 8 50% · T2 20 50% · BE 8+1 · Trail 12/6/2". */
@@ -296,6 +369,7 @@ function describe(s) {
   s.targets.forEach((t, i) => parts.push('T' + (i + 1) + ' ' + t.ticks + (s.targets.length > 1 ? ' ' + t.sharePct + '%' : '')));
   if (s.breakeven) parts.push('BE ' + s.breakeven.afterTicks + '+' + s.breakeven.plusTicks);
   if (s.trail) parts.push('Trail ' + s.trail.startTicks + '/' + s.trail.byTicks + '/' + s.trail.stepTicks);
+  if (s.barTrail) parts.push('Bar trail ' + s.barTrail.bars + ' x ' + barKindText(s.barTrail) + (s.barTrail.offsetTicks ? ' +' + s.barTrail.offsetTicks : '') + (s.barTrail.startTicks > 0 ? ' from ' + s.barTrail.startTicks : ''));
   return parts.join(' · ');
 }
 /** A new strategy's id: letters and digits The Desk accepts, unique among `others`. */
@@ -376,6 +450,17 @@ function kindFor(chartKind, family) {
 }
 
 /* ---------------- what ChartBridge says back: managed strategies and merges, in plain words */
+/* next release: ChartBridge's word on the bar trail (`managed` `barTrail` {state, text}, only with a bar trail): on, building
+   (fewer whole bars than asked yet), notProven (range bars not yet known to be NinjaTrader's own from the session open: the stop
+   stays where it is, Anthony 2026-11-01), ended (the session closed: it no longer moves the stop), none (no bars for it). Every
+   state but on is said on the ticket in ChartBridge's words; notProven, ended and none in the warning colour. */
+const BAR_STATE_WARN = ['notProven', 'ended', 'none'];
+function barTrailNote(m) {
+  const b = m && m.barTrail && typeof m.barTrail === 'object' ? m.barTrail : null;
+  if (!b || b.state === 'on' || typeof b.state !== 'string') return { text: '', warn: false };
+  const t = typeof b.text === 'string' && b.text ? b.text : b.state === 'notProven' ? 'not proven yet' : b.state;
+  return { text: ' · Bar trail ' + t, warn: BAR_STATE_WARN.includes(b.state) };
+}
 /** The ticket's line for a `managed` message: { text, level } ('' text for one that is done). */
 function managedLine(m) {
   if (!m || m.state === 'done') return { text: '', level: '' };
@@ -383,9 +468,10 @@ function managedLine(m) {
   const be = n ? m.pairs.filter(p => p && p.be).length : 0, tr = n ? m.pairs.filter(p => p && p.trailing).length : 0;
   const how = n ? ': ' + n + ' pair' + (n > 1 ? 's' : '') + (be ? ', ' + be + ' at breakeven' : '') + (tr ? ', ' + tr + ' trailing' : '') : '';
   const why = typeof m.text === 'string' && m.text ? ' (' + m.text + ')' : '';
-  if (m.state === 'waiting') return { text: name + ': waiting for the fill', level: '' };
-  if (m.state === 'active') return { text: name + ' managing' + how, level: '' };
-  if (m.state === 'resumed') return { text: name + ' resumed after a restart' + how + why, level: 'warn' };
+  const bt = barTrailNote(m);
+  if (m.state === 'waiting') return { text: name + ': waiting for the fill' + bt.text, level: bt.warn ? 'warn' : '' };
+  if (m.state === 'active') return { text: name + ' managing' + how + bt.text, level: bt.warn ? 'warn' : '' };
+  if (m.state === 'resumed') return { text: name + ' resumed after a restart' + how + why + bt.text, level: 'warn' };
   if (m.state === 'unmanaged') return { text: name + ' NOT MANAGED: ' + (typeof m.text === 'string' && m.text ? m.text.replace(/\.?\s*Manage it by hand\.?$/i, '') : 'breakeven and trailing are off') + '. Manage the stop by hand.', level: 'error' };
   return { text: name + ': ' + String(m.state) + why, level: '' };
 }
@@ -424,7 +510,8 @@ function createDesk(o) {
   const st = o.storage, timeout = o.timeoutMs || 5000;
   const get = k => { try { return st ? st.getItem(k) : null; } catch (e) { return null; } };
   const set = (k, v) => { try { if (!st) return false; st.setItem(k, v); return true; } catch (e) { return false; } };
-  const desk = { reach: 'unknown', error: '' };
+  /* leftOut: the strategies the last read or save left out ([{ name, text }], strategiesLeftOut), said on the Strategies screen */
+  const desk = { reach: 'unknown', error: '', leftOut: { hotkeys: [], strategies: [] } };
   const readCache = () => { try { const v = JSON.parse(get(DESK_KEYS.cache)); return isObj(v) ? v : {}; } catch (e) { return {}; } };
   let last = DESK_DEFAULT;
   desk.url = () => last;
@@ -458,6 +545,7 @@ function createDesk(o) {
     if (r.status !== 200 || !isObj(r.body)) return down(r, DOCS[which].what);
     desk.reach = 'ok'; desk.error = '';
     const doc = DOCS[which].clean(r.body);
+    if (which === 'strategies') desk.leftOut.strategies = strategiesLeftOut(r.body);
     keep(which, doc);
     return { ok: true, doc };
   };
@@ -466,6 +554,7 @@ function createDesk(o) {
     if (r.status === 200 && isObj(r.body)) {
       desk.reach = 'ok'; desk.error = '';
       const d = DOCS[which].clean(r.body);
+      if (which === 'strategies') desk.leftOut.strategies = strategiesLeftOut(r.body);
       keep(which, d);
       return { ok: true, doc: d };
     }
@@ -483,7 +572,7 @@ function createDesk(o) {
 
 return { SWITCHES, cleanSwitches, deskSyncOn, KEY_ACTIONS, KEY_IDS, keyName, MODIFIERS, ENTRY_MODS, isCombo, comboMods, usesMod,
   emptyHotkeysDoc, cleanHotkeysDoc, hotkeyConflict, keyFromEvent, modifierConflict, checkHotkeysDoc,
-  STRATEGY_MAX, NAME_MAX, emptyStrategiesDoc, strategyName, checkStrategy, checkStrategiesDoc, cleanStrategiesDoc,
+  STRATEGY_MAX, NAME_MAX, BAR_TRAIL_MAX, BAR_OFFSET_MAX, BAR_TYPES, BAR_MINUTES, BAR_RANGE_MAX, BAR_START_MAX, barKind, emptyStrategiesDoc, strategyName, checkStrategy, checkStrategiesDoc, cleanStrategiesDoc,
   toWire, WIRE_KEYS, checkWire, describe, newId, resolveKey, clickFamily, KIND_TEXT, baseKind, entryKind, kindFor,
-  managedLine, mergeLine, DESK_KEYS, DESK_DEFAULT, deskUrl, createDesk };
+  managedLine, barTrailNote, strategiesLeftOut, mergeLine, DESK_KEYS, DESK_DEFAULT, deskUrl, createDesk };
 });

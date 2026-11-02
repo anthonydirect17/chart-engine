@@ -89,7 +89,7 @@ export const KEYS = Object.assign({}, V2_KEYS, {
   agentRules: ['type', 'cid', 'agent', 'roots', 'maxQtyNQ', 'maxQtyMNQ', 'maxQtyES', 'maxQtyMES', 'entryFrom', 'entryUntil', 'flatAt', 'maxExpireSec', 'maxTrades', 'maxLosses'],
 });
 Object.assign(KEYS, GROUP_KEYS);   // 0.5.8: groupSave, groupDelete, accountGroup, accountLimits
-export const STRATEGY_KEYS = ['name', 'stop', 'stopLimit', 't1', 't1Share', 't2', 't2Share', 't3', 't3Share', 'beAfter', 'bePlus', 'trailAfter', 'trailBy', 'trailStep'];
+export const STRATEGY_KEYS = ['name', 'stop', 'stopLimit', 't1', 't1Share', 't2', 't2Share', 't3', 't3Share', 'beAfter', 'bePlus', 'trailAfter', 'trailBy', 'trailStep', 'barTrail', 'barTrailOffset', 'barTrailType', 'barTrailSize', 'barTrailStart'];
 export const BOOL_KEYS = { memberBench: ['benched'], accountTrade: ['on'], accountArchive: ['confirm'], copierFollower: ['on'], botKill: ['on'], agentKill: ['on'] };
 const OPT_BOOL_KEYS = { agentAccount: ['league'], groupSave: ['noHedge'] };   // 0.6.7: noHedge optional in groupSave (check_groupSave asks it of an older ChartBridge)   // 0.6.2: true or false when present
 export const BOT_KEYS = {
@@ -160,6 +160,24 @@ export function checkStrategy(s, maxB) {
   const tr = ['trailAfter', 'trailBy', 'trailStep'].filter(k => s[k] !== undefined).length;
   if (tr !== 0 && tr !== 3) return 'trailAfter, trailBy and trailStep go together.';
   if (tr) for (const k of ['trailAfter', 'trailBy', 'trailStep']) if ((why = whole(k, 1))) return why;
+  // next build: the bar trail (ChartBridgeStrategies.cs ParseStrategy). The fake takes it and keeps its stop where it is: the
+  // bar trail's moves (1 minute bars, at a close) are checked in the C# harness (check/StrategiesHarness.cs), not here.
+  const hn = s.barTrail !== undefined, ho = s.barTrailOffset !== undefined;
+  if (hn && (!isInt(s.barTrail) || s.barTrail < 1 || s.barTrail > 50)) return 'barTrail must be a whole number of bars from 1 to 50.';
+  if (ho && (!isInt(s.barTrailOffset) || s.barTrailOffset < 0 || s.barTrailOffset > 100)) return 'barTrailOffset must be a whole number of ticks from 0 to 100.';
+  if (hn !== ho) return 'barTrail and barTrailOffset go together.';
+  if (hn && maxB > 0 && s.barTrailOffset > maxB) return 'barTrailOffset must be at most ' + maxB + ' (maxBracketTicks in config.txt).';
+  if (hn && tr) return 'barTrail and trailAfter are refused together: one trail per strategy.';
+  // Anthony 2026-11-01: the bar kind and the start (ParseStrategy's rules)
+  const ht = s.barTrailType !== undefined, hz = s.barTrailSize !== undefined, hst = s.barTrailStart !== undefined;
+  if ((ht || hz || hst) && !hn) return 'barTrailType, barTrailSize and barTrailStart need barTrail.';
+  if (ht && s.barTrailType !== 'minute' && s.barTrailType !== 'range') return 'barTrailType must be "minute" or "range".';
+  if (hz && !isInt(s.barTrailSize)) return 'barTrailSize must be a whole number.';
+  if (ht !== hz) return 'barTrailType and barTrailSize go together.';
+  if (ht && s.barTrailType === 'minute' && ![1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30, 60].includes(s.barTrailSize)) return 'barTrailSize for minute bars must be 1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30 or 60.';
+  if (ht && s.barTrailType === 'range' && (s.barTrailSize < 1 || s.barTrailSize > 400)) return 'barTrailSize for range bars must be a whole number of ticks from 1 to 400.';
+  if (hst && (!isInt(s.barTrailStart) || s.barTrailStart < 0 || s.barTrailStart > 2000)) return 'barTrailStart must be a whole number of ticks from 0 to 2000.';
+  if (hst && maxB > 0 && s.barTrailStart > maxB) return 'barTrailStart must be at most ' + maxB + ' (maxBracketTicks in config.txt).';
   return null;
 }
 export const targetsOf = s => [1, 2, 3].filter(i => s['t' + i] !== undefined).map(i => ({ ticks: s['t' + i], share: s['t' + i + 'Share'] }));
@@ -560,7 +578,16 @@ export class OrderDeskV3 extends OrderDesk {
   }
   managedMsg(x) {
     return { type: 'managed', id: x.entry.id, account: x.entry.account, root: x.entry.root, side: x.entry.side, name: x.s.name, strategy: x.s, state: x.state,
-      pairs: x.pairs.map(p => ({ bucket: p.bucket, qty: p.qty, fill: p.fill, stopId: p.stopId, stop: p.stop, targetId: p.targetId, target: p.target, be: p.be, trailing: p.trailing })), best: x.best, text: x.text };
+      pairs: x.pairs.map(p => ({ bucket: p.bucket, qty: p.qty, fill: p.fill, stopId: p.stopId, stop: p.stop, targetId: p.targetId, target: p.target, be: p.be, trailing: p.trailing })), best: x.best, text: x.text,
+      ...(x.barTrail ? { barTrail: x.barTrail } : {}) };
+  }
+  /** next release, /test/bar-trail: ChartBridge's word on the bar trail ({ state, text }) for every live managed entry; '' takes it away */
+  setBarTrailState(state, text) {
+    for (const x of this.managed.values()) {
+      if (x.state === 'done') continue;
+      x.barTrail = state ? { state, text: text === null || text === undefined ? null : text } : null;
+      this.broadcastV3(this.managedMsg(x));
+    }
   }
   /** breakeven and trailing on every trade (PROTOCOL.md: never back, never through the last trade, 500 ms apart) */
   tick(root, price) {

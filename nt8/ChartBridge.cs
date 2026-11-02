@@ -2216,7 +2216,7 @@ namespace NinjaTrader.NinjaScript.AddOns
     // ------------------------------------------------------------------ the server
     public static class ChartBridgeServer
     {
-        public const string Version = "0.6.10";   // 0.6.10: the account lifecycle (Anthony 2026-10-30): remove-only changes for an account NinjaTrader no longer lists (leave its group, a copier follower off then removed, Hide with no stale hold), Hide takes a member out of its group in the same step, a member not in NinjaTrader no longer blocks an agent's group, a group preview sizes only the members gate 2 lets trade, the accounts message's notListed, kept what The Desk rejects inside a 200; also an entry being placed is not a restart (the Placing mark), the NQ tick file to The Desk (ChartBridgeTicks.cs), the 1 second request from the session's open, a tick chart with no history at the open asks again once (historyLate), /diag's pc and every 1 second contract; 0.6.9: the stats suite's Phase 2 (recording only): 1 second bars to The Desk, the order record (every order type, POST /api/order-events), a decision id on a group entry's orders and fills; 0.6.8: the minute book (minute and tick charts' history up to now from every live trade ChartBridge saw), a hole recorded in /diag and history.log (never shown), 20 s limits on a load's minute history and last trades; 0.6.7: the bench (memberBench), no hedging always on, a group's own rules optional and never sizing a member
+        public const string Version = "0.6.11";   // 0.6.11: the bar trail exit option of an Order Strategy (Anthony 2026-11-01: minute or NinjaTrader range bars ChartBridge builds from its live trades, phantom range bars ignored, range bars proven or "not proven yet", the trail ends at the session close, at most 16 bar kinds a market and a 17th refused at placement), the 1 second bars' narrower tick request (12:00 AM of the session's own date, from the open itself when that answer misses the open); 0.6.10: the account lifecycle (Anthony 2026-10-30): remove-only changes for an account NinjaTrader no longer lists (leave its group, a copier follower off then removed, Hide with no stale hold), Hide takes a member out of its group in the same step, a member not in NinjaTrader no longer blocks an agent's group, a group preview sizes only the members gate 2 lets trade, the accounts message's notListed, kept what The Desk rejects inside a 200; also an entry being placed is not a restart (the Placing mark), the NQ tick file to The Desk (ChartBridgeTicks.cs), the 1 second request from the session's open, a tick chart with no history at the open asks again once (historyLate), /diag's pc and every 1 second contract; 0.6.9: the stats suite's Phase 2 (recording only): 1 second bars to The Desk, the order record (every order type, POST /api/order-events), a decision id on a group entry's orders and fills; 0.6.8: the minute book (minute and tick charts' history up to now from every live trade ChartBridge saw), a hole recorded in /diag and history.log (never shown), 20 s limits on a load's minute history and last trades; 0.6.7: the bench (memberBench), no hedging always on, a group's own rules optional and never sizing a member
         private static readonly object Gate = new object();
         private static HttpListener listener;
         private static CancellationTokenSource cts;
@@ -2833,10 +2833,10 @@ namespace NinjaTrader.NinjaScript.AddOns
                 double rx = ChartBridgeTime.NowUtcMs();
                 DateTime utc = ChartBridgeTime.ToUtc(e.Time);
                 string root = RootOf(e.Instrument);
-                ChartBridgeOrders.NoteLast(root, e.Price);
+                double t = ChartBridgeTime.EtSeconds(utc);
+                ChartBridgeOrders.NoteLast(root, e.Price, t);   // next build: the trade's New York time, for the bar trail's bars
                 int method, cat;
                 int side = SideTagger(root).Tag(e.Price, e.Time, e.Bid, e.Ask, out method, out cat);
-                double t = ChartBridgeTime.EtSeconds(utc);
                 string json = "{\"type\":\"tick\",\"root\":" + CbJson.Str(root) +
                     ",\"t\":" + CbJson.Num3(t) +
                     ",\"u\":" + CbJson.Num3(ChartBridgeTime.UtcMs(utc)) +
@@ -4541,6 +4541,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static void FeedDropped(string root, string why)
         {
             Interlocked.Exchange(ref feedDown, 1);   // a session that starts before the feed is back is not whole
+            ChartBridgeOrders.BarTrailFeedDropped(root);   // the bar trail's bars start over (a bar across the drop is not whole); review HIGH 2: also while closed, so a session that opens before the feed is back is not taken as seen from its open
             if (MarketClosedNow()) { Log("data feed: " + why + " while the market is closed; no trade was missed"); return; }   // S-B
             ChartBridgeTicks.NoteFeedDrop();   // the NQ tick file's next chunk says the capture may have a hole
             HtfFeedDropped(root);   // 0.3.7: the forming higher-timeframe bars miss trades: asked again at the next request

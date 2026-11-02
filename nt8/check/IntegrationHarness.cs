@@ -490,7 +490,7 @@ public static class IntegrationHarness
         Check(r.Contains("\"result\":\"merged\"") && kept != null && kept.Quantity == 2 && kept.StopPrice == 24998, "X9: one target: the first pair kept and grown to 2 at 24998: " + r);
         string tag1 = Regex.Match(e1.Name, "^CB#([0-9a-f]{8})").Groups[1].Value;
         string file = Path.Combine(ChartBridgeConfig.Folder, "managed.txt");
-        Check(File.Exists(file) && File.ReadAllLines(file).Any(l => l.StartsWith(tag1 + "\t") && l.EndsWith("\tmerged")), "X9: managed.txt marks the merged entry (written whole when the swap ended)");
+        Check(File.Exists(file) && File.ReadAllLines(file).Any(l => l.StartsWith(tag1 + "\t") && Regex.IsMatch(l, "\t[0-9]+\tmerged(\tsession:[0-9]+)?(\tbarEnded)?$")), "X9: managed.txt marks the merged entry (written whole when the swap ended; 1.41.0: the optional session fields may follow)");
         int n = z.Calls.Count;
         Trade(25001.5); Trade(25001.75);
         Check(z.Calls.Count == n, "X9: the same run: breakeven does not move the merged stop");

@@ -552,7 +552,7 @@ public static class BarsHarness
                   "S2 OneSession: the request: MNQ 12-26, 1 minute, Last, DoNotMerge, the instrument's trading hours, from the day before the open to now (NinjaTrader's time): " + (r == null ? "none" : r.From + " to " + r.To));
             string b = d2.All().FirstOrDefault() ?? "";
             Check(b.StartsWith("{\"v\":1,\"source\":\"chartbridge\",\"bridge\":\"" + ChartBridgeServer.Version + "\",\"pc\":\"HOME\",\"contract\":\"MNQ 12-26\",\"root\":\"MNQ\",\"tick\":0.25,\"session\":\"2026-09-30\",\"tf\":\"1m\",\"stamp\":\"open\",\"bars\":[[") &&
-                  ChartBridgeServer.Version == "0.6.10", "S2 OneSession: contract v1 fields, bridge 0.6.10, pc HOME: " + (b.Length > 160 ? b.Substring(0, 160) : b));
+                  ChartBridgeServer.Version == "0.6.11", "S2 OneSession: contract v1 fields, bridge 0.6.11, pc HOME: " + (b.Length > 160 ? b.Substring(0, 160) : b));
             Check(Ts(b).Count > 0 && Ts(b)[0] == Ms(Utc(2026, 9, 29, 22, 0)) && b.Contains("[" + Ms(Utc(2026, 9, 29, 22, 0)) + ",25000,25001,24999.5,25000.25,10]"),
                 "S2 OneSession: the first bar is the 18:00 ET minute (NinjaTrader's 18:01 close stamp less 60 s), prices and volume exact");
         }
@@ -1072,13 +1072,16 @@ public static class BarsHarness
     // ------------------------------------------------------------ 0.6.9: 1 second bars (Anthony 2026-10-24, the stats suite's Phase 2)
     // The stand-in NinjaTrader's trades for a tick request: answerTicks (per case). TicksFor makes a session of made-up trades: one
     // every `every` seconds from the 18:00 ET open to the 17:00 close, the even ones with a quote stored (at the ask), the odd ones
-    // without, plus three trades of the session before (the request covers whole days from 12:00 AM), which are left out.
+    // without, plus three trades of the session before when the request's from is on an earlier date than the session's (next build:
+    // NinjaTrader answers whole trading days from 12:00 AM of the from's date, so a from at the 18:00 open, the day before, brought
+    // the session before as well; a from at 12:00 AM of the session's own date does not), which are left out.
     static Func<BarsRequest, Bars> answerTicks = r => new Bars();
-    static Bars TicksFor(DateTime session, int every)
+    static Bars TicksFor(DateTime session, int every) { return TicksFor(session, every, true); }
+    static Bars TicksFor(DateTime session, int every, bool dayBefore)
     {
         Bars b = new Bars();
         DateTime openEt = session.Date.AddDays(-1).AddHours(18);
-        for (int k = 0; k < 3; k++) { b.Add(NtOf(session.Date.AddDays(-1).AddHours(12).AddSeconds(k)), 1, 1, 1, 24990, 1); b.Bids.Add(0); b.Asks.Add(0); }
+        if (dayBefore) for (int k = 0; k < 3; k++) { b.Add(NtOf(session.Date.AddDays(-1).AddHours(12).AddSeconds(k)), 1, 1, 1, 24990, 1); b.Bids.Add(0); b.Asks.Add(0); }
         for (int sec = 0, n = 0; sec < 23 * 3600; sec += every, n++)
         {
             double p = 25000 + (sec % 13) * 0.25;
@@ -1096,7 +1099,7 @@ public static class BarsHarness
     {
         Desk d = Fresh(dir, roots, nowUtc);
         ChartBridgeBars.ReadConfig("bars1s", "on");
-        answerTicks = r => TicksFor(SessionOf1s(r), 7);
+        answerTicks = r => { DateTime ses = SessionOf1s(r); return TicksFor(ses, 7, r.From.Date < ses.Date); };   // whole trading days from the from's date
         return d;
     }
     // The session a tick request asks for: to the close (17:00 ET of the session date, NinjaTrader's time) or to now.
@@ -1178,6 +1181,46 @@ public static class BarsHarness
         Check(Field1s(parts[0], "first") == Field1s(parts[2], "first") && Field1s(parts[0], "last") == sb.Rows[4].T.ToString(), "1s message: first and last second of the whole session in every part");
     }
 
+    // Next build: a narrow answer that does not reach the open (a NinjaTrader that cut the day at 12:00 AM): never sent as it is; the
+    // next pass asks from the open itself (the 0.6.10 request), and that answer is sent, the session before left out as before.
+    static void OneSecondNarrowFallback(string dir, DateTime now)
+    {
+        Desk desk = Fresh1s(dir, "MNQ", now);
+        try
+        {
+            desk.Status1s = body => 200;
+            ChartBridgeBars.CatchUpSessions = 1;
+            string ls0 = Regex.Match(Diag(), "\"oneSecond\":\\{[^}]*\"lastSent\":\\{[^}]*\\}").Value;
+            Check(ls0.Contains("\"MNQ 12-26\":\"none yet\""), "1s lastSent: MNQ listed before The Desk has a set of it (\"none yet\"): " + ls0);
+            answerTicks = r =>
+            {
+                DateTime ses = SessionOf1s(r);
+                Bars all = TicksFor(ses, 7, r.From.Date < ses.Date), cut = new Bars();
+                if (r.From.Date < ses.Date) return all;
+                for (int i = 0; i < all.Count; i++) if (all.GetTime(i) >= r.From) { cut.Add(all.GetTime(i), all.GetOpen(i), all.GetHigh(i), all.GetLow(i), all.GetClose(i), all.GetVolume(i)); cut.Bids.Add(all.Bids[i]); cut.Asks.Add(all.Asks[i]); }
+                return cut;   // the narrow request cut at 12:00 AM: the session's first 6 hours (Chicago) missing
+            };
+            int m0 = MadeCount();
+            ChartBridgeBars.PlanOnce(null);
+            List<BarsRequest> first = TicksMade(m0);
+            Check(first.Count == 1 && first[0].From == W(2026, 9, 30, 0, 0) && desk.All1s().Count == 0 && !ChartBridgeBars1sQueue.IsWaiting("2026-09-30 MNQ 12-26") &&
+                  Logged("1 second bars for MNQ 12-26 session 2026-09-30: the request from 2026-09-30 00:00 NinjaTrader time did not reach the open (its first trade in the session 420 minutes after the open); asked again from the open itself on the next pass"),
+                  "1s narrow: an answer that does not reach the open is never sent as it is, and said: " + (first.Count > 0 ? first[0].From.ToString() : "none"));
+            int m1 = MadeCount();
+            ChartBridgeBars.PlanOnce(null);
+            List<BarsRequest> second = TicksMade(m1);
+            List<string> rows = desk.All1s().SelectMany(Rows1s).ToList();
+            Check(second.Count == 1 && second[0].From == W(2026, 9, 29, 17, 0) && rows.Count == 11829 && ChartBridgeBars1sQueue.IsDone("2026-09-30 MNQ 12-26") &&
+                  Diag().Contains("3 trades outside the session left out (asked 2026-09-29 17:00 to 2026-09-30 16:00 NinjaTrader time, from the open: the narrow request did not reach it)"),
+                  "1s narrow: the next pass asks from the open itself (the 0.6.10 request), the whole session sent, the session before left out: " + (second.Count > 0 ? second[0].From.ToString() : "none") + ", " + rows.Count + " rows");
+            string ls1 = Regex.Match(Diag(), "\"oneSecond\":\\{[^}]*\"lastSent\":\\{[^}]*\\}").Value;
+            Check(ls1.Contains("\"MNQ 12-26\":\"2026-09-30\""), "1s lastSent: MNQ with its session once taken: " + ls1);
+            Check(ChartBridgeBars.NarrowFrom1s(W(2026, 9, 29, 17, 0), W(2026, 9, 30, 16, 0)) == W(2026, 9, 30, 0, 0) && ChartBridgeBars.NarrowFrom1s(W(2026, 9, 30, 0, 30), W(2026, 9, 30, 23, 30)) == W(2026, 9, 30, 0, 30),
+                  "1s narrow: from 12:00 AM of the close's date in NinjaTrader's time, never before the open");
+        }
+        finally { desk.Stop(); }
+    }
+
     static void OneSecondSession(string dir)
     {
         // the 1-minute message of a session, with the 1 second bars off and on: byte for byte the same
@@ -1198,8 +1241,8 @@ public static class BarsHarness
             List<BarsRequest> ticks = TicksMade(m0);
             BarsRequest r = ticks.FirstOrDefault();
             Check(ticks.Count == 1 && r.BarsPeriod.Value == 1 && r.BarsPeriod.MarketDataType == MarketDataType.Last && r.MergePolicy == MergePolicy.DoNotMerge && r.TradingHours != null &&
-                  r.Instrument.FullName == "MNQ 12-26" && r.From == W(2026, 9, 29, 17, 0) && r.To == W(2026, 9, 30, 16, 0),
-                  "1s session: one request, 1 tick, Last, DoNotMerge, the trading hours, from the open itself (18:00 ET, 17:00 in NinjaTrader's Chicago time; Sunday 11-01 item 11: not the whole session before) to the close: " + (r == null ? "none" : r.From + " to " + r.To));
+                  r.Instrument.FullName == "MNQ 12-26" && r.From == W(2026, 9, 30, 0, 0) && r.To == W(2026, 9, 30, 16, 0),
+                  "1s session: one request, 1 tick, Last, DoNotMerge, the trading hours, from 12:00 AM of the session's own date in NinjaTrader's Chicago time (next build: its own trading day; from the 18:00 open NinjaTrader still gave the whole session before) to the close: " + (r == null ? "none" : r.From + " to " + r.To));
             List<string> got = desk.All1s();
             List<string> rows = got.SelectMany(Rows1s).ToList();
             int parts = got.Count;
@@ -1218,10 +1261,11 @@ public static class BarsHarness
             ChartBridgeBars1sQueue.Load();
             ChartBridgeBars.PlanOnce(null);
             Check(TicksMade(m1).Count == 0 && desk.All1s().Count == 8, "1s session: the next pass and a restart ask for nothing more");
-            Check(Diag().Contains("\"oneSecond\":{\"on\":true,") && Diag().Contains("\"lastSent\":{\"MNQ 12-26\":\"2026-09-30\"}") && Diag().Contains("11829 seconds, 8 messages, 3 trades outside the session left out (asked 2026-09-29 17:00 to 2026-09-30 16:00 NinjaTrader time), sides mixed"),
+            Check(Diag().Contains("\"oneSecond\":{\"on\":true,") && Diag().Contains("\"lastSent\":{\"MNQ 12-26\":\"2026-09-30\"}") && Diag().Contains("11829 seconds, 8 messages, 0 trades outside the session left out (asked 2026-09-30 00:00 to 2026-09-30 16:00 NinjaTrader time, the session's own trading day), sides mixed"),
                   "1s session: /diag bars.oneSecond: on, last sent, the last build: " + Regex.Match(Diag(), "\"oneSecond\":\\{.*\\}\\}$").Value);
         }
         finally { desk.Stop(); }
+        OneSecondNarrowFallback(dir, now);   // next build
         // the roots: NQ and MNQ only (ES and MES get their 1-minute bars as before), and only with their 1-minute bars on
         Desk d2 = Fresh1s(dir, "NQ, MNQ, ES, MES", now);
         try
@@ -1441,9 +1485,11 @@ public static class BarsHarness
                 answerTicks = r => new Bars();
                 ChartBridgeBars.CatchUpSessions = 1;
                 int t0 = MadeCount();
-                for (int i = 0; i < 6; i++) { DateTime at = EtToUtc(W(2026, 10, 1, 17, 6)).AddMinutes(16 * i); ChartBridgeBars.UtcNow = () => at; ChartBridgeBars.PlanOnce(null); }
-                Check(TicksMade(t0).Count == 3 && Logged("1 second bars for MNQ 12-26 session 2026-10-01: NinjaTrader has no trades for it; tried 3 times") && d2.All().Count == 1,
-                      "1s: a session with no trades in NinjaTrader: asked 3 times 15 minutes apart, then not until a restart (" + TicksMade(t0).Count + ")");
+                // the narrow request at 17:06, then from the open at 17:07, 17:23 and 17:39 (a new request starts only by 17:50)
+                for (int i = 0; i < 6; i++) { DateTime at = EtToUtc(W(2026, 10, 1, 17, 6)).AddMinutes(i == 0 ? 0 : 1 + 16 * (i - 1)); ChartBridgeBars.UtcNow = () => at; ChartBridgeBars.PlanOnce(null); }
+                List<BarsRequest> tm = TicksMade(t0);
+                Check(tm.Count == 4 && tm[0].From == W(2026, 10, 1, 0, 0) && tm.Skip(1).All(x => x.From == W(2026, 9, 30, 17, 0)) && Logged("1 second bars for MNQ 12-26 session 2026-10-01: NinjaTrader has no trades for it; tried 3 times") && d2.All().Count == 1,
+                      "1s: a session with no trades in NinjaTrader: the narrow request (next build) then from the open, asked 3 times 15 minutes apart, then not until a restart (" + tm.Count + ")");
             }
             finally { d2.Stop(); }
         }

@@ -497,6 +497,16 @@ chart page's order bar did until 1.22.0 (`live/trade.js`), so everything below a
   breakeven and trailing. Build them in **Settings > Order Strategies...**; each can have a key that picks it. The
   ticket shows plainly when ChartBridge manages it, resumed it after a restart, or could not (NOT MANAGED: manage the
   stop by hand).
+  1.41.0: a **Bar trail** row (instead of Trailing, one trail per strategy): the stop behind the low (long) or high
+  (short) of the last N completed bars of the kind picked (Minute bars of 1 to 60 minutes, or NinjaTrader's Range bars of 1
+  to 400 ticks), an offset in ticks beyond, optionally only once the open profit reached a number of ticks, moved only at a
+  bar close and never loosened. Only prices that traded are used: range bars' phantom bars (no trade in them) are left out
+  and a range bar counts by its traded high and low. Range bars count once they are proven NinjaTrader's own (from the
+  session open); until then the ticket says the bar trail is "not proven yet" and the stop stays where it is. The bar trail
+  ends at the session close (the ticket says so). A bar kind ChartBridge cannot build is refused with the reason, and a
+  strategy in The Desk this chart cannot use is named on the Strategies screen.
+  It needs ChartBridge 0.6.11 (an older one refuses it) and a Desk that takes the `barTrail` key (an older one
+  refuses the save, said under the form); see `nt8/PROTOCOL.md`, "The bar trail".
 - **Merge** (`merge`): a Merge button on the ticket and a Merge key. ChartBridge joins the stops and targets of the
   position into one set at the first leg's prices; the ticket shows the result (merged, restored or failed).
 - **Entry types** (`orderTypes`): in Settings pick a Limit key and a Stop key (Shift, Ctrl or Alt). Hold one with Buy
@@ -505,6 +515,25 @@ chart page's order bar did until 1.22.0 (`live/trade.js`), so everything below a
 - **Shared by every PC**: the strategies and the hotkeys are kept in The Desk, at `deskUrl` in ChartBridge's `config.txt`
   (where ChartBridge already sends the fills; shown in Settings). When The Desk does not answer, the last copy read is
   used and shown read only; nothing you change is lost silently (it says it was not saved).
+
+## The League tab: a past day (1.41.0)
+
+The League tab (1.35.0, `?tab=league`) shows the shadow league's live day. A link can open a **past session date**, read
+only: `http://localhost:8765/?tab=league&day=YYYY-MM-DD` (the same on `/live/`). This is the format The Desk's Agent Stats
+day rows link to (The Desk's `#/lab/agents/...`; the chart page is ChartBridge's own page, so the link works on the
+trading PC). The page reads `GET /api/chart-league?date=YYYY-MM-DD` from The Desk (which already takes it).
+
+- The day is checked first: `YYYY-MM-DD`, a real calendar date, not after the league's current session date (New York time,
+  from 17:00 the next date, a weekend rolls to Monday). A bad one is said plainly and the live day shows; The Desk is not asked
+  for it. The current session's own date opens the live view; after 17:00 the session that just closed opens as a past day.
+- The chart counts a session as in its history only when it holds a bar of that session (18:00 New York of the day before to
+  17:00 of the day).
+- A past day is labelled "Past day YYYY-MM-DD · read only" with a **Back to today** button; closing the tab drops the day
+  from the address, so the next open is the live day. A reload keeps it.
+- It shows that day's paper trades (on the NQ 1 min chart, when its 5-day history reaches the day: drag back to it) and its
+  decisions. The live status (positions, flags, the spend) is today's, never that day's, so it is not shown for a past day.
+- A day with no paper trade and no decision says "No league record for YYYY-MM-DD ... Not enough data to show that day."
+- A past day is never drawn as the faint league marks on the live charts, nor read by the Agents strip.
 
 ## The Bot tab (1.16.0)
 

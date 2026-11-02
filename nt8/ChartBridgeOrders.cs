@@ -163,10 +163,12 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         // ---------------------------------------------------------- last price per root (gate 5)
         private static readonly Dictionary<string, double[]> Last = new Dictionary<string, double[]>();   // root -> { price, time ms }
-        public static void NoteLast(string root, double price)
+        public static void NoteLast(string root, double price) { NoteLast(root, price, double.NaN); }
+        // et: the trade's New York wall seconds (ChartBridgeTime.EtSeconds; next build: the bar trail's bars); NaN when not known.
+        public static void NoteLast(string root, double price, double et)
         {
             lock (Last) Last[root] = new double[] { price, ChartBridgeTime.NowUtcMs() };
-            if (StrategiesOn) StrategyTrade(root, price);   // 0.4.0 B1: breakeven and trailing (cheap; a move is sent off this thread)
+            if (StrategiesOn) StrategyTrade(root, price, et);   // 0.4.0 B1: breakeven and trailing (cheap; a move is sent off this thread)
         }
 
         // A last price no older than maxAgeMs. The market exit needs a tick this fresh, so a lagging price feed
@@ -706,8 +708,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             // and its placing never interleave with another entry on a member
             // re-review 3: only entries wait on it: a page market exit (no bracket or strategy, the other side of the position by both
             // readings, at most the position) never does
+            try {   // review LOW 3: a bar kind this placement made stays held until it ends, sent or refused (BarKindsPlaced); not indented, so the lines stay as they were
             if (!bot && agent == null && !LooksLikeExit(top, bracketBody, strategyBody)) { lock (GroupEntryLock) lock (PlaceLock) why = PlaceOrderLocked(top, bracketBody, cid, strategyBody, bot, agent, agentPlan, out planTag, out placed); }
             else lock (PlaceLock) why = PlaceOrderLocked(top, bracketBody, cid, strategyBody, bot, agent, agentPlan, out planTag, out placed);   // two pages or tabs cannot both pass the cap check
+            } finally { BarKindsPlaced(); }
             if (planTag != null)
             {
                 // The record is what a recompile reads. Its name holds the same ticks, so a failed write does not refuse the
@@ -817,6 +821,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                 string off = StrategiesRunRefusal();   // 0.4.0 fix1 (F5): managed.txt unreadable at the start (or not read yet): no new strategy entry
                 if (off != null) return off;
                 string bad = ParseStrategy(strategyBody, out strat);
+                if (bad != null) return bad;
+                bad = BarTrailPlaceProblem(root, strat, tick);   // next build: the bar trail's bars made now, or the plain reason they cannot be
                 if (bad != null) return bad;
                 stopTicks = strat.Stop + Math.Max(0, strat.StopLimit); targetTicks = strat.MaxTarget;   // for the leg-at-or-below-zero check
             }

@@ -61,6 +61,8 @@ test('checkWire: the same verdict and the same words as ChartBridge\'s check (te
       const v = pick(nums);
       if (v !== undefined) s[k] = v;
     }
+    if (rnd(5) === 0) { for (const k of ['barTrail', 'barTrailOffset']) { const v = pick(nums); if (v !== undefined) s[k] = v; } }   // next release: the bar trail
+    if (rnd(6) === 0) { const ty = pick(['minute', 'range', 'tick', 5, undefined]); if (ty !== undefined) s.barTrailType = ty; for (const k of ['barTrailSize', 'barTrailStart']) { const v = pick(nums); if (v !== undefined) s[k] = v; } }   // 2026-11-01: kind and start
     if (rnd(4) === 0) { s.t1 = 8; s.t1Share = 50; s.t2 = 16; s.t2Share = 50; delete s.t3; delete s.t3Share; }
     for (const maxB of [0, 300]) {
       const want = V.checkStrategy(s, maxB), got = OS.checkWire(s, maxB);
@@ -507,4 +509,166 @@ test('the workspace loads order-strategies.js before trade.js, and the install l
   const css = read('live/workspace.css'), block = css.slice(css.indexOf('1.16.0 (ChartBridge 0.4.0): Order Strategies'));
   assert.doesNotMatch(block, /transition\s*:|animation\s*:|@keyframes/);
   assert.doesNotMatch(read('live/order-strategies.js'), /requestAnimationFrame|transition|animate\(/);
+});
+
+/* ---------------- next release: the bar trail (Anthony's task "Strategy creator: bar trail option") */
+test('the bar trail: an optional barTrail { bars, offsetTicks }, never null, never with the tick trail; to ChartBridge as barTrail and barTrailOffset', () => {
+  const bt = strat({ trail: null, barTrail: { bars: 3, offsetTicks: 2 } });
+  assert.equal(OS.checkStrategy(bt, {}), null);
+  assert.deepEqual(OS.toWire(bt), { name: 'Scalp 2', stop: 16, stopLimit: 2, t1: 8, t1Share: 50, t2: 20, t2Share: 50, beAfter: 8, bePlus: 1, barTrail: 3, barTrailOffset: 2, barTrailType: 'minute', barTrailSize: 1 },
+    'backward compatible: a bar trail with no kind (the first build\'s document) is 1 minute bars');
+  assert.equal(OS.checkWire(OS.toWire(bt), 0), null);
+  assert.equal(OS.describe(bt), 'Stop 16 STL+2 · T1 8 50% · T2 20 50% · BE 8+1 · Bar trail 3 x 1 min +2');
+  assert.equal(OS.describe(strat({ trail: null, barTrail: { bars: 1, offsetTicks: 0 } })), 'Stop 16 STL+2 · T1 8 50% · T2 20 50% · BE 8+1 · Bar trail 1 x 1 min');
+  assert.ok(!('barTrail' in OS.toWire(SCALP)) && !('barTrailOffset' in OS.toWire(SCALP)), 'a strategy without it sends neither key');
+  const why = (over) => OS.checkStrategy(strat(Object.assign({ trail: null }, over)), {});
+  const needs = 'The bar trail needs bars and offset ticks (and may have a bar type and size, and a start).';
+  assert.deepEqual(why({ barTrail: null }), { field: 'barTrail', text: needs }, 'null is refused: no key means no bar trail');
+  assert.deepEqual(why({ barTrail: { bars: 2 } }), { field: 'barTrail', text: needs });
+  assert.equal(why({ barTrail: { bars: 0, offsetTicks: 1 } }).field, 'barTrail');
+  assert.equal(why({ barTrail: { bars: 51, offsetTicks: 1 } }).text, 'The bar trail must be a whole number of bars from 1 to 50.');
+  assert.equal(why({ barTrail: { bars: 2.5, offsetTicks: 1 } }).field, 'barTrail');
+  assert.deepEqual(why({ barTrail: { bars: 2, offsetTicks: 101 } }), { field: 'barOffset', text: 'The bar trail\'s offset must be a whole number of ticks from 0 to 100.' });
+  assert.equal(why({ barTrail: { bars: 2, offsetTicks: -1 } }).field, 'barOffset');
+  assert.deepEqual(OS.checkStrategy(strat({ barTrail: { bars: 2, offsetTicks: 1 } }), {}), { field: 'barTrail', text: 'One trail per strategy: Trailing or Bar trail, not both.' });
+  assert.match(OS.checkStrategy(strat({ barTrail: { bars: 2, offsetTicks: 1 }, extra: 1 }), {}).text, /needs exactly/);
+  // a document read with one keeps it; a document without any is as before
+  const doc = OS.cleanStrategiesDoc({ rev: 3, strategies: [bt, strat({ id: 'b', name: 'B', hotkey: null })] });
+  assert.equal(doc.strategies.length, 2);
+  assert.equal(OS.checkStrategiesDoc(doc, null), '');
+  // ChartBridge's words: both or neither, never with trailAfter, maxBracketTicks on the offset
+  assert.equal(OS.checkWire({ name: 'S', stop: 8, barTrail: 2 }, 0), 'barTrail and barTrailOffset go together.');
+  assert.equal(OS.checkWire({ name: 'S', stop: 8, barTrail: 2, barTrailOffset: 1, trailAfter: 8, trailBy: 4, trailStep: 1 }, 0), 'barTrail and trailAfter are refused together: one trail per strategy.');
+  assert.equal(OS.checkWire({ name: 'S', stop: 8, barTrail: 2, barTrailOffset: 40 }, 30), 'barTrailOffset must be at most 30 (maxBracketTicks in config.txt).');
+});
+
+test('the bar trail: the C# reads and refuses it with the same rules (ChartBridgeStrategies.cs)', () => {
+  const cs = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'ChartBridgeStrategies.cs'), 'utf8');
+  assert.match(cs, /"trailStep", "barTrail", "barTrailOffset", "barTrailType", "barTrailSize", "barTrailStart" \};/);
+  assert.match(cs, /public const int BarTrailMax = 50, BarTrailOffsetMax = 100,/);
+  assert.match(cs, /barTrail and trailAfter are refused together: one trail per strategy/);
+  assert.match(cs, /if \(s\.BarTrail > 0 && p\.BarLevel > 0 && Tighter\(m\.Buy, p\.BarLevel, stopNow\)/, 'sent by MoveDue, under every rule of a move');
+  const ws = fs.readFileSync(path.join(__dirname, '..', 'live', 'workspace.js'), 'utf8');
+  assert.match(ws, /s\.barTrail = \{ bars: n\('barTrail'\), offsetTicks: n\('barOffset'\), type: sgEl\('barType'\)\.value === 'range' \? 'range' : 'minute', size: n\('barSize'\) \};/);
+  assert.match(ws, /if \(n\('barStart'\) !== 0\) s\.barTrail\.startTicks = n\('barStart'\);/);
+});
+
+/* ---------------- Anthony 2026-11-01: any bar kind (minute or NinjaTrader's range) and an optional start */
+test('the bar trail\'s kind and start: in The Desk\'s document, to ChartBridge, in one line; the same refusals as ChartBridge', async () => {
+  const V = await V3;
+  const bt = (b) => strat({ trail: null, barTrail: b });
+  const r40 = bt({ bars: 3, offsetTicks: 2, type: 'range', size: 40 });
+  assert.equal(OS.checkStrategy(r40, {}), null);
+  assert.equal(OS.describe(r40), 'Stop 16 STL+2 · T1 8 50% · T2 20 50% · BE 8+1 · Bar trail 3 x 40-range +2');
+  assert.deepEqual(OS.toWire(r40), { name: 'Scalp 2', stop: 16, stopLimit: 2, t1: 8, t1Share: 50, t2: 20, t2Share: 50, beAfter: 8, bePlus: 1, barTrail: 3, barTrailOffset: 2, barTrailType: 'range', barTrailSize: 40 });
+  const m5 = bt({ bars: 2, offsetTicks: 0, type: 'minute', size: 5, startTicks: 8 });
+  assert.equal(OS.checkStrategy(m5, {}), null);
+  assert.equal(OS.describe(m5), 'Stop 16 STL+2 · T1 8 50% · T2 20 50% · BE 8+1 · Bar trail 2 x 5 min from 8');
+  assert.equal(OS.toWire(m5).barTrailStart, 8);
+  assert.ok(!('barTrailStart' in OS.toWire(bt({ bars: 2, offsetTicks: 0, type: 'minute', size: 5, startTicks: 0 }))), 'a start of 0 is at once: no key');
+  for (const s of [r40, m5]) { assert.equal(OS.checkWire(OS.toWire(s), 0), null); assert.equal(V.checkStrategy(OS.toWire(s), 0), null, 'the fake bridge takes it'); }
+  const why = b => OS.checkStrategy(bt(b), {});
+  assert.deepEqual(why({ bars: 2, offsetTicks: 1, type: 'range' }), { field: 'barType', text: 'The bar trail\'s bar type and size go together.' });
+  assert.deepEqual(why({ bars: 2, offsetTicks: 1, size: 40 }), { field: 'barType', text: 'The bar trail\'s bar type and size go together.' });
+  assert.deepEqual(why({ bars: 2, offsetTicks: 1, type: 'tick', size: 40 }), { field: 'barType', text: 'The bar trail\'s bars are minute or range bars: tick bars are not supported.' });
+  assert.deepEqual(why({ bars: 2, offsetTicks: 1, type: 'minute', size: 7 }), { field: 'barSize', text: 'Minute bars for the bar trail are 1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30 or 60 minutes.' });
+  assert.deepEqual(why({ bars: 2, offsetTicks: 1, type: 'range', size: 401 }), { field: 'barSize', text: 'Range bars for the bar trail are a whole number of ticks from 1 to 400.' });
+  assert.equal(why({ bars: 2, offsetTicks: 1, type: 'range', size: 0 }).field, 'barSize');
+  assert.deepEqual(why({ bars: 2, offsetTicks: 1, startTicks: 2001 }), { field: 'barStart', text: 'The bar trail\'s start must be a whole number of ticks from 0 to 2000 (0: at once).' });
+  assert.equal(why({ bars: 2, offsetTicks: 1, startTicks: -1 }).field, 'barStart');
+  assert.equal(why({ bars: 2, offsetTicks: 1, extra: 1 }).field, 'barTrail');
+  /* the first build's document (no kind, no start) still loads, and reads as 1 minute bars */
+  const old = OS.cleanStrategiesDoc({ rev: 2, strategies: [bt({ bars: 3, offsetTicks: 2 })] });
+  assert.equal(old.strategies.length, 1);
+  assert.deepEqual(OS.barKind(old.strategies[0].barTrail), { type: 'minute', size: 1, supported: true });
+  /* ChartBridge's words for the wire keys */
+  const W = o => OS.checkWire(Object.assign({ name: 'S', stop: 8 }, o), 0);
+  assert.equal(W({ barTrailType: 'range', barTrailSize: 40 }), 'barTrailType, barTrailSize and barTrailStart need barTrail.');
+  assert.equal(W({ barTrail: 2, barTrailOffset: 1, barTrailType: 'hour', barTrailSize: 1 }), 'barTrailType must be "minute" or "range".');
+  assert.equal(W({ barTrail: 2, barTrailOffset: 1, barTrailType: 'range' }), 'barTrailType and barTrailSize go together.');
+  assert.equal(W({ barTrail: 2, barTrailOffset: 1, barTrailType: 'range', barTrailSize: '40' }), 'barTrailSize must be a whole number.');
+  assert.equal(W({ barTrail: 2, barTrailOffset: 1, barTrailType: 'minute', barTrailSize: 7 }), 'barTrailSize for minute bars must be 1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30 or 60.');
+  assert.equal(W({ barTrail: 2, barTrailOffset: 1, barTrailType: 'range', barTrailSize: 401 }), 'barTrailSize for range bars must be a whole number of ticks from 1 to 400.');
+  assert.equal(W({ barTrail: 2, barTrailOffset: 1, barTrailStart: 2001 }), 'barTrailStart must be a whole number of ticks from 0 to 2000.');
+  assert.equal(OS.checkWire({ name: 'S', stop: 8, barTrail: 2, barTrailOffset: 1, barTrailStart: 40 }, 30), 'barTrailStart must be at most 30 (maxBracketTicks in config.txt).');
+  /* the C# has the same keys and limits */
+  const cs = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'ChartBridgeStrategies.cs'), 'utf8');
+  assert.match(cs, /"barTrail", "barTrailOffset", "barTrailType", "barTrailSize", "barTrailStart" \};/);
+  assert.match(cs, /BarRangeMax = 400, BarStartMax = 2000;/);
+  assert.match(cs, /BarMinuteSizes = \{ 1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30, 60 \};/);
+  assert.deepEqual(OS.BAR_MINUTES, [1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30, 60]);
+});
+
+/* ---------------- Anthony 2026-11-01: phantom bars, the session, "not proven yet", and nothing unsupported in silence */
+test('the bar trail\'s state from ChartBridge is said on the ticket: not proven yet and ended in the warning colour', () => {
+  const m = { type: 'managed', id: 'o1', name: 'Bars R40', state: 'active', pairs: [{ bucket: 1, qty: 1, fill: 25000, be: false, trailing: false }], text: null };
+  assert.deepEqual(OS.managedLine(m), { text: 'Bars R40 managing: 1 pair', level: '' }, 'no barTrail key (a strategy without one, an older ChartBridge): as before');
+  const NP = 'not proven yet: ChartBridge has not seen these 40 tick range bars from the session open (or a swing that proves them NinjaTrader\'s), so the stop stays where it is';
+  assert.deepEqual(OS.managedLine(Object.assign({}, m, { barTrail: { state: 'notProven', text: NP } })), { text: 'Bars R40 managing: 1 pair · Bar trail ' + NP, level: 'warn' });
+  assert.deepEqual(OS.managedLine(Object.assign({}, m, { barTrail: { state: 'notProven', text: null } })), { text: 'Bars R40 managing: 1 pair · Bar trail not proven yet', level: 'warn' }, 'never silent, even without ChartBridge\'s words');
+  assert.deepEqual(OS.managedLine(Object.assign({}, m, { barTrail: { state: 'ended', text: 'ended at the session close: it no longer moves the stop, which stays where it is' } })).level, 'warn');
+  assert.deepEqual(OS.managedLine(Object.assign({}, m, { barTrail: { state: 'none', text: 'not running: no room for 15 minute bars on MNQ (at most 16 bar kinds at once); the stop stays where it is' } })).level, 'warn');
+  assert.deepEqual(OS.managedLine(Object.assign({}, m, { barTrail: { state: 'building', text: 'waiting for 3 whole 5 minute bars' } })), { text: 'Bars R40 managing: 1 pair · Bar trail waiting for 3 whole 5 minute bars', level: '' });
+  assert.deepEqual(OS.managedLine(Object.assign({}, m, { barTrail: { state: 'on', text: null } })), { text: 'Bars R40 managing: 1 pair', level: '' });
+  assert.deepEqual(OS.managedLine(Object.assign({}, m, { state: 'waiting', barTrail: { state: 'notProven', text: NP } })), { text: 'Bars R40: waiting for the fill · Bar trail ' + NP, level: 'warn' });
+  assert.equal(OS.managedLine(Object.assign({}, m, { state: 'resumed', text: 'ChartBridge restarted', barTrail: { state: 'building', text: 'waiting for 1 whole 1 minute bar' } })).level, 'warn');
+});
+
+test('a bar kind the chart does not support is said plainly: never read as minute bars, never dropped in silence', () => {
+  assert.deepEqual(OS.barKind({ bars: 2, offsetTicks: 1, type: 'tick', size: 500 }), { type: 'tick', size: 500, supported: false }, 'tick bars are not read as 1 minute bars');
+  assert.deepEqual(OS.barKind({ bars: 2, offsetTicks: 1, type: 'minute', size: 7 }), { type: 'minute', size: 7, supported: false });
+  assert.deepEqual(OS.barKind({ bars: 2, offsetTicks: 1, type: 'range', size: 40 }), { type: 'range', size: 40, supported: true });
+  assert.deepEqual(OS.barKind(null), { type: 'minute', size: 1, supported: true });
+  assert.equal(OS.checkStrategy(strat({ trail: null, barTrail: { bars: 2, offsetTicks: 1, type: 'volume', size: 1000 } }), {}).text, 'The bar trail\'s bars are minute or range bars: volume bars are not supported.');
+  const raw = { rev: 4, strategies: [strat({ id: 'a', hotkey: null }), strat({ id: 't', name: 'Ticks 500', hotkey: null, trail: null, barTrail: { bars: 2, offsetTicks: 1, type: 'tick', size: 500 } }),
+    strat({ id: 'm7', name: 'Seven', hotkey: null, trail: null, barTrail: { bars: 2, offsetTicks: 1, type: 'minute', size: 7 } })] };
+  assert.deepEqual(OS.cleanStrategiesDoc(raw).strategies.map(x => x.id), ['a']);
+  assert.deepEqual(OS.strategiesLeftOut(raw), [
+    { name: 'Ticks 500', text: 'The bar trail\'s bars are minute or range bars: tick bars are not supported.' },
+    { name: 'Seven', text: 'Minute bars for the bar trail are 1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30 or 60 minutes.' }]);
+  assert.deepEqual(OS.strategiesLeftOut({ rev: 1, strategies: [strat({ id: 'a', hotkey: null })] }), []);
+  assert.deepEqual(OS.strategiesLeftOut(null), []);
+  /* ChartBridge's own check names it too (the page refuses what ChartBridge would) */
+  assert.equal(OS.checkWire({ name: 'S', stop: 8, barTrail: 2, barTrailOffset: 1, barTrailType: 'tick', barTrailSize: 500 }, 0), 'barTrailType must be "minute" or "range".');
+});
+
+test('createDesk: a read or a save keeps the strategies it left out, for the Strategies screen to name', async () => {
+  const raw = { rev: 2, strategies: [strat({ id: 'a', hotkey: null }), strat({ id: 't', name: 'Ticks 500', hotkey: null, trail: null, barTrail: { bars: 2, offsetTicks: 1, type: 'tick', size: 500 } })] };
+  const mem = new Map();
+  const storage = { getItem: k => (mem.has(k) ? mem.get(k) : null), setItem: (k, v) => mem.set(k, v) };
+  const fetch = async (url, o) => ({ status: 200, json: async () => (o.method === 'PUT' ? Object.assign(JSON.parse(o.body), { rev: 3, strategies: raw.strategies }) : raw) });
+  const desk = OS.createDesk({ fetch, storage, base: () => 'http://127.0.0.1:8800' });
+  assert.deepEqual(desk.leftOut.strategies, []);
+  const r = await desk.read('strategies');
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.doc.strategies.map(x => x.id), ['a']);
+  assert.deepEqual(desk.leftOut.strategies, [{ name: 'Ticks 500', text: 'The bar trail\'s bars are minute or range bars: tick bars are not supported.' }]);
+  await desk.save('strategies', { rev: 2, strategies: [strat({ id: 'a', hotkey: null })] });
+  assert.equal(desk.leftOut.strategies.length, 1, 'a save that comes back with it says so again');
+  const ws = fs.readFileSync(path.join(__dirname, '..', 'live', 'workspace.js'), 'utf8');
+  assert.match(ws, /<p class="ws-help" id="sg-left" role="status"><\/p>/);
+  assert.match(ws, /'Not shown, this chart cannot use ' \+/);
+});
+
+test('the C# bar trail: the phantom rule, the session close, not proven yet and the 17th kind (ChartBridgeStrategies.cs)', () => {
+  const cs = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'ChartBridgeStrategies.cs'), 'utf8');
+  assert.match(cs, /THE PHANTOM RULE: a phantom bar is a range bar\s+\/\/\s+no trade was in/);
+  assert.match(cs, /Phantoms\+\+;   \/\/ a phantom bar: no trade was in it, never used/);
+  assert.match(cs, /if \(exact\) \{ Push\(th \* Tick, tl \* Tick\); done = true; \}/, 'a used bar keeps its traded high and low');
+  assert.match(cs, /if \(open \|\| !had\) \{ if \(EndBarTrailsLocked\(root, d\)\) ended = true; \}/, 'the session open (and the first trade seen after a start) ends the bar trail of entries filled in an earlier session');
+  // review of PR #75: HIGH 1, the session across a restart; HIGH 2, the gap rule; LOW 4, the flat rule
+  assert.match(cs, /if \(m\.Session > 0 && m\.Session >= d\) continue;   \/\/ filled in this session: it trails on/);
+  assert.match(cs, /\(\\tmerged\)\{0,1\}\(\\tsession:\[0-9\]\{1,9\}\)\{0,1\}\(\\tbarEnded\)\{0,1\}\$"\);/, 'managed.txt: optional session and barEnded after merged');
+  assert.match(cs, /line\.BarEnded \|\| \(savedSession > 0 \? nowSession == 0 \|\| savedSession < nowSession : filled \|\| legs\.Any/, 'a restart keeps an earlier session\'s bar trail ended (and one with no saved session)');
+  assert.match(cs, /if \(gap\) \{ foreach \(TrailBars tb in list\) tb\.Reset\(\); BarGapSince\.Remove\(root\); \}\s+else foreach \(TrailBars tb in list\) tb\.SessionOpen\(d\);/, 'a gap across the open: the kinds start over as after a drop');
+  assert.match(cs, /string notOpen = PositionNotOpen\(stop\);/, 'never a stop move while the position is not open');
+  const cb = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'ChartBridge.cs'), 'utf8');
+  const drop = cb.slice(cb.indexOf('private static void FeedDropped(string root, string why)'));
+  assert.ok(drop.indexOf('ChartBridgeOrders.BarTrailFeedDropped(root);') > 0 && drop.indexOf('ChartBridgeOrders.BarTrailFeedDropped(root);') < drop.indexOf('if (MarketClosedNow())'), 'a drop while the market is closed reaches the bar trail too');
+  assert.match(cs, /return "notProven";/);
+  assert.match(cs, /return "ended";/);
+  assert.match(cs, /",\\"barTrail\\":\{\\"state\\":"/);
+  const orders = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'ChartBridgeOrders.cs'), 'utf8');
+  assert.match(orders, /bad = BarTrailPlaceProblem\(root, strat, tick\);/, 'placement refuses a bar kind it cannot build, with the reason');
+  assert.doesNotMatch(cs, /past that an entry's bar trail never moves/);
 });

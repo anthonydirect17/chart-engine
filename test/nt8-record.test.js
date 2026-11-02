@@ -51,10 +51,34 @@ test('0.6.10: the files this release does not touch are still the 0.6.8 files, b
   const want = {
     'ChartBridgeStops.cs': 'f2d74c58a904a5ba448ca5ebceb05f25b01d55642ddfdf1323b0c7dbf95f5d3c',
     'ChartBridgeBot.cs': '33ca2af1f1867f14ab188f659ad63210933801b62c951234255972111fef84b1',
-    'ChartBridgeStrategies.cs': '588a308895185587f795276a0479d41c9ebc1843bd53ad6d7c06c8aa935d386a',
+    /* ChartBridgeStrategies.cs: the next build changes it (the bar trail), before its version is bumped */
     'ChartBridgeMerge.cs': '7aa31e37d38c1875eb236e1575d20f49ed31c1e2c08fc9d265d5aa7e0a32952c',
   };
   for (const [f, h] of Object.entries(want)) assert.strictEqual(crypto.createHash('sha256').update(read(f).replace(/\r/g, '')).digest('hex'), h, f + ' is the 0.6.8 file');
+});
+
+test('0.6.11: the add-on files this release does not touch are the 0.6.10 files, byte for byte (while ChartBridge is 0.6.11)', () => {
+  if (!/public const string Version = "0\.6\.11";/.test(read('ChartBridge.cs'))) return;   // a later release may change them
+  // 0.6.11 changed ChartBridge.cs (the version, the trade's time to the bar trail, its feed drop), ChartBridgeOrders.cs and
+  // ChartBridgeStrategies.cs (the bar trail) and ChartBridgeBars.cs (the narrower 1 second request); every other add-on file is
+  // the one Anthony compiled for 0.6.10
+  const want = {
+    'ChartBridgeAccounts.cs': 'fafc11f2257267a41d26863401261f92c8468d260de4d144a3b2d00b787e01ad',
+    'ChartBridgeAgents.cs': '87f8f18b0f806ec3693aae385ec4228659df0bf8e93a267e4db871084d766e73',
+    'ChartBridgeBot.cs': '33ca2af1f1867f14ab188f659ad63210933801b62c951234255972111fef84b1',
+    'ChartBridgeCopier.cs': 'bb90a637610b3b56236c6cfba014c1a1db40110f2b821bbeecf7778f2f4e6e49',
+    'ChartBridgeGroups.cs': '95baae61b5c8d135d0a1b84e5a0c7fd13e63ff936d22da76170259bc2e4610ff',
+    'ChartBridgeMerge.cs': '7aa31e37d38c1875eb236e1575d20f49ed31c1e2c08fc9d265d5aa7e0a32952c',
+    'ChartBridgeOrderRecord.cs': 'de33b77a1d774d2ce8d11a5f3a8e927f1ff085c7d8f47259ff6a542d18ccc1f1',
+    'ChartBridgePin.cs': '8c6b28abf30cc716b7175fa3c1fd4e1cb9ca0c9407a19a03357830028481e3eb',
+    'ChartBridgeStops.cs': 'f2d74c58a904a5ba448ca5ebceb05f25b01d55642ddfdf1323b0c7dbf95f5d3c',
+    'ChartBridgeTape.cs': 'b5150cf7dbea2244da11d49511d163b4666a2403b9e21ebd10ea44a25da87fd1',
+    'ChartBridgeTicks.cs': '83d962030e993e40280de8a8348da87baafdc661b56b9091da0e46137152cabe',
+    'ChartBridgeV3.cs': '4ea9774ee3d30e619d1b849965b68565c24eed8f276194deaf93ee23242261dc',
+  };
+  const addons = JSON.parse(read('install-files.json')).addons.map(f => f.replace(/^nt8\//, ''));
+  assert.deepStrictEqual(addons.filter(f => !want[f]).sort(), ['ChartBridge.cs', 'ChartBridgeBars.cs', 'ChartBridgeOrders.cs', 'ChartBridgeStrategies.cs'], 'every add-on file is checked or named as changed');
+  for (const [f, h] of Object.entries(want)) assert.strictEqual(crypto.createHash('sha256').update(read(f).replace(/\r/g, '')).digest('hex'), h, f + ' is the 0.6.10 file');
 });
 
 test('0.6.9: the decision id: the group entry\'s PlaceOrder call unchanged, set and cleared around it, noted before Submit', () => {

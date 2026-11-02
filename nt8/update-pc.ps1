@@ -2070,7 +2070,7 @@ function Set-PinTimes($Pin, $Times) {
   $Pin['dailyTimes'] = $t
 }
 
-# The daily times as this PC's local times on a day (New York time worked out for that day).
+# The daily times as this PC's local times on a day (New York time worked out for New York's date at that moment).
 function Get-DailyLocal($Times, [datetime]$Day = (Get-Date)) {
   return @(@($Times) | ForEach-Object { ConvertFrom-NewYorkTime $_ $Day })
 }
@@ -2188,7 +2188,11 @@ function Save-TriggerCheck($State, $Res) {
   $State['dailyTrigger'] = $d
 }
 
-# HH:mm New York time on a given day, as this PC's local time (DST on both sides, on that day).
+# HH:mm New York time on New York's date at the moment $Day (this PC's clock; a UTC time when its Kind is Utc), as this
+# PC's local time (DST on both sides, on that day). Chart 1.41.0 (task #72): the day is New York's own date at that
+# moment, never this PC's calendar date. On a PC whose clock is not New York time the two differ for a few hours around
+# midnight, and on a DST change (2026-11-01 00:00 to 04:00 UTC, New York still on 2026-10-31) the PC's date gave the
+# other side's offset, so the status line (its $Now) and the daily triggers worked out an hour apart.
 function ConvertFrom-NewYorkTime([string]$HHmm, [datetime]$Day = (Get-Date)) {
   $tz = $null
   foreach ($id in @('Eastern Standard Time', 'America/New_York')) {
@@ -2196,7 +2200,10 @@ function ConvertFrom-NewYorkTime([string]$HHmm, [datetime]$Day = (Get-Date)) {
   }
   if (-not $tz) { throw 'the New York time zone is not known on this PC' }
   $h, $m = $HHmm.Split(':')
-  $ny = New-Object DateTime($Day.Year, $Day.Month, $Day.Day, [int]$h, [int]$m, 0, [DateTimeKind]::Unspecified)
+  $utc = $Day
+  if ($Day.Kind -ne [DateTimeKind]::Utc) { $utc = $Day.ToUniversalTime() }   # Local or Unspecified: this PC's clock
+  $nyDay = [TimeZoneInfo]::ConvertTimeFromUtc($utc, $tz).Date
+  $ny = New-Object DateTime($nyDay.Year, $nyDay.Month, $nyDay.Day, [int]$h, [int]$m, 0, [DateTimeKind]::Unspecified)
   return [TimeZoneInfo]::ConvertTime($ny, $tz, [TimeZoneInfo]::Local)
 }
 
