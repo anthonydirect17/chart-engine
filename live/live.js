@@ -46,6 +46,8 @@
  *   live-tape-floors-v1 { <root>: { rth, eth } } the large-print floors (the workspace's Time and Sales floors, 1.12.0), also
  *                       the bubbles' and the absorption bars' large trade (G1c); only those set by hand
  *   live-scale-lock-v1  { <paneId>: true } a chart's price scale locked (1.14.0, review D2); unlocked unless set
+ *   live-fit-orders-v1  { <paneId>: false } a chart's "Fit stop and target" switched off (Unreleased, Anthony 2026-11-02); on
+ *                       unless set, so a layout saved before it fits as it always did
  *   live-color-presets-v1  { chart: [{ id, name, colors: { up, down, bg }, ind }], indicator: [{ id, name, colors }] }
  *                       the named presets (1.9.0), through presetStore below so a store shared by every PC can replace
  *                       it; a chart preset's optional `ind` is the id of the indicator preset it brings with it
@@ -258,7 +260,8 @@ function presetName(v) { return typeof v === 'string' ? v.replace(/\s+/g, ' ').t
 const KEYS = { settings: 'live-settings-v2', range: 'live-range-v2', indicators: 'live-indicators-v2', bracket: 'live-bracket-v1', indicatorOptions: 'live-indicator-options-v1',
   paneHeights: 'live-pane-heights-v1', indicatorColors: 'live-indicator-colors-v1', presets: 'live-color-presets-v1', colors: 'live-colors-v1',
   bracketPresets: 'live-bracket-presets-v1', bracketSel: 'live-bracket-sel-v1', bracketUnit: 'live-bracket-unit-v1', qty: 'live-qty-v1',
-  hotkeys: 'live-hotkeys-v1', signals: 'live-signals-v1', floors: 'live-tape-floors-v1', scaleLock: 'live-scale-lock-v1', paneRoom: 'live-pane-room-v1' };
+  hotkeys: 'live-hotkeys-v1', signals: 'live-signals-v1', floors: 'live-tape-floors-v1', scaleLock: 'live-scale-lock-v1', paneRoom: 'live-pane-room-v1',
+  fitOrders: 'live-fit-orders-v1' };
 /*
  * The chart signals' settings (G1c), by the NinjaScript files' own names, each kept inside the file's [Range]:
  * AbsorptionTradeCombo per instrument and chart type (Anthony: Range 40 and 1 minute first, every other type the same
@@ -730,6 +733,15 @@ function create(storage) {
       const all = Object.assign(Object.create(null), obj(KEYS.scaleLock));
       if (on) all[paneId] = true; else delete all[paneId];
       return raw.set(KEYS.scaleLock, all);
+    },
+    /** Whether a chart pane fits its stop and target (Unreleased, Anthony 2026-11-02): on unless switched off, kept per chart
+        the way the price scale lock is. */
+    fitOrders(paneId) { return !(paneOk(paneId) && obj(KEYS.fitOrders)[paneId] === false); },
+    setFitOrders(paneId, on) {
+      if (!paneOk(paneId)) return false;
+      const all = Object.assign(Object.create(null), obj(KEYS.fitOrders));
+      if (on) delete all[paneId]; else all[paneId] = false;
+      return raw.set(KEYS.fitOrders, all);
     },
     /** A chart pane's own room right of price, set by dragging its gap (1.39.2), or null: Settings' room applies. */
     paneRoom(paneId) { const v = paneOk(paneId) ? obj(KEYS.paneRoom)[paneId] : null; return roomOk(v) ? v : null; },
@@ -2921,6 +2933,9 @@ function mount(container, options) {
   /* the price scale lock (1.14.0, review D2): saved per chart, off by default */
   chart.setScaleLock(prefs.scaleLocked(PANE));
   chart.on('scaleLock', v => prefs.setScaleLocked(PANE, v));
+  /* Fit stop and target (Unreleased, Anthony 2026-11-02): the toggle beside the lock, saved per chart, on by default */
+  chart.setFitOrders(prefs.fitOrders(PANE));
+  chart.on('fitOrders', v => prefs.setFitOrders(PANE, v));
   /* 1.37.0: the room right set by dragging the gap on this chart. 1.39.2 (Anthony 2026-10-27): this chart's own, saved for it;
      the other charts keep theirs (until then every chart took it, and a daily chart beside a minute chart was pushed off
      its bars). A room picked in Settings sets every chart to it again. */
@@ -2928,7 +2943,10 @@ function mount(container, options) {
     if (!LP.roomOk(px)) return;
     S.room = px; prefs.setPaneRoom(PANE, px);
   });
-  listen(window, 'storage', e => { if (e.key === PREFIX + LP.KEYS.scaleLock) chart.setScaleLock(prefs.scaleLocked(PANE)); });
+  listen(window, 'storage', e => {
+    if (e.key === PREFIX + LP.KEYS.scaleLock) chart.setScaleLock(prefs.scaleLocked(PANE));
+    if (e.key === PREFIX + LP.KEYS.fitOrders) chart.setFitOrders(prefs.fitOrders(PANE));
+  });
   function shortHeader() {
     if (!COMPACT) return;
     const r = rootEl.getBoundingClientRect(), sh = r.width < 700 || r.height < 400;

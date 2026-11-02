@@ -955,11 +955,11 @@ const CSS = `
 .ce-live[hidden]{display:none}
 .ce-live svg{width:12px;height:12px;display:block}
 .ce-live:hover{color:#F7F3EA;border-color:#E2C687;box-shadow:0 0 12px rgba(201,165,92,.18)}
-.ce-lock{position:absolute;bottom:3px;z-index:3;width:24px;height:20px;padding:0;box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;color:#8A857B;background:transparent;border:1px solid transparent;border-radius:5px;cursor:pointer}
-.ce-lock svg{width:12px;height:12px;display:block}
-.ce-lock:hover{color:#ECE9E2;border-color:#2A2824}
-.ce-lock[aria-pressed="true"]{color:#E2C687;background:#17140E;border-color:#3C321E}
-.ce-lock:focus-visible{outline:2px solid #E2C687;outline-offset:1px}
+.ce-lock,.ce-fit{position:absolute;bottom:3px;z-index:3;width:24px;height:20px;padding:0;box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;color:#8A857B;background:transparent;border:1px solid transparent;border-radius:5px;cursor:pointer}
+.ce-lock svg,.ce-fit svg{width:12px;height:12px;display:block}
+.ce-lock:hover,.ce-fit:hover{color:#ECE9E2;border-color:#2A2824}
+.ce-lock[aria-pressed="true"],.ce-fit[data-fit="off"]{color:#E2C687;background:#17140E;border-color:#3C321E}
+.ce-lock:focus-visible,.ce-fit:focus-visible{outline:2px solid #E2C687;outline-offset:1px}
 .ce-live:focus-visible{outline:2px solid #E2C687;outline-offset:2px}
 .ce-theme{position:relative;display:inline-block}
 .ce-theme-btn{font:500 12px "IBM Plex Sans",system-ui,sans-serif;color:var(--ce-text,#ECE9E2);background:var(--ce-s2,#111114);border:1px solid var(--ce-line,#2A2824);border-radius:8px;padding:4px 12px 4px 8px;min-height:30px;cursor:pointer;display:inline-flex;align-items:center;gap:8px}
@@ -989,7 +989,7 @@ const CSS = `
 .ce-divider[hidden]{display:none}
 .ce-divider:hover,.ce-divider.is-drag,.ce-divider:focus-visible{background:linear-gradient(transparent 1px,rgba(201,165,92,.6) 1px,rgba(201,165,92,.6) 3px,transparent 3px)}
 .ce-divider:focus-visible{box-shadow:inset 0 0 0 2px #E2C687}
-@media (prefers-reduced-motion:reduce){.ce-live,.ce-lock,.ce-theme-btn,.ce-preset,.ce-ground{transition:none!important}}
+@media (prefers-reduced-motion:reduce){.ce-live,.ce-lock,.ce-fit,.ce-theme-btn,.ce-preset,.ce-ground{transition:none!important}}
 `;
 function injectStyle() {
   if (typeof document === 'undefined' || document.getElementById('ce-style')) return;
@@ -1274,6 +1274,7 @@ function create(container, options) {
     clock: opt.clock || (() => zoneSeconds(Date.now() / 1000, opt.timeZone || 'America/New_York')),
     liveButton: opt.liveButton !== false,
     lockButton: opt.lockButton !== undefined ? opt.lockButton !== false : opt.liveButton !== false,
+    fitButton: opt.fitButton !== undefined ? opt.fitButton !== false : opt.lockButton !== undefined ? opt.lockButton !== false : opt.liveButton !== false,   // the fit toggle beside the lock
     unit: opt.unit !== undefined ? opt.unit : 'pt',
     pointValue: opt.pointValue || 0,
     compactLabels: opt.compactLabels === true,                                                        // 1.15.0: short order labels, the full one on hover
@@ -1302,11 +1303,39 @@ function create(container, options) {
      tag): locked, a price zoom set by hand is kept (the auto-fit does not take over near the edge, nor on scrolling back
      to the live edge) until it is unlocked, End or Jump to live */
   let lockBtn = null, scaleLocked = false;
+  /* Unreleased (Anthony 2026-11-02: "an option to have the chart zoom out to fit the stop and target like it is now, but an
+     option to toggle that off as well, maybe near the lock on the bottom right"): the fit toggle, the lock's size and look,
+     left of it; the two centred together in the corner (the lock alone stays centred, as before) */
+  let fitBtn = null;
+  const pairL = Math.round((o.axisWidth - 52) / 2);
   if (o.lockButton) {
     lockBtn = document.createElement('button'); lockBtn.type = 'button'; lockBtn.className = 'ce-lock';
-    lockBtn.style.right = Math.round((o.axisWidth - 24) / 2) + 'px';
+    lockBtn.style.right = (o.fitButton ? pairL : Math.round((o.axisWidth - 24) / 2)) + 'px';
     container.appendChild(lockBtn);
   }
+  if (o.fitButton) {
+    fitBtn = document.createElement('button'); fitBtn.type = 'button'; fitBtn.className = 'ce-fit';
+    fitBtn.style.right = (o.lockButton ? pairL + 28 : Math.round((o.axisWidth - 24) / 2)) + 'px';
+    container.appendChild(fitBtn);
+  }
+  /* on: the price scale zooms out so every working order, stop and target is in view (as since 1.14.0, the default); off: the
+     scale fits the candles only, an order line off it shows as a marker at the plot's top or bottom edge. Off is the state
+     that holds the view against the default, so it takes the gold the locked padlock has. */
+  function syncFit() {
+    if (!fitBtn) return;
+    const on = !!o.fitOrders;
+    fitBtn.setAttribute('aria-pressed', String(on));
+    fitBtn.setAttribute('data-fit', on ? 'on' : 'off');
+    fitBtn.title = on
+      ? 'Fit stop and target: on. The price scale zooms out to keep working orders, stops and targets in view (click to turn off)'
+      : 'Fit stop and target: off. The view never moves for an order; a line off the chart shows as a marker at the top or bottom edge (click to turn on)';
+    fitBtn.setAttribute('aria-label', on ? 'Fit stop and target: on' : 'Fit stop and target: off');
+    /* two price lines, a top and a bottom: on, an arrow out to each (the scale reaches them); off, the arrows fold back in */
+    fitBtn.innerHTML = '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1.75h8M2 10.25h8" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>'
+      + (on ? '<path d="M6 3.4v5.2M4.4 4.9 6 3.3l1.6 1.6M4.4 7.1 6 8.7l1.6-1.6" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>'
+        : '<path d="M4.4 3.4 6 5l1.6-1.6M4.4 8.6 6 7l1.6 1.6" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>') + '</svg>';
+  }
+  syncFit();
   function syncLock() {
     if (!lockBtn) return;
     lockBtn.setAttribute('aria-pressed', String(scaleLocked));
@@ -1376,7 +1405,7 @@ function create(container, options) {
   let labelFirst = null, prevOd = null;                    // prevOd: the pressed order's { id, off } as the last frame drew it (1.39.1)
   const lineTop = y => clamp(y - ORDER_LH / 2, 0, Math.max(0, plotH - ORDER_LH));   // the top of a label drawn at its line
   const pendingMoves = new Map();          // order id -> price asked for, until the next setOrders
-  const listeners = { bubble: [], legend: [], live: [], drawings: [], tool: [], orderMove: [], orderCancel: [], orderPlace: [], orderPlanAdd: [], orderPressOff: [], error: [], paneResize: [], scaleLock: [], drawn: [], room: [] };
+  const listeners = { bubble: [], legend: [], live: [], drawings: [], tool: [], orderMove: [], orderCancel: [], orderPlace: [], orderPlanAdd: [], orderPressOff: [], error: [], paneResize: [], scaleLock: [], fitOrders: [], drawn: [], room: [] };
   const emit = (ev, arg) => { for (const fn of listeners[ev]) { try { fn(arg); } catch (e) { setTimeout(() => { throw e; }); } } };
 
   const AXIS_W = o.axisWidth, TIME_H = o.timeAxisHeight;
@@ -1808,6 +1837,51 @@ function create(container, options) {
     vwapMark = { up, x, y, w, h, price: vw };
   }
   let vwapMark = null, atrCache = { key: '', v: null }, posHit = null, posBoxLast = null;
+  /* Unreleased (Anthony 2026-11-02): with the fit off, an order line off the scale is a marker at the plot's top or bottom
+     right edge, the VWAP marker's shape (a small triangle pointing to it, the line's short name and price on the legend ground)
+     in the line's own color, with its axis tag's border (dashed 3/2 for a stop, 2/3 for a planned line, solid for a limit).
+     Stacked under (or over) the VWAP's marker, the farthest price outermost. Never moves the view. */
+  let orderEdge = [];
+  const EDGE_H = 16, EDGE_GAP = 2;
+  function edgeName(ord) {
+    if (ord.plan) return ord.plan.role === 'stop' ? 'SL' : 'TP';
+    if (ord.role === 'target') return 'TGT';
+    if (ord.role === 'stop') return 'STP';
+    return (ord.side === 'sell' ? 'SELL ' : 'BUY ') + (KIND_ABBR[ord.kind] || String(ord.kind || '').toUpperCase());
+  }
+  function orderEdgesLayout(list) {
+    orderEdge = [];
+    if (!list.length) return;
+    ctx.font = '500 10px ' + T.fontMono;
+    const ups = list.filter(e => e.up).sort((a, b) => b.price - a.price), downs = list.filter(e => !e.up).sort((a, b) => b.price - a.price);
+    let y = vwapMark && vwapMark.up ? vwapMark.y + vwapMark.h + EDGE_GAP : 4;
+    for (const e of ups) { e.y = y; y += EDGE_H + EDGE_GAP; }
+    y = (vwapMark && !vwapMark.up ? vwapMark.y : plotH - 4 + EDGE_GAP) - EDGE_GAP - EDGE_H;
+    for (let k = downs.length - 1; k >= 0; k--) { downs[k].y = y; y -= EDGE_H + EDGE_GAP; }
+    for (const e of ups.concat(downs)) {
+      e.text = edgeName(e.ord) + ' ' + fmtPrice(e.price, o.precision);
+      e.w = Math.ceil(ctx.measureText(e.text).width) + 22; e.h = EDGE_H; e.x = plotW - 6 - e.w;
+      orderEdge.push(e);
+    }
+  }
+  function drawOrderEdges() {
+    if (!orderEdge.length) return;
+    ctx.font = '500 10px ' + T.fontMono; ctx.textBaseline = 'middle'; ctx.textAlign = 'right';
+    for (const e of orderEdge) {
+      const { x, y, w, h, up, ord } = e, col = ord.side === 'sell' ? T.short : T.long;
+      const dash = ord.plan ? [2, 3] : (ord.kind === 'stop' || ord.kind === 'stopLimit') ? [3, 2] : [];
+      ctx.globalAlpha = ord.plan ? 0.7 : 1;
+      roundRect(x, y, w, h, 3); ctx.fillStyle = T.legendBg; ctx.fill();
+      roundRect(x + 0.5, y + 0.5, w - 1, h - 1, 3); ctx.strokeStyle = col; ctx.lineWidth = 1; ctx.setLineDash(dash); ctx.stroke(); ctx.setLineDash([]);
+      ctx.fillStyle = col; ctx.beginPath();
+      const tx = x + 8, ty = y + h / 2;
+      if (up) { ctx.moveTo(tx - 4, ty + 2.5); ctx.lineTo(tx + 4, ty + 2.5); ctx.lineTo(tx, ty - 3); }
+      else { ctx.moveTo(tx - 4, ty - 2.5); ctx.lineTo(tx + 4, ty - 2.5); ctx.lineTo(tx, ty + 3); }
+      ctx.closePath(); ctx.fill();
+      ctx.fillText(e.text, x + w - 5, ty + 0.5);
+      ctx.globalAlpha = 1;
+    }
+  }
   /*
    * The studies (1.34.0, Anthony 2026-10-20): EMAs, SMAs and Bollinger Bands on the plot, the RSI in the lower pane, on the
    * plot's own bars (smaAt, emaAt, bandsAt, rsiAt). The closed bars' values are kept (SC) and only the forming bar's worked
@@ -2607,6 +2681,7 @@ function create(container, options) {
     prevOd = od ? { id: od.id, off: od.off } : null;
     orderHits = []; posHit = null;
     const labelBoxes = [];                    // where the labels are (full size), for the corner readout (1.15.0)
+    orderEdge = [];
     if (n >= 0 && (orders.length || position || orderPreview)) {
       const LH = ORDER_LH, STEP = LH + 2;
       ctx.font = '500 11px ' + T.fontMono; ctx.textBaseline = 'middle';
@@ -2760,9 +2835,10 @@ function create(container, options) {
           orderTags.push({ price: position.avgPrice, style: { fill: T.tagFill, fg: T.exit, border: T.exit } });
         }
       }
+      const edges = [];
       for (const ord of orders) {
         const price = orderPrice(ord), y = yOf(price);
-        if (y < 0 || y > plotH) continue;
+        if (y < 0 || y > plotH) { if (!o.fitOrders && !(od && od.id === ord.id)) edges.push({ ord, id: ord.id, price, up: y < 0 }); continue; }
         const col = ord.side === 'sell' ? T.short : T.long, stop = ord.kind === 'stop' || ord.kind === 'stopLimit';
         const dragging = od && od.id === ord.id;
         if (ord.plan) {                                            // a planned stop or target (1.13.0): fainter, finely dashed
@@ -2805,6 +2881,8 @@ function create(container, options) {
         }
       }
       placeAll();                                                // 1.38.0: every label placed, the dragged one first
+      orderEdgesLayout(edges);                                   // fit off: the lines off the scale, as edge markers
+      if (orderEdge.length) orderLabels.push(drawOrderEdges);
     }
 
     // last price line and live dot
@@ -2839,7 +2917,7 @@ function create(container, options) {
       const mw = t => { let v = cornerWidths.get(t); if (v === undefined) { if (cornerWidths.size > 64) cornerWidths.clear(); v = Math.ceil(ctx.measureText(t).width) + 10; cornerWidths.set(t, v); } return v; };   // measured once per text
       let text = cornerText, w = mw(text);
       if (w > plotW - 12 && cornerShort) { text = cornerShort; w = mw(text); }
-      const h = 16, at = cornerPlace(plotW, plotH, w, h, labelBoxes.concat(vwapMark ? [vwapMark] : []), o.fitTop);
+      const h = 16, at = cornerPlace(plotW, plotH, w, h, labelBoxes.concat(vwapMark ? [vwapMark] : [], orderEdge), o.fitTop);
       if (at) {
         roundRect(at.x, at.y, w, h, 4); ctx.fillStyle = T.legendBg; ctx.fill();
         ctx.fillStyle = T.text2; ctx.fillText(text, at.x + 5, at.y + h / 2 + 0.5);
@@ -3284,6 +3362,7 @@ function create(container, options) {
   container.addEventListener('keyup', onKeyUp);
   if (liveBtn) liveBtn.addEventListener('click', () => api.goLive());
   if (lockBtn) lockBtn.addEventListener('click', () => { api.setScaleLock(!scaleLocked); emit('scaleLock', scaleLocked); });
+  if (fitBtn) fitBtn.addEventListener('click', () => { api.setFitOrders(!o.fitOrders); emit('fitOrders', o.fitOrders); });
   const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(resize) : null;
   if (ro) ro.observe(container);
   resize();
@@ -3582,6 +3661,15 @@ function create(container, options) {
         live) until unlocked (the auto-fit then takes over), End or goLive(). on('scaleLock', locked) after a click on it. */
     setScaleLock(on) { const v = !!on; if (v === scaleLocked) return; scaleLocked = v; if (!v) V.auto = true; syncLock(); dirty = true; },
     scaleLock() { return scaleLocked; },
+    /** Fit stop and target (option `fitOrders`, on by default; the toggle beside the lock, option `fitButton`): on, the auto-fit
+        takes in every working order, stop, target and planned line (1.14.0); turning it on fits the scale again unless the
+        lock is on. Off, the scale fits the candles only and an order line off it is an edge marker (orderEdges()); the view
+        never moves for one. on('fitOrders', on) after a click on the toggle. */
+    setFitOrders(on) { const v = !!on; if (v === o.fitOrders) return; o.fitOrders = v; if (v && !scaleLocked) V.auto = true; syncFit(); dirty = true; },
+    fitOrders() { return !!o.fitOrders; },
+    /** The order lines off the scale as last drawn with the fit off, each a marker at the plot's right edge:
+        [{ id, price, up, text, x, y, w, h }] (CSS px in the chart), top ones first; [] with the fit on or none off the scale. */
+    orderEdges() { return orderEdge.map(e => ({ id: e.id, price: e.price, up: e.up, text: e.text, x: e.x, y: e.y, w: e.w, h: e.h })); },
     reset() { V.auto = true; V.follow = true; V.kin = null; V.anchor = null; V.logT = Math.log(o.barSpacing); dirty = true; },
     isLive() { return V.follow; },
     bars() { return bars; },
@@ -3595,7 +3683,7 @@ function create(container, options) {
       cancelAnimationFrame(raf); if (ro) ro.disconnect();
       container.removeEventListener('keydown', onKey);
       container.removeEventListener('keyup', onKeyUp);
-      cv.remove(); if (liveBtn) liveBtn.remove(); if (lockBtn) lockBtn.remove(); divEl.remove();
+      cv.remove(); if (liveBtn) liveBtn.remove(); if (lockBtn) lockBtn.remove(); if (fitBtn) fitBtn.remove(); divEl.remove();
       container.classList.remove('ce-host');
     },
   };
