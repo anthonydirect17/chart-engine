@@ -33,7 +33,19 @@ test('The Desk\'s day as read: bad trades dropped, open ones kept open; no folde
   assert.deepEqual(d.trades.map(t => t.id), ['a']);
   assert.deepEqual(d.open.map(t => [t.id, t.open, t.exitT]), [['d', true, null]]);
   assert.equal(d.decisions.length, 4);
-  assert.equal(L.cleanDay({ folder: { set: false } }).problem, 'The league\'s folder is not set on The Desk (Lab, Shadow league, on WORK).');
+  /* The Desk on HOMESERVER reads the copy WORK's League Mirror posts: set false, ok true, source mirror is no problem */
+  assert.equal(L.cleanDay({ folder: { set: false, ok: true, problem: null, source: 'mirror' } }).problem, '', 'the mirror: no warning');
+  assert.equal(L.cleanDay(Object.assign({}, day, { folder: { set: false, ok: true, problem: null, source: 'mirror' } })).trades.length, 1, 'the mirror: the day as read');
+  /* nothing to read: The Desk's own words, trimmed to 200 */
+  const none = 'The league\'s folder is not set, and no league files have arrived from WORK yet.';
+  assert.equal(L.cleanDay({ folder: { set: false, ok: false, problem: none, source: null } }).problem, none);
+  assert.equal(L.cleanDay({ folder: { set: false, ok: false, problem: 'x'.repeat(300) } }).problem, 'x'.repeat(200));
+  assert.equal(L.cleanDay({ folder: { set: true, ok: false, problem: 'The league\'s folder is set but cannot be found on this PC.' } }).problem, 'The league\'s folder is set but cannot be found on this PC.');
+  /* an older Desk (set false, no ok, no problem): the page's own sentence, never "set a folder on WORK" */
+  const old = L.cleanDay({ folder: { set: false } }).problem;
+  assert.equal(old, 'No league files have reached The Desk yet.');
+  assert.doesNotMatch(old, /WORK|folder/);
+  assert.equal(L.cleanDay({ folder: { set: false, ok: false, problem: null } }).problem, 'No league files have reached The Desk yet.', 'ok false with no text: the same sentence');
   assert.equal(L.cleanDay({ folder: { set: true, ok: true, problem: 'The league has no session yet.' } }).problem, 'The league has no session yet.');
   assert.equal(L.cleanDay(null).problem, 'The Desk sent nothing the page can read.');
 });
