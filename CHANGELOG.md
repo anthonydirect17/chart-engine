@@ -5,8 +5,9 @@
 In plain words: each chart now has a small toggle next to the price scale padlock. On (the default) the chart zooms out to keep
 your stop and target in view, as it always has; off, the chart stays where you put it and a stop or target off screen shows as a
 small marker at the top or bottom edge with its price. The bar trail also got its follow-ups: an entry filled in the first moments
-of a new session no longer has its bar trail ended by mistake, and if your PC clock runs behind the market data, a fill that can
-only be placed in the session before ends its bar trail at once, so the stop never moves in the new session. The ticket's bar
+of a new session no longer has its bar trail ended by mistake. If your PC clock runs behind the market data, a fill in the first
+moments of a new session that ChartBridge cannot yet place in its session ends its bar trail at once (the safe side), so the stop
+never moves in the wrong session. The ticket's bar
 trail line now fits (the full reason is in its tooltip). Two test checks that failed now and then (check:orders' Gap fallback, smoke:workspace's feed delay split) were fixed in
 the tests themselves; the page and ChartBridge were right.
 

@@ -1506,8 +1506,8 @@ public static class StrategiesHarness
         // W6: its execution (18:00:00.2, the new session) comes now: an ended bar trail is never started again
         ExecUpdate(w6, ListExec(w6, e6, EtN(11, 5, 18, 0, 0.2), "XW6"));
         ChartBridgeOrders.SaveManagedNow();
-        Check(LineOf(e6).EndsWith("\tbarEnded") && LastManaged(w6).Contains("\"barTrail\":{\"state\":\"ended\""),
-              "W6: an execution after its bar trail ended never starts it again (barEnded kept in managed.txt): " + LineOf(e6) + " | " + LastManaged(w6));
+        Check(LineOf(e6).EndsWith("\tsession:" + before + "\tbarEnded") && LastManaged(w6).Contains("\"barTrail\":{\"state\":\"ended\""),
+              "W6: an execution after its bar trail ended never starts it again and never changes its saved session (session:" + before + " and barEnded kept in managed.txt): " + LineOf(e6) + " | " + LastManaged(w6));
         // W7: an entry filled with the PC clock and the latest trade both in the new session and no execution listed (guessed: the
         // new session), whose execution is of the session before: ended at once. First an execution with its OrderId on another
         // account (review LOW 3): never taken for it.
