@@ -366,12 +366,25 @@ try {
   const NP = 'not proven yet: ChartBridge has not seen these 40 tick range bars from the session open (or a swing that proves them NinjaTrader\'s), so the stop stays where it is';
   await control('bar-trail', { state: 'notProven', text: NP }); await wait(400);
   const np = await tk(A, 'managed').textContent();
-  check(np.startsWith('Runner 3T managing: 3 pairs') && np.includes(' · Bar trail ' + NP) && /warn/.test(await tk(A, 'managed').getAttribute('class')), 'bar trail not proven yet, plainly, in the warning colour: ' + np);
+  check(np === 'Runner 3T managing: 3 pairs · Bar trail not proven yet' && await tk(A, 'managed').getAttribute('title') === 'Runner 3T managing: 3 pairs · Bar trail ' + NP && /warn/.test(await tk(A, 'managed').getAttribute('class')),
+    'bar trail not proven yet, plainly, in the warning colour, ChartBridge\'s whole reason in the tooltip (1.42): ' + np);
+  /* 1.42: the line fits the ticket at its narrowest (2 cells at 1366 x 768, as this layout): two lines at most, all of it inside
+     the ticket's panel (the whole reason ran to 8 lines there and the panel cut it off) */
+  const btFits = () => A.evaluate(() => {
+    const m = document.querySelector('[data-tk-id="managed"]'), box = m.closest('.ws-body') || m.closest('.ws-panel'), r = m.getBoundingClientRect(), b = box.getBoundingClientRect();
+    const lh = parseFloat(getComputedStyle(m).lineHeight) || 1.25 * parseFloat(getComputedStyle(m).fontSize);
+    return { lines: Math.round(r.height / lh), inside: r.bottom <= b.bottom + 0.5 && r.right <= b.right + 0.5, inWidth: r.right <= b.right + 0.5 && m.scrollWidth <= m.clientWidth + 1, w: Math.round(b.width) };
+  });
   await A.setViewportSize({ width: 1366, height: 768 }); await wait(300);
+  let fit = await btFits();
+  check(fit.lines <= 2 && fit.inside, '1366 x 768, the ticket ' + fit.w + ' px wide: the bar trail line fits (' + fit.lines + ' lines, inside the panel: ' + fit.inside + ')');
   await A.screenshot({ path: path.join(out, 'strategies-bar-trail-not-proven-1366.png') });
-  await A.setViewportSize({ width: 1920, height: 1080 }); await wait(300);
   await control('bar-trail', { state: 'ended', text: 'ended at the session close: it no longer moves the stop, which stays where it is' }); await wait(400);
-  check(/ · Bar trail ended at the session close: it no longer moves the stop, which stays where it is$/.test(await tk(A, 'managed').textContent()) && /warn/.test(await tk(A, 'managed').getAttribute('class')), 'bar trail ended at the session close, in the warning colour: ' + await tk(A, 'managed').textContent());
+  fit = await btFits();
+  check(fit.lines <= 3 && fit.inWidth, '1366 x 768: the ended line wraps inside the ticket\'s width (' + fit.lines + ' lines; its last line under the panel\'s scroll edge in this 3 row ticket: ' + !fit.inside + ')');
+  await A.screenshot({ path: path.join(out, 'strategies-bar-trail-ended-1366.png') });
+  await A.setViewportSize({ width: 1920, height: 1080 }); await wait(300);
+  check(/ · Bar trail ended at the session close$/.test(await tk(A, 'managed').textContent()) && /: it no longer moves the stop, which stays where it is$/.test(await tk(A, 'managed').getAttribute('title')) && /warn/.test(await tk(A, 'managed').getAttribute('class')), 'bar trail ended at the session close, in the warning colour, the whole in the tooltip: ' + await tk(A, 'managed').textContent());
   await control('bar-trail', { state: 'building', text: 'waiting for 3 whole 5 minute bars' }); await wait(400);
   check(/ · Bar trail waiting for 3 whole 5 minute bars$/.test(await tk(A, 'managed').textContent()) && !/warn|error/.test(await tk(A, 'managed').getAttribute('class')), 'bar trail waiting for its bars, plainly: ' + await tk(A, 'managed').textContent());
   await control('bar-trail', { state: 'on' }); await wait(400);

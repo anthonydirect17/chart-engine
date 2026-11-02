@@ -1656,8 +1656,10 @@ function pickStrategy(id) {
   publish(); renderOrders();
 }
 /* the ticket's 1.16.0 rows: the strategy, Merge, the managed strategies and the last Merge, written only when changed */
-function setText(el, text, level) {
-  if (el.textContent !== text) { el.textContent = text; el.title = text; }
+function setText(el, text, level, tip) {
+  if (el.textContent !== text) el.textContent = text;
+  const t = tip || text;                                // 1.42: the whole of a line cut short (the bar trail's reason)
+  if (el.title !== t) el.title = t;
   const c = 'oinfo tk-v3' + (level ? ' ' + level : '');
   if (el.className !== c) el.className = c;
 }
@@ -1691,7 +1693,7 @@ function renderTicketV3() {
     if (mb.title !== t) mb.title = t;
   }
   const mg = core.managedOf(TR.account, TK.root).map(OS.managedLine).filter(x => x.text);
-  setText(tk('managed'), mg.map(x => x.text).join(' · '), mg.some(x => x.level === 'error') ? 'error' : mg.some(x => x.level === 'warn') ? 'warn' : '');
+  setText(tk('managed'), mg.map(x => x.text).join(' · '), mg.some(x => x.level === 'error') ? 'error' : mg.some(x => x.level === 'warn') ? 'warn' : '', mg.map(x => x.tip || x.text).join(' · '));
   const pos = TR.positions.get(TR.account + '|' + TK.root);
   if (!(pos && pos.qty)) TR.merges.delete(TR.account + '|' + TK.root);   // the last Merge is shown while its position is open
   const ml = OS.mergeLine(TR.merges.get(TR.account + '|' + TK.root));
