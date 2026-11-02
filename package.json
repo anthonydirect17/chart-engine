@@ -68,6 +68,7 @@
     "smoke:be-labels": "node test/be-labels-smoke.mjs",
     "smoke:indmenu": "node test/indmenu-smoke.mjs",
     "smoke:v2": "node test/v2-smoke.mjs",
+    "smoke:fit": "node test/fit-smoke.mjs",
     "perf:live": "node test/perf-live.mjs",
     "perf:workspace": "node test/perf-workspace.mjs",
     "perf:bot": "node test/perf-bot.mjs",

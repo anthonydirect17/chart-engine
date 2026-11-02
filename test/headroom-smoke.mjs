@@ -10,7 +10,8 @@
 //   - Jump to live: a small icon at the top of the price scale with the tooltip "Jump to live (End)", only while not
 //     following live, clear of the price and order tags, taking no layout room; a click or End goes back to live;
 //   - the price scale lock (review D2): in the corner under the price axis, saved per chart; locked, a zoom set by hand
-//     is kept as price moves, End fits it again.
+//     is kept as price moves, End fits it again;
+//   - Fit stop and target (Unreleased): beside the lock, the same size, on by default, saved per chart the same way.
 //   npm run smoke:headroom        (CHROMIUM_PATH=/path/to/chrome to use a preinstalled browser)
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
@@ -229,6 +230,22 @@ try {
   check(await sp.getAttribute(H('chart') + ' .ce-lock', 'aria-pressed') === 'true', 'locked after a reload');
   await sp.click(H('chart') + ' .ce-lock');
   check((await sp.evaluate(() => JSON.parse(localStorage.getItem('live-scale-lock-v1') || '{}').main)) === undefined && (await look(sp, 'host'))[0].auto, 'unlocked: saved, the auto-fit on');
+  // Fit stop and target (Unreleased, Anthony 2026-11-02): the toggle beside the lock, saved per chart the same way, on by default
+  const fitOf = () => sp.evaluate(sel => { const f = document.querySelector(sel + ' .ce-fit'), l = document.querySelector(sel + ' .ce-lock'), a = f.getBoundingClientRect(), b = l.getBoundingClientRect();
+    return { pressed: f.getAttribute('aria-pressed'), title: f.title, beside: a.top === b.top && a.width === b.width && a.height === b.height && Math.round(b.left - a.right) === 4, engine: window.liveChart.fitOrders(),
+      saved: JSON.parse(localStorage.getItem('live-fit-orders-v1') || '{}').main }; }, H('chart'));
+  let fo = await fitOf();
+  check(fo.pressed === 'true' && fo.engine && fo.beside && fo.saved === undefined && /^Fit stop and target: on\b/.test(fo.title), 'Fit stop and target beside the lock, the same size, on by default: ' + JSON.stringify(fo));
+  await sp.click(H('chart') + ' .ce-fit');
+  fo = await fitOf();
+  check(fo.pressed === 'false' && !fo.engine && fo.saved === false, 'a click turns it off, saved for this chart');
+  await sp.reload(); await waitLive(sp, 30000);
+  await sp.waitForFunction(() => window.liveChart && window.liveChart.lastBar(), null, { timeout: 30000 });
+  fo = await fitOf();
+  check(fo.pressed === 'false' && !fo.engine, 'off after a reload');
+  await sp.click(H('chart') + ' .ce-fit');
+  fo = await fitOf();
+  check(fo.pressed === 'true' && fo.engine && fo.saved === undefined, 'on again: saved (the key dropped, the default)');
   await ctx2.close();
 } finally {
   await browser.close();

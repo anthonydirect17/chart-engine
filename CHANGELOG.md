@@ -1,5 +1,33 @@
 # Changelog
 
+## Unreleased (2026-11-02): Fit stop and target, a toggle beside the price scale lock
+
+Anthony 2026-11-02: "an option to have the chart zoom out to fit the stop and target like it is now, but an option to toggle
+that off as well, maybe near the lock on the bottom right". His answers: per chart, remembered with its layout the way the lock is;
+on by default (today's behavior); off, the scale is never changed for a stop or target and a line off screen shows as a small
+marker at the top or bottom edge with its price; the toggle beside the lock, the lock's size, look, hover and tooltip pattern.
+
+- **The engine** (`src/chart-engine.js`): the `fitOrders` option (1.14.0, the auto-fit takes in every working order, bracket leg
+  and planned line) can now change while the chart runs: `setFitOrders(on)`, `fitOrders()`, and `on('fitOrders', fn)` after a
+  click on the new toggle (option `fitButton`, by default as `lockButton`). Turning it on fits the scale again unless the lock is
+  on. Off, the auto-fit is the candles' (and the bubbles') only, exactly as with no orders.
+- **The toggle:** 24 x 20 px, left of the padlock, the two centred together in the corner under the price axis (the padlock alone
+  stays where it was). On: a top and a bottom line with an arrow out to each, quiet grey; off: the arrows folded in, in the locked
+  padlock's gold. Tooltip "Fit stop and target: on. ..." / "Fit stop and target: off. ...".
+- **Edge markers** (fit off): an order line off the scale is a marker at the plot's top or bottom right edge, the VWAP marker's
+  shape in the line's own color and its axis tag's border ("STP 20,084.00", "TGT 19,999.50"; dashed for a stop or planned
+  line), stacked farthest outermost, clear of the VWAP's marker; the corner readout keeps clear of them. `orderEdges()` returns
+  them as drawn. The view never moves for them; lines in view draw and drag as before.
+- **The page** (`live/live.js`): saved per chart in `live-fit-orders-v1` (`{ <paneId>: false }`, only the charts switched off,
+  as `live-scale-lock-v1` keeps the locked ones), read at start and on a change in another window. A layout saved before this
+  has no key and fits as it always did.
+- Docs: `CHART_STYLE.md` (the price scale, the edge markers, the toggle beside the padlock), `README.md` (options, API, smoke).
+- Tests: `test/fit-orders.test.js` (new: on takes in the stop and target, off the candles' scale exactly with edge markers at the
+  right edge with their prices, stacking under the VWAP marker, the toggle's place and states, saved per chart);
+  `npm run smoke:fit` (new, screenshots `fit-on.png`, `fit-off.png`, `fit-corner-on.png`, `fit-corner-off.png`,
+  `fit-off-markers-top.png`, `fit-off-markers-bottom.png`); `smoke:headroom` checks the toggle beside the lock, saved and
+  read back after a reload.
+
 ## ChartBridge 0.6.11 and chart 1.41.0 (2026-11-01): the bar trail exit option, a past day in the League view, a narrower 1 second request, the updater's DST edge
 
 Four items. The bar trail is Anthony's task "Strategy creator: bar trail option" and his decisions of 2026-11-01. It needs
