@@ -1241,7 +1241,6 @@ at least 16) bounds the `ticks/` folder next to `config.txt`.
   aside (`.day.jsonl.refused`). A failed day is sent too, marked `failed`, so The Desk shows it. Done days: `ticks/tickdays.txt`
   (`<session contract>`, check, stored, packed): never pulled again. A failure is tried again after 15 minutes, 3 times, then not
   until the next start.
-  until the next start.
 
   **The morning catch-up (Anthony 2026-11-03).** Anthony sometimes closes NinjaTrader before 16:15 (e.g. 16:05), so a session's
   final pull never ran that day. The final pull of a session that has **closed** (its raw file there, not done) may also **start** on
