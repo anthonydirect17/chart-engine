@@ -80,10 +80,12 @@ test('1 second bars (item 11, next build narrowed): from 12:00 AM of the session
 test('tick file (Anthony 2026-11-03): the morning catch-up before 09:15 ET is the tick day pull\'s own; the 1 second bars are not widened', () => {
   const win = between(ticks, 'public static TimeSpan MorningEnd', 'public static bool PlanDay(');
   assert.match(win, /public static TimeSpan MorningEnd = new TimeSpan\(9, 15, 0\);/);
-  assert.match(win, /if \(et\.DayOfWeek == DayOfWeek\.Saturday \|\| et\.DayOfWeek == DayOfWeek\.Sunday\) return false;\s*return et\.TimeOfDay < MorningEnd;/);
+  assert.match(win, /if \(et\.DayOfWeek == DayOfWeek\.Saturday \|\| et\.DayOfWeek == DayOfWeek\.Sunday\) return false;\s*return et\.TimeOfDay >= MorningStart && et\.TimeOfDay < MorningEnd;/);
+  // review LOW 1, pending Anthony's answer: the window's start is one named line, 00:00 today (the behaviour unchanged)
+  assert.match(ticks, /public static TimeSpan MorningStart = new TimeSpan\(0, 0, 0\);/);
   assert.match(win, /public static bool InDayStartWindow\(DateTime et\) \{ return ChartBridgeBars\.In1sStartWindow\(et\) \|\| InMorningWindow\(et\); \}/);
   // dayState says when the next pull can go
-  assert.match(win, /public const string DayWaitText = "waiting: the final pull goes 16:15 to 17:50 ET on weekdays, before 09:15 ET on weekday mornings, and on the weekend";/);
+  assert.match(win, /string morning = MorningStart == TimeSpan\.Zero \? "before " \+ Hm\(MorningEnd\) : Hm\(MorningStart\) \+ " to " \+ Hm\(MorningEnd\);\s*return "waiting: the final pull goes 16:15 to 17:50 ET on weekdays, " \+ morning \+ " ET on weekday mornings, and on the weekend";/);
   // the window is checked by the gate as it sends (none starts at 09:15 or later); one already out is never cut
   const plan = between(ticks, 'public static bool PlanDay(', 'public static TickCheckResult FinishDay(string key');
   assert.match(plan, /if \(morning\) t\.MayStart = \(\) => InMorningWindow\(NowEt\(\)\);/);
@@ -103,8 +105,22 @@ test('tick file (2026-11-03): the raw deleted once packed: only the last part ke
   const ask = between(ticks, 'public static int AskPacked(', '// ---------------------------------------------------------- the folder');
   assert.match(ask, /if \(!InPackAskWindow\(nowEt\)\) return 0;/);
   assert.match(ask, /d\.Stored && !d\.Packed && \(d\.Check == "exact" \|\| d\.Check == "filled"\)/, 'a failed day is never asked');
-  assert.match(ask, /if \(last == today\) continue;/, 'at most once a New York day');
+  assert.match(ask, /if \(last == today \|\| mem == today\) continue;/, 'at most once a New York day (the file or, review LOW 4, memory)');
+  assert.ok((ask.match(/NoteAsked\(d\.Key, today\);/g) || []).length === 2, 'a refusal and an answer not packed both note the day asked (memory and file)');
   assert.match(ask, /if \(stored && packed\)\s*\{\s*lock \(Sync\) d\.Packed = true;\s*SaveDays\(\);\s*DeleteRaw\(d\.Key\);/);
   assert.match(ticks, /public static bool InPackAskWindow\(DateTime et\) \{ return ChartBridgeBars\.In1sWindow\(et\) \|\| InMorningWindow\(et\); \}/);
   assert.match(between(ticks, 'private static void SenderLoop(', '// ----'), /SendDays\(stopping\);\s*AskPacked\(stopping\);/);
+});
+
+test('tick file (review LOW 3): the raw deleted before the key is forgotten; no ghost key; a chunk whose raw is gone never throws', () => {
+  const del = between(ticks, 'private static string DeleteFiles(', '// On the sender thread. Returns how many days were asked.');
+  assert.match(del, /lock \(Sync\)/, 'the delete runs under the tick file lock');
+  assert.match(del, /new\[\] \{ raw, LastPartFile\(key\), AskedFile\(key\), state \}/, 'the raw first, the state last');
+  assert.ok(del.indexOf('File.Delete(f)') < del.indexOf('Keys.Remove(key)'), 'the files before the key');
+  const scan = between(ticks, 'private static void ScanFolder()', 'private static void RecountDisk()');
+  assert.match(scan, /packed = Days\.TryGetValue\(key, out d\) && d\.Packed;/, 'a day noted packed is not registered');
+  assert.match(scan, /if \(!File\.Exists\(Path\.Combine\(Folder, name \+ "\.raw"\)\)\) continue;/, 'a state with no raw is not registered');
+  assert.match(between(ticks, 'private static void SenderLoop(', '// ----'), /LoadDays\(\); ScanFolder\(\);/, 'the days are read before the folder');
+  const send = between(ticks, 'public static int SendChunks(', 'private static async Task<WebResponse> PostAsync(');
+  assert.match(send, /if \(cuts\.Count > 0 && !File\.Exists\(k\.Raw\)\) \{ RawGone\(k, null\); continue; \}/);
 });

@@ -1245,7 +1245,9 @@ at least 16) bounds the `ticks/` folder next to `config.txt`.
   **The morning catch-up (0.6.13, Anthony 2026-11-03).** Anthony sometimes closes NinjaTrader before 16:15 (e.g. 16:05), so a session's
   final pull never ran that day. The final pull of a session that has **closed** (its raw file there, not done) may also **start** on
   a weekday morning, from ChartBridge's start until 09:15 New York (Monday to Friday: a request must start before 09:15:00; the
-  weekend keeps its own rule above). Only this pull gets the morning: the 1 second bars' own requests and sends keep their window
+  weekend keeps its own rule above). The window opens at `MorningStart` (`ChartBridgeTicks.MorningStart`, 00:00 New York: today
+  any time after midnight, the behaviour unchanged); a later start (e.g. 06:00, waiting on Anthony's answer) is that one line,
+  and `dayState` then says `06:00 to 09:15 ET on weekday mornings`. The same window is the morning half of the packed asks below. Only this pull gets the morning: the 1 second bars' own requests and sends keep their window
   (16:15 to 17:50 / 18:00 on weekdays and the weekend), and the day's sends to `/api/ticks/day` keep it too, so a day pulled in the
   morning is sent from 16:15. Everything else is unchanged: one request at a time through the 0.3.5 gate, only when the 1 second
   bars asked nothing that pass, the same check, write, send and deletion rules, the 15 minute / 3 times retry, done days never
@@ -1281,7 +1283,8 @@ at least 16) bounds the `ticks/` folder next to `config.txt`.
   passed day's last part says `"stored":true` but `"packed":false`, ChartBridge keeps the raw and its state and keeps **only that
   last part**, exactly as sent, in `ticks/<same>.day.last` (one part, at most 20,000 trades; the rest of the day file is deleted
   as before; it counts in the folder's size against `tickFileMaxMB` like every file there). The New York date it was last asked is
-  in `<same>.day.asked` (the day The Desk stored it counts as asked). At most once a New York day, in the final pull's windows
+  in `<same>.day.asked` (the day The Desk stored it counts as asked) and in memory as well, so a write of that file that fails
+  never makes a send every loop (still at most once a day; the file carries it over a restart). At most once a New York day, in the final pull's windows
   (the 1 second bars' window, 16:15 to 18:00 on weekdays and the weekend while shut, or a weekday morning before 09:15), on the
   tick sender thread, it posts that last part to `/api/ticks/day` again: The Desk has the set, ignores the part and answers the
   day's state now (`"duplicate":true`, `stored`, `packed`). `"stored":true` and `"packed":true`: the raw, its state, `.day.last`
@@ -1290,9 +1293,17 @@ at least 16) bounds the `ticks/` folder next to `config.txt`.
   again (30 minutes, as the chunks). A time-out or another failure: everything kept, nothing asked for 15 minutes. `400`, `413` or
   `422`: everything kept, asked again the next day, logged. A failed day keeps no last part and is never asked (it never packs);
   its raw stays until Anthony rules. A day stored before 0.6.13 has no `.day.last`: it is not asked (sending the whole day
-  again would make a new set at The Desk); its raw stays and `rawOld` lists it. A day another PC stored as `flagged` never packs
-  (The Desk packs only the master), so that PC asks once a day and keeps its raw. `/diag` `tickFile.packWait` lists the days
-  waiting (per session and contract: `lastPart`, `asked`).
+  again would make a new set at The Desk); its raw stays and `rawOld` lists it. A day The Desk stored as `flagged` (another PC's
+  day is the master) keeps its raw until The Desk answers `"packed":true`, which The Desk does with `"packedVia":"master"` once
+  the session's master day is packed (TheDesk PR #65); until then that PC asks once a day, and then deletes its raw as above.
+  `/diag` `tickFile.packWait` lists the days waiting (per session and contract: `lastPart`, `asked`).
+
+  The delete itself (review fixes before 0.6.13 shipped): `tickdays.txt` notes the day packed first; then, under the tick file's
+  lock, the raw, `.day.last`, `.day.asked` and the state (last) are deleted, and only then is the key forgotten, so the bars
+  worker's look at the folder can never bring the key back from a state file still there. That look never registers a state
+  whose day `tickdays.txt` notes packed (a delete cut short, by a crash or a locked file: its files are deleted then) or whose
+  raw file is gone. A known key whose raw file is gone, with chunks not sent, is passed over by the chunk sender (said once in
+  the Output window); the later sessions' chunks still go.
 - **Which PC sends** (Anthony 2026-10-28: automatic, WORK wins): every PC with the tick file on captures and sends what it receives
   under its `pc` name (`config.txt` `pc`, else the Windows computer name). The Desk merges the live rows second by second, WORK's
   first where WORK has them and the other PC's where WORK has none (so WORK coming up mid-session never takes HOME's earlier
