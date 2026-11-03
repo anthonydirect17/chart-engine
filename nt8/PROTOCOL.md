@@ -1,4 +1,4 @@
-# ChartBridge protocol (v1 market data and fills, v2 orders, v3 accounts, strategies, copier and bot, 0.5.0 agents, 0.5.1 accounts, 0.5.8 prop groups, 0.6.0 group trading, 0.6.1 a group's Type and default hero, 0.6.3 the audit fixes, 0.6.4 the no-trade-record alarm and Merge on an off follower, 0.6.8 the minute book, 0.6.10 the account lifecycle and the NQ tick file, 0.6.11 the bar trail and the narrower 1 second request, 0.6.12 the bar trail follow-ups)
+# ChartBridge protocol (v1 market data and fills, v2 orders, v3 accounts, strategies, copier and bot, 0.5.0 agents, 0.5.1 accounts, 0.5.8 prop groups, 0.6.0 group trading, 0.6.1 a group's Type and default hero, 0.6.3 the audit fixes, 0.6.4 the no-trade-record alarm and Merge on an off follower, 0.6.8 the minute book, 0.6.10 the account lifecycle and the NQ tick file, 0.6.11 the bar trail and the narrower 1 second request, 0.6.12 the bar trail follow-ups, 0.6.13 the tick day's morning catch-up and the raw deleted once packed)
 
 ChartBridge is a NinjaTrader 8 add-on. It serves the live chart page at `http://localhost:8765/` and
 talks to it over one WebSocket at `ws://localhost:8765/ws`. Everything stays on the local machine.
@@ -1212,7 +1212,7 @@ at least 16) bounds the `ticks/` folder next to `config.txt`.
   it reads the files again, so a sender of an earlier start still running can never write the same `cut <seq>` with other bytes.
 
   ```json
-  {"v":1,"source":"chartbridge","bridge":"0.6.12","pc":"WORK","root":"NQ","contract":"NQ 12-26","tick":0.25,
+  {"v":1,"source":"chartbridge","bridge":"0.6.13","pc":"WORK","root":"NQ","contract":"NQ 12-26","tick":0.25,
    "session":"2026-10-30","run":"a1b2c3d4e5f6","seq":12,"count":1834,"volume":2301,
    "first":1793397600123,"last":1793397779950,"lost":0,"gaps":0,
    "sides":{"bidAsk":1700,"tickRule":130,"none":4},"cols":["u","p","v","s"],"ticks":[[1793397600123,25000.25,1,1]]}
@@ -1229,7 +1229,8 @@ at least 16) bounds the `ticks/` folder next to `config.txt`.
   after it. The Desk keys a chunk by contract, session, `pc`, `run` and `seq` and ignores one sent again.
 - **The final file** (point 4). On the bars worker, after the pass's 1-minute and 1 second bars and only when the 1 second bars
   asked nothing that pass, only in the 1 second bars' window (a request starts 16:15 to 17:50 New York on weekdays, on Saturday, and
-  Sunday before 17:50; never in trading hours), for each session with a raw file that has closed and is not done: one
+  Sunday before 17:50; never in trading hours) and, as a catch-up, on weekday mornings before 09:15 New York (Anthony 2026-11-03,
+  below), for each session with a raw file that has closed and is not done: one
   `BarsRequest` through the 0.3.5 gate (1 tick, Last, the instrument's trading hours, `DoNotMerge`, 180 s), from the session's
   open to its close (NinjaTrader's time). The answer is read once on NinjaTrader's thread (sides by the bid and ask stored with each
   trade, else the tick rule). **The check**, second by second (UTC): `exact` every second has the same trades and volume live and
@@ -1241,8 +1242,28 @@ at least 16) bounds the `ticks/` folder next to `config.txt`.
   (`<session contract>`, check, stored, packed): never pulled again. A failure is tried again after 15 minutes, 3 times, then not
   until the next start.
 
+  **The morning catch-up (0.6.13, Anthony 2026-11-03).** Anthony sometimes closes NinjaTrader before 16:15 (e.g. 16:05), so a session's
+  final pull never ran that day. The final pull of a session that has **closed** (its raw file there, not done) may also **start** on
+  a weekday morning, from ChartBridge's start until 09:15 New York (Monday to Friday: a request must start before 09:15:00; the
+  weekend keeps its own rule above). The window opens at `MorningStart` (`ChartBridgeTicks.MorningStart`, 00:00 New York: today
+  any time after midnight, the behaviour unchanged); a later start (e.g. 06:00, waiting on Anthony's answer) is that one line,
+  and `dayState` then says `06:00 to 09:15 ET on weekday mornings`. The same window is the morning half of the packed asks below. Only this pull gets the morning: the 1 second bars' own requests and sends keep their window
+  (16:15 to 17:50 / 18:00 on weekdays and the weekend), and the day's sends to `/api/ticks/day` keep it too, so a day pulled in the
+  morning is sent from 16:15. Everything else is unchanged: one request at a time through the 0.3.5 gate, only when the 1 second
+  bars asked nothing that pass, the same check, write, send and deletion rules, the 15 minute / 3 times retry, done days never
+  pulled again. The session still open (in the morning, today's session that opened at 18:00 yesterday) is never pulled: only a
+  session past its 17:00 close (plus 5 minutes). The gate checks the window at the moment it would send the request to NinjaTrader:
+  one that waited at the gate until 09:15 goes nowhere (not a failure and not a try; `dayState` says when the next pull can go). A
+  request already out at 09:15 is never cut: it finishes and the day is written whole and recorded as any other. A day NinjaTrader
+  no longer has whole (an old day): history with less than the live capture makes the check `failed` (written, sent marked failed,
+  the raw kept until Anthony rules, `lastDay` says so); an answer with no trades at all is `NinjaTrader has no trades for it`
+  (`lastError`), tried again after 15 minutes, 3 times, then not until the next start, never marked done; the raw is kept. Nothing
+  is guessed. `/diag` `tickFile.dayState` outside the windows: `waiting: the final pull goes 16:15 to 17:50 ET on weekdays, before
+  09:15 ET on weekday mornings, and on the weekend`; while a morning pull is out: `asking NinjaTrader: ticks <session contract> (the
+  morning catch-up)`.
+
   ```json
-  {"v":1,"source":"chartbridge","bridge":"0.6.12","pc":"WORK","root":"NQ","contract":"NQ 12-26","tick":0.25,
+  {"v":1,"source":"chartbridge","bridge":"0.6.13","pc":"WORK","root":"NQ","contract":"NQ 12-26","tick":0.25,
    "session":"2026-10-30","set":"0a1b2c3d4e5f","part":1,"parts":48,"setTicks":951234,"setVolume":1203456,
    "first":1793397600001,"last":1793480399990,
    "check":{"status":"filled","liveTicks":950001,"liveVolume":1202001,"histTicks":951234,"histVolume":1203456,
@@ -1257,7 +1278,33 @@ at least 16) bounds the `ticks/` folder next to `config.txt`.
   when the check passed and The Desk's answer to the day's last part says `"stored":true` and `"packed":true`. The Desk does not
   pack: the data caretaker on HOMESERVER (built later) packs each stored day and tells The Desk (`POST /api/ticks/packed`), and
   only then does The Desk answer `"packed":true` about that day. Until then the raw is kept; a failed day keeps its raw until
-  Anthony rules. `/diag` `tickFile.rawOld` lists raw files older than 7 days.
+  Anthony rules. `/diag` `tickFile.rawOld` lists raw files older than 7 days (still kept, packed or not yet).
+- **The raw deleted once packed** (0.6.13, 2026-11-03, the coordinator for Anthony: the tick data loop closed). When the answer to a
+  passed day's last part says `"stored":true` but `"packed":false`, ChartBridge keeps the raw and its state and keeps **only that
+  last part**, exactly as sent, in `ticks/<same>.day.last` (one part, at most 20,000 trades; the rest of the day file is deleted
+  as before; it counts in the folder's size against `tickFileMaxMB` like every file there). The New York date it was last asked is
+  in `<same>.day.asked` (the day The Desk stored it counts as asked) and in memory as well, so a write of that file that fails
+  never makes a send every loop (still at most once a day; the file carries it over a restart). At most once a New York day, in the final pull's windows
+  (the 1 second bars' window, 16:15 to 18:00 on weekdays and the weekend while shut, or a weekday morning before 09:15), on the
+  tick sender thread, it posts that last part to `/api/ticks/day` again: The Desk has the set, ignores the part and answers the
+  day's state now (`"duplicate":true`, `stored`, `packed`). `"stored":true` and `"packed":true`: the raw, its state, `.day.last`
+  and `.day.asked` are deleted, `tickdays.txt` notes the day packed, `/diag` `files` no longer lists it and `days` says `packed`
+  true. Still not packed: everything kept, asked again the next day. `404`: everything kept, asked again when the route is tried
+  again (30 minutes, as the chunks). A time-out or another failure: everything kept, nothing asked for 15 minutes. `400`, `413` or
+  `422`: everything kept, asked again the next day, logged. A failed day keeps no last part and is never asked (it never packs);
+  its raw stays until Anthony rules, even if `tickdays.txt` notes it packed (at a start only a passed day noted packed has its
+  files left from a delete cut short deleted; a delete that fails there is logged once a run). A day stored before 0.6.13 has no `.day.last`: it is not asked (sending the whole day
+  again would make a new set at The Desk); its raw stays and `rawOld` lists it. A day The Desk stored as `flagged` (another PC's
+  day is the master) keeps its raw until The Desk answers `"packed":true`, which The Desk does with `"packedVia":"master"` once
+  the session's master day is packed (TheDesk PR #65); until then that PC asks once a day, and then deletes its raw as above.
+  `/diag` `tickFile.packWait` lists the days waiting (per session and contract: `lastPart`, `asked`).
+
+  The delete itself (review fixes before 0.6.13 shipped): `tickdays.txt` notes the day packed first; then, under the tick file's
+  lock, the raw, `.day.last`, `.day.asked` and the state (last) are deleted, and only then is the key forgotten, so the bars
+  worker's look at the folder can never bring the key back from a state file still there. That look never registers a state
+  whose day `tickdays.txt` notes packed (a delete cut short, by a crash or a locked file: its files are deleted then) or whose
+  raw file is gone. A known key whose raw file is gone, with chunks not sent, is passed over by the chunk sender (said once in
+  the Output window); the later sessions' chunks still go.
 - **Which PC sends** (Anthony 2026-10-28: automatic, WORK wins): every PC with the tick file on captures and sends what it receives
   under its `pc` name (`config.txt` `pc`, else the Windows computer name). The Desk merges the live rows second by second, WORK's
   first where WORK has them and the other PC's where WORK has none (so WORK coming up mid-session never takes HOME's earlier
@@ -1265,7 +1312,8 @@ at least 16) bounds the `ticks/` folder next to `config.txt`.
 - **`/diag` `tickFile`:** `on`, `capturing`, `queue`, `queueMax`, `droppedQueue`, `droppedDisk`, `outside`, `written`,
   `feedDrops`, `diskMB`, `maxMB`, `files` (per session and contract: `bytes`, `chunks`, `sent`, `aside`, `ageDays`), `lastSent`
   (per contract: the session and seq of the latest chunk taken), `days` (per session and contract: `check`, `stored`, `packed`),
-  `rawOld`, `rawOldNote`, `dayState`, `lastDay`, `deskHasNoTicks`, `lastError`.
+  `packWait` (per session and contract: `lastPart`, `asked`), `rawOld`, `rawOldNote`, `dayState`, `lastDay`, `deskHasNoTicks`,
+  `lastError`.
 
 ## Orders (protocol v2, Step 2: trading from the chart)
 

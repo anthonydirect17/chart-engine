@@ -1,5 +1,82 @@
 # Changelog
 
+## ChartBridge 0.6.13 and chart 1.42.2 (2026-11-03): the NQ tick file's morning catch-up before 09:15; the raw file deleted once packed
+
+In plain words: a missed day's tick check now also runs on weekday mornings before 09:15 New York, so closing NinjaTrader before
+16:15 no longer leaves that day without its final pull. And WORK and HOME now delete their raw tick files once the server has
+packed the day, instead of keeping them for good. The chart page itself does not change (1.42.2 only follows the version; one
+comment's wording in `live/league.js` and the 1.42.1 notes were made clearer, from the PR #77 review).
+
+Install: the PC updater installs the page from green main as usual. ChartBridge 0.6.13 is a recompile: run the updater with
+`-InstallChartBridge`, then F5 in NinjaTrader while flat. The page works with ChartBridge 0.6.2 or newer (`minChartBridge` stays
+0.6.2); only the tick file changes need 0.6.13.
+
+**1. The NQ tick file: the morning catch-up and the raw deleted once packed** (ChartBridge 0.6.13):
+
+When Anthony closes NinjaTrader before 16:15 (e.g. 16:05), that session's final tick pull never ran that day. Now
+ChartBridge may also start that pull on a weekday morning, from its start until 09:15 New York, for a session that has closed and
+is not done yet. It never pulls the session that is still open (in the morning, today's session that opened at 18:00 yesterday).
+Only the tick file's final pull gets the morning: the 1 second bars keep their 16:15 to 17:50 window, and the day file is still
+sent to The Desk from 16:15. And a day The Desk stored but has not packed yet is now asked about again once a day, so its raw
+file is deleted once The Desk says it is packed. ChartBridge only (`nt8/ChartBridgeTicks.cs`, a small hook in `nt8/ChartBridge.cs` and
+`nt8/ChartBridgeBars.cs`): a recompile in NinjaTrader.
+
+- **The morning window** (`ChartBridgeTicks.InMorningWindow`, `InDayStartWindow`). Anthony 2026-11-03: "The morning catch-up
+  before 09:15 is fine." Monday to Friday, a request must start before 09:15:00 New York. The weekend keeps its own rule (Saturday,
+  and Sunday before 17:50). Everything else is as before: one request at a time through the gate, only when the 1 second bars
+  asked nothing that pass, the same check, write, send and deletion rules, 15 minutes and 3 tries, done days never pulled again.
+- **Nothing starts at 09:15, nothing is cut at 09:15.** The gate checks the window at the moment it would send the request
+  (`BarsTicket.MayStart`). A pull that waited at the gate until 09:15 goes nowhere and is not counted as a try; it goes in the
+  evening window. A pull already out at 09:15 finishes and its day is written whole and recorded.
+- **An old day NinjaTrader no longer has whole.** Less history than the live capture: the check says failed, the day is sent
+  marked failed and the raw file is kept until Anthony rules (as before). No trades at all: reported ("NinjaTrader has no trades
+  for it"), tried again after 15 minutes, 3 times, never marked done; the raw file is kept. Nothing is guessed.
+- **/diag** `tickFile.dayState` outside the windows now reads "waiting: the final pull goes 16:15 to 17:50 ET on weekdays, before
+  09:15 ET on weekday mornings, and on the weekend"; a morning pull shows "(the morning catch-up)".
+- **The raw file deleted once packed** (the coordinator for Anthony, 2026-11-03: close the tick data loop). Until now a day The
+  Desk stored but had not packed yet kept its raw file for good, because ChartBridge never asked again. Now it keeps just that
+  day's last part (`.day.last`, the very part it sent) and, at most once a New York day in the final pull's windows (16:15 to
+  18:00 on weekdays, the weekend, and weekday mornings before 09:15), sends it to The Desk again. The Desk already has the day, so
+  it only answers whether it is packed. Once the answer says stored and packed, ChartBridge deletes the raw file, its state and
+  the kept part, notes the day packed in `tickdays.txt`, and `/diag` says so. Not packed yet, The Desk away (404) or not answering:
+  everything is kept and asked again later. A failed day is never asked and keeps its raw until Anthony rules. A day stored before
+  this change has no kept part, so it is not asked; its raw stays listed in `rawOld`. `/diag` `tickFile.packWait` lists the days
+  waiting. A day HOME sent that The Desk flagged (WORK's day is the master) is deleted the same way: The Desk answers packed true,
+  with `"packedVia":"master"`, once WORK's day is packed (TheDesk PR #65).
+- **Review fixes before shipping** (the PR #78 review, all small): the delete now removes the files first (the raw first, the
+  state last) and only then forgets the day, so the bars worker can never bring a deleted day back from a leftover state file;
+  that look at the folder also skips a day already noted packed (and finishes a delete cut short, only for a passed day: a
+  failed day noted packed keeps its raw; a delete that fails there is logged once) and a state file whose raw file is gone; a chunk whose raw file is gone is passed over and said once, so it never holds up the later sessions' chunks.
+  The day last asked is kept in memory as well as in `.day.asked`, so a file that cannot be written never makes a send every
+  loop. The morning window's start is now one named line, `MorningStart`, at 00:00 New York (unchanged); it can be set later
+  (e.g. 06:00) once Anthony answers.
+- **Tests:** `nt8/check/BarsHarness.cs` (`npm run check:orders`): the window table (08:40, 00:30, 09:14:59 yes; 09:15:00 no;
+  the weekend as before; the 1 second bars not widened); a Wednesday 08:40 start pulls Tuesday's closed session and never the open
+  one; 09:14:59 starts, 09:15:00 does not; a pull the gate reaches at 09:15 never goes out and is not a try; a pull out at 09:15
+  finishes; Saturday 08:40 pulls, Sunday 17:55 does not; short history fails the check, no history is retried and reported; the
+  bars worker at 08:40 asks no 1 second request. The raw deleted once packed: stored and not packed keeps the raw and only the
+  last part, not asked again that day, asked the next window, at most once a day, never in trading hours; 404 and a time-out keep
+  everything (no new ask for 15 minutes after a time-out); packed true deletes the raw, its state and the part and `tickdays.txt`
+  and `/diag` say packed; a failed day is never asked or deleted and stays in `rawOld`. The review fixes: a look at the folder
+  run between the delete's two steps brings no day back and fails nothing, and the later session's chunk still goes; a day noted
+  packed with its files left is not brought back and its files are deleted; a state file with no raw is not brought back; a chunk
+  whose raw file is gone never throws and is said once; the asked file cannot be written and the day is still asked at most once
+  a day; a 400 or 422 is asked again the next day, not the same day; a 200 with no "packed" keeps everything; a flagged day
+  answered packed via the master is deleted; the morning window opens at `MorningStart` (00:00). `test/nt8-ticks.test.js` checks
+  the code and the `dayState` words.
+
+**2. A wording fix from the PR #77 review** (no behaviour change): the 1.42.1 entry below, its `live/COMPAT.json` note and the
+comment in `live/league.js` `cleanDay` read as if The Desk's `folder.problem` text showed only when `ok` is not true. They now say:
+The Desk's own `folder.problem` text is always shown; with no text, `ok` true is never a problem whatever `set` says, and only an
+older Desk (`set` false, no `ok`) gets the page's sentence. Also `nt8/PROTOCOL.md` loses a doubled line, and its new tick file
+sections say 0.6.13.
+
+**3. The release:** `package.json`, the engine's header and `VERSION` 1.42.2; ChartBridge's `Version` 0.6.13 with its comment;
+`live/COMPAT.json` page 1.42.2 and its history row (`minChartBridge` stays 0.6.2: the page needs nothing new from ChartBridge);
+`nt8/PROTOCOL.md`'s title list and the tick file examples say 0.6.13; the version pins in the tests and `BarsHarness` take 0.6.13;
+`test/nt8-record.test.js`: while ChartBridge is 0.6.13, every add-on file but `ChartBridge.cs`, `ChartBridgeBars.cs` and
+`ChartBridgeTicks.cs` is checked byte for byte against 0.6.12.
+
 ## chart 1.42.1 (2026-11-02): the bar trail lines on the ticket, short; no false "folder is not set" warning with the League Mirror (page only, no F5)
 
 In plain words: two small fixes on the page. The order ticket's bar trail line now says just "Bar trail ended" or "Bar trail
@@ -36,10 +113,10 @@ league, on WORK)." while the league was working. Since The Desk moved to HOMESER
 WORK's League Mirror task posts, so it has no folder set and says so (`set` false) while also saying all is well (`ok` true,
 `source` "mirror"). The page now trusts `ok`: no warning then. Page only, no F5.
 
-- **The page** (`live/league.js`, `cleanDay`): `folder.ok` true is never a problem, whatever `folder.set` says. Otherwise The
-  Desk's own `folder.problem` text is shown (trimmed to 200 characters as before), e.g. "The league's folder is not set, and no
-  league files have arrived from WORK yet." Only an older Desk that sends `set` false with no `ok` and no `problem` gets the page's
-  own sentence, now "No league files have reached The Desk yet." (it no longer tells Anthony to set a folder on WORK). The League
+- **The page** (`live/league.js`, `cleanDay`): The Desk's own `folder.problem` text is always shown (trimmed to 200 characters as
+  before), e.g. "The league's folder is not set, and no league files have arrived from WORK yet."; with no text, `folder.ok` true
+  is never a problem whatever `folder.set` says, and only an older Desk (`set` false, no `ok`) gets the page's sentence, now "No
+  league files have reached The Desk yet." (it no longer tells Anthony to set a folder on WORK). The League
   view and the Drone sky's warning both read this one value, so both are fixed.
 - Tests: `test/league.test.js` (the mirror answer gives no problem and its day as read; set false with ok false shows The Desk's
   text, trimmed; a set folder that cannot be found shows The Desk's text; an older Desk gets the new sentence),

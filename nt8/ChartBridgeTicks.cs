@@ -16,11 +16,15 @@
 //    chunk by contract, session, PC, run and seq and ignores one sent again. Chunks go at any hour: they go to The Desk, never to
 //    NinjaTrader. NO request goes to NinjaTrader for them.
 // 3. The final file. After the close, on the bars worker, in the 1 second bars' window (16:15 to 17:50 New York on weekdays, the
-//    weekend while shut; never in trading hours), through the 0.3.5 gate, one tick request per captured session, from the open to
-//    the close (NinjaTrader's history), checked against the live capture second by second (TickCheck). The history is the master
-//    when the check passes (exact, or filled: history has trades the live capture missed, never fewer). The day goes to POST
+//    weekend while shut; never in trading hours) and, as a catch-up for a session closed and not done (Anthony 2026-11-03: he may
+//    close NinjaTrader before 16:15), on weekday mornings before 09:15 New York (this pull only), through the 0.3.5 gate, one tick
+//    request per captured session, from the open to the close (NinjaTrader's history), checked against the live capture second by
+//    second (TickCheck). The history is the master when the check passes (exact, or filled: history has trades the live capture missed, never fewer). The day goes to POST
 //    /api/ticks/day in parts. The raw is deleted only when the check passed and The Desk answers "stored" and "packed" true; a failed
-//    day keeps its raw until Anthony rules. Raw files older than 7 days are listed in /diag (tickFile.rawOld).
+//    day keeps its raw until Anthony rules.
+//    Stored but not packed (2026-11-03): only the day's last part is kept (.day.last) and sent again at most once a day in the
+//    final pull's windows; when The Desk answers stored and packed the raw, its state and the part are deleted (AskPacked).
+//    Raw files older than 7 days are listed in /diag (tickFile.rawOld).
 //
 // Only market data and the PC name leave this PC. This file never places, changes or cancels an order and never touches the order
 // lane. Written in C# 5 syntax on purpose so it compiles on every NinjaTrader 8 release.
@@ -545,10 +549,13 @@ namespace NinjaTrader.NinjaScript.AddOns
             foreach (KeyFiles k in keys)
             {
                 List<Cut> cuts; lock (Sync) cuts = k.Cuts.Where(c => !k.Sent.Contains(c.Seq) && !k.Aside.Contains(c.Seq)).OrderBy(c => c.Seq).ToList();
+                if (cuts.Count > 0 && !File.Exists(k.Raw)) { RawGone(k, null); continue; }   // review LOW 3: never thrown every loop
                 foreach (Cut c in cuts)
                 {
                     if (stopping != null && stopping()) return sent;
-                    string body = ChunkJson(k.Key, c.Seq);
+                    string body;
+                    try { body = ChunkJson(k.Key, c.Seq); }
+                    catch (Exception ex) { if (File.Exists(k.Raw)) throw; RawGone(k, ex.Message); break; }   // deleted as it was read
                     if (body == null) continue;
                     int code; string answer;
                     Sent2 r = Post("/api/ticks/chunk", body, gen, out code, out answer);
@@ -579,6 +586,15 @@ namespace NinjaTrader.NinjaScript.AddOns
                 }
             }
             return sent;
+        }
+
+        // A key with chunks not sent whose raw file is gone: passed over (the later keys' chunks still go), said once a run.
+        private static readonly HashSet<string> RawGoneSaid = new HashSet<string>();
+        private static void RawGone(KeyFiles k, string why)
+        {
+            bool first; lock (Sync) first = RawGoneSaid.Add(k.Key);
+            if (!first) return;
+            ChartBridgeServer.Log("the NQ tick file for " + k.Key + ": the raw file is gone (" + (why ?? "not in the ticks folder") + "); its chunks not sent are passed over");
         }
 
         private static async Task<WebResponse> PostAsync(HttpWebRequest req, byte[] bytes)
@@ -730,14 +746,42 @@ namespace NinjaTrader.NinjaScript.AddOns
             ChartBridgeServer.Log("the NQ tick file for " + key + ": " + why + (n >= MaxTries ? "; tried " + MaxTries + " times, not asked again until ChartBridge restarts" : "; trying again in " + RetryMinutes + " minutes"));
         }
 
+        // Anthony 2026-11-03: he sometimes closes NinjaTrader before 16:15 (e.g. 16:05), so a session's final pull never ran that day.
+        // The catch-up: the final pull of a session that has CLOSED (a raw file, not done) may also START on a weekday morning, from
+        // ChartBridge's start until 09:15 New York (Monday to Friday; the weekend keeps its own rule). Only this pull: the 1 second
+        // bars keep In1sStartWindow, and the day's sends keep In1sWindow. A request out at 09:15 is never cut: the gate checks the
+        // window only at the moment it would send the request (BarsTicket.MayStart); one already out finishes as any other.
+        // MorningStart: when the morning window opens (New York). 00:00 is the behaviour Anthony has today (from ChartBridge's start,
+        // any time after midnight); a later start (e.g. 06:00) is this one line once Anthony answers. dayState's text follows it.
+        public static TimeSpan MorningStart = new TimeSpan(0, 0, 0);
+        public static TimeSpan MorningEnd = new TimeSpan(9, 15, 0);
+        public static bool InMorningWindow(DateTime et)
+        {
+            if (et.DayOfWeek == DayOfWeek.Saturday || et.DayOfWeek == DayOfWeek.Sunday) return false;
+            return et.TimeOfDay >= MorningStart && et.TimeOfDay < MorningEnd;
+        }
+        // When a final pull may start: the 1 second bars' start window, or a weekday morning in the morning window.
+        public static bool InDayStartWindow(DateTime et) { return ChartBridgeBars.In1sStartWindow(et) || InMorningWindow(et); }
+        public static string DayWaitText
+        {
+            get
+            {
+                string morning = MorningStart == TimeSpan.Zero ? "before " + Hm(MorningEnd) : Hm(MorningStart) + " to " + Hm(MorningEnd);
+                return "waiting: the final pull goes 16:15 to 17:50 ET on weekdays, " + morning + " ET on weekday mornings, and on the weekend";
+            }
+        }
+        private static string Hm(TimeSpan t) { return t.Hours.ToString("00", Inv) + ":" + t.Minutes.ToString("00", Inv); }
+        private static DateTime NowEt() { return TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(ChartBridgeBars.UtcNow(), DateTimeKind.Utc), ChartBridgeTime.Eastern); }
+
         // On the bars worker, after the 1-minute and 1 second bars of a pass, and only when those asked nothing this pass: at most one
-        // session's final pull, only in the 1 second bars' window. Returns true when it asked NinjaTrader.
+        // session's final pull, only in InDayStartWindow. Returns true when it asked NinjaTrader.
         public static bool PlanDay(Func<bool> stopping)
         {
             if (!On) { dayState = "off"; return false; }
             DateTime nowUtc = ChartBridgeBars.UtcNow();
             DateTime nowEt = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(nowUtc, DateTimeKind.Utc), ChartBridgeTime.Eastern);
-            if (!ChartBridgeBars.In1sStartWindow(nowEt)) { dayState = "waiting: the final pull goes 16:15 to 17:50 ET on weekdays and on the weekend"; return false; }
+            if (!InDayStartWindow(nowEt)) { dayState = DayWaitText; return false; }
+            bool morning = !ChartBridgeBars.In1sStartWindow(nowEt);   // the morning catch-up: it must start before 09:15 ET
             ScanFolder();
             List<string> due = DaysToPull(nowUtc);
             if (due.Count == 0) { dayState = "idle"; return false; }
@@ -752,10 +796,11 @@ namespace NinjaTrader.NinjaScript.AddOns
             DateTime fromNt = TimeZoneInfo.ConvertTimeFromUtc(openUtc, ntZone), toNt = TimeZoneInfo.ConvertTimeFromUtc(closeUtc, ntZone);
             long fromMs = (long)Math.Round(ChartBridgeTime.UtcMs(openUtc)), toMs = (long)Math.Round(ChartBridgeTime.UtcMs(closeUtc));
             BarsTicket t = new BarsTicket();
+            if (morning) t.MayStart = () => InMorningWindow(NowEt());   // checked by the gate as it sends: none starts at 09:15 or later
             string contract = k.Contract;
             string busy = ChartBridgeServer.GateBars("ticks " + key, inst, fromNt, toNt, ChartBridgeBars.Request1sTimeoutMs, stopping, t, bars => BuildTickDay(bars, fromMs, toMs, contract));
             if (busy != null) { dayState = "waiting for the gate: " + busy; return false; }
-            dayState = "asking NinjaTrader: ticks " + key;
+            dayState = "asking NinjaTrader: ticks " + key + (morning ? " (the morning catch-up)" : "");
             System.Diagnostics.Stopwatch sw = System.Diagnostics.Stopwatch.StartNew();
             long giveUpMs = (long)ChartBridgeBars.QueueWaitMs + ChartBridgeBars.Request1sTimeoutMs + ChartBridgeServer.AnswerCopyMs + 5000;
             while (!t.Done.Wait(50))
@@ -765,6 +810,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (sw.ElapsedMilliseconds > giveUpMs) { LaterDay(key, "no answer from the gate"); return true; }
             }
             if (t.GateStuck) { dayState = "waiting for the gate: " + t.Error; return true; }
+            if (t.NotStarted) { dayState = DayWaitText; return true; }   // the morning window closed while it waited at the gate: nothing went out, not a try
             if (t.Error != null) { LaterDay(key, t.Error); return true; }
             TickDayBuild hist = t.Built as TickDayBuild;
             if (hist == null || hist.Ticks.Count == 0) { LaterDay(key, "NinjaTrader has no trades for it"); return true; }
@@ -940,23 +986,141 @@ namespace NinjaTrader.NinjaScript.AddOns
                 return;
             }
             lock (Sync) { DayAgainAt.Remove(file); DayAgainTries.Remove(file); }
+            bool passed = d.Check == "exact" || d.Check == "filled";
+            // Stored, passed, not packed yet: the day's last part is kept (<base>.day.last, one part, at most PartMaxTicks trades, counted
+            // in the folder's size against tickFileMaxMB) so it can be sent again later to learn "packed" (AskPacked). The rest of the
+            // day file goes as before.
+            if (passed && !packed)
+            {
+                try
+                {
+                    string lastPart = File.ReadAllLines(file).LastOrDefault(x => x.Trim().Length > 0);
+                    if (lastPart != null)
+                    {
+                        string lp = LastPartFile(key); File.WriteAllText(lp + ".tmp", lastPart); if (File.Exists(lp)) File.Delete(lp); File.Move(lp + ".tmp", lp);
+                        lock (Sync) AskedDay[key] = EtToday();
+                        File.WriteAllText(AskedFile(key), EtToday());   // The Desk just answered: the first ask is the next New York day
+                    }
+                }
+                catch (Exception ex) { error = key + ": the day's last part could not be kept: " + ex.Message; ChartBridgeServer.Log("the NQ tick file for " + error); }
+            }
             try { File.Delete(file); File.Delete(progress); } catch (Exception) { }
             RecountDisk();
-            bool passed = d.Check == "exact" || d.Check == "filled";
-            if (stored && packed && passed)
-            {
-                KeyFiles k; lock (Sync) { Keys.TryGetValue(key, out k); Keys.Remove(key); }
-                if (k != null)
-                {
-                    long size = File.Exists(k.Raw) ? new FileInfo(k.Raw).Length : 0;
-                    try { File.Delete(k.Raw); File.Delete(k.State); Interlocked.Add(ref diskBytes, -size); } catch (Exception ex) { ChartBridgeServer.Log("could not delete the raw ticks of " + key + ": " + ex.Message); }
-                }
-                ChartBridgeServer.Log("The Desk stored and packed the NQ tick file for " + key + "; the raw file is deleted");
-            }
+            if (stored && packed && passed) DeleteRaw(key);
             else ChartBridgeServer.Log("The Desk " + (stored ? "stored" : "took") + " the NQ tick file for " + key + "; the raw file is kept (" + (!passed ? "the check failed: until Anthony rules" : !packed ? "not packed yet" : "not stored") + ")");
         }
 
+        // ---------------------------------------------------------- the raw deleted once packed (2026-11-03)
+        // A day stored and passed but not packed keeps its raw and its last part (<base>.day.last). At most once a New York day, in the
+        // final pull's windows (InPackAskWindow: the 1 second bars' window or a weekday morning before 09:15), the last part is sent to
+        // /api/ticks/day again: The Desk ignores the part (it has the set) and answers the day's stored and packed state now. Stored and
+        // packed: the raw, its state and the last part are deleted and the day noted packed in tickdays.txt. A failed day is never
+        // asked (it never packs; its raw stays until Anthony rules). 404 keeps everything and asks again when the route is tried again
+        // (NoDeskRetryMs); a time-out or another failure keeps everything and asks nothing more for RetryMinutes; a refusal keeps
+        // everything and asks again the next day.
+        private static DateTime packAgainAt = DateTime.MinValue;   // after a failure (a time-out, The Desk down): no ask before then
+        // Review LOW 4: the New York date each day was last asked, in memory as well as in <base>.day.asked, so a failed write of
+        // that file never makes a send every loop (at most once a day while ChartBridge runs; the file carries it over a restart).
+        private static readonly Dictionary<string, string> AskedDay = new Dictionary<string, string>();
+        private static void NoteAsked(string key, string day)
+        {
+            lock (Sync) AskedDay[key] = day;
+            try { File.WriteAllText(AskedFile(key), day); } catch (Exception) { }
+        }
+        public static string LastPartFile(string key) { return Path.Combine(Folder, BaseOf(key) + ".day.last"); }
+        private static string AskedFile(string key) { return Path.Combine(Folder, BaseOf(key) + ".day.asked"); }
+        private static string EtToday() { return TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(ChartBridgeBars.UtcNow(), DateTimeKind.Utc), ChartBridgeTime.Eastern).ToString("yyyy-MM-dd", Inv); }
+        public static bool InPackAskWindow(DateTime et) { return ChartBridgeBars.In1sWindow(et) || InMorningWindow(et); }
+
+        // Review LOW 3: the files go first and the key last, all under Sync, so the bars worker's ScanFolder (PlanDay) can never
+        // register the key again from a state file still there (a ghost in /diag, a "bars error", a chunk that cannot be read). The
+        // raw goes first and the state last: a crash part way leaves a state with no raw, of a day tickdays.txt already notes packed
+        // (it is saved before this), which ScanFolder never registers and finishes deleting (DeleteFiles).
+        public static Action DeleteStepForHarness;   // the harness only: runs between the files and the key (a ScanFolder there)
+        private static void DeleteRaw(string key)
+        {
+            string why = DeleteFiles(key, true);
+            RecountDisk();
+            if (why != null) ChartBridgeServer.Log("could not delete the raw ticks of " + key + ": " + why);
+            else ChartBridgeServer.Log("The Desk stored and packed the NQ tick file for " + key + "; the raw file is deleted");
+        }
+        // Deletes the raw, the last part, the asked file and the state (last), then forgets the key. Returns null, or why not.
+        private static string DeleteFiles(string key, bool hook)
+        {
+            lock (Sync)
+            {
+                AskedDay.Remove(key);
+                KeyFiles k; Keys.TryGetValue(key, out k);
+                string b = Path.Combine(Folder, BaseOf(key));
+                string raw = k != null ? k.Raw : b + ".raw", state = k != null ? k.State : b + ".state";
+                try { foreach (string f in new[] { raw, LastPartFile(key), AskedFile(key), state }) if (File.Exists(f)) File.Delete(f); }
+                catch (Exception ex) { return ex.Message; }
+                finally
+                {
+                    Action h = DeleteStepForHarness;
+                    if (hook && h != null) h();
+                    Keys.Remove(key);
+                }
+                return null;
+            }
+        }
+
+        // On the sender thread. Returns how many days were asked.
+        public static int AskPacked(Func<bool> stopping)
+        {
+            DateTime nowUtc = ChartBridgeBars.UtcNow();
+            DateTime nowEt = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(nowUtc, DateTimeKind.Utc), ChartBridgeTime.Eastern);
+            if (!InPackAskWindow(nowEt)) return 0;
+            if (deskHasNone && nowUtc < retryAt) return 0;
+            lock (Sync) if (nowUtc < packAgainAt) return 0;
+            string today = nowEt.ToString("yyyy-MM-dd", Inv);
+            List<DayRec> waiting;
+            lock (Sync) waiting = Days.Values.Where(d => d.Stored && !d.Packed && (d.Check == "exact" || d.Check == "filled")).OrderBy(d => d.Key, StringComparer.Ordinal).ToList();
+            int gen = Volatile.Read(ref stopGen), asked = 0;
+            foreach (DayRec d in waiting)
+            {
+                if (stopping != null && stopping()) return asked;
+                string lp = LastPartFile(d.Key), af = AskedFile(d.Key);
+                if (!File.Exists(lp)) continue;   // a day stored before this release: no part to send again (its raw stays; rawOld lists it)
+                string last = "", mem;
+                try { if (File.Exists(af)) last = File.ReadAllText(af).Trim(); } catch (Exception) { last = ""; }
+                lock (Sync) if (!AskedDay.TryGetValue(d.Key, out mem)) mem = "";
+                if (last == today || mem == today) continue;   // at most once a New York day
+                string line = File.ReadAllText(lp).Trim();
+                int code; string answer;
+                Sent2 r = Post("/api/ticks/day", line, gen, out code, out answer);
+                if (r == Sent2.Stopped) return asked;
+                if (r == Sent2.NoDesk) { deskHasNone = true; retryAt = nowUtc.AddMilliseconds(NoDeskRetryMs); error = "The Desk has no tick file route (404)"; return asked; }
+                if (r == Sent2.Failed) { lock (Sync) packAgainAt = nowUtc.AddMinutes(RetryMinutes); error = d.Key + ": asking whether the day is packed: " + answer; return asked; }
+                asked++;
+                if (r == Sent2.Refused)
+                {
+                    NoteAsked(d.Key, today);
+                    ChartBridgeServer.Log("The Desk refused the NQ tick file's last part for " + d.Key + " sent again (" + code + (answer.Length > 0 ? ": " + answer : "") + "); the raw file is kept, asked again tomorrow");
+                    continue;
+                }
+                deskHasNone = false;
+                bool stored = StoredRx.IsMatch(answer), packed = PackedRx.IsMatch(answer);
+                if (stored && packed)
+                {
+                    lock (Sync) d.Packed = true;
+                    SaveDays();
+                    DeleteRaw(d.Key);
+                    continue;
+                }
+                NoteAsked(d.Key, today);
+                RecountDisk();
+                if (!stored) ChartBridgeServer.Log("The Desk answered the NQ tick file's last part for " + d.Key + " without stored; the raw file is kept, asked again tomorrow");
+            }
+            return asked;
+        }
+
         // ---------------------------------------------------------- the folder (the sender thread and the bars worker)
+        // Review LOW 3: a state file is not registered when its day is noted packed in tickdays.txt (a delete cut short: its files
+        // are deleted now) or when its raw file is gone; a state file deleted while it is read is passed over. Only a passed day
+        // (exact or filled) noted packed is deleted: a failed day keeps its raw until Anthony rules, even if tickdays.txt says packed.
+        // A delete that fails is said once a run for each key (ScanDeleteSaid), not every look at the folder.
+        private static readonly HashSet<string> ScanDeleteSaid = new HashSet<string>();
         private static void ScanFolder()
         {
             if (!Directory.Exists(Folder)) return;
@@ -966,12 +1130,32 @@ namespace NinjaTrader.NinjaScript.AddOns
                 bool known; lock (Sync) known = Keys.Values.Any(k => BaseOf(k.Key) == name);
                 if (known) continue;
                 string session = null, contract = null;
-                foreach (string raw in File.ReadAllLines(st))
+                try
                 {
-                    if (raw.StartsWith("session ", StringComparison.Ordinal)) session = raw.Substring(8).Trim();
-                    else if (raw.StartsWith("contract ", StringComparison.Ordinal)) contract = raw.Substring(9).Trim();
+                    foreach (string raw in File.ReadAllLines(st))
+                    {
+                        if (raw.StartsWith("session ", StringComparison.Ordinal)) session = raw.Substring(8).Trim();
+                        else if (raw.StartsWith("contract ", StringComparison.Ordinal)) contract = raw.Substring(9).Trim();
+                    }
                 }
-                if (session != null && contract != null) FilesOf(session, contract, 0, false);
+                catch (Exception) { continue; }   // deleted (or locked) as it was read: looked at again next time
+                if (session == null || contract == null) continue;
+                string key = KeyOf(session, contract);
+                bool packed; lock (Sync) { DayRec d; packed = Days.TryGetValue(key, out d) && d.Packed && (d.Check == "exact" || d.Check == "filled"); }
+                if (packed)
+                {
+                    string why = DeleteFiles(key, false);
+                    RecountDisk();
+                    if (why == null) ChartBridgeServer.Log("the NQ tick file for " + key + " is packed: its files left from a delete cut short are deleted");
+                    else
+                    {
+                        bool first; lock (Sync) first = ScanDeleteSaid.Add(key);
+                        if (first) ChartBridgeServer.Log("could not delete the files left of the packed NQ tick file for " + key + ": " + why + " (tried again at each look at the folder, said once)");
+                    }
+                    continue;
+                }
+                if (!File.Exists(Path.Combine(Folder, name + ".raw"))) continue;
+                FilesOf(session, contract, 0, false);
             }
         }
 
@@ -1004,7 +1188,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 long ignored; while (DropTimes.TryDequeue(out ignored)) { }
                 runStartUtc = ChartBridgeBars.UtcNow();
                 error = ""; lastDay = ""; deskHasNone = false; retryAt = DateTime.MinValue;
-                lock (Sync) { Keys.Clear(); LastSent.Clear(); RetryAtDay.Clear(); TriesDay.Clear(); SessionDrops.Clear(); DayAgainAt.Clear(); DayAgainTries.Clear(); }
+                lock (Sync) { Keys.Clear(); LastSent.Clear(); RetryAtDay.Clear(); TriesDay.Clear(); SessionDrops.Clear(); DayAgainAt.Clear(); DayAgainTries.Clear(); AskedDay.Clear(); RawGoneSaid.Clear(); ScanDeleteSaid.Clear(); packAgainAt = DateTime.MinValue; }
                 if (!On) { dayState = "off"; return; }
                 dayState = "starting";
                 ManualResetEvent stop = new ManualResetEvent(false);
@@ -1049,7 +1233,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static void SenderLoop(int gen, ManualResetEvent stop)
         {
             Func<bool> stopping = () => Stopping(gen, stop);
-            try { ScanFolder(); LoadDays(); } catch (Exception ex) { error = "the ticks folder could not be read: " + ex.Message; }
+            try { LoadDays(); ScanFolder(); } catch (Exception ex) { error = "the ticks folder could not be read: " + ex.Message; }
             System.Diagnostics.Stopwatch since = System.Diagnostics.Stopwatch.StartNew();
             long lastCut = 0;
             while (!stop.WaitOne(SendEveryMs))
@@ -1060,6 +1244,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if (since.ElapsedMilliseconds - lastCut >= ChunkEveryMs) { lastCut = since.ElapsedMilliseconds; ScanFolder(); CutOnce(gen); }
                     SendChunks(stopping);
                     SendDays(stopping);
+                    AskPacked(stopping);
                 }
                 catch (Exception ex) { error = "tick file send error: " + ex.Message; CbLogLimit.Error("tick file send error", ex); }
             }
@@ -1095,6 +1280,13 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (Sync) b.Append(string.Join(",", LastSent.OrderBy(kv => kv.Key, StringComparer.Ordinal).Select(kv => CbJson.Str(kv.Key) + ":" + CbJson.Str(kv.Value)).ToArray()));
             b.Append("},\"days\":{");
             lock (Sync) b.Append(string.Join(",", Days.Values.OrderBy(d => d.Key, StringComparer.Ordinal).Select(d => CbJson.Str(d.Key) + ":{\"check\":" + CbJson.Str(d.Check) + ",\"stored\":" + (d.Stored ? "true" : "false") + ",\"packed\":" + (d.Packed ? "true" : "false") + "}").ToArray()));
+            b.Append("},\"packWait\":{");
+            List<DayRec> pw; lock (Sync) pw = Days.Values.Where(d => d.Stored && !d.Packed && (d.Check == "exact" || d.Check == "filled")).OrderBy(d => d.Key, StringComparer.Ordinal).ToList();
+            b.Append(string.Join(",", pw.Select(d =>
+            {
+                string asked = ""; try { if (File.Exists(AskedFile(d.Key))) asked = File.ReadAllText(AskedFile(d.Key)).Trim(); } catch (Exception) { }
+                return CbJson.Str(d.Key) + ":{\"lastPart\":" + (File.Exists(LastPartFile(d.Key)) ? "true" : "false") + ",\"asked\":" + (asked.Length > 0 ? CbJson.Str(asked) : "null") + "}";
+            }).ToArray()));
             b.Append("},\"rawOld\":[").Append(string.Join(",", old.Select(x => CbJson.Str(x)).ToArray())).Append(']')
              .Append(",\"rawOldNote\":").Append(old.Count > 0 ? CbJson.Str(old.Count + " raw file(s) older than " + RawOldDays + " days: a raw file is deleted only after its day is packed and stored at The Desk") : "null")
              .Append(",\"dayState\":").Append(CbJson.Str(dayState ?? ""))
