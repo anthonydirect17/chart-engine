@@ -1237,12 +1237,13 @@ at least 16) bounds the `ticks/` folder next to `config.txt`.
   definitions are in "The day check's rule" below): `exact` every second has the same trades and volume live and in history;
   `filled` history has more in some seconds (the live capture missed them: a disconnect, a late start), never fewer; `short` (0.6.14)
   history has fewer trades or less volume in some seconds but is not thin; `failed` only when history has no trades or is thin
-  (under 90 percent of the live trades in the span the live capture covered). `exact`, `filled` and `short` pass; holes (60 seconds
-  or more of live trades with no history trade) never fail a day and are listed in the check. Before 0.6.14 any second with more
+  (under 90 percent of the live trades in the span the live capture covered). `exact`, `filled` and `short` pass; holes (live trades
+  with no history trade for at least 60 seconds after a 1 second trim at each end, or a history silence as long over a known capture
+  gap) never fail a day and are listed in the check. Before 0.6.14 any second with more
   live than history failed the day. The history is the master when the check passes. The day is written whole to `ticks/<same>.day.jsonl` (parts of at most 20,000 trades) and sent to `deskUrl` +
   `/api/ticks/day` in the same window as the 1 second bars' sends; progress in `<same>.day.sent`; `400`, `413` or `422` sets the day
   aside (`.day.jsonl.refused`). A failed day is sent too, marked `failed`, so The Desk shows it. Done days: `ticks/tickdays.txt`
-  (`<session contract>`, check `exact`, `filled`, `short` or `failed`, stored, packed): never pulled again (0.6.14: except once, a
+  (`<session contract>`, check `exact`, `filled`, `short` or `failed`, stored, packed, and from 0.6.14 the rule): never pulled again (0.6.14: except once, a
   day failed under the old rule with its raw kept, below). A failure is tried again after 15 minutes, 3 times, then not
   until the next start.
 
@@ -1268,52 +1269,83 @@ at least 16) bounds the `ticks/` folder next to `config.txt`.
 
   ```json
   {"v":1,"source":"chartbridge","bridge":"0.6.14","pc":"WORK","root":"NQ","contract":"NQ 12-26","tick":0.25,
-   "session":"2026-10-30","set":"0a1b2c3d4e5f","part":1,"parts":48,"setTicks":951234,"setVolume":1203456,
+   "session":"2026-10-30","set":"0a1b2c3d4e5f","part":1,"parts":48,"setTicks":951167,"setVolume":1203380,
    "first":1793397600001,"last":1793480399990,
-   "check":{"status":"short","liveTicks":950001,"liveVolume":1202001,"histTicks":951234,"histVolume":1203456,
-            "secondsLiveMissed":3,"ticksLiveMissed":1233,"secondsHistShort":2,"ticksHistShort":3,"liveLost":0,"liveGaps":1,
-            "rule":2,"coveredLive":949990,"coveredHist":951222,"historyShare":1.0013,
-            "holes":[{"from":1793421000000,"to":1793421075000,"live":64}],
+   "check":{"status":"short","liveTicks":950001,"liveVolume":1202001,"histTicks":951167,"histVolume":1203380,
+            "secondsLiveMissed":3,"ticksLiveMissed":1233,"secondsHistShort":62,"ticksHistShort":67,"liveLost":0,"liveGaps":1,
+            "rule":2,"coveredSeconds":82680,"spanWhole":false,"coveredLive":949990,"coveredHist":949923,"historyShare":0.9999,
+            "holes":[{"from":1793421000000,"to":1793421075000,"live":64,"inGap":false}],
             "detail":[{"t":1793420000000,"live":0,"hist":12},{"t":1793420500000,"live":2,"hist":1}]},
-   "sides":{"method":"mixed","bidAsk":800000,"tickRule":151234,"none":0},
+   "sides":{"method":"mixed","bidAsk":800000,"tickRule":151167,"none":0},
    "cols":["u","p","v","s"],"ticks":[[1793397600001,25000.25,1,1]],"complete":true}
   ```
+
+  The example's numbers agree with each other: a capture gap of 120 seconds (`liveGaps` 1) held 11 live trades and the 3 seconds
+  live missed (1,233 trades), so they are out of the span (`coveredSeconds` 82,680 of the session's 82,800); history is short 64
+  trades in the 60 live seconds of a 75 second hole and 3 trades in 2 skewed seconds (62 seconds, 67 trades), so
+  `histTicks` = 950,001 + 1,233 - 67 and `coveredHist` = 949,990 - 67. `detail` lists at most 20 seconds of each kind.
 - **The day check's rule** (0.6.14, Anthony's decision of 2026-11-03: "the only failure should be very large gaps in the day, or
   days that are unusable for a backtesting purpose, small inconsistency does not matter to me"; "even a 1 minute gap should not fail
   the whole day, that gap just should not be used for testing"). NinjaTrader's history stays the day's record. `TickCheck.Compare`
   counts each UTC second's trades and volume, live and history.
-  - **The covered span:** every second from the second of the session's first live trade to the second of its last live trade,
-    both included, less every second strictly inside a known live capture gap. A known gap is a chunk that took drops (`lost` or
-    `gaps` above 0, its carried chunks too; the first chunk after a restart mid-session is one): from the last live trade of the
-    chunk before it (none: an open start) to the first live trade of the chunk after it (none: an open end); drops not on a chunk
-    yet run from the last cut trade to the end. The seconds of those two bracketing trades stay in the span. When the gaps leave no
-    live trade at all, the whole first to last span counts.
-  - **`failed`** only when history has no trades, or history is thin: in the covered span `coveredHist * 100 < coveredLive * 90`
+  - **The span** the share is judged over: every second from the second of the session's first live trade to the second of its
+    last live trade, both included, less every second strictly inside a known live capture gap. A known gap is a chunk that took
+    drops (`lost` or `gaps` above 0, its carried chunks too; the first chunk after a restart mid-session is one): from the last live
+    trade of the chunk before it (none: an open start) to the first live trade of the chunk after it (none: an open end); drops not
+    on a chunk yet run from the last cut trade to the end. The seconds of those two bracketing trades stay in the span. When what
+    the gaps leave has fewer than 600 seconds (`TickCheck.MinCoveredSeconds`) or fewer than 1,000 live trades
+    (`TickCheck.MinCoveredLive`), the whole first to last live span is used instead (`spanWhole` true; also true when there is no
+    known gap). The coordinator for Anthony after the PR #79 review: a sliver of a span (a short run, most chunks flagged) would let
+    the skew below fail a good day.
+  - **`failed`** only when history has no trades, or history is thin: in the span `coveredHist * 100 < coveredLive * 90`
     (`TickCheck.ThinSharePercent`; 90.0 percent passes).
-  - **A hole:** a maximal run of seconds that have live trades and no history trade, with no history trade in any second between
-    them, at least 60 seconds (`TickCheck.HoleMinSeconds`) from the start of its first such second to the end of its last. Seconds
-    with no trade at all inside the run count to its length; a history trade in any second between ends the run; a known capture
-    gap does not split it; time with no trade in either is never a hole. Holes never fail a day: The Desk and the backtests skip
-    each one (`from` to `to`).
+  - **A hole**, either kind, is kept when its length less 1 second at each end (`TickCheck.HoleSkewTrimSeconds`) is at least 60
+    seconds (`TickCheck.HoleMinSeconds`), so at least 62 seconds before the trim; it is listed untrimmed, from the start of its first
+    second to the end of its last. The trim is why the skew below can never make a hole: history's early stamp can empty the
+    second before a silence and its late stamp the second after it, at most one second at each end. Holes never fail a day: The
+    Desk, the caretaker and the backtests skip each one (`from` to `to`), either kind.
+    - `inGap` false: a maximal run of seconds that have live trades and no history trade, with no history trade in any second
+      between them. Seconds with no trade at all inside the run count to its length; a history trade in any second between ends
+      the run; a known capture gap does not split it; time with no trade in either is never this kind.
+    - `inGap` true (the coordinator's decision, 2026-11-03): a history silence over a known capture gap, the seconds strictly
+      between two history trades with none between, when any of those seconds is inside a known gap: the live capture could not see
+      that time and history has nothing, so nobody vouches for it. `live` is the live trades in it (often 0); a run of the first
+      kind inside it is taken in (listed once, as this kind). A silence before the first or after the last history trade is not
+      looked at.
   - **The statuses:** `failed` as above; else `short` when history has fewer trades or less volume than live in any second (a day
-    with a hole is `short`); else `filled` when history has more in any second; else `exact`. `exact`, `filled` and `short` pass
+    with an `inGap` false hole is always `short`; one with only `inGap` holes can be `exact` or `filled`); else `filled` when
+    history has more in any second; else `exact`. `exact`, `filled` and `short` pass
     (`TickCheck.IsPassed`): the raw is deleted once stored and packed, the last part is kept and asked again, as for exact and
     filled. **Per second differences are expected and are not a failure:** NinjaTrader's history stamps a trade 4 ms early to
     about 106 ms late against the live feed (WORK, 2026-11-02, five seconds looked at: every live trade over history was in the last
-    .942 to .999 of its second and history had no trade live lacked), so a trade late in its second is in the next one in history.
+    tenth of its second and history had no trade live lacked), so a trade late in its second is in the next one in history.
     `secondsHistShort`, `ticksHistShort`, `secondsLiveMissed`, `ticksLiveMissed` and `detail` are information only.
-  - **The summary** (`check`, in every part) adds to the counts it had: `rule` (2: this rule; absent before 0.6.14), `coveredLive`
-    and `coveredHist` (each one's trades in the covered span), `historyShare` (`coveredHist / coveredLive`, rounded to 4 places,
-    above 1 when history has more; null when no live trade) and `holes`, every hole oldest first:
-    `[{"from": UTC ms, start of its first second, "to": UTC ms, end of its last second (exclusive), "live": live trades in it}]`,
-    `[]` when none. A reader of `status` should take `short` as passed and read `holes` on any passed day.
+  - **The summary** (`check`, in every part) adds to the counts it had: `rule` (2: this rule; absent before 0.6.14),
+    `coveredSeconds` and `spanWhole` (the span's seconds; whether it is the whole first to last live span), `coveredLive` and
+    `coveredHist` (each one's trades in the span), `historyShare` (`coveredHist / coveredLive`, rounded to 4 places, above 1 when
+    history has more; null when no live trade) and `holes`, every hole oldest first: `[{"from": UTC ms, start of its first second,
+    "to": UTC ms, end of its last second (exclusive), "live": live trades in it, "inGap": true | false}]`, `[]` when none. A reader
+    of `status` should take `short` as passed and skip every hole on any passed day.
+  - **The install order** (0.6.14): The Desk's update that accepts `short` first, then the F5. A Desk that does not take `short`
+    answers 400 and the day is set aside (`<same>.day.jsonl.refused`, raw kept). **Recovery** for a PC that got 0.6.14 first: once
+    The Desk takes `short`, rename `<same>.day.jsonl.refused` back to `<same>.day.jsonl`; `SendDays` sends it from part 1 in the next
+    send window (the set aside deleted its `.day.sent`), then stored, packed and the raw deleted as usual.
+  - **A day set aside** (`.day.jsonl.refused` after a 400, 413 or 422; `.day.jsonl.unstored` after 3 answers without stored): an
+    older file under that name is deleted first (an earlier set of the same day); if the move still fails, the day file stays, is
+    not sent again while ChartBridge runs (never a resend every 10 seconds), and `lastError` and the Output window say so. A new set
+    of the day (a check again) deletes the day's `.day.jsonl.refused`, `.day.jsonl.unstored` and `.day.sent` before it is sent.
   - **A day failed under the old rule** (before 0.6.14) is checked again once. `ticks/tickrule.txt` holds `rule 2` and one
-    `recheck <session contract>` line per day still to check again. When the file is not there (the first start of 0.6.14), it is
-    written, listing every day `tickdays.txt` notes `failed` whose raw file is still in the folder. A listed day is not done: its
+    `recheck <session contract>` line per day still to check again. A day can be listed only while `tickdays.txt` notes it `failed`
+    under rule 1 (its line has no fifth field: `tickdays.txt` lines are `<session contract>`, check, stored, packed, rule from 0.6.14)
+    and its raw file is still in the folder. When the file is not there (the first start of 0.6.14, or the file lost), it is written,
+    listing every such day; when it is there, a listed day that no longer qualifies (checked again, its raw gone) is dropped and the
+    file written again. A listed day is not done: its
     final pull runs once more in the final pull's windows, through the gate, 15 minutes between tries, 3 tries, then not until the
     next start (the list survives a restart). Its new check replaces the `failed` record in `tickdays.txt` (stored and packed 0) and
     the day leaves the list; the day file is written and sent as a new set (The Desk keeps one day per contract, session and PC: it
-    replaces the failed one). A failed day whose raw is gone is not listed; a day failed under the new rule is never checked again.
+    replaces the failed one); the new record has rule 2, so the day is never listed again, even if `tickrule.txt` goes missing. A
+    failed day whose raw is gone is not listed; a day failed under the new rule is never checked again. Going back to 0.6.13 would
+    skip every five field line of `tickdays.txt` (it reads four) and pull those days again; nothing is lost, the pulls repeat.
     `/diag` `tickFile.recheck` lists the days waiting; `lastDay` ends `checked again under the 0.6.14 rule`.
 - **Deletion.** The day file (`.day.jsonl`) is deleted only after The Desk's answer to its last part says `"stored":true`; an
   answer without it keeps the file, and it is sent again from its first part (The Desk ignores the parts it has) 15 minutes later,
@@ -1354,7 +1386,8 @@ at least 16) bounds the `ticks/` folder next to `config.txt`.
   seconds away), flags the other PC, and keeps WORK's checked day as the master; it knows WORK only by the name `WORK`.
 - **`/diag` `tickFile`:** `on`, `capturing`, `queue`, `queueMax`, `droppedQueue`, `droppedDisk`, `outside`, `written`,
   `feedDrops`, `diskMB`, `maxMB`, `files` (per session and contract: `bytes`, `chunks`, `sent`, `aside`, `ageDays`), `lastSent`
-  (per contract: the session and seq of the latest chunk taken), `days` (per session and contract: `check`, `stored`, `packed`),
+  (per contract: the session and seq of the latest chunk taken), `days` (per session and contract: `check`, `stored`, `packed`,
+  `rule` from 0.6.14),
   `recheck` (0.6.14: the days failed under the old rule still to be checked again), `packWait` (per session and contract: `lastPart`, `asked`), `rawOld`, `rawOldNote`, `dayState`, `lastDay`, `deskHasNoTicks`,
   `lastError`.
 

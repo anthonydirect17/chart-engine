@@ -150,10 +150,34 @@ test('tick file (Anthony 2026-11-03, 0.6.14): the day check fails only on no his
 
 test('tick file (0.6.14): a day failed under the old rule with its raw kept is checked again once (tickrule.txt)', () => {
   const load = between(ticks, 'private static void LoadDays()', 'private static void SaveRule()');
-  assert.match(load, /if \(d\.Check == "failed" && File\.Exists\(Path\.Combine\(Folder, BaseOf\(d\.Key\) \+ "\.raw"\)\)\) Recheck\.Add\(d\.Key\);/);
-  assert.match(load, /if \(Days\.TryGetValue\(key, out d\) && d\.Check == "failed"\) Recheck\.Add\(key\);/);
+  assert.match(load, /foreach \(DayRec d in Days\.Values\) if \(MayRecheck\(d\.Key\)\) Recheck\.Add\(d\.Key\);/);
+  assert.match(load, /if \(MayRecheck\(key\)\) Recheck\.Add\(key\); else write = true;/, 'a listed key that no longer qualifies is dropped and the file written again');
+  assert.match(load, /return Days\.TryGetValue\(key, out d\) && d\.Check == "failed" && d\.Rule < 2 && File\.Exists\(Path\.Combine\(Folder, BaseOf\(key\) \+ "\.raw"\)\);/, 'only a rule 1 failed day with its raw');
+  // the rule column (a 0.6.13 line of four fields reads as rule 1)
+  assert.match(load, /if \(f\.Length != 4 && f\.Length != 5\) continue;\s*int rule = 1;/);
+  assert.match(ticks, /\+ "\\t" \+ d\.Rule\.ToString\(Inv\)\)\.ToList\(\);/);
   assert.match(ticks, /public static bool IsDayDone\(string key\) \{ lock \(Sync\) return Days\.ContainsKey\(key\) && !Recheck\.Contains\(key\); \}/);
   assert.match(between(ticks, 'private static TickCheckResult FinishDay(KeyFiles k', 'private static string ShareText('), /again = Recheck\.Remove\(k\.Key\);[\s\S]*if \(again\) SaveRule\(\);/);
   // the same windows and tries as any final pull: DaysToPull keeps MaxTries and RetryAtDay
   assert.match(between(ticks, 'public static List<string> DaysToPull(', 'private static void LaterDay('), /if \(IsDayDone\(k\.Key\) \|\| !File\.Exists\(k\.Raw\)\) continue;[\s\S]*if \(tries >= MaxTries\) continue;/);
+});
+
+test('tick file (0.6.14 review): the span floor, the skew trim, inGap holes, and a set aside that never loops', () => {
+  const chk = between(ticks, 'public static class TickCheck', 'public class TickDayBuild');
+  assert.match(chk, /public const int MinCoveredSeconds = 600;/);
+  assert.match(chk, /public const int MinCoveredLive = 1000;/);
+  assert.match(chk, /public const int HoleSkewTrimSeconds = 1;/);
+  assert.match(chk, /else if \(r\.CoveredSeconds < MinCoveredSeconds \|\| r\.CoveredLive < MinCoveredLive\) \{ Cover\(r, by, liveFrom, liveTo, null\); r\.SpanWhole = true; \}/);
+  assert.match(chk, /if \(from >= 0 && to - from - 2000L \* HoleSkewTrimSeconds >= HoleMinSeconds \* 1000L\)/);
+  assert.match(chk, /if \(prevHist != long\.MinValue && OverGap\(prevHist \+ 1000, kv\.Key, gaps\)\) EndRun\(silences,/);
+  const parts = between(ticks, 'private static List<string> DayParts(KeyFiles k', 'private static readonly Regex StoredRx');
+  for (const k of ['coveredSeconds', 'spanWhole', 'inGap']) assert.ok(parts.includes('\\"' + k + '\\":'), 'the check has ' + k);
+  const aside = between(ticks, 'private static void SetAside(', 'private static string DayKeyOf(');
+  assert.match(aside, /try \{ if \(File\.Exists\(to\)\) File\.Delete\(to\); File\.Move\(file, to\); \}/);
+  assert.match(aside, /lock \(Sync\) AsideFailed\.Add\(file\);/);
+  assert.match(between(ticks, 'public static int SendDays(', 'private static string DayKeyOf('), /lock \(Sync\) if \(AsideFailed\.Contains\(file\)\) continue;/);
+  assert.ok(!/File\.Move\(file, file \+ "\.(refused|unstored)"\)/.test(ticks), 'every set aside goes through SetAside');
+  const finish = between(ticks, 'private static TickCheckResult FinishDay(KeyFiles k', 'private static string ShareText(');
+  assert.match(finish, /new\[\] \{ "\.day\.sent", "\.day\.jsonl\.refused", "\.day\.jsonl\.unstored" \}/);
+  assert.match(finish, /DayAgainAt\.Remove\(file\); DayAgainTries\.Remove\(file\); AsideFailed\.Remove\(file\);/);
 });
