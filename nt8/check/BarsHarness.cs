@@ -1598,14 +1598,24 @@ public static class BarsHarness
         TickCheckResult rh = TickCheck.Compare(day, hHole);
         Check(rh.Status == "short" && rh.Passed && rh.Holes.Count == 1 && rh.Holes[0][0] == t0 + 100000 && rh.Holes[0][1] == t0 + 180000 && rh.Holes[0][2] == 80,
               "tick rule: an 80 second hole never fails the day; listed from its first live second to the end of its last, with its live trades: " + string.Join(";", rh.Holes.Select(h => h[0] - t0 + "-" + (h[1] - t0) + "/" + h[2]).ToArray()));
-        // the 60 second test is on the run less 1 second at each end (HoleSkewTrimSeconds): 61 seconds is not a hole, 62 is
-        TickCheckResult r61 = TickCheck.Compare(day, day.Where(x => x.U < t0 + 100000 || x.U >= t0 + 161000).ToList());
-        TickCheckResult r62 = TickCheck.Compare(day, day.Where(x => x.U < t0 + 100000 || x.U >= t0 + 162000).ToList());
-        Check(TickCheck.HoleSkewTrimSeconds == 1 && r61.Holes.Count == 0 && r62.Holes.Count == 1 && r62.Holes[0][0] == t0 + 100000 && r62.Holes[0][1] == t0 + 162000 && r62.Holes[0][3] == 0,
-              "tick rule: a run of 61 seconds with no history is not a hole (60 after the skew trim is needed), 62 is, listed untrimmed");
-        // NIT 1 (the PR #79 review): the skew cannot make a hole. History's 4 ms early stamp pulls the trade before a 59 second
-        // silence into the second before, and its 106 ms late stamp pushes the trade after it into the second after: 61 seconds of
-        // live with no history, not a hole. A true 60 second silence with the same skew: 62 seconds, a hole.
+        // exactly 60 seconds (Anthony's minute): a genuine 59 second gap is not a hole, a genuine 60 second one is
+        TickCheckResult r59 = TickCheck.Compare(day, day.Where(x => x.U < t0 + 100000 || x.U >= t0 + 159000).ToList());
+        TickCheckResult r60 = TickCheck.Compare(day, day.Where(x => x.U < t0 + 100000 || x.U >= t0 + 160000).ToList());
+        Check(r59.Holes.Count == 0 && r60.Holes.Count == 1 && r60.Holes[0][0] == t0 + 100000 && r60.Holes[0][1] == t0 + 160000 && r60.Holes[0][3] == 0,
+              "tick rule: a genuine 59 second gap is not a hole, a genuine 60 second gap is (exactly 60, no trim when the edges are not the skew's)");
+        // LOW A (the PR #79 re-review): an edge second is left out of the length only when the skew alone can empty it: its live
+        // trades all at 4 ms or less (first second) or all at 894 ms or more (last). A 60 second run, history none in it.
+        Check(TickCheck.SkewEarlyMs == 4 && TickCheck.SkewLateMs == 106 && TickCheck.EdgeEarlyMaxMs == 4 && TickCheck.EdgeLateMinMs == 894, "tick rule: the skew window constants: 4 ms early, 106 ms late, so 4 and 894");
+        foreach (int[] e in new[] { new[] { 500, 500, 1 }, new[] { 5, 893, 1 }, new[] { 4, 500, 0 }, new[] { 500, 894, 0 }, new[] { 4, 894, 0 } })
+        {
+            List<TickRec> el = new List<TickRec>();
+            for (int i = 0; i < 300; i++) el.Add(Tr(t0 + i * 1000L + (i == 100 ? e[0] : i == 159 ? e[1] : 500), 25000, 1));
+            TickCheckResult re = TickCheck.Compare(el, el.Where(x => x.U < t0 + 100000 || x.U >= t0 + 160000).ToList());
+            Check(re.Holes.Count == e[2], "tick rule: a 60 second run whose edge live trades are at " + e[0] + " ms and " + e[1] + " ms: " + (e[2] == 1 ? "a hole" : "not a hole (an edge the skew could empty is left out)"));
+        }
+        // the skew cannot make a hole: history's 4 ms early stamp pulls the trade before a 59 second silence into the second before,
+        // and its 106 ms late stamp pushes the trade after it into the second after: 61 seconds of live with no history, both edges
+        // the skew's, not a hole. A true 60 second silence with the same skew: a hole.
         foreach (int silent in new[] { 59, 60 })
         {
             List<TickRec> sl = new List<TickRec>(), sh = new List<TickRec>();
@@ -1620,14 +1630,14 @@ public static class BarsHarness
             Check(silent == 59 ? rk.Holes.Count == 0 : rk.Holes.Count == 1 && rk.Holes[0][0] == t0 + 99000 && rk.Holes[0][1] == t0 + 161000,
                   "tick rule: a true " + silent + " second history silence with the skew at both edges: " + (silent == 59 ? "no hole (the skew alone cannot make one)" : "a hole") + ": " + string.Join(";", rk.Holes.Select(h => h[0] - t0 + "-" + (h[1] - t0)).ToArray()));
         }
-        // seconds with no live trade inside the run count: live at seconds 100 to 109 and 152 to 161, nothing between, history none
-        // from 100 to 161: one hole of 62 seconds with 20 live trades
-        List<TickRec> sparse = day.Where(x => x.U < t0 + 110000 || x.U >= t0 + 152000).ToList();
-        TickCheckResult rq = TickCheck.Compare(sparse, sparse.Where(x => x.U < t0 + 100000 || x.U >= t0 + 162000).ToList());
-        Check(rq.Holes.Count == 1 && rq.Holes[0][0] == t0 + 100000 && rq.Holes[0][1] == t0 + 162000 && rq.Holes[0][2] == 20,
+        // seconds with no live trade inside the run count: live at seconds 100 to 109 and 150 to 159, nothing between, history none
+        // from 100 to 159: one hole of 60 seconds with 20 live trades
+        List<TickRec> sparse = day.Where(x => x.U < t0 + 110000 || x.U >= t0 + 150000).ToList();
+        TickCheckResult rq = TickCheck.Compare(sparse, sparse.Where(x => x.U < t0 + 100000 || x.U >= t0 + 160000).ToList());
+        Check(rq.Holes.Count == 1 && rq.Holes[0][0] == t0 + 100000 && rq.Holes[0][1] == t0 + 160000 && rq.Holes[0][2] == 20,
               "tick rule: the quiet seconds inside a run count to its length (bracketed by live trades): " + string.Join(";", rq.Holes.Select(h => h[0] - t0 + "-" + (h[1] - t0) + "/" + h[2]).ToArray()));
         // ... and one history trade in between, even in a second with no live trade, splits it: two runs of 10 seconds, no hole
-        List<TickRec> hSplit = sparse.Where(x => x.U < t0 + 100000 || x.U >= t0 + 162000).ToList(); hSplit.Add(Tr(t0 + 130200, 25000, 1));
+        List<TickRec> hSplit = sparse.Where(x => x.U < t0 + 100000 || x.U >= t0 + 160000).ToList(); hSplit.Add(Tr(t0 + 130200, 25000, 1));
         Check(TickCheck.Compare(sparse, hSplit).Holes.Count == 0, "tick rule: a history trade between live trades ends the run (no hole)");
         // history empty only where live has nothing either (a quiet market) is no hole: a hole needs live trades
         List<TickRec> quiet = day.Where(x => x.U < t0 + 100000 || x.U >= t0 + 300000).ToList();
@@ -1694,8 +1704,23 @@ public static class BarsHarness
         TickCheckResult rin2 = TickCheck.Compare(lr, hr2, rg);
         Check(rin2.Holes.Count == 1 && rin2.Holes[0][0] == t0 + 220000 && rin2.Holes[0][1] == t0 + 301000 && rin2.Holes[0][2] == 80 && rin2.Holes[0][3] == 1,
               "tick rule: a history silence from 220 to 300 reaching one second into the gap: one inGap hole that takes in the live run (80 live trades): " + string.Join(";", rin2.Holes.Select(h => h[0] - t0 + "-" + (h[1] - t0) + "/" + h[2] + "/" + h[3]).ToArray()));
-        // a 61 second silence over the gap is not one (the skew trim applies to every hole)
-        Check(TickCheck.Compare(lr, Every(t0, 0, 350, 500).Concat(Every(t0, 411, 1000, 500)).ToList(), rg).Holes.Count == 0, "tick rule: a 61 second silence over a gap is not a hole (the skew trim)");
+        // an inGap silence is never trimmed (no live trade to be skewed against): 60 seconds is a hole, 59 is not
+        TickCheckResult in60 = TickCheck.Compare(lr, Every(t0, 0, 350, 500).Concat(Every(t0, 410, 1000, 500)).ToList(), rg);
+        TickCheckResult in59 = TickCheck.Compare(lr, Every(t0, 0, 350, 500).Concat(Every(t0, 409, 1000, 500)).ToList(), rg);
+        Check(in60.Holes.Count == 1 && in60.Holes[0][0] == t0 + 350000 && in60.Holes[0][1] == t0 + 410000 && in60.Holes[0][3] == 1 && in59.Holes.Count == 0,
+              "tick rule: a 60 second history silence over a gap is an inGap hole, a 59 second one is not");
+        // LOW C: the session's open bounds the first silence. A restart at 200 s (an open start gap to the first trade of the next
+        // chunk at 380 s), history missing the first 300 s of the session: an inGap hole from the open, taking in the live run
+        List<TickRec> lo = Every(t0, 200, 1000, 500);
+        List<TickRec> ho = Every(t0, 300, 1000, 500);
+        List<long[]> og = new List<long[]> { new long[] { long.MinValue, t0 + 380500 } };
+        TickCheckResult rop = TickCheck.Compare(lo, ho, og, t0);
+        Check(rop.Holes.Count == 1 && rop.Holes[0][0] == t0 && rop.Holes[0][1] == t0 + 300000 && rop.Holes[0][2] == 100 && rop.Holes[0][3] == 1,
+              "tick rule: history missing the first 300 s with an open start gap: an inGap hole from the open (100 live trades in it): " + string.Join(";", rop.Holes.Select(h => h[0] - t0 + "-" + (h[1] - t0) + "/" + h[2] + "/" + h[3]).ToArray()));
+        TickCheckResult ropNo = TickCheck.Compare(lo, ho, og);
+        Check(ropNo.Holes.Count == 1 && ropNo.Holes[0][0] == t0 + 200000 && ropNo.Holes[0][3] == 0, "tick rule: without the open the same day has only the live run (from 200 s)");
+        TickCheckResult ropQuiet = TickCheck.Compare(Every(t0, 300, 1000, 500), ho, null, t0);
+        Check(ropQuiet.Holes.Count == 0, "tick rule: history and live both start at 300 s, no known gap: no hole at the open (nobody missed anything)");
         // a hole is not split by a known gap
         TickCheckResult unsplit = TickCheck.Compare(day, hHole, new List<long[]> { new long[] { t0 + 139400, t0 + 141400 } });
         Check(unsplit.Holes.Count == 1 && unsplit.Holes[0][0] == t0 + 100000 && unsplit.Holes[0][1] == t0 + 180000 && unsplit.Holes[0][2] == 80, "tick rule: a known gap inside a hole does not split it (one hole, marked inGap)");
@@ -1808,6 +1833,23 @@ public static class BarsHarness
             // NIT 4: tickdays.txt has the rule column; a line of 0.6.13 (no rule) keeps reading as rule 1 and is written back as 1
             Check(Lines(dir, "ticks/tickdays.txt").Contains("2026-10-05 NQ 12-26\tfailed\t1\t0\t1") && TickDiag().Contains("\"" + k6 + "\":{\"check\":\"exact\",\"stored\":false,\"packed\":false,\"rule\":2}"),
                   "tick recheck: tickdays.txt and /diag days carry the rule (the 0.6.13 line as rule 1): " + string.Join(" | ", Lines(dir, "ticks/tickdays.txt")));
+            // LOW B (the PR #79 re-review): a round trip to 0.6.13 and back. 0.6.13 skips the five field line, pulls the day again under
+            // its old rule, fails it and writes a four field line; tickrule.txt still says only "rule 2". The next start of 0.6.14
+            // lists the day again (every start does) and checks it once more under the new rule.
+            File.WriteAllLines(Path.Combine(T, "tickdays.txt"), Lines(dir, "ticks/tickdays.txt").Select(x => x.StartsWith(k6 + "\t") ? k6 + "\tfailed\t1\t0" : x).ToArray());
+            Check(File.ReadAllLines(rule).SequenceEqual(new[] { "rule 2" }), "tick round trip (set up): tickrule.txt lists nothing");
+            ChartBridgeTicks.Start(); ChartBridgeTicks.Stop();
+            typeof(ChartBridgeTicks).GetField("capturing", BindingFlags.NonPublic | BindingFlags.Static).SetValue(null, true);
+            load.Invoke(null, null); TickScan();
+            Check(File.ReadAllLines(rule).SequenceEqual(new[] { "rule 2", "recheck " + k6 }) && ChartBridgeTicks.DaysToPull(wed1630.AddMinutes(78)).Contains(k6),
+                  "tick round trip: the next start of 0.6.14 lists the day 0.6.13 failed again: " + string.Join(" | ", File.ReadAllLines(rule)));
+            ChartBridgeBars.UtcNow = () => wed1630.AddMinutes(78);
+            m0 = MadeCount();
+            asked = ChartBridgeTicks.PlanDay(null);
+            made = TicksMade(m0);
+            Check(asked && made.Count == 1 && IsSession(made[0], D(2026, 10, 6)) && Lines(dir, "ticks/tickdays.txt").Contains(k6 + "\texact\t0\t0\t2") && File.ReadAllLines(rule).SequenceEqual(new[] { "rule 2" }) &&
+                  !ChartBridgeTicks.DaysToPull(wed1630.AddMinutes(79)).Contains(k6),
+                  "tick round trip: healed: checked under the new rule (exact, rule 2) and not listed again: " + string.Join(" | ", Lines(dir, "ticks/tickdays.txt")));
             // a day failed under the new rule stays failed (never pulled again, never listed after a restart)
             List<DateTime> part = walls.Take(20).ToList();
             TickMorningSetup(dir, wed1630);
@@ -1816,7 +1858,7 @@ public static class BarsHarness
             load.Invoke(null, null); TickScan();
             Check(Lines(dir, "ticks/tickdays.txt").Contains(k6 + "\tfailed\t0\t0\t2") && File.ReadAllLines(rule).SequenceEqual(new[] { "rule 2" }) && !ChartBridgeTicks.DaysToPull(wed1630.AddMinutes(30)).Contains(k6) && File.Exists(Path.Combine(T, "2026-10-06_NQ_12-26.raw")),
                   "tick recheck: a day failed under the new rule (history 40 percent) is not checked again; its raw is kept until Anthony rules");
-            // NIT 4: even with tickrule.txt gone, a day failed under rule 2 is never listed again (at most once)
+            // NIT 4: even with tickrule.txt gone, a day failed under rule 2 is never listed again (once per failed rule 1 record)
             File.Delete(rule);
             load.Invoke(null, null);
             Check(File.ReadAllLines(rule).SequenceEqual(new[] { "rule 2" }) && !ChartBridgeTicks.DaysToPull(wed1630.AddMinutes(30)).Contains(k6),
@@ -1844,6 +1886,10 @@ public static class BarsHarness
         List<TickRec> live = ChartBridgeTicks.ReadAllLive(k);
         TickCheckResult r = ChartBridgeTicks.FinishDay(k, HistOf(live.Select(x => Tr(x.U % 1000 == 950 ? x.U + 106 : x.U, x.P, x.V))));
         string part = File.ReadAllLines(Path.Combine(T, "2026-10-06_NQ_12-26.day.jsonl"))[0];
+        DateTime ou, cu; ChartBridgeBars.SessionUtc(D(2026, 10, 6), out ou, out cu);
+        long openMs = Ms(ou), firstMs = Ms(EtToUtc(a));
+        Check(r.Holes.Count == 1 && r.Holes[0][0] == openMs && r.Holes[0][1] == firstMs && r.Holes[0][3] == 1 && part.Contains("\"holes\":[{\"from\":" + openMs + ",\"to\":" + firstMs + ",\"live\":0,\"inGap\":true}]"),
+              "tick all flagged (LOW C): started after the open, history from 09:30 only: an inGap hole from the session's open (18:00 ET) to history's first trade: " + Regex.Match(part, "\"holes\":\\[[^\\]]*\\]").Value);
         Check(r.Status == "short" && r.Passed && r.SpanWhole && r.CoveredSeconds == 360 && part.Contains("\"spanWhole\":true") && Lines(dir, "ticks/tickdays.txt").Contains(k + "\tshort\t0\t0\t2"),
               "tick all flagged: a 6 minute capture with every chunk flagged and skewed history passes (short), judged on the whole span: " + r.Status + " " + r.CoveredHist + "/" + r.CoveredLive);
     }

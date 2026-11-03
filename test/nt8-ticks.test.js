@@ -145,13 +145,13 @@ test('tick file (Anthony 2026-11-03, 0.6.14): the day check fails only on no his
     assert.ok(parts.includes('\\"' + k + '\\":'), 'the check has ' + k);
   assert.match(parts, /c\.Append\("\{\\"from\\":"\)\.Append\(chk\.Holes\[i\]\[0\]\)\.Append\(",\\"to\\":"\)\.Append\(chk\.Holes\[i\]\[1\]\)\.Append\(",\\"live\\":"\)\.Append\(chk\.Holes\[i\]\[2\]\)/);
   // the known capture gaps go to the check
-  assert.match(ticks, /TickCheckResult chk = TickCheck\.Compare\(live, hist\.Ticks, KnownGaps\(k\)\);/);
+  assert.match(ticks, /TickCheckResult chk = TickCheck\.Compare\(live, hist\.Ticks, KnownGaps\(k\), OpenMsOf\(k\.Session\)\);/);
 });
 
 test('tick file (0.6.14): a day failed under the old rule with its raw kept is checked again once (tickrule.txt)', () => {
   const load = between(ticks, 'private static void LoadDays()', 'private static void SaveRule()');
   assert.match(load, /foreach \(DayRec d in Days\.Values\) if \(MayRecheck\(d\.Key\)\) Recheck\.Add\(d\.Key\);/);
-  assert.match(load, /if \(MayRecheck\(key\)\) Recheck\.Add\(key\); else write = true;/, 'a listed key that no longer qualifies is dropped and the file written again');
+  assert.match(load, /write = !there \|\| !listed\.SetEquals\(Recheck\);/, 'the record is written again when it lists other days');
   assert.match(load, /return Days\.TryGetValue\(key, out d\) && d\.Check == "failed" && d\.Rule < 2 && File\.Exists\(Path\.Combine\(Folder, BaseOf\(key\) \+ "\.raw"\)\);/, 'only a rule 1 failed day with its raw');
   // the rule column (a 0.6.13 line of four fields reads as rule 1)
   assert.match(load, /if \(f\.Length != 4 && f\.Length != 5\) continue;\s*int rule = 1;/);
@@ -166,10 +166,18 @@ test('tick file (0.6.14 review): the span floor, the skew trim, inGap holes, and
   const chk = between(ticks, 'public static class TickCheck', 'public class TickDayBuild');
   assert.match(chk, /public const int MinCoveredSeconds = 600;/);
   assert.match(chk, /public const int MinCoveredLive = 1000;/);
-  assert.match(chk, /public const int HoleSkewTrimSeconds = 1;/);
+  assert.match(chk, /public const int SkewEarlyMs = 4, SkewLateMs = 106;/);
+  assert.match(chk, /public const int EdgeEarlyMaxMs = SkewEarlyMs;/);
+  assert.match(chk, /public const int EdgeLateMinMs = 1000 - SkewLateMs;/);
   assert.match(chk, /else if \(r\.CoveredSeconds < MinCoveredSeconds \|\| r\.CoveredLive < MinCoveredLive\) \{ Cover\(r, by, liveFrom, liveTo, null\); r\.SpanWhole = true; \}/);
-  assert.match(chk, /if \(from >= 0 && to - from - 2000L \* HoleSkewTrimSeconds >= HoleMinSeconds \* 1000L\)/);
-  assert.match(chk, /if \(prevHist != long\.MinValue && OverGap\(prevHist \+ 1000, kv\.Key, gaps\)\) EndRun\(silences,/);
+  // a live run: an edge second left out only when the skew alone can empty it; exactly 60 seconds otherwise (re-review LOW A)
+  assert.match(chk, /if \(firstMax <= EdgeEarlyMaxMs\) len -= 1000;\s*if \(lastMin >= EdgeLateMinMs\) len -= 1000;\s*if \(len >= HoleMinSeconds \* 1000L\)/);
+  // an inGap silence is never trimmed, and the first one starts at the session's open (re-review LOW C)
+  assert.match(chk, /if \(to - from >= HoleMinSeconds \* 1000L\) into\.Add/);
+  assert.match(chk, /long from = prevHist != long\.MinValue \? prevHist \+ 1000 : openSec;/);
+  assert.match(ticks, /TickCheck\.Compare\(live, hist\.Ticks, KnownGaps\(k\), OpenMsOf\(k\.Session\)\);/);
+  // every start lists every failed rule 1 day with its raw (re-review LOW B)
+  assert.match(between(ticks, 'private static void LoadDays()', 'private static bool MayRecheck('), /foreach \(DayRec d in Days\.Values\) if \(MayRecheck\(d\.Key\)\) Recheck\.Add\(d\.Key\);\s*HashSet<string> listed/);
   const parts = between(ticks, 'private static List<string> DayParts(KeyFiles k', 'private static readonly Regex StoredRx');
   for (const k of ['coveredSeconds', 'spanWhole', 'inGap']) assert.ok(parts.includes('\\"' + k + '\\":'), 'the check has ' + k);
   const aside = between(ticks, 'private static void SetAside(', 'private static string DayKeyOf(');

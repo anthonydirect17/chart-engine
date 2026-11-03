@@ -22,8 +22,9 @@
 //    second (TickCheck). The history is the master when the check passes: exact, filled (history has trades the live capture
 //    missed, never fewer) or, from 0.6.14 (Anthony 2026-11-03), short (history has fewer in some seconds, but at least 90 percent of
 //    the live trades over the span the live capture covered); it fails only when history has no trades or is under that 90 percent.
-//    Holes (live trades with no history trade for 60 seconds or more after a 1 second trim at each end, or a history silence as
-//    long over a known capture gap) never fail the day: they are listed in the check for the backtests to skip. A day failed under the old rule with its raw still there is checked again once (tickrule.txt). The day
+//    Holes (60 seconds or more of live trades with no history trade, an edge second left out only when the skew alone can empty
+//    it; or 60 seconds or more of history silence over a known capture gap, from the session's open too: inGap) never fail the
+//    day: they are listed in the check for the backtests to skip. A day failed under the old rule with its raw still there is checked again once (tickrule.txt). The day
 //    goes to POST /api/ticks/day in parts. The raw is deleted only when the check passed and The Desk answers "stored" and "packed" true; a failed
 //    day keeps its raw until Anthony rules.
 //    Stored but not packed (2026-11-03): only the day's last part is kept (.day.last) and sent again at most once a day in the
@@ -86,9 +87,14 @@ namespace NinjaTrader.NinjaScript.AddOns
         // backtesting purpose, small inconsistency does not matter to me"; "even a 1 minute gap should not fail the whole day, that
         // gap just should not be used for testing".
         public const int ThinSharePercent = 90;    // history under 90 percent of live's trades in the span: failed
-        public const int HoleMinSeconds = 60;      // a hole: 60 seconds or more (after the skew trim) with no history trade
-        public const int HoleSkewTrimSeconds = 1;  // trimmed from each end of a run before the 60 second test (history's stamps
-                                                   // run 4 ms early to about 106 ms late, so an edge second may be the skew's)
+        public const int HoleMinSeconds = 60;      // a hole: 60 seconds or more with no history trade
+        // The skew measured on WORK (2026-11-02): history's time of a trade runs 4 ms early to 106 ms late against the live feed. So a
+        // run's first second is history-empty by the skew alone when every live trade in it is in its first 4 ms (the twin landed in
+        // the second before), and its last second when every live trade in it is at 894 ms or later (the twin landed in the next).
+        // Only such an edge second is left out of a run's length for the 60 second test (the PR #79 re-review, LOW A).
+        public const int SkewEarlyMs = 4, SkewLateMs = 106;
+        public const int EdgeEarlyMaxMs = SkewEarlyMs;          // 4: a first second whose live trades are all at 4 ms or less
+        public const int EdgeLateMinMs = 1000 - SkewLateMs;     // 894: a last second whose live trades are all at 894 ms or more
         // The coordinator for Anthony, 2026-11-03 (the PR #79 review): judge on the whole first to last live span when the span left
         // by the known gaps has fewer than 600 seconds or fewer than 1,000 live trades (a short run, or most chunks flagged: a sliver
         // of a span would let the skew fail a good day).
@@ -99,7 +105,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         // The statuses that pass: history is the day's record.
         public static bool IsPassed(string status) { return status == "exact" || status == "filled" || status == "short"; }
 
-        public static TickCheckResult Compare(IList<TickRec> live, IList<TickRec> hist) { return Compare(live, hist, null); }
+        public static TickCheckResult Compare(IList<TickRec> live, IList<TickRec> hist) { return Compare(live, hist, null, long.MinValue); }
+        public static TickCheckResult Compare(IList<TickRec> live, IList<TickRec> hist, IList<long[]> gaps) { return Compare(live, hist, gaps, long.MinValue); }
 
         // Per UTC second: the trades and volume of each.
         //   failed: history has no trades, or history is thin: in the span its trades are under ThinSharePercent of live's.
@@ -111,13 +118,17 @@ namespace NinjaTrader.NinjaScript.AddOns
         // seconds strictly inside a known capture gap (gaps: {a, b} UTC ms, the last live trade before the gap and the first after
         // it; long.MinValue / long.MaxValue for an open end). When what the gaps leave has fewer than MinCoveredSeconds seconds or
         // fewer than MinCoveredLive live trades, the span is the whole first to last live span (SpanWhole).
-        // A hole (never failing the day), from its first second to the end of its last (to: the last second + 1000 ms), when its
-        // length less HoleSkewTrimSeconds at each end is at least HoleMinSeconds:
+        // A hole (never failing the day), listed from its first second to the end of its last (to: the last second + 1000 ms), at
+        // least HoleMinSeconds long:
         //   - a maximal run of seconds that have live trades and no history trade, with no history trade in any second between them
-        //     (seconds with no trade at all inside the run count to its length); the known gaps do not split one;
-        //   - a history silence over a known gap (inGap): the seconds strictly between two history trades, none in between, when one
-        //     of them is inside a known gap (no one vouches for that time); it takes in any run of the first kind inside it.
-        public static TickCheckResult Compare(IList<TickRec> live, IList<TickRec> hist, IList<long[]> gaps)
+        //     (seconds with no trade at all inside the run count to its length); the known gaps do not split one. Its length for the
+        //     test leaves out its first second when every live trade in it is at EdgeEarlyMaxMs or less, and its last second when
+        //     every live trade in it is at EdgeLateMinMs or more (the skew alone can empty those);
+        //   - a history silence over a known gap (inGap): the seconds strictly between two history trades, none in between, or from
+        //     the session's open (openMs, when known) to history's first trade, when one of them is inside a known gap (no one vouches
+        //     for that time); never trimmed (no live trade to be skewed against); it takes in any run of the first kind inside it.
+        // A silence after history's last trade is not looked at (the caretaker skips a late start or an early end by CME's calendar).
+        public static TickCheckResult Compare(IList<TickRec> live, IList<TickRec> hist, IList<long[]> gaps, long openMs)
         {
             TickCheckResult r = new TickCheckResult();
             SortedDictionary<long, long[]> by = new SortedDictionary<long, long[]>();   // second -> {live n, live v, hist n, hist v}
@@ -125,11 +136,13 @@ namespace NinjaTrader.NinjaScript.AddOns
             foreach (TickRec x in live)
             {
                 long[] a = Slot(by, x.U); a[0]++; a[1] += x.V; r.LiveTicks++; r.LiveVolume += x.V;
-                long s = Sec(x.U); if (s < liveFrom) liveFrom = s; if (s > liveTo) liveTo = s;
+                long s = Sec(x.U), ms = x.U - s; if (ms < a[4]) a[4] = ms; if (ms > a[5]) a[5] = ms;
+                if (s < liveFrom) liveFrom = s; if (s > liveTo) liveTo = s;
             }
             foreach (TickRec x in hist) { long[] a = Slot(by, x.U); a[2]++; a[3] += x.V; r.HistTicks++; r.HistVolume += x.V; }
             int missedListed = 0, shortListed = 0;
-            long runFrom = -1, runLast = -1, runLive = 0, prevHist = long.MinValue, liveSince = 0;
+            long runFrom = -1, runLast = -1, runLive = 0, runFirstMax = 0, runLastMin = 0, prevHist = long.MinValue, liveSince = 0;
+            long openSec = openMs == long.MinValue ? long.MinValue : Sec(openMs);
             List<long[]> runs = new List<long[]>(), silences = new List<long[]>();
             foreach (KeyValuePair<long, long[]> kv in by)
             {
@@ -146,13 +159,18 @@ namespace NinjaTrader.NinjaScript.AddOns
                 }
                 if (a[2] > 0)
                 {
-                    EndRun(runs, runFrom, runLast + 1000, runLive); runFrom = -1; runLive = 0;
-                    if (prevHist != long.MinValue && OverGap(prevHist + 1000, kv.Key, gaps)) EndRun(silences, prevHist + 1000, kv.Key, liveSince);
+                    EndRun(runs, runFrom, runLast, runLive, runFirstMax, runLastMin); runFrom = -1; runLive = 0;
+                    long from = prevHist != long.MinValue ? prevHist + 1000 : openSec;   // the first silence starts at the open
+                    if (from != long.MinValue && OverGap(from, kv.Key, gaps)) EndSilence(silences, from, kv.Key, liveSince);
                     prevHist = kv.Key; liveSince = 0;
                 }
-                else if (a[0] > 0) { if (runFrom < 0) runFrom = kv.Key; runLast = kv.Key; runLive += a[0]; liveSince += a[0]; }
+                else if (a[0] > 0)
+                {
+                    if (runFrom < 0) { runFrom = kv.Key; runFirstMax = a[5]; }
+                    runLast = kv.Key; runLastMin = a[4]; runLive += a[0]; liveSince += a[0];
+                }
             }
-            EndRun(runs, runFrom, runLast + 1000, runLive);
+            EndRun(runs, runFrom, runLast, runLive, runFirstMax, runLastMin);
             foreach (long[] s in silences) r.Holes.Add(new long[] { s[0], s[1], s[2], 1 });
             foreach (long[] h in runs)
                 if (!silences.Any(s => s[0] <= h[0] && h[1] <= s[1])) r.Holes.Add(new long[] { h[0], h[1], h[2], 0 });
@@ -174,10 +192,20 @@ namespace NinjaTrader.NinjaScript.AddOns
             return r;
         }
 
-        // A hole candidate [from, to) kept when its length less the skew trim at each end is at least HoleMinSeconds.
-        private static void EndRun(List<long[]> into, long from, long to, long n)
+        // A run of live seconds from its first second to its last: kept when at least HoleMinSeconds long, less an edge second the
+        // skew alone can empty (firstMax: the latest live ms in its first second; lastMin: the earliest in its last).
+        private static void EndRun(List<long[]> into, long from, long last, long n, long firstMax, long lastMin)
         {
-            if (from >= 0 && to - from - 2000L * HoleSkewTrimSeconds >= HoleMinSeconds * 1000L) into.Add(new long[] { from, to, n });
+            if (from < 0) return;
+            long len = last + 1000 - from;
+            if (firstMax <= EdgeEarlyMaxMs) len -= 1000;
+            if (lastMin >= EdgeLateMinMs) len -= 1000;
+            if (len >= HoleMinSeconds * 1000L) into.Add(new long[] { from, last + 1000, n });
+        }
+        // A history silence [from, to) over a known gap: kept when at least HoleMinSeconds long (never trimmed).
+        private static void EndSilence(List<long[]> into, long from, long to, long n)
+        {
+            if (to - from >= HoleMinSeconds * 1000L) into.Add(new long[] { from, to, n });
         }
 
         // Whether any second of [from, to) is strictly inside a known gap.
@@ -220,7 +248,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             long t = Sec(u);
             long[] a;
-            if (!by.TryGetValue(t, out a)) { a = new long[4]; by[t] = a; }
+            if (!by.TryGetValue(t, out a)) { a = new long[] { 0, 0, 0, 0, 1000, -1 }; by[t] = a; }   // {live n, v, hist n, v, live min ms, max ms}
             return a;
         }
     }
@@ -774,14 +802,15 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static readonly Dictionary<string, int> TriesDay = new Dictionary<string, int>();
         private static volatile string dayState = "off", lastDay = "";
 
-        // 0.6.14, the check again under the new rule (Anthony 2026-11-03): ticks/tickrule.txt says the rule ("rule 2") and lists the
-        // days still to be checked again ("recheck <key>"). A day can be listed only while tickdays.txt notes it failed under rule 1
-        // (a line with no rule field) and its raw file is in the folder. When tickrule.txt is not there (a folder of 0.6.13 or before,
-        // once; or the file lost), every such day is listed; when it is there, its listed keys that no longer qualify (checked again,
-        // or the raw gone) are dropped and the file written again. A listed day is not done: its final pull runs once more (the same
-        // windows, the 15 minutes and the 3 tries, again after a restart while it is listed), the new check's record (rule 2) replaces
-        // the failed one, and the key leaves the list. So a day is checked again at most once even if tickrule.txt goes missing. A
-        // day whose raw file is gone cannot be checked again and stays failed. A day checked again is sent again as a new set.
+        // 0.6.14, the check again under the new rule (Anthony 2026-11-03): at EVERY start (LoadDays) each day tickdays.txt notes failed
+        // under rule 1 (a line with no rule field: 0.6.13 or before wrote it) whose raw file is in the folder is to be checked again
+        // (Recheck); ticks/tickrule.txt ("rule 2", then "recheck <key>" lines) is the record of that list, written again whenever it
+        // differs. A listed day is not done: its final pull runs once more (the same windows, the 15 minutes and the 3 tries, again
+        // after a restart), the new check's record (rule 2) replaces the failed one, and the key leaves the list. A day checked by
+        // 0.6.14 has rule 2, so it is checked again at most once per failed rule 1 record, whatever happens to tickrule.txt; a round
+        // trip to 0.6.13 and back (0.6.13 rewrites the day as a four field line) is healed at the next start of 0.6.14 (the PR #79
+        // re-review, LOW B). A day whose raw file is gone cannot be checked again and stays failed. A day checked again is sent again
+        // as a new set.
         private static readonly HashSet<string> Recheck = new HashSet<string>();
         private static string RuleFile { get { return Path.Combine(Folder, "tickrule.txt"); } }
 
@@ -801,20 +830,14 @@ namespace NinjaTrader.NinjaScript.AddOns
                         if (f.Length == 5 && !int.TryParse(f[4], NumberStyles.Integer, Inv, out rule)) rule = 1;
                         Days[f[0]] = new DayRec { Key = f[0], Check = f[1], Stored = f[2] == "1", Packed = f[3] == "1", Rule = rule };
                     }
-                if (File.Exists(RuleFile))
-                {
+                foreach (DayRec d in Days.Values) if (MayRecheck(d.Key)) Recheck.Add(d.Key);
+                // the record: written when it is not there or lists other days (a key checked again or its raw gone is dropped)
+                HashSet<string> listed = new HashSet<string>();
+                bool there = File.Exists(RuleFile);
+                if (there)
                     foreach (string raw in File.ReadAllLines(RuleFile))
-                        if (raw.StartsWith("recheck ", StringComparison.Ordinal))
-                        {
-                            string key = raw.Substring(8).Trim();
-                            if (MayRecheck(key)) Recheck.Add(key); else write = true;   // checked again, or its raw gone: dropped
-                        }
-                }
-                else
-                {
-                    foreach (DayRec d in Days.Values) if (MayRecheck(d.Key)) Recheck.Add(d.Key);
-                    write = true;
-                }
+                        if (raw.StartsWith("recheck ", StringComparison.Ordinal)) listed.Add(raw.Substring(8).Trim());
+                write = !there || !listed.SetEquals(Recheck);
             }
             if (write) SaveRule();
         }
@@ -991,7 +1014,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static TickCheckResult FinishDay(KeyFiles k, TickDayBuild hist)
         {
             List<TickRec> live = ReadAllLive(k.Key);
-            TickCheckResult chk = TickCheck.Compare(live, hist.Ticks, KnownGaps(k));
+            TickCheckResult chk = TickCheck.Compare(live, hist.Ticks, KnownGaps(k), OpenMsOf(k.Session));
             long liveLost = 0, liveGaps = 0;
             lock (Sync)
             {
@@ -1023,6 +1046,15 @@ namespace NinjaTrader.NinjaScript.AddOns
             ChartBridgeServer.Log("the NQ tick file for " + lastDay + (chk.Passed ? "; queued for The Desk" : "; the check FAILED (no history, or history under " + TickCheck.ThinSharePercent + " percent of the live trades): sent marked failed, the raw file is kept until Anthony rules"));
             dayState = "idle";
             return chk;
+        }
+
+        // The session's open (18:00 New York the evening before) in UTC ms, or long.MinValue when the session cannot be read.
+        private static long OpenMsOf(string session)
+        {
+            DateTime s;
+            if (!DateTime.TryParseExact(session, "yyyy-MM-dd", Inv, DateTimeStyles.None, out s)) return long.MinValue;
+            DateTime ou, cu; ChartBridgeBars.SessionUtc(s, out ou, out cu);
+            return (long)Math.Round(ChartBridgeTime.UtcMs(ou));
         }
 
         private static string ShareText(TickCheckResult chk)
