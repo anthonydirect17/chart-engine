@@ -4,8 +4,8 @@
 
 In plain words: a day's tick check no longer fails because NinjaTrader's history has a trade or two less than the live capture in
 some seconds. It fails only when the history has no trades, or has under 90 percent of the live capture's trades. A hole is a
-time of a minute or more between two history trades (or from the session's open) in which the live capture traded, or which the
-live capture could not see (an `inGap` hole): the day still passes, and the hole is listed so the backtests skip that stretch. Monday 2026-11-02 on WORK, which failed under the old rule, is checked again once under the new one.
+time of a minute or more between two history trades (or from the session's open, or to its close) in which the live capture
+traded, or which the live capture could not see (an `inGap` hole, never at the close): the day still passes, and the hole is listed so the backtests skip that stretch. Monday 2026-11-02 on WORK, which failed under the old rule, is checked again once under the new one.
 The chart page itself does not change (1.42.3 only follows the version).
 
 Install, in this order: **first The Desk's update that accepts the status `short`, then the F5.** The Desk of today refuses a day
@@ -51,28 +51,35 @@ the summary as information only. NinjaTrader's history stays the day's record, a
   as before.
 - **A hole** is bounded by history trades (the coordinator for Anthony, the PR #79 third re-review: a gap in history is the time
   between two history trades; whether the market traded in it is shown by the live trades inside it). Take every time between
-  two consecutive history trades, and the time from the session's open (18:00 New York) to history's first trade. It is a hole when
-  it is **at least 60,000 ms** long (`TickCheck.HoleMinMs`; in ms, so where it falls in its seconds no longer matters) and either:
-  - **a live trade lies inside it beyond the skew margin** (`inGap` false): later than its start plus 4 ms (`SkewEarlyMs`) and
-    earlier than its end less 106 ms (`SkewLateMs`). History's time runs 4 ms early to 106 ms late against the live feed, so a live
-    trade within 4 ms after the history trade that starts the time, or within 106 ms before the one that ends it, can be that
-    history trade's twin; a live trade further inside cannot, so it proves history lost trades there. Or:
+  two consecutive history trades, the time from the session's open (18:00 New York) to history's first trade, and the time from
+  history's last trade to the session's close (17:00). It is a hole when it is **at least 60,000 ms** long (`TickCheck.HoleMinMs`;
+  in ms, so where it falls in its seconds no longer matters) and either:
+  - **a live trade lies inside it more than 1,000 ms from both ends** (`inGap` false; `TickCheck.HoleMarginMs`). History's time was
+    measured 4 ms early to 106 ms late against the live feed (`SkewEarlyMs`, `SkewLateMs`, kept as the record of what was
+    measured, from five seconds of one day), so a live trade close to a history trade that bounds the time can be that trade's
+    twin. The margin is a second on purpose, far wider than the measured skew: a few stamps later than 106 ms would otherwise make
+    false holes in a quiet market, and a second costs nothing at minute scale. A live trade further inside proves history lost
+    trades there. Or:
   - **it overlaps a known capture gap** (`inGap` true; the coordinator's decision), even with no live trade in it: the live capture
     could not see that time and history has nothing, so nobody vouches for it. WORK starts after the open most days (an open start
-    gap), so a history that starts late gives an `inGap` hole from the open.
+    gap), so a history that starts late gives an `inGap` hole from the open. **Not at the close**: from history's last trade to the
+    close only live evidence counts (the third re-review), so an early close (a holiday: neither feed trades after the halt, and
+    ChartBridge's sessions have no early closes) or a capture that ends with an open end gap lists nothing there. This covers the
+    60 s to 300 s end of a session the caretaker's early end test does not; longer ones the caretaker also skips by CME's calendar.
 
-  A hole is listed `{"from": the history trade before it (or the open), "to": the history trade after it (exclusive), "live": the
-  live trades inside, "inGap"}`, in UTC ms and **not aligned to seconds**. What is missed: only a history silence of a minute or more
-  with no live trade beyond the skew margin and no known gap, which means the market itself was quiet (the live feed saw no trade
-  either). The probes (made-up random trades, a fixed seed): history skewed 4 ms early to 106 ms late at 0.05 to 20 trades a
-  second gives 0 false holes in 360 captures of 10 minutes (the margin the other way round, 106 ms after the start and 4 ms before
-  the end, would give 63); a real 60.0 s history silence starting at a random millisecond is listed every time a live trade falls
-  inside it beyond the margin: 200 of 200 at 0.2, 1, 2, 5 and 20 trades a second, and 190 of 200 at 0.05 (the other 10 had no live
-  trade inside). The time from history's last trade to the close is not looked at: ChartBridge's sessions have no early closes, and
-  the data caretaker on the server already turns a late start or an early end into skip spans by CME's real calendar. Holes never
-  fail the day. The Desk and the caretaker should skip every hole, either kind.
+  A hole is listed `{"from": the history trade before it (or the open), "to": the history trade after it or the close (exclusive),
+  "live": the live trades inside, "inGap"}`, in UTC ms and **not aligned to seconds**. What is missed: only a history silence of a
+  minute or more with no live trade more than a second inside it and no known gap, which means the market itself was quiet (the
+  live feed saw no trade either). The probes (made-up random trades, a fixed seed; the skew as measured with 1 percent of the
+  stamps 107 to 300 ms late, worse than measured): 0 false holes in 600 captures of 10 minutes at 0.02, 0.05, 0.2, 1, 5 and 20
+  trades a second (100 each; the measured 4 / 106 ms margin would give 4 at 0.02 and 1 at 0.05); a real 60.0 s history silence
+  starting at a random millisecond is listed every time a live trade falls inside it beyond the margin: 200 of 200 at 0.2, 1, 2, 5
+  and 20 trades a second, 192 of 200 at 0.05 and 128 of 200 at 0.02 (the rest had no live trade inside beyond the margin). Holes
+  never fail the day. The Desk and the caretaker should skip every hole, either kind.
 - **The statuses.** `exact` every second the same; `filled` history has more in some seconds, never less; **`short`** (new, passes)
-  history has fewer trades or less volume in some seconds but is not thin. A day with a hole that has live trades inside is `short`;
+  history has fewer trades or less volume in some seconds but is not thin. A day with a hole that has live trades inside is `short` in practice
+  (the live trade that proves it sits in a whole second with no history trade; the one exception is a day that fails the 90
+  percent test, which is `failed`);
   a day with only `inGap` holes can be `exact` or `filled`; `holes` is its own field, so every passed day can be read for it. `failed` as
   above. Every place that treats a day as passed now asks one helper, `TickCheck.IsPassed` (exact, filled, short): `Passed`, the raw
   deleted once stored and packed (`DayTaken`), the last part kept and asked again (`AskPacked`), the look at the folder that
@@ -106,10 +113,12 @@ touched. `/diag` `tickFile.recheck` lists the days waiting.
   95 percent short with the per second counts kept; 90 percent passes and 89 fails; less volume in a second is short; history's
   4 ms early to 106 ms late stamps (and every trade 106 ms late) give per second differences, short, never a hole; an 81 second
   history silence with live trades passes and is listed from history trade to history trade with its live trades; a 60.0 s
-  history silence is a hole and a 59.9 s one is not; one live trade 4 ms after the start of a 62 s silence or 106 ms before its end
-  is no hole, 5 ms or 107 ms is; the random skew probes give 0 false holes (the margin the other way round would give 63); a real
-  60.0 s history silence at a random millisecond is listed whenever a live trade is inside beyond the margin, at 0.05 to 20 trades
-  a second; quiet seconds inside a silence count; a history trade between splits it; no trades in either for 200 s or 70 s is no
+  history silence is a hole and a 59.9 s one is not; one live trade 1,000 ms after the start of a 62 s silence or 1,000 ms before its
+  end is no hole, 1,001 ms is; the random skew probes, 1 percent of stamps 107 to 300 ms late, give 0 false holes at 0.02 to 20
+  trades a second (the measured 4 / 106 ms margin would give 5); a real 60.0 s history silence at a random millisecond is listed
+  whenever a live trade is inside beyond the margin, at 0.02 to 20 trades a second; history ending 120 s or 240 s before live's last
+  trade is a hole to the close, an early close with live stopping at the halt is none, an open end gap with no live trade is none,
+  a live trade within the margin of history's last trade only is none; quiet seconds inside a silence count; a history trade between splits it; no trades in either for 200 s or 70 s is no
   hole, and the 70 s over a capture gap is an `inGap` hole; only the covered span counts; a known gap leaves the span (85 percent then fails), its edge
   seconds stay, open ends, gaps covering everything fall back to the whole span, a gap does not split a hole; a 6 minute skewed
   capture whose gaps leave 3 seconds, and one through `FinishDay` with every chunk flagged, are judged on the whole span and pass;

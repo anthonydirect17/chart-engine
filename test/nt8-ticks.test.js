@@ -130,6 +130,7 @@ test('tick file (Anthony 2026-11-03, 0.6.14): the day check fails only on no his
   const chk = between(ticks, 'public static class TickCheck', 'public class TickDayBuild');
   assert.match(chk, /public const int ThinSharePercent = 90;/);
   assert.match(chk, /public const int HoleMinMs = 60000;/);
+  assert.match(chk, /public const int HoleMarginMs = 1000;/);
   assert.match(chk, /public static bool IsPassed\(string status\) \{ return status == "exact" \|\| status == "filled" \|\| status == "short"; \}/);
   assert.match(chk, /bool thin = r\.CoveredLive > 0 && r\.CoveredHist \* 100 < r\.CoveredLive \* ThinSharePercent;\s*if \(r\.HistTicks == 0 \|\| thin\) r\.Status = "failed";\s*else if \(r\.SecondsHistShort > 0\) r\.Status = "short";\s*else if \(r\.SecondsLiveMissed > 0\) r\.Status = "filled";\s*else r\.Status = "exact";/);
   assert.ok(!/Holes[^;\n]*Status|Status[^;\n]*Holes/.test(chk), 'holes never decide the status');
@@ -145,7 +146,7 @@ test('tick file (Anthony 2026-11-03, 0.6.14): the day check fails only on no his
     assert.ok(parts.includes('\\"' + k + '\\":'), 'the check has ' + k);
   assert.match(parts, /c\.Append\("\{\\"from\\":"\)\.Append\(chk\.Holes\[i\]\[0\]\)\.Append\(",\\"to\\":"\)\.Append\(chk\.Holes\[i\]\[1\]\)\.Append\(",\\"live\\":"\)\.Append\(chk\.Holes\[i\]\[2\]\)/);
   // the known capture gaps go to the check
-  assert.match(ticks, /TickCheckResult chk = TickCheck\.Compare\(live, hist\.Ticks, KnownGaps\(k\), OpenMsOf\(k\.Session\)\);/);
+  assert.match(ticks, /TickCheckResult chk = TickCheck\.Compare\(live, hist\.Ticks, KnownGaps\(k\), OpenMsOf\(k\.Session, true\), OpenMsOf\(k\.Session, false\)\);/);
 });
 
 test('tick file (0.6.14): a day failed under the old rule with its raw kept is checked again once (tickrule.txt)', () => {
@@ -173,8 +174,9 @@ test('tick file (0.6.14 review): the span floor, the skew trim, inGap holes, and
   const holes = between(ticks, 'private static void FindHoles(', 'private static long Between(');
   assert.match(holes, /for \(int i = openMs == long\.MinValue \? 1 : 0; i < hu\.Length; i\+\+\)/, 'from the open to the first history trade, then between history trades');
   assert.match(holes, /if \(b - a < HoleMinMs\) continue;/);
-  assert.match(holes, /if \(inGap \|\| Between\(lu, a \+ SkewEarlyMs, b - SkewLateMs\) > 0\) r\.Holes\.Add\(new long\[\] \{ a, b, Between\(lu, a, b\), inGap \? 1 : 0 \}\);/);
-  assert.match(ticks, /TickCheck\.Compare\(live, hist\.Ticks, KnownGaps\(k\), OpenMsOf\(k\.Session\)\);/);
+  assert.match(holes, /if \(inGap \|\| Between\(lu, a \+ HoleMarginMs, b - HoleMarginMs\) > 0\) r\.Holes\.Add\(new long\[\] \{ a, b, Between\(lu, a, b\), inGap \? 1 : 0 \}\);/);
+  // the close: live evidence only, never inGap (third re-review LOW 1)
+  assert.match(holes, /if \(closeMs != long\.MinValue && closeMs - last >= HoleMinMs && Between\(lu, last \+ HoleMarginMs, closeMs - HoleMarginMs\) > 0\)\s*r\.Holes\.Add\(new long\[\] \{ last, closeMs, Between\(lu, last, closeMs\), 0 \}\);/);
   // every start lists every failed rule 1 day with its raw (re-review LOW B)
   assert.match(between(ticks, 'private static void LoadDays()', 'private static bool MayRecheck('), /foreach \(DayRec d in Days\.Values\) if \(MayRecheck\(d\.Key\)\) Recheck\.Add\(d\.Key\);\s*HashSet<string> listed/);
   const parts = between(ticks, 'private static List<string> DayParts(KeyFiles k', 'private static readonly Regex StoredRx');

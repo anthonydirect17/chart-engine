@@ -22,9 +22,9 @@
 //    second (TickCheck). The history is the master when the check passes: exact, filled (history has trades the live capture
 //    missed, never fewer) or, from 0.6.14 (Anthony 2026-11-03), short (history has fewer in some seconds, but at least 90 percent of
 //    the live trades over the span the live capture covered); it fails only when history has no trades or is under that 90 percent.
-//    Holes (60 seconds or more between two history trades, or from the session's open to history's first trade, with a live
-//    trade inside beyond the skew margin, or over a known capture gap: inGap) never fail the day: they are listed in the check
-//    for the backtests to skip. A day failed under the old rule with its raw still there is checked again once (tickrule.txt). The day
+//    Holes (60 seconds or more between two history trades, or from the session's open to history's first trade, or from its last
+//    trade to the close, with a live trade inside more than 1 s from both ends, or over a known capture gap: inGap, not at the
+//    close) never fail the day: they are listed in the check for the backtests to skip. A day failed under the old rule with its raw still there is checked again once (tickrule.txt). The day
 //    goes to POST /api/ticks/day in parts. The raw is deleted only when the check passed and The Desk answers "stored" and "packed" true; a failed
 //    day keeps its raw until Anthony rules.
 //    Stored but not packed (2026-11-03): only the day's last part is kept (.day.last) and sent again at most once a day in the
@@ -91,11 +91,13 @@ namespace NinjaTrader.NinjaScript.AddOns
         // A hole is bounded by history trades (the coordinator for Anthony, the PR #79 third re-review): a time with no history trade
         // of at least HoleMinMs, in ms (no second alignment, so a real minute is never missed by where it falls in its seconds).
         public const int HoleMinMs = 60000;
-        // The skew measured on WORK (2026-11-02): history's time of a trade runs 4 ms early to 106 ms late against the live feed
-        // (history = live + d, d from -4 to +106 ms). So a live trade can be the twin of the history trade that starts a silence only
-        // when it is at most SkewEarlyMs after it, and of the one that ends it only when it is at most SkewLateMs before it. A live
-        // trade further inside proves history lost trades there.
+        // The skew measured on WORK (2026-11-02, five seconds of one day): history's time of a trade runs 4 ms early to 106 ms late
+        // against the live feed (history = live + d, d from -4 to +106 ms). Kept as the record of what was measured.
         public const int SkewEarlyMs = 4, SkewLateMs = 106;
+        // The margin a live trade must keep from both history trades that bound a silence to prove history lost trades there: wider
+        // than the measured skew on purpose (the coordinator for Anthony, the PR #79 third re-review: a few stamps later than 106 ms
+        // would otherwise make false holes in a quiet market; a second costs nothing at minute scale).
+        public const int HoleMarginMs = 1000;
         // The coordinator for Anthony, 2026-11-03 (the PR #79 review): judge on the whole first to last live span when the span left
         // by the known gaps has fewer than 600 seconds or fewer than 1,000 live trades (a short run, or most chunks flagged: a sliver
         // of a span would let the skew fail a good day).
@@ -106,8 +108,9 @@ namespace NinjaTrader.NinjaScript.AddOns
         // The statuses that pass: history is the day's record.
         public static bool IsPassed(string status) { return status == "exact" || status == "filled" || status == "short"; }
 
-        public static TickCheckResult Compare(IList<TickRec> live, IList<TickRec> hist) { return Compare(live, hist, null, long.MinValue); }
-        public static TickCheckResult Compare(IList<TickRec> live, IList<TickRec> hist, IList<long[]> gaps) { return Compare(live, hist, gaps, long.MinValue); }
+        public static TickCheckResult Compare(IList<TickRec> live, IList<TickRec> hist) { return Compare(live, hist, null, long.MinValue, long.MinValue); }
+        public static TickCheckResult Compare(IList<TickRec> live, IList<TickRec> hist, IList<long[]> gaps) { return Compare(live, hist, gaps, long.MinValue, long.MinValue); }
+        public static TickCheckResult Compare(IList<TickRec> live, IList<TickRec> hist, IList<long[]> gaps, long openMs) { return Compare(live, hist, gaps, openMs, long.MinValue); }
 
         // Per UTC second: the trades and volume of each.
         //   failed: history has no trades, or history is thin: in the span its trades are under ThinSharePercent of live's.
@@ -121,13 +124,13 @@ namespace NinjaTrader.NinjaScript.AddOns
         // fewer than MinCoveredLive live trades, the span is the whole first to last live span (SpanWhole).
         // A hole (never failing the day): the time between two consecutive history trades, or from the session's open (openMs, when
         // known) to history's first trade, from a to b (UTC ms), when b - a >= HoleMinMs and either
-        //   - a live trade lies strictly between a + SkewEarlyMs and b - SkewLateMs (the skew cannot explain it: history lost trades
+        //   - a live trade lies strictly between a + HoleMarginMs and b - HoleMarginMs (no skew explains it: history lost trades
         //     there), or
         //   - the time overlaps a known capture gap (inGap: the live capture could not see it, so nobody vouches for it).
-        // Listed {a, b (exclusive), the live trades strictly inside, inGap}. A time with no live trade beyond the margin and no gap
-        // is a quiet market, not a hole. The time after history's last trade is not looked at (the caretaker skips a late start or an
-        // early end by CME's calendar).
-        public static TickCheckResult Compare(IList<TickRec> live, IList<TickRec> hist, IList<long[]> gaps, long openMs)
+        // And the time from history's last trade to the session's close (closeMs, when known), on live evidence only (never inGap: an
+        // early close or a capture that ends with the day lists nothing). Listed {a, b (exclusive), the live trades strictly inside,
+        // inGap}. A time with no live trade beyond the margin and no gap is a quiet market, not a hole.
+        public static TickCheckResult Compare(IList<TickRec> live, IList<TickRec> hist, IList<long[]> gaps, long openMs, long closeMs)
         {
             TickCheckResult r = new TickCheckResult();
             SortedDictionary<long, long[]> by = new SortedDictionary<long, long[]>();   // second -> {live n, live v, hist n, hist v}
@@ -153,7 +156,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if (missedListed++ < DetailMax) r.Detail.Add(new long[] { kv.Key, a[0], a[2] });
                 }
             }
-            FindHoles(r, live, hist, gaps, openMs);
+            FindHoles(r, live, hist, gaps, openMs, closeMs);
             if (r.LiveTicks > 0)
             {
                 long all = (liveTo - liveFrom) / 1000 + 1;
@@ -171,8 +174,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             return r;
         }
 
-        // The holes (see Compare), oldest first: every time between consecutive history trades, and from the open to the first.
-        private static void FindHoles(TickCheckResult r, IList<TickRec> live, IList<TickRec> hist, IList<long[]> gaps, long openMs)
+        // The holes (see Compare), oldest first: from the open to history's first trade, between consecutive history trades, and from
+        // history's last trade to the close (live evidence only).
+        private static void FindHoles(TickCheckResult r, IList<TickRec> live, IList<TickRec> hist, IList<long[]> gaps, long openMs, long closeMs)
         {
             if (hist.Count == 0) return;
             long[] hu = new long[hist.Count], lu = new long[live.Count];
@@ -184,8 +188,11 @@ namespace NinjaTrader.NinjaScript.AddOns
                 long a = i == 0 ? openMs : hu[i - 1], b = hu[i];
                 if (b - a < HoleMinMs) continue;
                 bool inGap = OverGap(a, b, gaps);
-                if (inGap || Between(lu, a + SkewEarlyMs, b - SkewLateMs) > 0) r.Holes.Add(new long[] { a, b, Between(lu, a, b), inGap ? 1 : 0 });
+                if (inGap || Between(lu, a + HoleMarginMs, b - HoleMarginMs) > 0) r.Holes.Add(new long[] { a, b, Between(lu, a, b), inGap ? 1 : 0 });
             }
+            long last = hu[hu.Length - 1];
+            if (closeMs != long.MinValue && closeMs - last >= HoleMinMs && Between(lu, last + HoleMarginMs, closeMs - HoleMarginMs) > 0)
+                r.Holes.Add(new long[] { last, closeMs, Between(lu, last, closeMs), 0 });
         }
 
         // The values of the sorted array strictly between lo and hi.
@@ -1003,7 +1010,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static TickCheckResult FinishDay(KeyFiles k, TickDayBuild hist)
         {
             List<TickRec> live = ReadAllLive(k.Key);
-            TickCheckResult chk = TickCheck.Compare(live, hist.Ticks, KnownGaps(k), OpenMsOf(k.Session));
+            TickCheckResult chk = TickCheck.Compare(live, hist.Ticks, KnownGaps(k), OpenMsOf(k.Session, true), OpenMsOf(k.Session, false));
             long liveLost = 0, liveGaps = 0;
             lock (Sync)
             {
@@ -1037,13 +1044,14 @@ namespace NinjaTrader.NinjaScript.AddOns
             return chk;
         }
 
-        // The session's open (18:00 New York the evening before) in UTC ms, or long.MinValue when the session cannot be read.
-        private static long OpenMsOf(string session)
+        // The session's open (18:00 New York the evening before) or close (17:00, SessionUtc: no early closes) in UTC ms, or
+        // long.MinValue when the session cannot be read.
+        private static long OpenMsOf(string session, bool open)
         {
             DateTime s;
             if (!DateTime.TryParseExact(session, "yyyy-MM-dd", Inv, DateTimeStyles.None, out s)) return long.MinValue;
             DateTime ou, cu; ChartBridgeBars.SessionUtc(s, out ou, out cu);
-            return (long)Math.Round(ChartBridgeTime.UtcMs(ou));
+            return (long)Math.Round(ChartBridgeTime.UtcMs(open ? ou : cu));
         }
 
         private static string ShareText(TickCheckResult chk)
