@@ -1,5 +1,46 @@
 # Changelog
 
+## Unreleased (2026-11-03): the NQ tick file's final pull catches up on weekday mornings before 09:15; the raw file deleted once packed
+
+In plain words: when Anthony closes NinjaTrader before 16:15 (e.g. 16:05), that session's final tick pull never ran that day. Now
+ChartBridge may also start that pull on a weekday morning, from its start until 09:15 New York, for a session that has closed and
+is not done yet. It never pulls the session that is still open (in the morning, today's session that opened at 18:00 yesterday).
+Only the tick file's final pull gets the morning: the 1 second bars keep their 16:15 to 17:50 window, and the day file is still
+sent to The Desk from 16:15. And a day The Desk stored but has not packed yet is now asked about again once a day, so its raw
+file is deleted once The Desk says it is packed. ChartBridge only (`nt8/ChartBridgeTicks.cs`, a small hook in `nt8/ChartBridge.cs` and
+`nt8/ChartBridgeBars.cs`): a recompile in NinjaTrader when it is released.
+
+- **The morning window** (`ChartBridgeTicks.InMorningWindow`, `InDayStartWindow`). Anthony 2026-11-03: "The morning catch-up
+  before 09:15 is fine." Monday to Friday, a request must start before 09:15:00 New York. The weekend keeps its own rule (Saturday,
+  and Sunday before 17:50). Everything else is as before: one request at a time through the gate, only when the 1 second bars
+  asked nothing that pass, the same check, write, send and deletion rules, 15 minutes and 3 tries, done days never pulled again.
+- **Nothing starts at 09:15, nothing is cut at 09:15.** The gate checks the window at the moment it would send the request
+  (`BarsTicket.MayStart`). A pull that waited at the gate until 09:15 goes nowhere and is not counted as a try; it goes in the
+  evening window. A pull already out at 09:15 finishes and its day is written whole and recorded.
+- **An old day NinjaTrader no longer has whole.** Less history than the live capture: the check says failed, the day is sent
+  marked failed and the raw file is kept until Anthony rules (as before). No trades at all: reported ("NinjaTrader has no trades
+  for it"), tried again after 15 minutes, 3 times, never marked done; the raw file is kept. Nothing is guessed.
+- **/diag** `tickFile.dayState` outside the windows now reads "waiting: the final pull goes 16:15 to 17:50 ET on weekdays, before
+  09:15 ET on weekday mornings, and on the weekend"; a morning pull shows "(the morning catch-up)".
+- **The raw file deleted once packed** (the coordinator for Anthony, 2026-11-03: close the tick data loop). Until now a day The
+  Desk stored but had not packed yet kept its raw file for good, because ChartBridge never asked again. Now it keeps just that
+  day's last part (`.day.last`, the very part it sent) and, at most once a New York day in the final pull's windows (16:15 to
+  18:00 on weekdays, the weekend, and weekday mornings before 09:15), sends it to The Desk again. The Desk already has the day, so
+  it only answers whether it is packed. Once the answer says stored and packed, ChartBridge deletes the raw file, its state and
+  the kept part, notes the day packed in `tickdays.txt`, and `/diag` says so. Not packed yet, The Desk away (404) or not answering:
+  everything is kept and asked again later. A failed day is never asked and keeps its raw until Anthony rules. A day stored before
+  this change has no kept part, so it is not asked; its raw stays listed in `rawOld`. `/diag` `tickFile.packWait` lists the days
+  waiting.
+- **Tests:** `nt8/check/BarsHarness.cs` (`npm run check:orders`): the window table (08:40, 00:30, 09:14:59 yes; 09:15:00 no;
+  the weekend as before; the 1 second bars not widened); a Wednesday 08:40 start pulls Tuesday's closed session and never the open
+  one; 09:14:59 starts, 09:15:00 does not; a pull the gate reaches at 09:15 never goes out and is not a try; a pull out at 09:15
+  finishes; Saturday 08:40 pulls, Sunday 17:55 does not; short history fails the check, no history is retried and reported; the
+  bars worker at 08:40 asks no 1 second request. The raw deleted once packed: stored and not packed keeps the raw and only the
+  last part, not asked again that day, asked the next window, at most once a day, never in trading hours; 404 and a time-out keep
+  everything (no new ask for 15 minutes after a time-out); packed true deletes the raw, its state and the part and `tickdays.txt`
+  and `/diag` say packed; a failed day is never asked or deleted and stays in `rawOld`. `test/nt8-ticks.test.js` checks the code
+  and the `dayState` words.
+
 ## chart 1.42.1 (2026-11-02): the bar trail lines on the ticket, short; no false "folder is not set" warning with the League Mirror (page only, no F5)
 
 In plain words: two small fixes on the page. The order ticket's bar trail line now says just "Bar trail ended" or "Bar trail

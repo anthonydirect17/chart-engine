@@ -4246,6 +4246,9 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static void RunBars(GateJob j, Instrument inst, DateTime fromNt, DateTime toNt, Func<bool> dropped, BarsTicket t, Action done, Func<Bars, object> build)
         {
             if (dropped != null && dropped()) { t.Error = "stopped"; done(); t.Done.Set(); return; }   // stopped since it was queued: nothing goes out
+            bool may = true;
+            try { may = t.MayStart == null || t.MayStart(); } catch (Exception) { may = false; }
+            if (!may) { t.NotStarted = true; t.Error = "not started: its window closed while it waited at the gate"; done(); t.Done.Set(); return; }   // 2026-11-03: the tick day's morning catch-up starts before 09:15 ET or not at all
             try
             {
                 BarsRequest req0 = new BarsRequest(inst, fromNt, toNt);

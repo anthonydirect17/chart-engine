@@ -943,6 +943,10 @@ namespace NinjaTrader.NinjaScript.AddOns
         public double BuildMs;             // 0.6.9: how long that took there
         public volatile string Error;
         public object Job;                 // the gate's own record of it
+        // Anthony 2026-11-03 (the tick day's morning catch-up): when set, the gate asks it at the moment it would send the request to
+        // NinjaTrader; false sends nothing (NotStarted). Never asked once the request is out: one that started may finish.
+        public Func<bool> MayStart;
+        public volatile bool NotStarted;   // MayStart said no: nothing went to NinjaTrader (not a failure, not a try)
     }
 
     // ------------------------------------------------------------------ the bars queue (the fills queue's rules)
