@@ -127,6 +127,11 @@ public static class BarsHarness
             TickFilePacked(dir);         // 2026-11-03: stored, not packed: the last part sent again once a day; packed: the raw deleted
             TickFileGhosts(dir);         // review LOW 3: the raw deleted before the key is forgotten; no ghost key, no chunk that cannot be read
             TickFileAskedOnce(dir);      // review LOW 4: the asked date kept in memory too; LOW 2: a flagged day packed via the master
+            TickCheckRule();             // 0.6.14 (Anthony 2026-11-03): failed only when history is empty or under 90 percent; short; holes (pure)
+            TickFileRule(dir);           // 0.6.14: the known gaps from the flagged chunks, the summary's share and holes, short passed everywhere
+            TickFileRecheck(dir);        // 0.6.14: a day failed under the old rule, its raw kept, checked again once
+            TickFileAllFlagged(dir);     // 0.6.14 review LOW 1: every chunk flagged, skewed history: judged on the whole span
+            TickFileRefusedAgain(dir);   // 0.6.14 review LOW 2: refused again after a recheck: no resend loop; the recovery
         }
         catch (Exception ex) { Check(false, "bars harness threw: " + ex); }
         finally
@@ -557,7 +562,7 @@ public static class BarsHarness
                   "S2 OneSession: the request: MNQ 12-26, 1 minute, Last, DoNotMerge, the instrument's trading hours, from the day before the open to now (NinjaTrader's time): " + (r == null ? "none" : r.From + " to " + r.To));
             string b = d2.All().FirstOrDefault() ?? "";
             Check(b.StartsWith("{\"v\":1,\"source\":\"chartbridge\",\"bridge\":\"" + ChartBridgeServer.Version + "\",\"pc\":\"HOME\",\"contract\":\"MNQ 12-26\",\"root\":\"MNQ\",\"tick\":0.25,\"session\":\"2026-09-30\",\"tf\":\"1m\",\"stamp\":\"open\",\"bars\":[[") &&
-                  ChartBridgeServer.Version == "0.6.13", "S2 OneSession: contract v1 fields, bridge 0.6.13, pc HOME: " + (b.Length > 160 ? b.Substring(0, 160) : b));
+                  ChartBridgeServer.Version == "0.6.14", "S2 OneSession: contract v1 fields, bridge 0.6.14, pc HOME: " + (b.Length > 160 ? b.Substring(0, 160) : b));
             Check(Ts(b).Count > 0 && Ts(b)[0] == Ms(Utc(2026, 9, 29, 22, 0)) && b.Contains("[" + Ms(Utc(2026, 9, 29, 22, 0)) + ",25000,25001,24999.5,25000.25,10]"),
                 "S2 OneSession: the first bar is the 18:00 ET minute (NinjaTrader's 18:01 close stamp less 60 s), prices and volume exact");
         }
@@ -1536,8 +1541,498 @@ public static class BarsHarness
         TickCheckResult failed = TickCheck.Compare(more, live);
         Check(failed.Status == "failed" && failed.SecondsHistShort == 1 && failed.TicksHistShort == 2 && !failed.Passed, "tick check: live has trades the history lacks: failed");
         TickCheckResult vol = TickCheck.Compare(new List<TickRec> { Tr(t0, 25000, 5) }, new List<TickRec> { Tr(t0, 25000, 3) });
-        Check(vol.Status == "failed", "tick check: the same count with less volume in history: failed");
+        Check(vol.Status == "short" && vol.Passed, "tick check (0.6.14): the same count with less volume in history: short (passed)");
         Check(TickCheck.Compare(live, new List<TickRec>()).Status == "failed", "tick check: no history at all: failed");
+    }
+
+    // ------------------------------------------------------------ 0.6.14: the day check's rule (Anthony 2026-11-03)
+    // Made-up trades only. One trade a second from t0 for n seconds, at ms into each second.
+    static List<TickRec> Every(long t0, int from, int to, int ms) { List<TickRec> l = new List<TickRec>(); for (int i = from; i < to; i++) l.Add(Tr(t0 + i * 1000L + ms, 25000, 1)); return l; }
+
+    static void TickCheckRule()
+    {
+        long t0 = 1790719200000L;
+        Check(TickCheck.ThinSharePercent == 90 && TickCheck.HoleMinMs == 60000 && TickCheck.Rule == 2, "tick rule: the named constants: 90 percent, 60,000 ms, rule 2");
+        Check(TickCheck.IsPassed("exact") && TickCheck.IsPassed("filled") && TickCheck.IsPassed("short") && !TickCheck.IsPassed("failed") && !TickCheck.IsPassed(null), "tick rule: exact, filled and short pass; failed does not");
+        // history short in 5 of 100 seconds: 95 percent: passes as short, the counts kept as information
+        List<TickRec> live = Every(t0, 0, 100, 500);
+        List<TickRec> h95 = live.Where((x, i) => i % 20 != 7).ToList();
+        TickCheckResult r = TickCheck.Compare(live, h95);
+        Check(r.Status == "short" && r.Passed && r.SecondsHistShort == 5 && r.TicksHistShort == 5 && r.CoveredLive == 100 && r.CoveredHist == 95 && Math.Abs(r.HistoryShare - 0.95) < 1e-9 && r.Holes.Count == 0,
+              "tick rule: history short in some seconds, 95 percent of live: short (passed), secondsHistShort and ticksHistShort kept: " + r.Status + " " + r.HistoryShare);
+        // the 90 percent line: 90 of 100 passes, 89 of 100 fails
+        TickCheckResult r90 = TickCheck.Compare(live, live.Where((x, i) => i % 10 != 3).ToList());
+        TickCheckResult r89 = TickCheck.Compare(live, live.Where((x, i) => i % 10 != 3 && i != 98).ToList());
+        Check(r90.Status == "short" && r90.CoveredHist == 90 && r89.Status == "failed" && r89.CoveredHist == 89 && !r89.Passed, "tick rule: 90 percent passes (short), 89 percent fails (history thin): " + r90.Status + " " + r89.Status);
+        // the same count, less volume in a second: short, not failed
+        TickCheckResult vol = TickCheck.Compare(new List<TickRec> { Tr(t0, 25000, 5) }, new List<TickRec> { Tr(t0, 25000, 3) });
+        Check(vol.Status == "short" && vol.SecondsHistShort == 1, "tick rule: the same count with less volume in history: short");
+        // history more somewhere and less somewhere: short (filled is never less)
+        List<TickRec> mixed = h95.ToList(); mixed.Add(Tr(t0 + 50500, 25000, 1)); mixed.Add(Tr(t0 + 50600, 25000, 1));
+        Check(TickCheck.Compare(live, mixed).Status == "short", "tick rule: more in one second and less in others: short");
+        // no history at all: failed
+        TickCheckResult none = TickCheck.Compare(live, new List<TickRec>());
+        Check(none.Status == "failed" && none.CoveredHist == 0 && none.HistoryShare == 0, "tick rule: no history: failed");
+
+        // (coordinator, WORK's look at Monday 2026-11-02) history stamps a trade 4 ms early to 106 ms late, so a trade late in its
+        // second lands in the next one: per second differences, never a hole, never a failure
+        List<TickRec> sk = new List<TickRec>(), skh = new List<TickRec>();
+        int[] skew = { -4, 106, 30, 99, 0, 57 };
+        for (int i = 0; i < 400; i++)
+        {
+            int ms = i % 3 == 0 ? 950 + (i % 50) : 100 + i % 700;   // every third trade in the last .950 to .999 of its second
+            long u = t0 + i * 1000L + ms; sk.Add(Tr(u, 25000, 1)); sk.Add(Tr(u + 1, 25000, 1));
+            skh.Add(Tr(u + skew[i % skew.Length], 25000, 1)); skh.Add(Tr(u + 1 + skew[(i + 1) % skew.Length], 25000, 1));
+        }
+        TickCheckResult rs = TickCheck.Compare(sk, skh);
+        Check(rs.SecondsHistShort > 50 && rs.Holes.Count == 0 && rs.Status == "short" && rs.Passed && rs.HistoryShare >= 0.99,
+              "tick rule: NinjaTrader's history stamping 4 ms early to 106 ms late: history short in " + rs.SecondsHistShort + " seconds, no hole, passed (short, share " + rs.HistoryShare + ")");
+        // the worst skew everywhere: every history trade 106 ms late, each one in the next second (one trade a second at .950)
+        TickCheckResult late = TickCheck.Compare(Every(t0, 0, 300, 950), Every(t0, 0, 300, 950).Select(x => Tr(x.U + 106, x.P, x.V)).ToList());
+        Check(late.Holes.Count == 0 && late.Status == "short" && late.SecondsHistShort == 1 && late.SecondsLiveMissed == 1 && late.CoveredHist == 299,
+              "tick rule: every history trade 106 ms late: no hole (history has a trade in every second but the first), short: " + late.Status + " " + late.SecondsHistShort + " " + late.Holes.Count);
+
+        // a hole: history has no trade for 81 s (from its trade at 99.4 s to its trade at 180.4 s) while live traded 80 times, in a
+        // 1,000 second day (92 percent): passes, the hole listed from history trade to history trade, with the live trades inside
+        List<TickRec> day = Every(t0, 0, 1000, 400);
+        List<TickRec> hHole = day.Where(x => x.U < t0 + 100000 || x.U >= t0 + 180000).ToList();
+        TickCheckResult rh = TickCheck.Compare(day, hHole);
+        Check(rh.Status == "short" && rh.Passed && rh.Holes.Count == 1 && rh.Holes[0][0] == t0 + 99400 && rh.Holes[0][1] == t0 + 180400 && rh.Holes[0][2] == 80 && rh.Holes[0][3] == 0,
+              "tick rule: an 81 second history silence with live trades never fails the day; listed from history trade to history trade, with its live trades: " + string.Join(";", rh.Holes.Select(h => h[0] - t0 + "-" + (h[1] - t0) + "/" + h[2]).ToArray()));
+        // the third re-review: a hole is bounded by history trades and measured in ms: 60.0 s is a hole, 59.9 s is not (live every
+        // 100 ms; history the same with none strictly between its trades at a and b)
+        Check(TickCheck.HoleMinMs == 60000 && TickCheck.HoleMarginMs == 1000 && TickCheck.SkewEarlyMs == 4 && TickCheck.SkewLateMs == 106, "tick rule: the constants: 60,000 ms, a 1,000 ms margin, the measured skew 4 ms early and 106 ms late");
+        List<TickRec> dense = new List<TickRec>();
+        for (int i = 0; i < 3000; i++) dense.Add(Tr(t0 + 37 + i * 100L, 25000, 1));
+        foreach (long len in new long[] { 60000, 59900 })
+        {
+            long ha = t0 + 100037, hb = ha + len;
+            TickCheckResult rl = TickCheck.Compare(dense, dense.Where(x => x.U <= ha || x.U >= hb).ToList());
+            Check(len == 60000 ? rl.Holes.Count == 1 && rl.Holes[0][0] == ha && rl.Holes[0][1] == hb && rl.Holes[0][2] == 599 : rl.Holes.Count == 0,
+                  "tick rule: a " + (len / 1000.0).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) + " s history silence with live trades inside: " + (len == 60000 ? "a hole (not second-aligned: from " + (ha - t0) + " to " + (hb - t0) + ")" : "not a hole"));
+        }
+        // the margin (HoleMarginMs, 1,000 ms, wider than the measured skew on purpose): one live trade inside a 62 s history silence.
+        // Within 1,000 ms of either history trade that bounds it: no hole; further in, a hole.
+        List<TickRec> hm = Every(t0, 0, 100, 500).Concat(Every(t0, 161, 300, 500)).ToList();   // history trades at 99.5 s and 161.5 s
+        foreach (long[] e in new[] { new long[] { 1000, 0 }, new long[] { 1001, 1 }, new long[] { 62000 - 1000, 0 }, new long[] { 62000 - 1001, 1 } })
+        {
+            List<TickRec> lm = hm.ToList(); lm.Add(Tr(t0 + 99500 + e[0], 25000, 1));
+            TickCheckResult rmg = TickCheck.Compare(lm, hm);
+            Check(rmg.Holes.Count == e[1], "tick rule: one live trade " + e[0] + " ms after the history trade that starts a 62 s silence: " + (e[1] == 1 ? "a hole" : "no hole (inside the margin)"));
+        }
+        // probes with made-up random trades (a fixed seed), quiet stretches included. The skew: as measured (4 ms early to 106 ms
+        // late), with 1 percent of the stamps 107 to 300 ms late (worse than measured).
+        Random pr = new Random(20261103);
+        Func<int> skewMs = () => pr.Next(100) == 0 ? 107 + pr.Next(194) : -4 + pr.Next(111);
+        double[] rates = { 0.02, 0.05, 0.2, 1.0, 5.0, 20.0 };
+        // (a) skew alone: history the same trades, each skewed: never a hole
+        int probes = 0, falseHoles = 0, narrow = 0;
+        foreach (double rate in rates)
+        {
+            int fr = 0, nr = 0;
+            for (int trial = 0; trial < 100; trial++)
+            {
+                List<TickRec> pl = new List<TickRec>(), ph = new List<TickRec>();
+                int n = Math.Max(1, (int)(rate * 600));
+                for (int i = 0; i < n; i++) { long u = t0 + (long)(pr.NextDouble() * 600000); pl.Add(Tr(u, 25000, 1)); ph.Add(Tr(u + skewMs(), 25000, 1)); }
+                fr += TickCheck.Compare(pl, ph).Holes.Count; probes++;
+                nr += MarginHoles(pl, ph, 4, 106);
+            }
+            falseHoles += fr; narrow += nr;
+            Console.WriteLine("     (skew probes at " + rate.ToString(System.Globalization.CultureInfo.InvariantCulture) + " trades a second: 100 random 10 minute captures, 1 percent of stamps 107 to 300 ms late: " + fr + " false holes; with the measured 4 / 106 ms margin there would be " + nr + ")");
+        }
+        Check(falseHoles == 0, "tick rule: the skew probes (1 percent of stamps 107 to 300 ms late) give no false hole: " + falseHoles + " in " + probes + " (the 4 / 106 ms margin would give " + narrow + ")");
+        // (b) a real 60.0 s history silence (history has no trade for 60.0 s of its own time from a random millisecond), skewed
+        // history: listed whenever a live trade falls inside it beyond the margin; no hole anywhere else
+        foreach (double rate in new[] { 0.02, 0.05, 0.2, 1.0, 2.0, 5.0, 20.0 })
+        {
+            int listed = 0, eligible = 0, tries = 200, elsewhere = 0, wrong = 0;
+            for (int trial = 0; trial < tries; trial++)
+            {
+                List<TickRec> pl = new List<TickRec>(), ph = new List<TickRec>();
+                long g0 = t0 + 120000 + pr.Next(1000), g1 = g0 + 60000;
+                int n = Math.Max(1, (int)(rate * 300));
+                for (int i = 0; i < n; i++)
+                {
+                    long u = t0 + (long)(pr.NextDouble() * 300000), h = u + skewMs();
+                    pl.Add(Tr(u, 25000, 1));
+                    if (h < g0 || h >= g1) ph.Add(Tr(h, 25000, 1));   // the gap is in history's own time
+                }
+                if (ph.Count == 0) continue;
+                long[] hs = ph.Select(x => x.U).OrderBy(x => x).ToArray();
+                long a = hs.Where(x => x < g0).DefaultIfEmpty(long.MinValue).Max(), b = hs.Where(x => x >= g1).DefaultIfEmpty(long.MaxValue).Min();
+                bool can = a != long.MinValue && b != long.MaxValue && pl.Any(x => x.U > a + TickCheck.HoleMarginMs && x.U < b - TickCheck.HoleMarginMs);
+                TickCheckResult pg = TickCheck.Compare(pl, ph);
+                bool got = pg.Holes.Any(x => x[0] == a && x[1] == b);
+                if (can) eligible++;
+                if (got) listed++;
+                if (got != can) wrong++;
+                elsewhere += pg.Holes.Count(x => !(x[0] == a && x[1] == b));
+            }
+            Console.WriteLine("     (a real 60.0 s history silence at a random millisecond, " + rate.ToString(System.Globalization.CultureInfo.InvariantCulture) + " trades a second, skewed history: listed " + listed + " of " + tries +
+                              "; a live trade inside beyond the margin in " + eligible + "; holes elsewhere " + elsewhere + ")");
+            Check(wrong == 0 && elsewhere == 0 && (rate < 1 || listed >= tries * 98 / 100),
+                  "tick rule: a real 60.0 s history silence at " + rate.ToString(System.Globalization.CultureInfo.InvariantCulture) + " trades a second is listed whenever a live trade is inside beyond the margin (" + listed + " of " + tries + "), no hole elsewhere");
+        }
+        // seconds with no live trade inside count: live at 100 to 109 s and 150 to 159 s, nothing between, history none from 100 to
+        // 159 s: one hole from history's trade at 99.4 s to its trade at 160.4 s, 20 live trades
+        List<TickRec> sparse = day.Where(x => x.U < t0 + 110000 || x.U >= t0 + 150000).ToList();
+        TickCheckResult rq = TickCheck.Compare(sparse, sparse.Where(x => x.U < t0 + 100000 || x.U >= t0 + 160000).ToList());
+        Check(rq.Holes.Count == 1 && rq.Holes[0][0] == t0 + 99400 && rq.Holes[0][1] == t0 + 160400 && rq.Holes[0][2] == 20,
+              "tick rule: quiet seconds inside a history silence count to its length: " + string.Join(";", rq.Holes.Select(h => h[0] - t0 + "-" + (h[1] - t0) + "/" + h[2]).ToArray()));
+        // ... and one history trade in between, even in a second with no live trade, splits it: two silences of about 30 s, no hole
+        List<TickRec> hSplit = sparse.Where(x => x.U < t0 + 100000 || x.U >= t0 + 160000).ToList(); hSplit.Add(Tr(t0 + 130200, 25000, 1));
+        Check(TickCheck.Compare(sparse, hSplit).Holes.Count == 0, "tick rule: a history trade in between splits the silence (no hole)");
+        // a quiet market is no hole: neither feed trades for 200 s, or for 70 s
+        List<TickRec> quiet = day.Where(x => x.U < t0 + 100000 || x.U >= t0 + 300000).ToList();
+        Check(TickCheck.Compare(quiet, quiet.ToList()).Holes.Count == 0 && TickCheck.Compare(quiet, quiet.ToList()).Status == "exact", "tick rule: no trades in either for 200 seconds: no hole, exact");
+        List<TickRec> quiet70 = day.Where(x => x.U < t0 + 100000 || x.U >= t0 + 170000).ToList();
+        Check(TickCheck.Compare(quiet70, quiet70.ToList()).Holes.Count == 0, "tick rule: a quiet market where neither feed trades for 70 s is not a hole without a capture gap");
+        TickCheckResult q70g = TickCheck.Compare(quiet70, quiet70.ToList(), new List<long[]> { new long[] { t0 + 99400, t0 + 170400 } });
+        Check(q70g.Holes.Count == 1 && q70g.Holes[0][3] == 1 && q70g.Holes[0][2] == 0, "tick rule: the same 70 s over a known capture gap is an inGap hole (nobody vouches for it)");
+        // the covered span is from the first to the last live trade: history before and after it does not count in the share
+        List<TickRec> wide = Every(t0, 0, 1000, 400);
+        List<TickRec> liveMid = wide.Where(x => x.U >= t0 + 300000 && x.U < t0 + 400000).ToList();
+        List<TickRec> hMid = wide.Where(x => x.U < t0 + 300000 || x.U >= t0 + 400000 || (x.U - t0) / 1000 % 5 == 0).ToList();   // 20 percent inside the span
+        TickCheckResult rspan = TickCheck.Compare(liveMid, hMid);
+        Check(rspan.Status == "failed" && rspan.CoveredLive == 100 && rspan.CoveredHist == 20 && rspan.SecondsLiveMissed > 800,
+              "tick rule: only the span the live capture covered counts: history full outside it does not hide a thin history inside it: " + rspan.Status + " " + rspan.CoveredHist + "/" + rspan.CoveredLive);
+
+        // the known capture gaps: seconds strictly inside a gap leave the span, so history's trades there do not hide a thin history
+        // elsewhere. Live 2 trades a second at 0..199 and 400..999 (a restart between), history 2 trades a second at 200..399 and 85
+        // percent elsewhere.
+        List<TickRec> lg = Every(t0, 0, 200, 300).Concat(Every(t0, 400, 1000, 300)).Concat(Every(t0, 0, 200, 800)).Concat(Every(t0, 400, 1000, 800)).ToList();
+        List<TickRec> hg = lg.Where((x, i) => i % 20 != 1 && i % 20 != 2 && i % 20 != 3).ToList();
+        hg.AddRange(Every(t0, 200, 400, 300)); hg.AddRange(Every(t0, 200, 400, 700));
+        hg = hg.OrderBy(x => x.U).ToList();
+        TickCheckResult noGap = TickCheck.Compare(lg, hg);
+        List<long[]> gaps = new List<long[]> { new long[] { t0 + 199300, t0 + 400300 } };
+        TickCheckResult withGap = TickCheck.Compare(lg, hg, gaps);
+        Check(noGap.Status == "filled" || noGap.Status == "short", "tick rule (set up): without the gap the history's trades in the restart hide the thin history: " + noGap.Status + " " + noGap.HistoryShare);
+        Check(withGap.Status == "failed" && withGap.CoveredLive == 1600 && withGap.CoveredHist == 1360 && withGap.CoveredSeconds == 800 && !withGap.SpanWhole && Math.Abs(withGap.HistoryShare - 0.85) < 1e-9,
+              "tick rule: a known capture gap leaves the span (seconds strictly between its two live trades): 85 percent fails: " + withGap.Status + " " + withGap.CoveredHist + "/" + withGap.CoveredLive);
+        Check(!TickCheck.InGap(t0 + 199000, gaps) && TickCheck.InGap(t0 + 200000, gaps) && TickCheck.InGap(t0 + 399000, gaps) && !TickCheck.InGap(t0 + 400000, gaps), "tick rule: the gap's edge seconds stay in the span");
+        Check(TickCheck.InGap(t0, new List<long[]> { new long[] { long.MinValue, t0 + 5000 } }) && TickCheck.InGap(t0 + 9000, new List<long[]> { new long[] { t0 + 5000, long.MaxValue } }), "tick rule: a gap with an open end");
+        // gaps that leave no live trade: the share is over the whole span (never no check at all)
+        TickCheckResult allGap = TickCheck.Compare(live, live.Take(50).ToList(), new List<long[]> { new long[] { long.MinValue, long.MaxValue } });
+        Check(allGap.Status == "failed" && allGap.CoveredLive == 100 && allGap.CoveredHist == 50 && allGap.SpanWhole, "tick rule: gaps that cover every live trade: the whole span counts (50 percent fails)");
+
+        // LOW 1 (the PR #79 review): a span left by the gaps under MinCoveredSeconds (600) or MinCoveredLive (1,000): the whole
+        // first to last live span. A 6 minute capture, 2 trades a second, one late in its second; history 106 ms late on that one
+        // (it lands in the next second); the gaps leave seconds 0 to 2, where the skew alone would make 83 percent.
+        Check(TickCheck.MinCoveredSeconds == 600 && TickCheck.MinCoveredLive == 1000, "tick rule: the named constants: 600 seconds, 1,000 live trades");
+        List<TickRec> six = Every(t0, 0, 360, 100).Concat(Every(t0, 0, 360, 950)).OrderBy(x => x.U).ToList();
+        List<TickRec> sixH = six.Select(x => Tr(x.U % 1000 == 950 ? x.U + 106 : x.U, x.P, x.V)).ToList();
+        TickCheckResult sliver = TickCheck.Compare(six, sixH, new List<long[]> { new long[] { t0 + 2950, long.MaxValue } });
+        Check(sliver.Status == "short" && sliver.Passed && sliver.SpanWhole && sliver.CoveredSeconds == 360 && sliver.CoveredLive == 720 && sliver.CoveredHist == 719 && sliver.Holes.Count == 0,
+              "tick rule: a 6 minute capture whose gaps leave 3 seconds, with skewed history: judged on the whole span, passes (short): " + sliver.Status + " " + sliver.CoveredHist + "/" + sliver.CoveredLive);
+        // 700 seconds left but only 700 live trades: the whole span too
+        List<TickRec> l700 = Every(t0, 0, 1200, 500);
+        TickCheckResult r700 = TickCheck.Compare(l700, l700.ToList(), new List<long[]> { new long[] { t0 + 699500, long.MaxValue } });
+        Check(r700.SpanWhole && r700.CoveredSeconds == 1200 && r700.Status == "exact", "tick rule: 700 seconds but fewer than 1,000 live trades left: the whole span");
+        // 2,000 seconds and 2,000 live trades left by the gap: the span left is used (85 percent there fails; the whole would pass)
+        List<TickRec> l2k = Every(t0, 0, 1000, 500).Concat(Every(t0, 2000, 3000, 500)).ToList();
+        List<TickRec> h2k = l2k.Where((x, i) => i % 20 > 2).ToList(); h2k.AddRange(Every(t0, 1000, 2000, 300)); h2k.AddRange(Every(t0, 1000, 2000, 700));
+        TickCheckResult r2k = TickCheck.Compare(l2k, h2k, new List<long[]> { new long[] { t0 + 999500, t0 + 2000500 } });
+        Check(!r2k.SpanWhole && r2k.CoveredSeconds == 2000 && r2k.CoveredLive == 2000 && r2k.CoveredHist == 1700 && r2k.Status == "failed",
+              "tick rule: a capture with 2,000 covered seconds still uses the covered span (85 percent fails): " + r2k.CoveredSeconds + " " + r2k.CoveredHist + "/" + r2k.CoveredLive + " " + r2k.Status);
+
+        // NIT 5 (the coordinator's decision): a history silence of 60 seconds or more over a known capture gap is a hole too (inGap),
+        // with the live trades in it (0 here); it never fails the day. Live 0..299 and 500..999, a restart gap between; history full
+        // but silent from 350 to 429 (inside the gap).
+        List<TickRec> lr = Every(t0, 0, 300, 500).Concat(Every(t0, 500, 1000, 500)).ToList();
+        List<TickRec> hr = Every(t0, 0, 350, 500).Concat(Every(t0, 430, 1000, 500)).ToList();
+        List<long[]> rg = new List<long[]> { new long[] { t0 + 299500, t0 + 500500 } };
+        TickCheckResult rin = TickCheck.Compare(lr, hr, rg);
+        Check(rin.Status == "filled" && rin.Passed && rin.Holes.Count == 1 && rin.Holes[0][0] == t0 + 349500 && rin.Holes[0][1] == t0 + 430500 && rin.Holes[0][2] == 0 && rin.Holes[0][3] == 1,
+              "tick rule: an 80 second history silence inside a capture gap: a hole (inGap, live 0) on a filled day: " + rin.Status + " " + string.Join(";", rin.Holes.Select(h => h[0] - t0 + "-" + (h[1] - t0) + "/" + h[2] + "/" + h[3]).ToArray()));
+        Check(TickCheck.Compare(lr, hr).Holes.Count == 0, "tick rule: the same silence with no known gap there (no live trade in it): no hole");
+        // a silence that only touches the gap by one second is over it
+        List<TickRec> hr2 = Every(t0, 0, 220, 500).Concat(Every(t0, 301, 1000, 500)).ToList();
+        TickCheckResult rin2 = TickCheck.Compare(lr, hr2, rg);
+        Check(rin2.Holes.Count == 1 && rin2.Holes[0][0] == t0 + 219500 && rin2.Holes[0][1] == t0 + 301500 && rin2.Holes[0][2] == 80 && rin2.Holes[0][3] == 1,
+              "tick rule: a history silence from 219.5 to 301.5 s reaching into the gap: one inGap hole with the 80 live trades in it: " + string.Join(";", rin2.Holes.Select(h => h[0] - t0 + "-" + (h[1] - t0) + "/" + h[2] + "/" + h[3]).ToArray()));
+        // an inGap silence: 60.0 s is a hole, 59.9 s is not
+        TickCheckResult in60 = TickCheck.Compare(lr, Every(t0, 0, 350, 500).Concat(Every(t0, 409, 1000, 500)).ToList(), rg);
+        List<TickRec> h599 = Every(t0, 0, 350, 500); h599.Add(Tr(t0 + 409400, 25000, 1)); h599.AddRange(Every(t0, 410, 1000, 500));
+        TickCheckResult in599 = TickCheck.Compare(lr, h599, rg);
+        Check(in60.Holes.Count == 1 && in60.Holes[0][0] == t0 + 349500 && in60.Holes[0][1] == t0 + 409500 && in60.Holes[0][3] == 1 && in599.Holes.Count == 0,
+              "tick rule: a 60.0 s history silence over a gap is an inGap hole, a 59.9 s one is not");
+        // LOW C: the session's open bounds the first silence. A restart at 200 s (an open start gap to the first trade of the next
+        // chunk at 380 s), history missing the first 300 s of the session: an inGap hole from the open, taking in the live run
+        List<TickRec> lo = Every(t0, 200, 1000, 500);
+        List<TickRec> ho = Every(t0, 300, 1000, 500);
+        List<long[]> og = new List<long[]> { new long[] { long.MinValue, t0 + 380500 } };
+        TickCheckResult rop = TickCheck.Compare(lo, ho, og, t0);
+        Check(rop.Holes.Count == 1 && rop.Holes[0][0] == t0 && rop.Holes[0][1] == t0 + 300500 && rop.Holes[0][2] == 100 && rop.Holes[0][3] == 1,
+              "tick rule: history missing the first 300 s with an open start gap: an inGap hole from the open (100 live trades in it): " + string.Join(";", rop.Holes.Select(h => h[0] - t0 + "-" + (h[1] - t0) + "/" + h[2] + "/" + h[3]).ToArray()));
+        TickCheckResult ropNo = TickCheck.Compare(lo, ho, og);
+        Check(ropNo.Holes.Count == 0, "tick rule: without the open nothing before history's first trade is looked at (FinishDay always passes the open)");
+        TickCheckResult ropQuiet = TickCheck.Compare(Every(t0, 300, 1000, 500), ho, null, t0);
+        Check(ropQuiet.Holes.Count == 0, "tick rule: history and live both start at 300 s, no known gap: no hole at the open (nobody missed anything)");
+        // the third re-review, LOW 1: the time from history's last trade to the close, on live evidence only (never inGap). The
+        // session closes at 1,000 s; live trades to 999.5 s.
+        long close = t0 + 1000000;
+        List<TickRec> lc = Every(t0, 0, 1000, 500);
+        foreach (int early in new[] { 120, 240 })
+        {
+            TickCheckResult rc = TickCheck.Compare(lc, Every(t0, 0, 1000 - early, 500), null, t0, close);
+            long last = t0 + (999 - early) * 1000L + 500;
+            Check(rc.Holes.Count == 1 && rc.Holes[0][0] == last && rc.Holes[0][1] == close && rc.Holes[0][2] == early && rc.Holes[0][3] == 0,
+                  "tick rule: history ends " + early + " s before live's last trade: a hole from history's last trade to the close (" + early + " live trades): " + string.Join(";", rc.Holes.Select(h => h[0] - t0 + "-" + (h[1] - t0) + "/" + h[2] + "/" + h[3]).ToArray()));
+        }
+        // an early close (a holiday): both feeds stop at the halt at 600 s, the session's close (no early closes in SessionUtc) at
+        // 1,000 s: no hole; and with an open end capture gap after the halt: still none (never inGap at the close)
+        List<TickRec> halt = Every(t0, 0, 600, 500);
+        Check(TickCheck.Compare(halt, halt.ToList(), null, t0, close).Holes.Count == 0, "tick rule: an early-close day, live stopping at the halt: no hole at the close");
+        Check(TickCheck.Compare(halt, halt.ToList(), new List<long[]> { new long[] { t0 + 599500, long.MaxValue } }, t0, close).Holes.Count == 0,
+              "tick rule: an open end capture gap with no live trades after history's last trade: no hole (live evidence only at the close)");
+        // a live trade within the margin of history's last trade only: no hole
+        List<TickRec> lc2 = halt.ToList(); lc2.Add(Tr(t0 + 599500 + 900, 25000, 1));
+        Check(TickCheck.Compare(lc2, halt, null, t0, close).Holes.Count == 0, "tick rule: a live trade 900 ms after history's last trade only: no hole at the close (inside the margin)");
+        // a hole is not split by a known gap
+        TickCheckResult unsplit = TickCheck.Compare(day, hHole, new List<long[]> { new long[] { t0 + 139400, t0 + 141400 } });
+        Check(unsplit.Holes.Count == 1 && unsplit.Holes[0][0] == t0 + 99400 && unsplit.Holes[0][1] == t0 + 180400 && unsplit.Holes[0][2] == 80 && unsplit.Holes[0][3] == 1, "tick rule: a known gap inside a hole does not split it (one hole, marked inGap)");
+    }
+
+    // FinishDay: the known gaps come from the chunks that took drops; the summary carries the share, the covered counts and the holes
+    static void TickFileRule(string dir)
+    {
+        ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 5, 17, 30));   // started before the session opened: no restart flag
+        TickFresh(dir);
+        Desk desk = new Desk();
+        string urlWas = ChartBridgeConfig.DeskUrl;
+        ChartBridgeConfig.DeskUrl = desk.Url;
+        string T = TicksDir(dir), k = "2026-10-06 NQ 12-26";
+        try
+        {
+            typeof(ChartBridgeTicks).GetMethod("LoadDays", BindingFlags.NonPublic | BindingFlags.Static).Invoke(null, null);
+            DateTime a = W(2026, 10, 6, 9, 30);
+            for (int i = 0; i < 600; i++) Feed(a.AddSeconds(i).AddMilliseconds(200), 25000, 1);   // chunk 1: 09:30:00 to 09:39:59
+            ChartBridgeTicks.WriteOnce(); ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 6, 9, 40)); ChartBridgeTicks.CutOnce();
+            ChartBridgeTicks.NoteFeedDrop();                                                       // a feed drop: chunk 2 is flagged
+            for (int i = 600; i < 1200; i++) Feed(a.AddSeconds(i).AddMilliseconds(200), 25000, 1);
+            ChartBridgeTicks.WriteOnce(); ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 6, 9, 50)); ChartBridgeTicks.CutOnce();
+            for (int i = 1200; i < 1800; i++) Feed(a.AddSeconds(i).AddMilliseconds(200), 25000, 1);   // chunk 3: 09:50:00 to 09:59:59
+            ChartBridgeTicks.WriteOnce(); ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 6, 10, 0)); ChartBridgeTicks.CutOnce();
+            Check(Field1s(ChartBridgeTicks.ChunkJson(k, 2) ?? "", "gaps") == "1" && Field1s(ChartBridgeTicks.ChunkJson(k, 1) ?? "", "gaps") == "0", "tick rule file (set up): chunk 2 took the feed drop");
+            // history: 85 percent in chunks 1 and 3, everything in chunk 2: thin where the capture is known good
+            List<TickRec> live = ChartBridgeTicks.ReadAllLive(k);
+            List<TickRec> hist = live.Where((x, i) => (i >= 600 && i < 1200) || (i % 20 != 1 && i % 20 != 2 && i % 20 != 3)).ToList();
+            TickCheckResult r = ChartBridgeTicks.FinishDay(k, HistOf(hist));
+            string part = File.ReadAllLines(Path.Combine(T, "2026-10-06_NQ_12-26.day.jsonl"))[0];
+            Check(r.Status == "failed" && r.CoveredLive == 1200 && r.CoveredHist == 1020 && part.Contains("\"status\":\"failed\"") && part.Contains("\"rule\":2,\"coveredSeconds\":1200,\"spanWhole\":false,\"coveredLive\":1200,\"coveredHist\":1020,\"historyShare\":0.85,\"holes\":[]"),
+                  "tick rule file: the flagged chunk's seconds leave the span (the last trade before it to the first after it): 85 percent fails: " + Regex.Match(part, "\"rule\":[^\\]]*\\]").Value);
+            // the same day with history thin only inside the flagged chunk and a 2 minute hole in chunk 3: short, the hole listed
+            long holeFrom = Ms(EtToUtc(a.AddSeconds(1300))), holeTo = Ms(EtToUtc(a.AddSeconds(1420)));
+            List<TickRec> hist2 = live.Where((x, i) => (i < 600 || i >= 1200 || i % 2 == 0) && !(x.U >= holeFrom && x.U < holeTo)).ToList();
+            TickCheckResult r2 = ChartBridgeTicks.FinishDay(k, HistOf(hist2));
+            part = File.ReadAllLines(Path.Combine(T, "2026-10-06_NQ_12-26.day.jsonl"))[0];
+            Check(r2.Status == "short" && r2.Passed && r2.Holes.Count == 1 && part.Contains("\"status\":\"short\"") && part.Contains("\"holes\":[{\"from\":" + (holeFrom - 800) + ",\"to\":" + (holeTo + 200) + ",\"live\":120,\"inGap\":false}]") &&
+                  part.Contains("\"secondsHistShort\":") && Lines(dir, "ticks/tickdays.txt").Contains(k + "\tshort\t0\t0\t2") && TickDiag().Contains("\"lastDay\":\"" + k + ": short,") && TickDiag().Contains("1 hole(s)"),
+                  "tick rule file: short with a 2 minute hole: passed, the hole in the check (from, to, live), tickdays.txt and /diag say short: " + Regex.Match(part, "\"holes\":\\[[^\\]]*\\]").Value);
+            Check(Logged("; queued for The Desk") && Regex.IsMatch(part, "\"historyShare\":0\\.9\\d*,"), "tick rule file: a short day is queued as passed; historyShare in the summary: " + Field1s(part, "historyShare"));
+
+            // a short day is passed everywhere: stored, not packed: its last part kept and asked; packed: the raw deleted
+            ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 6, 16, 30));
+            desk.AnswerTicks = body => "{\"ok\":true,\"whole\":true,\"stored\":true,\"kept\":true,\"packed\":false}";
+            ChartBridgeTicks.SendDays(null);
+            Check(File.Exists(ChartBridgeTicks.LastPartFile(k)) && TickDiag().Contains("\"packWait\":{\"" + k + "\":{\"lastPart\":true") && Lines(dir, "ticks/tickdays.txt").Contains(k + "\tshort\t1\t0\t2"),
+                  "tick rule file: a short day stored, not packed: its last part kept, listed in packWait (as exact and filled)");
+            desk.AnswerTicks = body => "{\"ok\":true,\"duplicate\":true,\"whole\":true,\"stored\":true,\"kept\":true,\"packed\":true}";
+            ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 7, 16, 30));
+            Check(ChartBridgeTicks.AskPacked(null) == 1 && !File.Exists(Path.Combine(T, "2026-10-06_NQ_12-26.raw")) && Lines(dir, "ticks/tickdays.txt").Contains(k + "\tshort\t1\t1\t2"),
+                  "tick rule file: a short day asked and packed: the raw deleted (as exact and filled)");
+            // a short day noted packed with its files left (a delete cut short): the look at the folder deletes them
+            File.WriteAllText(Path.Combine(T, "2026-10-06_NQ_12-26.state"), "run 0a1b2c3d4e5f\ntick 0.25\ncontract NQ 12-26\nsession 2026-10-06\n");
+            File.WriteAllText(Path.Combine(T, "2026-10-06_NQ_12-26.raw"), "1\n");
+            TickForget(); TickScan();
+            Check(!File.Exists(Path.Combine(T, "2026-10-06_NQ_12-26.raw")) && !File.Exists(Path.Combine(T, "2026-10-06_NQ_12-26.state")), "tick rule file: a short day noted packed: its files left are deleted by the look at the folder");
+        }
+        finally { desk.Stop(); ChartBridgeConfig.DeskUrl = urlWas; ChartBridgeTicks.PartMaxTicks = 20000; }
+    }
+
+    // A day failed under the old rule, its raw kept: checked again once under the new rule after the F5 to 0.6.14
+    static void TickFileRecheck(string dir)
+    {
+        DateTime wed1630 = EtToUtc(W(2026, 10, 7, 16, 30));
+        Desk desk = Fresh(dir, "NQ", wed1630);
+        string T = TicksDir(dir), k6 = "2026-10-06 NQ 12-26", rule = Path.Combine(T, "tickrule.txt");
+        MethodInfo load = typeof(ChartBridgeTicks).GetMethod("LoadDays", BindingFlags.NonPublic | BindingFlags.Static);
+        try
+        {
+            List<DateTime> walls = TickMorningSetup(dir, wed1630);
+            Check(File.Exists(rule) && File.ReadAllLines(rule).SequenceEqual(new[] { "rule 2" }), "tick recheck: a new folder notes rule 2, nothing to check again");
+            // the folder of 0.6.13: tickdays.txt says 10-06 failed (stored), 10-05 failed with no raw; no tickrule.txt
+            File.WriteAllLines(Path.Combine(T, "tickdays.txt"), new[] { "2026-10-05 NQ 12-26\tfailed\t1\t0", k6 + "\tfailed\t1\t0" });
+            File.Delete(rule);
+            load.Invoke(null, null);
+            Check(File.ReadAllLines(rule).SequenceEqual(new[] { "rule 2", "recheck " + k6 }) && TickDiag().Contains("\"recheck\":[\"" + k6 + "\"]") && !ChartBridgeTicks.IsDayDone(k6),
+                  "tick recheck: after the F5, a failed day with its raw kept is listed to be checked again; one with no raw is not: " + string.Join(" | ", File.ReadAllLines(rule)));
+            Check(ChartBridgeTicks.DaysToPull(wed1630).Contains(k6), "tick recheck: the failed day is due again");
+            // NIT 3 (the PR #79 review): a listed key whose raw file is gone is dropped and tickrule.txt written again
+            File.WriteAllLines(rule, new[] { "rule 2", "recheck 2026-10-05 NQ 12-26", "recheck " + k6 });
+            load.Invoke(null, null);
+            Check(File.ReadAllLines(rule).SequenceEqual(new[] { "rule 2", "recheck " + k6 }), "tick recheck: a listed day whose raw is gone is dropped from tickrule.txt: " + string.Join(" | ", File.ReadAllLines(rule)));
+            // outside the windows: nothing (the same windows as any final pull)
+            ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 7, 10, 0));
+            int m0 = MadeCount();
+            Check(!ChartBridgeTicks.PlanDay(null) && TicksMade(m0).Count == 0, "tick recheck: never in trading hours");
+            // NinjaTrader has nothing: tried again in 15 minutes, 3 times; the day stays failed and listed
+            ChartBridgeBars.UtcNow = () => wed1630;
+            answerTicks = r => new Bars();
+            for (int i = 0; i < 3; i++) { ChartBridgeBars.UtcNow = () => wed1630.AddMinutes(20 * i); ChartBridgeTicks.PlanDay(null); }
+            Check(!ChartBridgeTicks.DaysToPull(wed1630.AddMinutes(70)).Contains(k6) && Lines(dir, "ticks/tickdays.txt").Contains(k6 + "\tfailed\t1\t0") && File.ReadAllLines(rule).Contains("recheck " + k6) &&
+                  TickDiag().Contains("NinjaTrader has no trades for it"),
+                  "tick recheck: 3 tries with no answer, then not until a restart; the day stays failed and listed");
+            // a restart (tickrule.txt read again): tried again, the history now matches: exact, written, queued; the list empty
+            ChartBridgeTicks.Start(); ChartBridgeTicks.Stop();
+            typeof(ChartBridgeTicks).GetField("capturing", BindingFlags.NonPublic | BindingFlags.Static).SetValue(null, true);
+            load.Invoke(null, null); TickScan();
+            List<DateTime> hist = walls;
+            answerTicks = r => { Bars b = new Bars(); foreach (DateTime w in hist) { b.Add(NtOf(w), 25000, 25000, 25000, 25000, 1); b.Bids.Add(24999.75); b.Asks.Add(25000); } return b; };
+            ChartBridgeBars.UtcNow = () => wed1630.AddMinutes(75);
+            m0 = MadeCount();
+            bool asked = ChartBridgeTicks.PlanDay(null);
+            List<BarsRequest> made = TicksMade(m0);
+            Check(asked && made.Count == 1 && IsSession(made[0], D(2026, 10, 6)) && Lines(dir, "ticks/tickdays.txt").Contains(k6 + "\texact\t0\t0\t2") && File.ReadAllLines(rule).SequenceEqual(new[] { "rule 2" }) &&
+                  File.Exists(Path.Combine(T, "2026-10-06_NQ_12-26.day.jsonl")) && TickDiag().Contains("checked again under the 0.6.14 rule") && TickDiag().Contains("\"recheck\":[]"),
+                  "tick recheck: after a restart the failed day is pulled once more, checked under the new rule (exact), queued; no longer listed: " + string.Join(",", Lines(dir, "ticks/tickdays.txt")));
+            Check(!ChartBridgeTicks.DaysToPull(wed1630.AddMinutes(80)).Contains(k6), "tick recheck: once only: a day checked under the new rule is done");
+            // NIT 4: tickdays.txt has the rule column; a line of 0.6.13 (no rule) keeps reading as rule 1 and is written back as 1
+            Check(Lines(dir, "ticks/tickdays.txt").Contains("2026-10-05 NQ 12-26\tfailed\t1\t0\t1") && TickDiag().Contains("\"" + k6 + "\":{\"check\":\"exact\",\"stored\":false,\"packed\":false,\"rule\":2}"),
+                  "tick recheck: tickdays.txt and /diag days carry the rule (the 0.6.13 line as rule 1): " + string.Join(" | ", Lines(dir, "ticks/tickdays.txt")));
+            // LOW B (the PR #79 re-review): a round trip to 0.6.13 and back. 0.6.13 skips the five field line, pulls the day again under
+            // its old rule, fails it and writes a four field line; tickrule.txt still says only "rule 2". The next start of 0.6.14
+            // lists the day again (every start does) and checks it once more under the new rule.
+            File.WriteAllLines(Path.Combine(T, "tickdays.txt"), Lines(dir, "ticks/tickdays.txt").Select(x => x.StartsWith(k6 + "\t") ? k6 + "\tfailed\t1\t0" : x).ToArray());
+            Check(File.ReadAllLines(rule).SequenceEqual(new[] { "rule 2" }), "tick round trip (set up): tickrule.txt lists nothing");
+            ChartBridgeTicks.Start(); ChartBridgeTicks.Stop();
+            typeof(ChartBridgeTicks).GetField("capturing", BindingFlags.NonPublic | BindingFlags.Static).SetValue(null, true);
+            load.Invoke(null, null); TickScan();
+            Check(File.ReadAllLines(rule).SequenceEqual(new[] { "rule 2", "recheck " + k6 }) && ChartBridgeTicks.DaysToPull(wed1630.AddMinutes(78)).Contains(k6),
+                  "tick round trip: the next start of 0.6.14 lists the day 0.6.13 failed again: " + string.Join(" | ", File.ReadAllLines(rule)));
+            ChartBridgeBars.UtcNow = () => wed1630.AddMinutes(78);
+            m0 = MadeCount();
+            asked = ChartBridgeTicks.PlanDay(null);
+            made = TicksMade(m0);
+            Check(asked && made.Count == 1 && IsSession(made[0], D(2026, 10, 6)) && Lines(dir, "ticks/tickdays.txt").Contains(k6 + "\texact\t0\t0\t2") && File.ReadAllLines(rule).SequenceEqual(new[] { "rule 2" }) &&
+                  !ChartBridgeTicks.DaysToPull(wed1630.AddMinutes(79)).Contains(k6),
+                  "tick round trip: healed: checked under the new rule (exact, rule 2) and not listed again: " + string.Join(" | ", Lines(dir, "ticks/tickdays.txt")));
+            // a day failed under the new rule stays failed (never pulled again, never listed after a restart)
+            List<DateTime> part = walls.Take(20).ToList();
+            TickMorningSetup(dir, wed1630);
+            answerTicks = r => { Bars b = new Bars(); foreach (DateTime w in part) { b.Add(NtOf(w), 25000, 25000, 25000, 25000, 1); b.Bids.Add(24999.75); b.Asks.Add(25000); } return b; };
+            ChartBridgeTicks.PlanDay(null);
+            load.Invoke(null, null); TickScan();
+            Check(Lines(dir, "ticks/tickdays.txt").Contains(k6 + "\tfailed\t0\t0\t2") && File.ReadAllLines(rule).SequenceEqual(new[] { "rule 2" }) && !ChartBridgeTicks.DaysToPull(wed1630.AddMinutes(30)).Contains(k6) && File.Exists(Path.Combine(T, "2026-10-06_NQ_12-26.raw")),
+                  "tick recheck: a day failed under the new rule (history 40 percent) is not checked again; its raw is kept until Anthony rules");
+            // NIT 4: even with tickrule.txt gone, a day failed under rule 2 is never listed again (once per failed rule 1 record)
+            File.Delete(rule);
+            load.Invoke(null, null);
+            Check(File.ReadAllLines(rule).SequenceEqual(new[] { "rule 2" }) && !ChartBridgeTicks.DaysToPull(wed1630.AddMinutes(30)).Contains(k6),
+                  "tick recheck: tickrule.txt lost: a day failed under the new rule is not listed again (its rule 2 in tickdays.txt)");
+        }
+        finally { desk.Stop(); ChartBridgeTicks.Stop(); ChartBridgeTicks.ResetConfig(); typeof(ChartBridgeTicks).GetField("capturing", BindingFlags.NonPublic | BindingFlags.Static).SetValue(null, false); }
+    }
+
+    // LOW 1 through FinishDay: a 6 minute capture made after its session opened (its first chunk flagged) with a feed drop before
+    // each later cut (every chunk flagged), history skewed (106 ms late on the trades late in their second): judged on the whole span
+    static void TickFileAllFlagged(string dir)
+    {
+        ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 6, 9, 29));   // started after the session opened
+        TickFresh(dir);
+        string k = "2026-10-06 NQ 12-26", T = TicksDir(dir);
+        typeof(ChartBridgeTicks).GetMethod("LoadDays", BindingFlags.NonPublic | BindingFlags.Static).Invoke(null, null);
+        DateTime a = W(2026, 10, 6, 9, 30);
+        for (int c = 0; c < 3; c++)
+        {
+            if (c > 0) { ChartBridgeBars.UtcNow = () => EtToUtc(a.AddSeconds(120 * c)); ChartBridgeTicks.NoteFeedDrop(); }
+            for (int i = 120 * c; i < 120 * (c + 1); i++) { Feed(a.AddSeconds(i).AddMilliseconds(100), 25000, 1); Feed(a.AddSeconds(i).AddMilliseconds(950), 25000.25, 1); }
+            ChartBridgeTicks.WriteOnce(); ChartBridgeBars.UtcNow = () => EtToUtc(a.AddSeconds(120 * (c + 1))); ChartBridgeTicks.CutOnce();
+        }
+        Check(Enumerable.Range(1, 3).All(q => Field1s(ChartBridgeTicks.ChunkJson(k, q) ?? "", "gaps") != "0"), "tick all flagged (set up): every chunk says gaps");
+        List<TickRec> live = ChartBridgeTicks.ReadAllLive(k);
+        TickCheckResult r = ChartBridgeTicks.FinishDay(k, HistOf(live.Select(x => Tr(x.U % 1000 == 950 ? x.U + 106 : x.U, x.P, x.V))));
+        string part = File.ReadAllLines(Path.Combine(T, "2026-10-06_NQ_12-26.day.jsonl"))[0];
+        DateTime ou, cu; ChartBridgeBars.SessionUtc(D(2026, 10, 6), out ou, out cu);
+        long openMs = Ms(ou), firstMs = Ms(EtToUtc(a)) + 100;   // history's first trade, 09:30:00.100
+        Check(r.Holes.Count == 1 && r.Holes[0][0] == openMs && r.Holes[0][1] == firstMs && r.Holes[0][3] == 1 && part.Contains("\"holes\":[{\"from\":" + openMs + ",\"to\":" + firstMs + ",\"live\":0,\"inGap\":true}]"),
+              "tick all flagged (LOW C): started after the open, history from 09:30 only: an inGap hole from the session's open (18:00 ET) to history's first trade: " + Regex.Match(part, "\"holes\":\\[[^\\]]*\\]").Value);
+        Check(r.Status == "short" && r.Passed && r.SpanWhole && r.CoveredSeconds == 360 && part.Contains("\"spanWhole\":true") && Lines(dir, "ticks/tickdays.txt").Contains(k + "\tshort\t0\t0\t2"),
+              "tick all flagged: a 6 minute capture with every chunk flagged and skewed history passes (short), judged on the whole span: " + r.Status + " " + r.CoveredHist + "/" + r.CoveredLive);
+    }
+
+    // LOW 2 (the PR #79 review): a day checked again after an earlier refusal, refused again: set aside once, never a resend loop
+    static void TickFileRefusedAgain(string dir)
+    {
+        ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 6, 16, 30));
+        TickFresh(dir);
+        typeof(ChartBridgeTicks).GetMethod("LoadDays", BindingFlags.NonPublic | BindingFlags.Static).Invoke(null, null);
+        Desk desk = new Desk();
+        string urlWas = ChartBridgeConfig.DeskUrl;
+        ChartBridgeConfig.DeskUrl = desk.Url;
+        string T = TicksDir(dir), k = "2026-10-06 NQ 12-26";
+        string day = Path.Combine(T, "2026-10-06_NQ_12-26.day.jsonl"), refused = day + ".refused", unstored = day + ".unstored";
+        try
+        {
+            for (int i = 0; i < 4; i++) Feed(W(2026, 10, 6, 9, 30).AddSeconds(i), 25000, 1);
+            ChartBridgeTicks.WriteOnce(); TickScan();
+            desk.StatusTicks = body => 422;
+            ChartBridgeTicks.FinishDay(k, HistOf(ChartBridgeTicks.ReadAllLive(k)));
+            ChartBridgeTicks.SendDays(null);
+            Check(File.Exists(refused) && !File.Exists(day), "tick refused again (set up): the first set refused and set aside");
+            // checked again (a new set): the earlier set aside files of the day go
+            File.WriteAllText(unstored, "{}");
+            ChartBridgeTicks.FinishDay(k, HistOf(ChartBridgeTicks.ReadAllLive(k)));
+            Check(File.Exists(day) && !File.Exists(refused) && !File.Exists(unstored) && !File.Exists(Path.Combine(T, "2026-10-06_NQ_12-26.day.sent")),
+                  "tick refused again: a new set of the day removes the earlier .refused and .unstored");
+            // refused again, with an older .refused there (the move is safe when its target exists): set aside, then nothing more
+            File.WriteAllText(refused, "{}");
+            int n0 = desk.AllTicks().Count;
+            ChartBridgeTicks.SendDays(null);
+            int n1 = desk.AllTicks().Count;
+            for (int i = 0; i < 3; i++) ChartBridgeTicks.SendDays(null);
+            Check(n1 == n0 + 1 && desk.AllTicks().Count == n1 && File.Exists(refused) && File.ReadAllText(refused) != "{}" && !File.Exists(day),
+                  "tick refused again: refused a second time, the older .refused replaced, the part sent once: no resend loop: " + (n1 - n0) + " then " + (desk.AllTicks().Count - n1));
+            // a set aside that cannot be done (a folder in the way): the file stays, is not sent again this run, and lastError says so
+            File.Delete(refused); Directory.CreateDirectory(refused);
+            ChartBridgeTicks.FinishDay(k, HistOf(ChartBridgeTicks.ReadAllLive(k)));
+            n0 = desk.AllTicks().Count;
+            ChartBridgeTicks.SendDays(null);
+            n1 = desk.AllTicks().Count;
+            for (int i = 0; i < 3; i++) ChartBridgeTicks.SendDays(null);
+            Check(n1 == n0 + 1 && desk.AllTicks().Count == n1 && File.Exists(day) && TickDiag().Contains("could not be set aside"),
+                  "tick refused again: a set aside that fails keeps the file and never sends it again this run (no loop): " + (n1 - n0) + " then " + (desk.AllTicks().Count - n1));
+            Directory.Delete(refused);
+            // the recovery for a PC that had 0.6.14 before The Desk took short: .refused renamed back to .day.jsonl is sent from part 1
+            desk.StatusTicks = body => 422;
+            ChartBridgeTicks.FinishDay(k, HistOf(ChartBridgeTicks.ReadAllLive(k)));
+            ChartBridgeTicks.SendDays(null);
+            Check(File.Exists(refused) && !File.Exists(day), "tick recovery (set up): refused and set aside");
+            File.Move(refused, day);
+            desk.StatusTicks = body => 200;
+            desk.AnswerTicks = body => "{\"ok\":true,\"whole\":true,\"stored\":true,\"kept\":true,\"packed\":false}";
+            n0 = desk.AllTicks().Count;
+            ChartBridgeTicks.SendDays(null);
+            Check(desk.AllTicks().Count == n0 + 1 && desk.AllTicks().Last().Contains("\"part\":1,") && !File.Exists(day) && Lines(dir, "ticks/tickdays.txt").Contains(k + "\texact\t1\t0\t2"),
+                  "tick recovery: the .refused file renamed back to .day.jsonl is sent from part 1 and stored");
+        }
+        finally { desk.Stop(); ChartBridgeConfig.DeskUrl = urlWas; }
+    }
+
+    // The probes only: the holes a margin of afterStart and beforeEnd ms would list (no gaps, no open), to show which way round the
+    // skew margin must be.
+    static int MarginHoles(List<TickRec> live, List<TickRec> hist, int afterStart, int beforeEnd)
+    {
+        long[] hs = hist.Select(x => x.U).OrderBy(x => x).ToArray(), ls = live.Select(x => x.U).OrderBy(x => x).ToArray();
+        int n = 0;
+        for (int i = 1; i < hs.Length; i++)
+        {
+            long a = hs[i - 1], b = hs[i];
+            if (b - a >= TickCheck.HoleMinMs && ls.Any(u => u > a + afterStart && u < b - beforeEnd)) n++;
+        }
+        return n;
     }
 
     static string TicksDir(string dir) { return Path.Combine(dir, "ChartBridge", "ticks"); }
@@ -1797,7 +2292,7 @@ public static class BarsHarness
             string day6 = Path.Combine(TicksDir(dir), "2026-10-06_NQ_12-26.day.jsonl");
             string[] parts = File.ReadAllLines(day6);
             Check(r6.Status == "filled" && parts.Length == 3 && parts.All(p => Field1s(p, "setTicks") == "5" && Field1s(p, "parts") == "3") && parts[0].Contains("\"check\":{\"status\":\"filled\",\"liveTicks\":4,") &&
-                  parts[0].EndsWith(",\"complete\":true}") && Lines(dir, "ticks/tickdays.txt").Contains(k6 + "\tfilled\t0\t0"),
+                  parts[0].EndsWith(",\"complete\":true}") && Lines(dir, "ticks/tickdays.txt").Contains(k6 + "\tfilled\t0\t0\t2"),
                   "tick days: the history (one trade more) checked against the live capture: filled; written whole as 3 parts with the check: " + parts[0].Substring(0, Math.Min(400, parts[0].Length)));
             Check(ChartBridgeTicks.DaysToPull(EtToUtc(W(2026, 10, 9, 17, 6))).SequenceEqual(new[] { k7, k8 }), "tick days: a day done is not pulled again; the others are, oldest first");
             Check(TickDisk() == FolderSize(dir) && TickDisk() > new FileInfo(day6).Length, "tick disk: the folder's size counts the .day.jsonl files waiting too: " + TickDisk() + " of " + FolderSize(dir));
@@ -1807,14 +2302,14 @@ public static class BarsHarness
             ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 9, 16, 30));
             Check(ChartBridgeTicks.SendDays(null) == 3 && desk.AllTicks().All(b => b.StartsWith("/api/ticks/day {")), "tick days: the 3 parts to /api/ticks/day in the window");
             string raw6 = Path.Combine(TicksDir(dir), "2026-10-06_NQ_12-26.raw");
-            Check(File.Exists(raw6) && !File.Exists(day6) && Lines(dir, "ticks/tickdays.txt").Contains(k6 + "\tfilled\t1\t0") && Logged("the raw file is kept (not packed yet)"),
+            Check(File.Exists(raw6) && !File.Exists(day6) && Lines(dir, "ticks/tickdays.txt").Contains(k6 + "\tfilled\t1\t0\t2") && Logged("the raw file is kept (not packed yet)"),
                   "tick days: The Desk stored it but did not pack it: the raw file is kept (deleted only after the pack)");
             Check(TickDisk() == FolderSize(dir), "tick disk: counted again once the day file is deleted: " + TickDisk() + " of " + FolderSize(dir));
             // stored and packed: the raw is deleted
             desk.AnswerTicks = body => "{\"ok\":true,\"stored\":true,\"kept\":true,\"packed\":true}";
             ChartBridgeTicks.FinishDay(k7, HistOf(ChartBridgeTicks.ReadAllLive(k7)));
             ChartBridgeTicks.SendDays(null);
-            Check(!File.Exists(Path.Combine(TicksDir(dir), "2026-10-07_NQ_12-26.raw")) && !File.Exists(Path.Combine(TicksDir(dir), "2026-10-07_NQ_12-26.state")) && Lines(dir, "ticks/tickdays.txt").Contains(k7 + "\texact\t1\t1"),
+            Check(!File.Exists(Path.Combine(TicksDir(dir), "2026-10-07_NQ_12-26.raw")) && !File.Exists(Path.Combine(TicksDir(dir), "2026-10-07_NQ_12-26.state")) && Lines(dir, "ticks/tickdays.txt").Contains(k7 + "\texact\t1\t1\t2"),
                   "tick days: checked (exact), stored and packed: the raw file and its state are deleted");
             // a failed check: sent marked failed, the raw kept even when The Desk says packed
             List<TickRec> hist8 = ChartBridgeTicks.ReadAllLive(k8).Skip(1).ToList();
@@ -1854,7 +2349,7 @@ public static class BarsHarness
             string day6 = Path.Combine(TicksDir(dir), "2026-10-06_NQ_12-26.day.jsonl"), sent6 = Path.Combine(TicksDir(dir), "2026-10-06_NQ_12-26.day.sent");
             ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 9, 16, 30));
             int n1 = ChartBridgeTicks.SendDays(null);
-            Check(n1 == 2 && File.Exists(day6) && !File.Exists(sent6) && Lines(dir, "ticks/tickdays.txt").Contains(k6 + "\texact\t0\t0") && Logged("did not store it; the day file is kept and sent again in 15 minutes (try 1 of 3)"),
+            Check(n1 == 2 && File.Exists(day6) && !File.Exists(sent6) && Lines(dir, "ticks/tickdays.txt").Contains(k6 + "\texact\t0\t0\t2") && Logged("did not store it; the day file is kept and sent again in 15 minutes (try 1 of 3)"),
                   "tick days: the last part answered without stored true: the day file is KEPT (not deleted), to be sent again from its first part");
             Check(ChartBridgeTicks.SendDays(null) == 0, "tick days: not sent again at once (15 minutes later)");
             ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 9, 16, 46));
@@ -1873,7 +2368,7 @@ public static class BarsHarness
             desk.AnswerTicks = body => "{\"ok\":true,\"whole\":true,\"stored\":true,\"kept\":true,\"packed\":false}";
             ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 9, 17, 20));
             ChartBridgeTicks.SendDays(null);
-            Check(!File.Exists(day7) && File.Exists(Path.Combine(TicksDir(dir), "2026-10-07_NQ_12-26.raw")) && Lines(dir, "ticks/tickdays.txt").Contains(k7 + "\texact\t1\t0"),
+            Check(!File.Exists(day7) && File.Exists(Path.Combine(TicksDir(dir), "2026-10-07_NQ_12-26.raw")) && Lines(dir, "ticks/tickdays.txt").Contains(k7 + "\texact\t1\t0\t2"),
                   "tick days: stored on the next try: the day file deleted only now; the raw kept (not packed)");
         }
         finally { desk.Stop(); ChartBridgeConfig.DeskUrl = urlWas; ChartBridgeTicks.PartMaxTicks = 20000; }
@@ -1913,7 +2408,7 @@ public static class BarsHarness
             TimeZoneInfo z = NinjaTrader.Core.Globals.GeneralOptions.TimeZoneInfo;
             Check(asked.Count == 1 && r0.Instrument.FullName == "NQ 12-26" && r0.From == TimeZoneInfo.ConvertTimeFromUtc(ou, z) && r0.To == TimeZoneInfo.ConvertTimeFromUtc(cu, z) && r0.BarsPeriod.BarsPeriodType == BarsPeriodType.Tick,
                   "tick pull: after the close, one tick request through the gate, from the session's open to its close (NinjaTrader's time): " + (r0 == null ? "none" : r0.From + " to " + r0.To));
-            Check(Lines(dir, "ticks/tickdays.txt").Contains("2026-10-06 NQ 12-26\texact\t0\t0") && File.Exists(Path.Combine(TicksDir(dir), "2026-10-06_NQ_12-26.day.jsonl")),
+            Check(Lines(dir, "ticks/tickdays.txt").Contains("2026-10-06 NQ 12-26\texact\t0\t0\t2") && File.Exists(Path.Combine(TicksDir(dir), "2026-10-06_NQ_12-26.day.jsonl")),
                   "tick pull: the history matches the live capture second by second: exact, queued for The Desk");
             m0 = MadeCount();
             ChartBridgeBars.PlanOnce(null);
@@ -1994,7 +2489,7 @@ public static class BarsHarness
     {
         DateTime wed0840 = EtToUtc(W(2026, 10, 7, 8, 40));
         Desk desk = Fresh(dir, "NQ", wed0840);
-        string doneLine = "2026-10-06 NQ 12-26\texact\t0\t0";
+        string doneLine = "2026-10-06 NQ 12-26\texact\t0\t0\t2";
         string dayFile = Path.Combine(TicksDir(dir), "2026-10-06_NQ_12-26.day.jsonl");
         try
         {
@@ -2063,7 +2558,7 @@ public static class BarsHarness
             answerTicks = r => { Bars b = new Bars(); foreach (DateTime w in part) { b.Add(NtOf(w), 25000, 25000, 25000, 25000, 1); b.Bids.Add(24999.75); b.Asks.Add(25000); } return b; };
             ChartBridgeTicks.PlanDay(null);
             string raw6 = Path.Combine(TicksDir(dir), "2026-10-06_NQ_12-26.raw");
-            Check(Lines(dir, "ticks/tickdays.txt").Contains("2026-10-06 NQ 12-26\tfailed\t0\t0") && TickDiag().Contains("\"lastDay\":\"2026-10-06 NQ 12-26: failed,") && File.Exists(raw6) && File.Exists(dayFile),
+            Check(Lines(dir, "ticks/tickdays.txt").Contains("2026-10-06 NQ 12-26\tfailed\t0\t0\t2") && TickDiag().Contains("\"lastDay\":\"2026-10-06 NQ 12-26: failed,") && File.Exists(raw6) && File.Exists(dayFile),
                   "tick day morning: history short of the live capture: the check fails, reported in lastDay, sent marked failed, the raw kept");
             // nothing at all: retried 15 minutes later (3 times), reported in lastError, never marked done, the raw kept
             TickMorningSetup(dir, wed0840);
@@ -2093,7 +2588,7 @@ public static class BarsHarness
             m0 = MadeCount();
             ChartBridgeBars.PlanOnce(null);
             List<BarsRequest> made = TicksMade(m0);
-            Check(made.Count == 1 && IsSession(made[0], D(2026, 10, 6)) && desk.All1s().Count == 0 && Lines(dir, "ticks/tickdays.txt").Contains("2026-10-06 NQ 12-26\texact\t0\t0"),
+            Check(made.Count == 1 && IsSession(made[0], D(2026, 10, 6)) && desk.All1s().Count == 0 && Lines(dir, "ticks/tickdays.txt").Contains("2026-10-06 NQ 12-26\texact\t0\t0\t2"),
                   "tick day morning: through the bars worker at 08:40, only the tick day's pull asks NinjaTrader: " + made.Count);
         }
         finally { desk.Stop(); ChartBridgeTicks.Stop(); ChartBridgeTicks.ResetConfig(); typeof(ChartBridgeTicks).GetField("capturing", BindingFlags.NonPublic | BindingFlags.Static).SetValue(null, false); }
@@ -2138,7 +2633,7 @@ public static class BarsHarness
             ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 10, 10, 0));
             Check(ChartBridgeTicks.AskPacked(null) == 2 && desk.AllTicks().Count == n0 + 2 && desk.AllTicks()[n0] == "/api/ticks/day " + lastSent6 && !desk.AllTicks().Skip(n0).Any(b => b.Contains("2026-10-08")),
                   "tick packed: stored, not packed: the last part sent again in the next window (once a day); the failed day is never asked");
-            Check(File.Exists(raw6) && File.Exists(state6) && File.Exists(last6) && Lines(dir, "ticks/tickdays.txt").Contains(k6 + "\texact\t1\t0"), "tick packed: still not packed: everything kept");
+            Check(File.Exists(raw6) && File.Exists(state6) && File.Exists(last6) && Lines(dir, "ticks/tickdays.txt").Contains(k6 + "\texact\t1\t0\t2"), "tick packed: still not packed: everything kept");
             ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 10, 13, 0));
             Check(ChartBridgeTicks.AskPacked(null) == 0 && desk.AllTicks().Count == n0 + 2, "tick packed: at most once a New York day");
             // a raw older than 7 days stays listed in rawOld while it waits
@@ -2151,14 +2646,14 @@ public static class BarsHarness
             // Monday 08:00 (the morning window): a Desk without the route (404) keeps everything
             desk.StatusTicks = body => 404;
             ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 12, 8, 0));
-            Check(ChartBridgeTicks.AskPacked(null) == 0 && File.Exists(raw6) && File.Exists(last6) && Lines(dir, "ticks/tickdays.txt").Contains(k6 + "\texact\t1\t0") && TickDiag().Contains("\"deskHasNoTicks\":true"),
+            Check(ChartBridgeTicks.AskPacked(null) == 0 && File.Exists(raw6) && File.Exists(last6) && Lines(dir, "ticks/tickdays.txt").Contains(k6 + "\texact\t1\t0\t2") && TickDiag().Contains("\"deskHasNoTicks\":true"),
                   "tick packed: a Desk 404 keeps the raw, the state and the last part");
             typeof(ChartBridgeTicks).GetField("deskHasNone", BindingFlags.NonPublic | BindingFlags.Static).SetValue(null, false);
             // a time-out keeps everything and asks again after 15 minutes
             desk.StatusTicks = body => { Thread.Sleep(1500); return 200; };
             ChartBridgeTicks.TimeoutMs = 300;
             ChartBridgeTicks.AskPacked(null);
-            Check(File.Exists(raw6) && File.Exists(last6) && Lines(dir, "ticks/tickdays.txt").Contains(k6 + "\texact\t1\t0") && TickDiag().Contains("asking whether the day is packed"),
+            Check(File.Exists(raw6) && File.Exists(last6) && Lines(dir, "ticks/tickdays.txt").Contains(k6 + "\texact\t1\t0\t2") && TickDiag().Contains("asking whether the day is packed"),
                   "tick packed: a Desk time-out keeps everything: " + Regex.Match(TickDiag(), "\"lastError\":\"[^\"]*\"").Value);
             ChartBridgeTicks.TimeoutMs = timeoutWas;
             desk.StatusTicks = body => 200;
@@ -2170,14 +2665,14 @@ public static class BarsHarness
             desk.AnswerTicks = body => "{\"ok\":true,\"duplicate\":true,\"whole\":true,\"stored\":true,\"kept\":true,\"role\":\"master\",\"packed\":true}";
             ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 12, 8, 20));
             int asked = ChartBridgeTicks.AskPacked(null);
-            Check(asked == 2 && !File.Exists(raw6) && !File.Exists(state6) && !File.Exists(last6) && !File.Exists(asked6) && Lines(dir, "ticks/tickdays.txt").Contains(k6 + "\texact\t1\t1") && Lines(dir, "ticks/tickdays.txt").Contains(k7 + "\texact\t1\t1"),
+            Check(asked == 2 && !File.Exists(raw6) && !File.Exists(state6) && !File.Exists(last6) && !File.Exists(asked6) && Lines(dir, "ticks/tickdays.txt").Contains(k6 + "\texact\t1\t1\t2") && Lines(dir, "ticks/tickdays.txt").Contains(k7 + "\texact\t1\t1\t2"),
                   "tick packed: stored and packed true: the raw, its state and the last part deleted, tickdays.txt says packed: " + string.Join(" | ", Lines(dir, "ticks/tickdays.txt")));
             string diag = TickDiag();
             string filesPart = diag.Substring(diag.IndexOf("\"files\":"), diag.IndexOf("\"lastSent\":") - diag.IndexOf("\"files\":"));
-            Check(!filesPart.Contains(k6) && filesPart.Contains(k8) && diag.Contains("\"" + k6 + "\":{\"check\":\"exact\",\"stored\":true,\"packed\":true}") && diag.Contains("\"packWait\":{}") && TickDisk() == FolderSize(dir),
+            Check(!filesPart.Contains(k6) && filesPart.Contains(k8) && diag.Contains("\"" + k6 + "\":{\"check\":\"exact\",\"stored\":true,\"packed\":true,\"rule\":2}") && diag.Contains("\"packWait\":{}") && TickDisk() == FolderSize(dir),
                   "tick packed: /diag files no longer lists the day, days says packed, nothing waits");
             ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 16, 16, 30));
-            Check(ChartBridgeTicks.AskPacked(null) == 0 && File.Exists(raw8) && Lines(dir, "ticks/tickdays.txt").Contains(k8 + "\tfailed\t1\t0") && TickDiag().Contains("\"rawOld\":[\"2026-10-08 NQ 12-26\"]"),
+            Check(ChartBridgeTicks.AskPacked(null) == 0 && File.Exists(raw8) && Lines(dir, "ticks/tickdays.txt").Contains(k8 + "\tfailed\t1\t0\t2") && TickDiag().Contains("\"rawOld\":[\"2026-10-08 NQ 12-26\"]"),
                   "tick packed: a failed day is never deleted (until Anthony rules) and stays in rawOld");
         }
         finally { desk.Stop(); ChartBridgeConfig.DeskUrl = urlWas; ChartBridgeTicks.PartMaxTicks = 20000; ChartBridgeTicks.TimeoutMs = timeoutWas; }
@@ -2322,7 +2817,7 @@ public static class BarsHarness
             int f1 = ChartBridgeTicks.AskPacked(null);
             ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 12, 8, 30));
             int f2 = ChartBridgeTicks.AskPacked(null);
-            Check(f1 == 1 && f2 == 0 && asks() == a0 + 3 && File.Exists(raw6) && File.Exists(last6) && Lines(dir, "ticks/tickdays.txt").Contains(k6 + "\texact\t1\t0") && Logged("asked again tomorrow"),
+            Check(f1 == 1 && f2 == 0 && asks() == a0 + 3 && File.Exists(raw6) && File.Exists(last6) && Lines(dir, "ticks/tickdays.txt").Contains(k6 + "\texact\t1\t0\t2") && Logged("asked again tomorrow"),
                   "tick asked: a 422 refusal keeps everything and is not asked again that day: " + f1 + " " + f2);
             desk.StatusTicks = body => 400;
             ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 13, 8, 0));   // Tuesday morning
@@ -2335,7 +2830,7 @@ public static class BarsHarness
             desk.AnswerTicks = body => "{\"ok\":true,\"stored\":true}";
             ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 14, 8, 0));   // Wednesday morning
             int g1 = ChartBridgeTicks.AskPacked(null), g2 = ChartBridgeTicks.AskPacked(null);
-            Check(g1 == 1 && g2 == 0 && File.Exists(raw6) && File.Exists(state6) && File.Exists(last6) && Lines(dir, "ticks/tickdays.txt").Contains(k6 + "\texact\t1\t0") &&
+            Check(g1 == 1 && g2 == 0 && File.Exists(raw6) && File.Exists(state6) && File.Exists(last6) && Lines(dir, "ticks/tickdays.txt").Contains(k6 + "\texact\t1\t0\t2") &&
                   File.Exists(asked6) && File.ReadAllText(asked6).Trim() == "2026-10-14" && TickDiag().Contains("\"packWait\":{\"" + k6 + "\":{\"lastPart\":true,\"asked\":\"2026-10-14\"}"),
                   "tick asked: a 200 without \"packed\" keeps the raw, its state and the last part, noted asked today: " + g1 + " " + g2);
 
@@ -2345,7 +2840,7 @@ public static class BarsHarness
             desk.AnswerTicks = body => "{\"stored\":true,\"packed\":true,\"packedVia\":\"master\"}";
             ChartBridgeBars.UtcNow = () => EtToUtc(W(2026, 10, 15, 8, 0));   // Thursday morning
             Check(ChartBridgeTicks.AskPacked(null) == 1 && !File.Exists(raw6) && !File.Exists(state6) && !File.Exists(last6) && !File.Exists(asked6) &&
-                  Lines(dir, "ticks/tickdays.txt").Contains(k6 + "\texact\t1\t1") && !DiagFiles().Contains(k6) && TickDiag().Contains("\"packWait\":{}"),
+                  Lines(dir, "ticks/tickdays.txt").Contains(k6 + "\texact\t1\t1\t2") && !DiagFiles().Contains(k6) && TickDiag().Contains("\"packWait\":{}"),
                   "tick asked: a flagged day: The Desk answers stored and packed true via the master: the raw, its state and the last part deleted, tickdays.txt says packed");
         }
         finally

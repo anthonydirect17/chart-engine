@@ -1,5 +1,147 @@
 # Changelog
 
+## ChartBridge 0.6.14 and chart 1.42.3 (2026-11-03): the NQ tick file's day check fails only a day unusable for backtests; holes listed, never failing
+
+In plain words: a day's tick check no longer fails because NinjaTrader's history has a trade or two less than the live capture in
+some seconds. It fails only when the history has no trades, or has under 90 percent of the live capture's trades. A hole is a
+time of a minute or more between two history trades (or from the session's open, or to its close) in which the live capture
+traded, or which the live capture could not see (an `inGap` hole, never at the close): the day still passes, and the hole is listed so the backtests skip that stretch. Monday 2026-11-02 on WORK, which failed under the old rule, is checked again once under the new one.
+The chart page itself does not change (1.42.3 only follows the version).
+
+Install, in this order: **first The Desk's update that accepts the status `short`, then the F5.** The Desk of today refuses a day
+part whose `check.status` is not exact, filled or failed (400), and ChartBridge then sets that day aside (`.day.jsonl.refused`, raw
+kept, not sent again by itself). Once The Desk takes `short`: the PC updater installs the page from green main as usual, and
+ChartBridge 0.6.14 is a recompile: run the updater with `-InstallChartBridge`, then F5 in NinjaTrader while flat. The page works
+with ChartBridge 0.6.2 or newer (`minChartBridge` stays 0.6.2).
+
+**Recovery, for a PC that got 0.6.14 before The Desk accepted `short`:** each day The Desk refused is in the `ticks` folder as
+`<session>_<contract>.day.jsonl.refused` (its raw kept). After The Desk is updated, rename that file back to
+`<session>_<contract>.day.jsonl` (drop `.refused`); in the next send window ChartBridge sends it from part 1 (the set aside deleted
+its progress file), and the usual stored, packed and raw deleted path follows. Nothing else is needed.
+
+**Going back to 0.6.13** (only if ever needed): `tickdays.txt` lines now have a fifth field (the rule), and 0.6.13 skips such lines.
+So 0.6.13 takes every day with its raw still there as not done, pulls it again under its old rule (a `short` day then fails),
+sends it as a new set, so **The Desk's rows for those days are replaced**, and writes four field lines. Nothing is lost (the raw
+files stay). Back on 0.6.14, the next start checks every such failed day again (it is rule 1 with its raw: every start lists those),
+and The Desk's rows are replaced once more with the new rule's result.
+
+**1. The day check's rule** (ChartBridge 0.6.14, `nt8/ChartBridgeTicks.cs`; Anthony's decision of 2026-11-03):
+
+Until now a day failed if ANY second had more live trades or volume than NinjaTrader's history. On WORK, Monday 2026-11-02 failed
+that way: WORK was off from the 18:00 open until the morning and closed shortly after 16:00 (as expected, history filled those
+hours), and in the seconds the live capture covered history held about 1.6 percent fewer trades, one to five trades in a second.
+Anthony: "the only failure should be very large gaps in the day, or days that are unusable for a backtesting purpose, small
+inconsistency does not matter to me" and "even a 1 minute gap should not fail the whole day, that gap just should not be used for
+testing". WORK's look at five of those seconds (times only): every live trade over history was stamped in the last tenth of its
+second, history had no trade live lacked, and where trades match history's time runs 4 ms early to about 106 ms late. So those
+"history short" seconds are NinjaTrader's history stamping a trade up to about 0.1 s later, into the next second; nothing is
+missing. **Per second differences of this kind are expected and are not a failure**; `secondsHistShort` and `ticksHistShort` stay in
+the summary as information only. NinjaTrader's history stays the day's record, as before.
+
+- **The span the share is judged over.** Every second from the second of the session's first live trade to the second of its last
+  live trade, both included, less the seconds strictly inside a live capture gap ChartBridge knows of. A known gap is a chunk that
+  took drops (its `lost` or `gaps` above 0, its carried chunks too: a lost trade or a feed drop, which includes the first chunk after
+  a restart mid-session): from the last live trade of the chunk before it to the first live trade of the chunk after it (an open
+  end when there is none); drops that wait for a cut not made yet run from the last cut trade to the end. When what the gaps leave
+  has **fewer than 600 seconds or fewer than 1,000 live trades** (`TickCheck.MinCoveredSeconds`, `MinCoveredLive`; the coordinator
+  for Anthony after the PR #79 review: a short run, or most chunks flagged, would leave a sliver where the skew alone fails a good
+  day), the whole first to last span counts instead (`spanWhole` true).
+- **failed** only when history has no trades, or history is thin: in that span history's trades are under 90 percent of live's
+  (`TickCheck.ThinSharePercent = 90`; 90.0 percent passes). The day is sent marked failed and its raw is kept until Anthony rules,
+  as before.
+- **A hole** is bounded by history trades (the coordinator for Anthony, the PR #79 third re-review: a gap in history is the time
+  between two history trades; whether the market traded in it is shown by the live trades inside it). Take every time between
+  two consecutive history trades, the time from the session's open (18:00 New York) to history's first trade, and the time from
+  history's last trade to the session's close (17:00). It is a hole when it is **at least 60,000 ms** long (`TickCheck.HoleMinMs`;
+  in ms, so where it falls in its seconds no longer matters) and either:
+  - **a live trade lies inside it more than 1,000 ms from both ends** (`inGap` false; `TickCheck.HoleMarginMs`). History's time was
+    measured 4 ms early to 106 ms late against the live feed (`SkewEarlyMs`, `SkewLateMs`, kept as the record of what was
+    measured, from five seconds of one day), so a live trade close to a history trade that bounds the time can be that trade's
+    twin. The margin is a second on purpose, far wider than the measured skew: a few stamps later than 106 ms would otherwise make
+    false holes in a quiet market, and a second costs nothing at minute scale. A live trade further inside proves history lost
+    trades there. Or:
+  - **it overlaps a known capture gap** (`inGap` true; the coordinator's decision), even with no live trade in it: the live capture
+    could not see that time and history has nothing, so nobody vouches for it. WORK starts after the open most days (an open start
+    gap), so a history that starts late gives an `inGap` hole from the open. **Not at the close**: from history's last trade to the
+    close only live evidence counts (the third re-review), so an early close (a holiday: neither feed trades after the halt, and
+    ChartBridge's sessions have no early closes) or a capture that ends with an open end gap lists nothing there. This covers the
+    60 s to 300 s end of a session the caretaker's early end test does not; longer ones the caretaker also skips by CME's calendar.
+
+  A hole is listed `{"from": the history trade before it (or the open), "to": the history trade after it or the close (exclusive),
+  "live": the live trades inside, "inGap"}`, in UTC ms and **not aligned to seconds**. What is missed: only a history silence of a
+  minute or more with no live trade more than a second inside it and no known gap, which means the market itself was quiet (the
+  live feed saw no trade either). The probes (made-up random trades, a fixed seed; the skew as measured with 1 percent of the
+  stamps 107 to 300 ms late, worse than measured): 0 false holes in 600 captures of 10 minutes at 0.02, 0.05, 0.2, 1, 5 and 20
+  trades a second (100 each; the measured 4 / 106 ms margin would give 4 at 0.02 and 1 at 0.05); a real 60.0 s history silence
+  starting at a random millisecond is listed every time a live trade falls inside it beyond the margin: 200 of 200 at 0.2, 1, 2, 5
+  and 20 trades a second, 192 of 200 at 0.05 and 128 of 200 at 0.02 (the rest had no live trade inside beyond the margin). Holes
+  never fail the day. The Desk and the caretaker should skip every hole, either kind.
+- **The statuses.** `exact` every second the same; `filled` history has more in some seconds, never less; **`short`** (new, passes)
+  history has fewer trades or less volume in some seconds but is not thin. A day with a hole that has live trades inside is `short` in practice
+  (the live trade that proves it sits in a whole second with no history trade; the one exception is a day that fails the 90
+  percent test, which is `failed`);
+  a day with only `inGap` holes can be `exact` or `filled`; `holes` is its own field, so every passed day can be read for it. `failed` as
+  above. Every place that treats a day as passed now asks one helper, `TickCheck.IsPassed` (exact, filled, short): `Passed`, the raw
+  deleted once stored and packed (`DayTaken`), the last part kept and asked again (`AskPacked`), the look at the folder that
+  finishes a delete cut short (`ScanFolder`) and `/diag` `packWait`. A failed day is never asked and never deleted, as before.
+- **The summary** (the check in every part of the day file) keeps every count it had and adds `rule` (2), `coveredSeconds`,
+  `spanWhole`, `coveredLive` and `coveredHist` (the span's seconds and the trades of each in it), `historyShare` (`coveredHist` over
+  `coveredLive`, rounded to 4 places, null when no live trade) and `holes`:
+  `[{"from": UTC ms, "to": UTC ms (exclusive), "live": live trades in it, "inGap": true | false}]`, every hole, oldest first.
+  `lastDay` in `/diag` and the Output window say the share and the number of holes.
+- **`tickdays.txt`** has a fifth field, the rule a day's check was made under (2 from 0.6.14); a line of 0.6.13 or before has four
+  fields and reads as rule 1. `/diag` `tickFile.days` shows `rule`.
+- **A day set aside** (refused, or not stored 3 times): an older file under the `.refused` or `.unstored` name is deleted first;
+  if the move still cannot be done, the day file stays, is not sent again while ChartBridge runs, and `lastError` and the Output
+  window say so (never a resend every 10 seconds; the PR #79 review).
+
+**2. A day failed under the old rule is checked again once.** Every start of 0.6.14 lists every day `tickdays.txt` notes failed under
+rule 1 (a four field line) whose raw file is still there (Monday 2026-11-02 on WORK), and writes `ticks/tickrule.txt` (`rule 2`, then
+`recheck <session contract>` per listed day) whenever that record differs. Such a day is no longer done: its final pull runs once more in the same windows as any
+final pull (16:15 to 17:50 New York on weekdays, weekday mornings before 09:15, the weekend), one request at a time through the
+gate, 15 minutes between tries and 3 tries, then not until the next start (every start lists it again while it qualifies).
+NinjaTrader's answer is checked under the new rule and written as a new set; the day's earlier set aside files (`.day.jsonl.refused`,
+`.day.jsonl.unstored`) and its progress go, and the set is sent to The Desk (The Desk stores it in place of the failed one: one row
+per contract, session and PC). The new record (rule 2) replaces `failed` in `tickdays.txt` and the day leaves the list. A passed day
+then follows the usual stored, packed and raw deleted path. A listed day whose raw is gone is dropped from the list (the file written
+again); it cannot be checked again and stays failed. A day that fails under the new rule stays failed and is never checked again,
+even if `tickrule.txt` goes missing (its rule 2 in `tickdays.txt`). A round trip to 0.6.13 and back is healed: 0.6.13 rewrites such
+a day as a four field failed line, and the next start of 0.6.14 lists it again (the re-review, LOW B). Days already passed are not
+touched. `/diag` `tickFile.recheck` lists the days waiting.
+
+- **Tests:** `nt8/check/BarsHarness.cs` (`npm run check:orders`, made-up trades only): the constants; exact, filled and short pass;
+  95 percent short with the per second counts kept; 90 percent passes and 89 fails; less volume in a second is short; history's
+  4 ms early to 106 ms late stamps (and every trade 106 ms late) give per second differences, short, never a hole; an 81 second
+  history silence with live trades passes and is listed from history trade to history trade with its live trades; a 60.0 s
+  history silence is a hole and a 59.9 s one is not; one live trade 1,000 ms after the start of a 62 s silence or 1,000 ms before its
+  end is no hole, 1,001 ms is; the random skew probes, 1 percent of stamps 107 to 300 ms late, give 0 false holes at 0.02 to 20
+  trades a second (the measured 4 / 106 ms margin would give 5); a real 60.0 s history silence at a random millisecond is listed
+  whenever a live trade is inside beyond the margin, at 0.02 to 20 trades a second; history ending 120 s or 240 s before live's last
+  trade is a hole to the close, an early close with live stopping at the halt is none, an open end gap with no live trade is none,
+  a live trade within the margin of history's last trade only is none; quiet seconds inside a silence count; a history trade between splits it; no trades in either for 200 s or 70 s is no
+  hole, and the 70 s over a capture gap is an `inGap` hole; only the covered span counts; a known gap leaves the span (85 percent then fails), its edge
+  seconds stay, open ends, gaps covering everything fall back to the whole span, a gap does not split a hole; a 6 minute skewed
+  capture whose gaps leave 3 seconds, and one through `FinishDay` with every chunk flagged, are judged on the whole span and pass;
+  700 seconds with fewer than 1,000 live trades uses the whole span; 2,000 covered seconds still uses the covered span; a history
+  silence inside a capture gap is an `inGap` hole (live 0) on a filled day, the same silence with no gap is none, a silence reaching
+  one second into a gap takes in its live run, a 60.0 s `inGap` silence is a hole and a 59.9 s one is not; history missing the
+  first 300 s with an open start gap gives an `inGap` hole from the open (and through `FinishDay`, a capture started after the open
+  gets one from 18:00 to history's first trade), both starting together with no gap gives none; through `FinishDay` the flagged
+  chunk's seconds leave the span and the summary has `rule`, `coveredSeconds`, `spanWhole`, `coveredLive`, `coveredHist`,
+  `historyShare` and `holes` with `inGap`; a short day is queued, kept, asked and its raw deleted once packed, and the look at the
+  folder finishes its delete; a failed day of 0.6.13 with its raw is listed, never pulled in trading hours, tried 3 times, tried
+  again after a restart, checked under the new rule once and no longer listed; one with no raw is not listed or is dropped from the
+  list; the rule column is written and a 0.6.13 line reads as rule 1; one failed under the new rule is not checked again, even with
+  `tickrule.txt` gone; a round trip to 0.6.13 (the day rewritten as a four field failed line) is listed again at the next start and
+  healed; a day checked again after a refusal removes the old `.refused` and `.unstored`, refused again replaces the old
+  `.refused` and is sent once, a set aside that cannot be done never loops; a `.refused` renamed back is sent from part 1. The
+  existing tick cases now say short where they said failed for less volume. `test/nt8-ticks.test.js` checks the code.
+
+**3. The release:** `package.json`, the engine's header and `VERSION` 1.42.3; ChartBridge's `Version` 0.6.14 with its comment;
+`live/COMPAT.json` page 1.42.3 and its history row (`minChartBridge` stays 0.6.2); `nt8/PROTOCOL.md`'s title list, the tick file
+examples and the check's section; the version pins in the tests and `BarsHarness` take 0.6.14; `test/nt8-record.test.js`: while
+ChartBridge is 0.6.14, every add-on file but `ChartBridge.cs` and `ChartBridgeTicks.cs` is checked byte for byte against 0.6.13.
+
 ## ChartBridge 0.6.13 and chart 1.42.2 (2026-11-03): the NQ tick file's morning catch-up before 09:15; the raw file deleted once packed
 
 In plain words: a missed day's tick check now also runs on weekday mornings before 09:15 New York, so closing NinjaTrader before

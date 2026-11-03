@@ -131,6 +131,31 @@ test('0.6.13: the add-on files this release does not touch are the 0.6.12 files,
   for (const [f, h] of Object.entries(want)) assert.strictEqual(crypto.createHash('sha256').update(read(f).replace(/\r/g, '')).digest('hex'), h, f + ' is the 0.6.12 file');
 });
 
+test('0.6.14: the add-on files this release does not touch are the 0.6.13 files, byte for byte (while ChartBridge is 0.6.14)', () => {
+  if (!/public const string Version = "0\.6\.14";/.test(read('ChartBridge.cs'))) return;   // a later release may change them
+  // 0.6.14 changed ChartBridge.cs (the version) and ChartBridgeTicks.cs (the tick day check rule, Anthony 2026-11-03); every other
+  // add-on file is the one compiled for 0.6.13 (hashes from main 37b3a91)
+  const want = {
+    'ChartBridgeAccounts.cs': 'fafc11f2257267a41d26863401261f92c8468d260de4d144a3b2d00b787e01ad',
+    'ChartBridgeAgents.cs': '87f8f18b0f806ec3693aae385ec4228659df0bf8e93a267e4db871084d766e73',
+    'ChartBridgeBars.cs': 'a0bea9224dac8e2fb2dc33664d4e74159cde7c3a3f888bdfe6c92ea42b99fc9a',
+    'ChartBridgeBot.cs': '33ca2af1f1867f14ab188f659ad63210933801b62c951234255972111fef84b1',
+    'ChartBridgeCopier.cs': 'bb90a637610b3b56236c6cfba014c1a1db40110f2b821bbeecf7778f2f4e6e49',
+    'ChartBridgeGroups.cs': '95baae61b5c8d135d0a1b84e5a0c7fd13e63ff936d22da76170259bc2e4610ff',
+    'ChartBridgeMerge.cs': '7aa31e37d38c1875eb236e1575d20f49ed31c1e2c08fc9d265d5aa7e0a32952c',
+    'ChartBridgeOrderRecord.cs': 'de33b77a1d774d2ce8d11a5f3a8e927f1ff085c7d8f47259ff6a542d18ccc1f1',
+    'ChartBridgeOrders.cs': 'e1baf6f7237c5b0ce32cc3abdd6a227b3f98344aa44f94e3f49bc72841b291ac',
+    'ChartBridgePin.cs': '8c6b28abf30cc716b7175fa3c1fd4e1cb9ca0c9407a19a03357830028481e3eb',
+    'ChartBridgeStops.cs': 'f2d74c58a904a5ba448ca5ebceb05f25b01d55642ddfdf1323b0c7dbf95f5d3c',
+    'ChartBridgeStrategies.cs': '968179e96aa887424b9df26148f8ae65bc3c60238f6f9de90f238e7781ab9193',
+    'ChartBridgeTape.cs': 'b5150cf7dbea2244da11d49511d163b4666a2403b9e21ebd10ea44a25da87fd1',
+    'ChartBridgeV3.cs': '4ea9774ee3d30e619d1b849965b68565c24eed8f276194deaf93ee23242261dc',
+  };
+  const addons = JSON.parse(read('install-files.json')).addons.map(f => f.replace(/^nt8\//, ''));
+  assert.deepStrictEqual(addons.filter(f => !want[f]).sort(), ['ChartBridge.cs', 'ChartBridgeTicks.cs'], 'every add-on file is checked or named as changed');
+  for (const [f, h] of Object.entries(want)) assert.strictEqual(crypto.createHash('sha256').update(read(f).replace(/\r/g, '')).digest('hex'), h, f + ' is the 0.6.13 file');
+});
+
 test('0.6.9: the decision id: the group entry\'s PlaceOrder call unchanged, set and cleared around it, noted before Submit', () => {
   const g = read('ChartBridgeGroups.cs');
   const loop = body(g, 'private static string GroupPlaceLocked(');
