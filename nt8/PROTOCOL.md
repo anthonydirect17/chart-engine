@@ -1,4 +1,4 @@
-# ChartBridge protocol (v1 market data and fills, v2 orders, v3 accounts, strategies, copier and bot, 0.5.0 agents, 0.5.1 accounts, 0.5.8 prop groups, 0.6.0 group trading, 0.6.1 a group's Type and default hero, 0.6.3 the audit fixes, 0.6.4 the no-trade-record alarm and Merge on an off follower, 0.6.8 the minute book, 0.6.10 the account lifecycle and the NQ tick file, 0.6.11 the bar trail and the narrower 1 second request, 0.6.12 the bar trail follow-ups)
+# ChartBridge protocol (v1 market data and fills, v2 orders, v3 accounts, strategies, copier and bot, 0.5.0 agents, 0.5.1 accounts, 0.5.8 prop groups, 0.6.0 group trading, 0.6.1 a group's Type and default hero, 0.6.3 the audit fixes, 0.6.4 the no-trade-record alarm and Merge on an off follower, 0.6.8 the minute book, 0.6.10 the account lifecycle and the NQ tick file, 0.6.11 the bar trail and the narrower 1 second request, 0.6.12 the bar trail follow-ups, 0.6.13 the tick day's morning catch-up and the raw deleted once packed)
 
 ChartBridge is a NinjaTrader 8 add-on. It serves the live chart page at `http://localhost:8765/` and
 talks to it over one WebSocket at `ws://localhost:8765/ws`. Everything stays on the local machine.
@@ -1212,7 +1212,7 @@ at least 16) bounds the `ticks/` folder next to `config.txt`.
   it reads the files again, so a sender of an earlier start still running can never write the same `cut <seq>` with other bytes.
 
   ```json
-  {"v":1,"source":"chartbridge","bridge":"0.6.12","pc":"WORK","root":"NQ","contract":"NQ 12-26","tick":0.25,
+  {"v":1,"source":"chartbridge","bridge":"0.6.13","pc":"WORK","root":"NQ","contract":"NQ 12-26","tick":0.25,
    "session":"2026-10-30","run":"a1b2c3d4e5f6","seq":12,"count":1834,"volume":2301,
    "first":1793397600123,"last":1793397779950,"lost":0,"gaps":0,
    "sides":{"bidAsk":1700,"tickRule":130,"none":4},"cols":["u","p","v","s"],"ticks":[[1793397600123,25000.25,1,1]]}
@@ -1242,7 +1242,7 @@ at least 16) bounds the `ticks/` folder next to `config.txt`.
   (`<session contract>`, check, stored, packed): never pulled again. A failure is tried again after 15 minutes, 3 times, then not
   until the next start.
 
-  **The morning catch-up (Anthony 2026-11-03).** Anthony sometimes closes NinjaTrader before 16:15 (e.g. 16:05), so a session's
+  **The morning catch-up (0.6.13, Anthony 2026-11-03).** Anthony sometimes closes NinjaTrader before 16:15 (e.g. 16:05), so a session's
   final pull never ran that day. The final pull of a session that has **closed** (its raw file there, not done) may also **start** on
   a weekday morning, from ChartBridge's start until 09:15 New York (Monday to Friday: a request must start before 09:15:00; the
   weekend keeps its own rule above). Only this pull gets the morning: the 1 second bars' own requests and sends keep their window
@@ -1261,7 +1261,7 @@ at least 16) bounds the `ticks/` folder next to `config.txt`.
   morning catch-up)`.
 
   ```json
-  {"v":1,"source":"chartbridge","bridge":"0.6.12","pc":"WORK","root":"NQ","contract":"NQ 12-26","tick":0.25,
+  {"v":1,"source":"chartbridge","bridge":"0.6.13","pc":"WORK","root":"NQ","contract":"NQ 12-26","tick":0.25,
    "session":"2026-10-30","set":"0a1b2c3d4e5f","part":1,"parts":48,"setTicks":951234,"setVolume":1203456,
    "first":1793397600001,"last":1793480399990,
    "check":{"status":"filled","liveTicks":950001,"liveVolume":1202001,"histTicks":951234,"histVolume":1203456,
@@ -1277,7 +1277,7 @@ at least 16) bounds the `ticks/` folder next to `config.txt`.
   pack: the data caretaker on HOMESERVER (built later) packs each stored day and tells The Desk (`POST /api/ticks/packed`), and
   only then does The Desk answer `"packed":true` about that day. Until then the raw is kept; a failed day keeps its raw until
   Anthony rules. `/diag` `tickFile.rawOld` lists raw files older than 7 days (still kept, packed or not yet).
-- **The raw deleted once packed** (2026-11-03, the coordinator for Anthony: the tick data loop closed). When the answer to a
+- **The raw deleted once packed** (0.6.13, 2026-11-03, the coordinator for Anthony: the tick data loop closed). When the answer to a
   passed day's last part says `"stored":true` but `"packed":false`, ChartBridge keeps the raw and its state and keeps **only that
   last part**, exactly as sent, in `ticks/<same>.day.last` (one part, at most 20,000 trades; the rest of the day file is deleted
   as before; it counts in the folder's size against `tickFileMaxMB` like every file there). The New York date it was last asked is
@@ -1289,7 +1289,7 @@ at least 16) bounds the `ticks/` folder next to `config.txt`.
   true. Still not packed: everything kept, asked again the next day. `404`: everything kept, asked again when the route is tried
   again (30 minutes, as the chunks). A time-out or another failure: everything kept, nothing asked for 15 minutes. `400`, `413` or
   `422`: everything kept, asked again the next day, logged. A failed day keeps no last part and is never asked (it never packs);
-  its raw stays until Anthony rules. A day stored before this release has no `.day.last`: it is not asked (sending the whole day
+  its raw stays until Anthony rules. A day stored before 0.6.13 has no `.day.last`: it is not asked (sending the whole day
   again would make a new set at The Desk); its raw stays and `rawOld` lists it. A day another PC stored as `flagged` never packs
   (The Desk packs only the master), so that PC asks once a day and keeps its raw. `/diag` `tickFile.packWait` lists the days
   waiting (per session and contract: `lastPart`, `asked`).

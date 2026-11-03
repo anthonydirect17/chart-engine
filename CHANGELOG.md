@@ -1,14 +1,25 @@
 # Changelog
 
-## Unreleased (2026-11-03): the NQ tick file's final pull catches up on weekday mornings before 09:15; the raw file deleted once packed
+## ChartBridge 0.6.13 and chart 1.42.2 (2026-11-03): the NQ tick file's morning catch-up before 09:15; the raw file deleted once packed
 
-In plain words: when Anthony closes NinjaTrader before 16:15 (e.g. 16:05), that session's final tick pull never ran that day. Now
+In plain words: a missed day's tick check now also runs on weekday mornings before 09:15 New York, so closing NinjaTrader before
+16:15 no longer leaves that day without its final pull. And WORK and HOME now delete their raw tick files once the server has
+packed the day, instead of keeping them for good. The chart page itself does not change (1.42.2 only follows the version; one
+comment's wording in `live/league.js` and the 1.42.1 notes were made clearer, from the PR #77 review).
+
+Install: the PC updater installs the page from green main as usual. ChartBridge 0.6.13 is a recompile: run the updater with
+`-InstallChartBridge`, then F5 in NinjaTrader while flat. The page works with ChartBridge 0.6.2 or newer (`minChartBridge` stays
+0.6.2); only the tick file changes need 0.6.13.
+
+**1. The NQ tick file: the morning catch-up and the raw deleted once packed** (ChartBridge 0.6.13):
+
+When Anthony closes NinjaTrader before 16:15 (e.g. 16:05), that session's final tick pull never ran that day. Now
 ChartBridge may also start that pull on a weekday morning, from its start until 09:15 New York, for a session that has closed and
 is not done yet. It never pulls the session that is still open (in the morning, today's session that opened at 18:00 yesterday).
 Only the tick file's final pull gets the morning: the 1 second bars keep their 16:15 to 17:50 window, and the day file is still
 sent to The Desk from 16:15. And a day The Desk stored but has not packed yet is now asked about again once a day, so its raw
 file is deleted once The Desk says it is packed. ChartBridge only (`nt8/ChartBridgeTicks.cs`, a small hook in `nt8/ChartBridge.cs` and
-`nt8/ChartBridgeBars.cs`): a recompile in NinjaTrader when it is released.
+`nt8/ChartBridgeBars.cs`): a recompile in NinjaTrader.
 
 - **The morning window** (`ChartBridgeTicks.InMorningWindow`, `InDayStartWindow`). Anthony 2026-11-03: "The morning catch-up
   before 09:15 is fine." Monday to Friday, a request must start before 09:15:00 New York. The weekend keeps its own rule (Saturday,
@@ -40,6 +51,18 @@ file is deleted once The Desk says it is packed. ChartBridge only (`nt8/ChartBri
   everything (no new ask for 15 minutes after a time-out); packed true deletes the raw, its state and the part and `tickdays.txt`
   and `/diag` say packed; a failed day is never asked or deleted and stays in `rawOld`. `test/nt8-ticks.test.js` checks the code
   and the `dayState` words.
+
+**2. A wording fix from the PR #77 review** (no behaviour change): the 1.42.1 entry below, its `live/COMPAT.json` note and the
+comment in `live/league.js` `cleanDay` read as if The Desk's `folder.problem` text showed only when `ok` is not true. They now say:
+The Desk's own `folder.problem` text is always shown; with no text, `ok` true is never a problem whatever `set` says, and only an
+older Desk (`set` false, no `ok`) gets the page's sentence. Also `nt8/PROTOCOL.md` loses a doubled line, and its new tick file
+sections say 0.6.13.
+
+**3. The release:** `package.json`, the engine's header and `VERSION` 1.42.2; ChartBridge's `Version` 0.6.13 with its comment;
+`live/COMPAT.json` page 1.42.2 and its history row (`minChartBridge` stays 0.6.2: the page needs nothing new from ChartBridge);
+`nt8/PROTOCOL.md`'s title list and the tick file examples say 0.6.13; the version pins in the tests and `BarsHarness` take 0.6.13;
+`test/nt8-record.test.js`: while ChartBridge is 0.6.13, every add-on file but `ChartBridge.cs`, `ChartBridgeBars.cs` and
+`ChartBridgeTicks.cs` is checked byte for byte against 0.6.12.
 
 ## chart 1.42.1 (2026-11-02): the bar trail lines on the ticket, short; no false "folder is not set" warning with the League Mirror (page only, no F5)
 
