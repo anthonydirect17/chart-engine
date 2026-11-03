@@ -77,10 +77,10 @@ league, on WORK)." while the league was working. Since The Desk moved to HOMESER
 WORK's League Mirror task posts, so it has no folder set and says so (`set` false) while also saying all is well (`ok` true,
 `source` "mirror"). The page now trusts `ok`: no warning then. Page only, no F5.
 
-- **The page** (`live/league.js`, `cleanDay`): `folder.ok` true is never a problem, whatever `folder.set` says. Otherwise The
-  Desk's own `folder.problem` text is shown (trimmed to 200 characters as before), e.g. "The league's folder is not set, and no
-  league files have arrived from WORK yet." Only an older Desk that sends `set` false with no `ok` and no `problem` gets the page's
-  own sentence, now "No league files have reached The Desk yet." (it no longer tells Anthony to set a folder on WORK). The League
+- **The page** (`live/league.js`, `cleanDay`): The Desk's own `folder.problem` text is always shown (trimmed to 200 characters as
+  before), e.g. "The league's folder is not set, and no league files have arrived from WORK yet."; with no text, `folder.ok` true
+  is never a problem whatever `folder.set` says, and only an older Desk (`set` false, no `ok`) gets the page's sentence, now "No
+  league files have reached The Desk yet." (it no longer tells Anthony to set a folder on WORK). The League
   view and the Drone sky's warning both read this one value, so both are fixed.
 - Tests: `test/league.test.js` (the mirror answer gives no problem and its day as read; set false with ok false shows The Desk's
   text, trimmed; a set folder that cannot be found shows The Desk's text; an older Desk gets the new sentence),
