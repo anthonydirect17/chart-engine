@@ -22,9 +22,9 @@
 //    second (TickCheck). The history is the master when the check passes: exact, filled (history has trades the live capture
 //    missed, never fewer) or, from 0.6.14 (Anthony 2026-11-03), short (history has fewer in some seconds, but at least 90 percent of
 //    the live trades over the span the live capture covered); it fails only when history has no trades or is under that 90 percent.
-//    Holes (60 seconds or more of live trades with no history trade, an edge second left out only when the skew alone can empty
-//    it; or 60 seconds or more of history silence over a known capture gap, from the session's open too: inGap) never fail the
-//    day: they are listed in the check for the backtests to skip. A day failed under the old rule with its raw still there is checked again once (tickrule.txt). The day
+//    Holes (a gap of about a minute or more: 59 whole seconds of live trades with no history trade, an edge second left out only
+//    when the skew alone can empty it; or 59 whole seconds of history silence over a known capture gap, from the session's open
+//    too: inGap) never fail the day: they are listed in the check for the backtests to skip. A day failed under the old rule with its raw still there is checked again once (tickrule.txt). The day
 //    goes to POST /api/ticks/day in parts. The raw is deleted only when the check passed and The Desk answers "stored" and "packed" true; a failed
 //    day keeps its raw until Anthony rules.
 //    Stored but not packed (2026-11-03): only the day's last part is kept (.day.last) and sent again at most once a day in the
@@ -87,13 +87,15 @@ namespace NinjaTrader.NinjaScript.AddOns
         // backtesting purpose, small inconsistency does not matter to me"; "even a 1 minute gap should not fail the whole day, that
         // gap just should not be used for testing".
         public const int ThinSharePercent = 90;    // history under 90 percent of live's trades in the span: failed
-        public const int HoleMinSeconds = 60;      // a hole: 60 seconds or more with no history trade
+        // A hole: a gap of about a minute or more, 59 whole seconds with no history trade (the coordinator for Anthony, the PR #79
+        // re-review: a real 60.0 s gap seldom lines up with whole seconds, so it covers 59 of them; 59 lists every real one-minute gap).
+        public const int HoleMinSeconds = 59;
         // The skew measured on WORK (2026-11-02): history's time of a trade runs 4 ms early to 106 ms late against the live feed. So a
-        // run's first second is history-empty by the skew alone when every live trade in it is in its first 4 ms (the twin landed in
-        // the second before), and its last second when every live trade in it is at 894 ms or later (the twin landed in the next).
-        // Only such an edge second is left out of a run's length for the 60 second test (the PR #79 re-review, LOW A).
+        // run's first second is history-empty by the skew alone when every live trade in it is at 3 ms or less (4 ms early puts its
+        // twin in the second before), and its last second when every live trade in it is at 894 ms or later (106 ms late puts the
+        // twin in the next). Only such an edge second is left out of a run's length for the hole test (the PR #79 re-review, LOW A).
         public const int SkewEarlyMs = 4, SkewLateMs = 106;
-        public const int EdgeEarlyMaxMs = SkewEarlyMs;          // 4: a first second whose live trades are all at 4 ms or less
+        public const int EdgeEarlyMaxMs = SkewEarlyMs - 1;      // 3: a first second whose live trades are all at 3 ms or less
         public const int EdgeLateMinMs = 1000 - SkewLateMs;     // 894: a last second whose live trades are all at 894 ms or more
         // The coordinator for Anthony, 2026-11-03 (the PR #79 review): judge on the whole first to last live span when the span left
         // by the known gaps has fewer than 600 seconds or fewer than 1,000 live trades (a short run, or most chunks flagged: a sliver

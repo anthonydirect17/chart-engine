@@ -3,9 +3,10 @@
 ## ChartBridge 0.6.14 and chart 1.42.3 (2026-11-03): the NQ tick file's day check fails only a day unusable for backtests; holes listed, never failing
 
 In plain words: a day's tick check no longer fails because NinjaTrader's history has a trade or two less than the live capture in
-some seconds. It fails only when the history has no trades, or has under 90 percent of the live capture's trades. A hole is 60
-seconds or more with live trades and no history trade at all, or 60 seconds or more where history is silent over a stretch the live
-capture could not see (an `inGap` hole, from the session's open too): the day still passes, and the hole is listed so the backtests
+some seconds. It fails only when the history has no trades, or has under 90 percent of the live capture's trades. A hole is a gap
+of about a minute or more (59 whole seconds with no history trade, which covers every real one-minute gap) where the live capture
+has trades, or where history is silent over a stretch the live capture could not see (an `inGap` hole, from the session's open too):
+the day still passes, and the hole is listed so the backtests
 skip that stretch. Monday 2026-11-02 on WORK, which failed under the old rule, is checked again once under the new one.
 The chart page itself does not change (1.42.3 only follows the version).
 
@@ -50,19 +51,24 @@ the summary as information only. NinjaTrader's history stays the day's record, a
 - **failed** only when history has no trades, or history is thin: in that span history's trades are under 90 percent of live's
   (`TickCheck.ThinSharePercent = 90`; 90.0 percent passes). The day is sent marked failed and its raw is kept until Anthony rules,
   as before.
-- **A hole**, two kinds, each at least exactly 60 seconds (`TickCheck.HoleMinSeconds = 60`), listed from the start of its first
-  second to the end of its last:
+- **A hole**, two kinds, each a gap of about a minute or more: 59 whole seconds with no history trade
+  (`TickCheck.HoleMinSeconds = 59`), which covers every real one-minute gap (the second re-review: a real 60.0 s gap seldom lines up
+  with whole seconds, so it covers 59 of them). Listed from the start of its first second to the end of its last:
   - A run of seconds with live trades and no history trade, with no history trade in any second between them (`inGap` false).
     Seconds with no trade at all inside the run count to its length (history-empty time bracketed by live trades); a history trade
     anywhere in between ends the run. Quiet time with no trade in either is never this kind, and a known capture gap does not split
-    one. **The skew edge** (the PR #79 re-review): the run's first second is left out of its length for the 60 second test only when
-    every live trade in it is at 4 ms or less into its second (`TickCheck.EdgeEarlyMaxMs`, from `SkewEarlyMs = 4`: its history twin
-    may be in the second before), and its last second only when every live trade in it is at 894 ms or more (`EdgeLateMinMs`,
-    1000 less `SkewLateMs = 106`: its twin may be in the next second). Those are the only seconds the skew alone can empty, so the
-    skew cannot make a hole, and a genuine 60 second gap is always one.
+    one. **The skew edge** (the PR #79 re-review): the run's first second is left out of its length for the 59 second test only when
+    every live trade in it is at 3 ms or less into its second (`TickCheck.EdgeEarlyMaxMs`, `SkewEarlyMs = 4` less 1: 4 ms early puts
+    its history twin in the second before), and its last second only when every live trade in it is at 894 ms or more
+    (`EdgeLateMinMs`, 1000 less `SkewLateMs = 106`: its twin may be in the next second). Those are the only seconds the skew alone
+    can empty, so the skew cannot make a hole (random probes, 0.05 to 20 trades a second, history 4 ms early to 106 ms late: 0 false
+    holes in 300 captures of 10 minutes). The other way round, a real gap of a minute or more is listed unless the live capture has no trade in its first or last whole second, or only trades
+    inside the skew window there. That misses none in a busy market (a real 60.0 s gap at a random millisecond, history skewed: 200
+    of 200 listed at 20 trades a second) and some in a quiet one (148 of 200 at 2 trades a second, mostly an edge second with no live
+    trade at all).
   - A history silence over a known capture gap (`inGap` true; the coordinator's decision): the seconds strictly between two history
     trades with none between, or from the session's open (18:00 New York) to history's first trade, when any of them is inside a
-    known gap. The live capture could not see that time and history has nothing, so nobody vouches for it. Never trimmed (there is
+    known gap. The live capture could not see that time and history has nothing, so nobody vouches for it. 59 whole seconds too, never trimmed (there is
     no live trade to be skewed against). `live` is the live trades in it (often 0); a run of the first kind inside it is taken in.
     WORK starts after the open most days (an open start gap), so a history that starts late gives an `inGap` hole from the open.
     The time from history's last trade to the close is not looked at: ChartBridge's sessions have no early closes, and the data
@@ -102,15 +108,16 @@ touched. `/diag` `tickFile.recheck` lists the days waiting.
 - **Tests:** `nt8/check/BarsHarness.cs` (`npm run check:orders`, made-up trades only): the constants; exact, filled and short pass;
   95 percent short with the per second counts kept; 90 percent passes and 89 fails; less volume in a second is short; history's
   4 ms early to 106 ms late stamps (and every trade 106 ms late) give per second differences, short, never a hole; an 80 second
-  hole passes and is listed with its live trades; a genuine 59 second gap is no hole, a genuine 60 second one is; a 60 second run
-  with edge live trades at 5 and 893 ms is a hole, at 4 ms (first) or 894 ms (last) it is not; a true 59 second history silence
-  with the skew at both edges is no hole, a true 60 second one is; quiet seconds inside a run count; a history trade between ends a
+  hole passes and is listed with its live trades; 58 whole seconds with no history trade is no hole, 59 is; a 59 second run with
+  edge live trades at 4 and 893 ms is a hole, at 3 ms (first) or 894 ms (last) it is not; a true 58 second history silence with the
+  skew at both edges is no hole, a true 59 second one is; skew probes with random trades give 0 false holes; a real 60.0 s gap at a
+  random millisecond is listed every time at 20 trades a second (200 of 200); quiet seconds inside a run count; a history trade between ends a
   run; no trades in either is no hole; only the covered span counts; a known gap leaves the span (85 percent then fails), its edge
   seconds stay, open ends, gaps covering everything fall back to the whole span, a gap does not split a hole; a 6 minute skewed
   capture whose gaps leave 3 seconds, and one through `FinishDay` with every chunk flagged, are judged on the whole span and pass;
   700 seconds with fewer than 1,000 live trades uses the whole span; 2,000 covered seconds still uses the covered span; a history
   silence inside a capture gap is an `inGap` hole (live 0) on a filled day, the same silence with no gap is none, a silence reaching
-  one second into a gap takes in its live run, a 60 second `inGap` silence is a hole and a 59 second one is not; history missing the
+  one second into a gap takes in its live run, a 59 second `inGap` silence is a hole and a 58 second one is not; history missing the
   first 300 s with an open start gap gives an `inGap` hole from the open (and through `FinishDay`, a capture started after the open
   gets one from 18:00 to history's first trade), both starting together with no gap gives none; through `FinishDay` the flagged
   chunk's seconds leave the span and the summary has `rule`, `coveredSeconds`, `spanWhole`, `coveredLive`, `coveredHist`,

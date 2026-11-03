@@ -1237,9 +1237,9 @@ at least 16) bounds the `ticks/` folder next to `config.txt`.
   definitions are in "The day check's rule" below): `exact` every second has the same trades and volume live and in history;
   `filled` history has more in some seconds (the live capture missed them: a disconnect, a late start), never fewer; `short` (0.6.14)
   history has fewer trades or less volume in some seconds but is not thin; `failed` only when history has no trades or is thin
-  (under 90 percent of the live trades in the span the live capture covered). `exact`, `filled` and `short` pass; holes (60 seconds
-  or more of live trades with no history trade, or 60 seconds or more of history silence over a known capture gap, from the session's
-  open too: `inGap`) never fail a day and are listed in the check. Before 0.6.14 any second with more
+  (under 90 percent of the live trades in the span the live capture covered). `exact`, `filled` and `short` pass; holes (a gap of
+  about a minute or more, 59 whole seconds with no history trade, where live has trades, or of history silence over a known capture
+  gap, from the session's open too: `inGap`) never fail a day and are listed in the check. Before 0.6.14 any second with more
   live than history failed the day. The history is the master when the check passes. The day is written whole to `ticks/<same>.day.jsonl` (parts of at most 20,000 trades) and sent to `deskUrl` +
   `/api/ticks/day` in the same window as the 1 second bars' sends; progress in `<same>.day.sent`; `400`, `413` or `422` sets the day
   aside (`.day.jsonl.refused`). A failed day is sent too, marked `failed`, so The Desk shows it. Done days: `ticks/tickdays.txt`
@@ -1301,21 +1301,25 @@ at least 16) bounds the `ticks/` folder next to `config.txt`.
     the skew below fail a good day.
   - **`failed`** only when history has no trades, or history is thin: in the span `coveredHist * 100 < coveredLive * 90`
     (`TickCheck.ThinSharePercent`; 90.0 percent passes).
-  - **A hole**, either kind, is at least exactly 60 seconds (`TickCheck.HoleMinSeconds`), listed from the start of its first second
-    to the end of its last. Holes never fail a day: The Desk, the caretaker and the backtests skip each one (`from` to `to`), either
+  - **A hole**, either kind, is a gap of about a minute or more: 59 whole seconds with no history trade (`TickCheck.HoleMinSeconds`),
+    which covers every real one-minute gap (a real 60.0 s gap seldom lines up with whole seconds, so it covers 59 of them). Listed
+    from the start of its first second to the end of its last. Holes never fail a day: The Desk, the caretaker and the backtests skip each one (`from` to `to`), either
     kind.
     - `inGap` false: a maximal run of seconds that have live trades and no history trade, with no history trade in any second
       between them. Seconds with no trade at all inside the run count to its length; a history trade in any second between ends
       the run; a known capture gap does not split it; time with no trade in either is never this kind. **The skew edge** (the PR
-      #79 re-review): for the 60 second test the run's first second is left out only when every live trade in it is at 4 ms or less
-      into its second (`TickCheck.EdgeEarlyMaxMs`, from `SkewEarlyMs` 4: its history twin may be in the second before), and its last
-      second only when every live trade in it is at 894 ms or more (`TickCheck.EdgeLateMinMs`, 1000 less `SkewLateMs` 106: its twin
-      may be in the next second), measured on the live side's earliest and latest ms in that second. Those are the only seconds the
-      skew below can empty, so the skew can never make a hole and a genuine 60 second gap is always one.
+      #79 re-review): for the 59 second test the run's first second is left out only when every live trade in it is at 3 ms or less
+      into its second (`TickCheck.EdgeEarlyMaxMs`, `SkewEarlyMs` 4 less 1: 4 ms early puts its history twin in the second before),
+      and its last second only when every live trade in it is at 894 ms or more (`TickCheck.EdgeLateMinMs`, 1000 less `SkewLateMs`
+      106: its twin may be in the next second), measured on the live side's latest and earliest ms in that second. Those are the only
+      seconds the skew below can empty, so the skew can never make a hole (random probes: 0 false holes). The other way round, a real
+      gap of a minute or more is listed unless the live capture has no trade in its first or last whole second, or only trades
+      inside the skew window there: none missed in a busy market (200 of 200 at 20 trades a second in the harness), some in a quiet
+      one (148 of 200 at 2 trades a second, mostly an edge second with no live trade at all).
     - `inGap` true (the coordinator's decision, 2026-11-03): a history silence over a known capture gap, the seconds strictly
       between two history trades with none between, or from the session's open (18:00 New York, `ChartBridgeBars.SessionUtc`) to
       history's first trade, when any of those seconds is inside a known gap: the live capture could not see that time and history
-      has nothing, so nobody vouches for it. Never trimmed (there is no live trade to be skewed against). `live` is the live trades
+      has nothing, so nobody vouches for it. 59 whole seconds too, never trimmed (there is no live trade to be skewed against). `live` is the live trades
       in it (often 0); a run of the first kind inside it is taken in (listed once, as this kind). WORK starts after the open most
       days (an open start gap), so a history that starts late gives an `inGap` hole from the open; with no known gap there, a late
       history start with live trades is a hole of the first kind from the first live trade. The time from history's last trade to

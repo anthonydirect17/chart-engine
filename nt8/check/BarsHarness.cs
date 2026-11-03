@@ -1552,7 +1552,7 @@ public static class BarsHarness
     static void TickCheckRule()
     {
         long t0 = 1790719200000L;
-        Check(TickCheck.ThinSharePercent == 90 && TickCheck.HoleMinSeconds == 60 && TickCheck.Rule == 2, "tick rule: the named constants: 90 percent, 60 seconds, rule 2");
+        Check(TickCheck.ThinSharePercent == 90 && TickCheck.HoleMinSeconds == 59 && TickCheck.Rule == 2, "tick rule: the named constants: 90 percent, 59 whole seconds, rule 2");
         Check(TickCheck.IsPassed("exact") && TickCheck.IsPassed("filled") && TickCheck.IsPassed("short") && !TickCheck.IsPassed("failed") && !TickCheck.IsPassed(null), "tick rule: exact, filled and short pass; failed does not");
         // history short in 5 of 100 seconds: 95 percent: passes as short, the counts kept as information
         List<TickRec> live = Every(t0, 0, 100, 500);
@@ -1598,25 +1598,25 @@ public static class BarsHarness
         TickCheckResult rh = TickCheck.Compare(day, hHole);
         Check(rh.Status == "short" && rh.Passed && rh.Holes.Count == 1 && rh.Holes[0][0] == t0 + 100000 && rh.Holes[0][1] == t0 + 180000 && rh.Holes[0][2] == 80,
               "tick rule: an 80 second hole never fails the day; listed from its first live second to the end of its last, with its live trades: " + string.Join(";", rh.Holes.Select(h => h[0] - t0 + "-" + (h[1] - t0) + "/" + h[2]).ToArray()));
-        // exactly 60 seconds (Anthony's minute): a genuine 59 second gap is not a hole, a genuine 60 second one is
+        // a gap of about a minute or more (the second re-review, NIT 2): 58 whole seconds with no history trade is not a hole, 59 is
+        TickCheckResult r58 = TickCheck.Compare(day, day.Where(x => x.U < t0 + 100000 || x.U >= t0 + 158000).ToList());
         TickCheckResult r59 = TickCheck.Compare(day, day.Where(x => x.U < t0 + 100000 || x.U >= t0 + 159000).ToList());
-        TickCheckResult r60 = TickCheck.Compare(day, day.Where(x => x.U < t0 + 100000 || x.U >= t0 + 160000).ToList());
-        Check(r59.Holes.Count == 0 && r60.Holes.Count == 1 && r60.Holes[0][0] == t0 + 100000 && r60.Holes[0][1] == t0 + 160000 && r60.Holes[0][3] == 0,
-              "tick rule: a genuine 59 second gap is not a hole, a genuine 60 second gap is (exactly 60, no trim when the edges are not the skew's)");
+        Check(r58.Holes.Count == 0 && r59.Holes.Count == 1 && r59.Holes[0][0] == t0 + 100000 && r59.Holes[0][1] == t0 + 159000 && r59.Holes[0][3] == 0,
+              "tick rule: 58 whole seconds with no history trade is not a hole, 59 is");
         // LOW A (the PR #79 re-review): an edge second is left out of the length only when the skew alone can empty it: its live
-        // trades all at 4 ms or less (first second) or all at 894 ms or more (last). A 60 second run, history none in it.
-        Check(TickCheck.SkewEarlyMs == 4 && TickCheck.SkewLateMs == 106 && TickCheck.EdgeEarlyMaxMs == 4 && TickCheck.EdgeLateMinMs == 894, "tick rule: the skew window constants: 4 ms early, 106 ms late, so 4 and 894");
-        foreach (int[] e in new[] { new[] { 500, 500, 1 }, new[] { 5, 893, 1 }, new[] { 4, 500, 0 }, new[] { 500, 894, 0 }, new[] { 4, 894, 0 } })
+        // trades all at 3 ms or less (first second: 4 ms early) or all at 894 ms or more (last: 106 ms late). A 59 second run.
+        Check(TickCheck.SkewEarlyMs == 4 && TickCheck.SkewLateMs == 106 && TickCheck.EdgeEarlyMaxMs == 3 && TickCheck.EdgeLateMinMs == 894, "tick rule: the skew window constants: 4 ms early, 106 ms late, so 3 and 894");
+        foreach (int[] e in new[] { new[] { 500, 500, 1 }, new[] { 4, 893, 1 }, new[] { 3, 500, 0 }, new[] { 500, 894, 0 }, new[] { 3, 894, 0 } })
         {
             List<TickRec> el = new List<TickRec>();
-            for (int i = 0; i < 300; i++) el.Add(Tr(t0 + i * 1000L + (i == 100 ? e[0] : i == 159 ? e[1] : 500), 25000, 1));
-            TickCheckResult re = TickCheck.Compare(el, el.Where(x => x.U < t0 + 100000 || x.U >= t0 + 160000).ToList());
-            Check(re.Holes.Count == e[2], "tick rule: a 60 second run whose edge live trades are at " + e[0] + " ms and " + e[1] + " ms: " + (e[2] == 1 ? "a hole" : "not a hole (an edge the skew could empty is left out)"));
+            for (int i = 0; i < 300; i++) el.Add(Tr(t0 + i * 1000L + (i == 100 ? e[0] : i == 158 ? e[1] : 500), 25000, 1));
+            TickCheckResult re = TickCheck.Compare(el, el.Where(x => x.U < t0 + 100000 || x.U >= t0 + 159000).ToList());
+            Check(re.Holes.Count == e[2], "tick rule: a 59 second run whose edge live trades are at " + e[0] + " ms and " + e[1] + " ms: " + (e[2] == 1 ? "a hole" : "not a hole (an edge the skew could empty is left out)"));
         }
-        // the skew cannot make a hole: history's 4 ms early stamp pulls the trade before a 59 second silence into the second before,
-        // and its 106 ms late stamp pushes the trade after it into the second after: 61 seconds of live with no history, both edges
-        // the skew's, not a hole. A true 60 second silence with the same skew: a hole.
-        foreach (int silent in new[] { 59, 60 })
+        // the skew cannot make a hole: history's 4 ms early stamp pulls the trade before a 58 second silence into the second before,
+        // and its 106 ms late stamp pushes the trade after it into the second after: 60 seconds of live with no history, both edges
+        // the skew's, not a hole. A true 59 second silence with the same skew: a hole.
+        foreach (int silent in new[] { 58, 59 })
         {
             List<TickRec> sl = new List<TickRec>(), sh = new List<TickRec>();
             for (int i = 0; i < 300; i++)
@@ -1627,8 +1627,45 @@ public static class BarsHarness
                 sh.Add(Tr(u + (i == 99 ? -4 : i == 100 + silent ? 106 : 0), 25000, 1));
             }
             TickCheckResult rk = TickCheck.Compare(sl, sh);
-            Check(silent == 59 ? rk.Holes.Count == 0 : rk.Holes.Count == 1 && rk.Holes[0][0] == t0 + 99000 && rk.Holes[0][1] == t0 + 161000,
-                  "tick rule: a true " + silent + " second history silence with the skew at both edges: " + (silent == 59 ? "no hole (the skew alone cannot make one)" : "a hole") + ": " + string.Join(";", rk.Holes.Select(h => h[0] - t0 + "-" + (h[1] - t0)).ToArray()));
+            Check(silent == 58 ? rk.Holes.Count == 0 : rk.Holes.Count == 1 && rk.Holes[0][0] == t0 + 99000 && rk.Holes[0][1] == t0 + (101 + silent) * 1000L,
+                  "tick rule: a true " + silent + " second history silence with the skew at both edges: " + (silent == 58 ? "no hole (the skew alone cannot make one)" : "a hole") + ": " + string.Join(";", rk.Holes.Select(h => h[0] - t0 + "-" + (h[1] - t0)).ToArray()));
+        }
+        // the second re-review, NIT 2: probes with made-up random trades (a fixed seed). (a) Skew alone: history the same trades, each
+        // stamped 4 ms early to 106 ms late, at 0.05 to 20 trades a second: never a hole. (b) A real 60.0 s gap (history has no trade
+        // for 60.0 s of its own time from a random millisecond), the same skew: listed every time at 20 trades a second; the share at 2 a
+        // second is printed (the quiet market's few percent).
+        Random pr = new Random(20261103);
+        int probes = 0, falseHoles = 0;
+        foreach (double rate in new[] { 0.05, 0.2, 1.0, 5.0, 20.0 })
+            for (int trial = 0; trial < 60; trial++)
+            {
+                List<TickRec> pl = new List<TickRec>(), ph = new List<TickRec>();
+                int n = (int)(rate * 600);
+                for (int i = 0; i < n; i++) { long u = t0 + (long)(pr.NextDouble() * 600000); pl.Add(Tr(u, 25000, 1)); ph.Add(Tr(u - 4 + pr.Next(111), 25000, 1)); }
+                falseHoles += TickCheck.Compare(pl, ph).Holes.Count; probes++;
+            }
+        Console.WriteLine("     (skew probes: " + probes + " random 10 minute captures, 0.05 to 20 trades a second, history 4 ms early to 106 ms late: " + falseHoles + " false holes)");
+        Check(falseHoles == 0, "tick rule: the skew probes give no false hole: " + falseHoles + " in " + probes);
+        foreach (double rate in new[] { 20.0, 2.0 })
+        {
+            int listed = 0, tries = 200, falseGap = 0;
+            for (int trial = 0; trial < tries; trial++)
+            {
+                List<TickRec> pl = new List<TickRec>(), ph = new List<TickRec>();
+                long g0 = t0 + 100000 + pr.Next(1000), g1 = g0 + 60000;
+                int n = (int)(rate * 300);
+                for (int i = 0; i < n; i++)
+                {
+                    long u = t0 + (long)(pr.NextDouble() * 300000), h = u - 4 + pr.Next(111);
+                    pl.Add(Tr(u, 25000, 1));
+                    if (h < g0 || h >= g1) ph.Add(Tr(h, 25000, 1));   // the gap is in history's own time
+                }
+                TickCheckResult pg = TickCheck.Compare(pl, ph);
+                if (pg.Holes.Any(x => x[0] <= g0 + 1000 && x[1] >= g1 - 1000)) listed++;
+                falseGap += pg.Holes.Count(x => x[1] <= g0 || x[0] >= g1);
+            }
+            Console.WriteLine("     (a real 60.0 s gap at a random millisecond, " + rate + " trades a second, skewed history: listed " + listed + " of " + tries + ", holes elsewhere " + falseGap + ")");
+            Check(falseGap == 0 && (rate < 20 || listed == tries), "tick rule: a real 60.0 s gap starting at a random millisecond at " + rate + " trades a second: listed " + listed + " of " + tries + (rate < 20 ? " (information)" : " (every one)") + ", no hole elsewhere");
         }
         // seconds with no live trade inside the run count: live at seconds 100 to 109 and 150 to 159, nothing between, history none
         // from 100 to 159: one hole of 60 seconds with 20 live trades
@@ -1704,11 +1741,11 @@ public static class BarsHarness
         TickCheckResult rin2 = TickCheck.Compare(lr, hr2, rg);
         Check(rin2.Holes.Count == 1 && rin2.Holes[0][0] == t0 + 220000 && rin2.Holes[0][1] == t0 + 301000 && rin2.Holes[0][2] == 80 && rin2.Holes[0][3] == 1,
               "tick rule: a history silence from 220 to 300 reaching one second into the gap: one inGap hole that takes in the live run (80 live trades): " + string.Join(";", rin2.Holes.Select(h => h[0] - t0 + "-" + (h[1] - t0) + "/" + h[2] + "/" + h[3]).ToArray()));
-        // an inGap silence is never trimmed (no live trade to be skewed against): 60 seconds is a hole, 59 is not
-        TickCheckResult in60 = TickCheck.Compare(lr, Every(t0, 0, 350, 500).Concat(Every(t0, 410, 1000, 500)).ToList(), rg);
+        // an inGap silence is never trimmed (no live trade to be skewed against): 59 whole seconds is a hole, 58 is not
         TickCheckResult in59 = TickCheck.Compare(lr, Every(t0, 0, 350, 500).Concat(Every(t0, 409, 1000, 500)).ToList(), rg);
-        Check(in60.Holes.Count == 1 && in60.Holes[0][0] == t0 + 350000 && in60.Holes[0][1] == t0 + 410000 && in60.Holes[0][3] == 1 && in59.Holes.Count == 0,
-              "tick rule: a 60 second history silence over a gap is an inGap hole, a 59 second one is not");
+        TickCheckResult in58 = TickCheck.Compare(lr, Every(t0, 0, 350, 500).Concat(Every(t0, 408, 1000, 500)).ToList(), rg);
+        Check(in59.Holes.Count == 1 && in59.Holes[0][0] == t0 + 350000 && in59.Holes[0][1] == t0 + 409000 && in59.Holes[0][3] == 1 && in58.Holes.Count == 0,
+              "tick rule: a 59 second history silence over a gap is an inGap hole, a 58 second one is not");
         // LOW C: the session's open bounds the first silence. A restart at 200 s (an open start gap to the first trade of the next
         // chunk at 380 s), history missing the first 300 s of the session: an inGap hole from the open, taking in the live run
         List<TickRec> lo = Every(t0, 200, 1000, 500);
