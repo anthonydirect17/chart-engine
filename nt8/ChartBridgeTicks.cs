@@ -19,8 +19,12 @@
 //    weekend while shut; never in trading hours) and, as a catch-up for a session closed and not done (Anthony 2026-11-03: he may
 //    close NinjaTrader before 16:15), on weekday mornings before 09:15 New York (this pull only), through the 0.3.5 gate, one tick
 //    request per captured session, from the open to the close (NinjaTrader's history), checked against the live capture second by
-//    second (TickCheck). The history is the master when the check passes (exact, or filled: history has trades the live capture missed, never fewer). The day goes to POST
-//    /api/ticks/day in parts. The raw is deleted only when the check passed and The Desk answers "stored" and "packed" true; a failed
+//    second (TickCheck). The history is the master when the check passes: exact, filled (history has trades the live capture
+//    missed, never fewer) or, from 0.6.14 (Anthony 2026-11-03), short (history has fewer in some seconds, but at least 90 percent of
+//    the live trades over the span the live capture covered); it fails only when history has no trades or is under that 90 percent.
+//    Holes (60 seconds or more of live trades with no history trade) never fail the day: they are listed in the check for the
+//    backtests to skip. A day failed under the old rule with its raw still there is checked again once (tickrule.txt). The day
+//    goes to POST /api/ticks/day in parts. The raw is deleted only when the check passed and The Desk answers "stored" and "packed" true; a failed
 //    day keeps its raw until Anthony rules.
 //    Stored but not packed (2026-11-03): only the day's last part is kept (.day.last) and sent again at most once a day in the
 //    final pull's windows; when The Desk answers stored and packed the raw, its state and the part are deleted (AskPacked).
@@ -61,26 +65,58 @@ namespace NinjaTrader.NinjaScript.AddOns
     // The check of a session's live capture against NinjaTrader's history, second by second.
     public class TickCheckResult
     {
-        public string Status = "failed";   // "exact", "filled" or "failed"
+        public string Status = "failed";   // "exact", "filled", "short" or "failed" (TickCheck.IsPassed: the first three pass)
         public long LiveTicks, LiveVolume, HistTicks, HistVolume, SecondsLiveMissed, TicksLiveMissed, SecondsHistShort, TicksHistShort;
         public readonly List<long[]> Detail = new List<long[]>();   // {second (UTC ms), live trades, history trades}
-        public bool Passed { get { return Status == "exact" || Status == "filled"; } }
+        // 0.6.14 (Anthony 2026-11-03): the trades of each in the span the live capture covered (TickCheck.Compare), history's share
+        // of live's there (NaN when no live trade is in it), and every hole: {from UTC ms, to UTC ms (exclusive), live trades in it}.
+        public long CoveredLive, CoveredHist;
+        public double HistoryShare = double.NaN;
+        public readonly List<long[]> Holes = new List<long[]>();
+        public bool Passed { get { return TickCheck.IsPassed(Status); } }
     }
 
     public static class TickCheck
     {
         public static int DetailMax = 20;   // seconds listed of each kind
+        // Anthony's decision of 2026-11-03: "the only failure should be very large gaps in the day, or days that are unusable for a
+        // backtesting purpose, small inconsistency does not matter to me"; "even a 1 minute gap should not fail the whole day, that
+        // gap just should not be used for testing".
+        public const int ThinSharePercent = 90;   // history under 90 percent of live's trades in the covered span: failed
+        public const int HoleMinSeconds = 60;     // a hole: 60 seconds or more of live trades with no history trade at all
+        public const int Rule = 2;                // the check's rule: 2 from 0.6.14 (1, every second history short failed, before)
 
-        // Per UTC second: the trades and volume of each. exact: every second the same; filled: history has more in some seconds (the
-        // live capture missed them: a disconnect, a late start), never less; failed: live has a trade or volume in a second history
-        // lacks, or history has none.
-        public static TickCheckResult Compare(IList<TickRec> live, IList<TickRec> hist)
+        // The statuses that pass: history is the day's record.
+        public static bool IsPassed(string status) { return status == "exact" || status == "filled" || status == "short"; }
+
+        public static TickCheckResult Compare(IList<TickRec> live, IList<TickRec> hist) { return Compare(live, hist, null); }
+
+        // Per UTC second: the trades and volume of each.
+        //   failed: history has no trades, or history is thin: in the covered span its trades are under ThinSharePercent of live's.
+        //   short: passed, history has fewer trades or less volume than live in some second (information only: NinjaTrader's history
+        //     stamps a trade up to about 0.1 s later than the live feed, so a trade late in its second lands in the next one).
+        //   filled: passed, history has more in some seconds (the live capture missed them: a disconnect, a late start), never less.
+        //   exact: passed, every second the same.
+        // The covered span: every second from the first live trade's second to the last live trade's second, both included, less
+        // the seconds strictly inside a known capture gap (gaps: {a, b} UTC ms, the last live trade before the gap and the first
+        // after it; long.MinValue / long.MaxValue for an open end). When the gaps leave no live trade, the span is the whole first to
+        // last live second (so a thin history is never hidden by gaps).
+        // A hole: a maximal run of seconds that have live trades and no history trade, with no history trade in any second between
+        // them (seconds with no trade at all inside the run count to its length), from the first such second to the end of the last
+        // (to: the last second + 1000 ms), at least HoleMinSeconds long. Holes never fail the day; the known gaps do not split one.
+        public static TickCheckResult Compare(IList<TickRec> live, IList<TickRec> hist, IList<long[]> gaps)
         {
             TickCheckResult r = new TickCheckResult();
             SortedDictionary<long, long[]> by = new SortedDictionary<long, long[]>();   // second -> {live n, live v, hist n, hist v}
-            foreach (TickRec x in live) { long[] a = Slot(by, x.U); a[0]++; a[1] += x.V; r.LiveTicks++; r.LiveVolume += x.V; }
+            long liveFrom = long.MaxValue, liveTo = long.MinValue;
+            foreach (TickRec x in live)
+            {
+                long[] a = Slot(by, x.U); a[0]++; a[1] += x.V; r.LiveTicks++; r.LiveVolume += x.V;
+                long s = Sec(x.U); if (s < liveFrom) liveFrom = s; if (s > liveTo) liveTo = s;
+            }
             foreach (TickRec x in hist) { long[] a = Slot(by, x.U); a[2]++; a[3] += x.V; r.HistTicks++; r.HistVolume += x.V; }
             int missedListed = 0, shortListed = 0;
+            long runFrom = -1, runLast = -1, runLive = 0;
             foreach (KeyValuePair<long, long[]> kv in by)
             {
                 long[] a = kv.Value;
@@ -94,17 +130,55 @@ namespace NinjaTrader.NinjaScript.AddOns
                     r.SecondsLiveMissed++; r.TicksLiveMissed += a[2] - a[0];
                     if (missedListed++ < DetailMax) r.Detail.Add(new long[] { kv.Key, a[0], a[2] });
                 }
+                if (a[2] > 0) { EndRun(r, runFrom, runLast, runLive); runFrom = -1; runLive = 0; }
+                else if (a[0] > 0) { if (runFrom < 0) runFrom = kv.Key; runLast = kv.Key; runLive += a[0]; }
             }
-            if (r.HistTicks == 0 || r.SecondsHistShort > 0) r.Status = "failed";
+            EndRun(r, runFrom, runLast, runLive);
+            if (r.LiveTicks > 0)
+            {
+                Cover(r, by, liveFrom, liveTo, gaps);
+                if (r.CoveredLive == 0) Cover(r, by, liveFrom, liveTo, null);
+                r.HistoryShare = (double)r.CoveredHist / r.CoveredLive;
+            }
+            bool thin = r.CoveredLive > 0 && r.CoveredHist * 100 < r.CoveredLive * ThinSharePercent;
+            if (r.HistTicks == 0 || thin) r.Status = "failed";
+            else if (r.SecondsHistShort > 0) r.Status = "short";
             else if (r.SecondsLiveMissed > 0) r.Status = "filled";
             else r.Status = "exact";
             r.Detail.Sort((x, y) => x[0].CompareTo(y[0]));
             return r;
         }
 
+        private static void EndRun(TickCheckResult r, long from, long last, long n)
+        {
+            if (from >= 0 && last - from + 1000 >= HoleMinSeconds * 1000L) r.Holes.Add(new long[] { from, last + 1000, n });
+        }
+
+        private static void Cover(TickCheckResult r, SortedDictionary<long, long[]> by, long from, long to, IList<long[]> gaps)
+        {
+            r.CoveredLive = 0; r.CoveredHist = 0;
+            foreach (KeyValuePair<long, long[]> kv in by)
+            {
+                long t = kv.Key;
+                if (t < from || t > to || InGap(t, gaps)) continue;
+                r.CoveredLive += kv.Value[0]; r.CoveredHist += kv.Value[2];
+            }
+        }
+
+        // A second strictly inside a known gap: after the second of its last live trade before and before the second of the first after.
+        public static bool InGap(long t, IList<long[]> gaps)
+        {
+            if (gaps == null) return false;
+            foreach (long[] g in gaps)
+                if ((g[0] == long.MinValue || t > Sec(g[0])) && (g[1] == long.MaxValue || t < Sec(g[1]))) return true;
+            return false;
+        }
+
+        public static long Sec(long u) { return u - ((u % 1000) + 1000) % 1000; }
+
         private static long[] Slot(SortedDictionary<long, long[]> by, long u)
         {
-            long t = u - ((u % 1000) + 1000) % 1000;
+            long t = Sec(u);
             long[] a;
             if (!by.TryGetValue(t, out a)) { a = new long[4]; by[t] = a; }
             return a;
@@ -651,26 +725,63 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         // ---------------------------------------------------------- 3. the final file
-        // tickdays.txt: one line a day: "<key>\t<check>\t<stored>\t<packed>" (check exact, filled or failed; stored and packed 0 or 1).
+        // tickdays.txt: one line a day: "<key>\t<check>\t<stored>\t<packed>" (check exact, filled, short or failed; stored and packed 0
+        // or 1).
         private class DayRec { public string Key, Check; public bool Stored, Packed; }
         private static readonly Dictionary<string, DayRec> Days = new Dictionary<string, DayRec>();
         private static readonly Dictionary<string, DateTime> RetryAtDay = new Dictionary<string, DateTime>();
         private static readonly Dictionary<string, int> TriesDay = new Dictionary<string, int>();
         private static volatile string dayState = "off", lastDay = "";
 
+        // 0.6.14, the check again under the new rule (Anthony 2026-11-03): ticks/tickrule.txt says which rule the days in
+        // tickdays.txt were checked under ("rule 2") and lists the days still to be checked again ("recheck <key>"). When it is not
+        // there (a folder of 0.6.13 or before, once), every day tickdays.txt notes failed whose raw file is still there is listed: its
+        // final pull runs once more, as a day not done (the same windows, the 15 minutes and the 3 tries, again after a restart while
+        // it is listed), and the new check's record replaces the failed one; the key leaves the list as that record is written. A day
+        // whose raw file is gone cannot be checked again and stays failed. A day checked again is sent again as a new set.
+        private static readonly HashSet<string> Recheck = new HashSet<string>();
+        private static string RuleFile { get { return Path.Combine(Folder, "tickrule.txt"); } }
+
         private static void LoadDays()
         {
+            bool write = false;
             lock (Sync)
             {
                 Days.Clear();
-                if (!File.Exists(DaysFile)) return;
-                foreach (string raw in File.ReadAllLines(DaysFile))
+                Recheck.Clear();
+                if (File.Exists(DaysFile))
+                    foreach (string raw in File.ReadAllLines(DaysFile))
+                    {
+                        string[] f = raw.Split('\t');
+                        if (f.Length != 4) continue;
+                        Days[f[0]] = new DayRec { Key = f[0], Check = f[1], Stored = f[2] == "1", Packed = f[3] == "1" };
+                    }
+                if (File.Exists(RuleFile))
                 {
-                    string[] f = raw.Split('\t');
-                    if (f.Length != 4) continue;
-                    Days[f[0]] = new DayRec { Key = f[0], Check = f[1], Stored = f[2] == "1", Packed = f[3] == "1" };
+                    foreach (string raw in File.ReadAllLines(RuleFile))
+                        if (raw.StartsWith("recheck ", StringComparison.Ordinal))
+                        {
+                            string key = raw.Substring(8).Trim(); DayRec d;
+                            if (Days.TryGetValue(key, out d) && d.Check == "failed") Recheck.Add(key);
+                        }
+                }
+                else
+                {
+                    foreach (DayRec d in Days.Values)
+                        if (d.Check == "failed" && File.Exists(Path.Combine(Folder, BaseOf(d.Key) + ".raw"))) Recheck.Add(d.Key);
+                    write = true;
                 }
             }
+            if (write) SaveRule();
+        }
+        private static void SaveRule()
+        {
+            List<string> lines = new List<string> { "rule " + TickCheck.Rule };
+            lock (Sync) lines.AddRange(Recheck.OrderBy(x => x, StringComparer.Ordinal).Select(x => "recheck " + x));
+            Directory.CreateDirectory(Folder);
+            string tmp = RuleFile + ".tmp";
+            File.WriteAllLines(tmp, lines.ToArray());
+            if (File.Exists(RuleFile)) File.Replace(tmp, RuleFile, null); else File.Move(tmp, RuleFile);
         }
         private static void SaveDays()
         {
@@ -681,7 +792,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (File.Exists(DaysFile)) File.Replace(tmp, DaysFile, null); else File.Move(tmp, DaysFile);
         }
 
-        public static bool IsDayDone(string key) { lock (Sync) return Days.ContainsKey(key); }
+        // Done: recorded in tickdays.txt and not listed to be checked again under the 0.6.14 rule.
+        public static bool IsDayDone(string key) { lock (Sync) return Days.ContainsKey(key) && !Recheck.Contains(key); }
 
         // NinjaTrader's trades of [fromMs, toMs) on its thread: one pass, sides by the stored bid and ask else the tick rule.
         public static object BuildTickDay(Bars bars, long fromMs, long toMs, string contract)
@@ -829,7 +941,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static TickCheckResult FinishDay(KeyFiles k, TickDayBuild hist)
         {
             List<TickRec> live = ReadAllLive(k.Key);
-            TickCheckResult chk = TickCheck.Compare(live, hist.Ticks);
+            TickCheckResult chk = TickCheck.Compare(live, hist.Ticks, KnownGaps(k));
             long liveLost = 0, liveGaps = 0;
             lock (Sync)
             {
@@ -843,14 +955,52 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (File.Exists(file)) File.Delete(file);
             File.Move(tmp, file);
             try { File.Delete(Path.Combine(Folder, BaseOf(k.Key) + ".day.sent")); } catch (Exception) { }
-            lock (Sync) Days[k.Key] = new DayRec { Key = k.Key, Check = chk.Status, Stored = false, Packed = false };
+            bool again;
+            lock (Sync) { Days[k.Key] = new DayRec { Key = k.Key, Check = chk.Status, Stored = false, Packed = false }; again = Recheck.Remove(k.Key); }
             SaveDays();
+            if (again) SaveRule();
             RecountDisk();
             lastDay = k.Key + ": " + chk.Status + ", live " + chk.LiveTicks + " trades, history " + chk.HistTicks + " (live missed " + chk.TicksLiveMissed + " in " + chk.SecondsLiveMissed +
-                      " seconds, history short " + chk.TicksHistShort + " in " + chk.SecondsHistShort + " seconds), " + parts.Count + " parts";
-            ChartBridgeServer.Log("the NQ tick file for " + lastDay + (chk.Passed ? "; queued for The Desk" : "; the check FAILED: sent marked failed, the raw file is kept until Anthony rules"));
+                      " seconds, history short " + chk.TicksHistShort + " in " + chk.SecondsHistShort + " seconds), history share " + ShareText(chk) + ", " + chk.Holes.Count + " hole(s), " + parts.Count + " parts" +
+                      (again ? ", checked again under the 0.6.14 rule" : "");
+            ChartBridgeServer.Log("the NQ tick file for " + lastDay + (chk.Passed ? "; queued for The Desk" : "; the check FAILED (no history, or history under " + TickCheck.ThinSharePercent + " percent of the live trades): sent marked failed, the raw file is kept until Anthony rules"));
             dayState = "idle";
             return chk;
+        }
+
+        private static string ShareText(TickCheckResult chk)
+        {
+            return double.IsNaN(chk.HistoryShare) ? "not known (no live trade in the span)" : (Math.Round(chk.HistoryShare * 100, 1)).ToString("0.0", Inv) + " percent";
+        }
+
+        // The live capture gaps ChartBridge knows of (0.6.14), for the check's covered span: for each chunk that took drops (its
+        // lost or gaps above 0, its carried chunks too: a dropped trade or a feed drop may sit anywhere in them) the span from the
+        // last live trade of the chunk before it (long.MinValue when none) to the first live trade of the chunk after it
+        // (long.MaxValue when none); and when drops wait for a cut not made yet, from the last cut trade to long.MaxValue.
+        private static List<long[]> KnownGaps(KeyFiles k)
+        {
+            List<Cut> cuts; long pending;
+            lock (Sync)
+            {
+                cuts = k.Cuts.OrderBy(c => c.Seq).ToList();
+                long[] d = DropsOf(k.Session); pending = Math.Max(0, d[0] - k.LostSeen) + Math.Max(0, d[1] - k.GapsSeen);
+            }
+            List<long[]> gaps = new List<long[]>();
+            for (int i = 0; i < cuts.Count; i++)
+            {
+                if (cuts[i].Lost <= 0 && cuts[i].Gaps <= 0) continue;
+                long a = i > 0 ? EdgeU(k, cuts[i - 1], false) : long.MinValue, b = i + 1 < cuts.Count ? EdgeU(k, cuts[i + 1], true) : long.MaxValue;
+                gaps.Add(new long[] { a, b });
+            }
+            if (pending > 0) gaps.Add(new long[] { cuts.Count > 0 ? EdgeU(k, cuts[cuts.Count - 1], false) : long.MinValue, long.MaxValue });
+            return gaps;
+        }
+        // The first (lowest) or last (highest) trade time of a cut; an open end when it has none.
+        private static long EdgeU(KeyFiles k, Cut c, bool first)
+        {
+            List<TickRec> t = ReadRange(k, c.From, c.To);
+            if (t.Count == 0) return first ? long.MaxValue : long.MinValue;
+            return first ? t.Min(x => x.U) : t.Max(x => x.U);
         }
 
         public static List<string> DayParts(string key, TickDayBuild hist, TickCheckResult chk, string set)
@@ -871,7 +1021,17 @@ namespace NinjaTrader.NinjaScript.AddOns
              .Append(",\"histTicks\":").Append(chk.HistTicks).Append(",\"histVolume\":").Append(chk.HistVolume)
              .Append(",\"secondsLiveMissed\":").Append(chk.SecondsLiveMissed).Append(",\"ticksLiveMissed\":").Append(chk.TicksLiveMissed)
              .Append(",\"secondsHistShort\":").Append(chk.SecondsHistShort).Append(",\"ticksHistShort\":").Append(chk.TicksHistShort)
-             .Append(",\"liveLost\":").Append(liveLost).Append(",\"liveGaps\":").Append(liveGaps).Append(",\"detail\":[");
+             .Append(",\"liveLost\":").Append(liveLost).Append(",\"liveGaps\":").Append(liveGaps)
+             .Append(",\"rule\":").Append(TickCheck.Rule)
+             .Append(",\"coveredLive\":").Append(chk.CoveredLive).Append(",\"coveredHist\":").Append(chk.CoveredHist)
+             .Append(",\"historyShare\":").Append(double.IsNaN(chk.HistoryShare) ? "null" : CbJson.Num(Math.Round(chk.HistoryShare, 4)))
+             .Append(",\"holes\":[");
+            for (int i = 0; i < chk.Holes.Count; i++)
+            {
+                if (i > 0) c.Append(',');
+                c.Append("{\"from\":").Append(chk.Holes[i][0]).Append(",\"to\":").Append(chk.Holes[i][1]).Append(",\"live\":").Append(chk.Holes[i][2]).Append('}');
+            }
+            c.Append("],\"detail\":[");
             for (int i = 0; i < chk.Detail.Count; i++)
             {
                 if (i > 0) c.Append(',');
@@ -986,7 +1146,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 return;
             }
             lock (Sync) { DayAgainAt.Remove(file); DayAgainTries.Remove(file); }
-            bool passed = d.Check == "exact" || d.Check == "filled";
+            bool passed = TickCheck.IsPassed(d.Check);
             // Stored, passed, not packed yet: the day's last part is kept (<base>.day.last, one part, at most PartMaxTicks trades, counted
             // in the folder's size against tickFileMaxMB) so it can be sent again later to learn "packed" (AskPacked). The rest of the
             // day file goes as before.
@@ -1075,7 +1235,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (Sync) if (nowUtc < packAgainAt) return 0;
             string today = nowEt.ToString("yyyy-MM-dd", Inv);
             List<DayRec> waiting;
-            lock (Sync) waiting = Days.Values.Where(d => d.Stored && !d.Packed && (d.Check == "exact" || d.Check == "filled")).OrderBy(d => d.Key, StringComparer.Ordinal).ToList();
+            lock (Sync) waiting = Days.Values.Where(d => d.Stored && !d.Packed && TickCheck.IsPassed(d.Check)).OrderBy(d => d.Key, StringComparer.Ordinal).ToList();
             int gen = Volatile.Read(ref stopGen), asked = 0;
             foreach (DayRec d in waiting)
             {
@@ -1118,7 +1278,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // ---------------------------------------------------------- the folder (the sender thread and the bars worker)
         // Review LOW 3: a state file is not registered when its day is noted packed in tickdays.txt (a delete cut short: its files
         // are deleted now) or when its raw file is gone; a state file deleted while it is read is passed over. Only a passed day
-        // (exact or filled) noted packed is deleted: a failed day keeps its raw until Anthony rules, even if tickdays.txt says packed.
+        // (exact, filled or short) noted packed is deleted: a failed day keeps its raw until Anthony rules, even if tickdays.txt says packed.
         // A delete that fails is said once a run for each key (ScanDeleteSaid), not every look at the folder.
         private static readonly HashSet<string> ScanDeleteSaid = new HashSet<string>();
         private static void ScanFolder()
@@ -1141,7 +1301,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 catch (Exception) { continue; }   // deleted (or locked) as it was read: looked at again next time
                 if (session == null || contract == null) continue;
                 string key = KeyOf(session, contract);
-                bool packed; lock (Sync) { DayRec d; packed = Days.TryGetValue(key, out d) && d.Packed && (d.Check == "exact" || d.Check == "filled"); }
+                bool packed; lock (Sync) { DayRec d; packed = Days.TryGetValue(key, out d) && d.Packed && TickCheck.IsPassed(d.Check); }
                 if (packed)
                 {
                     string why = DeleteFiles(key, false);
@@ -1188,7 +1348,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 long ignored; while (DropTimes.TryDequeue(out ignored)) { }
                 runStartUtc = ChartBridgeBars.UtcNow();
                 error = ""; lastDay = ""; deskHasNone = false; retryAt = DateTime.MinValue;
-                lock (Sync) { Keys.Clear(); LastSent.Clear(); RetryAtDay.Clear(); TriesDay.Clear(); SessionDrops.Clear(); DayAgainAt.Clear(); DayAgainTries.Clear(); AskedDay.Clear(); RawGoneSaid.Clear(); ScanDeleteSaid.Clear(); packAgainAt = DateTime.MinValue; }
+                lock (Sync) { Keys.Clear(); Recheck.Clear(); LastSent.Clear(); RetryAtDay.Clear(); TriesDay.Clear(); SessionDrops.Clear(); DayAgainAt.Clear(); DayAgainTries.Clear(); AskedDay.Clear(); RawGoneSaid.Clear(); ScanDeleteSaid.Clear(); packAgainAt = DateTime.MinValue; }
                 if (!On) { dayState = "off"; return; }
                 dayState = "starting";
                 ManualResetEvent stop = new ManualResetEvent(false);
@@ -1280,8 +1440,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (Sync) b.Append(string.Join(",", LastSent.OrderBy(kv => kv.Key, StringComparer.Ordinal).Select(kv => CbJson.Str(kv.Key) + ":" + CbJson.Str(kv.Value)).ToArray()));
             b.Append("},\"days\":{");
             lock (Sync) b.Append(string.Join(",", Days.Values.OrderBy(d => d.Key, StringComparer.Ordinal).Select(d => CbJson.Str(d.Key) + ":{\"check\":" + CbJson.Str(d.Check) + ",\"stored\":" + (d.Stored ? "true" : "false") + ",\"packed\":" + (d.Packed ? "true" : "false") + "}").ToArray()));
-            b.Append("},\"packWait\":{");
-            List<DayRec> pw; lock (Sync) pw = Days.Values.Where(d => d.Stored && !d.Packed && (d.Check == "exact" || d.Check == "filled")).OrderBy(d => d.Key, StringComparer.Ordinal).ToList();
+            b.Append("},\"recheck\":[");
+            lock (Sync) b.Append(string.Join(",", Recheck.OrderBy(x => x, StringComparer.Ordinal).Select(x => CbJson.Str(x)).ToArray()));
+            b.Append("],\"packWait\":{");
+            List<DayRec> pw; lock (Sync) pw = Days.Values.Where(d => d.Stored && !d.Packed && TickCheck.IsPassed(d.Check)).OrderBy(d => d.Key, StringComparer.Ordinal).ToList();
             b.Append(string.Join(",", pw.Select(d =>
             {
                 string asked = ""; try { if (File.Exists(AskedFile(d.Key))) asked = File.ReadAllText(AskedFile(d.Key)).Trim(); } catch (Exception) { }

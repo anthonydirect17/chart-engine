@@ -1,4 +1,4 @@
-# ChartBridge protocol (v1 market data and fills, v2 orders, v3 accounts, strategies, copier and bot, 0.5.0 agents, 0.5.1 accounts, 0.5.8 prop groups, 0.6.0 group trading, 0.6.1 a group's Type and default hero, 0.6.3 the audit fixes, 0.6.4 the no-trade-record alarm and Merge on an off follower, 0.6.8 the minute book, 0.6.10 the account lifecycle and the NQ tick file, 0.6.11 the bar trail and the narrower 1 second request, 0.6.12 the bar trail follow-ups, 0.6.13 the tick day's morning catch-up and the raw deleted once packed)
+# ChartBridge protocol (v1 market data and fills, v2 orders, v3 accounts, strategies, copier and bot, 0.5.0 agents, 0.5.1 accounts, 0.5.8 prop groups, 0.6.0 group trading, 0.6.1 a group's Type and default hero, 0.6.3 the audit fixes, 0.6.4 the no-trade-record alarm and Merge on an off follower, 0.6.8 the minute book, 0.6.10 the account lifecycle and the NQ tick file, 0.6.11 the bar trail and the narrower 1 second request, 0.6.12 the bar trail follow-ups, 0.6.13 the tick day's morning catch-up and the raw deleted once packed, 0.6.14 the tick day check's rule: short and holes)
 
 ChartBridge is a NinjaTrader 8 add-on. It serves the live chart page at `http://localhost:8765/` and
 talks to it over one WebSocket at `ws://localhost:8765/ws`. Everything stays on the local machine.
@@ -1212,7 +1212,7 @@ at least 16) bounds the `ticks/` folder next to `config.txt`.
   it reads the files again, so a sender of an earlier start still running can never write the same `cut <seq>` with other bytes.
 
   ```json
-  {"v":1,"source":"chartbridge","bridge":"0.6.13","pc":"WORK","root":"NQ","contract":"NQ 12-26","tick":0.25,
+  {"v":1,"source":"chartbridge","bridge":"0.6.14","pc":"WORK","root":"NQ","contract":"NQ 12-26","tick":0.25,
    "session":"2026-10-30","run":"a1b2c3d4e5f6","seq":12,"count":1834,"volume":2301,
    "first":1793397600123,"last":1793397779950,"lost":0,"gaps":0,
    "sides":{"bidAsk":1700,"tickRule":130,"none":4},"cols":["u","p","v","s"],"ticks":[[1793397600123,25000.25,1,1]]}
@@ -1233,13 +1233,17 @@ at least 16) bounds the `ticks/` folder next to `config.txt`.
   below), for each session with a raw file that has closed and is not done: one
   `BarsRequest` through the 0.3.5 gate (1 tick, Last, the instrument's trading hours, `DoNotMerge`, 180 s), from the session's
   open to its close (NinjaTrader's time). The answer is read once on NinjaTrader's thread (sides by the bid and ask stored with each
-  trade, else the tick rule). **The check**, second by second (UTC): `exact` every second has the same trades and volume live and
-  in history; `filled` history has more in some seconds (the live capture missed them: a disconnect, a late start), never fewer;
-  `failed` live has a trade or volume in a second history lacks, or history has none. The history is the master when the check
-  passes. The day is written whole to `ticks/<same>.day.jsonl` (parts of at most 20,000 trades) and sent to `deskUrl` +
+  trade, else the tick rule). **The check**, second by second (UTC), under the rule of 0.6.14 (Anthony 2026-11-03; the exact
+  definitions are in "The day check's rule" below): `exact` every second has the same trades and volume live and in history;
+  `filled` history has more in some seconds (the live capture missed them: a disconnect, a late start), never fewer; `short` (0.6.14)
+  history has fewer trades or less volume in some seconds but is not thin; `failed` only when history has no trades or is thin
+  (under 90 percent of the live trades in the span the live capture covered). `exact`, `filled` and `short` pass; holes (60 seconds
+  or more of live trades with no history trade) never fail a day and are listed in the check. Before 0.6.14 any second with more
+  live than history failed the day. The history is the master when the check passes. The day is written whole to `ticks/<same>.day.jsonl` (parts of at most 20,000 trades) and sent to `deskUrl` +
   `/api/ticks/day` in the same window as the 1 second bars' sends; progress in `<same>.day.sent`; `400`, `413` or `422` sets the day
   aside (`.day.jsonl.refused`). A failed day is sent too, marked `failed`, so The Desk shows it. Done days: `ticks/tickdays.txt`
-  (`<session contract>`, check, stored, packed): never pulled again. A failure is tried again after 15 minutes, 3 times, then not
+  (`<session contract>`, check `exact`, `filled`, `short` or `failed`, stored, packed): never pulled again (0.6.14: except once, a
+  day failed under the old rule with its raw kept, below). A failure is tried again after 15 minutes, 3 times, then not
   until the next start.
 
   **The morning catch-up (0.6.13, Anthony 2026-11-03).** Anthony sometimes closes NinjaTrader before 16:15 (e.g. 16:05), so a session's
@@ -1263,15 +1267,54 @@ at least 16) bounds the `ticks/` folder next to `config.txt`.
   morning catch-up)`.
 
   ```json
-  {"v":1,"source":"chartbridge","bridge":"0.6.13","pc":"WORK","root":"NQ","contract":"NQ 12-26","tick":0.25,
+  {"v":1,"source":"chartbridge","bridge":"0.6.14","pc":"WORK","root":"NQ","contract":"NQ 12-26","tick":0.25,
    "session":"2026-10-30","set":"0a1b2c3d4e5f","part":1,"parts":48,"setTicks":951234,"setVolume":1203456,
    "first":1793397600001,"last":1793480399990,
-   "check":{"status":"filled","liveTicks":950001,"liveVolume":1202001,"histTicks":951234,"histVolume":1203456,
-            "secondsLiveMissed":3,"ticksLiveMissed":1233,"secondsHistShort":0,"ticksHistShort":0,"liveLost":0,"liveGaps":1,
-            "detail":[{"t":1793420000000,"live":0,"hist":12}]},
+   "check":{"status":"short","liveTicks":950001,"liveVolume":1202001,"histTicks":951234,"histVolume":1203456,
+            "secondsLiveMissed":3,"ticksLiveMissed":1233,"secondsHistShort":2,"ticksHistShort":3,"liveLost":0,"liveGaps":1,
+            "rule":2,"coveredLive":949990,"coveredHist":951222,"historyShare":1.0013,
+            "holes":[{"from":1793421000000,"to":1793421075000,"live":64}],
+            "detail":[{"t":1793420000000,"live":0,"hist":12},{"t":1793420500000,"live":2,"hist":1}]},
    "sides":{"method":"mixed","bidAsk":800000,"tickRule":151234,"none":0},
    "cols":["u","p","v","s"],"ticks":[[1793397600001,25000.25,1,1]],"complete":true}
   ```
+- **The day check's rule** (0.6.14, Anthony's decision of 2026-11-03: "the only failure should be very large gaps in the day, or
+  days that are unusable for a backtesting purpose, small inconsistency does not matter to me"; "even a 1 minute gap should not fail
+  the whole day, that gap just should not be used for testing"). NinjaTrader's history stays the day's record. `TickCheck.Compare`
+  counts each UTC second's trades and volume, live and history.
+  - **The covered span:** every second from the second of the session's first live trade to the second of its last live trade,
+    both included, less every second strictly inside a known live capture gap. A known gap is a chunk that took drops (`lost` or
+    `gaps` above 0, its carried chunks too; the first chunk after a restart mid-session is one): from the last live trade of the
+    chunk before it (none: an open start) to the first live trade of the chunk after it (none: an open end); drops not on a chunk
+    yet run from the last cut trade to the end. The seconds of those two bracketing trades stay in the span. When the gaps leave no
+    live trade at all, the whole first to last span counts.
+  - **`failed`** only when history has no trades, or history is thin: in the covered span `coveredHist * 100 < coveredLive * 90`
+    (`TickCheck.ThinSharePercent`; 90.0 percent passes).
+  - **A hole:** a maximal run of seconds that have live trades and no history trade, with no history trade in any second between
+    them, at least 60 seconds (`TickCheck.HoleMinSeconds`) from the start of its first such second to the end of its last. Seconds
+    with no trade at all inside the run count to its length; a history trade in any second between ends the run; a known capture
+    gap does not split it; time with no trade in either is never a hole. Holes never fail a day: The Desk and the backtests skip
+    each one (`from` to `to`).
+  - **The statuses:** `failed` as above; else `short` when history has fewer trades or less volume than live in any second (a day
+    with a hole is `short`); else `filled` when history has more in any second; else `exact`. `exact`, `filled` and `short` pass
+    (`TickCheck.IsPassed`): the raw is deleted once stored and packed, the last part is kept and asked again, as for exact and
+    filled. **Per second differences are expected and are not a failure:** NinjaTrader's history stamps a trade 4 ms early to
+    about 106 ms late against the live feed (WORK, 2026-11-02, five seconds looked at: every live trade over history was in the last
+    .942 to .999 of its second and history had no trade live lacked), so a trade late in its second is in the next one in history.
+    `secondsHistShort`, `ticksHistShort`, `secondsLiveMissed`, `ticksLiveMissed` and `detail` are information only.
+  - **The summary** (`check`, in every part) adds to the counts it had: `rule` (2: this rule; absent before 0.6.14), `coveredLive`
+    and `coveredHist` (each one's trades in the covered span), `historyShare` (`coveredHist / coveredLive`, rounded to 4 places,
+    above 1 when history has more; null when no live trade) and `holes`, every hole oldest first:
+    `[{"from": UTC ms, start of its first second, "to": UTC ms, end of its last second (exclusive), "live": live trades in it}]`,
+    `[]` when none. A reader of `status` should take `short` as passed and read `holes` on any passed day.
+  - **A day failed under the old rule** (before 0.6.14) is checked again once. `ticks/tickrule.txt` holds `rule 2` and one
+    `recheck <session contract>` line per day still to check again. When the file is not there (the first start of 0.6.14), it is
+    written, listing every day `tickdays.txt` notes `failed` whose raw file is still in the folder. A listed day is not done: its
+    final pull runs once more in the final pull's windows, through the gate, 15 minutes between tries, 3 tries, then not until the
+    next start (the list survives a restart). Its new check replaces the `failed` record in `tickdays.txt` (stored and packed 0) and
+    the day leaves the list; the day file is written and sent as a new set (The Desk keeps one day per contract, session and PC: it
+    replaces the failed one). A failed day whose raw is gone is not listed; a day failed under the new rule is never checked again.
+    `/diag` `tickFile.recheck` lists the days waiting; `lastDay` ends `checked again under the 0.6.14 rule`.
 - **Deletion.** The day file (`.day.jsonl`) is deleted only after The Desk's answer to its last part says `"stored":true`; an
   answer without it keeps the file, and it is sent again from its first part (The Desk ignores the parts it has) 15 minutes later,
   3 times, then set aside (`.day.jsonl.unstored`, kept; `/diag` `lastError` says so). The raw file and its state are deleted only
@@ -1312,7 +1355,7 @@ at least 16) bounds the `ticks/` folder next to `config.txt`.
 - **`/diag` `tickFile`:** `on`, `capturing`, `queue`, `queueMax`, `droppedQueue`, `droppedDisk`, `outside`, `written`,
   `feedDrops`, `diskMB`, `maxMB`, `files` (per session and contract: `bytes`, `chunks`, `sent`, `aside`, `ageDays`), `lastSent`
   (per contract: the session and seq of the latest chunk taken), `days` (per session and contract: `check`, `stored`, `packed`),
-  `packWait` (per session and contract: `lastPart`, `asked`), `rawOld`, `rawOldNote`, `dayState`, `lastDay`, `deskHasNoTicks`,
+  `recheck` (0.6.14: the days failed under the old rule still to be checked again), `packWait` (per session and contract: `lastPart`, `asked`), `rawOld`, `rawOldNote`, `dayState`, `lastDay`, `deskHasNoTicks`,
   `lastError`.
 
 ## Orders (protocol v2, Step 2: trading from the chart)

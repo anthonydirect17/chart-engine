@@ -104,7 +104,7 @@ test('tick file (2026-11-03): the raw deleted once packed: only the last part ke
   assert.match(taken, /if \(stored && packed && passed\) DeleteRaw\(key\);/);
   const ask = between(ticks, 'public static int AskPacked(', '// ---------------------------------------------------------- the folder');
   assert.match(ask, /if \(!InPackAskWindow\(nowEt\)\) return 0;/);
-  assert.match(ask, /d\.Stored && !d\.Packed && \(d\.Check == "exact" \|\| d\.Check == "filled"\)/, 'a failed day is never asked');
+  assert.match(ask, /d\.Stored && !d\.Packed && TickCheck\.IsPassed\(d\.Check\)/, 'a failed day is never asked');
   assert.match(ask, /if \(last == today \|\| mem == today\) continue;/, 'at most once a New York day (the file or, review LOW 4, memory)');
   assert.ok((ask.match(/NoteAsked\(d\.Key, today\);/g) || []).length === 2, 'a refusal and an answer not packed both note the day asked (memory and file)');
   assert.match(ask, /if \(stored && packed\)\s*\{\s*lock \(Sync\) d\.Packed = true;\s*SaveDays\(\);\s*DeleteRaw\(d\.Key\);/);
@@ -118,10 +118,42 @@ test('tick file (review LOW 3): the raw deleted before the key is forgotten; no 
   assert.match(del, /new\[\] \{ raw, LastPartFile\(key\), AskedFile\(key\), state \}/, 'the raw first, the state last');
   assert.ok(del.indexOf('File.Delete(f)') < del.indexOf('Keys.Remove(key)'), 'the files before the key');
   const scan = between(ticks, 'private static void ScanFolder()', 'private static void RecountDisk()');
-  assert.match(scan, /packed = Days\.TryGetValue\(key, out d\) && d\.Packed && \(d\.Check == "exact" \|\| d\.Check == "filled"\);/, 'a passed day noted packed is not registered; a failed one keeps its raw');
+  assert.match(scan, /packed = Days\.TryGetValue\(key, out d\) && d\.Packed && TickCheck\.IsPassed\(d\.Check\);/, 'a passed day noted packed is not registered; a failed one keeps its raw');
   assert.match(scan, /first = ScanDeleteSaid\.Add\(key\);\s*if \(first\) ChartBridgeServer\.Log\(/, 'a delete that fails is said once a run for each key');
   assert.match(scan, /if \(!File\.Exists\(Path\.Combine\(Folder, name \+ "\.raw"\)\)\) continue;/, 'a state with no raw is not registered');
   assert.match(between(ticks, 'private static void SenderLoop(', '// ----'), /LoadDays\(\); ScanFolder\(\);/, 'the days are read before the folder');
   const send = between(ticks, 'public static int SendChunks(', 'private static async Task<WebResponse> PostAsync(');
   assert.match(send, /if \(cuts\.Count > 0 && !File\.Exists\(k\.Raw\)\) \{ RawGone\(k, null\); continue; \}/);
+});
+
+test('tick file (Anthony 2026-11-03, 0.6.14): the day check fails only on no history or history under 90 percent; short passes; holes never fail', () => {
+  const chk = between(ticks, 'public static class TickCheck', 'public class TickDayBuild');
+  assert.match(chk, /public const int ThinSharePercent = 90;/);
+  assert.match(chk, /public const int HoleMinSeconds = 60;/);
+  assert.match(chk, /public static bool IsPassed\(string status\) \{ return status == "exact" \|\| status == "filled" \|\| status == "short"; \}/);
+  assert.match(chk, /bool thin = r\.CoveredLive > 0 && r\.CoveredHist \* 100 < r\.CoveredLive \* ThinSharePercent;\s*if \(r\.HistTicks == 0 \|\| thin\) r\.Status = "failed";\s*else if \(r\.SecondsHistShort > 0\) r\.Status = "short";\s*else if \(r\.SecondsLiveMissed > 0\) r\.Status = "filled";\s*else r\.Status = "exact";/);
+  assert.ok(!/Holes[^;\n]*Status|Status[^;\n]*Holes/.test(chk), 'holes never decide the status');
+  assert.match(ticks, /public bool Passed \{ get \{ return TickCheck\.IsPassed\(Status\); \} \}/);
+  // every place that treats a day as passed asks IsPassed, never the names one by one
+  const rest = ticks.slice(ticks.indexOf('public class TickDayBuild'));
+  assert.ok(!/"exact"|"filled"|"short"/.test(rest), 'no status compared by name outside TickCheck');
+  assert.match(between(ticks, 'private static void DayTaken(', '// ----'), /bool passed = TickCheck\.IsPassed\(d\.Check\);/);
+  assert.equal((ticks.match(/TickCheck\.IsPassed\(d\.Check\)/g) || []).length, 4, 'DayTaken, AskPacked, ScanFolder, /diag packWait');
+  // the summary: the counts kept (information only), the share, the covered counts, the holes
+  const parts = between(ticks, 'private static List<string> DayParts(KeyFiles k', 'private static readonly Regex StoredRx');
+  for (const k of ['secondsHistShort', 'ticksHistShort', 'secondsLiveMissed', 'ticksLiveMissed', 'liveLost', 'liveGaps', 'rule', 'coveredLive', 'coveredHist', 'historyShare', 'holes'])
+    assert.ok(parts.includes('\\"' + k + '\\":'), 'the check has ' + k);
+  assert.match(parts, /c\.Append\("\{\\"from\\":"\)\.Append\(chk\.Holes\[i\]\[0\]\)\.Append\(",\\"to\\":"\)\.Append\(chk\.Holes\[i\]\[1\]\)\.Append\(",\\"live\\":"\)\.Append\(chk\.Holes\[i\]\[2\]\)/);
+  // the known capture gaps go to the check
+  assert.match(ticks, /TickCheckResult chk = TickCheck\.Compare\(live, hist\.Ticks, KnownGaps\(k\)\);/);
+});
+
+test('tick file (0.6.14): a day failed under the old rule with its raw kept is checked again once (tickrule.txt)', () => {
+  const load = between(ticks, 'private static void LoadDays()', 'private static void SaveRule()');
+  assert.match(load, /if \(d\.Check == "failed" && File\.Exists\(Path\.Combine\(Folder, BaseOf\(d\.Key\) \+ "\.raw"\)\)\) Recheck\.Add\(d\.Key\);/);
+  assert.match(load, /if \(Days\.TryGetValue\(key, out d\) && d\.Check == "failed"\) Recheck\.Add\(key\);/);
+  assert.match(ticks, /public static bool IsDayDone\(string key\) \{ lock \(Sync\) return Days\.ContainsKey\(key\) && !Recheck\.Contains\(key\); \}/);
+  assert.match(between(ticks, 'private static TickCheckResult FinishDay(KeyFiles k', 'private static string ShareText('), /again = Recheck\.Remove\(k\.Key\);[\s\S]*if \(again\) SaveRule\(\);/);
+  // the same windows and tries as any final pull: DaysToPull keeps MaxTries and RetryAtDay
+  assert.match(between(ticks, 'public static List<string> DaysToPull(', 'private static void LaterDay('), /if \(IsDayDone\(k\.Key\) \|\| !File\.Exists\(k\.Raw\)\) continue;[\s\S]*if \(tries >= MaxTries\) continue;/);
 });
