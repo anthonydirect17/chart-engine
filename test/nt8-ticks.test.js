@@ -129,7 +129,7 @@ test('tick file (review LOW 3): the raw deleted before the key is forgotten; no 
 test('tick file (Anthony 2026-11-03, 0.6.14): the day check fails only on no history or history under 90 percent; short passes; holes never fail', () => {
   const chk = between(ticks, 'public static class TickCheck', 'public class TickDayBuild');
   assert.match(chk, /public const int ThinSharePercent = 90;/);
-  assert.match(chk, /public const int HoleMinSeconds = 59;/);
+  assert.match(chk, /public const int HoleMinMs = 60000;/);
   assert.match(chk, /public static bool IsPassed\(string status\) \{ return status == "exact" \|\| status == "filled" \|\| status == "short"; \}/);
   assert.match(chk, /bool thin = r\.CoveredLive > 0 && r\.CoveredHist \* 100 < r\.CoveredLive \* ThinSharePercent;\s*if \(r\.HistTicks == 0 \|\| thin\) r\.Status = "failed";\s*else if \(r\.SecondsHistShort > 0\) r\.Status = "short";\s*else if \(r\.SecondsLiveMissed > 0\) r\.Status = "filled";\s*else r\.Status = "exact";/);
   assert.ok(!/Holes[^;\n]*Status|Status[^;\n]*Holes/.test(chk), 'holes never decide the status');
@@ -167,14 +167,13 @@ test('tick file (0.6.14 review): the span floor, the skew trim, inGap holes, and
   assert.match(chk, /public const int MinCoveredSeconds = 600;/);
   assert.match(chk, /public const int MinCoveredLive = 1000;/);
   assert.match(chk, /public const int SkewEarlyMs = 4, SkewLateMs = 106;/);
-  assert.match(chk, /public const int EdgeEarlyMaxMs = SkewEarlyMs - 1;/);
-  assert.match(chk, /public const int EdgeLateMinMs = 1000 - SkewLateMs;/);
+  assert.ok(!/EdgeEarlyMaxMs|EdgeLateMinMs|HoleMinSeconds/.test(chk), 'no edge trim, no whole seconds for holes (third re-review)');
   assert.match(chk, /else if \(r\.CoveredSeconds < MinCoveredSeconds \|\| r\.CoveredLive < MinCoveredLive\) \{ Cover\(r, by, liveFrom, liveTo, null\); r\.SpanWhole = true; \}/);
-  // a live run: an edge second left out only when the skew alone can empty it; exactly 60 seconds otherwise (re-review LOW A)
-  assert.match(chk, /if \(firstMax <= EdgeEarlyMaxMs\) len -= 1000;\s*if \(lastMin >= EdgeLateMinMs\) len -= 1000;\s*if \(len >= HoleMinSeconds \* 1000L\)/);
-  // an inGap silence is never trimmed, and the first one starts at the session's open (re-review LOW C)
-  assert.match(chk, /if \(to - from >= HoleMinSeconds \* 1000L\) into\.Add/);
-  assert.match(chk, /long from = prevHist != long\.MinValue \? prevHist \+ 1000 : openSec;/);
+  // a hole is bounded by history trades, in ms, with the skew margin (third re-review)
+  const holes = between(ticks, 'private static void FindHoles(', 'private static long Between(');
+  assert.match(holes, /for \(int i = openMs == long\.MinValue \? 1 : 0; i < hu\.Length; i\+\+\)/, 'from the open to the first history trade, then between history trades');
+  assert.match(holes, /if \(b - a < HoleMinMs\) continue;/);
+  assert.match(holes, /if \(inGap \|\| Between\(lu, a \+ SkewEarlyMs, b - SkewLateMs\) > 0\) r\.Holes\.Add\(new long\[\] \{ a, b, Between\(lu, a, b\), inGap \? 1 : 0 \}\);/);
   assert.match(ticks, /TickCheck\.Compare\(live, hist\.Ticks, KnownGaps\(k\), OpenMsOf\(k\.Session\)\);/);
   // every start lists every failed rule 1 day with its raw (re-review LOW B)
   assert.match(between(ticks, 'private static void LoadDays()', 'private static bool MayRecheck('), /foreach \(DayRec d in Days\.Values\) if \(MayRecheck\(d\.Key\)\) Recheck\.Add\(d\.Key\);\s*HashSet<string> listed/);

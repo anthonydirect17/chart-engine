@@ -22,9 +22,9 @@
 //    second (TickCheck). The history is the master when the check passes: exact, filled (history has trades the live capture
 //    missed, never fewer) or, from 0.6.14 (Anthony 2026-11-03), short (history has fewer in some seconds, but at least 90 percent of
 //    the live trades over the span the live capture covered); it fails only when history has no trades or is under that 90 percent.
-//    Holes (a gap of about a minute or more: 59 whole seconds of live trades with no history trade, an edge second left out only
-//    when the skew alone can empty it; or 59 whole seconds of history silence over a known capture gap, from the session's open
-//    too: inGap) never fail the day: they are listed in the check for the backtests to skip. A day failed under the old rule with its raw still there is checked again once (tickrule.txt). The day
+//    Holes (60 seconds or more between two history trades, or from the session's open to history's first trade, with a live
+//    trade inside beyond the skew margin, or over a known capture gap: inGap) never fail the day: they are listed in the check
+//    for the backtests to skip. A day failed under the old rule with its raw still there is checked again once (tickrule.txt). The day
 //    goes to POST /api/ticks/day in parts. The raw is deleted only when the check passed and The Desk answers "stored" and "packed" true; a failed
 //    day keeps its raw until Anthony rules.
 //    Stored but not packed (2026-11-03): only the day's last part is kept (.day.last) and sent again at most once a day in the
@@ -71,8 +71,9 @@ namespace NinjaTrader.NinjaScript.AddOns
         public readonly List<long[]> Detail = new List<long[]>();   // {second (UTC ms), live trades, history trades}
         // 0.6.14 (Anthony 2026-11-03): the span the share is judged over (TickCheck.Compare): its seconds and the trades of each in
         // it; SpanWhole when that is the whole first to last live span (no known gap, or the span left by the gaps too small);
-        // history's share of live's there (NaN when no live trade is in it); and every hole: {from UTC ms, to UTC ms (exclusive),
-        // live trades in it, 1 when it is a history silence over a known capture gap else 0}.
+        // history's share of live's there (NaN when no live trade is in it); and every hole: {from UTC ms (the history trade before
+        // it, or the session's open), to UTC ms (the history trade after it, exclusive), live trades in it, 1 when it overlaps a known
+        // capture gap else 0}. Holes are not second-aligned.
         public long CoveredLive, CoveredHist, CoveredSeconds;
         public bool SpanWhole;
         public double HistoryShare = double.NaN;
@@ -87,16 +88,14 @@ namespace NinjaTrader.NinjaScript.AddOns
         // backtesting purpose, small inconsistency does not matter to me"; "even a 1 minute gap should not fail the whole day, that
         // gap just should not be used for testing".
         public const int ThinSharePercent = 90;    // history under 90 percent of live's trades in the span: failed
-        // A hole: a gap of about a minute or more, 59 whole seconds with no history trade (the coordinator for Anthony, the PR #79
-        // re-review: a real 60.0 s gap seldom lines up with whole seconds, so it covers 59 of them; 59 lists every real one-minute gap).
-        public const int HoleMinSeconds = 59;
-        // The skew measured on WORK (2026-11-02): history's time of a trade runs 4 ms early to 106 ms late against the live feed. So a
-        // run's first second is history-empty by the skew alone when every live trade in it is at 3 ms or less (4 ms early puts its
-        // twin in the second before), and its last second when every live trade in it is at 894 ms or later (106 ms late puts the
-        // twin in the next). Only such an edge second is left out of a run's length for the hole test (the PR #79 re-review, LOW A).
+        // A hole is bounded by history trades (the coordinator for Anthony, the PR #79 third re-review): a time with no history trade
+        // of at least HoleMinMs, in ms (no second alignment, so a real minute is never missed by where it falls in its seconds).
+        public const int HoleMinMs = 60000;
+        // The skew measured on WORK (2026-11-02): history's time of a trade runs 4 ms early to 106 ms late against the live feed
+        // (history = live + d, d from -4 to +106 ms). So a live trade can be the twin of the history trade that starts a silence only
+        // when it is at most SkewEarlyMs after it, and of the one that ends it only when it is at most SkewLateMs before it. A live
+        // trade further inside proves history lost trades there.
         public const int SkewEarlyMs = 4, SkewLateMs = 106;
-        public const int EdgeEarlyMaxMs = SkewEarlyMs - 1;      // 3: a first second whose live trades are all at 3 ms or less
-        public const int EdgeLateMinMs = 1000 - SkewLateMs;     // 894: a last second whose live trades are all at 894 ms or more
         // The coordinator for Anthony, 2026-11-03 (the PR #79 review): judge on the whole first to last live span when the span left
         // by the known gaps has fewer than 600 seconds or fewer than 1,000 live trades (a short run, or most chunks flagged: a sliver
         // of a span would let the skew fail a good day).
@@ -120,16 +119,14 @@ namespace NinjaTrader.NinjaScript.AddOns
         // seconds strictly inside a known capture gap (gaps: {a, b} UTC ms, the last live trade before the gap and the first after
         // it; long.MinValue / long.MaxValue for an open end). When what the gaps leave has fewer than MinCoveredSeconds seconds or
         // fewer than MinCoveredLive live trades, the span is the whole first to last live span (SpanWhole).
-        // A hole (never failing the day), listed from its first second to the end of its last (to: the last second + 1000 ms), at
-        // least HoleMinSeconds long:
-        //   - a maximal run of seconds that have live trades and no history trade, with no history trade in any second between them
-        //     (seconds with no trade at all inside the run count to its length); the known gaps do not split one. Its length for the
-        //     test leaves out its first second when every live trade in it is at EdgeEarlyMaxMs or less, and its last second when
-        //     every live trade in it is at EdgeLateMinMs or more (the skew alone can empty those);
-        //   - a history silence over a known gap (inGap): the seconds strictly between two history trades, none in between, or from
-        //     the session's open (openMs, when known) to history's first trade, when one of them is inside a known gap (no one vouches
-        //     for that time); never trimmed (no live trade to be skewed against); it takes in any run of the first kind inside it.
-        // A silence after history's last trade is not looked at (the caretaker skips a late start or an early end by CME's calendar).
+        // A hole (never failing the day): the time between two consecutive history trades, or from the session's open (openMs, when
+        // known) to history's first trade, from a to b (UTC ms), when b - a >= HoleMinMs and either
+        //   - a live trade lies strictly between a + SkewEarlyMs and b - SkewLateMs (the skew cannot explain it: history lost trades
+        //     there), or
+        //   - the time overlaps a known capture gap (inGap: the live capture could not see it, so nobody vouches for it).
+        // Listed {a, b (exclusive), the live trades strictly inside, inGap}. A time with no live trade beyond the margin and no gap
+        // is a quiet market, not a hole. The time after history's last trade is not looked at (the caretaker skips a late start or an
+        // early end by CME's calendar).
         public static TickCheckResult Compare(IList<TickRec> live, IList<TickRec> hist, IList<long[]> gaps, long openMs)
         {
             TickCheckResult r = new TickCheckResult();
@@ -138,14 +135,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             foreach (TickRec x in live)
             {
                 long[] a = Slot(by, x.U); a[0]++; a[1] += x.V; r.LiveTicks++; r.LiveVolume += x.V;
-                long s = Sec(x.U), ms = x.U - s; if (ms < a[4]) a[4] = ms; if (ms > a[5]) a[5] = ms;
-                if (s < liveFrom) liveFrom = s; if (s > liveTo) liveTo = s;
+                long s = Sec(x.U); if (s < liveFrom) liveFrom = s; if (s > liveTo) liveTo = s;
             }
             foreach (TickRec x in hist) { long[] a = Slot(by, x.U); a[2]++; a[3] += x.V; r.HistTicks++; r.HistVolume += x.V; }
             int missedListed = 0, shortListed = 0;
-            long runFrom = -1, runLast = -1, runLive = 0, runFirstMax = 0, runLastMin = 0, prevHist = long.MinValue, liveSince = 0;
-            long openSec = openMs == long.MinValue ? long.MinValue : Sec(openMs);
-            List<long[]> runs = new List<long[]>(), silences = new List<long[]>();
             foreach (KeyValuePair<long, long[]> kv in by)
             {
                 long[] a = kv.Value;
@@ -159,24 +152,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                     r.SecondsLiveMissed++; r.TicksLiveMissed += a[2] - a[0];
                     if (missedListed++ < DetailMax) r.Detail.Add(new long[] { kv.Key, a[0], a[2] });
                 }
-                if (a[2] > 0)
-                {
-                    EndRun(runs, runFrom, runLast, runLive, runFirstMax, runLastMin); runFrom = -1; runLive = 0;
-                    long from = prevHist != long.MinValue ? prevHist + 1000 : openSec;   // the first silence starts at the open
-                    if (from != long.MinValue && OverGap(from, kv.Key, gaps)) EndSilence(silences, from, kv.Key, liveSince);
-                    prevHist = kv.Key; liveSince = 0;
-                }
-                else if (a[0] > 0)
-                {
-                    if (runFrom < 0) { runFrom = kv.Key; runFirstMax = a[5]; }
-                    runLast = kv.Key; runLastMin = a[4]; runLive += a[0]; liveSince += a[0];
-                }
             }
-            EndRun(runs, runFrom, runLast, runLive, runFirstMax, runLastMin);
-            foreach (long[] s in silences) r.Holes.Add(new long[] { s[0], s[1], s[2], 1 });
-            foreach (long[] h in runs)
-                if (!silences.Any(s => s[0] <= h[0] && h[1] <= s[1])) r.Holes.Add(new long[] { h[0], h[1], h[2], 0 });
-            r.Holes.Sort((x, y) => x[0].CompareTo(y[0]));
+            FindHoles(r, live, hist, gaps, openMs);
             if (r.LiveTicks > 0)
             {
                 long all = (liveTo - liveFrom) / 1000 + 1;
@@ -194,32 +171,42 @@ namespace NinjaTrader.NinjaScript.AddOns
             return r;
         }
 
-        // A run of live seconds from its first second to its last: kept when at least HoleMinSeconds long, less an edge second the
-        // skew alone can empty (firstMax: the latest live ms in its first second; lastMin: the earliest in its last).
-        private static void EndRun(List<long[]> into, long from, long last, long n, long firstMax, long lastMin)
+        // The holes (see Compare), oldest first: every time between consecutive history trades, and from the open to the first.
+        private static void FindHoles(TickCheckResult r, IList<TickRec> live, IList<TickRec> hist, IList<long[]> gaps, long openMs)
         {
-            if (from < 0) return;
-            long len = last + 1000 - from;
-            if (firstMax <= EdgeEarlyMaxMs) len -= 1000;
-            if (lastMin >= EdgeLateMinMs) len -= 1000;
-            if (len >= HoleMinSeconds * 1000L) into.Add(new long[] { from, last + 1000, n });
-        }
-        // A history silence [from, to) over a known gap: kept when at least HoleMinSeconds long (never trimmed).
-        private static void EndSilence(List<long[]> into, long from, long to, long n)
-        {
-            if (to - from >= HoleMinSeconds * 1000L) into.Add(new long[] { from, to, n });
+            if (hist.Count == 0) return;
+            long[] hu = new long[hist.Count], lu = new long[live.Count];
+            for (int i = 0; i < hu.Length; i++) hu[i] = hist[i].U;
+            for (int i = 0; i < lu.Length; i++) lu[i] = live[i].U;
+            Array.Sort(hu); Array.Sort(lu);
+            for (int i = openMs == long.MinValue ? 1 : 0; i < hu.Length; i++)
+            {
+                long a = i == 0 ? openMs : hu[i - 1], b = hu[i];
+                if (b - a < HoleMinMs) continue;
+                bool inGap = OverGap(a, b, gaps);
+                if (inGap || Between(lu, a + SkewEarlyMs, b - SkewLateMs) > 0) r.Holes.Add(new long[] { a, b, Between(lu, a, b), inGap ? 1 : 0 });
+            }
         }
 
-        // Whether any second of [from, to) is strictly inside a known gap.
-        private static bool OverGap(long from, long to, IList<long[]> gaps)
+        // The values of the sorted array strictly between lo and hi.
+        private static long Between(long[] sorted, long lo, long hi)
         {
-            if (gaps == null || to <= from) return false;
-            foreach (long[] g in gaps)
-            {
-                long lo = g[0] == long.MinValue ? from : Math.Max(from, Sec(g[0]) + 1000);
-                long hi = g[1] == long.MaxValue ? to - 1000 : Math.Min(to - 1000, Sec(g[1]) - 1000);
-                if (lo <= hi) return true;
-            }
+            if (hi <= lo) return 0;
+            return First(sorted, hi, false) - First(sorted, lo, true);
+        }
+        // The index of the first value above x (after) or at least x (not after).
+        private static int First(long[] sorted, long x, bool after)
+        {
+            int lo = 0, hi = sorted.Length;
+            while (lo < hi) { int m = (lo + hi) >> 1; if (after ? sorted[m] <= x : sorted[m] < x) lo = m + 1; else hi = m; }
+            return lo;
+        }
+
+        // Whether the time (a, b) overlaps a known gap (gaps: {a, b} UTC ms, open intervals; long.MinValue / MaxValue an open end).
+        private static bool OverGap(long a, long b, IList<long[]> gaps)
+        {
+            if (gaps == null || b <= a) return false;
+            foreach (long[] g in gaps) if (Math.Max(a, g[0]) < Math.Min(b, g[1])) return true;
             return false;
         }
 
@@ -250,7 +237,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             long t = Sec(u);
             long[] a;
-            if (!by.TryGetValue(t, out a)) { a = new long[] { 0, 0, 0, 0, 1000, -1 }; by[t] = a; }   // {live n, v, hist n, v, live min ms, max ms}
+            if (!by.TryGetValue(t, out a)) { a = new long[4]; by[t] = a; }
             return a;
         }
     }
