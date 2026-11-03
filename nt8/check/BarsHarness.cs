@@ -2246,6 +2246,14 @@ public static class BarsHarness
             Check(!KeyKnown(k6) && !DiagFiles().Contains(k6) && !File.Exists(raw6) && !File.Exists(state6) && !File.Exists(ChartBridgeTicks.LastPartFile(k6)) && KeyKnown(k7) && TickDisk() == FolderSize(dir),
                   "tick ghosts: a state whose day tickdays.txt notes packed is not registered; its files left from a delete cut short are deleted: " + DiagFiles());
 
+            // 2b. a failed day noted packed in tickdays.txt (a Desk regression, or a record rebuilt): after a restart ScanFolder keeps
+            //     its raw and its state and registers its key (a failed day keeps its raw until Anthony rules)
+            File.WriteAllLines(days, File.ReadAllLines(days).Where(x => !x.StartsWith(k7 + "\t")).Concat(new[] { k7 + "\tfailed\t1\t1" }).ToArray());
+            TickForget();
+            TickScan();
+            Check(File.Exists(raw7) && File.Exists(state7) && KeyKnown(k7) && DiagFiles().Contains(k7),
+                  "tick ghosts: a failed day noted packed keeps its raw and its state after a restart, its key registered: " + DiagFiles());
+
             // 3. a state file with no raw file (deleted by hand, or the raw went first and the delete was cut short): not registered
             File.Delete(raw7);
             TickForget();

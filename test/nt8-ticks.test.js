@@ -118,7 +118,8 @@ test('tick file (review LOW 3): the raw deleted before the key is forgotten; no 
   assert.match(del, /new\[\] \{ raw, LastPartFile\(key\), AskedFile\(key\), state \}/, 'the raw first, the state last');
   assert.ok(del.indexOf('File.Delete(f)') < del.indexOf('Keys.Remove(key)'), 'the files before the key');
   const scan = between(ticks, 'private static void ScanFolder()', 'private static void RecountDisk()');
-  assert.match(scan, /packed = Days\.TryGetValue\(key, out d\) && d\.Packed;/, 'a day noted packed is not registered');
+  assert.match(scan, /packed = Days\.TryGetValue\(key, out d\) && d\.Packed && \(d\.Check == "exact" \|\| d\.Check == "filled"\);/, 'a passed day noted packed is not registered; a failed one keeps its raw');
+  assert.match(scan, /first = ScanDeleteSaid\.Add\(key\);\s*if \(first\) ChartBridgeServer\.Log\(/, 'a delete that fails is said once a run for each key');
   assert.match(scan, /if \(!File\.Exists\(Path\.Combine\(Folder, name \+ "\.raw"\)\)\) continue;/, 'a state with no raw is not registered');
   assert.match(between(ticks, 'private static void SenderLoop(', '// ----'), /LoadDays\(\); ScanFolder\(\);/, 'the days are read before the folder');
   const send = between(ticks, 'public static int SendChunks(', 'private static async Task<WebResponse> PostAsync(');

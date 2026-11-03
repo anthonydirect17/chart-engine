@@ -1117,7 +1117,10 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         // ---------------------------------------------------------- the folder (the sender thread and the bars worker)
         // Review LOW 3: a state file is not registered when its day is noted packed in tickdays.txt (a delete cut short: its files
-        // are deleted now) or when its raw file is gone; a state file deleted while it is read is passed over.
+        // are deleted now) or when its raw file is gone; a state file deleted while it is read is passed over. Only a passed day
+        // (exact or filled) noted packed is deleted: a failed day keeps its raw until Anthony rules, even if tickdays.txt says packed.
+        // A delete that fails is said once a run for each key (ScanDeleteSaid), not every look at the folder.
+        private static readonly HashSet<string> ScanDeleteSaid = new HashSet<string>();
         private static void ScanFolder()
         {
             if (!Directory.Exists(Folder)) return;
@@ -1138,10 +1141,17 @@ namespace NinjaTrader.NinjaScript.AddOns
                 catch (Exception) { continue; }   // deleted (or locked) as it was read: looked at again next time
                 if (session == null || contract == null) continue;
                 string key = KeyOf(session, contract);
-                bool packed; lock (Sync) { DayRec d; packed = Days.TryGetValue(key, out d) && d.Packed; }
+                bool packed; lock (Sync) { DayRec d; packed = Days.TryGetValue(key, out d) && d.Packed && (d.Check == "exact" || d.Check == "filled"); }
                 if (packed)
                 {
-                    if (DeleteFiles(key, false) == null) { RecountDisk(); ChartBridgeServer.Log("the NQ tick file for " + key + " is packed: its files left from a delete cut short are deleted"); }
+                    string why = DeleteFiles(key, false);
+                    RecountDisk();
+                    if (why == null) ChartBridgeServer.Log("the NQ tick file for " + key + " is packed: its files left from a delete cut short are deleted");
+                    else
+                    {
+                        bool first; lock (Sync) first = ScanDeleteSaid.Add(key);
+                        if (first) ChartBridgeServer.Log("could not delete the files left of the packed NQ tick file for " + key + ": " + why + " (tried again at each look at the folder, said once)");
+                    }
                     continue;
                 }
                 if (!File.Exists(Path.Combine(Folder, name + ".raw"))) continue;
@@ -1178,7 +1188,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 long ignored; while (DropTimes.TryDequeue(out ignored)) { }
                 runStartUtc = ChartBridgeBars.UtcNow();
                 error = ""; lastDay = ""; deskHasNone = false; retryAt = DateTime.MinValue;
-                lock (Sync) { Keys.Clear(); LastSent.Clear(); RetryAtDay.Clear(); TriesDay.Clear(); SessionDrops.Clear(); DayAgainAt.Clear(); DayAgainTries.Clear(); AskedDay.Clear(); RawGoneSaid.Clear(); packAgainAt = DateTime.MinValue; }
+                lock (Sync) { Keys.Clear(); LastSent.Clear(); RetryAtDay.Clear(); TriesDay.Clear(); SessionDrops.Clear(); DayAgainAt.Clear(); DayAgainTries.Clear(); AskedDay.Clear(); RawGoneSaid.Clear(); ScanDeleteSaid.Clear(); packAgainAt = DateTime.MinValue; }
                 if (!On) { dayState = "off"; return; }
                 dayState = "starting";
                 ManualResetEvent stop = new ManualResetEvent(false);

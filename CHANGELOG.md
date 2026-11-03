@@ -45,8 +45,8 @@ file is deleted once The Desk says it is packed. ChartBridge only (`nt8/ChartBri
   with `"packedVia":"master"`, once WORK's day is packed (TheDesk PR #65).
 - **Review fixes before shipping** (the PR #78 review, all small): the delete now removes the files first (the raw first, the
   state last) and only then forgets the day, so the bars worker can never bring a deleted day back from a leftover state file;
-  that look at the folder also skips a day already noted packed (and finishes a delete cut short) and a state file whose raw
-  file is gone; a chunk whose raw file is gone is passed over and said once, so it never holds up the later sessions' chunks.
+  that look at the folder also skips a day already noted packed (and finishes a delete cut short, only for a passed day: a
+  failed day noted packed keeps its raw; a delete that fails there is logged once) and a state file whose raw file is gone; a chunk whose raw file is gone is passed over and said once, so it never holds up the later sessions' chunks.
   The day last asked is kept in memory as well as in `.day.asked`, so a file that cannot be written never makes a send every
   loop. The morning window's start is now one named line, `MorningStart`, at 00:00 New York (unchanged); it can be set later
   (e.g. 06:00) once Anthony answers.

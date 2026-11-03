@@ -1292,7 +1292,8 @@ at least 16) bounds the `ticks/` folder next to `config.txt`.
   true. Still not packed: everything kept, asked again the next day. `404`: everything kept, asked again when the route is tried
   again (30 minutes, as the chunks). A time-out or another failure: everything kept, nothing asked for 15 minutes. `400`, `413` or
   `422`: everything kept, asked again the next day, logged. A failed day keeps no last part and is never asked (it never packs);
-  its raw stays until Anthony rules. A day stored before 0.6.13 has no `.day.last`: it is not asked (sending the whole day
+  its raw stays until Anthony rules, even if `tickdays.txt` notes it packed (at a start only a passed day noted packed has its
+  files left from a delete cut short deleted; a delete that fails there is logged once a run). A day stored before 0.6.13 has no `.day.last`: it is not asked (sending the whole day
   again would make a new set at The Desk); its raw stays and `rawOld` lists it. A day The Desk stored as `flagged` (another PC's
   day is the master) keeps its raw until The Desk answers `"packed":true`, which The Desk does with `"packedVia":"master"` once
   the session's master day is packed (TheDesk PR #65); until then that PC asks once a day, and then deletes its raw as above.
