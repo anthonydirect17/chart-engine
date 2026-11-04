@@ -949,8 +949,8 @@ function create(env) {
 
   /* Chart actions (only while Armed): drag an order's label to move it, its x to cancel it. */
   const notShown = id => { const o = TR.orders.get(id); if (o && o.account === TR.account) return false; flash(o ? 'Not sent: that order is not on ' + TR.account + '.' : 'Not sent: that order is no longer working.', o ? 'error' : 'warn'); env.changed(); return true; };
-  function moveOrder(id, price) {
-    if (isGroupLine(id)) { groupMove(id, price); return; }   // 1.33.0: every member's order there, to the same price
+  function moveOrder(id, price, members) {
+    if (isGroupLine(id)) { groupMove(id, price, members); return; }   // 1.33.0: every member's order there, to the same price
     if (!ready()) { env.changed(); return; }
     if (notShown(id)) return;
     /* An order in a Cancel all under way (queued, or its cancel just sent) is not moved: Cancel all wins and cancels
@@ -983,17 +983,17 @@ function create(env) {
       return 'its planned ' + whichName(p.which) + ' is ' + p.ticks + ' ticks from it, at ' + fmt(at) + ' (dropped at ' + fmt(p.dropped) + ')';
     }).join('; ') + '.';
   }
-  function cancelOrder(id) {
-    if (isGroupLine(id)) { groupCancel(id); return; }   // 1.33.0: the x on a group line cancels each member's order there
+  function cancelOrder(id, members) {
+    if (isGroupLine(id)) { groupCancel(id, members); return; }   // 1.33.0: the x on a group line cancels each member's order there
     if (!ready()) return;
     if (notShown(id)) return;
     send({ type: 'cancel', id });
     batchStop(x => x.id === id);                                   // sent now, not again with a Cancel all under way
     flash('Cancelling order ' + id, '');
   }
-  function groupCancel(id) {
+  function groupCancel(id, members) {
     if (!ready()) return;
-    const l = groupLine(id);
+    const l = groupLine(id, members);
     if (!l) { flash('Not sent: that group line is no longer there.', 'warn'); return; }
     for (const x of l.items) { send({ type: 'cancel', id: x.id }); batchStop(e => e.id === x.id); }
     flash('Cancelling ' + l.items.length + ' order' + (l.items.length === 1 ? '' : 's') + ' of the group (' + l.items.map(x => x.account).join(', ') + ').', '');
@@ -1020,9 +1020,9 @@ function create(env) {
   }
   /* `from`: the entry price the chart drew the line from (a move of the entry may still wait for its answer), so the
      distance sent is the one the chart showed (F2 review) */
-  function planMove(planId, price, from) {
+  function planMove(planId, price, from, members) {
     const p = OT.planIdOf(planId); if (!p) return;
-    if (isGroupLine(planId)) { groupPlan(planEntries(planId), p.which, (o, tick) => OT.planDrag(o, p.which, price, tick, from)); return; }   // 1.33.0: each member's entry, to the same price
+    if (isGroupLine(planId)) { groupPlan(planEntries(planId, members), p.which, (o, tick) => OT.planDrag(o, p.which, price, tick, from)); return; }   // 1.33.0: each member's entry, to the same price
     const o = planTarget(p.entry); if (!o) return;
     const r = OT.planDrag(o, p.which, price, tickOf(o.root), from);
     if (r.error) { env.changed(); flash(r.error, 'warn'); return; }
@@ -1031,15 +1031,15 @@ function create(env) {
     const mv = TR.moving.get(o.id);                                // dragged while the entry's move waits: kept for its refusal
     if (mv) mv.plans = mv.plans.filter(x => x.which !== p.which).concat([{ which: p.which, ticks: r.ticks, dropped: price }]);
   }
-  function planRemove(planId) {
+  function planRemove(planId, members) {
     const p = OT.planIdOf(planId); if (!p) return;
-    if (isGroupLine(planId)) { groupPlan(planEntries(planId), p.which, () => ({ ticks: null })); return; }
+    if (isGroupLine(planId)) { groupPlan(planEntries(planId, members), p.which, () => ({ ticks: null })); return; }
     const o = planTarget(p.entry); if (!o) return;
     sendPlan(o, p.which, null, 'Removing the planned ' + whichName(p.which) + ' of order ' + o.id + '.');
   }
-  function planAdd(entryId, which) {
+  function planAdd(entryId, which, members) {
     if (which !== 'stop' && which !== 'target') return;
-    if (isGroupLine(entryId)) { const t = OT.cleanBracket(brackets[root()], cap())[which]; if (!(t > 0)) { flash('Not sent: the bracket ' + whichName(which) + ' for ' + root() + ' is 0.', 'warn'); return; } groupPlan(groupLine(entryId), which, () => ({ ticks: t })); return; }
+    if (isGroupLine(entryId)) { const t = OT.cleanBracket(brackets[root()], cap())[which]; if (!(t > 0)) { flash('Not sent: the bracket ' + whichName(which) + ' for ' + root() + ' is 0.', 'warn'); return; } groupPlan(groupLine(entryId, members), which, () => ({ ticks: t })); return; }
     const o = planTarget(entryId); if (!o) return;
     const t = OT.cleanBracket(brackets[o.root], cap())[which];
     if (!(t > 0)) { flash('Not sent: the bracket ' + whichName(which) + ' for ' + o.root + ' is 0. Set it in the bracket boxes, then click +' + (which === 'stop' ? 'SL' : 'TP') + ' again.', 'warn'); return; }
@@ -1048,8 +1048,8 @@ function create(env) {
   /* 1.33.0: a group entry line's planned stop or target: one `plan` per member entry (ticks: from each one's own entry price,
      so every member's line lands at the same price) */
   /* the member entries under a group's planned line (each planned line's own entry) */
-  function planEntries(planLineId) {
-    const l = groupLine(planLineId);
+  function planEntries(planLineId, members) {
+    const l = groupLine(planLineId, members);
     return l ? { items: l.items.map(x => Object.assign({}, x, { id: x.plan && x.plan.parent })).filter(x => x.id) } : null;
   }
   function groupPlan(l, which, ticksOf) {
@@ -1083,28 +1083,69 @@ function create(env) {
    * price). Entries still merge only at one price. The drag, the x and the planned lines' drag act on every member of the line
    * as before, so each member's order goes to the one price dropped at.
    */
+  /*
+   * 1.43.0, the review of 69eebe1 (B1): a merged line's id must not change while its members stay, or the engine drops a drag in
+   * progress and the drop finds no line. So the ids are sticky: each member order remembers the line id it was last drawn in
+   * (gIds, per account and instrument). The clusters are worked out afresh each time (OT.mergeLevels), then each takes, in the
+   * walk's order: (1) the id its lead (the member nearest the entry) last had, when no cluster before it took that id; else
+   * (2) the id most of its members last had (a tie: the one its earliest member in the group's order had), when free; else
+   * (3) a new id, "<base><price in ticks>", or with ".<n>" after it when that id was already given out on this account and
+   * instrument (gIssued), so a line that went never hands its id to another. A line whose own members did not change keeps its
+   * id (its lead is the same member); no two lines share one. A group move under way (gmHold) keeps every member it covers in
+   * that line, at the price asked for, until each has its answer (moved, refused or gone) or MOVE_WAIT has passed, so the
+   * members still waiting never show as a second line.
+   */
+  const gIds = new Map(), gIssued = new Map(), gmHold = new Map();
   function groupBuckets(account, r) {
     const g = groupFor(account), t = tickOf(r), out = new Map();
     if (!g || !(t > 0)) return out;
+    const scope = account + '|' + r, mem = gIds.get(scope) || new Map(), next = new Map();
+    if (!gIssued.has(scope)) gIssued.set(scope, new Set());
+    const issued = gIssued.get(scope);
+    if (issued.size > 5000) issued.clear();
     const at = p => Math.round(p / t);
     const all = [];
     for (const a of targets(account)) for (const o of chartOrdersOne(a, r)) all.push(Object.assign({ account: a }, o));
-    const lineOf = new Map(), made = new Map();       // a member item -> its line's id; a line's id -> { price, lead }
+    const lineOf = new Map(), made = new Map(), taken = new Set();   // a member item -> its line's id; a line's id -> { price, lead, hold }
+    /* a group move under way: its members stay in its line until they have their answers */
+    const holds = [...gmHold.entries()].filter(([, h]) => h.scope === scope);
+    for (const [id, h] of holds) {
+      const its = all.filter(x => h.ids.has(x.id));
+      if (!its.length || now() > h.until || its.every(x => Math.abs(x.price - h.price) < t / 2)) { gmHold.delete(id); continue; }
+      made.set(id, { price: h.price, lead: its[0], hold: h.price }); taken.add(id);
+      for (const x of its) lineOf.set(x, id);
+    }
+    const prevOf = x => mem.get(x.id);
+    const fresh = (base, c, sfx) => {
+      let id = base + c.at + sfx, n = 1;
+      while (taken.has(id) || issued.has(id)) id = base + c.at + '.' + (++n) + sfx;
+      return id;
+    };
     const cluster = (items, base, sfx) => {
-      for (const c of OT.mergeLevels(items, t, OT.mergeEnd(items[0]))) {
-        const id = base + c.at + sfx;
-        made.set(id, { price: c.price, lead: c.lead });
-        for (const x of c.items) lineOf.set(x, id);
-      }
+      const free = items.filter(x => !lineOf.has(x));
+      if (!free.length) return;
+      const cs = OT.mergeLevels(free, t, OT.mergeEnd(free[0])), ids = new Array(cs.length).fill(null);
+      const mine = id => typeof id === 'string' && id.startsWith(base) && id.endsWith(sfx) && !taken.has(id);
+      cs.forEach((c, i) => { const p = prevOf(c.lead); if (mine(p)) { ids[i] = p; taken.add(p); } });
+      cs.forEach((c, i) => {
+        if (ids[i]) return;
+        const n = new Map();
+        for (const x of c.items) { const p = prevOf(x); if (mine(p)) n.set(p, (n.get(p) || 0) + 1); }
+        let best = null;
+        for (const [p, k] of n) if (best === null || k > n.get(best)) best = p;   // a tie: the first seen, its earliest member's
+        if (best) { ids[i] = best; taken.add(best); }
+      });
+      cs.forEach((c, i) => { if (!ids[i]) { ids[i] = fresh(base, c, sfx); taken.add(ids[i]); } });
+      cs.forEach((c, i) => { made.set(ids[i], { price: c.price, lead: c.lead }); for (const x of c.items) lineOf.set(x, ids[i]); });
     };
     /* the orders: a stop or a target by its role, side and kind, clustered; anything else (an entry) at its own price */
     const legs = new Map();
     for (const x of all) {
-      if (x.plan) continue;
+      if (x.plan || lineOf.has(x)) continue;
       const k = 'G~' + (x.role || 'entry') + '~' + x.side + '~' + x.kind + '~';
       if (x.role === 'stop' || x.role === 'target') { if (!legs.has(k)) legs.set(k, []); legs.get(k).push(x); continue; }
       const id = k + at(x.price);
-      if (!made.has(id)) made.set(id, { price: x.price, lead: x });
+      if (!made.has(id)) { made.set(id, { price: x.price, lead: x }); taken.add(id); }
       lineOf.set(x, id);
     }
     for (const [k, items] of legs) cluster(items, k, '');
@@ -1122,9 +1163,11 @@ function create(env) {
     for (const x of all) {                             // the lines in the order of their first member, as before
       const id = lineOf.get(x);
       let b = out.get(id);
-      if (!b) { const m = made.get(id); b = { id, items: [], price: m.price, lead: m.lead, parent: x.plan ? lineOfId.get(x.plan.parent) || null : null }; out.set(id, b); }
+      if (!b) { const m = made.get(id); b = { id, items: [], price: m.price, lead: m.lead, hold: m.hold, parent: x.plan ? lineOfId.get(x.plan.parent) || null : null }; out.set(id, b); }
       b.items.push(x);
+      next.set(x.id, id); issued.add(id);
     }
+    gIds.set(scope, next);
     return out;
   }
   const roleWords = x => (x.plan ? (x.plan.role === 'stop' ? 'planned stop' : 'planned target') : (x.side === 'sell' ? 'SELL ' : 'BUY ') + (x.role === 'stop' ? 'STP' : x.role === 'target' ? 'TGT' : String(x.kind).toUpperCase()));
@@ -1139,12 +1182,12 @@ function create(env) {
       const ps = b.items.map(x => x.price), lo = Math.min(...ps), hi = Math.max(...ps);
       const range = hi - lo > t / 2 ? (f.plan ? (f.plan.role === 'stop' ? 'planned stops ' : 'planned targets ') : roleWords(f) + ' ') + fmt(lo) + ' to ' + fmt(hi) + ', the line at ' + fmt(b.price) + ' (the nearest the entry)\n' : '';
       const tip = (g ? 'Group ' + g.name : 'Group') + ': ' + range + b.items.map(x => x.account + ' ' + roleWords(x) + ' ' + leftOf(x) + ' @ ' + fmt(x.price)).join('\n') + (extra ? '\n' + extra : '');
-      const pend = b.items.every(x => x.movePending !== undefined && x.movePending === f.movePending) ? f.movePending : undefined;
+      const pend = b.hold !== undefined ? b.hold : b.items.every(x => x.movePending !== undefined && x.movePending === f.movePending) ? f.movePending : undefined;   // 1.43.0: a group move under way: at its price
       /* 1.43.0: each member's own order for the label's ticks and dollars (the engine's `parts`): its price (where its move waits,
          if it does), what is left of it, and what its risk is measured from: its account's own position average for a stop or a
          target, its own entry's price for a planned line. The label then says the sum of each member's own risk. */
       const parts = b.items.map(x => {
-        const q = { price: x.movePending !== undefined ? x.movePending : x.price, qty: leftOf(x) };
+        const q = { price: b.hold !== undefined ? b.hold : x.movePending !== undefined ? x.movePending : x.price, qty: leftOf(x) };
         if (x.plan) q.from = x.price - x.plan.offset * t;
         else { const p = TR.positions.get(x.account + '|' + r); if (p && +p.qty && isFinite(p.avgPrice)) q.from = +p.avgPrice; }
         return q;
@@ -1178,21 +1221,31 @@ function create(env) {
     return { qty, avgPrice, group: g.name + ' \u00d7' + held.length, groupTip: tip };
   }
   /* the member orders a group line stands for, read now (a line drawn a moment ago may cover fewer or more) */
-  function groupLine(id) {
-    const r = root(), plan = OT.planIdOf(id);
-    for (const b of groupBuckets(TR.account, r).values()) if (b.id === id) return { items: b.items, plan };
+  function groupLine(id, members) {
+    const r = root(), plan = OT.planIdOf(id), bs = [...groupBuckets(TR.account, r).values()];
+    for (const b of bs) if (b.id === id) return { id, items: b.items, plan };
+    /* 1.43.0 (the review of 69eebe1): an action forwarded from another window names the members it drew on that line; when this
+       window's line has another id (the ids are sticky per window), the members still working are the line acted on */
+    if (Array.isArray(members) && members.length) {
+      const want = new Set(members.filter(x => typeof x === 'string')), items = [];
+      let own = null;
+      for (const b of bs) if (isGroupLine(b.id) && !!OT.planIdOf(b.id) === !!plan) for (const x of b.items) if (want.has(x.id)) { items.push(x); own = own || b.id; }
+      if (items.length) return { id: own, items, plan };   // `id`: this window's line of the first of them
+    }
     return null;
   }
   const isGroupLine = id => typeof id === 'string' && id.startsWith('G~');
   let gmRun = null;                                  // a group line's move: { what, price, queue: [{ id, account, price }], sent: [], refused: Map(cid -> account) }
-  function groupMove(id, price) {
+  function groupMove(id, price, members) {
     if (!ready()) { env.changed(); return; }
     if (gmRun) { flash('A group move is under way: ' + gmRun.queue.length + ' left. Nothing new was sent.', 'warn'); env.changed(); return; }
-    const l = groupLine(id);
+    const l = groupLine(id, members);
     if (!l) { flash('Not sent: that group line is no longer there.', 'warn'); env.changed(); return; }
     const items = l.items.filter(x => !inCancelAll(x.id));
     const f = items[0] || l.items[0], what = f.role === 'stop' ? 'stops' : f.role === 'target' ? 'targets' : 'orders';
-    gmRun = { what, price, queue: items.map(x => ({ id: x.id, account: x.account })), sent: [], cids: new Map(), refused: [] };
+    gmRun = { what, price, queue: items.map(x => ({ id: x.id, account: x.account })), sent: [], cids: new Map(), ids: new Map(), refused: [] };
+    /* 1.43.0 (the review of 69eebe1): the members keep this line, at the price asked for, until each has its answer */
+    if (items.length) { gmHold.set(l.id, { scope: TR.account + '|' + root(), price, ids: new Set(items.map(x => x.id)), until: now() + MOVE_WAIT }); later(() => env.changed(), MOVE_WAIT + 50); }
     gmPump();
   }
   function gmPump() {
@@ -1205,7 +1258,8 @@ function create(env) {
       if (why) { for (const x of r.queue) r.refused.push(x.account + ': not sent (' + why + ')'); r.queue.length = 0; }
       for (const x of r.queue.splice(0, room)) {
         const cid = newCid();
-        r.cids.set(cid, x.account); r.sent.push(x.account);
+        r.cids.set(cid, x.account); r.ids.set(cid, x.id); r.sent.push(x.account);
+        for (const h of gmHold.values()) if (h.ids.has(x.id)) { h.until = Math.max(h.until, now() + MOVE_WAIT); later(() => env.changed(), MOVE_WAIT + 50); }
         send({ type: 'change', cid, id: x.id, price: r.price });   /* each member's move is the single path's (ChartBridge checks it as one account's) */
         noteMoving(x.id, r.price, cid);
       }
@@ -1224,7 +1278,11 @@ function create(env) {
   const gmDoneRuns = [];
   /* a refused member move: kept for its run's report */
   function gmRefused(m) {
-    for (const r of gmDoneRuns.concat(gmRun ? [gmRun] : [])) if (r.cids.has(m.cid)) { r.refused.push(r.cids.get(m.cid) + ': refused (' + m.reason + ')'); return true; }
+    for (const r of gmDoneRuns.concat(gmRun ? [gmRun] : [])) if (r.cids.has(m.cid)) {
+      r.refused.push(r.cids.get(m.cid) + ': refused (' + m.reason + ')');
+      for (const h of gmHold.values()) h.ids.delete(r.ids.get(m.cid));   // 1.43.0: a refused member leaves the move's line (drawn where it is)
+      return true;
+    }
     return false;
   }
   function chartOrdersOne(account, r) {

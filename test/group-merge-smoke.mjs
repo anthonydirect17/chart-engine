@@ -4,7 +4,7 @@
 // the made-up Lucid group, sample data only), at 1366 x 768:
 //   npm run smoke:group-merge        (CHROMIUM_PATH=/path/to/chrome to use a preinstalled browser)
 // Checks: SIM-A, SIM-B and SIM-C's stops (2 ticks in all) draw as ONE line at the stop nearest the entry, its quantity the sum,
-// "Lucid ×3", its tooltip the range and each account's own price; SIM-D's stop, 3 ticks away, stays its own line; the same for the
+// "Lucid ×3", its label drawn "STP 27 -20t -$270" (each member's own risk), its tooltip the range and each account's own price; SIM-D's stop, 3 ticks away, stays its own line; the same for the
 // targets; a drag of the merged stop sends one change per member (SIM-A, SIM-B, SIM-C), every one to the price dropped at, and the
 // ticket says each member's result; SIM-D's stop is not moved. Screenshots test/out/group-merge-lines-1366.png (the merged stop and
 // target, at rest), group-merge-hover-1366.png (the merged stop's full label) and group-merge-moved-1366.png.
@@ -37,6 +37,10 @@ try {
   await ctx.addInitScript(() => {
     window.__sent = [];
     const send = WebSocket.prototype.send;
+    /* the text the charts draw, for the label checks (the last 4,000 strings) */
+    window.__texts = [];
+    const ft = CanvasRenderingContext2D.prototype.fillText;
+    CanvasRenderingContext2D.prototype.fillText = function (t, x, y, w) { window.__texts.push(String(t)); if (window.__texts.length > 4000) window.__texts.splice(0, 1000); return w === undefined ? ft.call(this, t, x, y) : ft.call(this, t, x, y, w); };
     WebSocket.prototype.send = function (d) { try { const m = JSON.parse(d); if (['order', 'change', 'cancel', 'flatten', 'groupPreview', 'groupOrder', 'plan'].includes(m.type)) window.__sent.push(m); } catch (e) { /* not JSON */ } return send.call(this, d); };
   });
   const p = await ctx.newPage();
@@ -73,9 +77,13 @@ try {
   check(tgts[0].qty === abc && tgts[0].group === 'Lucid ×3' && Math.abs(tgts[0].price - (P + 40 * T)) < 1e-9, 'the targets the same: one line at the target nearest the entry (SIM-A\'s): ' + JSON.stringify(tgts[0]));
   check(tgts[1].qty === qty[3] && stops[0].parts && stops[0].parts.length === 3, 'SIM-D\'s target its own line; the merged stop carries each member\'s own order for its risk label');
   /* the risk label: the sum of each member's own risk, every one 20 ticks from its own fill: -20t, $2 a point (MNQ) */
-  const want = '-$' + Math.round(abc * 20 * T * 2);
-  const short = await p.evaluate(([i, id]) => { const ch = window.workspace.chart(i); const o = ch.getOrders().find(x => x.id === id); const pos = ch.getPosition(); return { o, pos }; }, [cid, stops[0].id]);
-  console.log('  info: merged stop ' + stops[0].id + ' at ' + stops[0].price + ', the group position ' + JSON.stringify(short.pos) + ', the label should read "STP ' + abc + ' -20t ' + want + '"');
+  const want = 'STP ' + abc + ' -20t -$' + Math.round(abc * 20 * T * 2).toLocaleString('en-US');
+  const drawn = async text => { await p.evaluate(() => { window.__texts.length = 0; }); const box = await p.locator('.ws-panel[data-id="' + cid + '"] canvas').first().boundingBox();
+    await p.mouse.move(box.x + 60, box.y + 60); await wait(250); await p.mouse.move(box.x + 70, box.y + 70); await wait(250); await p.mouse.move(5, 5); await wait(400);
+    return p.evaluate(t => window.__texts.filter(x => x === t).length, text); };
+  check(await until(async () => (await drawn(want)) > 0, 'the merged stop\'s label drawn', 6000), 'the merged stop\'s label reads "' + want + '": every member 20 ticks from its own fill, the sum of their own risk');
+  const wantT = 'TGT ' + abc + ' +40t +$' + Math.round(abc * 40 * T * 2).toLocaleString('en-US');
+  check(await until(async () => (await drawn(wantT)) > 0, 'the merged target\'s label drawn', 6000), 'the merged target\'s label reads "' + wantT + '"');
   /* the tooltip: hover the merged stop's label */
   const hoverOn = async id => {
     for (let k = 0; k < 3; k++) {
@@ -110,6 +118,11 @@ try {
   const after = await until(async () => { const s = await control('state', { root: 'MNQ' }); const ss = s.orders.filter(o => o.role === 'stop'); return ss.filter(o => o.account !== 'SIM-D').every(o => o.price === ch[0].price) ? ss : null; }, 'the three stops at the dropped price');
   check(!!after && after.find(o => o.account === 'SIM-D').price === P + 5 * T - 20 * T, 'SIM-D\'s stop was not moved');
   await p.mouse.move(5, 5); await wait(600);
+  if (after) {
+    const pts = ['SIM-A', 'SIM-B', 'SIM-C'].reduce((a, x, k) => a + (ch[0].price - fills[k]) * qty[k], 0);
+    const wantM = 'STP ' + abc + ' -' + Math.round(Math.abs(pts) / abc / T) + 't -$' + Math.abs(Math.round(pts * 2)).toLocaleString('en-US');   // whole dollars as the engine rounds them
+    check(await until(async () => (await drawn(wantM)) > 0, 'the moved stop\'s label', 6000), 'after the drop the one line reads "' + wantM + '": each member from its own fill, at the one price');
+  }
   await p.locator('.ws-panel[data-id="' + cid + '"]').screenshot({ path: path.join(out, 'group-merge-moved-1366.png') });
   await p.click(tk('flattenBtn')); await wait(600);
   await ctx.close();

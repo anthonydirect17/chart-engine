@@ -1075,6 +1075,7 @@ function actHere(a) {
   const was = capture; capture = notes;
   try {
     const R = ticketRoot(), plan = typeof a.id === 'string' ? OT.planIdOf(a.id) : null, oid = plan ? plan.entry : a.id;
+    const mem = Array.isArray(a.members) ? a.members.filter(x => typeof x === 'string').slice(0, 200) : undefined;   // 1.43.0: a group line's members as drawn
     const otherRoot = !!a.root && a.root !== R && ['place', 'placeTyped', 'move', 'cancel', 'planAdd', 'buy', 'sell'].includes(a.kind);
     // asked in the window it came from, and Anthony said Send: only for the instrument and account he was asked about,
     // and not when a Close or Flatten of it went out after he was asked (F2 review, re-review)
@@ -1093,9 +1094,9 @@ function actHere(a) {
       if (k.error) tnote(k.error, 'warn'); else core.placeChecked(a.side, k.kind, +a.price);
     }
     else if (a.kind === 'merge') core.merge();
-    else if (a.kind === 'move' && typeof a.id === 'string' && isFinite(a.price)) { if (plan) core.planMove(a.id, +a.price, isFinite(a.from) ? +a.from : undefined); else core.moveOrder(a.id, +a.price); }
-    else if ((a.kind === 'cancel' || a.kind === 'cancelAny') && typeof a.id === 'string') { if (plan) core.planRemove(a.id); else core.cancelOrder(a.id); }
-    else if (a.kind === 'planAdd' && typeof a.id === 'string' && (a.which === 'stop' || a.which === 'target')) core.planAdd(a.id, a.which);
+    else if (a.kind === 'move' && typeof a.id === 'string' && isFinite(a.price)) { if (plan) core.planMove(a.id, +a.price, isFinite(a.from) ? +a.from : undefined, mem); else core.moveOrder(a.id, +a.price, mem); }
+    else if ((a.kind === 'cancel' || a.kind === 'cancelAny') && typeof a.id === 'string') { if (plan) core.planRemove(a.id, mem); else core.cancelOrder(a.id, mem); }
+    else if (a.kind === 'planAdd' && typeof a.id === 'string' && (a.which === 'stop' || a.which === 'target')) core.planAdd(a.id, a.which, mem);
     else if (a.kind === 'buy') core.sendOrder('buy', 'market', null);
     else if (a.kind === 'sell') core.sendOrder('sell', 'market', null);
     else if (a.kind === 'be') core.breakEven();
@@ -1127,10 +1128,17 @@ const tradeHost = {
     const fam = core.switchOn('orderTypes') ? OS.clickFamily(mods, modifiersNow(), side === 'buy' || !(mods && mods.ctrl) ? ['Shift'] : ['Ctrl']) : '';
     chartAction({ kind: 'place', side, price, root, orderKind: fam ? OS.kindFor(kind, fam) : kind });
   },
-  move: (id, price, root, from) => chartAction({ kind: 'move', id, price, root, from }),
-  cancel: (id, root) => chartAction({ kind: 'cancel', id, root }),
-  planAdd: (id, which, root) => chartAction({ kind: 'planAdd', id, which, root }),
+  move: (id, price, root, from) => chartAction(withMembers({ kind: 'move', id, price, root, from })),
+  cancel: (id, root) => chartAction(withMembers({ kind: 'cancel', id, root })),
+  planAdd: (id, which, root) => chartAction(withMembers({ kind: 'planAdd', id, which, root })),
 };
+/* 1.43.0 (the review of 69eebe1): a group line's action carries the member orders this window drew on it, so the ticket's window
+   finds them when its own line has another id (a merged line's id is sticky per window) */
+function withMembers(a) {
+  if (typeof a.id !== 'string' || !a.id.startsWith('G~') || !a.root) return a;
+  const acct = ticketAccount(), l = acct ? core.chartOrders(acct, a.root).find(x => x.id === a.id) : null;
+  return l && Array.isArray(l.members) ? Object.assign(a, { members: l.members.slice(0, 200) }) : a;
+}
 
 /* ---------------- the one ticket across windows */
 const linkChannel = TL.browserChannel(TL.CHANNEL);
@@ -2652,7 +2660,7 @@ function mountAccount(v) {
     if (b.dataset.close) core.flattenHere(b.dataset.close);                          // the ticket's "Also open" Close
     /* Anthony (1.15.0): the x cancels an order of ANY instrument: TradeCore's own cancel (needs Armed, the order on the
        ticket's account and still working), in the ticket's window or forwarded to it as the chart's x is */
-    else chartAction({ kind: 'cancelAny', id: b.dataset.cancel, root: b.dataset.root });
+    else chartAction(withMembers({ kind: 'cancelAny', id: b.dataset.cancel, root: b.dataset.root }));
   });
   const put = (k, el, text, cls) => { const key = text + '|' + cls; if (A.keys[k] === key) return; A.keys[k] = key; el.textContent = text; el.className = cls || ''; };
   A.render = () => {

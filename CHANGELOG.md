@@ -39,15 +39,29 @@ of each other, and one entry line's planned stops (or planned targets). Entries 
   at, with each member's result on the ticket ("Group stops to 25,413.50: SIM-A, SIM-B, SIM-C moved."); the x cancels each
   member's order; a planned line's drag and x send `plan` to each member's entry. A line's id keeps its form
   ("G~stop~sell~stop~<ticks>"), its price the line's.
+- **Sticky line ids** (the review of 69eebe1, B1; `live/trade.js` `groupBuckets`): a merged line's id was its lead's price, so it
+  changed when the lead's stop filled (it is nearest the entry, so it goes first), when a late bracket arrived nearer the entry,
+  or in a cascade (sell stops at 4, 3, 2, 1 and 0 ticks give [4,3,2] and [1,0]; when 4 goes the walk gives [3,2,1] and [0]), and
+  the engine dropped a drag in progress ("that group line is no longer there"). Now each member order remembers its last line's
+  id; each new cluster takes its lead's last id when free, else the id most of its members had, else a new one (the price in
+  ticks, with ".<n>" when that id was given out before on this account and instrument). Deterministic, no two lines share an id,
+  and a line whose own members did not change keeps its id. A group move under way keeps the members still waiting in its line at
+  the price asked for (no brief second line) until each is moved, refused or gone, or MOVE_WAIT (5 s) has passed. The ids are
+  per window, so a drag, x or +SL / +TP forwarded from another window carries the members it drew (`live/workspace.js`
+  `withMembers`), and the ticket's window acts on them when its own line has another id.
 - **Tests:** `test/group-merge.test.js` (the constant; 1 tick and 2 ticks apart one line, 3 ticks two; a chain of 1 tick gaps over
   4 ticks at least two lines, none over 2 ticks; the walk from the end nearest the entry; mixed sides, roles and kinds never merge;
   entries still at one price; the quantity sum, the label's group and the tooltip with the range and each account's own price; a
   drag of a merged line sends one change per member to the dropped price and says each result, the x cancels each; merged planned
   lines and their drag and x; a single account unchanged; `partsRisk`; the merged line's risk label at rest and live while
-  dragged, a planned line's, and a single account's as before). `npm run smoke:group-merge` (`test/group-merge-smoke.mjs`, new):
+  dragged, a planned line's, and a single account's as before; B1, the chart wired to the ticket: a drag survives the lead's
+  order going, a cascade from a neighbouring cluster and a late member nearer the entry, the ids stable across refreshes, no id
+  shared or handed on, a group move's waiting members one line at the price asked for, and a forwarded action found by its
+  members). `npm run smoke:group-merge` (`test/group-merge-smoke.mjs`, new):
   a group MARKET entry against the fake bridge with a made-up slippage per account (its new `--market-slip`, test only) fills
   SIM-A, SIM-B, SIM-C and SIM-D 0, 1, 2 and 5 ticks apart; SIM-A to SIM-C's stops are one line at SIM-C's ("STP 27 -20t -$270"),
-  SIM-D's its own, the targets the same; the tooltip; a drag moves SIM-A to SIM-C to one price and leaves SIM-D's; screenshots
+  SIM-D's its own, the targets the same; the drawn labels checked ("STP 27 -20t -$270", "TGT 27 +40t +$540", and after the drop
+  the one line's own sum); the tooltip; a drag moves SIM-A to SIM-C to one price and leaves SIM-D's; screenshots
   `group-merge-lines-1366.png`, `group-merge-hover-1366.png`, `group-merge-moved-1366.png`.
 
 **2. The release:** `package.json`, the engine's header and `VERSION` 1.43.0; `live/COMPAT.json` page 1.43.0 and its history row

@@ -511,6 +511,14 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   - **Its tooltip:** when the members' prices differ it starts with the range and where the line sits ("Group Lucid: SELL STP
     25,406.50 to 25,406.75, the line at 25,406.75 (the nearest the entry)"), then each account's order with its own price, as
     before. One price: the tooltip as before.
+  - **Its id is sticky** (the review of 69eebe1): each member order remembers the line it was last drawn in. After the walk, each
+    cluster takes the id its lead (the member nearest the entry) had, if no cluster before it took it; else the id most of its
+    members had, if free; else a new one ("G~stop~sell~stop~<ticks>", with ".<n>" after it when that id was given out before),
+    so no two lines share an id, a line that went never hands its id on, and a line whose members did not change keeps its id. So
+    a drag in progress survives the lead's stop filling, a neighbouring cluster's change and a late bracket arriving nearer the
+    entry. While a group move waits for its answers, every member it covers stays in that line at the price asked for, until each
+    is moved, refused (it is then drawn where it is) or gone, or 5 s have passed: no second line meanwhile. A drag or x from a
+    window other than the ticket's names the members it drew, so the ticket's window finds them whatever its own line's id.
   - **Its actions:** dragging it moves EVERY member's order to the single price it is dropped at (one `change` per member, the
     ticket saying each member's result); its x cancels each member's order; a planned line's drag, x, +SL and +TP go to each
     member's entry. Order placement and ChartBridge are unchanged.

@@ -202,7 +202,7 @@ test('1.43.0: partsRisk: the sum of each member\'s own risk, its ticks that sum 
   assert.equal(U.partsRisk([{ price: 1, qty: 1 }], null, () => undefined, 1, 0.25), null, 'nothing to measure from: not known');
 });
 
-function stub() {
+function stub(base, amp) {
   const ops = [];
   const ctx = new Proxy({}, {
     get(t, k) {
@@ -231,7 +231,7 @@ function stub() {
   delete require.cache[require.resolve('../src/chart-engine.js')];
   const E = require('../src/chart-engine.js');
   const bars = [], T0 = Date.UTC(2026, 10, 3, 15, 0) / 1000;
-  for (let i = 0; i < 200; i++) { const c = 100 + Math.sin(i / 9) * 2; bars.push({ t: T0 + i * 60, o: c - 0.5, h: c + 1, l: c - 1, c, v: 100, vw: c }); }
+  for (let i = 0; i < 200; i++) { const c = (base || 100) + Math.sin(i / 9) * (amp || 2); bars.push({ t: T0 + i * 60, o: c - 0.5, h: c + 1, l: c - 1, c, v: 100, vw: c }); }
   const host = element();
   const chart = E.create(host, { clock: () => bars[bars.length - 1].t + 30, compactLabels: true, motion: { zoom: 0, fit: 0, candle: 0, follow: 0 } });
   chart.setBars(bars);
@@ -279,4 +279,135 @@ test('1.43.0: a merged planned line\'s label: each member\'s own distance and co
   S.chart.setOrderEditing(true);
   S.frame(3);
   assert.ok(S.texts().includes('SL -9t -$85'), 'NQ, 8 and 9 ticks, one contract each: 17 ticks, $85; 8.5 ticks a contract shown as 9 (never smaller): ' + S.texts().filter(t => /SL/.test(t)).join('|'));
+});
+
+/* ---------------- the review of 69eebe1 (B1): a merged line's id is sticky, so a drag in progress survives its members changing */
+/* the chart wired to the ticket as the page wires it: the group's lines and position set on the engine, a drop sent to TradeCore */
+function wired(R) {
+  const S = stub(24981, 4), drops = [];
+  S.chart.on('orderMove', e => { drops.push(e); R.core.moveOrder(e.id, e.price); });
+  S.chart.setOrderEditing(true);
+  const sync = () => { S.chart.setPosition(R.core.groupPosition('group:g1', 'NQ'), { pointValue: 20 }); S.chart.setOrders(R.core.chartOrders('group:g1', 'NQ')); S.frame(2); };
+  const stopLines = () => R.core.chartOrders('group:g1', 'NQ').filter(l => l.role === 'stop');
+  /* press the label of line `id`, move 20 px down; returns the drop (release 40 px down from the press) */
+  const press = id => {
+    const h = S.chart.orderHandles().find(x => x.id === id);
+    assert.ok(h, 'line ' + id + ' drawn');
+    const x = h.box.x + 8, y = h.box.y + h.box.h / 2;
+    S.down(x, y); S.move(x, y + 10); S.move(x, y + 20); S.frame();
+    return () => { S.move(x, y + 40); S.frame(); S.up(x, y + 40); S.frame(); };
+  };
+  return { S, drops, sync, stopLines, press };
+}
+const stopOf = (id, a, price, extra) => order(id, a, 'stop', 'sell', 'stop', price, 1, extra);
+
+test('B1: the ids are stable across refreshes with no change, and when an unrelated order changes', () => {
+  const R = rig();
+  R.core.message({ type: 'position', account: 'SIM-A', root: 'NQ', qty: 2, avgPrice: 25000 });
+  R.core.message({ type: 'orders', list: [stopOf('a', 'SIM-A', 24980), stopOf('b', 'SIM-B', 24980.25), stopOf('c', 'SIM-C', 24980.5), order('t', 'SIM-A', 'target', 'sell', 'limit', 25040, 1)] });
+  const ids = () => R.core.chartOrders('group:g1', 'NQ').map(l => l.id).join(' ');
+  const first = ids();
+  assert.equal(first, 'G~stop~sell~stop~99922 G~target~sell~limit~100160', 'the first ids as before: the line price in ticks');
+  for (let k = 0; k < 5; k++) assert.equal(ids(), first, 'refresh ' + k);
+  R.core.message(order('t', 'SIM-A', 'target', 'sell', 'limit', 25050, 1));
+  assert.equal(ids().split(' ')[0], 'G~stop~sell~stop~99922', 'the stop line keeps its id when the target moves');
+});
+
+test('B1: a drag survives the lead member\'s order going (its stop, nearest the entry, filled)', () => {
+  const R = rig(); R.core.setArmed(true);
+  R.core.message({ type: 'orders', list: [stopOf('a', 'SIM-A', 24980), stopOf('b', 'SIM-B', 24980.25), stopOf('c', 'SIM-C', 24980.5)] });
+  const W = wired(R); W.sync();
+  const id = W.stopLines()[0].id;
+  const drop = W.press(id);
+  R.core.message(order('c', 'SIM-C', 'stop', 'sell', 'stop', 24980.5, 1, { state: 'filled', filled: 1, avgFill: 24980 }));   // the lead goes mid drag
+  W.sync();
+  assert.deepEqual(W.stopLines().map(l => [l.id, l.members.join('+'), l.price]), [[id, 'a+b', 24980.25]], 'the line keeps its id, now at the next stop nearest the entry');
+  R.sent.length = 0;
+  drop();
+  assert.equal(W.drops.length, 1, 'the drag was not dropped: the release sent the move');
+  assert.equal(W.drops[0].id, id);
+  assert.deepEqual(R.sent.map(m => [m.type, m.id]), [['change', 'a'], ['change', 'b']], 'one change per member still there');
+  assert.equal(new Set(R.sent.map(m => m.price)).size, 1, 'every one to the price dropped at');
+});
+
+test('B1: a drag survives a cascade from a neighbouring cluster', () => {
+  const R = rig(); R.core.setArmed(true);
+  /* sell stops at 4, 3, 2, 1 and 0 ticks over 24980: lines [4,3,2] and [1,0]; when 4 goes the walk gives [3,2,1] and [0] */
+  const px = k => 24980 + k * 0.25;
+  R.core.message({ type: 'orders', list: [stopOf('k4', 'SIM-A', px(4)), stopOf('k3', 'SIM-B', px(3)), stopOf('k2', 'SIM-C', px(2)), stopOf('k1', 'SIM-A', px(1)), stopOf('k0', 'SIM-B', px(0))] });
+  const W = wired(R); W.sync();
+  const before = W.stopLines().map(l => [l.id, l.members.join('+')]);
+  assert.deepEqual(before.map(x => x[1]), ['k4+k3+k2', 'k1+k0']);
+  const [idHi, idLo] = before.map(x => x[0]);
+  const drop = W.press(idLo);
+  R.core.message(order('k4', 'SIM-A', 'stop', 'sell', 'stop', px(4), 1, { state: 'filled', filled: 1, avgFill: 24980 }));
+  W.sync();
+  assert.deepEqual(W.stopLines().map(l => [l.id, l.members.join('+')]), [[idHi, 'k1+k3+k2'], [idLo, 'k0']], 'each new cluster keeps the id its lead had: no line takes another\'s');
+  R.sent.length = 0;
+  drop();
+  assert.equal(W.drops.length, 1, 'the drag was not dropped');
+  assert.equal(W.drops[0].id, idLo);
+  assert.deepEqual(R.sent.map(m => [m.type, m.id]), [['change', 'k0']], 'the line\'s member moved, to the price dropped at');
+});
+
+test('B1: a drag survives a late member arriving nearer the entry (a bracket placed just after the market entry)', () => {
+  const R = rig(); R.core.setArmed(true);
+  R.core.message({ type: 'orders', list: [stopOf('a', 'SIM-A', 24980), stopOf('b', 'SIM-B', 24980.25)] });
+  const W = wired(R); W.sync();
+  const id = W.stopLines()[0].id;
+  const drop = W.press(id);
+  R.core.message(stopOf('c', 'SIM-C', 24980.5));                // the late one, the new nearest the entry
+  W.sync();
+  assert.deepEqual(W.stopLines().map(l => [l.id, l.members.join('+'), l.price]), [[id, 'a+b+c', 24980.5]], 'most of its members had this id: kept');
+  R.sent.length = 0;
+  drop();
+  assert.equal(W.drops.length, 1, 'the drag was not dropped');
+  assert.deepEqual(R.sent.map(m => [m.type, m.id]), [['change', 'a'], ['change', 'b'], ['change', 'c']]);
+});
+
+test('B1: no two lines share an id, and a line that went never hands its id to a new one', () => {
+  const R = rig();
+  R.core.message({ type: 'orders', list: [stopOf('a', 'SIM-A', 24980), stopOf('b', 'SIM-B', 24981)] });
+  const [la, lb] = R.core.chartOrders('group:g1', 'NQ');
+  R.core.message(order('a', 'SIM-A', 'stop', 'sell', 'stop', 24980, 1, { state: 'filled', filled: 1, avgFill: 24980 }));
+  R.core.chartOrders('group:g1', 'NQ');
+  R.core.message(stopOf('d', 'SIM-C', 24980));                   // a new stop where the gone line was
+  const now2 = R.core.chartOrders('group:g1', 'NQ');
+  assert.equal(new Set(now2.map(l => l.id)).size, now2.length);
+  assert.ok(now2.some(l => l.id === lb.id), 'b\'s line keeps its id');
+  const nd = now2.find(l => l.members.includes('d'));
+  assert.notEqual(nd.id, la.id, 'the new line has a new id, not the gone line\'s: ' + nd.id);
+  assert.match(nd.id, /^G~stop~sell~stop~99920\.\d+$/);
+});
+
+test('B1 (low): while a group move waits, its members stay one line at the price asked for; a refused one leaves it', () => {
+  const R = rig(); R.core.setArmed(true);
+  R.core.message({ type: 'orders', list: [stopOf('a', 'SIM-A', 24980), stopOf('b', 'SIM-B', 24980.25), stopOf('c', 'SIM-C', 24980.5)] });
+  const id = R.core.chartOrders('group:g1', 'NQ')[0].id;
+  R.sent.length = 0;
+  R.core.moveOrder(id, 24990);
+  const cids = Object.fromEntries(R.sent.map(m => [m.id, m.cid]));
+  R.core.message(order('a', 'SIM-A', 'stop', 'sell', 'stop', 24990, 1));   // a's answer first, b and c still waiting
+  let ls = R.core.chartOrders('group:g1', 'NQ');
+  assert.deepEqual(ls.map(l => [l.id, l.members.join('+'), l.price, l.movePending]), [[id, 'a+b+c', 24990, 24990]], 'one line, its id, at the price asked for: no second line');
+  assert.ok(ls[0].parts.every(p => p.price === 24990));
+  R.core.message({ type: 'reject', cid: cids.c, id: 'c', reason: 'sample: refused' });
+  ls = R.core.chartOrders('group:g1', 'NQ');
+  assert.deepEqual(ls.map(l => [l.id, l.members.join('+')]), [[id, 'a+b'], ['G~stop~sell~stop~99922.2', 'c']], 'the refused one is drawn where it is, its own line (a new id)');
+  R.core.message(order('b', 'SIM-B', 'stop', 'sell', 'stop', 24990, 1));
+  ls = R.core.chartOrders('group:g1', 'NQ');
+  assert.deepEqual(ls.map(l => [l.id, l.members.join('+'), l.price, l.movePending]), [[id, 'a+b', 24990, undefined], ['G~stop~sell~stop~99922.2', 'c', 24980.5, undefined]], 'all answered: as drawn, the line keeps its id');
+});
+
+test('B1: an action forwarded from another window finds the line by the members it drew there', () => {
+  const R = rig(); R.core.setArmed(true);
+  R.core.message({ type: 'orders', list: [stopOf('a', 'SIM-A', 24980), stopOf('b', 'SIM-B', 24980.25)] });
+  R.core.chartOrders('group:g1', 'NQ');
+  R.sent.length = 0;
+  R.core.moveOrder('G~stop~sell~stop~99999', 24985, ['a', 'b']);   // the other window's id for the line
+  assert.deepEqual(R.sent.map(m => [m.type, m.id, m.price]), [['change', 'a', 24985], ['change', 'b', 24985]]);
+  R.advance(3000); R.sent.length = 0;
+  R.core.moveOrder('G~stop~sell~stop~99999', 24985);
+  assert.deepEqual(R.sent, [], 'no members named: not found, as before');
+  assert.match(R.notes.pop(), /that group line is no longer there/);
 });
