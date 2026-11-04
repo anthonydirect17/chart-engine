@@ -43,9 +43,11 @@
 
   Going private (Anthony 2026-11-04), step A: CI is green with either today's pair (unit (ubuntu-latest) and
   unit (windows-latest)) or HOMESERVER's job unit-windows (step B moves the Windows job there, SERVER_RULES.md rule
-  6.1, and runs Linux on pull requests only). GitHub's API is asked with this PC's GitHub login when git has one for
-  the repo (git credential fill, never interactive, never logged or saved; Get-GitHubToken), else without a token as
-  before. A private repo with no login reads as unknown ("this PC has no GitHub login for it"), never as a failure.
+  6.1, and runs Linux on pull requests only). GitHub's API is asked without a token first, as before; only when it
+  answers 404 (a private repo) is this PC's fine-grained, read-only chart-engine token read (SERVER_RULES.md rule
+  8.5: never the whole-account login; git credential fill for the repo's path, only with credential.useHttpPath set
+  for it, never interactive, never logged or saved; Get-GitHubToken) and sent. A private repo without that token
+  reads as unknown ("this PC has no GitHub token for it"), never as a failure.
 
   State and logs: Documents\NinjaTrader 8\ChartBridge\updater\ (state.json, status.json, update.log, swap.json while a
   page install runs, staged\, previous\, previous-addons\, bin\, paused). Only update.json (versions, no secrets) is written into the served www folder.
@@ -409,13 +411,14 @@ function Get-GitExe {
 
 # Every git call of this tool goes through here. Only subcommands that read, or fetch origin into
 # refs/remotes, are allowed: nothing here can move Anthony's clone (no checkout, merge, pull, reset ...).
-# credential runs only as `credential fill` (Get-GitHubToken: it reads this PC's stored GitHub login); approve and
+# credential runs only as `credential fill` (Get-GitHubToken: it reads this PC's chart-engine token); approve and
 # reject, which change the PC's stored logins, never run.
-$script:GitAllowed = @('fetch', 'rev-parse', 'show', 'cat-file', 'archive', 'remote', 'symbolic-ref', 'rev-list', 'merge-base', 'hash-object', 'ls-tree', 'credential')
+# config runs only as the one read of credential.useHttpPath for the repo's URL (Get-GitHubToken).
+$script:GitAllowed = @('fetch', 'rev-parse', 'show', 'cat-file', 'archive', 'remote', 'symbolic-ref', 'rev-list', 'merge-base', 'hash-object', 'ls-tree', 'credential', 'config')
 
-# Four allowed subcommands also have a writing form, so their whole argument list is checked: symbolic-ref reads
+# Five allowed subcommands also have a writing form, so their whole argument list is checked: symbolic-ref reads
 # one ref (a second name would write it, -d deletes it), remote only runs get-url, hash-object never writes (-w),
-# credential only fills (never approve, reject or store).
+# credential only fills (never approve, reject or store), config only reads credential.useHttpPath for a GitHub URL.
 function Test-GitArgs([string[]]$ArgList) {
   $sub = $ArgList[0]
   if ($script:GitAllowed -notcontains $sub) { return "git $sub is not allowed in update-pc.ps1" }
@@ -432,6 +435,9 @@ function Test-GitArgs([string[]]$ArgList) {
     $dd = [array]::IndexOf([string[]]$rest, '--')
     $opts = @(); if ($dd -ge 0) { $opts = @($rest | Select-Object -First $dd) }
     if ($dd -lt 0 -or $rest.Count -le $dd + 1 -or @($opts | Where-Object { $_ -notmatch '^--path=' -and $_ -ne '--no-filters' }).Count) { return "git hash-object is allowed only as 'hash-object [--path=<p>] -- <file>' (never -w), not '$($rest -join ' ')'" }
+  }
+  if ($sub -eq 'config') {
+    if ($rest.Count -ne 4 -or $rest[0] -ne '--bool' -or $rest[1] -ne '--get-urlmatch' -or $rest[2] -ne 'credential.useHttpPath' -or $rest[3] -notmatch '^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\.git$') { return "git config is not allowed in update-pc.ps1 except as one read, 'config --bool --get-urlmatch credential.useHttpPath https://github.com/<owner>/<repo>.git', not '$($rest -join ' ')'" }
   }
   if ($sub -eq 'credential') {
     if ($rest.Count -ne 1 -or $rest[0] -ne 'fill') { return "git credential is allowed only as 'credential fill' (never approve, reject or store), not '$($rest -join ' ')'" }
@@ -506,38 +512,50 @@ function Get-RepoSlug {
   return (ConvertTo-RepoSlug $r.out)
 }
 
-# This PC's stored GitHub login for the repo, or '' when it has none. chart-engine is public today and the API needs no
-# token; once it is private (Anthony 2026-11-04) the API answers 404 without one, so the API call sends the login
-# git already uses for the fetch. `git credential fill` asks this PC's credential helpers (Git Credential Manager) the
-# way git fetch does, and never interactively: Invoke-Native sets GIT_TERMINAL_PROMPT=0 and GCM_INTERACTIVE=never, and
-# Invoke-Git adds credential.interactive=never and an empty askPass, so the hidden task never shows a prompt or a
-# window; 15 seconds at most. The question names the repo's path (owner/repo.git), as fetch's own question does: git
-# itself drops the path before asking a helper unless credential.useHttpPath is set (the default), so the helper sees
-# exactly what it sees for the fetch. Only when that finds nothing is the host alone asked, for a PC with useHttpPath
-# set whose login is stored for github.com as a whole. The password goes back to the caller only: never logged,
-# printed, saved in state.json or status.json, or put in an error text (Hide-Token). Nothing is ever stored or
-# removed: credential approve and reject never run (Test-GitArgs refuses them).
+# This PC's chart-engine token, read only when GitHub's API answered 404 without one (the repo is private). Anthony
+# 2026-11-04 (SERVER_RULES.md rule 8.5): the PC updaters use a fine-grained, read-only token for chart-engine only,
+# never the whole-account GitHub login. So:
+#   - only when credential.useHttpPath is true for https://github.com/<owner>/<repo>.git, read with
+#     `git config --bool --get-urlmatch`, which applies git's own URL matching (the exact
+#     credential.https://github.com/<owner>/<repo>.git.useHttpPath key the README sets, a wider credential.<url> key,
+#     or a plain credential.useHttpPath), so the answer is the one git uses for this URL. Without it git drops the
+#     path and a helper hands over the login stored for github.com as a whole: never asked then;
+#   - `git credential fill` with protocol=https, host=github.com and path=<owner>/<repo>.git, one ask (never the host
+#     alone), never interactive: Invoke-Native sets GIT_TERMINAL_PROMPT=0 and GCM_INTERACTIVE=never, and Invoke-Git
+#     adds credential.interactive=never and an empty askPass, so the hidden task never shows a prompt or a window;
+#     15 seconds at most;
+#   - only a fine-grained token (GitHub's prefix github_pat_) is used; any other stored login is left unused.
+# Returns @{ token; why }: the token, or '' and why there is none (no secret in it). The token goes back to the caller
+# only: never logged, printed, saved in state.json or status.json, or put in an error text (Hide-Token). Nothing is
+# ever stored or removed: credential approve and reject never run (Test-GitArgs refuses them).
 function Get-GitHubToken([string]$Slug) {
-  $asks = @("protocol=https`nhost=github.com`npath=$Slug.git`n`n", "protocol=https`nhost=github.com`n`n")
-  foreach ($ask in $asks) {
-    try { $r = Invoke-Git @('credential', 'fill') 15 $ask } catch { continue }
-    if ($r.code -ne 0) { continue }
-    foreach ($line in ([string]$r.out -split "`r?`n")) {
-      if ($line.StartsWith('password=') -and $line.Length -gt 9) { return $line.Substring(9) }
-    }
+  $url = "https://github.com/$Slug.git"
+  $setup = 'Anthony sets up this PC''s chart-engine token once (README: Keep this PC up to date)'
+  $hp = $null
+  try { $hp = Invoke-Git @('config', '--bool', '--get-urlmatch', 'credential.useHttpPath', $url) 15 } catch { }
+  if (-not $hp -or $hp.code -ne 0 -or ([string]$hp.out).Trim() -ne 'true') {
+    return @{ token = ''; why = "credential.useHttpPath is not set for $url, so this PC has no chart-engine token git can give (its whole-account login is never used, SERVER_RULES.md rule 8.5); $setup" }
   }
-  return ''
+  $r = $null
+  try { $r = Invoke-Git @('credential', 'fill') 15 "protocol=https`nhost=github.com`npath=$Slug.git`n`n" } catch { }
+  $pw = ''
+  if ($r -and $r.code -eq 0) {
+    foreach ($line in ([string]$r.out -split "`r?`n")) { if ($line.StartsWith('password=')) { $pw = $line.Substring(9); break } }
+  }
+  if (-not $pw) { return @{ token = ''; why = "git has no token stored for $url; $setup" } }
+  if (-not $pw.StartsWith('github_pat_')) { return @{ token = ''; why = "the login git has stored for $url is not a fine-grained token (github_pat_...), so it is not used (SERVER_RULES.md rule 8.5); $setup" } }
+  return @{ token = $pw; why = '' }
 }
 
-# A text with the login taken out (and any user:password@ in a URL), before it is logged, saved or shown.
+# A text with the token taken out (and any user:password@ in a URL), before it is logged, saved or shown.
 function Hide-Token([string]$Text, [string]$Token) {
   $t = "$Text"
-  if ($Token) { $t = $t.Replace($Token, '[login]') }
+  if ($Token) { $t = $t.Replace($Token, '[token]') }
   return ($t -replace '(?i)(https?://)[^/@\s]+@', '$1')
 }
 
-# One GET to the GitHub API. Without a token (no login on this PC) the API allows 60 requests an hour per address;
-# with this PC's login, 5000 an hour. A pass makes two (check runs and statuses), and a green commit is remembered in
+# One GET to the GitHub API. Without a token the API allows 60 requests an hour per address; with this PC's
+# chart-engine token, 5000 an hour. A pass makes two (check runs and statuses), and a green commit is remembered in
 # state.json and never asked about again, so a PC uses a few a day.
 function Invoke-GitHubJson([string]$Path, [string]$Token = '') {
   try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
@@ -560,19 +578,34 @@ function Read-CiResults([string]$Slug, [string]$Sha, [string]$Token) {
   return @{ checks = $checks; statuses = @(Get-Field $st 'statuses' @()) }
 }
 
+# The HTTP status of a failed request (Windows PowerShell 5.1's WebException or PowerShell 7's), or $null.
+function Get-WebCode($Err) {
+  try { return [int]$Err.Exception.Response.StatusCode } catch { return $null }
+}
+
+# A 403 or 429 that is GitHub's rate limit (429, or X-RateLimit-Remaining 0), not a refusal.
+function Test-RateLimited($Err, $Code) {
+  if ($Code -eq 429) { return $true }
+  $left = $null
+  try { $left = [string]$Err.Exception.Response.Headers['X-RateLimit-Remaining'] } catch { }
+  if (-not $left) { try { $left = [string](@($Err.Exception.Response.Headers.GetValues('X-RateLimit-Remaining'))[0]) } catch { } }
+  return ($left -eq '0')
+}
+
 # Why GitHub could not be asked, in plain words (state unknown: never failure, never an install).
-function Get-CiProblem($Code, [string]$Message, [bool]$Sent, [bool]$Refused, [string]$Slug) {
-  if (-not $Sent -and ($Code -eq 404 -or $Code -eq 401)) {
-    if ($Refused) { return "GitHub answered $Code`: this PC's GitHub login was refused (401: expired or signed out?) and the repo is private: nothing installed; Anthony signs this PC in to GitHub again" }
-    return "GitHub answered $Code`: the repo is private and this PC has no GitHub login for it: nothing installed; Anthony signs this PC in to GitHub once"
+function Get-CiProblem($Err, [bool]$Sent, [string]$Slug, [string]$Token) {
+  $code = Get-WebCode $Err
+  $limited = ($code -eq 403 -or $code -eq 429) -and (Test-RateLimited $Err $code)
+  if (-not $Sent) {
+    if ($code -eq 403 -or $code -eq 429) { return "GitHub answered $code (rate limited: 60 requests an hour without a token)" }
+  } else {
+    if ($limited) { return "GitHub answered $code (rate limited, with this PC's chart-engine token)" }
+    if ($code -eq 401) { return "GitHub refused this PC's chart-engine token (401: expired or revoked?): nothing installed; Anthony makes a new one (README: Keep this PC up to date)" }
+    if ($code -eq 403) { return "GitHub refused this PC's chart-engine token (403: it lacks a permission the check needs, README: Keep this PC up to date): nothing installed" }
+    if ($code -eq 404) { return "GitHub answered 404 with this PC's chart-engine token: it cannot see $Slug (a token for another repo, or the repo is not at $Slug): nothing installed" }
   }
-  if ($Sent -and $Code -eq 404) { return "GitHub answered 404 with this PC's GitHub login: that login cannot see $Slug; nothing installed; Anthony signs this PC in to GitHub with an account that can read it" }
-  if ($Code -eq 403 -or $Code -eq 429) {
-    if ($Sent) { return "GitHub answered $Code (rate limited, with this PC's GitHub login)" }
-    return "GitHub answered $Code (rate limited: 60 requests an hour without a token)"
-  }
-  if ($Code) { return "GitHub answered $Code" }
-  return "GitHub could not be read ($Message)"
+  if ($code) { return "GitHub answered $code" }
+  return "GitHub could not be read ($(Hide-Token $Err.Exception.Message $Token))"
 }
 
 # Did CI pass for a commit? The same rule as The Desk's updater (ops/updater.py GitHubCI), plus the jobs Anthony
@@ -581,21 +614,23 @@ function Get-CiProblem($Code, [string]$Message, [bool]$Sent, [bool]$Refused, [st
 #   success  a required set green, and every other check and status finished green (a skipped one is fine)
 #   pending  no results yet, or something still running, or no required set complete yet
 #   failure  a check or status failed, or a required set finished with a job not green (and no set is green)
-#   unknown  GitHub could not be asked (offline, rate limited, a private repo without this PC's GitHub login)
+#   unknown  GitHub could not be asked (offline, rate limited, a private repo without this PC's chart-engine token)
+# GitHub is asked without a token first, always: a public repo never sees the token. Only a 404 or 401 (a private
+# repo, or none at that name) reads this PC's chart-engine token and asks again with it. A private repo read without
+# a token is never green: it is unknown, and nothing is installed.
 function Get-CiState([string]$Slug, [string]$Sha) {
   if (-not $Slug) { return @{ state = 'unknown'; detail = 'the GitHub repo is not known from the origin URL' } }
-  $login = ''
-  try { $login = [string](Get-GitHubToken $Slug) } catch { $login = '' }
-  $token = $login; $refused = $false; $res = $null
-  while ($null -eq $res) {
+  $res = $null
+  try { $res = Read-CiResults $Slug $Sha '' }
+  catch {
+    $code = Get-WebCode $_
+    if ($code -ne 404 -and $code -ne 401) { return @{ state = 'unknown'; detail = (Get-CiProblem $_ $false $Slug '') } }
+    $t = @{ token = ''; why = 'this PC''s chart-engine token could not be read' }
+    try { $t = Get-GitHubToken $Slug } catch { }
+    if (-not $t.token) { return @{ state = 'unknown'; detail = "GitHub answered $code`: the repo is private (or not found at $Slug) and this PC has no GitHub token for it: nothing installed; $($t.why)" } }
+    $token = [string]$t.token
     try { $res = Read-CiResults $Slug $Sha $token }
-    catch {
-      $code = $null
-      try { $code = [int]$_.Exception.Response.StatusCode } catch { }
-      # A login GitHub refuses (expired) must not stop a PC that worked without one: asked again without it, once
-      if ($token -and $code -eq 401) { $token = ''; $refused = $true; continue }
-      return @{ state = 'unknown'; detail = (Hide-Token (Get-CiProblem $code (Hide-Token $_.Exception.Message $login) ([bool]$token) $refused $Slug) $login) }
-    }
+    catch { return @{ state = 'unknown'; detail = (Hide-Token (Get-CiProblem $_ $true $Slug $token) $token) } }
   }
   return (Resolve-CiState $res.checks $res.statuses)
 }
@@ -1241,16 +1276,16 @@ function Invoke-Fetch([switch]$Wait, [switch]$DryRun) {
     try { Wait-Ms ($script:FetchRetrySec * 1000) } catch { Clear-NetWait; throw }
   }
 }
-# What a failed fetch says. A private repo with no GitHub login on this PC (git prints "could not read Username for
-# 'https://github.com': terminal prompts disabled", as the hidden task never prompts) or a login GitHub refuses
+# What a failed fetch says. A private repo with no GitHub token on this PC (git prints "could not read Username for
+# 'https://github.com': terminal prompts disabled", as the hidden task never prompts) or a token GitHub refuses
 # ("Authentication failed", "Repository not found") is said plainly; anything else as git said it.
 function Get-FetchProblem([string]$Err) {
   $last = Hide-Token (Get-LastLine $Err) ''
   if ($Err -match '(?i)could not read (username|password)|terminal prompts disabled|cannot prompt because user interactivity has been disabled') {
-    return "git fetch failed: the repo is private and this PC has no GitHub login for it: nothing installed; Anthony signs this PC in to GitHub once (git said: $last)"
+    return "git fetch failed: the repo is private (or not found) and this PC has no GitHub token for it: nothing installed; Anthony sets up this PC's chart-engine token once (README: Keep this PC up to date; git said: $last)"
   }
   if ($Err -match '(?i)authentication failed|invalid username or (password|token)|repository not found|repository ''[^'']*'' not found') {
-    return "git fetch failed: GitHub refused this PC's GitHub login, or the repo is not there for it (a login that expired, an account that cannot read the repo, or a wrong origin URL): nothing installed; Anthony signs this PC in to GitHub again (git said: $last)"
+    return "git fetch failed: GitHub refused this PC's GitHub token, or the repo is not there for it (a token that expired, one for another repo, or a wrong origin URL): nothing installed; Anthony makes a new chart-engine token (README: Keep this PC up to date; git said: $last)"
   }
   return "git fetch failed: $last"
 }

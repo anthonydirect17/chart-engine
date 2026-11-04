@@ -31,9 +31,14 @@ $script:FakeDiag = $null
 $script:Toasts = @()
 $script:RealGitHubJson = ${function:Invoke-GitHubJson}
 $script:RealGitHubToken = ${function:Get-GitHubToken}
-# This PC's GitHub login as git credential fill would give it ('' = none); the real reader is tested with a fake helper
+# This PC's chart-engine token as Get-GitHubToken would give it ('' = none); the real reader is tested with a fake helper
 $script:FakeLogin = ''
-function Get-GitHubToken([string]$Slug) { return $script:FakeLogin }
+$script:TokenAsks = 0
+function Get-GitHubToken([string]$Slug) {
+  $script:TokenAsks++
+  if ($script:FakeLogin) { return @{ token = $script:FakeLogin; why = '' } }
+  return @{ token = ''; why = 'stub: no chart-engine token on this PC' }
+}
 $script:RealMove = ${function:Move-FileAtomic}
 # A power loss (a laptop lid): from the crash point on, nothing more is written anywhere through the updater.
 $script:CrashAt = ''; $script:PowerLost = $false
@@ -259,14 +264,15 @@ Test 'CI failure and unknown: no update (unknown is a STOP)' {
 
 # ---------------------------------------------------------------------------------------------- going private (step A)
 # Anthony 2026-11-04: chart-engine goes private, and its Windows job moves to HOMESERVER's runner (step B). The updater
-# already installed on WORK and HOME must keep working before and after: either required set, and this PC's GitHub login.
+# already installed on WORK and HOME must keep working before and after: either required set, and this PC's chart-engine
+# token (Anthony 2026-11-04, SERVER_RULES.md rule 8.5: fine-grained, read-only, chart-engine only; never the whole login).
 
 function Job([string]$Name, [string]$Conclusion = 'success', [string]$Status = 'completed') {
   if (-not $Conclusion) { $Conclusion = $null }
   return @{ name = $Name; status = $Status; conclusion = $Conclusion; app = @{ slug = 'github-actions' } }
 }
-$script:TestLogin = 'not-a-real-login-7f3a9c'
-function Assert-NoLogin([string]$Where, [string]$Text) { Assert (-not "$Text".Contains($script:TestLogin)) "the login is not in $Where" }
+$script:TestLogin = 'github_pat_not-a-real-token-7f3a9c'      # made up (a real one has no hyphen)
+function Assert-NoLogin([string]$Where, [string]$Text) { Assert (-not "$Text".Contains($script:TestLogin)) "the token is not in $Where" }
 function Assert-LoginNowhere {
   Assert-NoLogin 'update.log' (Get-Text $script:P.Log)
   Assert-NoLogin 'state.json' (Get-Text $script:P.State)
@@ -276,21 +282,22 @@ function Assert-LoginNowhere {
   Assert-NoLogin 'the toasts' ($script:Toasts -join "`n")
 }
 # GitHub's API through the real reader (Invoke-GitHubJson): each request's Authorization header is recorded, and the
-# answer is WebAnswer, or an HTTP error: CodeWith when a login was sent, CodeWithout when none was
+# answer is WebAnswer, or an HTTP error: CodeWith when a token was sent, CodeWithout when none was ('throw-with-login':
+# a request with the token fails with a message that carries it; RateLeft: the X-RateLimit-Remaining header)
 function Use-FakeApi {
   $script:KeepJson = ${function:Invoke-GitHubJson}
   ${function:script:Invoke-GitHubJson} = $script:RealGitHubJson
   $script:SeenAuth = New-Object System.Collections.ArrayList
-  $script:CodeWith = 0; $script:CodeWithout = 0; $script:WebAnswer = '{}'
+  $script:CodeWith = 0; $script:CodeWithout = 0; $script:WebAnswer = '{}'; $script:TokenAsks = 0; $script:RateLeft = ''
   ${function:script:Invoke-WebRequest} = {
     param($Uri, $Headers, [switch]$UseBasicParsing, $TimeoutSec)
     $auth = ''; if ($Headers.ContainsKey('Authorization')) { $auth = [string]$Headers['Authorization'] }
     [void]$script:SeenAuth.Add($auth)
     $c = $script:CodeWithout; if ($auth) { $c = $script:CodeWith }
-    if ($script:WebAnswer -eq 'throw-with-login') { throw (New-Object System.Net.WebException "stub: refused, sent $auth to https://x-access-token:$($script:FakeLogin)@api.github.com") }
+    if ($auth -and $script:WebAnswer -eq 'throw-with-login') { throw (New-Object System.Net.WebException "stub: refused, sent $auth to https://x-access-token:$($script:FakeLogin)@api.github.com") }
     if ($c) {
       $e = New-Object System.Net.WebException "stub: the remote server returned an error: ($c)"
-      $e | Add-Member -NotePropertyName Response -NotePropertyValue @{ StatusCode = $c } -Force
+      $e | Add-Member -NotePropertyName Response -NotePropertyValue @{ StatusCode = $c; Headers = @{ 'X-RateLimit-Remaining' = $script:RateLeft } } -Force
       throw $e
     }
     return @{ Content = $script:WebAnswer }
@@ -344,102 +351,118 @@ Test 'CI: after 24 hours with neither required set, the reason asks whether a jo
     Assert (-not (Test-Path (Get-WwwFile 'live.js'))) 'nothing installed'
   } finally { $script:FakeCi = 'success'; $s = Read-State; if ($s.Contains('ciPending')) { $s.Remove('ciPending') }; Save-State $s }
 }
-Test 'GitHub login: git credential fill reads it through this PC''s helper, never interactively, the repo path first, then the host' {
+Test 'chart-engine token: only with useHttpPath set for the repo URL, one ask with the repo path, never interactively, a fine-grained token only' {
   $rec = Join-Path $tmpRoot 'helper-seen.txt'
   $recSh = $rec.Replace('\', '/')
+  $url = 'https://github.com/owner/chart-engine.git'
+  $keys = @('credential.helper', 'credential.useHttpPath', "credential.$url.useHttpPath", 'credential.https://github.com.useHttpPath', 'credential.https://github.com/owner/other.git.useHttpPath')
   $keepEnv = @{ p = $env:GIT_TERMINAL_PROMPT; g = $env:GCM_INTERACTIVE }
   # the window this runs in would allow prompts: the hidden run must not
   $env:GIT_TERMINAL_PROMPT = '1'; $env:GCM_INTERACTIVE = 'always'
-  # a stand-in credential helper (only `get`): it records what it was asked and the two variables, never the login
-  function Set-Helper([string]$Gate, [switch]$HttpPath) {
-    foreach ($k in @('credential.helper', 'credential.useHttpPath')) { [void](Invoke-Native (Get-GitExe) @('-C', $clone, 'config', '--local', '--unset-all', $k) 30) }
+  # a stand-in credential helper (only `get`): it records what it was asked and the two variables, never the token
+  function Set-Helper([string]$Answer, [string]$HttpPathKey = '') {
+    foreach ($k in $keys) { [void](Invoke-Native (Get-GitExe) @('-C', $clone, 'config', '--local', '--unset-all', $k) 30) }
     [void](G $clone @('config', '--local', '--add', 'credential.helper', ''))   # this PC's own helpers (GCM) left out
-    if ($HttpPath) { [void](G $clone @('config', '--local', 'credential.useHttpPath', 'true')) }
-    if ($Gate -eq 'none') { return }
+    if ($HttpPathKey) { [void](G $clone @('config', '--local', $HttpPathKey, 'true')) }
+    if ($Answer -eq 'none') { return }
     $sh = '!f() { test "$1" = get || exit 0; p=nopath; while IFS= read -r l; do [ -z "$l" ] && break; case "$l" in path=*) p="$l";; esac; done; ' +
-      'echo "prompt=$GIT_TERMINAL_PROMPT gcm=$GCM_INTERACTIVE $p" >> ''' + $recSh + '''; ' + $Gate + ' echo username=x-access-token; echo password=' + $script:TestLogin + '; }; f'
+      'echo "prompt=$GIT_TERMINAL_PROMPT gcm=$GCM_INTERACTIVE $p" >> ''' + $recSh + '''; echo username=x-access-token; echo password=' + $Answer + '; }; f'
     [void](G $clone @('config', '--local', '--add', 'credential.helper', $sh))
   }
   function Get-Seen { if (-not (Test-Path -LiteralPath $rec)) { return @() }; $t = @((Get-Text $rec) -split "`r?`n" | Where-Object { $_ }); Remove-Item -LiteralPath $rec -Force; return $t }
   try {
-    Set-Helper ''
-    Assert ((& $script:RealGitHubToken 'owner/chart-engine') -eq $script:TestLogin) 'the login, from the helper'
-    $seen = @(Get-Seen)
-    Assert ($seen.Count -eq 1 -and $seen[0] -eq 'prompt=0 gcm=never nopath') "asked once, never interactively (git drops the path without useHttpPath): $($seen -join ' | ')"
-    Set-Helper '[ "$p" != nopath ] || exit 0;' -HttpPath
-    Assert ((& $script:RealGitHubToken 'owner/chart-engine') -eq $script:TestLogin) 'useHttpPath: the login stored for the repo path'
-    $seen = @(Get-Seen)
-    Assert ($seen.Count -eq 1 -and $seen[0] -eq 'prompt=0 gcm=never path=owner/chart-engine.git') "the repo path first: $($seen -join ' | ')"
-    Set-Helper '[ "$p" = nopath ] || exit 0;' -HttpPath
-    Assert ((& $script:RealGitHubToken 'owner/chart-engine') -eq $script:TestLogin) 'useHttpPath: a login stored for github.com as a whole'
-    $seen = @(Get-Seen)
-    Assert ($seen.Count -eq 2 -and $seen[0] -match 'path=owner/chart-engine\.git$' -and $seen[1] -eq 'prompt=0 gcm=never nopath') "then the host alone: $($seen -join ' | ')"
-    Set-Helper 'none'
-    Assert ((& $script:RealGitHubToken 'owner/chart-engine') -eq '') 'no login on this PC: none, and no prompt (it would hang the test)'
-    foreach ($bad in @(@('credential', 'approve'), @('credential', 'reject'), @('credential', 'store'), @('credential', 'fill', 'x'), @('credential'))) {
+    # useHttpPath not set: git would drop the path and hand over the login stored for github.com: never asked
+    Set-Helper $script:TestLogin
+    $t = & $script:RealGitHubToken 'owner/chart-engine'
+    Assert ($t.token -eq '' -and $t.why -match (Rx "credential.useHttpPath is not set for $url") -and $t.why -match 'rule 8\.5' -and $t.why -match 'chart-engine token') "no useHttpPath: $($t.why)"
+    Assert (@(Get-Seen).Count -eq 0) 'the helper was never asked'
+    # set for the exact URL (as the README sets it), for github.com, or plainly: git's own URL matching decides
+    foreach ($key in @("credential.$url.useHttpPath", 'credential.https://github.com.useHttpPath', 'credential.useHttpPath')) {
+      Set-Helper $script:TestLogin $key
+      $t = & $script:RealGitHubToken 'owner/chart-engine'
+      Assert ($t.token -eq $script:TestLogin -and $t.why -eq '') "$key`: the token"
+      $seen = @(Get-Seen)
+      Assert ($seen.Count -eq 1 -and $seen[0] -eq 'prompt=0 gcm=never path=owner/chart-engine.git') "$key`: one ask, with the repo path, never interactively: $($seen -join ' | ')"
+    }
+    # useHttpPath set for another repo only: not this one
+    Set-Helper $script:TestLogin 'credential.https://github.com/owner/other.git.useHttpPath'
+    Assert ((& $script:RealGitHubToken 'owner/chart-engine').token -eq '') 'another repo''s setting does not count'
+    Assert (@(Get-Seen).Count -eq 0) 'and the helper was never asked'
+    # a stored login that is not a fine-grained token (a whole-account OAuth login) is never used
+    Set-Helper 'gho_not-a-real-oauth-login' "credential.$url.useHttpPath"
+    $t = & $script:RealGitHubToken 'owner/chart-engine'
+    Assert ($t.token -eq '' -and $t.why -match 'not a fine-grained token' -and $t.why -notmatch 'gho_not') "an OAuth login: $($t.why)"
+    [void](Get-Seen)
+    Set-Helper 'none' "credential.$url.useHttpPath"
+    $t = & $script:RealGitHubToken 'owner/chart-engine'
+    Assert ($t.token -eq '' -and $t.why -match (Rx "git has no token stored for $url")) "none stored, and no prompt (it would hang the test): $($t.why)"
+    foreach ($bad in @(@('credential', 'approve'), @('credential', 'reject'), @('credential', 'store'), @('credential', 'fill', 'x'), @('credential'),
+        @('config', '--bool', '--get-urlmatch', 'credential.helper', $url), @('config', 'credential.useHttpPath', 'true'), @('config', '--bool', '--get-urlmatch', 'credential.useHttpPath', 'https://example.invalid/x.git'))) {
       $threw = $false
-      try { [void](Invoke-Git $bad 15 "protocol=https`nhost=github.com`n`n") } catch { $threw = $_.Exception.Message -match 'allowed only' }
-      Assert $threw "refused: git $($bad -join ' ') (the PC's stored logins are never changed)"
+      try { [void](Invoke-Git $bad 15 "protocol=https`nhost=github.com`n`n") } catch { $threw = $_.Exception.Message -match 'allowed only|not allowed' }
+      Assert $threw "refused: git $($bad -join ' ') (the PC's stored logins and git config are never changed)"
     }
     Assert-NoLogin 'the printed output' ($script:Said -join "`n")
     Assert-NoLogin 'update.log' (Get-Text $script:P.Log)
   } finally {
-    foreach ($k in @('credential.helper', 'credential.useHttpPath')) { [void](Invoke-Native (Get-GitExe) @('-C', $clone, 'config', '--local', '--unset-all', $k) 30) }
+    foreach ($k in $keys) { [void](Invoke-Native (Get-GitExe) @('-C', $clone, 'config', '--local', '--unset-all', $k) 30) }
     $env:GIT_TERMINAL_PROMPT = $keepEnv.p; $env:GCM_INTERACTIVE = $keepEnv.g
   }
 }
-Test 'GitHub login: sent as Authorization Bearer, and never in update.log, state.json, status.json, update.json, output or an error text' {
+Test 'chart-engine token: a public repo never sees it; sent as Bearer only after a 404 without; never in update.log, state.json, status.json, update.json, output or an error text' {
   Use-FakeApi
   try {
     $script:FakeLogin = $script:TestLogin
     $script:WebAnswer = $script:BoxGreen
     $r = Get-CiState 'owner/chart-engine' 'abc'
-    Assert ($r.state -eq 'success') "$($r.state) $($r.detail)"
-    Assert ($script:SeenAuth.Count -eq 2 -and @($script:SeenAuth | Where-Object { $_ -ne "Bearer $($script:TestLogin)" }).Count -eq 0) "both requests carry the login: $($script:SeenAuth.Count)"
-    $script:FakeLogin = ''; $script:SeenAuth.Clear()
-    [void](Get-CiState 'owner/chart-engine' 'abc')
-    Assert (@($script:SeenAuth | Where-Object { $_ }).Count -eq 0) 'no login on this PC: no Authorization header (as today)'
-    # whole runs: one that waits, and one whose error text carries the login (it is taken out)
-    $script:FakeLogin = $script:TestLogin
+    Assert ($r.state -eq 'success' -and $script:SeenAuth.Count -eq 2 -and @($script:SeenAuth | Where-Object { $_ }).Count -eq 0 -and $script:TokenAsks -eq 0) "public: no token read or sent ($($script:SeenAuth.Count) requests, $($script:TokenAsks) reads)"
+    # private: 404 without a token, then the token
+    $script:CodeWithout = 404; $script:SeenAuth.Clear()
+    $r = Get-CiState 'owner/chart-engine' 'abc'
+    Assert ($r.state -eq 'success' -and $script:TokenAsks -eq 1) "private with the token: $($r.state) $($r.detail)"
+    Assert ($script:SeenAuth.Count -eq 3 -and $script:SeenAuth[0] -eq '' -and $script:SeenAuth[1] -eq "Bearer $($script:TestLogin)" -and $script:SeenAuth[2] -eq "Bearer $($script:TestLogin)") "first without, then both calls with it: $($script:SeenAuth.Count)"
+    # whole runs: one that waits, and one whose error text carries the token (it is taken out)
     $script:WebAnswer = '{"check_runs":[]}'
     $r = Run-Update
     Assert ($r.outcome -eq 'ci_pending') $r.outcome
     $script:WebAnswer = 'throw-with-login'
     $r = Run-Update
-    Assert ($r.outcome -eq 'ci_unknown' -and $r.reason -match '\[login\]' -and $r.reason -notmatch 'x-access-token:') $r.reason
+    Assert ($r.outcome -eq 'ci_unknown' -and $r.reason -match '\[token\]' -and $r.reason -notmatch 'x-access-token:') $r.reason
     Assert-LoginNowhere
     Assert (-not (Test-Path (Get-WwwFile 'live.js'))) 'nothing installed'
   } finally { Reset-FakeApi; $s = Read-State; if ($s.Contains('ciPending')) { $s.Remove('ciPending') }; Save-State $s }
 }
-Test 'GitHub login: a 404 or 401 without one says the repo is private and this PC has no login (unknown, never failure); a refused login is tried once without' {
-  $private = 'the repo is private and this PC has no GitHub login for it: nothing installed; Anthony signs this PC in to GitHub once'
+Test 'chart-engine token: a 404 or 401 without one says the repo is private (or not found) and this PC has no token (unknown, never failure); a refused token says why' {
   Use-FakeApi
   try {
     foreach ($c in @(404, 401)) {
       $script:FakeLogin = ''; $script:CodeWithout = $c
       $r = Get-CiState 'owner/chart-engine' 'abc'
-      Assert ($r.state -eq 'unknown' -and $r.detail -eq "GitHub answered $c`: $private") "$c without a login: $($r.state) $($r.detail)"
+      Assert ($r.state -eq 'unknown' -and $r.detail -eq "GitHub answered $c`: the repo is private (or not found at owner/chart-engine) and this PC has no GitHub token for it: nothing installed; stub: no chart-engine token on this PC") "$c without a token: $($r.state) $($r.detail)"
     }
     $script:CodeWithout = 404
     $r = Run-Update
-    Assert ($r.outcome -eq 'ci_unknown' -and $r.reason -match (Rx $private) -and $script:StopOutcomes -contains $r.outcome) $r.reason
+    Assert ($r.outcome -eq 'ci_unknown' -and $r.reason -match (Rx 'the repo is private (or not found at owner/chart-engine) and this PC has no GitHub token for it') -and $script:StopOutcomes -contains $r.outcome) $r.reason
     Assert (-not (Test-Path (Get-WwwFile 'live.js'))) 'nothing installed'
-    # a login GitHub refuses (expired): asked again without it, so a public repo keeps working as today
-    $script:FakeLogin = $script:TestLogin; $script:CodeWith = 401; $script:CodeWithout = 0; $script:WebAnswer = $script:BoxGreen; $script:SeenAuth.Clear()
+    # the token refused: never green (a private repo without it is unknown), and the reason is said
+    $script:FakeLogin = $script:TestLogin; $script:WebAnswer = $script:BoxGreen
+    $script:CodeWith = 401
     $r = Get-CiState 'owner/chart-engine' 'abc'
-    Assert ($r.state -eq 'success' -and $script:SeenAuth.Count -eq 3 -and $script:SeenAuth[0] -and -not $script:SeenAuth[1] -and -not $script:SeenAuth[2]) "refused, then without: $($r.state) $($script:SeenAuth.Count)"
-    $script:CodeWithout = 404
+    Assert ($r.state -eq 'unknown' -and $r.detail -match "refused this PC's chart-engine token \(401") $r.detail
+    $script:CodeWith = 403
     $r = Get-CiState 'owner/chart-engine' 'abc'
-    Assert ($r.state -eq 'unknown' -and $r.detail -match "this PC's GitHub login was refused" -and $r.detail -match 'signs this PC in to GitHub again') $r.detail
+    Assert ($r.state -eq 'unknown' -and $r.detail -match "refused this PC's chart-engine token \(403: it lacks a permission") "403, not the rate limit: $($r.detail)"
+    $script:RateLeft = '0'
+    Assert ((Get-CiState 'owner/chart-engine' 'abc').detail -eq "GitHub answered 403 (rate limited, with this PC's chart-engine token)") 'rate limited with the token'
+    $script:RateLeft = ''; $script:CodeWith = 429
+    Assert ((Get-CiState 'owner/chart-engine' 'abc').detail -eq "GitHub answered 429 (rate limited, with this PC's chart-engine token)") '429 with the token'
     $script:CodeWith = 404
     $r = Get-CiState 'owner/chart-engine' 'abc'
-    Assert ($r.state -eq 'unknown' -and $r.detail -match "with this PC's GitHub login: that login cannot see owner/chart-engine") $r.detail
-    $script:CodeWith = 403
-    Assert ((Get-CiState 'owner/chart-engine' 'abc').detail -eq "GitHub answered 403 (rate limited, with this PC's GitHub login)") 'rate limited with a login'
+    Assert ($r.state -eq 'unknown' -and $r.detail -match "404 with this PC's chart-engine token: it cannot see owner/chart-engine") $r.detail
+    $before = $script:TokenAsks
     $script:FakeLogin = ''; $script:CodeWithout = 403
     Assert ((Get-CiState 'owner/chart-engine' 'abc').detail -eq 'GitHub answered 403 (rate limited: 60 requests an hour without a token)') 'rate limited without (as today)'
-    $script:CodeWithout = 429
-    Assert ((Get-CiState 'owner/chart-engine' 'abc').state -eq 'unknown') '429'
+    Assert ($script:TokenAsks -eq $before) 'the token is read only after a 404 or 401 without one'
     Assert-LoginNowhere
   } finally { Reset-FakeApi }
 }
@@ -1271,15 +1294,15 @@ Test 'a fetch refused for another reason is not waited for (fetch_failed, a STOP
     Assert ((Test-NetworkDown 'fatal: unable to access ''https://github.com/x/'': Could not resolve host: github.com') -and (Test-NetworkDown 'ssh: connect to host github.com port 22: Network is unreachable') -and -not (Test-NetworkDown 'fatal: Authentication failed')) 'network errors told apart'
   } finally { Reset-FlakyFetch }
 }
-Test 'a fetch with no GitHub login for a private repo, or a login refused, says so plainly (fetch_failed, nothing installed)' {
+Test 'a fetch with no GitHub token for a private repo, or a token refused, says so plainly (fetch_failed, nothing installed)' {
   Use-FlakyFetch
   try {
     $script:NetDown = 1; $script:FetchErr = "fatal: could not read Username for 'https://github.com': terminal prompts disabled"
     $r = Run-Update
-    Assert ($r.outcome -eq 'fetch_failed' -and $r.reason -match (Rx 'git fetch failed: the repo is private and this PC has no GitHub login for it: nothing installed; Anthony signs this PC in to GitHub once') -and $r.reason -match 'terminal prompts disabled' -and $script:Waits.Count -eq 0) $r.reason
+    Assert ($r.outcome -eq 'fetch_failed' -and $r.reason -match (Rx 'git fetch failed: the repo is private (or not found) and this PC has no GitHub token for it: nothing installed; Anthony sets up this PC''s chart-engine token once') -and $r.reason -match 'terminal prompts disabled' -and $script:Waits.Count -eq 0) $r.reason
     $script:NetDown = 1; $script:FetchErr = "remote: Invalid username or token.`nfatal: Authentication failed for 'https://x-access-token:$($script:TestLogin)@github.com/owner/chart-engine.git/'"
     $r = Run-Update
-    Assert ($r.outcome -eq 'fetch_failed' -and $r.reason -match "GitHub refused this PC's GitHub login" -and $r.reason -match 'signs this PC in to GitHub again') $r.reason
+    Assert ($r.outcome -eq 'fetch_failed' -and $r.reason -match "GitHub refused this PC's GitHub token" -and $r.reason -match 'makes a new chart-engine token') $r.reason
     Assert-NoLogin 'the reason' $r.reason
     Assert-LoginNowhere
     $script:NetDown = 1; $script:FetchErr = 'fatal: something else broke'

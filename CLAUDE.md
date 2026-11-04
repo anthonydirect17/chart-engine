@@ -20,6 +20,8 @@
   anything here; cite it by rule number instead of copying it. Most used here: this repo goes private (Anthony 2026-11-04)
   and its Windows CI then moves to HOMESERVER's runner (rule 6.1; until it reads Private on the repo page, never a runner
   here); no secrets, account names or addresses in code, docs, tests or commits (8.3; examples use `desk.example.com`
-  and `100.64.0.10`); scheduled work runs overnight (4.1; the PC page updaters' check is
-  `update-pc.ps1 register -DailyAt 03:45`); ChartBridge never runs on HOMESERVER (10.8).
+  and `100.64.0.10`); scheduled work runs overnight (4.1; the PC page updaters move to an overnight check,
+  `update-pc.ps1 register -DailyAt 03:45`, Anthony 2026-11-04, BOARD.md GO log; the code's default is unchanged
+  for now); the PC updaters read a private chart-engine with a fine-grained read-only token for it alone, never the
+  whole-account login (8.5); ChartBridge never runs on HOMESERVER (10.8).
 - Ask Anthony before anything uncertain; Anthony does not want guessing.

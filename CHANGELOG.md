@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased (2026-11-04): getting ready to go private: the PC updater accepts the box job and uses this PC's GitHub login; placeholders
+## Unreleased (2026-11-04): getting ready to go private: the PC updater accepts the box job and reads a chart-engine token; placeholders
 
 `nt8/update-pc.ps1` and docs only (no page change, no version bump, as the 2026-10-23 updater entries). Anthony decided
 (2026-11-04) to make chart-engine private, with its Windows CI on HOMESERVER's self-hosted runner (SERVER_RULES.md rule
@@ -13,32 +13,43 @@
   finished green as before. A Linux job that runs on pull requests only (skipped or absent on `main` after step B) is
   not counted. A set that ran with a job not green (failed, skipped) is a failure unless the other set is green; with
   neither set there it waits, naming both, and after 24 hours the "was a required job renamed?" note names both sets.
-- **This PC's GitHub login for the API** (`Get-GitHubToken`): before it asks GitHub, the updater asks git for this PC's
-  stored login for the repo, `git credential fill` with `protocol=https`, `host=github.com` and `path=<owner>/<repo>.git`
-  (as fetch asks: git drops the path itself unless `credential.useHttpPath` is set), then the host alone if that finds
-  nothing. Never interactive (`GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=never`, `credential.interactive=never`, no
-  askpass), 15 seconds at most. A login found is sent as `Authorization: Bearer`; it is never logged, printed, saved or
-  put in an error text (`Hide-Token`). `git credential` is allowed only as `fill`: approve and reject never run, so the
-  PC's stored logins never change. No login: asked without a token, as today. A login GitHub refuses (401) is dropped
-  and the call made again without it, so a public repo keeps working as today.
-- **Truthful states:** a 404 or 401 with no login reads "the repo is private and this PC has no GitHub login for it:
-  nothing installed; Anthony signs this PC in to GitHub once" (CI unknown, never failure, nothing installed). A 404 with
-  a login says that login cannot see the repo; 403 and 429 stay the rate-limit message. A fetch that fails for want of
-  a login ("could not read Username ... terminal prompts disabled") or with a refused one now says so plainly.
+- **This PC's chart-engine token, only for a private repo** (Anthony 2026-11-04, SERVER_RULES.md rule 8.5: a
+  fine-grained, read-only token for chart-engine only, never the whole-account login). GitHub's API is asked without a
+  token first, always, so a public repo never sees one. Only a 404 or 401 then reads the token (`Get-GitHubToken`):
+  only when `credential.useHttpPath` is true for `https://github.com/<owner>/<repo>.git` (`git config --bool
+  --get-urlmatch`, git's own URL matching), one `git credential fill` with `protocol=https`, `host=github.com` and
+  `path=<owner>/<repo>.git` (never the host alone), and only a fine-grained token (`github_pat_`); any other stored
+  login is left unused. Never interactive (`GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=never`,
+  `credential.interactive=never`, no askpass), 15 seconds at most. The token is sent as `Authorization: Bearer`; it is
+  never logged, printed, saved or put in an error text (`Hide-Token`). `git credential` runs only as `fill` and
+  `git config` only as that one read: the updater never runs approve or reject itself.
+- **Truthful states:** a 404 or 401 without a token reads "the repo is private (or not found at <owner>/<repo>) and this
+  PC has no GitHub token for it: nothing installed", with the reason (useHttpPath not set, no token stored, or a stored
+  login that is not a fine-grained token) (CI unknown, never failure, nothing installed). A token GitHub refuses (401,
+  403 that is not the rate limit, 404) says so, and is never green: the private repo stays unknown. 403 and 429 rate
+  limits keep their message. A fetch that fails for want of a token ("could not read Username ... terminal prompts
+  disabled") or with a refused one now says so plainly.
 - **Placeholders** (the first commit): The Desk's real-looking hostname and Tailscale address in the docs, test strings
   and one `ChartBridge.cs` example comment are now `desk.example.com` and `100.64.0.10`; CLAUDE.md cites SERVER_RULES.md
-  by rule number. ChartBridge stays 0.6.14: the comment change needs no recompile.
+  by rule number (and now 4.1's overnight check, `register -DailyAt 03:45`, as a move with the code default unchanged,
+  and 8.5). ChartBridge stays 0.6.14: the comment change needs no recompile.
 - **Rollout:** the scheduled task runs its pinned copy, which changes only at `-InstallChartBridge` or `register`, so
-  WORK and HOME get this after one of those (`register` with the `-DailyAt` that PC uses). Step B waits until both have
-  it (`status` names the commit the task's copy is from); a pinned copy from before this change would wait on the
-  missing `unit (windows-latest)` and cannot read a private repo.
+  both PCs re-pin with `register` (with the `-DailyAt` that PC uses) before step B (`status` names the commit the task's
+  copy is from); a copy pinned before this change would wait on the missing `unit (windows-latest)` and cannot read a
+  private repo. After step B and going private, the clone is brought up to date before any `register`. The README has
+  the token setup (fine-grained, chart-engine only, Contents, Commit statuses and Metadata read, `useHttpPath` for the
+  repo URL, Token typed in Git Credential Manager).
+- **Open before step B:** GitHub's docs list the check runs call ("List check runs for a Git reference") for GitHub App
+  tokens only, not fine-grained personal access tokens, so on a private repo the token alone cannot read check runs.
 - Tests: `test/pc-updater.tests.ps1`: either set (today's pair; the box job green with Linux skipped or absent; the
-  box job failed, skipped or queued; neither there, and its 24 hour note), the login through a stand-in credential
-  helper (asked never interactively even from a window that allows prompts, the repo path first, then the host, none),
-  `credential approve`, `reject` and `store` refused, the login sent as Bearer and found in no output, log, state,
-  status, update.json or error text, the 404 and 401 messages, a refused login tried again without, and the plain fetch
-  messages. `test/pc-updater.test.js`: the allowed git subcommands, the box job's name, one place that asks for the
-  login and one that sends it.
+  box job failed, skipped or queued; neither there, and its 24 hour note), the token through a stand-in credential
+  helper (never asked without `useHttpPath` for the URL, which git's own URL matching decides; one ask with the repo
+  path, never interactively even from a window that allows prompts; an OAuth login refused; none stored),
+  `credential approve`, `reject` and `store` and other `git config` forms refused, a public repo that never sees the
+  token, the token sent as Bearer only after a 404 and found in no output, log, state, status, update.json or error
+  text, the 404 and 401 messages, a refused token (401, 403, 404) and the rate limits, and the plain fetch messages.
+  `test/pc-updater.test.js`: the allowed git subcommands, the box job's name, useHttpPath read before the one ask, the
+  token only after a 404 or 401, one place that asks for it and one that sends it.
 
 ## chart 1.43.0 (2026-11-04): a group's stops and targets a tick or two apart draw as one line (page only, no F5)
 

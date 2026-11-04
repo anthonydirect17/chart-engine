@@ -277,7 +277,7 @@ across fake restarts.
 
 `nt8\update-pc.ps1` keeps the chart page on each trading PC (HOME, the laptop, WORK) up to date by itself, and gets a
 new ChartBridge ready for Anthony to install by hand. Windows PowerShell and git only; no admin, no Python, no token of
-its own (once the repo is private it reads CI with this PC's GitHub login, the one git fetch uses: below).
+its own (once the repo is private it reads CI with this PC's chart-engine token, the one git fetch uses: below).
 
 - **The page updates by itself.** The updater checks when you sign in and twice a day, at 9:00 AM and 5:00 PM New York
   time (Anthony, 2026-10-23: every updater checks twice a day and at sign-in). It installs the newest commit on `main` whose CI is green: `unit` on both ubuntu-latest and
@@ -460,8 +460,8 @@ next update. `-InstallChartBridge` also moves the task's copy of the updater to 
 | `register` / `unregister` | the scheduled task "ChartEngine Updater" for this Windows user: at sign-in and daily at 9:00 AM and 5:00 PM New York time (`-DailyAt`), started hidden (wscript.exe //B and a one-line launcher) |
 
 Why it waits (all in `update.log`): CI not finished or red; GitHub not reachable (without a login it reads CI with
-no token: 60 requests an hour per address, and a pass uses two); the repo private and this PC with no GitHub login for
-it (below); ChartBridge's version not known (NinjaTrader closed and nothing recorded yet); the page needs a newer
+no token: 60 requests an hour per address, and a pass uses two); the repo private and this PC with no chart-engine
+token (below); ChartBridge's version not known (NinjaTrader closed and nothing recorded yet); the page needs a newer
 ChartBridge; paused; or a commit rolled back by hand.
 
 **Going private (Anthony 2026-11-04).** chart-engine becomes a private repo, and its Windows CI moves to HOMESERVER's
@@ -469,21 +469,42 @@ self-hosted runner (SERVER_RULES.md rule 6.1). In two steps, so the updaters on 
 
 1. **Step A (this updater):** it accepts either `unit (ubuntu-latest)` and `unit (windows-latest)` green, or the box
    job `unit-windows` green (a Linux job that runs on pull requests only is skipped or absent on `main`, and is not
-   counted). Before it asks GitHub's API it asks git, without any prompt or window, for this PC's stored GitHub login
-   for the repo (`git credential fill`: the login `git fetch` uses, from Git Credential Manager or another helper),
-   and sends it as the API's token. It never prints, logs or saves it, and never changes the PC's stored logins. With
-   no login it asks without a token, as before; a login GitHub refuses is dropped and the call made again without it.
-   The scheduled task runs its pinned copy, so a PC gets this only after its next `-InstallChartBridge` (while flat)
-   or `register` (with the `-DailyAt` that PC uses): one of them on WORK and HOME before step B (`status` names the
-   commit the task's copy is from).
-2. **Step B (later):** `.github/workflows/test.yml` moves the Windows job to the box as `unit-windows` once the
-   HOMESERVER coordinator's runner card is done, then Anthony makes the repo private.
+   counted). It asks GitHub's API without a token first, as before, so a public repo never sees one. Only when that
+   answers 404 (a private repo, or none at that name) does it read this PC's chart-engine token and ask again with
+   it: `git credential fill` for `https://github.com/<owner>/chart-engine.git` only (never the host alone), only
+   when `credential.useHttpPath` is true for that URL, and only a fine-grained token (`github_pat_...`); never
+   interactive, and never printed, logged or saved. The updater never runs `git credential approve` or `reject`
+   itself (git's own fetch may store or erase a login as usual).
+2. **Before step B:** both PCs re-pin with `register` (with the `-DailyAt` that PC uses), since the scheduled task
+   runs its pinned copy, which changes only at `register` or `-InstallChartBridge`; `status` names the commit the
+   task's copy is from. A copy pinned before step A waits on the missing `unit (windows-latest)` for good and cannot
+   read a private repo.
+3. **Step B (later):** `.github/workflows/test.yml` moves the Windows job to the box as `unit-windows` once the
+   HOMESERVER coordinator's runner card is done, then Anthony makes the repo private. From then on, bring the clone up
+   to date (its `git fetch` and pull with the token below) before any `register`.
 
-A private repo needs this PC signed in to GitHub once, as the Windows user the task runs as: the updater then reads
-"git fetch failed: the repo is private and this PC has no GitHub login for it" or "GitHub answered 404: the repo is
-private and this PC has no GitHub login for it" in `update.log` and `status` (nothing installed, never a CI failure)
-until it is. One way: a `git fetch` in the clone from a normal PowerShell window, signing in when Git Credential Manager
-asks.
+**This PC's chart-engine token** (Anthony 2026-11-04, SERVER_RULES.md rule 8.5: a fine-grained, read-only token for
+chart-engine only, never the whole-account GitHub login). Once the repo is private, once per PC, as the Windows user
+the task runs as:
+
+1. On GitHub, a fine-grained personal access token: Repository access "Only select repositories", chart-engine
+   alone; Repository permissions, all read-only: **Contents: Read** (to read the repo for `git fetch`; GitHub's own
+   "Repo-reading token" example in "Managing your personal access tokens" is contents read with metadata read),
+   **Commit statuses: Read** (the statuses call; GitHub's docs, "Get the combined status for a specific reference"),
+   and **Metadata: Read** (GitHub adds it). **Open, for Anthony before step B:** GitHub's docs for "List check runs
+   for a Git reference" (the updater's check runs call) name only GitHub App tokens, not fine-grained personal access
+   tokens, and the call is missing from "Endpoints available for fine-grained personal access tokens". So on a
+   private repo this token alone cannot read the check runs; the updater then says "GitHub refused this PC's
+   chart-engine token (403 ...)" and installs nothing.
+2. `git config --global credential.https://github.com/<owner>/chart-engine.git.useHttpPath true`, so git asks for a
+   login stored for this repo's path alone (the updater reads only that).
+3. A `git fetch` in the clone from a normal PowerShell window: when Git Credential Manager asks, choose **Token** and
+   type the token yourself. If the fetch works without asking, stop: a broader login matched (rule 8.5's wording).
+
+Without the token the updater reads "git fetch failed: the repo is private (or not found) and this PC has no GitHub
+token for it" or "GitHub answered 404: the repo is private (or not found at <owner>/chart-engine) and this PC has no
+GitHub token for it" in `update.log` and `status`, with the reason (for example `credential.useHttpPath is not
+set`): nothing installed, never a CI failure.
 
 With NinjaTrader closed, the ChartBridge version counted is the newest one `/diag` showed (or the one
 `-InstallChartBridge` copied, once seen), and never above the version in `bin\Custom\AddOns\ChartBridge.cs`.
