@@ -30,6 +30,10 @@ $script:FakeCi = 'success'
 $script:FakeDiag = $null
 $script:Toasts = @()
 $script:RealGitHubJson = ${function:Invoke-GitHubJson}
+$script:RealGitHubToken = ${function:Get-GitHubToken}
+# This PC's GitHub login as git credential fill would give it ('' = none); the real reader is tested with a fake helper
+$script:FakeLogin = ''
+function Get-GitHubToken([string]$Slug) { return $script:FakeLogin }
 $script:RealMove = ${function:Move-FileAtomic}
 # A power loss (a laptop lid): from the crash point on, nothing more is written anywhere through the updater.
 $script:CrashAt = ''; $script:PowerLost = $false
@@ -46,9 +50,15 @@ function Move-FileAtomic([string]$Source, [string]$Dest) {
 }
 # GitHub's API as the updater reads it: check runs and statuses for a commit (the real Get-CiState runs on these).
 function Get-RepoSlug { return 'owner/chart-engine' }
-function Invoke-GitHubJson([string]$Path) {
+function Invoke-GitHubJson([string]$Path, [string]$Token = '') {
   if ($script:FakeCi -eq 'unknown') { throw (New-Object System.Net.WebException 'stub: no network') }
   if ($Path -match '/status\?') { return @{ statuses = @() } }
+  # step B's workflow on main: the HOMESERVER job, the Linux job skipped (box), or only that skipped Linux job (neither)
+  if ($script:FakeCi -eq 'box') { return @{ total_count = 2; check_runs = @(
+      @{ name = 'unit-linux'; status = 'completed'; conclusion = 'skipped'; app = @{ slug = 'github-actions' } },
+      @{ name = $script:BoxCheck; status = 'completed'; conclusion = 'success'; app = @{ slug = 'github-actions' } }) } }
+  if ($script:FakeCi -eq 'neither') { return @{ total_count = 1; check_runs = @(
+      @{ name = 'unit-linux'; status = 'completed'; conclusion = 'skipped'; app = @{ slug = 'github-actions' } }) } }
   $win = @{ success = @('completed', 'success'); pending = @('in_progress', $null); failure = @('completed', 'failure') }[$script:FakeCi]
   return @{ total_count = 3; check_runs = @(
       @{ name = 'unit (ubuntu-latest)'; status = 'completed'; conclusion = 'success'; app = @{ slug = 'github-actions' } },
@@ -245,6 +255,193 @@ Test 'CI failure and unknown: no update (unknown is a STOP)' {
   $r = Run-Update
   Assert ($r.outcome -eq 'ci_unknown' -and $script:StopOutcomes -contains $r.outcome) $r.outcome
   Assert (-not (Test-Path (Get-WwwFile 'live.js'))) 'no page file'
+}
+
+# ---------------------------------------------------------------------------------------------- going private (step A)
+# Anthony 2026-11-04: chart-engine goes private, and its Windows job moves to HOMESERVER's runner (step B). The updater
+# already installed on WORK and HOME must keep working before and after: either required set, and this PC's GitHub login.
+
+function Job([string]$Name, [string]$Conclusion = 'success', [string]$Status = 'completed') {
+  if (-not $Conclusion) { $Conclusion = $null }
+  return @{ name = $Name; status = $Status; conclusion = $Conclusion; app = @{ slug = 'github-actions' } }
+}
+$script:TestLogin = 'not-a-real-login-7f3a9c'
+function Assert-NoLogin([string]$Where, [string]$Text) { Assert (-not "$Text".Contains($script:TestLogin)) "the login is not in $Where" }
+function Assert-LoginNowhere {
+  Assert-NoLogin 'update.log' (Get-Text $script:P.Log)
+  Assert-NoLogin 'state.json' (Get-Text $script:P.State)
+  if (Test-Path -LiteralPath $script:P.Status) { Assert-NoLogin 'status.json' (Get-Text $script:P.Status) }
+  if (Test-Path -LiteralPath (Get-WwwFile 'update.json')) { Assert-NoLogin 'update.json' (Get-Text (Get-WwwFile 'update.json')) }
+  Assert-NoLogin 'the printed output' ($script:Said -join "`n")
+  Assert-NoLogin 'the toasts' ($script:Toasts -join "`n")
+}
+# GitHub's API through the real reader (Invoke-GitHubJson): each request's Authorization header is recorded, and the
+# answer is WebAnswer, or an HTTP error: CodeWith when a login was sent, CodeWithout when none was
+function Use-FakeApi {
+  $script:KeepJson = ${function:Invoke-GitHubJson}
+  ${function:script:Invoke-GitHubJson} = $script:RealGitHubJson
+  $script:SeenAuth = New-Object System.Collections.ArrayList
+  $script:CodeWith = 0; $script:CodeWithout = 0; $script:WebAnswer = '{}'
+  ${function:script:Invoke-WebRequest} = {
+    param($Uri, $Headers, [switch]$UseBasicParsing, $TimeoutSec)
+    $auth = ''; if ($Headers.ContainsKey('Authorization')) { $auth = [string]$Headers['Authorization'] }
+    [void]$script:SeenAuth.Add($auth)
+    $c = $script:CodeWithout; if ($auth) { $c = $script:CodeWith }
+    if ($script:WebAnswer -eq 'throw-with-login') { throw (New-Object System.Net.WebException "stub: refused, sent $auth to https://x-access-token:$($script:FakeLogin)@api.github.com") }
+    if ($c) {
+      $e = New-Object System.Net.WebException "stub: the remote server returned an error: ($c)"
+      $e | Add-Member -NotePropertyName Response -NotePropertyValue @{ StatusCode = $c } -Force
+      throw $e
+    }
+    return @{ Content = $script:WebAnswer }
+  }
+}
+function Reset-FakeApi {
+  Remove-Item function:\Invoke-WebRequest -ErrorAction SilentlyContinue
+  ${function:script:Invoke-GitHubJson} = $script:KeepJson
+  $script:FakeLogin = ''
+}
+$script:BoxGreen = '{"check_runs":[{"name":"unit-linux","status":"completed","conclusion":"skipped","app":{"slug":"github-actions"}},{"name":"unit-windows","status":"completed","conclusion":"success","app":{"slug":"github-actions"}}]}'
+
+Test 'CI (going private): the HOMESERVER job unit-windows green is success, with the Linux job skipped or absent; today''s pair still is' {
+  Assert ($script:BoxCheck -eq 'unit-windows') "the box job is named unit-windows (as Bot-Lab's), got $($script:BoxCheck)"
+  foreach ($checks in @(@((Job 'unit-linux' 'skipped'), (Job 'unit-windows')), @(Job 'unit-windows'), @((Job 'unit (ubuntu-latest)' 'skipped'), (Job 'unit-windows')), @((Job 'unit-windows'), (Job 'deploy' 'neutral')))) {
+    $r = Resolve-CiState $checks @()
+    Assert ($r.state -eq 'success' -and $r.detail -eq 'green: unit-windows') "$($r.state): $($r.detail)"
+  }
+  $r = Resolve-CiState @((Job 'unit (ubuntu-latest)'), (Job 'unit (windows-latest)')) @()
+  Assert ($r.state -eq 'success' -and $r.detail -eq 'green: unit (ubuntu-latest), unit (windows-latest)') "today's pair: $($r.detail)"
+  $script:FakeCi = 'box'
+  try { Assert ((Get-CiState 'owner/chart-engine' 'abc').state -eq 'success') 'the box job green through the stubbed API' } finally { $script:FakeCi = 'success' }
+}
+Test 'CI (going private): the box job failed, skipped or queued is not success; with neither set there it waits and names both' {
+  $r = Resolve-CiState @((Job 'unit-linux' 'skipped'), (Job 'unit-windows' 'failure')) @()
+  Assert ($r.state -eq 'failure' -and $r.detail -match 'unit-windows=failure') "failed: $($r.detail)"
+  $r = Resolve-CiState @(Job 'unit-windows' 'skipped') @()
+  Assert ($r.state -eq 'failure' -and $r.detail -eq "'unit-windows' did not succeed") "skipped: $($r.detail)"
+  $r = Resolve-CiState @((Job 'unit-linux' 'skipped'), (Job 'unit-windows' '' 'queued')) @()
+  Assert ($r.state -eq 'pending' -and $r.detail -eq 'still running: unit-windows') "queued (the box holds jobs in market hours): $($r.detail)"
+  $r = Resolve-CiState @((Job 'unit-windows'), (Job 'unit-linux' 'failure')) @()
+  Assert ($r.state -eq 'failure') "another check that failed still fails: $($r.detail)"
+  $r = Resolve-CiState @((Job 'unit-windows' 'skipped'), (Job 'unit (ubuntu-latest)'), (Job 'unit (windows-latest)')) @()
+  Assert ($r.state -eq 'success') "either set: today's pair green is enough: $($r.detail)"
+  $r = Resolve-CiState @(Job 'unit-linux' 'skipped') @()
+  Assert ($r.state -eq 'pending' -and $r.detail -eq "no 'unit (ubuntu-latest)' and 'unit (windows-latest)' (or 'unit-windows') result yet") "neither: $($r.detail)"
+  Assert ($r.detail -like "no '* result yet") 'the 24 hour note (Invoke-Pass) reads it'
+  $r = Resolve-CiState @(Job 'unit (ubuntu-latest)') @()
+  Assert ($r.state -eq 'pending' -and $r.detail -eq "no 'unit (windows-latest)' (or 'unit-windows') result yet") "half of today's pair: $($r.detail)"
+  $r = Resolve-CiState @((Job 'unit (ubuntu-latest)' 'skipped')) @()
+  Assert ($r.state -eq 'pending') "a skipped Linux job with nothing else is waiting, not failure: $($r.detail)"
+}
+Test 'CI: after 24 hours with neither required set, the reason asks whether a job was renamed and names both sets' {
+  $script:FakeCi = 'neither'
+  try {
+    $r = Run-Update
+    Assert ($r.outcome -eq 'ci_pending' -and $r.reason -notmatch 'renamed') "first: $($r.reason)"
+    $s = Read-State; $s['ciPending']['since'] = (Get-NowMs) - 90000000; Save-State $s
+    $r = Run-Update
+    Assert ($r.outcome -eq 'ci_pending' -and $r.reason -match 'for over 24 hours: was a required job renamed\?' -and $r.reason -match (Rx 'update-pc.ps1 wants unit (ubuntu-latest) and unit (windows-latest) green, or unit-windows green')) $r.reason
+    Assert (-not (Test-Path (Get-WwwFile 'live.js'))) 'nothing installed'
+  } finally { $script:FakeCi = 'success'; $s = Read-State; if ($s.Contains('ciPending')) { $s.Remove('ciPending') }; Save-State $s }
+}
+Test 'GitHub login: git credential fill reads it through this PC''s helper, never interactively, the repo path first, then the host' {
+  $rec = Join-Path $tmpRoot 'helper-seen.txt'
+  $recSh = $rec.Replace('\', '/')
+  $keepEnv = @{ p = $env:GIT_TERMINAL_PROMPT; g = $env:GCM_INTERACTIVE }
+  # the window this runs in would allow prompts: the hidden run must not
+  $env:GIT_TERMINAL_PROMPT = '1'; $env:GCM_INTERACTIVE = 'always'
+  # a stand-in credential helper (only `get`): it records what it was asked and the two variables, never the login
+  function Set-Helper([string]$Gate, [switch]$HttpPath) {
+    foreach ($k in @('credential.helper', 'credential.useHttpPath')) { [void](Invoke-Native (Get-GitExe) @('-C', $clone, 'config', '--local', '--unset-all', $k) 30) }
+    [void](G $clone @('config', '--local', '--add', 'credential.helper', ''))   # this PC's own helpers (GCM) left out
+    if ($HttpPath) { [void](G $clone @('config', '--local', 'credential.useHttpPath', 'true')) }
+    if ($Gate -eq 'none') { return }
+    $sh = '!f() { test "$1" = get || exit 0; p=nopath; while IFS= read -r l; do [ -z "$l" ] && break; case "$l" in path=*) p="$l";; esac; done; ' +
+      'echo "prompt=$GIT_TERMINAL_PROMPT gcm=$GCM_INTERACTIVE $p" >> ''' + $recSh + '''; ' + $Gate + ' echo username=x-access-token; echo password=' + $script:TestLogin + '; }; f'
+    [void](G $clone @('config', '--local', '--add', 'credential.helper', $sh))
+  }
+  function Get-Seen { if (-not (Test-Path -LiteralPath $rec)) { return @() }; $t = @((Get-Text $rec) -split "`r?`n" | Where-Object { $_ }); Remove-Item -LiteralPath $rec -Force; return $t }
+  try {
+    Set-Helper ''
+    Assert ((& $script:RealGitHubToken 'owner/chart-engine') -eq $script:TestLogin) 'the login, from the helper'
+    $seen = @(Get-Seen)
+    Assert ($seen.Count -eq 1 -and $seen[0] -eq 'prompt=0 gcm=never nopath') "asked once, never interactively (git drops the path without useHttpPath): $($seen -join ' | ')"
+    Set-Helper '[ "$p" != nopath ] || exit 0;' -HttpPath
+    Assert ((& $script:RealGitHubToken 'owner/chart-engine') -eq $script:TestLogin) 'useHttpPath: the login stored for the repo path'
+    $seen = @(Get-Seen)
+    Assert ($seen.Count -eq 1 -and $seen[0] -eq 'prompt=0 gcm=never path=owner/chart-engine.git') "the repo path first: $($seen -join ' | ')"
+    Set-Helper '[ "$p" = nopath ] || exit 0;' -HttpPath
+    Assert ((& $script:RealGitHubToken 'owner/chart-engine') -eq $script:TestLogin) 'useHttpPath: a login stored for github.com as a whole'
+    $seen = @(Get-Seen)
+    Assert ($seen.Count -eq 2 -and $seen[0] -match 'path=owner/chart-engine\.git$' -and $seen[1] -eq 'prompt=0 gcm=never nopath') "then the host alone: $($seen -join ' | ')"
+    Set-Helper 'none'
+    Assert ((& $script:RealGitHubToken 'owner/chart-engine') -eq '') 'no login on this PC: none, and no prompt (it would hang the test)'
+    foreach ($bad in @(@('credential', 'approve'), @('credential', 'reject'), @('credential', 'store'), @('credential', 'fill', 'x'), @('credential'))) {
+      $threw = $false
+      try { [void](Invoke-Git $bad 15 "protocol=https`nhost=github.com`n`n") } catch { $threw = $_.Exception.Message -match 'allowed only' }
+      Assert $threw "refused: git $($bad -join ' ') (the PC's stored logins are never changed)"
+    }
+    Assert-NoLogin 'the printed output' ($script:Said -join "`n")
+    Assert-NoLogin 'update.log' (Get-Text $script:P.Log)
+  } finally {
+    foreach ($k in @('credential.helper', 'credential.useHttpPath')) { [void](Invoke-Native (Get-GitExe) @('-C', $clone, 'config', '--local', '--unset-all', $k) 30) }
+    $env:GIT_TERMINAL_PROMPT = $keepEnv.p; $env:GCM_INTERACTIVE = $keepEnv.g
+  }
+}
+Test 'GitHub login: sent as Authorization Bearer, and never in update.log, state.json, status.json, update.json, output or an error text' {
+  Use-FakeApi
+  try {
+    $script:FakeLogin = $script:TestLogin
+    $script:WebAnswer = $script:BoxGreen
+    $r = Get-CiState 'owner/chart-engine' 'abc'
+    Assert ($r.state -eq 'success') "$($r.state) $($r.detail)"
+    Assert ($script:SeenAuth.Count -eq 2 -and @($script:SeenAuth | Where-Object { $_ -ne "Bearer $($script:TestLogin)" }).Count -eq 0) "both requests carry the login: $($script:SeenAuth.Count)"
+    $script:FakeLogin = ''; $script:SeenAuth.Clear()
+    [void](Get-CiState 'owner/chart-engine' 'abc')
+    Assert (@($script:SeenAuth | Where-Object { $_ }).Count -eq 0) 'no login on this PC: no Authorization header (as today)'
+    # whole runs: one that waits, and one whose error text carries the login (it is taken out)
+    $script:FakeLogin = $script:TestLogin
+    $script:WebAnswer = '{"check_runs":[]}'
+    $r = Run-Update
+    Assert ($r.outcome -eq 'ci_pending') $r.outcome
+    $script:WebAnswer = 'throw-with-login'
+    $r = Run-Update
+    Assert ($r.outcome -eq 'ci_unknown' -and $r.reason -match '\[login\]' -and $r.reason -notmatch 'x-access-token:') $r.reason
+    Assert-LoginNowhere
+    Assert (-not (Test-Path (Get-WwwFile 'live.js'))) 'nothing installed'
+  } finally { Reset-FakeApi; $s = Read-State; if ($s.Contains('ciPending')) { $s.Remove('ciPending') }; Save-State $s }
+}
+Test 'GitHub login: a 404 or 401 without one says the repo is private and this PC has no login (unknown, never failure); a refused login is tried once without' {
+  $private = 'the repo is private and this PC has no GitHub login for it: nothing installed; Anthony signs this PC in to GitHub once'
+  Use-FakeApi
+  try {
+    foreach ($c in @(404, 401)) {
+      $script:FakeLogin = ''; $script:CodeWithout = $c
+      $r = Get-CiState 'owner/chart-engine' 'abc'
+      Assert ($r.state -eq 'unknown' -and $r.detail -eq "GitHub answered $c`: $private") "$c without a login: $($r.state) $($r.detail)"
+    }
+    $script:CodeWithout = 404
+    $r = Run-Update
+    Assert ($r.outcome -eq 'ci_unknown' -and $r.reason -match (Rx $private) -and $script:StopOutcomes -contains $r.outcome) $r.reason
+    Assert (-not (Test-Path (Get-WwwFile 'live.js'))) 'nothing installed'
+    # a login GitHub refuses (expired): asked again without it, so a public repo keeps working as today
+    $script:FakeLogin = $script:TestLogin; $script:CodeWith = 401; $script:CodeWithout = 0; $script:WebAnswer = $script:BoxGreen; $script:SeenAuth.Clear()
+    $r = Get-CiState 'owner/chart-engine' 'abc'
+    Assert ($r.state -eq 'success' -and $script:SeenAuth.Count -eq 3 -and $script:SeenAuth[0] -and -not $script:SeenAuth[1] -and -not $script:SeenAuth[2]) "refused, then without: $($r.state) $($script:SeenAuth.Count)"
+    $script:CodeWithout = 404
+    $r = Get-CiState 'owner/chart-engine' 'abc'
+    Assert ($r.state -eq 'unknown' -and $r.detail -match "this PC's GitHub login was refused" -and $r.detail -match 'signs this PC in to GitHub again') $r.detail
+    $script:CodeWith = 404
+    $r = Get-CiState 'owner/chart-engine' 'abc'
+    Assert ($r.state -eq 'unknown' -and $r.detail -match "with this PC's GitHub login: that login cannot see owner/chart-engine") $r.detail
+    $script:CodeWith = 403
+    Assert ((Get-CiState 'owner/chart-engine' 'abc').detail -eq "GitHub answered 403 (rate limited, with this PC's GitHub login)") 'rate limited with a login'
+    $script:FakeLogin = ''; $script:CodeWithout = 403
+    Assert ((Get-CiState 'owner/chart-engine' 'abc').detail -eq 'GitHub answered 403 (rate limited: 60 requests an hour without a token)') 'rate limited without (as today)'
+    $script:CodeWithout = 429
+    Assert ((Get-CiState 'owner/chart-engine' 'abc').state -eq 'unknown') '429'
+    Assert-LoginNowhere
+  } finally { Reset-FakeApi }
 }
 
 # ---------------------------------------------------------------------------------------------- ChartBridge version gates
@@ -1072,6 +1269,21 @@ Test 'a fetch refused for another reason is not waited for (fetch_failed, a STOP
     $s = Read-State; $r = Invoke-Pass -DryRun -State $s
     Assert ($r.outcome -eq 'offline' -and $script:Waits.Count -eq 0 -and $script:Fetches -eq 1) "check: $($r.outcome) waits $($script:Waits.Count)"
     Assert ((Test-NetworkDown 'fatal: unable to access ''https://github.com/x/'': Could not resolve host: github.com') -and (Test-NetworkDown 'ssh: connect to host github.com port 22: Network is unreachable') -and -not (Test-NetworkDown 'fatal: Authentication failed')) 'network errors told apart'
+  } finally { Reset-FlakyFetch }
+}
+Test 'a fetch with no GitHub login for a private repo, or a login refused, says so plainly (fetch_failed, nothing installed)' {
+  Use-FlakyFetch
+  try {
+    $script:NetDown = 1; $script:FetchErr = "fatal: could not read Username for 'https://github.com': terminal prompts disabled"
+    $r = Run-Update
+    Assert ($r.outcome -eq 'fetch_failed' -and $r.reason -match (Rx 'git fetch failed: the repo is private and this PC has no GitHub login for it: nothing installed; Anthony signs this PC in to GitHub once') -and $r.reason -match 'terminal prompts disabled' -and $script:Waits.Count -eq 0) $r.reason
+    $script:NetDown = 1; $script:FetchErr = "remote: Invalid username or token.`nfatal: Authentication failed for 'https://x-access-token:$($script:TestLogin)@github.com/owner/chart-engine.git/'"
+    $r = Run-Update
+    Assert ($r.outcome -eq 'fetch_failed' -and $r.reason -match "GitHub refused this PC's GitHub login" -and $r.reason -match 'signs this PC in to GitHub again') $r.reason
+    Assert-NoLogin 'the reason' $r.reason
+    Assert-LoginNowhere
+    $script:NetDown = 1; $script:FetchErr = 'fatal: something else broke'
+    Assert ((Run-Update).reason -eq 'git fetch failed: fatal: something else broke') 'anything else as git said it (as before)'
   } finally { Reset-FlakyFetch }
 }
 Test 'staged.tmp\files.zip held by an antivirus for a moment: its delete is tried again, and staging carries on' {

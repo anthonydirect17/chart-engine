@@ -108,11 +108,11 @@ test('the automatic path never moves Anthony\'s clone, and git never asks anythi
   const src = code(updater);
   // one entry point with a runtime allow-list of subcommands that only read or fetch into refs/remotes
   const allowed = eval('[' + /\$script:GitAllowed = @\(([^)]*)\)/.exec(src)[1] + ']');
-  assert.deepStrictEqual([...allowed].sort(), ['archive', 'cat-file', 'fetch', 'hash-object', 'ls-tree', 'merge-base', 'remote', 'rev-list', 'rev-parse', 'show', 'symbolic-ref'].sort());
+  assert.deepStrictEqual([...allowed].sort(), ['archive', 'cat-file', 'credential', 'fetch', 'hash-object', 'ls-tree', 'merge-base', 'remote', 'rev-list', 'rev-parse', 'show', 'symbolic-ref'].sort());
   assert.match(src, /\$refused = Test-GitArgs \$ArgList\s+if \(\$refused\) \{ throw \$refused \}/);
   assert.match(src, /if \(\$script:GitAllowed -notcontains \$sub\) \{ return/);
-  // the three subcommands with a writing form are checked in full
-  for (const sub of ['symbolic-ref', 'remote', 'hash-object']) assert.match(src, new RegExp("if \\(\\$sub -eq '" + sub + "'\\) \\{"), sub);
+  // the four subcommands with a writing form are checked in full (credential: fill only, never approve or reject)
+  for (const sub of ['symbolic-ref', 'remote', 'hash-object', 'credential']) assert.match(src, new RegExp("if \\(\\$sub -eq '" + sub + "'\\) \\{"), sub);
   // every call, written @( or (@(, starts with a literal subcommand from that list; git runs nowhere else
   const calls = [...src.matchAll(/Invoke-Git\s+\(?@\(\s*([^,)]+)/g)].map(m => m[1].trim());
   assert.ok(calls.length >= 12, calls.join(','));
@@ -123,6 +123,20 @@ test('the automatic path never moves Anthony\'s clone, and git never asks anythi
   assert.match(src, /'-c', 'credential\.interactive=never', '-c', 'core\.sshCommand=ssh -o BatchMode=yes', '-c', 'core\.askPass=',\s*'-c', 'gc\.auto=0', '-c', 'maintenance\.auto=false'/);
   assert.match(src, /-WorkingDirectory \$script:P\.Bin/);
   assert.match(src, /\$src = Get-PinSource \$state/);
+});
+
+test('going private, step A (Anthony 2026-11-04): either required set, and this PC\'s GitHub login only read and only sent to the API', () => {
+  const src = code(updater);
+  assert.match(src, /\$script:RequiredChecks = @\('unit \(ubuntu-latest\)', 'unit \(windows-latest\)'\)/, 'today\'s pair');
+  assert.match(src, /\$script:BoxCheck = 'unit-windows'/, 'the HOMESERVER job, as Bot-Lab names it');
+  assert.match(src, /\$script:RequiredSets = @\(@\{ jobs = \$script:RequiredChecks \}, @\{ jobs = @\(\$script:BoxCheck\) \}\)/);
+  assert.match(src, /if \(\$rest\.Count -ne 1 -or \$rest\[0\] -ne 'fill'\) \{ return/, 'git credential runs only as fill');
+  assert.ok(!/approve|reject/.test(src.replace(/never approve, reject or store/g, '')), 'credential approve or reject is never named in code');
+  assert.strictEqual([...src.matchAll(/Invoke-Git @\('credential', 'fill'\)/g)].length, 1, 'one place asks for the login');
+  assert.strictEqual([...src.matchAll(/Authorization/g)].length, 1, 'one place sends it');
+  const tok = src.slice(src.indexOf('function Get-GitHubToken'), src.indexOf('function Hide-Token'));
+  assert.ok(tok.length > 0 && !/Write-|Save-State|Set-Content|Out-File|\$script:/.test(tok), 'Get-GitHubToken writes nothing and keeps nothing');
+  assert.match(tok, /Invoke-Git @\('credential', 'fill'\) 15 \$ask/, 'a short time limit');
 });
 
 test('the task moves to the hidden launcher at -InstallChartBridge (after the re-pin); the automatic run only warns (Anthony 2026-10-23)', () => {

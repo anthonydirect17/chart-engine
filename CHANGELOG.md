@@ -1,5 +1,45 @@
 # Changelog
 
+## Unreleased (2026-11-04): getting ready to go private: the PC updater accepts the box job and uses this PC's GitHub login; placeholders
+
+`nt8/update-pc.ps1` and docs only (no page change, no version bump, as the 2026-10-23 updater entries). Anthony decided
+(2026-11-04) to make chart-engine private, with its Windows CI on HOMESERVER's self-hosted runner (SERVER_RULES.md rule
+6.1). Two steps, so the updaters on WORK and HOME never get stuck; this is step A, merged while the repo is public and
+`.github/workflows/test.yml` unchanged. Step B (later): test.yml moves the Windows job to the box runner as
+`unit-windows` after the HOMESERVER coordinator's runner card, then Anthony makes the repo private.
+
+- **Either required set** (`Resolve-CiState`): `unit (ubuntu-latest)` and `unit (windows-latest)` green (today), or the
+  box job `unit-windows` green (`$script:BoxCheck`, named as Bot-Lab's box job), with every other check and status
+  finished green as before. A Linux job that runs on pull requests only (skipped or absent on `main` after step B) is
+  not counted. A set that ran with a job not green (failed, skipped) is a failure unless the other set is green; with
+  neither set there it waits, naming both, and after 24 hours the "was a required job renamed?" note names both sets.
+- **This PC's GitHub login for the API** (`Get-GitHubToken`): before it asks GitHub, the updater asks git for this PC's
+  stored login for the repo, `git credential fill` with `protocol=https`, `host=github.com` and `path=<owner>/<repo>.git`
+  (as fetch asks: git drops the path itself unless `credential.useHttpPath` is set), then the host alone if that finds
+  nothing. Never interactive (`GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=never`, `credential.interactive=never`, no
+  askpass), 15 seconds at most. A login found is sent as `Authorization: Bearer`; it is never logged, printed, saved or
+  put in an error text (`Hide-Token`). `git credential` is allowed only as `fill`: approve and reject never run, so the
+  PC's stored logins never change. No login: asked without a token, as today. A login GitHub refuses (401) is dropped
+  and the call made again without it, so a public repo keeps working as today.
+- **Truthful states:** a 404 or 401 with no login reads "the repo is private and this PC has no GitHub login for it:
+  nothing installed; Anthony signs this PC in to GitHub once" (CI unknown, never failure, nothing installed). A 404 with
+  a login says that login cannot see the repo; 403 and 429 stay the rate-limit message. A fetch that fails for want of
+  a login ("could not read Username ... terminal prompts disabled") or with a refused one now says so plainly.
+- **Placeholders** (the first commit): The Desk's real-looking hostname and Tailscale address in the docs, test strings
+  and one `ChartBridge.cs` example comment are now `desk.example.com` and `100.64.0.10`; CLAUDE.md cites SERVER_RULES.md
+  by rule number. ChartBridge stays 0.6.14: the comment change needs no recompile.
+- **Rollout:** the scheduled task runs its pinned copy, which changes only at `-InstallChartBridge` or `register`, so
+  WORK and HOME get this after one of those (`register` with the `-DailyAt` that PC uses). Step B waits until both have
+  it (`status` names the commit the task's copy is from); a pinned copy from before this change would wait on the
+  missing `unit (windows-latest)` and cannot read a private repo.
+- Tests: `test/pc-updater.tests.ps1`: either set (today's pair; the box job green with Linux skipped or absent; the
+  box job failed, skipped or queued; neither there, and its 24 hour note), the login through a stand-in credential
+  helper (asked never interactively even from a window that allows prompts, the repo path first, then the host, none),
+  `credential approve`, `reject` and `store` refused, the login sent as Bearer and found in no output, log, state,
+  status, update.json or error text, the 404 and 401 messages, a refused login tried again without, and the plain fetch
+  messages. `test/pc-updater.test.js`: the allowed git subcommands, the box job's name, one place that asks for the
+  login and one that sends it.
+
 ## chart 1.43.0 (2026-11-04): a group's stops and targets a tick or two apart draw as one line (page only, no F5)
 
 In plain words: on a group ticket, a MARKET entry fills each account at its own price, and ChartBridge places each account's stop

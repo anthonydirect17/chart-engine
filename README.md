@@ -276,11 +276,12 @@ across fake restarts.
 ### Keep this PC up to date
 
 `nt8\update-pc.ps1` keeps the chart page on each trading PC (HOME, the laptop, WORK) up to date by itself, and gets a
-new ChartBridge ready for Anthony to install by hand. Windows PowerShell and git only; no admin, no Python, no token.
+new ChartBridge ready for Anthony to install by hand. Windows PowerShell and git only; no admin, no Python, no token of
+its own (once the repo is private it reads CI with this PC's GitHub login, the one git fetch uses: below).
 
 - **The page updates by itself.** The updater checks when you sign in and twice a day, at 9:00 AM and 5:00 PM New York
-  time (Anthony, 2026-10-23: every updater checks twice a day and at sign-in). It installs the newest commit on `main` whose CI is green on both ubuntu-latest and
-  windows-latest, and only when that page works with the ChartBridge compiled on this PC (`live/COMPAT.json`). An open
+  time (Anthony, 2026-10-23: every updater checks twice a day and at sign-in). It installs the newest commit on `main` whose CI is green: `unit` on both ubuntu-latest and
+  windows-latest (today's workflow), or `unit-windows` on HOMESERVER's runner (after the move below), and only when that page works with the ChartBridge compiled on this PC (`live/COMPAT.json`). An open
   page keeps running what it loaded, so an open trade is never disturbed.
 - **ChartBridge never installs by itself.** A new one is fetched and staged; Anthony installs it with one command while
   flat, then presses F5.
@@ -458,9 +459,31 @@ next update. `-InstallChartBridge` also moves the task's copy of the updater to 
 | `pause` / `resume` | turns the automatic update off and on (off is never the default; a cut-off install is still repaired while paused) |
 | `register` / `unregister` | the scheduled task "ChartEngine Updater" for this Windows user: at sign-in and daily at 9:00 AM and 5:00 PM New York time (`-DailyAt`), started hidden (wscript.exe //B and a one-line launcher) |
 
-Why it waits (all in `update.log`): CI not finished or red on either system; GitHub not reachable (it reads CI
-without a token: 60 requests an hour per address, and a pass uses two); ChartBridge's version not known (NinjaTrader
-closed and nothing recorded yet); the page needs a newer ChartBridge; paused; or a commit rolled back by hand.
+Why it waits (all in `update.log`): CI not finished or red; GitHub not reachable (without a login it reads CI with
+no token: 60 requests an hour per address, and a pass uses two); the repo private and this PC with no GitHub login for
+it (below); ChartBridge's version not known (NinjaTrader closed and nothing recorded yet); the page needs a newer
+ChartBridge; paused; or a commit rolled back by hand.
+
+**Going private (Anthony 2026-11-04).** chart-engine becomes a private repo, and its Windows CI moves to HOMESERVER's
+self-hosted runner (SERVER_RULES.md rule 6.1). In two steps, so the updaters on WORK and HOME never get stuck:
+
+1. **Step A (this updater):** it accepts either `unit (ubuntu-latest)` and `unit (windows-latest)` green, or the box
+   job `unit-windows` green (a Linux job that runs on pull requests only is skipped or absent on `main`, and is not
+   counted). Before it asks GitHub's API it asks git, without any prompt or window, for this PC's stored GitHub login
+   for the repo (`git credential fill`: the login `git fetch` uses, from Git Credential Manager or another helper),
+   and sends it as the API's token. It never prints, logs or saves it, and never changes the PC's stored logins. With
+   no login it asks without a token, as before; a login GitHub refuses is dropped and the call made again without it.
+   The scheduled task runs its pinned copy, so a PC gets this only after its next `-InstallChartBridge` (while flat)
+   or `register` (with the `-DailyAt` that PC uses): one of them on WORK and HOME before step B (`status` names the
+   commit the task's copy is from).
+2. **Step B (later):** `.github/workflows/test.yml` moves the Windows job to the box as `unit-windows` once the
+   HOMESERVER coordinator's runner card is done, then Anthony makes the repo private.
+
+A private repo needs this PC signed in to GitHub once, as the Windows user the task runs as: the updater then reads
+"git fetch failed: the repo is private and this PC has no GitHub login for it" or "GitHub answered 404: the repo is
+private and this PC has no GitHub login for it" in `update.log` and `status` (nothing installed, never a CI failure)
+until it is. One way: a `git fetch` in the clone from a normal PowerShell window, signing in when Git Credential Manager
+asks.
 
 With NinjaTrader closed, the ChartBridge version counted is the newest one `/diag` showed (or the one
 `-InstallChartBridge` copied, once seen), and never above the version in `bin\Custom\AddOns\ChartBridge.cs`.
