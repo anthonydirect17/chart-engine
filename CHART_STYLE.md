@@ -486,6 +486,34 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   drawn exactly as one account's (colors, borders, dashes, compact and full labels), its quantity the members' sum and its label
   followed by the group and how many accounts it covers: "STP 9 · Lucid ×4" ("SELL STP 9 · Lucid ×4" in full). Each account's
   order is in the line's tooltip. Dragging it moves every member's order to the price dropped at.
+- **A group's close stops and targets merge (1.43.0, Anthony 2026-11-04):** on a group MARKET entry each account fills at its own
+  price and ChartBridge places each account's bracket from that account's own fill, so the members' stops (and targets) can sit a
+  tick apart. A group's stops, and separately its targets, of the same role, side and kind whose prices are within
+  `GROUP_MERGE_TICKS` (2, `live/order-ticket.js`) of each other draw as ONE line, and so do one entry line's planned stops (or its
+  planned targets). Entries still merge only at one price; a single account's lines never merge.
+  - **The clustering rule** (`mergeLevels`): sort the prices from the end nearest the entry outward (a sell stop's highest first,
+    a buy stop's lowest, a sell target's lowest, a buy target's highest; a planned line by its plan role and closing side). The
+    first price opens a cluster; each next price joins it while it is at most 2 ticks from that cluster's FIRST price, else it
+    opens the next cluster. No cluster spans more than 2 ticks, so a chain of 1 tick gaps never grows into one long line (ticks
+    0, 1, 2, 3, 4 give two lines); 3 ticks apart stay two lines, as before.
+  - **Its price: the most protective, the cluster's price nearest the entry** (for a stop, the highest under a long; for a target,
+    the lowest over a long). That is the first member order the market reaches, so the line never shows more room than the
+    tightest account has: when price touches the line, an account's order is filling, never before. A quantity-weighted price would
+    sit between the members, past the tightest stop, and a member could be stopped out before price reached the line. The money is
+    never understated either way, as the label's figures are each member's own (below).
+  - **Its label:** the quantity is the members' sum, labelled as today ("STP 9 · Lucid ×4", "SELL STP 9 · Lucid ×4" in full).
+    **Its ticks and dollars** are the sum of each member's own risk: each member's order at its own price, measured from its own
+    account's position average (a planned line: from its own entry), times its own contracts; the dollars are that sum times the
+    point value, and the ticks are that sum per contract (the contracts' weighted average of the members' own ticks, a half
+    rounded away from zero, so a risk is never shown smaller). When every member filled at one price and the line covers the
+    group's whole position, this is the figure 1.42 showed (from the group's average). While the line is dragged, or its moves wait for their answers, every member is at the line's price
+    and the figures follow the drag live. The engine takes each member's order as `parts` on the line.
+  - **Its tooltip:** when the members' prices differ it starts with the range and where the line sits ("Group Lucid: SELL STP
+    25,406.50 to 25,406.75, the line at 25,406.75 (the nearest the entry)"), then each account's order with its own price, as
+    before. One price: the tooltip as before.
+  - **Its actions:** dragging it moves EVERY member's order to the single price it is dropped at (one `change` per member, the
+    ticket saying each member's result); its x cancels each member's order; a planned line's drag, x, +SL and +TP go to each
+    member's entry. Order placement and ChartBridge are unchanged.
 - **Planned stop and target (1.13.0, ChartBridge 0.3.8):** a resting entry's planned legs draw as its legs would (the
   leg's side color), but clearly planned: the line finely dashed 2/4 at 70% (40% while a move waits for its answer),
   the label "SL plan -12t" / "TP plan +24t" (ticks from the fill, from the line's live distance while dragged) with a

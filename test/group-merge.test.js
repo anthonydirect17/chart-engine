@@ -1,0 +1,282 @@
+'use strict';
+// Chart 1.43.0 (Anthony 2026-11-04, "merge on the chart"): on a group ticket, a MARKET entry fills each account at its own price and
+// ChartBridge places each account's bracket from its own fill, so the members' stops (and targets) can sit a tick apart. Stops, and
+// separately targets, of one role, side and kind within OT.GROUP_MERGE_TICKS (2) of each other draw as ONE line: clusters that
+// never span more than 2 ticks (a chain of 1 tick gaps never grows into one long line), the line at the price nearest the entry,
+// its quantity the sum, the range and each account's own price in its tooltip, its label's ticks and dollars the sum of each
+// member's own risk; a drag, the x and a planned line's drag act on every member. A fake clock and connection; made-up accounts
+// and prices.
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const OT = require('../live/order-ticket.js');
+const { LivePrefs: LP } = require('../live/live.js');
+const TC = require('../live/trade.js');
+
+/* ---------------- the clustering rule (live/order-ticket.js) */
+const at = ticks => ({ price: 25000 + ticks * 0.25 });
+const spans = cs => cs.map(c => Math.max(...c.items.map(x => Math.round(x.price / 0.25))) - Math.min(...c.items.map(x => Math.round(x.price / 0.25))));
+
+test('1.43.0: the merge distance is a named constant, 2 ticks', () => {
+  assert.equal(OT.GROUP_MERGE_TICKS, 2);
+});
+
+test('1.43.0: clustering: 1 tick apart one line, 2 ticks one line, 3 ticks two lines', () => {
+  assert.equal(OT.mergeLevels([at(0), at(1)], 0.25, 'high').length, 1, '1 tick apart');
+  assert.equal(OT.mergeLevels([at(0), at(2)], 0.25, 'high').length, 1, '2 ticks apart');
+  assert.equal(OT.mergeLevels([at(0), at(3)], 0.25, 'high').length, 2, '3 ticks apart');
+  assert.equal(OT.mergeLevels([at(0), at(0), at(0)], 0.25, 'low').length, 1, 'one price: one line, as before');
+});
+
+test('1.43.0: clustering is transitive-safe: a chain of 1 tick gaps spanning 4 ticks gives at least two lines, none over 2 ticks', () => {
+  for (const end of ['high', 'low']) {
+    const cs = OT.mergeLevels([at(0), at(1), at(2), at(3), at(4)], 0.25, end);
+    assert.ok(cs.length >= 2, end + ': ' + cs.length + ' lines');
+    assert.ok(spans(cs).every(s => s <= OT.GROUP_MERGE_TICKS), end + ': every line spans at most 2 ticks: ' + spans(cs));
+    assert.equal(cs.reduce((n, c) => n + c.items.length, 0), 5, 'every price in one line');
+  }
+  /* a long chain: still never more than 2 ticks a line */
+  const chain = Array.from({ length: 40 }, (_, i) => at(i));
+  assert.ok(spans(OT.mergeLevels(chain, 0.25, 'high')).every(s => s <= 2));
+});
+
+test('1.43.0: the walk starts at the end nearest the entry and the line sits at its first price', () => {
+  /* a sell stop (under a long): the highest is nearest the entry; ticks 0,1,2,3,4 from the top: {4,3,2} {1,0} */
+  const hi = OT.mergeLevels([at(0), at(1), at(2), at(3), at(4)], 0.25, 'high');
+  assert.deepEqual(hi.map(c => c.price), [25001, 25000.25]);
+  assert.deepEqual(hi[0].items.map(x => x.price), [25000.5, 25000.75, 25001], 'the members in the order given');
+  const lo = OT.mergeLevels([at(0), at(1), at(2), at(3), at(4)], 0.25, 'low');
+  assert.deepEqual(lo.map(c => c.price), [25000, 25000.75]);
+  assert.equal(OT.mergeEnd({ role: 'stop', side: 'sell' }), 'high', 'a sell stop: the highest is nearest the entry');
+  assert.equal(OT.mergeEnd({ role: 'stop', side: 'buy' }), 'low', 'a buy stop: the lowest');
+  assert.equal(OT.mergeEnd({ role: 'target', side: 'sell' }), 'low', 'a sell target: the lowest');
+  assert.equal(OT.mergeEnd({ role: 'target', side: 'buy' }), 'high', 'a buy target: the highest');
+  assert.equal(OT.mergeEnd({ role: null, side: 'sell', plan: { role: 'stop' } }), 'high', 'a buy entry\'s planned stop');
+  assert.equal(OT.mergeEnd({ role: null, side: 'sell', plan: { role: 'target' } }), 'low', 'a buy entry\'s planned target');
+});
+
+/* ---------------- the group ticket's lines (live/trade.js), as test/group-ticket.test.js's rig */
+function rig() {
+  let clock = 5000; const timers = []; let tid = 0;
+  const store = new Map();
+  const storage = { getItem: k => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)) };
+  const R = { sent: [], notes: [], root: 'NQ', last: 25000 };
+  const groups = [{ id: 'g1', name: 'Lucid', perMember: true, riskPct: 10, members: ['SIM-A', 'SIM-B', 'SIM-C'], tradeOut: [] }];
+  const env = {
+    LP, prefs: LP.create(storage), fetch: () => Promise.resolve({ ok: true, text: () => Promise.resolve('{"token":"t"}') }),
+    send: m => R.sent.push(JSON.parse(JSON.stringify(m))), open: () => true, sock: () => R,
+    root: () => R.root, lastPrice: () => R.last, qty: () => 1, pickerAccount: () => core.TR.account, wantedAccount: () => 'group:g1',
+    tick: () => 0.25, served: () => true, fmt: p => p.toFixed(2), flash: (t, l) => R.notes.push((l ? l + ': ' : '') + t),
+    later: (fn, ms) => { timers.push({ id: ++tid, at: clock + ms, fn }); return tid; },
+    changed: () => {}, armed: () => {}, applied: () => {}, lost: () => {}, syncAccounts: () => {}, batch: () => {}, unsent: () => {}, armBlocked: () => '', destroyed: () => false, now: () => clock,
+    groups: () => groups, confirmGroup: () => false, strategy: () => null,
+  };
+  const core = TC.create(env);
+  R.core = core;
+  R.advance = ms => { const end = clock + ms; for (;;) { timers.sort((a, b) => a.at - b.at || a.id - b.id); const t = timers[0]; if (!t || t.at > end) break; timers.shift(); clock = t.at; t.fn(); } clock = end; };
+  core.applyTrading({ enabled: true, accounts: ['SIM-A', 'SIM-B', 'SIM-C', 'SIM-D'], maxQty: { NQ: 9 } });
+  return R;
+}
+const order = (id, account, role, side, kind, price, qty, extra) => Object.assign({ type: 'order', id, account, root: 'NQ', role, side, kind, price, qty, filled: 0, state: 'working' }, extra || {});
+/* a group MARKET entry: each account filled at its own price, its bracket (80 ticks stop, 160 target) from its own fill */
+function filled(R, fills) {
+  const list = [];
+  fills.forEach(([a, qty, p], i) => {
+    R.core.message({ type: 'position', account: a, root: 'NQ', qty, avgPrice: p });
+    list.push(order('s' + i, a, 'stop', 'sell', 'stop', p - 20, qty), order('t' + i, a, 'target', 'sell', 'limit', p + 40, qty));
+  });
+  R.core.message({ type: 'orders', list });
+}
+
+test('1.43.0: two accounts 1 tick apart: one stop line and one target line; the quantity the sum, the label as today', () => {
+  const R = rig();
+  filled(R, [['SIM-A', 4, 25000], ['SIM-B', 2, 25000.25]]);
+  const lines = R.core.chartOrders('group:g1', 'NQ');
+  assert.equal(lines.length, 2, 'one stop line, one target line: ' + lines.map(l => l.id).join(' '));
+  const stop = lines.find(l => l.role === 'stop'), tgt = lines.find(l => l.role === 'target');
+  assert.equal(stop.qty, 6); assert.equal(stop.group, 'Lucid ×2', 'the label "STP 6 · Lucid ×2", as today');
+  assert.equal(stop.price, 24980.25, 'the stop line at the stop nearest the entry (the higher, under a long)');
+  assert.equal(tgt.price, 25040, 'the target line at the target nearest the entry (the lower, over a long)');
+  assert.equal(stop.groupTip, 'Group Lucid: SELL STP 24980.00 to 24980.25, the line at 24980.25 (the nearest the entry)\nSIM-A SELL STP 4 @ 24980.00\nSIM-B SELL STP 2 @ 24980.25',
+    'the range, then each account\'s order with its own price');
+  assert.deepEqual(stop.parts, [{ price: 24980, qty: 4, from: 25000 }, { price: 24980.25, qty: 2, from: 25000.25 }], 'each member\'s own order and fill, for the risk label');
+  assert.deepEqual(stop.members, ['s0', 's1']);
+});
+
+test('1.43.0: 2 ticks apart one line; 3 ticks apart two lines, each at its own price, as before', () => {
+  const R = rig();
+  filled(R, [['SIM-A', 1, 25000], ['SIM-B', 1, 25000.5]]);
+  assert.equal(R.core.chartOrders('group:g1', 'NQ').filter(l => l.role === 'stop').length, 1, '2 ticks apart');
+  R.core.message({ type: 'orders', list: [order('a', 'SIM-A', 'stop', 'sell', 'stop', 24980, 1), order('b', 'SIM-B', 'stop', 'sell', 'stop', 24980.75, 1)] });
+  const two = R.core.chartOrders('group:g1', 'NQ');
+  assert.equal(two.length, 2, '3 ticks apart');
+  assert.deepEqual(two.map(l => [l.price, l.qty, l.group]), [[24980, 1, 'Lucid ×1'], [24980.75, 1, 'Lucid ×1']]);
+  assert.ok(!/ to /.test(two[0].groupTip), 'one price: no range in the tooltip');
+});
+
+test('1.43.0: a chain of 1 tick gaps over 4 ticks gives at least two lines, none over 2 ticks', () => {
+  const R = rig();
+  R.core.message({ type: 'orders', list: [order('a', 'SIM-A', 'stop', 'sell', 'stop', 24980, 1), order('b', 'SIM-B', 'stop', 'sell', 'stop', 24980.25, 1), order('c', 'SIM-C', 'stop', 'sell', 'stop', 24980.5, 1),
+    order('d', 'SIM-A', 'stop', 'sell', 'stop', 24980.75, 1), order('e', 'SIM-B', 'stop', 'sell', 'stop', 24981, 1)] });
+  const lines = R.core.chartOrders('group:g1', 'NQ');
+  assert.ok(lines.length >= 2, lines.length + ' lines');
+  for (const l of lines) { const ps = l.parts.map(p => p.price); assert.ok(Math.max(...ps) - Math.min(...ps) <= 0.5 + 1e-9, l.id + ' spans ' + ps.join(', ')); }
+  assert.equal(lines.reduce((n, l) => n + l.qty, 0), 5);
+});
+
+test('1.43.0: mixed sides, roles and kinds never merge, even a tick apart', () => {
+  const R = rig();
+  R.core.message({ type: 'orders', list: [
+    order('a', 'SIM-A', 'stop', 'sell', 'stop', 24980, 1), order('b', 'SIM-B', 'stop', 'buy', 'stop', 24980.25, 1),           // sides
+    order('c', 'SIM-C', 'target', 'sell', 'stop', 24980, 1),                                                                      // roles
+    order('d', 'SIM-A', 'stop', 'sell', 'stopLimit', 24980.25, 1),                                                               // kinds
+    order('e', 'SIM-B', 'target', 'sell', 'limit', 25040, 1), order('f', 'SIM-C', 'target', 'sell', 'limit', 25040.25, 1)] });   // these two merge
+  const lines = R.core.chartOrders('group:g1', 'NQ');
+  assert.equal(lines.length, 5, lines.map(l => l.id).join(' '));
+  assert.deepEqual(lines.map(l => l.members.join('+')).sort(), ['a', 'b', 'c', 'd', 'e+f']);
+});
+
+test('1.43.0: a group\'s entries still merge only at one price', () => {
+  const R = rig();
+  R.core.message({ type: 'orders', list: [order('e1', 'SIM-A', 'entry', 'buy', 'limit', 24990, 1), order('e2', 'SIM-B', 'entry', 'buy', 'limit', 24990.25, 1)] });
+  assert.equal(R.core.chartOrders('group:g1', 'NQ').length, 2);
+});
+
+test('1.43.0: a drag of a merged line sends one change per member, every one to the price dropped at; the x cancels each', () => {
+  const R = rig();
+  R.core.setArmed(true);
+  filled(R, [['SIM-A', 4, 25000], ['SIM-B', 2, 25000.25], ['SIM-C', 1, 25000.5]]);
+  const stop = R.core.chartOrders('group:g1', 'NQ').find(l => l.role === 'stop');
+  assert.equal(stop.qty, 7); assert.equal(stop.group, 'Lucid ×3'); assert.equal(stop.price, 24980.5);
+  assert.match(stop.groupTip, /^Group Lucid: SELL STP 24980\.00 to 24980\.50, the line at 24980\.50 \(the nearest the entry\)\nSIM-A SELL STP 4 @ 24980\.00\nSIM-B SELL STP 2 @ 24980\.25\nSIM-C SELL STP 1 @ 24980\.50$/);
+  R.sent.length = 0;
+  R.core.moveOrder(stop.id, 24985);
+  assert.deepEqual(R.sent.map(m => [m.type, m.id, m.price]), [['change', 's0', 24985], ['change', 's1', 24985], ['change', 's2', 24985]], 'every member\'s stop to the one price');
+  R.advance(2000);
+  assert.equal(R.notes.pop(), 'Group stops to 24985.00: SIM-A, SIM-B, SIM-C moved.', 'each member\'s result on the ticket, as before');
+  const moved = R.core.chartOrders('group:g1', 'NQ').find(l => l.role === 'stop');
+  assert.equal(moved.movePending, 24985, 'drawn at the dropped price while the moves wait');
+  assert.ok(moved.parts.every(p => p.price === 24985), 'every member at the dropped price for the risk label');
+  R.sent.length = 0;
+  R.core.cancelOrder(R.core.chartOrders('group:g1', 'NQ').find(l => l.role === 'target').id);
+  assert.deepEqual(R.sent.map(m => m.type + ' ' + m.id), ['cancel t0', 'cancel t1', 'cancel t2'], 'the x cancels each member\'s order');
+});
+
+test('1.43.0: planned lines merge too: a drag sends `plan` to each member entry, to the one price', () => {
+  const R = rig();
+  R.core.setArmed(true);
+  const entry = (id, a, stopTicks) => order(id, a, 'entry', 'buy', 'limit', 24990, 1, { planned: { stopTicks, targetTicks: null } });
+  R.core.message({ type: 'orders', list: [entry('e1', 'SIM-A', 8), entry('e2', 'SIM-B', 9), entry('e3', 'SIM-C', 12)] });
+  const lines = R.core.chartOrders('group:g1', 'NQ'), plans = lines.filter(l => l.plan);
+  assert.equal(plans.length, 2, '8 and 9 ticks merge, 12 stays apart: ' + plans.map(l => l.id).join(' '));
+  const m = plans.find(l => l.qty === 2);
+  assert.equal(m.price, 24988, 'the planned stop nearest the entry');
+  assert.equal(m.plan.offset, -8, 'drawn from the entry line at that offset');
+  assert.deepEqual(m.parts, [{ price: 24988, qty: 1, from: 24990 }, { price: 24987.75, qty: 1, from: 24990 }]);
+  assert.match(m.groupTip, /^Group Lucid: planned stops 24987\.75 to 24988\.00, the line at 24988\.00/);
+  R.sent.length = 0;
+  R.core.planMove(m.id, 24986, 24990);
+  assert.deepEqual(R.sent.map(x => [x.type, x.id, x.stopTicks]), [['plan', 'e1', 16], ['plan', 'e2', 16]], 'each member entry, 16 ticks: the one price');
+  R.sent.length = 0;
+  R.core.planRemove(m.id);
+  assert.deepEqual(R.sent.map(x => [x.id, x.stopTicks]), [['e1', null], ['e2', null]], 'its x removes each');
+});
+
+test('1.43.0: a single-account ticket is unchanged: its own orders, a tick apart, stay separate lines with no parts', () => {
+  const R = rig();
+  R.core.message({ type: 'orders', list: [order('a', 'SIM-A', 'stop', 'sell', 'stop', 24980, 1), order('b', 'SIM-A', 'stop', 'sell', 'stop', 24980.25, 1)] });
+  const lines = R.core.chartOrders('SIM-A', 'NQ');
+  assert.deepEqual(lines.map(l => l.id), ['a', 'b']);
+  assert.ok(lines.every(l => l.parts === undefined && l.group === undefined));
+});
+
+/* ---------------- the risk label (src/chart-engine.js, on a stand-in canvas) */
+const U = require('../src/chart-engine.js').util;
+test('1.43.0: partsRisk: the sum of each member\'s own risk, its ticks that sum per contract (a half away from zero)', () => {
+  const parts = [{ price: 24980, qty: 4, from: 25000 }, { price: 24980.25, qty: 2, from: 25000.25 }, { price: 24980.5, qty: 1, from: 25000.5 }];
+  const r = U.partsRisk(parts, null, q => q.from, 1, 0.25);
+  assert.deepEqual(r, { points: -140, ticks: -80, qty: 7 }, 'every member 80 ticks from its own fill: -140 points, $2,800 on NQ');
+  const d = U.partsRisk(parts, 24985, q => q.from, 1, 0.25);
+  assert.equal(d.points, (24985 - 25000) * 4 + (24985 - 25000.25) * 2 + (24985 - 25000.5) * 1, 'dragged: every member at the line\'s price');
+  assert.equal(d.ticks, -61, '-60.57 ticks a contract: -61');
+  assert.deepEqual(U.partsRisk([{ price: 99.5, qty: 1, from: 100 }, { price: 99.75, qty: 1, from: 100 }], null, q => q.from, 1, 0.25), { points: -0.75, ticks: -2, qty: 2 }, '-1.5 ticks rounds to -2, never shown smaller');
+  assert.equal(U.partsRisk([{ price: 1, qty: 1 }], null, () => undefined, 1, 0.25), null, 'nothing to measure from: not known');
+});
+
+function stub() {
+  const ops = [];
+  const ctx = new Proxy({}, {
+    get(t, k) {
+      if (k in t) return t[k];
+      if (k === 'measureText') return s => ({ width: String(s).length * 7 });
+      if (k === 'fillText') return s => ops.push({ op: 'text', s: String(s) });
+      return () => {};
+    },
+    set(t, k, v) { t[k] = v; return true; },
+  });
+  const made = [];
+  const element = () => made[made.push({
+    handlers: {}, style: {}, dataset: {}, hidden: false, textContent: '', tabIndex: -1,
+    classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
+    addEventListener(type, fn) { this.handlers[type] = fn; }, removeEventListener(type) { delete this.handlers[type]; },
+    appendChild(c) { return c; }, remove() {}, setAttribute() {}, hasAttribute() { return false; },
+    getContext: () => ctx, focus() {}, setPointerCapture() {},
+    getBoundingClientRect: () => ({ left: 0, top: 0, width: 1078, height: 626, right: 1078, bottom: 626 }),
+  }) - 1];
+  let frameFn = null;
+  global.document = { createElement: element, getElementById: () => null, head: { appendChild() {} } };
+  global.window = { devicePixelRatio: 1 };
+  global.requestAnimationFrame = fn => { frameFn = fn; return 1; };
+  global.cancelAnimationFrame = () => { frameFn = null; };
+  global.Path2D = class { rect() {} moveTo() {} lineTo() {} closePath() {} arc() {} };
+  delete require.cache[require.resolve('../src/chart-engine.js')];
+  const E = require('../src/chart-engine.js');
+  const bars = [], T0 = Date.UTC(2026, 10, 3, 15, 0) / 1000;
+  for (let i = 0; i < 200; i++) { const c = 100 + Math.sin(i / 9) * 2; bars.push({ t: T0 + i * 60, o: c - 0.5, h: c + 1, l: c - 1, c, v: 100, vw: c }); }
+  const host = element();
+  const chart = E.create(host, { clock: () => bars[bars.length - 1].t + 30, compactLabels: true, motion: { zoom: 0, fit: 0, candle: 0, follow: 0 } });
+  chart.setBars(bars);
+  const cv = made.find(m => m.handlers.pointerdown);
+  let ts = 1000;
+  const ev = (x, y) => ({ clientX: x, clientY: y, button: 0, buttons: 1, pointerId: 1, pointerType: 'mouse', timeStamp: ts, shiftKey: false, ctrlKey: false, preventDefault() {} });
+  const api = {
+    chart, texts: () => ops.filter(o => o.op === 'text').map(o => o.s),
+    frame(n) { ops.length = 0; for (let k = 0; k < (n || 1); k++) { const f = frameFn; frameFn = null; if (f) f(ts += 16); } },   // every frame's text (a frame with nothing new draws nothing)
+    down: (x, y) => cv.handlers.pointerdown(ev(x, y)), move: (x, y) => cv.handlers.pointermove(ev(x, y)), up: (x, y) => cv.handlers.pointerup(ev(x, y)),
+  };
+  api.frame(30);
+  return api;
+}
+
+test('1.43.0: a merged line\'s risk label: the sum of each member\'s own risk, live while dragged; a single account\'s as before', () => {
+  const S = stub();
+  /* MNQ ($2 a point): SIM-A 4 @ 100.00, SIM-B 2 @ 100.25, SIM-C 1 @ 100.50, each stop 4 ticks under its own fill; the group's
+     position 7 at the weighted average 100.142857; the merged stop line at 99.50 (the nearest the entry) */
+  S.chart.setPosition({ qty: 7, avgPrice: (400 + 200.5 + 100.5) / 7, group: 'Lucid ×3' }, { pointValue: 2 });
+  const parts = [{ price: 99, qty: 4, from: 100 }, { price: 99.25, qty: 2, from: 100.25 }, { price: 99.5, qty: 1, from: 100.5 }];
+  S.chart.setOrders([{ id: 'G~stop~sell~stop~398', side: 'sell', kind: 'stop', role: 'stop', price: 99.5, qty: 7, group: 'Lucid ×3', parts }]);
+  S.chart.setOrderEditing(true);
+  S.frame(3);
+  assert.ok(S.texts().includes('STP 7 -4t -$14'), 'every member 4 ticks from its own fill: -4t, 7 points, -$14 (the average\'s figure at the line would be -3t -$9): ' + S.texts().filter(t => /STP/.test(t)).join('|'));
+  /* dragged to 99.00: every member there: -4 - 2.5 - 1.5 = -8 points, -$16, -4.57 ticks a contract: -5t */
+  const h = S.chart.orderHandles().find(x => x.id === 'G~stop~sell~stop~398');
+  const x = h.box.x + 8, y = h.box.y + h.box.h / 2, dy = S.chart.priceToY(99) - S.chart.priceToY(99.5);
+  S.down(x, y); S.move(x, y + dy / 2); S.move(x, y + dy); S.frame();
+  assert.ok(S.texts().some(t => /-5t -\$16/.test(t)), 'live while dragged: ' + S.texts().filter(t => /STP/.test(t)).join('|'));
+  S.up(x, y + dy); S.frame();
+  /* one account: no parts, the 1.34.0 figure from the position's average */
+  S.chart.setPosition({ qty: 2, avgPrice: 100 }, { pointValue: 2 });
+  S.chart.setOrders([{ id: 'o1', side: 'sell', kind: 'stop', role: 'stop', price: 99, qty: 2 }]);
+  S.frame(2);
+  assert.ok(S.texts().includes('STP 2 -4t -$4'), 'a single account, as before (1 point, 2 contracts, $2 a point): ' + S.texts().filter(t => /STP/.test(t)).join('|'));
+});
+
+test('1.43.0: a merged planned line\'s label: each member\'s own distance and contracts', () => {
+  const S = stub();
+  S.chart.setPosition(null, { pointValue: 20 });
+  const entry = { id: 'G~entry~buy~limit~400', side: 'buy', kind: 'limit', price: 100, qty: 2, group: 'Lucid ×2' };
+  S.chart.setOrders([entry, { id: 'G~entry~buy~limit~400~at392:sl', side: 'sell', kind: 'stop', price: 98, qty: 2, group: 'Lucid ×2', plan: { role: 'stop', parent: entry.id, offset: -8 },
+    parts: [{ price: 98, qty: 1, from: 100 }, { price: 97.75, qty: 1, from: 100 }] }]);
+  S.chart.setOrderEditing(true);
+  S.frame(3);
+  assert.ok(S.texts().includes('SL -9t -$85'), 'NQ, 8 and 9 ticks, one contract each: 17 ticks, $85; 8.5 ticks a contract shown as 9 (never smaller): ' + S.texts().filter(t => /SL/.test(t)).join('|'));
+});

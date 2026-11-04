@@ -1,5 +1,5 @@
 /*!
- * chart-engine 1.42.3
+ * chart-engine 1.43.0
  * Anthony's trading chart: a Canvas 2D candlestick engine with eased zoom, a smooth price axis,
  * live-growing candles, levels, VWAP and trade marks. No dependencies.
  *
@@ -13,7 +13,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
 'use strict';
 
-const VERSION = '1.42.3';
+const VERSION = '1.43.0';
 const DAY = 86400;
 
 /* ---------------------------------------------------------------- time */
@@ -100,6 +100,26 @@ function positionShort(qty, pnl, precision) {
   const out = [(qty > 0 ? 'L' : 'S') + Math.abs(qty), fmtSigned(pnl.points, precision)];
   if (pnl.dollars !== null && pnl.dollars !== undefined) { const d = Math.round(pnl.dollars); out.push((d < 0 ? '-' : d > 0 ? '+' : '') + '$' + fmtPrice(Math.abs(d), 0)); }
   return out;
+}
+/**
+ * 1.43.0 (Anthony 2026-11-04): a group line's risk as the sum of each member's own. parts [{ price, qty, from }] (the engine's
+ * `parts`), at: the price every part is at while the line is dragged or its move waits (null: each its own), fromOf(part): the
+ * price its risk is measured from, sign: +1 for a long's legs (-1 a short's; a planned line passes 1 and takes the magnitudes).
+ * Returns { points, ticks, qty } or null: `points` the sum of each part's signed points times its contracts (times the point
+ * value it is dollars), `ticks` that sum per contract in whole ticks (the contracts' weighted average of each member's own
+ * ticks; a half rounds away from zero, so a risk is never shown smaller), `qty` the contracts.
+ */
+function partsRisk(parts, at, fromOf, sign, tick) {
+  if (!Array.isArray(parts) || !parts.length || !(tick > 0)) return null;
+  let points = 0, qty = 0;
+  for (const q of parts) {
+    const from = fromOf(q), p = at !== null && at !== undefined ? at : q.price;
+    if (typeof from !== 'number' || !isFinite(from) || !isFinite(p) || !(q.qty > 0)) return null;
+    points += (p - from) * sign * q.qty; qty += q.qty;
+  }
+  if (!(qty > 0)) return null;
+  const per = points / qty / tick;
+  return { points, ticks: Math.sign(per) * Math.round(Math.abs(per) + 1e-9), qty };
 }
 /** Open P&L of a signed position (long > 0): points per contract, and dollars for the whole position. */
 function openPnl(qty, avgPrice, last, pointValue) {
@@ -2847,8 +2867,14 @@ function create(container, options) {
           const alpha = pendingMoves.has(ord.id) && !dragging ? 0.4 : 0.7;
           hline(y, col, [2, 4], dragging || lineHot(ord.id, y) ? 1 : 0.75 * alpha, dragging ? 1.5 : 1);   // 1.37.0: full while hovered or dragged
           const pv = hostPV || o.pointValue, left = parent ? Math.max(0, (+parent.qty || 0) - (+parent.filled || 0)) : 0;
-          const usd = pv > 0 && left > 0 ? (ord.plan.role === 'stop' ? -1 : 1) * ticks * o.tick * pv * left : null;   // 1.34.0: live while dragged
-          const pl = { plan: { role: ord.plan.role, ticks }, group: ord.group, usd };
+          let usd = pv > 0 && left > 0 ? (ord.plan.role === 'stop' ? -1 : 1) * ticks * o.tick * pv * left : null;   // 1.34.0: live while dragged
+          let shown = ticks;
+          if (ord.parts) {                                         // 1.43.0: a group's planned line: each member's own distance and contracts
+            const moved = dragging || pendingMoves.has(ord.id), base = parent ? orderPrice(parent) : null;
+            const r = partsRisk(ord.parts, moved ? price : null, q => (moved || q.from === undefined ? base : q.from), 1, o.tick);   // moved: every member from the entry line as drawn
+            if (r) { shown = Math.abs(r.ticks); usd = pv > 0 ? (ord.plan.role === 'stop' ? -1 : 1) * Math.abs(r.points) * pv : null; }
+          }
+          const pl = { plan: { role: ord.plan.role, ticks: shown }, group: ord.group, usd };
           const hit = label(y, [[orderLabel(pl), col]], col, [2, 3], alpha, orderEditing, null, [[orderLabelShort(pl), col]], ord.id, true);
           orderHits.push({ id: ord.id, box: hit.box, xbox: hit.xbox, y });   // 1.39.1: y, its line (read only, for orderHandles())
           orderTags.push({ price, id: ord.id, style: { fill: T.bg, fg: col, border: col, dash: [2, 3] } });
@@ -2864,6 +2890,9 @@ function create(container, options) {
           const pv = position.pointValue || hostPV || o.pointValue, left = Math.max(0, (+ord.qty || 0) - (+ord.filled || 0));
           const pts = (price - position.avgPrice) * Math.sign(position.qty);
           lab = Object.assign({}, ord, { legTicks: Math.round(pts / o.tick), usd: pv > 0 && left > 0 ? pts * pv * left : null });
+          /* 1.43.0: a group's line: the sum of each member's own risk (its own price, from its own fill, for its own contracts) */
+          const r = ord.parts ? partsRisk(ord.parts, dragging || pendingMoves.has(ord.id) ? price : null, q => (q.from !== undefined ? q.from : position.avgPrice), Math.sign(position.qty), o.tick) : null;
+          if (r) lab = Object.assign({}, ord, { legTicks: r.ticks, usd: pv > 0 ? r.points * pv : null });
         }
         const hit = label(y, [[orderLabel(lab), col]], col, dash ? [3, 2] : null, alpha, orderEditing, extras, [[orderLabelShort(lab), col]], ord.id, true);
         orderHits.push({ id: ord.id, box: hit.box, xbox: hit.xbox, adds: hit.adds, y });
@@ -3613,7 +3642,11 @@ function create(container, options) {
      * order (orderMove with its own id and `from`, the entry price it was drawn from; orderCancel). `adds: ['stop', 'target']` on an entry draws "+SL" / "+TP" cells on
      * its label while editing; a click on one emits orderPlanAdd { id, which }. `movePending: price` (1.22.0) on an order
      * whose move still waits for its answer draws it there (faded, as after the drag), its planned lines with it. `group` (1.33.0,
-     * a string such as "Lucid ×4") follows the label: a group's line on a host's chart.
+     * a string such as "Lucid ×4") follows the label: a group's line on a host's chart. `parts` (1.43.0, a group's line):
+     * [{ price, qty, from }], each member's own order (its price, what is left of it, and the price its risk is measured from:
+     * its account's position average for a stop or target, its entry's price for a planned line; a leg without `from` is
+     * measured from the position's average). The label's dollars are then the sum of each part's own risk and its ticks that
+     * sum per contract (partsRisk); while the line is dragged, or its move waits, every part is at the line's price.
      */
     setOrders(list) {
       orders = (list || []).filter(x => x && x.id !== undefined && isFinite(x.price) && x.price !== null)
@@ -3622,6 +3655,11 @@ function create(container, options) {
           if (x.plan && x.plan.parent !== undefined && isFinite(x.plan.offset)) y.plan = { parent: x.plan.parent, offset: Math.round(+x.plan.offset), role: x.plan.role === 'target' ? 'target' : 'stop', ticks: Math.abs(Math.round(+x.plan.offset)) };
           if (Array.isArray(x.adds)) y.adds = x.adds.filter(w => w === 'stop' || w === 'target');
           if (typeof x.group === 'string' && x.group) y.group = x.group.slice(0, 40);   // 1.33.0: a group's line names its group
+          if (Array.isArray(x.parts)) {                                                  // 1.43.0: a group line's member orders, for its risk
+            const ps = x.parts.filter(q => q && typeof q.price === 'number' && isFinite(q.price) && +q.qty > 0).slice(0, 200)
+              .map(q => (typeof q.from === 'number' && isFinite(q.from) ? { price: q.price, qty: +q.qty, from: q.from } : { price: q.price, qty: +q.qty }));
+            if (ps.length) y.parts = ps;
+          }
           return y;
         });
       pendingMoves.clear();
@@ -4550,7 +4588,7 @@ return {
     V1_GROUND, groundOf, HOUSE_CHROME,
     obarDims, fadedContrast, OBAR_DIM: { alpha: DIM, house: HOUSE_DIMS },
     aggregate, foldLast, addSessionVwap, sessionLevels, levelLines, initialBalance, ibLines, overnightRange, onLines, rthDay, closedDay, cmeClosed, cmeSessionDay, cmeClosures, nyseHolidays, nyseEarlyCloses, rthClose,
-    orderLabel, orderLabelShort, positionShort, htfStart, htfEnd, HTF_SECONDS, cornerPlace, openPnl, fmtMoney, fmtSigned, groupFills, stackFillLabels, profileRects,
+    orderLabel, orderLabelShort, positionShort, partsRisk, htfStart, htfEnd, HTF_SECONDS, cornerPlace, openPnl, fmtMoney, fmtSigned, groupFills, stackFillLabels, profileRects,
     roomBars, ROOM_MIN, ROOM_MAX, LINE_SOFT, LABEL_SOFT, fitRange, fmtRemain, barRemain, atr, smaAt, emaAt, bandsAt, rsiAt, smaSeries, emaSeries, bollinger, rsiSeries, pctFrom, bubbleRadius, BUBBLE_R_MIN, BUBBLE_R_MAX, rthVwap, rthVwapUpdate, vwapAt, PD_POC_DASH,
   },
   VolumeProfile, CumulativeDelta,

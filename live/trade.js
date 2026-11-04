@@ -1075,35 +1075,83 @@ function create(env) {
    * 1.33.0 (Anthony 2026-10-19, answer 1): a group ticket's charts draw the group's order lines: one line per level (the members'
    * orders of one role, side and kind at one price, and their planned lines), labelled with the group and how many accounts it
    * covers ("Lucid x4"), each account's order in its tooltip. A line's id is "G~<role>~<side>~<kind>~<price in ticks>" (a planned
-   * line's, its entry line's id with ":sl" or ":tp"). Dragging it moves every member's order there to the SAME price; its x cancels
-   * each; +SL or +TP adds to each.
+   * line's, its entry line's id with "~at<price in ticks>" and ":sl" or ":tp"). Dragging it moves every member's order there to
+   * the SAME price; its x cancels each; +SL or +TP adds to each.
+   * 1.43.0 (Anthony 2026-11-04, "merge on the chart"): a group's stops, and separately its targets (and the planned stops and
+   * targets of one entry line), of one role, side and kind merge into ONE line when they are within OT.GROUP_MERGE_TICKS (2) of
+   * each other, by OT.mergeLevels' rule (no cluster spans more than 2 ticks; the line at the price nearest the entry, its id's
+   * price). Entries still merge only at one price. The drag, the x and the planned lines' drag act on every member of the line
+   * as before, so each member's order goes to the one price dropped at.
    */
   function groupBuckets(account, r) {
     const g = groupFor(account), t = tickOf(r), out = new Map();
     if (!g || !(t > 0)) return out;
-    const keyOf = o => 'G~' + (o.role || 'entry') + '~' + o.side + '~' + o.kind + '~' + Math.round(o.price / t);
-    for (const a of targets(account)) {
-      const own = chartOrdersOne(a, r), parentKey = new Map();
-      for (const o of own) if (!o.plan) parentKey.set(o.id, keyOf(o));
-      for (const o of own) {
-        const id = o.plan ? (parentKey.get(o.plan.parent) || 'G~?') + '~at' + Math.round(o.price / t) + ':' + (o.plan.role === 'stop' ? 'sl' : 'tp') : keyOf(o);   // review 7: one id per planned level
-        let b = out.get(id);
-        if (!b) { b = { id, items: [], parent: o.plan ? parentKey.get(o.plan.parent) : null }; out.set(id, b); }
-        b.items.push(Object.assign({ account: a }, o));
+    const at = p => Math.round(p / t);
+    const all = [];
+    for (const a of targets(account)) for (const o of chartOrdersOne(a, r)) all.push(Object.assign({ account: a }, o));
+    const lineOf = new Map(), made = new Map();       // a member item -> its line's id; a line's id -> { price, lead }
+    const cluster = (items, base, sfx) => {
+      for (const c of OT.mergeLevels(items, t, OT.mergeEnd(items[0]))) {
+        const id = base + c.at + sfx;
+        made.set(id, { price: c.price, lead: c.lead });
+        for (const x of c.items) lineOf.set(x, id);
       }
+    };
+    /* the orders: a stop or a target by its role, side and kind, clustered; anything else (an entry) at its own price */
+    const legs = new Map();
+    for (const x of all) {
+      if (x.plan) continue;
+      const k = 'G~' + (x.role || 'entry') + '~' + x.side + '~' + x.kind + '~';
+      if (x.role === 'stop' || x.role === 'target') { if (!legs.has(k)) legs.set(k, []); legs.get(k).push(x); continue; }
+      const id = k + at(x.price);
+      if (!made.has(id)) made.set(id, { price: x.price, lead: x });
+      lineOf.set(x, id);
+    }
+    for (const [k, items] of legs) cluster(items, k, '');
+    /* the planned lines: each entry line's planned stops, and its planned targets, clustered (review 7: one id per level) */
+    const lineOfId = new Map();
+    for (const x of all) if (!x.plan) lineOfId.set(x.id, lineOf.get(x));
+    const plans = new Map();
+    for (const x of all) {
+      if (!x.plan) continue;
+      const k = (lineOfId.get(x.plan.parent) || 'G~?') + '|' + (x.plan.role === 'stop' ? 'sl' : 'tp');
+      if (!plans.has(k)) plans.set(k, []);
+      plans.get(k).push(x);
+    }
+    for (const [k, items] of plans) { const [parent, sfx] = k.split('|'); cluster(items, parent + '~at', ':' + sfx); }
+    for (const x of all) {                             // the lines in the order of their first member, as before
+      const id = lineOf.get(x);
+      let b = out.get(id);
+      if (!b) { const m = made.get(id); b = { id, items: [], price: m.price, lead: m.lead, parent: x.plan ? lineOfId.get(x.plan.parent) || null : null }; out.set(id, b); }
+      b.items.push(x);
     }
     return out;
   }
+  const roleWords = x => (x.plan ? (x.plan.role === 'stop' ? 'planned stop' : 'planned target') : (x.side === 'sell' ? 'SELL ' : 'BUY ') + (x.role === 'stop' ? 'STP' : x.role === 'target' ? 'TGT' : String(x.kind).toUpperCase()));
   function groupChartOrders(account, r) {
-    const g = groupFor(account), out = [];
+    const g = groupFor(account), out = [], t = tickOf(r);
     for (const b of groupBuckets(account, r).values()) {
-      const f = b.items[0], n = new Set(b.items.map(x => x.account)).size;
-      const left = b.items.reduce((s2, x) => s2 + Math.max(0, (+x.qty || 0) - (+x.filled || 0)), 0);
+      const f = b.lead, n = new Set(b.items.map(x => x.account)).size;
+      const leftOf = x => Math.max(0, (+x.qty || 0) - (+x.filled || 0));
+      const left = b.items.reduce((s2, x) => s2 + leftOf(x), 0);
       const extra = [outWords(account), leftWords(account)].filter(Boolean).join('\n');
-      const tip = (g ? 'Group ' + g.name : 'Group') + ': ' + b.items.map(x => x.account + ' ' + (x.plan ? (x.plan.role === 'stop' ? 'planned stop' : 'planned target') : (x.side === 'sell' ? 'SELL ' : 'BUY ') + (x.role === 'stop' ? 'STP' : x.role === 'target' ? 'TGT' : String(x.kind).toUpperCase())) + ' ' + Math.max(0, (+x.qty || 0) - (+x.filled || 0)) + ' @ ' + fmt(x.price)).join('\n') + (extra ? '\n' + extra : '');
+      /* 1.43.0: a merged line whose members' prices differ says the range first, and where the line is drawn */
+      const ps = b.items.map(x => x.price), lo = Math.min(...ps), hi = Math.max(...ps);
+      const range = hi - lo > t / 2 ? (f.plan ? (f.plan.role === 'stop' ? 'planned stops ' : 'planned targets ') : roleWords(f) + ' ') + fmt(lo) + ' to ' + fmt(hi) + ', the line at ' + fmt(b.price) + ' (the nearest the entry)\n' : '';
+      const tip = (g ? 'Group ' + g.name : 'Group') + ': ' + range + b.items.map(x => x.account + ' ' + roleWords(x) + ' ' + leftOf(x) + ' @ ' + fmt(x.price)).join('\n') + (extra ? '\n' + extra : '');
       const pend = b.items.every(x => x.movePending !== undefined && x.movePending === f.movePending) ? f.movePending : undefined;
-      const line = { id: b.id, side: f.side, kind: f.kind, price: f.price, qty: left, filled: 0, role: f.role, root: r,
+      /* 1.43.0: each member's own order for the label's ticks and dollars (the engine's `parts`): its price (where its move waits,
+         if it does), what is left of it, and what its risk is measured from: its account's own position average for a stop or a
+         target, its own entry's price for a planned line. The label then says the sum of each member's own risk. */
+      const parts = b.items.map(x => {
+        const q = { price: x.movePending !== undefined ? x.movePending : x.price, qty: leftOf(x) };
+        if (x.plan) q.from = x.price - x.plan.offset * t;
+        else { const p = TR.positions.get(x.account + '|' + r); if (p && +p.qty && isFinite(p.avgPrice)) q.from = +p.avgPrice; }
+        return q;
+      }).filter(q => q.qty > 0);
+      const line = { id: b.id, side: f.side, kind: f.kind, price: b.price, qty: left, filled: 0, role: f.role, root: r,
         group: (g ? g.name : 'group') + ' \u00d7' + n, groupTip: tip, members: b.items.map(x => x.id) };
+      if (parts.length) line.parts = parts;
       if (f.plan) line.plan = { parent: b.parent, offset: f.plan.offset, role: f.plan.role };
       if (f.adds) line.adds = f.adds;
       if (pend !== undefined) line.movePending = pend;

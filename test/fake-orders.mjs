@@ -322,7 +322,10 @@ export class OrderDesk {
   matchOne(o, price, placing) {
     if (!isWorking(o) || !(price > 0)) return;
     const left = o.qty - o.filled, buy = o.side === 'buy';
-    if (o.kind === 'market') return this.fill(o, left, price);
+    if (o.kind === 'market') {                    // 1.43.0: --market-slip, a made-up slippage per account (none unless set)
+      const slip = this.marketSlip && this.marketSlip[o.account] > 0 && this.instruments[o.root] ? this.marketSlip[o.account] * this.instruments[o.root].tick * (buy ? 1 : -1) : 0;
+      return this.fill(o, left, slip ? +(price + slip).toFixed(10) : price);
+    }
     if (o.kind === 'stop') { if (buy ? price >= o.price : price <= o.price) this.fill(o, left, price); return; }
     if (o.kind === 'stopLimit') { if (buy ? price >= o.price : price <= o.price) this.fill(o, left, o.price); return; }   // only from NinjaTrader (role other); stop and limit at one price here
     const through = buy ? price < o.price : price > o.price;

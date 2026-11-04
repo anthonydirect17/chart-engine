@@ -1,5 +1,58 @@
 # Changelog
 
+## chart 1.43.0 (2026-11-04): a group's stops and targets a tick or two apart draw as one line (page only, no F5)
+
+In plain words: on a group ticket, a MARKET entry fills each account at its own price, and ChartBridge places each account's stop
+and target from that account's own fill, so the chart showed two stop lines and two target lines a tick apart. Now a group's
+stops, and separately its targets, that are within 2 ticks of each other draw as ONE line, at the price nearest the entry, with
+the contracts added and each account's own price in the tooltip. Dragging it moves every account's order to the one price it is
+dropped at, as before; its x cancels each. Lines further apart stay separate, and a single account's ticket is unchanged.
+
+Install: the PC updater installs the page from green main as usual; no F5 needed. Page only: order placement and ChartBridge do
+not change, nothing needs a recompile. ChartBridge stays 0.6.14; `minChartBridge` stays 0.6.2 (COMPAT.json follows the page to
+1.43.0).
+
+**1. Close stops and targets merge on a group's chart** (Anthony's decision of 2026-11-04, "merge on the chart"; CHART_STYLE.md
+"A group's close stops and targets merge"):
+
+The 1.33.0 rule (Anthony's answers of 2026-10-19) drew one line per level only for the members' orders of one role, side and kind
+at one price. It now also takes the stops, and separately the targets, of one role, side and kind within `GROUP_MERGE_TICKS` (2)
+of each other, and one entry line's planned stops (or planned targets). Entries still merge only at one price.
+
+- **The clustering** (`live/order-ticket.js` `GROUP_MERGE_TICKS`, `mergeEnd`, `mergeLevels`): the prices sorted from the end
+  nearest the entry outward; the first opens a cluster, each next one joins while it is at most 2 ticks from the cluster's FIRST
+  price, else it opens the next. No line spans more than 2 ticks, so a chain of 1 tick gaps (ticks 0 to 4) gives two lines, not one
+  5 tick line. Sides, roles and kinds never mix.
+- **The line's price: the most protective**, the cluster's price nearest the entry (the first member order the market reaches), so
+  the line never shows more room than the tightest account has; a quantity-weighted price would sit past the tightest stop.
+- **The label** as today ("STP 9 · Lucid ×4"), the quantity the sum. **Its ticks and dollars** ("SL -80t -$120", "STP 9 -80t
+  -$1,440") are the sum of each member's own risk: each member's order at its own price, from its own account's position average
+  (a planned line: from its own entry), for its own contracts; the dollars that sum times the point value, the ticks that sum per
+  contract (the weighted average of the members' own ticks, a half rounded away from zero). Before, a group line's figures came
+  from the line's one price and the group's average, which understates the risk when the members' stops differ. While the line is
+  dragged, or its moves wait for their answers, every member is at the line's price and the figures follow the drag. The engine
+  takes each member's order as the line's new `parts` (`src/chart-engine.js` `partsRisk`, `setOrders`).
+- **The tooltip**: when the prices differ it starts with the range and where the line is ("Group Lucid: SELL STP 25,406.50 to
+  25,406.75, the line at 25,406.75 (the nearest the entry)"), then each account's order with its own price. At one price it is
+  as before.
+- **The actions**, through the existing per-member paths: the drag sends one `change` per member, every one to the price dropped
+  at, with each member's result on the ticket ("Group stops to 25,413.50: SIM-A, SIM-B, SIM-C moved."); the x cancels each
+  member's order; a planned line's drag and x send `plan` to each member's entry. A line's id keeps its form
+  ("G~stop~sell~stop~<ticks>"), its price the line's.
+- **Tests:** `test/group-merge.test.js` (the constant; 1 tick and 2 ticks apart one line, 3 ticks two; a chain of 1 tick gaps over
+  4 ticks at least two lines, none over 2 ticks; the walk from the end nearest the entry; mixed sides, roles and kinds never merge;
+  entries still at one price; the quantity sum, the label's group and the tooltip with the range and each account's own price; a
+  drag of a merged line sends one change per member to the dropped price and says each result, the x cancels each; merged planned
+  lines and their drag and x; a single account unchanged; `partsRisk`; the merged line's risk label at rest and live while
+  dragged, a planned line's, and a single account's as before). `npm run smoke:group-merge` (`test/group-merge-smoke.mjs`, new):
+  a group MARKET entry against the fake bridge with a made-up slippage per account (its new `--market-slip`, test only) fills
+  SIM-A, SIM-B, SIM-C and SIM-D 0, 1, 2 and 5 ticks apart; SIM-A to SIM-C's stops are one line at SIM-C's ("STP 27 -20t -$270"),
+  SIM-D's its own, the targets the same; the tooltip; a drag moves SIM-A to SIM-C to one price and leaves SIM-D's; screenshots
+  `group-merge-lines-1366.png`, `group-merge-hover-1366.png`, `group-merge-moved-1366.png`.
+
+**2. The release:** `package.json`, the engine's header and `VERSION` 1.43.0; `live/COMPAT.json` page 1.43.0 and its history row
+(`minChartBridge` stays 0.6.2); CHART_STYLE.md's group line rule.
+
 ## ChartBridge 0.6.14 and chart 1.42.3 (2026-11-03): the NQ tick file's day check fails only a day unusable for backtests; holes listed, never failing
 
 In plain words: a day's tick check no longer fails because NinjaTrader's history has a trade or two less than the live capture in
