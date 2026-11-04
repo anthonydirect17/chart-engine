@@ -555,8 +555,9 @@ function Hide-Token([string]$Text, [string]$Token) {
 }
 
 # One GET to the GitHub API. Without a token the API allows 60 requests an hour per address; with this PC's
-# chart-engine token, 5000 an hour. A pass makes two (check runs and statuses), and a green commit is remembered in
-# state.json and never asked about again, so a PC uses a few a day.
+# chart-engine token, 5000 an hour. A pass makes two (check runs and statuses), or with the token a few more (the
+# workflow runs, each run's jobs, statuses), and a green commit is remembered in state.json and never asked about
+# again, so a PC uses a few a day.
 function Invoke-GitHubJson([string]$Path, [string]$Token = '') {
   try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
   $headers = @{ 'Accept' = 'application/vnd.github+json'; 'X-GitHub-Api-Version' = '2022-11-28'; 'User-Agent' = 'chart-engine-pc-updater' }
@@ -573,6 +574,38 @@ function Read-CiResults([string]$Slug, [string]$Sha, [string]$Token) {
     $batch = @(Get-Field $d 'check_runs' @())
     $checks += $batch
     if ($batch.Count -lt 100) { break }
+  }
+  $st = Invoke-GitHubJson "/repos/$Slug/commits/$Sha/status?per_page=100" $Token
+  return @{ checks = $checks; statuses = @(Get-Field $st 'statuses' @()) }
+}
+
+# The same two lists from GitHub's Actions API, for the private path (with the token). GitHub's docs list the check
+# runs call for GitHub App tokens only, not fine-grained personal access tokens; the workflow runs and jobs calls take
+# one with "Actions" read, and the combined status one with "Commit statuses" read. Every workflow run for the commit
+# (all pages), then the jobs of each run's latest attempt (filter=latest: a re-run's own jobs, as its run_attempt), as
+# check-run-like records, so Resolve-CiState applies the very same gate: each job by its name (the required jobs), and
+# each run itself as one more record (a run not completed is pending; a run that ended failure, cancelled, timed_out,
+# action_required, startup_failure or anything else but success, neutral or skipped fails). Jobs come only from
+# GitHub Actions (app github-actions).
+function Read-ActionsResults([string]$Slug, [string]$Sha, [string]$Token) {
+  $runs = @()
+  for ($page = 1; $page -le 5; $page++) {
+    $d = Invoke-GitHubJson "/repos/$Slug/actions/runs?head_sha=$Sha&per_page=100&page=$page" $Token
+    $batch = @(Get-Field $d 'workflow_runs' @())
+    $runs += $batch
+    if ($batch.Count -lt 100) { break }
+  }
+  $checks = @()
+  foreach ($run in $runs) {
+    $id = [string](Get-Field $run 'id')
+    if ($id -notmatch '^\d+$') { throw "a workflow run without a plain id from GitHub ('$id')" }
+    $checks += @{ name = "workflow run $(Get-Field $run 'name') (run $(Get-Field $run 'run_number'), attempt $(Get-Field $run 'run_attempt' 1))"; status = (Get-Field $run 'status'); conclusion = (Get-Field $run 'conclusion'); app = @{ slug = 'github-actions' } }
+    for ($page = 1; $page -le 5; $page++) {
+      $j = Invoke-GitHubJson "/repos/$Slug/actions/runs/$id/jobs?filter=latest&per_page=100&page=$page" $Token
+      $batch = @(Get-Field $j 'jobs' @())
+      foreach ($job in $batch) { $checks += @{ name = (Get-Field $job 'name'); status = (Get-Field $job 'status'); conclusion = (Get-Field $job 'conclusion'); app = @{ slug = 'github-actions' } } }
+      if ($batch.Count -lt 100) { break }
+    }
   }
   $st = Invoke-GitHubJson "/repos/$Slug/commits/$Sha/status?per_page=100" $Token
   return @{ checks = $checks; statuses = @(Get-Field $st 'statuses' @()) }
@@ -615,9 +648,10 @@ function Get-CiProblem($Err, [bool]$Sent, [string]$Slug, [string]$Token) {
 #   pending  no results yet, or something still running, or no required set complete yet
 #   failure  a check or status failed, or a required set finished with a job not green (and no set is green)
 #   unknown  GitHub could not be asked (offline, rate limited, a private repo without this PC's chart-engine token)
-# GitHub is asked without a token first, always: a public repo never sees the token. Only a 404 or 401 (a private
-# repo, or none at that name) reads this PC's chart-engine token and asks again with it. A private repo read without
-# a token is never green: it is unknown, and nothing is installed.
+# GitHub is asked without a token first, always, through the check runs (the public path, as before): a public repo
+# never sees the token. Only a 404 or 401 (a private repo, or none at that name) reads this PC's chart-engine token and
+# asks again with it, through the Actions API (Read-ActionsResults, the same gate). A private repo read without a token
+# is never green: it is unknown, and nothing is installed.
 function Get-CiState([string]$Slug, [string]$Sha) {
   if (-not $Slug) { return @{ state = 'unknown'; detail = 'the GitHub repo is not known from the origin URL' } }
   $res = $null
@@ -629,7 +663,7 @@ function Get-CiState([string]$Slug, [string]$Sha) {
     try { $t = Get-GitHubToken $Slug } catch { }
     if (-not $t.token) { return @{ state = 'unknown'; detail = "GitHub answered $code`: the repo is private (or not found at $Slug) and this PC has no GitHub token for it: nothing installed; $($t.why)" } }
     $token = [string]$t.token
-    try { $res = Read-CiResults $Slug $Sha $token }
+    try { $res = Read-ActionsResults $Slug $Sha $token }
     catch { return @{ state = 'unknown'; detail = (Hide-Token (Get-CiProblem $_ $true $Slug $token) $token) } }
   }
   return (Resolve-CiState $res.checks $res.statuses)

@@ -15,7 +15,8 @@
   neither set there it waits, naming both, and after 24 hours the "was a required job renamed?" note names both sets.
 - **This PC's chart-engine token, only for a private repo** (Anthony 2026-11-04, SERVER_RULES.md rule 8.5: a
   fine-grained, read-only token for chart-engine only, never the whole-account login). GitHub's API is asked without a
-  token first, always, so a public repo never sees one. Only a 404 or 401 then reads the token (`Get-GitHubToken`):
+  token first, always, through the check runs as before, so a public repo never sees one. Only a 404 or 401 then
+  reads the token (`Get-GitHubToken`) and asks again through GitHub's Actions API (`Read-ActionsResults`, below):
   only when `credential.useHttpPath` is true for `https://github.com/<owner>/<repo>.git` (`git config --bool
   --get-urlmatch`, git's own URL matching), one `git credential fill` with `protocol=https`, `host=github.com` and
   `path=<owner>/<repo>.git` (never the host alone), and only a fine-grained token (`github_pat_`); any other stored
@@ -37,19 +38,30 @@
   both PCs re-pin with `register` (with the `-DailyAt` that PC uses) before step B (`status` names the commit the task's
   copy is from); a copy pinned before this change would wait on the missing `unit (windows-latest)` and cannot read a
   private repo. After step B and going private, the clone is brought up to date before any `register`. The README has
-  the token setup (fine-grained, chart-engine only, Contents, Commit statuses and Metadata read, `useHttpPath` for the
+  the token setup (fine-grained, chart-engine only, Actions, Commit statuses and Contents read, `useHttpPath` for the
   repo URL, Token typed in Git Credential Manager).
-- **Open before step B:** GitHub's docs list the check runs call ("List check runs for a Git reference") for GitHub App
-  tokens only, not fine-grained personal access tokens, so on a private repo the token alone cannot read check runs.
+- **The private path reads the Actions API** (`Read-ActionsResults`): GitHub's docs list the check runs call ("List
+  check runs for a Git reference") for GitHub App tokens only, not fine-grained personal access tokens, while "List
+  workflow runs for a repository" and "List jobs for a workflow run" take one with Actions read. With the token: every
+  workflow run for the commit (`/actions/runs?head_sha=`, all pages), the jobs of each run's latest attempt
+  (`/actions/runs/{id}/jobs?filter=latest`), and the combined statuses as before, turned into the same records the
+  check runs give, so `Resolve-CiState` is the one gate: a run or job not completed, or no runs yet, is pending; a job
+  that ended other than success, skipped or neutral, or a run that ended failure, cancelled, timed_out,
+  action_required or startup_failure, is a failure; the required jobs by name, with success; statuses as today. The
+  public path stays on the check runs, exactly as it was. The token's permissions (README): Actions, Commit statuses
+  and Contents read (Metadata comes with it).
 - Tests: `test/pc-updater.tests.ps1`: either set (today's pair; the box job green with Linux skipped or absent; the
   box job failed, skipped or queued; neither there, and its 24 hour note), the token through a stand-in credential
   helper (never asked without `useHttpPath` for the URL, which git's own URL matching decides; one ask with the repo
   path, never interactively even from a window that allows prompts; an OAuth login refused; none stored),
   `credential approve`, `reject` and `store` and other `git config` forms refused, a public repo that never sees the
   token, the token sent as Bearer only after a 404 and found in no output, log, state, status, update.json or error
-  text, the 404 and 401 messages, a refused token (401, 403, 404) and the rate limits, and the plain fetch messages.
+  text, the 404 and 401 messages, a refused token (401, 403, 404) and the rate limits, the plain fetch messages, and
+  the Actions path (green, the box job, pending, no runs yet, failed, cancelled and the other failed run endings, a
+  re-run whose latest attempt passed, a missing required job, statuses, the public path untouched) with the same
+  verdicts as the check runs path for the same scenarios.
   `test/pc-updater.test.js`: the allowed git subcommands, the box job's name, useHttpPath read before the one ask, the
-  token only after a 404 or 401, one place that asks for it and one that sends it.
+  token only after a 404 or 401 and then through the Actions API, one place that asks for it and one that sends it.
 
 ## chart 1.43.0 (2026-11-04): a group's stops and targets a tick or two apart draw as one line (page only, no F5)
 

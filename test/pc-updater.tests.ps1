@@ -288,11 +288,13 @@ function Use-FakeApi {
   $script:KeepJson = ${function:Invoke-GitHubJson}
   ${function:script:Invoke-GitHubJson} = $script:RealGitHubJson
   $script:SeenAuth = New-Object System.Collections.ArrayList
+  $script:SeenUris = New-Object System.Collections.ArrayList
+  $script:Routes = $null
   $script:CodeWith = 0; $script:CodeWithout = 0; $script:WebAnswer = '{}'; $script:TokenAsks = 0; $script:RateLeft = ''
   ${function:script:Invoke-WebRequest} = {
     param($Uri, $Headers, [switch]$UseBasicParsing, $TimeoutSec)
     $auth = ''; if ($Headers.ContainsKey('Authorization')) { $auth = [string]$Headers['Authorization'] }
-    [void]$script:SeenAuth.Add($auth)
+    [void]$script:SeenAuth.Add($auth); [void]$script:SeenUris.Add([string]$Uri)
     $c = $script:CodeWithout; if ($auth) { $c = $script:CodeWith }
     if ($auth -and $script:WebAnswer -eq 'throw-with-login') { throw (New-Object System.Net.WebException "stub: refused, sent $auth to https://x-access-token:$($script:FakeLogin)@api.github.com") }
     if ($c) {
@@ -300,13 +302,17 @@ function Use-FakeApi {
       $e | Add-Member -NotePropertyName Response -NotePropertyValue @{ StatusCode = $c; Headers = @{ 'X-RateLimit-Remaining' = $script:RateLeft } } -Force
       throw $e
     }
+    if ($script:Routes) {
+      foreach ($k in $script:Routes.Keys) { if ([string]$Uri -match $k) { return @{ Content = $script:Routes[$k] } } }
+      return @{ Content = '{}' }
+    }
     return @{ Content = $script:WebAnswer }
   }
 }
 function Reset-FakeApi {
   Remove-Item function:\Invoke-WebRequest -ErrorAction SilentlyContinue
   ${function:script:Invoke-GitHubJson} = $script:KeepJson
-  $script:FakeLogin = ''
+  $script:FakeLogin = ''; $script:Routes = $null
 }
 $script:BoxGreen = '{"check_runs":[{"name":"unit-linux","status":"completed","conclusion":"skipped","app":{"slug":"github-actions"}},{"name":"unit-windows","status":"completed","conclusion":"success","app":{"slug":"github-actions"}}]}'
 
@@ -416,11 +422,14 @@ Test 'chart-engine token: a public repo never sees it; sent as Bearer only after
     $script:WebAnswer = $script:BoxGreen
     $r = Get-CiState 'owner/chart-engine' 'abc'
     Assert ($r.state -eq 'success' -and $script:SeenAuth.Count -eq 2 -and @($script:SeenAuth | Where-Object { $_ }).Count -eq 0 -and $script:TokenAsks -eq 0) "public: no token read or sent ($($script:SeenAuth.Count) requests, $($script:TokenAsks) reads)"
-    # private: 404 without a token, then the token
+    # private: 404 without a token, then the token, through the Actions API (one run, its jobs, the statuses)
     $script:CodeWithout = 404; $script:SeenAuth.Clear()
+    $script:Routes = [ordered]@{ '/actions/runs\?head_sha=' = '{"total_count":1,"workflow_runs":[{"id":7,"name":"test","run_number":7,"run_attempt":1,"status":"completed","conclusion":"success"}]}'
+      '/actions/runs/7/jobs\?filter=latest' = '{"total_count":1,"jobs":[{"name":"unit-windows","status":"completed","conclusion":"success"}]}' }
     $r = Get-CiState 'owner/chart-engine' 'abc'
     Assert ($r.state -eq 'success' -and $script:TokenAsks -eq 1) "private with the token: $($r.state) $($r.detail)"
-    Assert ($script:SeenAuth.Count -eq 3 -and $script:SeenAuth[0] -eq '' -and $script:SeenAuth[1] -eq "Bearer $($script:TestLogin)" -and $script:SeenAuth[2] -eq "Bearer $($script:TestLogin)") "first without, then both calls with it: $($script:SeenAuth.Count)"
+    Assert ($script:SeenAuth.Count -eq 4 -and $script:SeenAuth[0] -eq '' -and @($script:SeenAuth | Select-Object -Skip 1 | Where-Object { $_ -ne "Bearer $($script:TestLogin)" }).Count -eq 0) "first without, then every call with it: $($script:SeenAuth.Count)"
+    $script:Routes = $null
     # whole runs: one that waits, and one whose error text carries the token (it is taken out)
     $script:WebAnswer = '{"check_runs":[]}'
     $r = Run-Update
@@ -467,6 +476,97 @@ Test 'chart-engine token: a 404 or 401 without one says the repo is private (or 
   } finally { Reset-FakeApi }
 }
 
+# The Actions path (the private repo, with the token): a stand-in GitHub that answers check runs, workflow runs, each
+# run's jobs (filter=latest only: without it the earlier attempts' jobs come too) and statuses from one scenario.
+function Set-Scenario($Runs, $Statuses = @()) {
+  $checks = @(); $wr = @()
+  $script:Routes = [ordered]@{}
+  foreach ($run in @($Runs)) {
+    $wr += @{ id = $run.id; name = 'test'; run_number = $run.id; run_attempt = $(if ($run.Contains('attempt')) { $run.attempt } else { 1 }); status = $run.status; conclusion = $run.conclusion }
+    $checks += @($run.jobs)
+    $script:Routes["/actions/runs/$($run.id)/jobs\?filter=latest&"] = (ConvertTo-Json -Depth 6 -Compress @{ total_count = @($run.jobs).Count; jobs = @($run.jobs) })
+    $all = @($run.jobs); if ($run.Contains('earlier')) { $all = @($run.earlier) + $all }
+    $script:Routes["/actions/runs/$($run.id)/jobs"] = (ConvertTo-Json -Depth 6 -Compress @{ total_count = $all.Count; jobs = $all })
+  }
+  $script:Routes['/actions/runs\?head_sha=abc&'] = (ConvertTo-Json -Depth 6 -Compress @{ total_count = $wr.Count; workflow_runs = $wr })
+  $script:Routes['/commits/abc/check-runs\?'] = (ConvertTo-Json -Depth 6 -Compress @{ total_count = $checks.Count; check_runs = $checks })
+  $script:Routes['/commits/abc/status\?'] = (ConvertTo-Json -Depth 6 -Compress @{ statuses = @($Statuses) })
+}
+function Get-Private { $script:FakeLogin = $script:TestLogin; $script:CodeWithout = 404; $script:SeenAuth.Clear(); $script:SeenUris.Clear(); return (Get-CiState 'owner/chart-engine' 'abc') }
+function Get-Public { $script:FakeLogin = $script:TestLogin; $script:CodeWithout = 0; $script:SeenAuth.Clear(); $script:SeenUris.Clear(); return (Get-CiState 'owner/chart-engine' 'abc') }
+function Run([int]$Id, [string]$Status, [string]$Conclusion, $Jobs) { return @{ id = $Id; status = $Status; conclusion = $(if ($Conclusion) { $Conclusion } else { $null }); jobs = @($Jobs) } }
+
+Test 'private path (the token): CI is read through the Actions API, workflow runs then each run''s latest jobs, with the same gate' {
+  Use-FakeApi
+  try {
+    Set-Scenario @(Run 11 'completed' 'success' @((Job 'unit (ubuntu-latest)'), (Job 'unit (windows-latest)')))
+    $r = Get-Private
+    Assert ($r.state -eq 'success' -and $r.detail -eq 'green: unit (ubuntu-latest), unit (windows-latest)') "green: $($r.state) $($r.detail)"
+    $uris = @($script:SeenUris)
+    Assert ($uris -match 'actions/runs\?head_sha=abc&per_page=100&page=1' -and $uris -match 'actions/runs/11/jobs\?filter=latest&per_page=100&page=1' -and $uris -match '/commits/abc/status\?') "the Actions calls: $($uris -join ' | ')"
+    Assert (@($script:SeenAuth | Select-Object -Skip 1 | Where-Object { $_ -ne "Bearer $($script:TestLogin)" }).Count -eq 0) 'every call after the first 404 carries the token'
+    Set-Scenario @(Run 12 'completed' 'success' @((Job 'unit-linux' 'skipped'), (Job 'unit-windows')))
+    $r = Get-Private; Assert ($r.state -eq 'success' -and $r.detail -eq 'green: unit-windows') "the box job: $($r.detail)"
+    # pending: a run or a job not finished, or no runs yet
+    Set-Scenario @(Run 13 'in_progress' '' @((Job 'unit-linux' 'skipped'), (Job 'unit-windows' '' 'queued')))
+    $r = Get-Private; Assert ($r.state -eq 'pending' -and $r.detail -match 'still running: .*unit-windows') "queued: $($r.detail)"
+    Set-Scenario @(Run 14 'queued' '' @())
+    $r = Get-Private; Assert ($r.state -eq 'pending' -and $r.detail -match (Rx 'still running: workflow run test (run 14, attempt 1)')) "a run with no jobs yet: $($r.detail)"
+    Set-Scenario @()
+    $r = Get-Private; Assert ($r.state -eq 'pending' -and $r.detail -eq 'no CI results for this commit yet') "no runs yet: $($r.detail)"
+    # failure: a job failed, a run cancelled, a run that never started its jobs
+    Set-Scenario @(Run 15 'completed' 'failure' @((Job 'unit (ubuntu-latest)'), (Job 'unit (windows-latest)' 'failure')))
+    $r = Get-Private; Assert ($r.state -eq 'failure' -and $r.detail -match 'unit \(windows-latest\)=failure') "failed: $($r.detail)"
+    Set-Scenario @(Run 16 'completed' 'cancelled' @((Job 'unit-windows' 'cancelled')))
+    $r = Get-Private; Assert ($r.state -eq 'failure' -and $r.detail -match 'unit-windows=cancelled') "cancelled: $($r.detail)"
+    foreach ($c in @('timed_out', 'action_required', 'startup_failure', 'failure', 'cancelled')) {
+      Set-Scenario @((Run 17 'completed' 'success' @((Job 'unit-windows'))), (Run 18 'completed' $c @()))
+      $r = Get-Private; Assert ($r.state -eq 'failure' -and $r.detail -match (Rx "workflow run test (run 18, attempt 1)=$c")) "a run that ended $c fails even with the box job green: $($r.detail)"
+    }
+    # a re-run: only the latest attempt's jobs count (filter=latest; the run's own conclusion is the latest attempt's)
+    $rerun = Run 19 'completed' 'success' @((Job 'unit (ubuntu-latest)'), (Job 'unit (windows-latest)'))
+    $rerun['attempt'] = 2; $rerun['earlier'] = @((Job 'unit (windows-latest)' 'failure'))
+    Set-Scenario @($rerun)
+    $r = Get-Private; Assert ($r.state -eq 'success') "the re-run's latest attempt passed: $($r.state) $($r.detail)"
+    # a missing required job: waits, naming it
+    Set-Scenario @(Run 20 'completed' 'success' @((Job 'unit (ubuntu-latest)')))
+    $r = Get-Private; Assert ($r.state -eq 'pending' -and $r.detail -eq "no 'unit (windows-latest)' (or 'unit-windows') result yet") "missing: $($r.detail)"
+    # statuses as today
+    Set-Scenario @(Run 21 'completed' 'success' @((Job 'unit-windows'))) @(@{ context = 'x'; state = 'error' })
+    $r = Get-Private; Assert ($r.state -eq 'failure' -and $r.detail -match 'x=error') "a status in error: $($r.detail)"
+    Set-Scenario @(Run 22 'completed' 'success' @((Job 'unit-windows'))) @(@{ context = 'y'; state = 'pending' })
+    $r = Get-Private; Assert ($r.state -eq 'pending' -and $r.detail -match 'still running: y') "a status pending: $($r.detail)"
+    # the public path stays on check runs: no Actions call, no token
+    Set-Scenario @(Run 23 'completed' 'success' @((Job 'unit-windows')))
+    $r = Get-Public
+    Assert ($r.state -eq 'success' -and @($script:SeenUris | Where-Object { $_ -match '/actions/' }).Count -eq 0 -and @($script:SeenAuth | Where-Object { $_ }).Count -eq 0) "public: check runs only, no token ($($script:SeenUris -join ' | '))"
+    Assert-LoginNowhere
+  } finally { Reset-FakeApi }
+}
+Test 'private path: the same scenarios give the same verdicts through the Actions API as through the check runs' {
+  Use-FakeApi
+  try {
+    $scenarios = [ordered]@{
+      'today''s pair green' = @(Run 31 'completed' 'success' @((Job 'unit (ubuntu-latest)'), (Job 'unit (windows-latest)')))
+      'box green, Linux skipped' = @(Run 32 'completed' 'success' @((Job 'unit-linux' 'skipped'), (Job 'unit-windows')))
+      'box alone, a neutral job' = @(Run 33 'completed' 'success' @((Job 'unit-windows'), (Job 'deploy' 'neutral')))
+      'box failed' = @(Run 34 'completed' 'failure' @((Job 'unit-linux' 'skipped'), (Job 'unit-windows' 'failure')))
+      'box skipped' = @(Run 35 'completed' 'success' @((Job 'unit-windows' 'skipped')))
+      'box cancelled' = @(Run 36 'completed' 'cancelled' @((Job 'unit-windows' 'cancelled')))
+      'box queued' = @(Run 37 'in_progress' '' @((Job 'unit-windows' '' 'queued')))
+      'neither' = @(Run 38 'completed' 'success' @((Job 'unit-linux' 'skipped')))
+      'half of today''s pair' = @(Run 39 'completed' 'success' @((Job 'unit (ubuntu-latest)')))
+      'Linux skipped in today''s pair' = @(Run 40 'completed' 'success' @((Job 'unit (ubuntu-latest)' 'skipped'), (Job 'unit (windows-latest)')))
+      'two workflows, one failed' = @((Run 41 'completed' 'success' @((Job 'unit-windows'))), (Run 42 'completed' 'failure' @((Job 'lint' 'failure'))))
+      'nothing yet' = @()
+    }
+    foreach ($name in $scenarios.Keys) {
+      Set-Scenario $scenarios[$name]
+      $pub = Get-Public; $priv = Get-Private
+      Assert ($pub.state -eq $priv.state) "$name`: check runs say $($pub.state) ($($pub.detail)), the Actions API $($priv.state) ($($priv.detail))"
+    }
+  } finally { Reset-FakeApi }
+}
 # ---------------------------------------------------------------------------------------------- ChartBridge version gates
 
 Test 'unknown ChartBridge version: the page is not installed, and the log says why' {

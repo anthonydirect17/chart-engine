@@ -149,6 +149,16 @@ test('going private, step A (Anthony 2026-11-04): either required set, and this 
   const ci = src.slice(src.indexOf('function Get-CiState'), src.indexOf('function Format-Jobs'));
   const first = ci.indexOf("try { $res = Read-CiResults $Slug $Sha '' }"), read = ci.indexOf('Get-GitHubToken $Slug');
   assert.ok(first > 0 && read > first && /if \(\$code -ne 404 -and \$code -ne 401\) \{ return/.test(ci.slice(first, read)), 'without a token first; the token only after a 404 or 401');
+  // with the token, the Actions API (fine-grained tokens cannot read check runs), into the same gate
+  assert.ok(ci.indexOf('try { $res = Read-ActionsResults $Slug $Sha $token }') > read, 'the private path reads the Actions API');
+  assert.strictEqual([...src.matchAll(/Read-ActionsResults \$Slug/g)].length, 1);
+  const act = src.slice(src.indexOf('function Read-ActionsResults'), src.indexOf('function Get-WebCode'));
+  assert.match(act, /\/actions\/runs\?head_sha=\$Sha&per_page=100&page=\$page/);
+  assert.match(act, /\/actions\/runs\/\$id\/jobs\?filter=latest&per_page=100&page=\$page/, 'the latest attempt');
+  assert.match(act, /if \(\$id -notmatch '\^\\d\+\$'\) \{ throw/, 'a run id is a plain number');
+  assert.match(act, /\/commits\/\$Sha\/status\?per_page=100/, 'the statuses as before');
+  assert.ok(!/check-runs/.test(act), 'no check runs call on the private path');
+  assert.match(ci, /return \(Resolve-CiState \$res\.checks \$res\.statuses\)/, 'one gate for both paths');
 });
 
 test('the task moves to the hidden launcher at -InstallChartBridge (after the re-pin); the automatic run only warns (Anthony 2026-10-23)', () => {

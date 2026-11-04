@@ -471,7 +471,8 @@ self-hosted runner (SERVER_RULES.md rule 6.1). In two steps, so the updaters on 
    job `unit-windows` green (a Linux job that runs on pull requests only is skipped or absent on `main`, and is not
    counted). It asks GitHub's API without a token first, as before, so a public repo never sees one. Only when that
    answers 404 (a private repo, or none at that name) does it read this PC's chart-engine token and ask again with
-   it: `git credential fill` for `https://github.com/<owner>/chart-engine.git` only (never the host alone), only
+   it, through GitHub's Actions API (the workflow runs for the commit, then each run's latest jobs, and the commit
+   statuses as before), with exactly the same gate as the check runs: `git credential fill` for `https://github.com/<owner>/chart-engine.git` only (never the host alone), only
    when `credential.useHttpPath` is true for that URL, and only a fine-grained token (`github_pat_...`); never
    interactive, and never printed, logged or saved. The updater never runs `git credential approve` or `reject`
    itself (git's own fetch may store or erase a login as usual).
@@ -488,14 +489,15 @@ chart-engine only, never the whole-account GitHub login). Once the repo is priva
 the task runs as:
 
 1. On GitHub, a fine-grained personal access token: Repository access "Only select repositories", chart-engine
-   alone; Repository permissions, all read-only: **Contents: Read** (to read the repo for `git fetch`; GitHub's own
-   "Repo-reading token" example in "Managing your personal access tokens" is contents read with metadata read),
-   **Commit statuses: Read** (the statuses call; GitHub's docs, "Get the combined status for a specific reference"),
-   and **Metadata: Read** (GitHub adds it). **Open, for Anthony before step B:** GitHub's docs for "List check runs
-   for a Git reference" (the updater's check runs call) name only GitHub App tokens, not fine-grained personal access
-   tokens, and the call is missing from "Endpoints available for fine-grained personal access tokens". So on a
-   private repo this token alone cannot read the check runs; the updater then says "GitHub refused this PC's
-   chart-engine token (403 ...)" and installs nothing.
+   alone; Repository permissions, all read-only, as GitHub's docs give them for each call the updater makes:
+   - **Actions: Read**: "List workflow runs for a repository" and "List jobs for a workflow run" (REST API docs,
+     Actions, Workflow runs and Workflow jobs). The check runs call the public path uses is not available to
+     fine-grained personal access tokens ("List check runs for a Git reference" names GitHub App tokens only), which is
+     why the private path reads the Actions API.
+   - **Commit statuses: Read**: "Get the combined status for a specific reference" (REST API docs, Commits, Commit
+     statuses).
+   - **Contents: Read**: to read the repo for `git fetch` (GitHub's "Repo-reading token" example in "Managing your
+     personal access tokens" is contents read). **Metadata: Read** comes with it.
 2. `git config --global credential.https://github.com/<owner>/chart-engine.git.useHttpPath true`, so git asks for a
    login stored for this repo's path alone (the updater reads only that).
 3. A `git fetch` in the clone from a normal PowerShell window: when Git Credential Manager asks, choose **Token** and
