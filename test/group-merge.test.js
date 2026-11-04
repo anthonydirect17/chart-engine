@@ -411,3 +411,111 @@ test('B1: an action forwarded from another window finds the line by the members 
   assert.deepEqual(R.sent, [], 'no members named: not found, as before');
   assert.match(R.notes.pop(), /that group line is no longer there/);
 });
+
+/* ---------------- the re-review of f2e06eb (F1): a forwarded action's members are authoritative, never its id */
+const stopIds = (R) => R.core.chartOrders('group:g1', 'NQ').filter(l => l.role === 'stop').map(l => [l.id, l.members.join('+')]);
+
+test('F1: the two-window case: the x and a drag forwarded from W2 act on SIM-C\'s stop only, never on W1\'s line of that id', () => {
+  const W1 = rig(); W1.core.setArmed(true);
+  /* 1. SIM-A's stop at 25000.00 and SIM-B's at 24999.75: one line in W1 */
+  W1.core.message({ type: 'orders', list: [stopOf('a', 'SIM-A', 25000), stopOf('b', 'SIM-B', 24999.75)] });
+  assert.deepEqual(stopIds(W1), [['G~stop~sell~stop~100000', 'a+b']]);
+  /* 2. dragged to 24998.75 in W1: the line keeps its id there */
+  W1.core.moveOrder('G~stop~sell~stop~100000', 24998.75);
+  W1.core.message(stopOf('a', 'SIM-A', 24998.75)); W1.core.message(stopOf('b', 'SIM-B', 24998.75));
+  W1.advance(2000);
+  assert.deepEqual(stopIds(W1), [['G~stop~sell~stop~100000', 'a+b']]);
+  /* 3. W2 opens: the same line there is ...99995 */
+  const W2 = rig();
+  W2.core.message({ type: 'orders', list: [stopOf('a', 'SIM-A', 24998.75), stopOf('b', 'SIM-B', 24998.75)] });
+  assert.deepEqual(stopIds(W2), [['G~stop~sell~stop~99995', 'a+b']]);
+  /* 4. SIM-C's stop arrives at 25000.00: W1 names it ...100000.2, W2 ...100000 */
+  for (const R of [W1, W2]) R.core.message(stopOf('c', 'SIM-C', 25000));
+  assert.deepEqual(stopIds(W1), [['G~stop~sell~stop~100000', 'a+b'], ['G~stop~sell~stop~100000.2', 'c']]);
+  assert.deepEqual(stopIds(W2), [['G~stop~sell~stop~99995', 'a+b'], ['G~stop~sell~stop~100000', 'c']]);
+  /* 5. the x on SIM-C's line in W2, forwarded with the members W2 drew on it */
+  const w2c = W2.core.chartOrders('group:g1', 'NQ').find(l => l.id === 'G~stop~sell~stop~100000');
+  W1.sent.length = 0;
+  W1.core.cancelOrder(w2c.id, w2c.members);
+  assert.deepEqual(W1.sent.map(m => m.type + ' ' + m.id), ['cancel c'], 'SIM-C\'s stop only, never A\'s and B\'s');
+  /* and a drag forwarded from W2 moves SIM-C's stop only */
+  W1.sent.length = 0;
+  W1.core.moveOrder(w2c.id, 25001, w2c.members);
+  assert.deepEqual(W1.sent.map(m => [m.type, m.id, m.price]), [['change', 'c', 25001]]);
+  /* the ticket's own window still goes by its id */
+  W1.advance(3000); W1.sent.length = 0;
+  W1.core.cancelOrder('G~stop~sell~stop~100000');
+  assert.deepEqual(W1.sent.map(m => m.type + ' ' + m.id), ['cancel a', 'cancel b'], 'no members: W1\'s own line of that id');
+});
+
+test('F1: forwarded members that left the line are still acted on as that window drew them, if they still qualify', () => {
+  const R = rig(); R.core.setArmed(true);
+  R.core.message({ type: 'orders', list: [stopOf('a', 'SIM-A', 24980), stopOf('b', 'SIM-B', 24980.25), stopOf('c', 'SIM-C', 24980.5)] });
+  R.core.chartOrders('group:g1', 'NQ');
+  R.core.message(stopOf('b', 'SIM-B', 24990));                   // b moved elsewhere since the other window drew [a, b, c]
+  R.core.message(order('c', 'SIM-C', 'stop', 'sell', 'stop', 24980.5, 1, { state: 'filled', filled: 1, avgFill: 24980.5 }));   // c filled
+  assert.equal(R.core.chartOrders('group:g1', 'NQ').filter(l => l.role === 'stop').length, 2, 'a and b on two lines here now');
+  R.sent.length = 0;
+  R.core.cancelOrder('G~stop~sell~stop~99999', ['a', 'b', 'c']);
+  assert.deepEqual(R.sent.map(m => m.type + ' ' + m.id), ['cancel a', 'cancel b'], 'a and b as the other window drew them; c no longer working');
+  R.sent.length = 0;
+  R.core.moveOrder('G~stop~sell~stop~99999', 24985, ['a', 'b', 'c']);
+  assert.deepEqual(R.sent.map(m => [m.id, m.price]), [['a', 24985], ['b', 24985]]);
+});
+
+test('F1: forwarded members of another account, group, instrument or kind (role, side, kind, planned) are dropped; none left: nothing sent, the ticket says why', () => {
+  const R = rig(); R.core.setArmed(true);
+  R.core.message({ type: 'orders', list: [stopOf('a', 'SIM-A', 24980), stopOf('d', 'SIM-D', 24980),                    // SIM-D: no member
+    Object.assign(stopOf('m', 'SIM-B', 24980), { root: 'MNQ' }),                                                          // another instrument
+    order('e1', 'SIM-C', 'entry', 'buy', 'limit', 24990, 1, { planned: { stopTicks: 8, targetTicks: null } })] });
+  R.sent.length = 0;
+  R.core.cancelOrder('G~stop~sell~stop~99920', ['a', 'd', 'm', 'e1:sl', 'nope']);
+  assert.deepEqual(R.sent.map(m => m.type + ' ' + m.id), ['cancel a'], 'only the group\'s working NQ leg');
+  R.sent.length = 0;
+  R.core.cancelOrder('G~stop~sell~stop~99920', ['d', 'm', 'e1:sl', 'e1']);
+  assert.deepEqual(R.sent, [], 'none qualifies (the entry e1 is not a sell stop): nothing sent, never the line of that id here');
+  assert.equal(R.notes.pop(), 'warn: Not sent: none of the orders that line showed in the other window is still a working order of group Lucid on NQ.');
+  R.sent.length = 0;
+  R.core.planRemove('G~entry~buy~limit~99960~at99952:sl', ['a']);   // a leg named for a planned line: another kind
+  assert.deepEqual(R.sent, []);
+  assert.match(R.notes.pop(), /none of the orders that line showed/);
+  R.core.planRemove('G~entry~buy~limit~99960~at99952:sl', ['e1:sl']);
+  assert.deepEqual(R.sent.map(m => [m.type, m.id, m.stopTicks]), [['plan', 'e1', null]], 'a planned line\'s own member');
+  R.sent.length = 0;
+  R.core.cancelOrder('G~stop~sell~stop~99920', []);
+  assert.deepEqual(R.sent, [], 'an empty list (the other window no longer had that line): nothing');
+});
+
+test('F1: a single-account ticket ignores members', () => {
+  const R = rig();
+  R.core.message({ type: 'orders', list: [stopOf('a', 'SIM-A', 24980), stopOf('b', 'SIM-A', 24980.25)] });
+  R.core.pickAccount('SIM-A'); R.core.setArmed(true);
+  R.sent.length = 0;
+  R.core.moveOrder('a', 24985, ['b']);
+  assert.deepEqual(R.sent.map(m => [m.type, m.id, m.price]), [['change', 'a', 24985]]);
+  R.sent.length = 0;
+  R.core.cancelOrder('b', ['a']);
+  assert.deepEqual(R.sent.map(m => m.type + ' ' + m.id), ['cancel b']);
+});
+
+test('F1 (low): members refused before they are sent (Armed off) leave the move\'s line at once', () => {
+  const R = rig(); R.core.setArmed(true);
+  const list = [];
+  for (let k = 0; k < 12; k++) list.push(stopOf('s' + k, ['SIM-A', 'SIM-B', 'SIM-C'][k % 3], 24980 + (k % 2) * 0.25));
+  R.core.message({ type: 'orders', list });
+  const id = R.core.chartOrders('group:g1', 'NQ')[0].id;
+  R.sent.length = 0;
+  R.core.moveOrder(id, 24990);
+  assert.equal(R.sent.length, 10, '10 a second: two wait');
+  let ls = R.core.chartOrders('group:g1', 'NQ');
+  assert.deepEqual(ls.map(l => [l.members.length, l.movePending]), [[12, 24990]], 'all 12 at the price asked for while they wait');
+  R.core.setArmed(false);
+  R.advance(1200);
+  ls = R.core.chartOrders('group:g1', 'NQ');
+  const held = ls.find(l => l.id === id), left = ls.find(l => l.id !== id);
+  assert.equal(held.members.length, 10); assert.equal(held.movePending, 24990);
+  const sentIds = new Set(R.sent.filter(m => m.type === 'change').map(m => m.id));
+  assert.deepEqual(left.members.slice().sort(), list.map(o => o.id).filter(x => !sentIds.has(x)).sort(), 'the two never sent are drawn where they are');
+  assert.equal(left.movePending, undefined);
+  assert.ok(left.parts.every(p => p.price !== 24990));
+});

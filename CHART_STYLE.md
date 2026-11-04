@@ -517,8 +517,11 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
     so no two lines share an id, a line that went never hands its id on, and a line whose members did not change keeps its id. So
     a drag in progress survives the lead's stop filling, a neighbouring cluster's change and a late bracket arriving nearer the
     entry. While a group move waits for its answers, every member it covers stays in that line at the price asked for, until each
-    is moved, refused (it is then drawn where it is) or gone, or 5 s have passed: no second line meanwhile. A drag or x from a
-    window other than the ticket's names the members it drew, so the ticket's window finds them whatever its own line's id.
+    is moved, refused or never sent (it is then drawn where it is) or gone, or 5 s have passed: no second line meanwhile. The ids
+    are per window, so the same id can be another line in another window: a drag, x or +SL / +TP from a window other than the
+    ticket's carries the member orders that window drew on the line, and the ticket's window acts on those only (the ones still
+    working orders of the group on that instrument, of the line's role, side and kind, or its planned stop or target), never on
+    its own line of that id; none left: nothing is sent and the ticket says why. In the ticket's own window, the id.
   - **Its actions:** dragging it moves EVERY member's order to the single price it is dropped at (one `change` per member, the
     ticket saying each member's result); its x cancels each member's order; a planned line's drag, x, +SL and +TP go to each
     member's entry. Order placement and ChartBridge are unchanged.

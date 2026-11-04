@@ -46,9 +46,16 @@ of each other, and one entry line's planned stops (or planned targets). Entries 
   id; each new cluster takes its lead's last id when free, else the id most of its members had, else a new one (the price in
   ticks, with ".<n>" when that id was given out before on this account and instrument). Deterministic, no two lines share an id,
   and a line whose own members did not change keeps its id. A group move under way keeps the members still waiting in its line at
-  the price asked for (no brief second line) until each is moved, refused or gone, or MOVE_WAIT (5 s) has passed. The ids are
-  per window, so a drag, x or +SL / +TP forwarded from another window carries the members it drew (`live/workspace.js`
-  `withMembers`), and the ticket's window acts on them when its own line has another id.
+  the price asked for (no brief second line) until each is moved, refused (also one never sent because trading, the connection
+  or Armed went off) or gone, or MOVE_WAIT (5 s) has passed.
+- **A forwarded action acts on the members it names, never on an id** (the re-review of f2e06eb, F1): the ids are per window, so
+  two windows can give the same id to different lines (a popout opened after a drag names the moved line afresh, and a new stop
+  where the old line was then takes the plain id there but ".2" in the ticket's window). A drag, x or +SL / +TP forwarded to the
+  ticket's window carries the member orders the other window drew on the line (`live/workspace.js` `withMembers`; an empty list
+  when that window no longer has the line), and the ticket's window acts only on those still working orders of its group on that
+  instrument, of the line's role, side and kind (or its planned stop or target) (`live/trade.js` `groupLine`); none left: nothing
+  is sent and the ticket says why ("Not sent: none of the orders that line showed in the other window is still a working order
+  of group Lucid on NQ."). An action in the ticket's own window goes by its id, and a single account's ticket ignores members.
 - **Tests:** `test/group-merge.test.js` (the constant; 1 tick and 2 ticks apart one line, 3 ticks two; a chain of 1 tick gaps over
   4 ticks at least two lines, none over 2 ticks; the walk from the end nearest the entry; mixed sides, roles and kinds never merge;
   entries still at one price; the quantity sum, the label's group and the tooltip with the range and each account's own price; a
@@ -56,8 +63,10 @@ of each other, and one entry line's planned stops (or planned targets). Entries 
   lines and their drag and x; a single account unchanged; `partsRisk`; the merged line's risk label at rest and live while
   dragged, a planned line's, and a single account's as before; B1, the chart wired to the ticket: a drag survives the lead's
   order going, a cascade from a neighbouring cluster and a late member nearer the entry, the ids stable across refreshes, no id
-  shared or handed on, a group move's waiting members one line at the price asked for, and a forwarded action found by its
-  members). `npm run smoke:group-merge` (`test/group-merge-smoke.mjs`, new):
+  shared or handed on, a group move's waiting members one line at the price asked for; F1: the two-window case, where the x and a
+  drag from the popout act on SIM-C's stop only, members that left the line still acted on if they qualify, members of another
+  account, group, instrument or kind dropped (none left: nothing sent, said), a single account ignoring members, and members never
+  sent leaving the move's line at once). `npm run smoke:group-merge` (`test/group-merge-smoke.mjs`, new):
   a group MARKET entry against the fake bridge with a made-up slippage per account (its new `--market-slip`, test only) fills
   SIM-A, SIM-B, SIM-C and SIM-D 0, 1, 2 and 5 ticks apart; SIM-A to SIM-C's stops are one line at SIM-C's ("STP 27 -20t -$270"),
   SIM-D's its own, the targets the same; the drawn labels checked ("STP 27 -20t -$270", "TGT 27 +40t +$540", and after the drop

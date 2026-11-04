@@ -1040,7 +1040,7 @@ function askFlattenEvery() {
    forwarded to it. Either way only for the ticket's instrument. */
 function chartAction(action) {
   if (holds()) { actHere(action); renderOrders(); return; }  // its note is on the ticket's notes line
-  forward(action);
+  forward(withMembers(action));                                // 1.43.0: a group line's members as this window drew them
 }
 function forward(action) {
   if (!link) { note(TL.NO_CHANNEL, true, 8000); renderCharts(); return; }
@@ -1128,16 +1128,18 @@ const tradeHost = {
     const fam = core.switchOn('orderTypes') ? OS.clickFamily(mods, modifiersNow(), side === 'buy' || !(mods && mods.ctrl) ? ['Shift'] : ['Ctrl']) : '';
     chartAction({ kind: 'place', side, price, root, orderKind: fam ? OS.kindFor(kind, fam) : kind });
   },
-  move: (id, price, root, from) => chartAction(withMembers({ kind: 'move', id, price, root, from })),
-  cancel: (id, root) => chartAction(withMembers({ kind: 'cancel', id, root })),
-  planAdd: (id, which, root) => chartAction(withMembers({ kind: 'planAdd', id, which, root })),
+  move: (id, price, root, from) => chartAction({ kind: 'move', id, price, root, from }),
+  cancel: (id, root) => chartAction({ kind: 'cancel', id, root }),
+  planAdd: (id, which, root) => chartAction({ kind: 'planAdd', id, which, root }),
 };
-/* 1.43.0 (the review of 69eebe1): a group line's action carries the member orders this window drew on it, so the ticket's window
-   finds them when its own line has another id (a merged line's id is sticky per window) */
+/* 1.43.0 (the review of 69eebe1, the re-review of f2e06eb F1): a group line's action forwarded to the ticket's window carries the
+   member orders this window drew on it, and the ticket's window acts on those (the ids are sticky per window, so the same id can
+   be another line there); an action in the ticket's own window goes by its id */
 function withMembers(a) {
-  if (typeof a.id !== 'string' || !a.id.startsWith('G~') || !a.root) return a;
-  const acct = ticketAccount(), l = acct ? core.chartOrders(acct, a.root).find(x => x.id === a.id) : null;
-  return l && Array.isArray(l.members) ? Object.assign(a, { members: l.members.slice(0, 200) }) : a;
+  if (typeof a.id !== 'string' || !a.id.startsWith('G~')) return a;
+  const acct = ticketAccount(), l = acct && a.root ? core.chartOrders(acct, a.root).find(x => x.id === a.id) : null;
+  /* no such line here any more: an empty list, so the ticket's window sends nothing (never its own line of that id) */
+  return Object.assign(a, { members: l && Array.isArray(l.members) ? l.members.slice(0, 200) : [] });
 }
 
 /* ---------------- the one ticket across windows */
@@ -2660,7 +2662,7 @@ function mountAccount(v) {
     if (b.dataset.close) core.flattenHere(b.dataset.close);                          // the ticket's "Also open" Close
     /* Anthony (1.15.0): the x cancels an order of ANY instrument: TradeCore's own cancel (needs Armed, the order on the
        ticket's account and still working), in the ticket's window or forwarded to it as the chart's x is */
-    else chartAction(withMembers({ kind: 'cancelAny', id: b.dataset.cancel, root: b.dataset.root }));
+    else chartAction({ kind: 'cancelAny', id: b.dataset.cancel, root: b.dataset.root });
   });
   const put = (k, el, text, cls) => { const key = text + '|' + cls; if (A.keys[k] === key) return; A.keys[k] = key; el.textContent = text; el.className = cls || ''; };
   A.render = () => {

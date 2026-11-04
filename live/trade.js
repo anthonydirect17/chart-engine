@@ -994,7 +994,7 @@ function create(env) {
   function groupCancel(id, members) {
     if (!ready()) return;
     const l = groupLine(id, members);
-    if (!l) { flash('Not sent: that group line is no longer there.', 'warn'); return; }
+    if (!l) { flash(missWords(), 'warn'); return; }
     for (const x of l.items) { send({ type: 'cancel', id: x.id }); batchStop(e => e.id === x.id); }
     flash('Cancelling ' + l.items.length + ' order' + (l.items.length === 1 ? '' : 's') + ' of the group (' + l.items.map(x => x.account).join(', ') + ').', '');
   }
@@ -1054,7 +1054,7 @@ function create(env) {
   }
   function groupPlan(l, which, ticksOf) {
     if (!ready()) { env.changed(); return; }
-    if (!l) { flash('Not sent: that group line is no longer there.', 'warn'); env.changed(); return; }
+    if (!l) { flash(missWords(), 'warn'); env.changed(); return; }
     const done = [], bad = [];
     for (const x of l.items) {
       const o = TR.orders.get(x.id);
@@ -1220,27 +1220,46 @@ function create(env) {
       '\n' + (qty > 0 ? 'LONG ' : 'SHORT ') + size + ' in all @ ' + fmt(avgPrice) + ' (the average)';
     return { qty, avgPrice, group: g.name + ' \u00d7' + held.length, groupTip: tip };
   }
-  /* the member orders a group line stands for, read now (a line drawn a moment ago may cover fewer or more) */
+  /* the member orders a group line stands for, read now (a line drawn a moment ago may cover fewer or more).
+     1.43.0 (the re-review of f2e06eb, F1): an action forwarded from another window names the member orders that window drew on the
+     line (`members`), and they are the line acted on: the ids are sticky per window, so the same id can be another line here.
+     Only those of them still working group orders of this ticket's group and instrument, of the same kind (the planned stop or
+     target the id names, or the role, side and kind in it), are acted on; the id is never used then. With no `members` (the
+     ticket's own window) the id, as before. None found: null, and missWords() says why. */
+  let lineMiss = '';
   function groupLine(id, members) {
     const r = root(), plan = OT.planIdOf(id), bs = [...groupBuckets(TR.account, r).values()];
-    for (const b of bs) if (b.id === id) return { id, items: b.items, plan };
-    /* 1.43.0 (the review of 69eebe1): an action forwarded from another window names the members it drew on that line; when this
-       window's line has another id (the ids are sticky per window), the members still working are the line acted on */
-    if (Array.isArray(members) && members.length) {
+    if (Array.isArray(members)) {
       const want = new Set(members.filter(x => typeof x === 'string')), items = [];
+      /* the same kind as the line named: a planned stop (or target), or the role, side and kind in its id (the id's form is the
+         same in every window: G~<role>~<side>~<kind>~...) */
+      const m = /^G~([^~]+)~([^~]+)~([^~]+)~/.exec(id);
+      const same = x => (plan ? !!x.plan && x.plan.role === plan.which : !x.plan && !!m && (x.role || 'entry') === m[1] && x.side === m[2] && String(x.kind) === m[3]);
       let own = null;
-      for (const b of bs) if (isGroupLine(b.id) && !!OT.planIdOf(b.id) === !!plan) for (const x of b.items) if (want.has(x.id)) { items.push(x); own = own || b.id; }
-      if (items.length) return { id: own, items, plan };   // `id`: this window's line of the first of them
+      for (const b of bs) if (isGroupLine(b.id)) for (const x of b.items) if (want.has(x.id) && same(x)) { items.push(x); own = own || b; }
+      if (!items.length) {
+        const g = groupFor(TR.account);
+        lineMiss = 'Not sent: none of the orders that line showed in the other window is still a working order of ' + (g ? 'group ' + g.name : 'this ticket') + ' on ' + r + '.';
+        return null;
+      }
+      /* this window's line of the first of them, when it covers just these; else an id of its own (a move's hold never takes a line
+         that also covers orders not moved) */
+      const lid = own.items.every(x => want.has(x.id)) ? own.id : own.id + '~f' + (++fwdSeq);
+      return { id: lid, items, plan };
     }
+    for (const b of bs) if (b.id === id) return { id, items: b.items, plan };
+    lineMiss = 'Not sent: that group line is no longer there.';
     return null;
   }
+  let fwdSeq = 0;
+  const missWords = () => lineMiss || 'Not sent: that group line is no longer there.';
   const isGroupLine = id => typeof id === 'string' && id.startsWith('G~');
   let gmRun = null;                                  // a group line's move: { what, price, queue: [{ id, account, price }], sent: [], refused: Map(cid -> account) }
   function groupMove(id, price, members) {
     if (!ready()) { env.changed(); return; }
     if (gmRun) { flash('A group move is under way: ' + gmRun.queue.length + ' left. Nothing new was sent.', 'warn'); env.changed(); return; }
     const l = groupLine(id, members);
-    if (!l) { flash('Not sent: that group line is no longer there.', 'warn'); env.changed(); return; }
+    if (!l) { flash(missWords(), 'warn'); env.changed(); return; }
     const items = l.items.filter(x => !inCancelAll(x.id));
     const f = items[0] || l.items[0], what = f.role === 'stop' ? 'stops' : f.role === 'target' ? 'targets' : 'orders';
     gmRun = { what, price, queue: items.map(x => ({ id: x.id, account: x.account })), sent: [], cids: new Map(), ids: new Map(), refused: [] };
@@ -1255,7 +1274,10 @@ function create(env) {
     const room = OT.paceChunks(r.queue, recent, BE_LIMIT)[0].length;
     if (room) {
       const why = FRAMED || !TR.enabled ? 'trading went off' : !open() ? 'the connection to ChartBridge dropped' : !TR.armed ? 'Armed went off' : '';
-      if (why) { for (const x of r.queue) r.refused.push(x.account + ': not sent (' + why + ')'); r.queue.length = 0; }
+      if (why) {
+        for (const x of r.queue) { r.refused.push(x.account + ': not sent (' + why + ')'); for (const h of gmHold.values()) h.ids.delete(x.id); }   // 1.43.0: never drawn at the price asked for
+        r.queue.length = 0;
+      }
       for (const x of r.queue.splice(0, room)) {
         const cid = newCid();
         r.cids.set(cid, x.account); r.ids.set(cid, x.id); r.sent.push(x.account);
