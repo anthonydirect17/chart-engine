@@ -95,6 +95,43 @@ function planDrag(o, which, price, tick, from) {
   return d >= 1 ? { ticks: d } : { error: 'Not sent: a target goes on the profit side of the entry (' + (dir > 0 ? 'above' : 'below') + ' it). Drag it back past the entry.' };
 }
 
+/*
+ * 1.43.0 (Anthony 2026-11-04): a group's stops, and separately its targets, merge on the chart when their prices are close. On a
+ * group MARKET entry each account fills at its own price and ChartBridge places each account's bracket from that account's own
+ * fill, so the members' stops (and targets) can sit a tick apart; they draw as ONE line when they are of the same role, side
+ * and kind and within GROUP_MERGE_TICKS of each other. The clustering rule (transitive-safe, so a chain of 1 tick gaps never
+ * grows into one long line): sort the prices from the end nearest the entry outward (mergeEnd); the first price opens a
+ * cluster; each next price joins it while it is at most GROUP_MERGE_TICKS from that cluster's FIRST price, else it opens the
+ * next cluster. So no cluster spans more than GROUP_MERGE_TICKS. The line sits at the cluster's first price, the one nearest
+ * the entry (the first the market reaches): the chart never shows more room than the tightest account has.
+ */
+const GROUP_MERGE_TICKS = 2;
+/** The end of a stop or target's prices nearest the entry: 'high' for a sell stop (under a long) or a buy target (under a
+    short), 'low' for a buy stop or a sell target. A planned line counts by its plan role and its (closing) side. */
+function mergeEnd(o) {
+  const stop = !!o && (o.role === 'stop' || (!!o.plan && o.plan.role === 'stop'));
+  return (o && o.side === 'sell') === stop ? 'high' : 'low';
+}
+/**
+ * The clusters of one role, side and kind (or one group entry's planned stops, or its planned targets): items [{ price, ... }],
+ * tick > 0, end 'high' or 'low' (mergeEnd), maxTicks (GROUP_MERGE_TICKS unless given). Returns [{ at, price, lead, items }] in
+ * walk order: `at` the line's price in whole ticks, `price` and `lead` the item nearest the entry (the line's own), `items`
+ * the cluster's members in the order given (an account's tooltip order stays the group's).
+ */
+function mergeLevels(items, tick, end, maxTicks) {
+  const gap = Number.isInteger(maxTicks) && maxTicks >= 0 ? maxTicks : GROUP_MERGE_TICKS;
+  if (!(tick > 0)) return [];
+  const list = (items || []).map((x, i) => ({ x, i, at: Math.round(x.price / tick) })).filter(e => isFinite(e.at));
+  list.sort((a, b) => (end === 'high' ? b.at - a.at : a.at - b.at) || a.i - b.i);
+  const out = [];
+  for (const e of list) {
+    const c = out[out.length - 1];
+    if (c && Math.abs(e.at - c.at) <= gap) c.all.push(e);
+    else out.push({ at: e.at, price: e.x.price, lead: e.x, all: [e] });
+  }
+  return out.map(c => ({ at: c.at, price: c.price, lead: c.lead, items: c.all.sort((a, b) => a.i - b.i).map(e => e.x) }));
+}
+
 /** Default trade account: the one already chosen if still allowed, else Sim101, else the first allowed. */
 function defaultAccount(accounts, current) {
   const list = accounts || [];
@@ -506,6 +543,6 @@ function hotkeyAction(keys, combo) {
   return a ? a.id : '';
 }
 
-return { HOTKEY_ACTIONS, hotkeyKeyName, hotkeyCombo, parseHotkey, hotkeyRefused, isChartKey, cleanHotkeys, hotkeyFromEvent, hotkeyAction, flattenAllRoots,
+return { GROUP_MERGE_TICKS, mergeEnd, mergeLevels, HOTKEY_ACTIONS, hotkeyKeyName, hotkeyCombo, parseHotkey, hotkeyRefused, isChartKey, cleanHotkeys, hotkeyFromEvent, hotkeyAction, flattenAllRoots,
   MAX_BRACKET_TICKS, NO_CAP, bracketCap, planIdOf, plannedLines, planDrag, BRACKET_RATIOS, BRACKET_PRESET_MAX, BRACKET_PRESET_NAME_MAX, QTY_CHOICES, ratioOf, ratioBracket, bracketPresetName, defaultPresetName, cleanBracketPresets, qtyOptions, breakEvenPrice, breakEvenLegs, breakEvenAllowed, paceChunks, isWorking, bracketAllowed, opensPosition, placeKind, maxQtyFor, checkQty, cleanBracket, defaultAccount, openEntryFills, groupFillMarks, groupFillWords, cancelAllIds, orderEvent, legSummary, protectionLine, repeatGuard };
 });

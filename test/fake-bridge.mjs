@@ -153,6 +153,8 @@
 //   --bot-account=Sim101            the bot starts on that account, as if chosen (bot-account.txt); without it: None
 //                                   The agents listen on /agent/<id> (no Origin, header X-ChartBridge-Agent: the secret).
 //   --agent-any-time                no entry window and no flat time for the agents (smokes run at any hour)
+//   --market-slip=SIM-B:1,SIM-C:2   (1.43.0) a market fill on that account that many ticks worse than the last price (made up),
+//                                   so a group MARKET entry fills each account at its own price
 //   With --agents and --test-controls (POST): /test/agent-secret?agent= (tests only), /test/agent-connect?agent=&name=&build=
 //   (a made-up agent that never misses a heartbeat; on=0 drops it), /test/agent-plan?agent=&id=&side=&kind=limit&p=&lp=&qty=
 //   &stop=&target=&expire=&setup=&reason=&confidence= (a plan, handled by the mode; p defaults to a price the checks take, the
@@ -529,6 +531,9 @@ const desk = V3 ? new OrderDeskV3(Object.assign(deskOpts, { now: () => Date.now(
     { name: 'Group A', size: 50000, drawdown: 2000, drawdownType: 'eod', dailyLoss: 1000, target: 3000, members: ['SIM-A', 'SIM-B'], accountType: 'funded', hero: 'sample-build-3' },
     { name: 'Group B', size: 50000, drawdown: 2500, drawdownType: 'intraday', target: 3000, members: ['SIM-C', 'SIM-D'], accountType: 'eval', hero: 'sample-build-1' }] : [],
   agentAccounts: Object.fromEntries(flagValue('agent-accounts').split(',').map(x => x.split(':').map(y => y.trim())).filter(x => x.length === 2 && x[0] && x[1])) })) : new OrderDesk(deskOpts);
+/* 1.43.0: --market-slip=SIM-B:1,SIM-C:2: a market fill on that account is that many ticks worse than the last price (made-up
+   slippage), so a group MARKET entry fills each account at its own price and each bracket sits from its own fill */
+desk.marketSlip = Object.fromEntries(flagValue('market-slip').split(',').map(x => x.split(':').map(y => y.trim())).filter(x => x.length === 2 && x[0] && /^\d+$/.test(x[1])).map(x => [x[0], +x[1]]));
 const tapeStats = V3 ? new TapeStats() : null;          // 0.4.0: the tape counters are always on (no switch)
 const BOT_SECRET = crypto.randomBytes(32).toString('hex');   // ChartBridge keeps it in bot-secret.txt; never printed
 const AGENT_SECRETS = Object.fromEntries(AGENTS.map(id => [id, crypto.randomBytes(32).toString('hex')]));   // agent-<id>-secret.txt; never printed
