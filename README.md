@@ -153,7 +153,7 @@ line; recompile or restart NinjaTrader after a change):
 | `maxQty.MNQ` | `1` | Position cap per instrument root, one line per root (`maxQty.NQ = 1`, ...). ChartBridge 0.5.3 (Anthony, 2026-10-10): agents never read `maxQty.MNQ`; an agent's MNQ entries may be up to 20 (its own rule and the hard ceiling still apply). The line, or 1 with no line, caps the page, the bot and the copier. |
 | `maxTicksAway` | none | ChartBridge 0.3.7: a limit or stop price at most this many ticks from the last price (none: no limit; before 0.3.7 always 200). A value that is not a whole number of 1 or more means no limit, said in the Output window and to the signed-in pages. |
 | `maxBracketTicks` | none | ChartBridge 0.3.7: a bracket at most this many ticks (0.3.8: a market or resting entry's stop and target ticks, and a `plan`'s). None: no limit. Same rule for a mistyped value. |
-| `allowOrigins` | none | Other web pages that may open the read-only WebSocket (ChartBridge 0.3.1), comma separated, each an exact `scheme://host[:port]`, no wildcard, e.g. `https://desk.golivepage.com, http://100.88.192.33:8800` for The Desk's Live trading page (add `http://localhost:8800` or `http://127.0.0.1:8800` too if The Desk is ever opened that way). One line: the last `allowOrigins` line wins. Non-ASCII host names in punycode. They can read, never trade. |
+| `allowOrigins` | none | Other web pages that may open the read-only WebSocket (ChartBridge 0.3.1), comma separated, each an exact `scheme://host[:port]`, no wildcard, e.g. `https://desk.example.com, http://100.64.0.10:8800` for The Desk's Live trading page (add `http://localhost:8800` or `http://127.0.0.1:8800` too if The Desk is ever opened that way). One line: the last `allowOrigins` line wins. Non-ASCII host names in punycode. They can read, never trade. |
 | `accountChecks` | on | ChartBridge 0.4.0 (on with no line; `accountChecks = off` turns it off, Anthony 2026-10-07): each account's trading checkmark on the page's Accounts tab is gate 2 in place of `tradeAccounts` (saved by ChartBridge in `accounts.txt`; on the first start the `tradeAccounts` names come pre-checked). `trading = true` stays the master switch. |
 | `orderTypes` | on | 0.4.0: stop-limit and MIT orders (`orderTypes = off` turns them off). |
 | `strategies` | on | 0.4.0: Order Strategies with an entry: stop, up to 3 targets, breakeven, trailing (`strategies = off` turns them off). |
@@ -276,11 +276,12 @@ across fake restarts.
 ### Keep this PC up to date
 
 `nt8\update-pc.ps1` keeps the chart page on each trading PC (HOME, the laptop, WORK) up to date by itself, and gets a
-new ChartBridge ready for Anthony to install by hand. Windows PowerShell and git only; no admin, no Python, no token.
+new ChartBridge ready for Anthony to install by hand. Windows PowerShell and git only; no admin, no Python, no token of
+its own (once the repo is private it reads CI with this PC's chart-engine token, the one git fetch uses: below).
 
 - **The page updates by itself.** The updater checks when you sign in and twice a day, at 9:00 AM and 5:00 PM New York
-  time (Anthony, 2026-10-23: every updater checks twice a day and at sign-in). It installs the newest commit on `main` whose CI is green on both ubuntu-latest and
-  windows-latest, and only when that page works with the ChartBridge compiled on this PC (`live/COMPAT.json`). An open
+  time (Anthony, 2026-10-23: every updater checks twice a day and at sign-in). It installs the newest commit on `main` whose CI is green: `unit` on both ubuntu-latest and
+  windows-latest (today's workflow), or `unit-windows` on HOMESERVER's runner (after the move below), and only when that page works with the ChartBridge compiled on this PC (`live/COMPAT.json`). An open
   page keeps running what it loaded, so an open trade is never disturbed.
 - **ChartBridge never installs by itself.** A new one is fetched and staged; Anthony installs it with one command while
   flat, then presses F5.
@@ -458,9 +459,54 @@ next update. `-InstallChartBridge` also moves the task's copy of the updater to 
 | `pause` / `resume` | turns the automatic update off and on (off is never the default; a cut-off install is still repaired while paused) |
 | `register` / `unregister` | the scheduled task "ChartEngine Updater" for this Windows user: at sign-in and daily at 9:00 AM and 5:00 PM New York time (`-DailyAt`), started hidden (wscript.exe //B and a one-line launcher) |
 
-Why it waits (all in `update.log`): CI not finished or red on either system; GitHub not reachable (it reads CI
-without a token: 60 requests an hour per address, and a pass uses two); ChartBridge's version not known (NinjaTrader
-closed and nothing recorded yet); the page needs a newer ChartBridge; paused; or a commit rolled back by hand.
+Why it waits (all in `update.log`): CI not finished or red; GitHub not reachable (without a login it reads CI with
+no token: 60 requests an hour per address, and a pass uses two); the repo private and this PC with no chart-engine
+token (below); ChartBridge's version not known (NinjaTrader closed and nothing recorded yet); the page needs a newer
+ChartBridge; paused; or a commit rolled back by hand.
+
+**Going private (Anthony 2026-11-04).** chart-engine becomes a private repo, and its Windows CI moves to HOMESERVER's
+self-hosted runner (SERVER_RULES.md rule 6.1). In two steps, so the updaters on WORK and HOME never get stuck:
+
+1. **Step A (this updater):** it accepts either `unit (ubuntu-latest)` and `unit (windows-latest)` green, or the box
+   job `unit-windows` green (a Linux job that runs on pull requests only is skipped or absent on `main`, and is not
+   counted). It asks GitHub's API without a token first, as before, so a public repo never sees one. Only when that
+   answers 404 (a private repo, or none at that name) does it read this PC's chart-engine token and ask again with
+   it, through GitHub's Actions API (the workflow runs for the commit, then each run's latest jobs, and the commit
+   statuses as before), with exactly the same gate as the check runs: `git credential fill` for `https://github.com/<owner>/chart-engine.git` only (never the host alone), only
+   when `credential.useHttpPath` is true for that URL, and only a fine-grained token (`github_pat_...`); never
+   interactive, and never printed, logged or saved. The updater never runs `git credential approve` or `reject`
+   itself (git's own fetch may store or erase a login as usual).
+2. **Before step B:** both PCs re-pin with `register` (with the `-DailyAt` that PC uses), since the scheduled task
+   runs its pinned copy, which changes only at `register` or `-InstallChartBridge`; `status` names the commit the
+   task's copy is from. A copy pinned before step A waits on the missing `unit (windows-latest)` for good and cannot
+   read a private repo.
+3. **Step B (later):** `.github/workflows/test.yml` moves the Windows job to the box as `unit-windows` once the
+   HOMESERVER coordinator's runner card is done, then Anthony makes the repo private. From then on, bring the clone up
+   to date (its `git fetch` and pull with the token below) before any `register`.
+
+**This PC's chart-engine token** (Anthony 2026-11-04, SERVER_RULES.md rule 8.5: a fine-grained, read-only token for
+chart-engine only, never the whole-account GitHub login). Once the repo is private, once per PC, as the Windows user
+the task runs as:
+
+1. On GitHub, a fine-grained personal access token: Repository access "Only select repositories", chart-engine
+   alone; Repository permissions, all read-only, as GitHub's docs give them for each call the updater makes:
+   - **Actions: Read**: "List workflow runs for a repository" and "List jobs for a workflow run" (REST API docs,
+     Actions, Workflow runs and Workflow jobs). The check runs call the public path uses is not available to
+     fine-grained personal access tokens ("List check runs for a Git reference" names GitHub App tokens only), which is
+     why the private path reads the Actions API.
+   - **Commit statuses: Read**: "Get the combined status for a specific reference" (REST API docs, Commits, Commit
+     statuses).
+   - **Contents: Read**: to read the repo for `git fetch` (GitHub's "Repo-reading token" example in "Managing your
+     personal access tokens" is contents read). **Metadata: Read** comes with it.
+2. `git config --global credential.https://github.com/<owner>/chart-engine.git.useHttpPath true`, so git asks for a
+   login stored for this repo's path alone (the updater reads only that).
+3. A `git fetch` in the clone from a normal PowerShell window: when Git Credential Manager asks, choose **Token** and
+   type the token yourself. If the fetch works without asking, stop: a broader login matched (rule 8.5's wording).
+
+Without the token the updater reads "git fetch failed: the repo is private (or not found) and this PC has no GitHub
+token for it" or "GitHub answered 404: the repo is private (or not found at <owner>/chart-engine) and this PC has no
+GitHub token for it" in `update.log` and `status`, with the reason (for example `credential.useHttpPath is not
+set`): nothing installed, never a CI failure.
 
 With NinjaTrader closed, the ChartBridge version counted is the newest one `/diag` showed (or the one
 `-InstallChartBridge` copied, once seen), and never above the version in `bin\Custom\AddOns\ChartBridge.cs`.

@@ -147,7 +147,7 @@ public static class PinHarness
             .SetValue(null, TimeZoneInfo.FindSystemTimeZoneById("America/New_York"));
         Check(ChartBridgeServer.Start(), "server: ChartBridge starts on port " + port);
         if (!WaitUp()) { Check(false, "server: not answering"); return; }
-        ChartBridgeConfig.AllowOrigins = ChartBridgeAccess.ParseOrigins("https://desk.golivepage.com");
+        ChartBridgeConfig.AllowOrigins = ChartBridgeAccess.ParseOrigins("https://desk.example.com");
 
         // status and set
         Check(Post("/pin/status", "{}").Is(200, "{\"set\":false,\"unlocked\":false}"), "POST /pin/status with no PIN: set false");
@@ -156,7 +156,7 @@ public static class PinHarness
 
         // strict endpoint checks, all before anything is set
         Check(Get("/pin/set").Status == 405 && Get("/pin/status").Status == 405, "PIN endpoints: GET is 405 (POST only)");
-        Check(Post("/pin/set", "{\"pin\":\"" + PinA + "\"}", "https://desk.golivepage.com").Status == 403, "PIN endpoints: a listed allowOrigins page (The Desk) is refused");
+        Check(Post("/pin/set", "{\"pin\":\"" + PinA + "\"}", "https://desk.example.com").Status == 403, "PIN endpoints: a listed allowOrigins page (The Desk) is refused");
         Check(Post("/pin/set", "{\"pin\":\"" + PinA + "\"}", "https://evil.example").Status == 403, "PIN endpoints: another page is refused");
         Check(Post("/pin/set", "{\"pin\":\"" + PinA + "\"}", "").Status == 403 && Post("/pin/set", "{\"pin\":\"" + PinA + "\"}", null).Status == 403, "PIN endpoints: an empty or missing Origin is refused");
         Check(Post("/pin/set", "{\"pin\":\"" + PinA + "\"}", "http://LOCALHOST:" + port).Status == 403 && Post("/pin/set", "{\"pin\":\"" + PinA + "\"}", "http://127.0.0.1:" + port).Status == 403,
@@ -191,8 +191,8 @@ public static class PinHarness
         Check(!ChartBridgePin.WsUnlocked(Own, null) && !ChartBridgePin.WsUnlocked(Own, "") && !ChartBridgePin.WsUnlocked(Own, tampered), "WebSocket from the own page: refused without a valid token");
         Check(!ChartBridgePin.WsUnlocked("HTTP://LOCALHOST:" + port, null) && !ChartBridgePin.WsUnlocked(" " + Own + " ", null), "WebSocket: no spelling of the own origin skips the PIN");
         Check(ChartBridgePin.WsUnlocked(Own, t1), "WebSocket from the own page with the token: allowed");
-        Check(ChartBridgePin.WsUnlocked("https://desk.golivepage.com", null) && ChartBridgePin.WsUnlocked(null, null), "WebSocket from The Desk (allowOrigins) or a local program (no Origin): no PIN needed, as in 0.3.1");
-        ChartBridgeConfig.AllowOrigins = ChartBridgeAccess.ParseOrigins(Own + ", https://desk.golivepage.com");
+        Check(ChartBridgePin.WsUnlocked("https://desk.example.com", null) && ChartBridgePin.WsUnlocked(null, null), "WebSocket from The Desk (allowOrigins) or a local program (no Origin): no PIN needed, as in 0.3.1");
+        ChartBridgeConfig.AllowOrigins = ChartBridgeAccess.ParseOrigins(Own + ", https://desk.example.com");
         Check(!ChartBridgePin.WsUnlocked(Own, null), "WebSocket: listing the own page in allowOrigins does not skip the PIN");
 
         // a wrong PIN never blocks the right one (review S2): 200 wrong in a row through the real server, then the right

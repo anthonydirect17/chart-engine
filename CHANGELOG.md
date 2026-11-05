@@ -1,5 +1,68 @@
 # Changelog
 
+## Unreleased (2026-11-04): getting ready to go private: the PC updater accepts the box job and reads a chart-engine token; placeholders
+
+`nt8/update-pc.ps1` and docs only (no page change, no version bump, as the 2026-10-23 updater entries). Anthony decided
+(2026-11-04) to make chart-engine private, with its Windows CI on HOMESERVER's self-hosted runner (SERVER_RULES.md rule
+6.1). Two steps, so the updaters on WORK and HOME never get stuck; this is step A, merged while the repo is public and
+`.github/workflows/test.yml` unchanged. Step B (later): test.yml moves the Windows job to the box runner as
+`unit-windows` after the HOMESERVER coordinator's runner card, then Anthony makes the repo private.
+
+- **Either required set** (`Resolve-CiState`): `unit (ubuntu-latest)` and `unit (windows-latest)` green (today), or the
+  box job `unit-windows` green (`$script:BoxCheck`, named as Bot-Lab's box job), with every other check and status
+  finished green as before. A Linux job that runs on pull requests only (skipped or absent on `main` after step B) is
+  not counted. A set that ran with a job not green (failed, skipped) is a failure unless the other set is green; with
+  neither set there it waits, naming both, and after 24 hours the "was a required job renamed?" note names both sets.
+- **This PC's chart-engine token, only for a private repo** (Anthony 2026-11-04, SERVER_RULES.md rule 8.5: a
+  fine-grained, read-only token for chart-engine only, never the whole-account login). GitHub's API is asked without a
+  token first, always, through the check runs as before, so a public repo never sees one. Only a 404 or 401 then
+  reads the token (`Get-GitHubToken`) and asks again through GitHub's Actions API (`Read-ActionsResults`, below):
+  only when `credential.useHttpPath` is true for `https://github.com/<owner>/<repo>.git` (`git config --bool
+  --get-urlmatch`, git's own URL matching), one `git credential fill` with `protocol=https`, `host=github.com` and
+  `path=<owner>/<repo>.git` (never the host alone), and only a fine-grained token (`github_pat_`); any other stored
+  login is left unused. Never interactive (`GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=never`,
+  `credential.interactive=never`, no askpass), 15 seconds at most. The token is sent as `Authorization: Bearer`; it is
+  never logged, printed, saved or put in an error text (`Hide-Token`). `git credential` runs only as `fill` and
+  `git config` only as that one read: the updater never runs approve or reject itself.
+- **Truthful states:** a 404 or 401 without a token reads "the repo is private (or not found at <owner>/<repo>) and this
+  PC has no GitHub token for it: nothing installed", with the reason (useHttpPath not set, no token stored, or a stored
+  login that is not a fine-grained token) (CI unknown, never failure, nothing installed). A token GitHub refuses (401,
+  403 that is not the rate limit, 404) says so, and is never green: the private repo stays unknown. 403 and 429 rate
+  limits keep their message. A fetch that fails for want of a token ("could not read Username ... terminal prompts
+  disabled") or with a refused one now says so plainly.
+- **Placeholders** (the first commit): The Desk's real-looking hostname and Tailscale address in the docs, test strings
+  and one `ChartBridge.cs` example comment are now `desk.example.com` and `100.64.0.10`; CLAUDE.md cites SERVER_RULES.md
+  by rule number (and now 4.1's overnight check, `register -DailyAt 03:45`, as a move with the code default unchanged,
+  and 8.5). ChartBridge stays 0.6.14: the comment change needs no recompile.
+- **Rollout:** the scheduled task runs its pinned copy, which changes only at `-InstallChartBridge` or `register`, so
+  both PCs re-pin with `register` (with the `-DailyAt` that PC uses) before step B (`status` names the commit the task's
+  copy is from); a copy pinned before this change would wait on the missing `unit (windows-latest)` and cannot read a
+  private repo. After step B and going private, the clone is brought up to date before any `register`. The README has
+  the token setup (fine-grained, chart-engine only, Actions, Commit statuses and Contents read, `useHttpPath` for the
+  repo URL, Token typed in Git Credential Manager).
+- **The private path reads the Actions API** (`Read-ActionsResults`): GitHub's docs list the check runs call ("List
+  check runs for a Git reference") for GitHub App tokens only, not fine-grained personal access tokens, while "List
+  workflow runs for a repository" and "List jobs for a workflow run" take one with Actions read. With the token: every
+  workflow run for the commit (`/actions/runs?head_sha=`, all pages), the jobs of each run's latest attempt
+  (`/actions/runs/{id}/jobs?filter=latest`), and the combined statuses as before, turned into the same records the
+  check runs give, so `Resolve-CiState` is the one gate: a run or job not completed, or no runs yet, is pending; a job
+  that ended other than success, skipped or neutral, or a run that ended failure, cancelled, timed_out,
+  action_required or startup_failure, is a failure; the required jobs by name, with success; statuses as today. The
+  public path stays on the check runs, exactly as it was. The token's permissions (README): Actions, Commit statuses
+  and Contents read (Metadata comes with it).
+- Tests: `test/pc-updater.tests.ps1`: either set (today's pair; the box job green with Linux skipped or absent; the
+  box job failed, skipped or queued; neither there, and its 24 hour note), the token through a stand-in credential
+  helper (never asked without `useHttpPath` for the URL, which git's own URL matching decides; one ask with the repo
+  path, never interactively even from a window that allows prompts; an OAuth login refused; none stored),
+  `credential approve`, `reject` and `store` and other `git config` forms refused, a public repo that never sees the
+  token, the token sent as Bearer only after a 404 and found in no output, log, state, status, update.json or error
+  text, the 404 and 401 messages, a refused token (401, 403, 404) and the rate limits, the plain fetch messages, and
+  the Actions path (green, the box job, pending, no runs yet, failed, cancelled and the other failed run endings, a
+  re-run whose latest attempt passed, a missing required job, statuses, the public path untouched) with the same
+  verdicts as the check runs path for the same scenarios.
+  `test/pc-updater.test.js`: the allowed git subcommands, the box job's name, useHttpPath read before the one ask, the
+  token only after a 404 or 401 and then through the Actions API, one place that asks for it and one that sends it.
+
 ## chart 1.43.0 (2026-11-04): a group's stops and targets a tick or two apart draw as one line (page only, no F5)
 
 In plain words: on a group ticket, a MARKET entry fills each account at its own price, and ChartBridge places each account's stop

@@ -1450,25 +1450,25 @@ public static class OrdersHarness
         Check(Loop("::1"), "address check: IPv6 loopback ::1 allowed");
         Check(Loop("::ffff:127.0.0.1"), "address check: IPv4 loopback mapped into IPv6 (::ffff:127.0.0.1) allowed");
         Check(!Loop("192.0.2.10"), "address check: a LAN address refused");
-        Check(!Loop("100.88.192.33"), "address check: a Tailscale 100.x address refused");
-        Check(!Loop("::ffff:192.0.2.10") && !Loop("::ffff:100.88.192.33"), "address check: LAN and Tailscale addresses mapped into IPv6 refused");
+        Check(!Loop("100.64.0.10"), "address check: a Tailscale 100.x address refused");
+        Check(!Loop("::ffff:192.0.2.10") && !Loop("::ffff:100.64.0.10"), "address check: LAN and Tailscale addresses mapped into IPv6 refused");
         Check(!Loop("2001:db8::1") && !Loop("fe80::1") && !Loop("::") && !Loop("0.0.0.0") && !Loop("::2"), "address check: other IPv6, link-local, unspecified refused");
         Check(!ChartBridgeAccess.IsLoopback((IPEndPoint)null) && !ChartBridgeAccess.IsLoopback((IPAddress)null), "address check: no address (null) refused");
 
         // origin allow-list for the read-only WebSocket
-        ChartBridgeConfig.AllowOrigins = ChartBridgeAccess.ParseOrigins("https://Desk.GoLivePage.com/, https://desk.golivepage.com:443, *, https://*.golivepage.com, null, http://x.example/path, http://100.88.192.33:8800, ftp://x.example");
-        Check(string.Join(" ", ChartBridgeConfig.AllowOrigins) == "https://desk.golivepage.com http://100.88.192.33:8800",
+        ChartBridgeConfig.AllowOrigins = ChartBridgeAccess.ParseOrigins("https://Desk.Example.com/, https://desk.example.com:443, *, https://*.example.com, null, http://x.example/path, http://100.64.0.10:8800, ftp://x.example");
+        Check(string.Join(" ", ChartBridgeConfig.AllowOrigins) == "https://desk.example.com http://100.64.0.10:8800",
               "allowOrigins: lower-cased, default port and trailing slash dropped, wildcards, null, paths and other schemes skipped: " + string.Join(" ", ChartBridgeConfig.AllowOrigins));
         Check(ChartBridgeAccess.WsOriginAllowed("http://localhost:8765"), "origin: ChartBridge's own page allowed");
-        Check(ChartBridgeAccess.WsOriginAllowed("https://desk.golivepage.com") && ChartBridgeAccess.WsOriginAllowed("http://100.88.192.33:8800"), "origin: listed origins allowed");
-        Check(ChartBridgeAccess.WsOriginAllowed("HTTPS://DESK.GOLIVEPAGE.COM"), "origin: compared lower-cased");
-        Check(!ChartBridgeAccess.WsOriginAllowed("https://evil.example") && !ChartBridgeAccess.WsOriginAllowed("https://desk.golivepage.com.evil.example")
-              && !ChartBridgeAccess.WsOriginAllowed("http://desk.golivepage.com") && !ChartBridgeAccess.WsOriginAllowed("https://desk.golivepage.com:8443")
+        Check(ChartBridgeAccess.WsOriginAllowed("https://desk.example.com") && ChartBridgeAccess.WsOriginAllowed("http://100.64.0.10:8800"), "origin: listed origins allowed");
+        Check(ChartBridgeAccess.WsOriginAllowed("HTTPS://DESK.EXAMPLE.COM"), "origin: compared lower-cased");
+        Check(!ChartBridgeAccess.WsOriginAllowed("https://evil.example") && !ChartBridgeAccess.WsOriginAllowed("https://desk.example.com.evil.example")
+              && !ChartBridgeAccess.WsOriginAllowed("http://desk.example.com") && !ChartBridgeAccess.WsOriginAllowed("https://desk.example.com:8443")
               && !ChartBridgeAccess.WsOriginAllowed("http://localhost:8766") && !ChartBridgeAccess.WsOriginAllowed("http://127.0.0.1:8765"), "origin: unlisted origins refused (exact scheme, host and port)");
         Check(!ChartBridgeAccess.WsOriginAllowed("null") && !ChartBridgeAccess.WsOriginAllowed("NULL"), "origin: \"null\" refused");
         Check(!ChartBridgeAccess.WsOriginAllowed("") && !ChartBridgeAccess.WsOriginAllowed(" "), "origin: an empty Origin header refused");
         Check(ChartBridgeAccess.WsOriginAllowed(null), "origin: no Origin header (a local program, not a browser) allowed");
-        Check(!ChartBridgeOrders.OriginAllowed("https://desk.golivepage.com") && ChartBridgeOrders.OriginAllowed("http://localhost:8765"), "a listed origin still cannot trade: orders only from ChartBridge's own page");
+        Check(!ChartBridgeOrders.OriginAllowed("https://desk.example.com") && ChartBridgeOrders.OriginAllowed("http://localhost:8765"), "a listed origin still cannot trade: orders only from ChartBridge's own page");
 
         // refusals are logged once an hour per address
         const int L = ChartBridgeAccess.LogLine, S = ChartBridgeAccess.LogSkip, F = ChartBridgeAccess.LogBudgetFull;
@@ -1491,10 +1491,10 @@ public static class OrdersHarness
         string dir = Path.Combine(Path.GetTempPath(), "cb-harness-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(Path.Combine(dir, "ChartBridge"));
         NinjaTrader.Core.Globals.UserDataDir = dir;
-        File.WriteAllLines(Path.Combine(dir, "ChartBridge", "config.txt"), new[] { "# test", "allowOrigins = https://desk.golivepage.com, http://100.88.192.33:8800" });
+        File.WriteAllLines(Path.Combine(dir, "ChartBridge", "config.txt"), new[] { "# test", "allowOrigins = https://desk.example.com, http://100.64.0.10:8800" });
         ChartBridgeConfig.Load();
-        Check(string.Join(" ", ChartBridgeConfig.AllowOrigins) == "https://desk.golivepage.com http://100.88.192.33:8800", "config.txt: allowOrigins is read");
-        File.WriteAllLines(Path.Combine(dir, "ChartBridge", "config.txt"), new[] { "allowOrigins = https://desk.golivepage.com", "allowOrigins = http://localhost:8800" });
+        Check(string.Join(" ", ChartBridgeConfig.AllowOrigins) == "https://desk.example.com http://100.64.0.10:8800", "config.txt: allowOrigins is read");
+        File.WriteAllLines(Path.Combine(dir, "ChartBridge", "config.txt"), new[] { "allowOrigins = https://desk.example.com", "allowOrigins = http://localhost:8800" });
         ChartBridgeConfig.Load();
         Check(string.Join(" ", ChartBridgeConfig.AllowOrigins) == "http://localhost:8800", "config.txt: with two allowOrigins lines, the last one wins");
         Check(string.Join(" ", ChartBridgeAccess.ParseOrigins("https://b\u00fccher.example, https://xn--bcher-kva.example")) == "https://xn--bcher-kva.example",
@@ -1503,11 +1503,11 @@ public static class OrdersHarness
         ChartBridgeConfig.Load();
         Check(ChartBridgeSwitches.Names.All(ChartBridgeSwitches.Get), "config.txt with no v3 line: every v3 switch is on (Anthony 2026-10-07)");
         AllOffLines();   // the base checks run with every v3 off line (0.3.8 exactly)
-        Check(ChartBridgeConfig.AllowOrigins.Count == 0 && !ChartBridgeAccess.WsOriginAllowed("https://desk.golivepage.com") && ChartBridgeAccess.WsOriginAllowed("http://localhost:8765"),
+        Check(ChartBridgeConfig.AllowOrigins.Count == 0 && !ChartBridgeAccess.WsOriginAllowed("https://desk.example.com") && ChartBridgeAccess.WsOriginAllowed("http://localhost:8765"),
               "config.txt without allowOrigins: only ChartBridge's own page");
-        ChartBridgeConfig.AllowOrigins = ChartBridgeAccess.ParseOrigins("https://desk.golivepage.com");
+        ChartBridgeConfig.AllowOrigins = ChartBridgeAccess.ParseOrigins("https://desk.example.com");
         string diag = ChartBridgeAccess.DiagJson();
-        Check(diag.Contains("\"allowOrigins\":[\"http://localhost:8765\",\"https://desk.golivepage.com\"]") && diag.Contains("\"loopbackOnly\":true"), "/diag lists the allowed origins: " + diag);
+        Check(diag.Contains("\"allowOrigins\":[\"http://localhost:8765\",\"https://desk.example.com\"]") && diag.Contains("\"loopbackOnly\":true"), "/diag lists the allowed origins: " + diag);
 
         // The real request handler behind a listener on every interface (what HTTP.sys does on Windows):
         // a plain GET from another address that says "Host: localhost" is refused on every path; from this PC it is served.

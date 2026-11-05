@@ -15,7 +15,8 @@
                           with STOP; a task whose state folder is not this window's has its own last run said
     check                 dry run: fetches main and says what `update` would do; changes nothing
     update                the automatic path (the scheduled task runs this): installs the newest commit on main
-                          whose CI is green on ubuntu-latest and windows-latest, only when its page works with the
+                          whose CI is green (unit on ubuntu-latest and windows-latest, or the HOMESERVER job
+                          unit-windows), only when its page works with the
                           ChartBridge compiled on this PC; stages a new ChartBridge but never installs it. A network
                           that is not up yet (the run at sign-in) is waited for up to 2 minutes, then the run ends
                           quietly (offline) until the next one
@@ -39,6 +40,14 @@
       ChartBridge maps each URL straight to www\<path>, so there is no one-step switch of a whole set: a journal
       (updater\swap.json) makes an interrupted install finish or undo itself at the start of the next run.
     - Windows PowerShell 5.1 and git only. No PowerShell command strings: scripts run with -File.
+
+  Going private (Anthony 2026-11-04), step A: CI is green with either today's pair (unit (ubuntu-latest) and
+  unit (windows-latest)) or HOMESERVER's job unit-windows (step B moves the Windows job there, SERVER_RULES.md rule
+  6.1, and runs Linux on pull requests only). GitHub's API is asked without a token first, as before; only when it
+  answers 404 (a private repo) is this PC's fine-grained, read-only chart-engine token read (SERVER_RULES.md rule
+  8.5: never the whole-account login; git credential fill for the repo's path, only with credential.useHttpPath set
+  for it, never interactive, never logged or saved; Get-GitHubToken) and sent. A private repo without that token
+  reads as unknown ("this PC has no GitHub token for it"), never as a failure.
 
   State and logs: Documents\NinjaTrader 8\ChartBridge\updater\ (state.json, status.json, update.log, swap.json while a
   page install runs, staged\, previous\, previous-addons\, bin\, paused). Only update.json (versions, no secrets) is written into the served www folder.
@@ -121,7 +130,14 @@ Set-StrictMode -Version 2.0
 $script:UpdaterSelf = $MyInvocation.MyCommand.Path
 $script:Bound = @{}                            # the options given on this command line (register keeps the task's others)
 foreach ($k in $PSBoundParameters.Keys) { $script:Bound[$k] = $PSBoundParameters[$k] }
-$script:RequiredChecks = @('unit (ubuntu-latest)', 'unit (windows-latest)')   # .github/workflows/test.yml
+# The jobs a main commit's CI must pass (Resolve-CiState): either set, every job in it green from GitHub Actions.
+# Today's .github/workflows/test.yml: the matrix job on GitHub's ubuntu-latest and windows-latest.
+$script:RequiredChecks = @('unit (ubuntu-latest)', 'unit (windows-latest)')
+# Step B of going private (Anthony 2026-11-04): test.yml moves the Windows job, the gate, to HOMESERVER's self-hosted
+# runner (SERVER_RULES.md rule 6.1) under this name, as Bot-Lab names its box job, and the Linux job runs on pull
+# requests only (skipped or absent on main). This one job green is then enough.
+$script:BoxCheck = 'unit-windows'
+$script:RequiredSets = @(@{ jobs = $script:RequiredChecks }, @{ jobs = @($script:BoxCheck) })
 $script:GoodConclusions = @('success', 'neutral', 'skipped')
 $script:Remote = 'origin'
 $script:Branch = 'main'
@@ -343,7 +359,8 @@ function Format-Arg([string]$Arg) {
 
 # A program with an argument list and a time limit. PowerShell itself is never started this way with a command
 # string (Norton on WORK blocks -EncodedCommand; see the test that guards it).
-function Invoke-Native([string]$Exe, [string[]]$ArgList, [int]$TimeoutSec = 120) {
+# -InputText is written to the program's standard input, then closed (git credential fill reads its question there).
+function Invoke-Native([string]$Exe, [string[]]$ArgList, [int]$TimeoutSec = 120, [string]$InputText = '') {
   $psi = New-Object System.Diagnostics.ProcessStartInfo
   $psi.FileName = $Exe
   $psi.Arguments = (($ArgList | ForEach-Object { Format-Arg $_ }) -join ' ')
@@ -360,9 +377,21 @@ function Invoke-Native([string]$Exe, [string[]]$ArgList, [int]$TimeoutSec = 120)
   $psi.EnvironmentVariables['GIT_ASKPASS'] = ''
   $psi.EnvironmentVariables['SSH_ASKPASS'] = ''
   $psi.EnvironmentVariables['GIT_SSH_COMMAND'] = 'ssh -o BatchMode=yes'
-  $p = [System.Diagnostics.Process]::Start($psi)
+  # Windows PowerShell 5.1 (.NET Framework) writes standard input in the console's input encoding and, when that is
+  # UTF-8 (code page 65001), sends its byte order mark first: git credential fill then reads no protocol and refuses.
+  # So for the start only, the same code page without the mark.
+  $keepIn = $null
+  if ($InputText) {
+    $psi.RedirectStandardInput = $true
+    try { if ([Console]::InputEncoding.CodePage -eq 65001 -and [Console]::InputEncoding.GetPreamble().Length) { $keepIn = [Console]::InputEncoding; [Console]::InputEncoding = $script:Utf8 } } catch { $keepIn = $null }
+  }
+  try { $p = [System.Diagnostics.Process]::Start($psi) }
+  finally { if ($keepIn) { try { [Console]::InputEncoding = $keepIn } catch { } } }
   $out = $p.StandardOutput.ReadToEndAsync()
   $err = $p.StandardError.ReadToEndAsync()
+  if ($InputText) {
+    try { $p.StandardInput.Write($InputText); $p.StandardInput.Close() } catch { }
+  }
   if (-not $p.WaitForExit($TimeoutSec * 1000)) {
     Stop-ProcessTree $p
     return @{ code = -1; out = ''; err = "timed out after $TimeoutSec s" }
@@ -390,10 +419,14 @@ function Get-GitExe {
 
 # Every git call of this tool goes through here. Only subcommands that read, or fetch origin into
 # refs/remotes, are allowed: nothing here can move Anthony's clone (no checkout, merge, pull, reset ...).
-$script:GitAllowed = @('fetch', 'rev-parse', 'show', 'cat-file', 'archive', 'remote', 'symbolic-ref', 'rev-list', 'merge-base', 'hash-object', 'ls-tree')
+# credential runs only as `credential fill` (Get-GitHubToken: it reads this PC's chart-engine token); approve and
+# reject, which change the PC's stored logins, never run.
+# config runs only as the one read of credential.useHttpPath for the repo's URL (Get-GitHubToken).
+$script:GitAllowed = @('fetch', 'rev-parse', 'show', 'cat-file', 'archive', 'remote', 'symbolic-ref', 'rev-list', 'merge-base', 'hash-object', 'ls-tree', 'credential', 'config')
 
-# Three allowed subcommands also have a writing form, so their whole argument list is checked: symbolic-ref reads
-# one ref (a second name would write it, -d deletes it), remote only runs get-url, hash-object never writes (-w).
+# Five allowed subcommands also have a writing form, so their whole argument list is checked: symbolic-ref reads
+# one ref (a second name would write it, -d deletes it), remote only runs get-url, hash-object never writes (-w),
+# credential only fills (never approve, reject or store), config only reads credential.useHttpPath for a GitHub URL.
 function Test-GitArgs([string[]]$ArgList) {
   $sub = $ArgList[0]
   if ($script:GitAllowed -notcontains $sub) { return "git $sub is not allowed in update-pc.ps1" }
@@ -411,10 +444,16 @@ function Test-GitArgs([string[]]$ArgList) {
     $opts = @(); if ($dd -ge 0) { $opts = @($rest | Select-Object -First $dd) }
     if ($dd -lt 0 -or $rest.Count -le $dd + 1 -or @($opts | Where-Object { $_ -notmatch '^--path=' -and $_ -ne '--no-filters' }).Count) { return "git hash-object is allowed only as 'hash-object [--path=<p>] -- <file>' (never -w), not '$($rest -join ' ')'" }
   }
+  if ($sub -eq 'config') {
+    if ($rest.Count -ne 4 -or $rest[0] -ne '--bool' -or $rest[1] -ne '--get-urlmatch' -or $rest[2] -ne 'credential.useHttpPath' -or $rest[3] -notmatch '^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\.git$') { return "git config is not allowed in update-pc.ps1 except as one read, 'config --bool --get-urlmatch credential.useHttpPath https://github.com/<owner>/<repo>.git', not '$($rest -join ' ')'" }
+  }
+  if ($sub -eq 'credential') {
+    if ($rest.Count -ne 1 -or $rest[0] -ne 'fill') { return "git credential is allowed only as 'credential fill' (never approve, reject or store), not '$($rest -join ' ')'" }
+  }
   return $null
 }
 
-function Invoke-Git([string[]]$ArgList, [int]$TimeoutSec = 120) {
+function Invoke-Git([string[]]$ArgList, [int]$TimeoutSec = 120, [string]$InputText = '') {
   $refused = Test-GitArgs $ArgList
   if ($refused) { throw $refused }
   $git = Get-GitExe
@@ -422,7 +461,9 @@ function Invoke-Git([string[]]$ArgList, [int]$TimeoutSec = 120) {
   # never a prompt or a window; never a gc or maintenance run started in Anthony's clone by a fetch
   $quiet = @('-c', 'credential.interactive=never', '-c', 'core.sshCommand=ssh -o BatchMode=yes', '-c', 'core.askPass=',
     '-c', 'gc.auto=0', '-c', 'maintenance.auto=false')
-  return (Invoke-Native $git (@('-C', $script:P.Repo) + $quiet + $ArgList) $TimeoutSec)
+  $more = @{}
+  if ($InputText) { $more['InputText'] = $InputText }
+  return (Invoke-Native $git (@('-C', $script:P.Repo) + $quiet + $ArgList) $TimeoutSec @more)
 }
 
 # The git blob id of a file on disk, as it would be stored at <RepoPath> (line endings normalized as git does).
@@ -479,44 +520,164 @@ function Get-RepoSlug {
   return (ConvertTo-RepoSlug $r.out)
 }
 
-# One GET to the GitHub API, without a token: chart-engine is public, and the API allows 60 requests an hour per
-# address without one. A pass makes two (check runs and statuses), and a green commit is remembered in state.json
-# and never asked about again, so a PC uses a few a day.
-function Invoke-GitHubJson([string]$Path) {
+# This PC's chart-engine token, read only when GitHub's API answered 404 without one (the repo is private). Anthony
+# 2026-11-04 (SERVER_RULES.md rule 8.5): the PC updaters use a fine-grained, read-only token for chart-engine only,
+# never the whole-account GitHub login. So:
+#   - only when credential.useHttpPath is true for https://github.com/<owner>/<repo>.git, read with
+#     `git config --bool --get-urlmatch`, which applies git's own URL matching (the exact
+#     credential.https://github.com/<owner>/<repo>.git.useHttpPath key the README sets, a wider credential.<url> key,
+#     or a plain credential.useHttpPath), so the answer is the one git uses for this URL. Without it git drops the
+#     path and a helper hands over the login stored for github.com as a whole: never asked then;
+#   - `git credential fill` with protocol=https, host=github.com and path=<owner>/<repo>.git, one ask (never the host
+#     alone), never interactive: Invoke-Native sets GIT_TERMINAL_PROMPT=0 and GCM_INTERACTIVE=never, and Invoke-Git
+#     adds credential.interactive=never and an empty askPass, so the hidden task never shows a prompt or a window;
+#     15 seconds at most;
+#   - only a fine-grained token (GitHub's prefix github_pat_) is used; any other stored login is left unused.
+# Returns @{ token; why }: the token, or '' and why there is none (no secret in it). The token goes back to the caller
+# only: never logged, printed, saved in state.json or status.json, or put in an error text (Hide-Token). Nothing is
+# ever stored or removed: credential approve and reject never run (Test-GitArgs refuses them).
+function Get-GitHubToken([string]$Slug) {
+  $url = "https://github.com/$Slug.git"
+  $setup = 'Anthony sets up this PC''s chart-engine token once (README: Keep this PC up to date)'
+  $hp = $null
+  try { $hp = Invoke-Git @('config', '--bool', '--get-urlmatch', 'credential.useHttpPath', $url) 15 } catch { }
+  if (-not $hp -or $hp.code -ne 0 -or ([string]$hp.out).Trim() -ne 'true') {
+    return @{ token = ''; why = "credential.useHttpPath is not set for $url, so this PC has no chart-engine token git can give (its whole-account login is never used, SERVER_RULES.md rule 8.5); $setup" }
+  }
+  $r = $null
+  try { $r = Invoke-Git @('credential', 'fill') 15 "protocol=https`nhost=github.com`npath=$Slug.git`n`n" } catch { }
+  $pw = ''
+  if ($r -and $r.code -eq 0) {
+    foreach ($line in ([string]$r.out -split "`r?`n")) { if ($line.StartsWith('password=')) { $pw = $line.Substring(9); break } }
+  }
+  if (-not $pw) { return @{ token = ''; why = "git has no token stored for $url; $setup" } }
+  if (-not $pw.StartsWith('github_pat_')) { return @{ token = ''; why = "the login git has stored for $url is not a fine-grained token (github_pat_...), so it is not used (SERVER_RULES.md rule 8.5); $setup" } }
+  return @{ token = $pw; why = '' }
+}
+
+# A text with the token taken out (and any user:password@ in a URL), before it is logged, saved or shown.
+function Hide-Token([string]$Text, [string]$Token) {
+  $t = "$Text"
+  if ($Token) { $t = $t.Replace($Token, '[token]') }
+  return ($t -replace '(?i)(https?://)[^/@\s]+@', '$1')
+}
+
+# One GET to the GitHub API. Without a token the API allows 60 requests an hour per address; with this PC's
+# chart-engine token, 5000 an hour. A pass makes two (check runs and statuses), or with the token a few more (the
+# workflow runs, each run's jobs, statuses), and a green commit is remembered in state.json and never asked about
+# again, so a PC uses a few a day.
+function Invoke-GitHubJson([string]$Path, [string]$Token = '') {
   try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
   $headers = @{ 'Accept' = 'application/vnd.github+json'; 'X-GitHub-Api-Version' = '2022-11-28'; 'User-Agent' = 'chart-engine-pc-updater' }
+  if ($Token) { $headers['Authorization'] = "Bearer $Token" }
   $res = Invoke-WebRequest -Uri ('https://api.github.com' + $Path) -Headers $headers -UseBasicParsing -TimeoutSec 20
   return (ConvertFrom-JsonText ([string]$res.Content))
 }
 
-# Did CI pass for a commit? The same rule as The Desk's updater (ops/updater.py GitHubCI), plus the two jobs Anthony
-# named: 'unit (ubuntu-latest)' and 'unit (windows-latest)' must both be there and green.
-#   success  both required jobs green, and every other check and status finished green
-#   pending  no results yet, or something still running
-#   failure  a check or status failed, or a required job finished without success
-#   unknown  GitHub could not be asked (offline, rate limited)
-function Get-CiState([string]$Slug, [string]$Sha) {
-  if (-not $Slug) { return @{ state = 'unknown'; detail = 'the GitHub repo is not known from the origin URL' } }
-  try {
-    $checks = @()
+# The check runs and statuses of a commit, as two lists.
+function Read-CiResults([string]$Slug, [string]$Sha, [string]$Token) {
+  $checks = @()
+  for ($page = 1; $page -le 5; $page++) {
+    $d = Invoke-GitHubJson "/repos/$Slug/commits/$Sha/check-runs?per_page=100&page=$page" $Token
+    $batch = @(Get-Field $d 'check_runs' @())
+    $checks += $batch
+    if ($batch.Count -lt 100) { break }
+  }
+  $st = Invoke-GitHubJson "/repos/$Slug/commits/$Sha/status?per_page=100" $Token
+  return @{ checks = $checks; statuses = @(Get-Field $st 'statuses' @()) }
+}
+
+# The same two lists from GitHub's Actions API, for the private path (with the token). GitHub's docs list the check
+# runs call for GitHub App tokens only, not fine-grained personal access tokens; the workflow runs and jobs calls take
+# one with "Actions" read, and the combined status one with "Commit statuses" read. Every workflow run for the commit
+# (all pages), then the jobs of each run's latest attempt (filter=latest: a re-run's own jobs, as its run_attempt), as
+# check-run-like records, so Resolve-CiState applies the very same gate: each job by its name (the required jobs), and
+# each run itself as one more record (a run not completed is pending; a run that ended failure, cancelled, timed_out,
+# action_required, startup_failure or anything else but success, neutral or skipped fails). Jobs come only from
+# GitHub Actions (app github-actions).
+function Read-ActionsResults([string]$Slug, [string]$Sha, [string]$Token) {
+  $runs = @()
+  for ($page = 1; $page -le 5; $page++) {
+    $d = Invoke-GitHubJson "/repos/$Slug/actions/runs?head_sha=$Sha&per_page=100&page=$page" $Token
+    $batch = @(Get-Field $d 'workflow_runs' @())
+    $runs += $batch
+    if ($batch.Count -lt 100) { break }
+  }
+  $checks = @()
+  foreach ($run in $runs) {
+    $id = [string](Get-Field $run 'id')
+    if ($id -notmatch '^\d+$') { throw "a workflow run without a plain id from GitHub ('$id')" }
+    $checks += @{ name = "workflow run $(Get-Field $run 'name') (run $(Get-Field $run 'run_number'), attempt $(Get-Field $run 'run_attempt' 1))"; status = (Get-Field $run 'status'); conclusion = (Get-Field $run 'conclusion'); app = @{ slug = 'github-actions' } }
     for ($page = 1; $page -le 5; $page++) {
-      $d = Invoke-GitHubJson "/repos/$Slug/commits/$Sha/check-runs?per_page=100&page=$page"
-      $batch = @(Get-Field $d 'check_runs' @())
-      $checks += $batch
+      $j = Invoke-GitHubJson "/repos/$Slug/actions/runs/$id/jobs?filter=latest&per_page=100&page=$page" $Token
+      $batch = @(Get-Field $j 'jobs' @())
+      foreach ($job in $batch) { $checks += @{ name = (Get-Field $job 'name'); status = (Get-Field $job 'status'); conclusion = (Get-Field $job 'conclusion'); app = @{ slug = 'github-actions' } } }
       if ($batch.Count -lt 100) { break }
     }
-    $st = Invoke-GitHubJson "/repos/$Slug/commits/$Sha/status?per_page=100"
-    $statuses = @(Get-Field $st 'statuses' @())
-  } catch {
-    $msg = $_.Exception.Message
-    $code = $null
-    try { $code = [int]$_.Exception.Response.StatusCode } catch { }
-    if ($code -eq 403 -or $code -eq 429) { return @{ state = 'unknown'; detail = "GitHub answered $code (rate limited: 60 requests an hour without a token)" } }
-    if ($code) { return @{ state = 'unknown'; detail = "GitHub answered $code" } }
-    return @{ state = 'unknown'; detail = "GitHub could not be read ($msg)" }
   }
-  return (Resolve-CiState $checks $statuses)
+  $st = Invoke-GitHubJson "/repos/$Slug/commits/$Sha/status?per_page=100" $Token
+  return @{ checks = $checks; statuses = @(Get-Field $st 'statuses' @()) }
 }
+
+# The HTTP status of a failed request (Windows PowerShell 5.1's WebException or PowerShell 7's), or $null.
+function Get-WebCode($Err) {
+  try { return [int]$Err.Exception.Response.StatusCode } catch { return $null }
+}
+
+# A 403 or 429 that is GitHub's rate limit (429, or X-RateLimit-Remaining 0), not a refusal.
+function Test-RateLimited($Err, $Code) {
+  if ($Code -eq 429) { return $true }
+  $left = $null
+  try { $left = [string]$Err.Exception.Response.Headers['X-RateLimit-Remaining'] } catch { }
+  if (-not $left) { try { $left = [string](@($Err.Exception.Response.Headers.GetValues('X-RateLimit-Remaining'))[0]) } catch { } }
+  return ($left -eq '0')
+}
+
+# Why GitHub could not be asked, in plain words (state unknown: never failure, never an install).
+function Get-CiProblem($Err, [bool]$Sent, [string]$Slug, [string]$Token) {
+  $code = Get-WebCode $Err
+  $limited = ($code -eq 403 -or $code -eq 429) -and (Test-RateLimited $Err $code)
+  if (-not $Sent) {
+    if ($code -eq 403 -or $code -eq 429) { return "GitHub answered $code (rate limited: 60 requests an hour without a token)" }
+  } else {
+    if ($limited) { return "GitHub answered $code (rate limited, with this PC's chart-engine token)" }
+    if ($code -eq 401) { return "GitHub refused this PC's chart-engine token (401: expired or revoked?): nothing installed; Anthony makes a new one (README: Keep this PC up to date)" }
+    if ($code -eq 403) { return "GitHub refused this PC's chart-engine token (403: it lacks a permission the check needs, README: Keep this PC up to date): nothing installed" }
+    if ($code -eq 404) { return "GitHub answered 404 with this PC's chart-engine token: it cannot see $Slug (a token for another repo, or the repo is not at $Slug): nothing installed" }
+  }
+  if ($code) { return "GitHub answered $code" }
+  return "GitHub could not be read ($(Hide-Token $Err.Exception.Message $Token))"
+}
+
+# Did CI pass for a commit? The same rule as The Desk's updater (ops/updater.py GitHubCI), plus the jobs Anthony
+# named, as either of two sets (RequiredSets): 'unit (ubuntu-latest)' and 'unit (windows-latest)' (today's workflow),
+# or 'unit-windows' (HOMESERVER's job, step B of going private), every job of the set there and green.
+#   success  a required set green, and every other check and status finished green (a skipped one is fine)
+#   pending  no results yet, or something still running, or no required set complete yet
+#   failure  a check or status failed, or a required set finished with a job not green (and no set is green)
+#   unknown  GitHub could not be asked (offline, rate limited, a private repo without this PC's chart-engine token)
+# GitHub is asked without a token first, always, through the check runs (the public path, as before): a public repo
+# never sees the token. Only a 404 or 401 (a private repo, or none at that name) reads this PC's chart-engine token and
+# asks again with it, through the Actions API (Read-ActionsResults, the same gate). A private repo read without a token
+# is never green: it is unknown, and nothing is installed.
+function Get-CiState([string]$Slug, [string]$Sha) {
+  if (-not $Slug) { return @{ state = 'unknown'; detail = 'the GitHub repo is not known from the origin URL' } }
+  $res = $null
+  try { $res = Read-CiResults $Slug $Sha '' }
+  catch {
+    $code = Get-WebCode $_
+    if ($code -ne 404 -and $code -ne 401) { return @{ state = 'unknown'; detail = (Get-CiProblem $_ $false $Slug '') } }
+    $t = @{ token = ''; why = 'this PC''s chart-engine token could not be read' }
+    try { $t = Get-GitHubToken $Slug } catch { }
+    if (-not $t.token) { return @{ state = 'unknown'; detail = "GitHub answered $code`: the repo is private (or not found at $Slug) and this PC has no GitHub token for it: nothing installed; $($t.why)" } }
+    $token = [string]$t.token
+    try { $res = Read-ActionsResults $Slug $Sha $token }
+    catch { return @{ state = 'unknown'; detail = (Hide-Token (Get-CiProblem $_ $true $Slug $token) $token) } }
+  }
+  return (Resolve-CiState $res.checks $res.statuses)
+}
+
+function Format-Jobs($Jobs) { return ((@($Jobs) | ForEach-Object { "'$_'" }) -join ' and ') }
 
 function Resolve-CiState($Checks, $Statuses) {
   $Checks = @($Checks); $Statuses = @($Statuses)
@@ -531,13 +692,28 @@ function Resolve-CiState($Checks, $Statuses) {
   foreach ($c in $Checks) { if ((Get-Field $c 'status') -ne 'completed') { $running += [string](Get-Field $c 'name') } }
   foreach ($s in $Statuses) { if ((Get-Field $s 'state') -eq 'pending') { $running += [string](Get-Field $s 'context') } }
   if ($running.Count) { return @{ state = 'pending'; detail = 'still running: ' + ($running -join ', ') } }
-  foreach ($need in $script:RequiredChecks) {
-    $hit = @($Checks | Where-Object { (Get-Field $_ 'name') -eq $need -and (Get-Field (Get-Field $_ 'app' @{}) 'slug') -eq 'github-actions' })
-    if ($hit.Count -eq 0) { return @{ state = 'pending'; detail = "no '$need' result yet" } }
-    if (@($hit | Where-Object { (Get-Field $_ 'conclusion') -eq 'success' }).Count -eq 0) { return @{ state = 'failure'; detail = "'$need' did not succeed" } }
+  # Either required set is enough. A set with every job there but one not green (skipped, neutral) is a failure,
+  # unless the other set is green; a set with a job missing waits. A job skipped on main because it runs on pull
+  # requests only (step B's Linux job) is not a required job then, so it never fails a green box job.
+  $notGreen = @(); $missing = @()
+  foreach ($set in $script:RequiredSets) {
+    $absent = @(); $failed = @()
+    foreach ($need in @($set.jobs)) {
+      $hit = @($Checks | Where-Object { (Get-Field $_ 'name') -eq $need -and (Get-Field (Get-Field $_ 'app' @{}) 'slug') -eq 'github-actions' })
+      if ($hit.Count -eq 0) { $absent += $need }
+      elseif (@($hit | Where-Object { (Get-Field $_ 'conclusion') -eq 'success' }).Count -eq 0) { $failed += $need }
+    }
+    if ($absent.Count -eq 0 -and $failed.Count -eq 0) { return @{ state = 'success'; detail = 'green: ' + (@($set.jobs) -join ', ') } }
+    if ($absent.Count -eq 0) { $notGreen += $failed } else { $missing += (Format-Jobs $absent) }
   }
-  return @{ state = 'success'; detail = 'green: ' + ($script:RequiredChecks -join ', ') }
+  if ($notGreen.Count) { return @{ state = 'failure'; detail = (Format-Jobs $notGreen) + ' did not succeed' } }
+  $text = $missing[0]
+  foreach ($m in @($missing | Select-Object -Skip 1)) { $text += " (or $m)" }
+  return @{ state = 'pending'; detail = "no $text result yet" }
 }
+
+# What update-pc.ps1 waits for, for the "was a required job renamed?" note.
+function Get-RequiredText { return ((@($script:RequiredSets) | ForEach-Object { (@($_.jobs) -join ' and ') + ' green' }) -join ', or ') }
 
 # ------------------------------------------------------------------------------------------------ ChartBridge's version
 
@@ -1142,6 +1318,19 @@ function Invoke-Fetch([switch]$Wait, [switch]$DryRun) {
     try { Wait-Ms ($script:FetchRetrySec * 1000) } catch { Clear-NetWait; throw }
   }
 }
+# What a failed fetch says. A private repo with no GitHub token on this PC (git prints "could not read Username for
+# 'https://github.com': terminal prompts disabled", as the hidden task never prompts) or a token GitHub refuses
+# ("Authentication failed", "Repository not found") is said plainly; anything else as git said it.
+function Get-FetchProblem([string]$Err) {
+  $last = Hide-Token (Get-LastLine $Err) ''
+  if ($Err -match '(?i)could not read (username|password)|terminal prompts disabled|cannot prompt because user interactivity has been disabled') {
+    return "git fetch failed: the repo is private (or not found) and this PC has no GitHub token for it: nothing installed; Anthony sets up this PC's chart-engine token once (README: Keep this PC up to date; git said: $last)"
+  }
+  if ($Err -match '(?i)authentication failed|invalid username or (password|token)|repository not found|repository ''[^'']*'' not found') {
+    return "git fetch failed: GitHub refused this PC's GitHub token, or the repo is not there for it (a token that expired, one for another repo, or a wrong origin URL): nothing installed; Anthony makes a new chart-engine token (README: Keep this PC up to date; git said: $last)"
+  }
+  return "git fetch failed: $last"
+}
 function Clear-NetWait { try { if (Test-Path -LiteralPath $script:P.NetWait) { Remove-Item -LiteralPath $script:P.NetWait -Force } } catch { } }
 
 # What a run refused by the lock says: another run works, or (0.3.8) another run is waiting for the network.
@@ -1178,7 +1367,7 @@ function Invoke-Pass([switch]$DryRun, [switch]$StageOnly, $State) {
     $r.outcome = 'offline'; $r.reason = "the network was not up: git fetch could not reach $($script:Remote) ($($f.tries) tries over $($f.waitedSec) s; $(Get-LastLine $f.err)); nothing changed, the next run tries again"
     return $r
   }
-  if ($f.code -ne 0) { $r.outcome = 'fetch_failed'; $r.reason = "git fetch failed: $(Get-LastLine $f.err)"; return $r }
+  if ($f.code -ne 0) { $r.outcome = 'fetch_failed'; $r.reason = (Get-FetchProblem ([string]$f.err)); return $r }
   $t = Invoke-Git @('rev-parse', "refs/remotes/$($script:Remote)/$($script:Branch)") 30
   if ($t.code -ne 0) { $r.outcome = 'fetch_failed'; $r.reason = "no $($script:Remote)/$($script:Branch)"; return $r }
   $r.target = $t.out.Trim()
@@ -1194,8 +1383,8 @@ function Invoke-Pass([switch]$DryRun, [switch]$StageOnly, $State) {
     if (-not $DryRun -and $ci.state -eq 'pending') {
       $ps = Get-Field $State 'ciPending'
       if (-not $ps -or (Get-Field $ps 'sha') -ne $r.target) { $State['ciPending'] = @{ sha = $r.target; since = (Get-NowMs) } }
-      elseif ($detail -like "no '*' result yet" -and (Get-NowMs) - [long](Get-Field $ps 'since' 0) -gt 86400000) {
-        $detail = "$detail for over 24 hours: was a required job renamed? (.github/workflows/test.yml; update-pc.ps1 wants $($script:RequiredChecks -join ' and '))"
+      elseif ($detail -like "no '* result yet" -and (Get-NowMs) - [long](Get-Field $ps 'since' 0) -gt 86400000) {
+        $detail = "$detail for over 24 hours: was a required job renamed? (.github/workflows/test.yml; update-pc.ps1 wants $(Get-RequiredText))"
       }
     }
     $r.outcome = "ci_$($ci.state)"

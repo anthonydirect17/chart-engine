@@ -108,11 +108,12 @@ test('the automatic path never moves Anthony\'s clone, and git never asks anythi
   const src = code(updater);
   // one entry point with a runtime allow-list of subcommands that only read or fetch into refs/remotes
   const allowed = eval('[' + /\$script:GitAllowed = @\(([^)]*)\)/.exec(src)[1] + ']');
-  assert.deepStrictEqual([...allowed].sort(), ['archive', 'cat-file', 'fetch', 'hash-object', 'ls-tree', 'merge-base', 'remote', 'rev-list', 'rev-parse', 'show', 'symbolic-ref'].sort());
+  assert.deepStrictEqual([...allowed].sort(), ['archive', 'cat-file', 'config', 'credential', 'fetch', 'hash-object', 'ls-tree', 'merge-base', 'remote', 'rev-list', 'rev-parse', 'show', 'symbolic-ref'].sort());
   assert.match(src, /\$refused = Test-GitArgs \$ArgList\s+if \(\$refused\) \{ throw \$refused \}/);
   assert.match(src, /if \(\$script:GitAllowed -notcontains \$sub\) \{ return/);
-  // the three subcommands with a writing form are checked in full
-  for (const sub of ['symbolic-ref', 'remote', 'hash-object']) assert.match(src, new RegExp("if \\(\\$sub -eq '" + sub + "'\\) \\{"), sub);
+  // the five subcommands with a writing form are checked in full (credential: fill only, never approve or reject;
+  // config: only the read of credential.useHttpPath for a GitHub URL)
+  for (const sub of ['symbolic-ref', 'remote', 'hash-object', 'credential', 'config']) assert.match(src, new RegExp("if \\(\\$sub -eq '" + sub + "'\\) \\{"), sub);
   // every call, written @( or (@(, starts with a literal subcommand from that list; git runs nowhere else
   const calls = [...src.matchAll(/Invoke-Git\s+\(?@\(\s*([^,)]+)/g)].map(m => m[1].trim());
   assert.ok(calls.length >= 12, calls.join(','));
@@ -123,6 +124,41 @@ test('the automatic path never moves Anthony\'s clone, and git never asks anythi
   assert.match(src, /'-c', 'credential\.interactive=never', '-c', 'core\.sshCommand=ssh -o BatchMode=yes', '-c', 'core\.askPass=',\s*'-c', 'gc\.auto=0', '-c', 'maintenance\.auto=false'/);
   assert.match(src, /-WorkingDirectory \$script:P\.Bin/);
   assert.match(src, /\$src = Get-PinSource \$state/);
+});
+
+test('going private, step A (Anthony 2026-11-04): either required set, and this PC\'s chart-engine token only read and only sent to the API', () => {
+  const src = code(updater);
+  assert.match(src, /\$script:RequiredChecks = @\('unit \(ubuntu-latest\)', 'unit \(windows-latest\)'\)/, 'today\'s pair');
+  assert.match(src, /\$script:BoxCheck = 'unit-windows'/, 'the HOMESERVER job, as Bot-Lab names it');
+  assert.match(src, /\$script:RequiredSets = @\(@\{ jobs = \$script:RequiredChecks \}, @\{ jobs = @\(\$script:BoxCheck\) \}\)/);
+  assert.match(src, /if \(\$rest\.Count -ne 1 -or \$rest\[0\] -ne 'fill'\) \{ return/, 'git credential runs only as fill');
+  assert.ok(!/approve|reject/.test(src.replace(/never approve, reject or store/g, '')), 'credential approve or reject is never named in code');
+  assert.strictEqual([...src.matchAll(/Invoke-Git @\('credential', 'fill'\)/g)].length, 1, 'one place asks for the login');
+  assert.strictEqual([...src.matchAll(/Authorization/g)].length, 1, 'one place sends it');
+  const tok = src.slice(src.indexOf('function Get-GitHubToken'), src.indexOf('function Hide-Token'));
+  assert.ok(tok.length > 0 && !/Write-|Save-State|Set-Content|Out-File|\$script:/.test(tok), 'Get-GitHubToken writes nothing and keeps nothing');
+  // SERVER_RULES.md rule 8.5 (Anthony 2026-11-04): a fine-grained token for chart-engine only, never the whole login
+  const hp = tok.indexOf("Invoke-Git @('config', '--bool', '--get-urlmatch', 'credential.useHttpPath', $url) 15");
+  const fill = tok.indexOf("Invoke-Git @('credential', 'fill') 15 \"protocol=https`nhost=github.com`npath=$Slug.git`n`n\"");
+  assert.ok(hp > 0 && fill > hp, 'useHttpPath is read first, then one ask with the repo path, 15 s at most');
+  assert.strictEqual([...tok.matchAll(/protocol=https/g)].length, 1, 'never the host alone');
+  assert.match(tok, /if \(-not \$pw\.StartsWith\('github_pat_'\)\) \{ return @\{ token = ''/, 'a fine-grained token only');
+  assert.match(src, /\$script:GitAllowed[^\n]*'config'/);
+  assert.match(src, /if \(\$sub -eq 'config'\) \{\s*if \(\$rest\.Count -ne 4 -or \$rest\[0\] -ne '--bool' -or \$rest\[1\] -ne '--get-urlmatch' -or \$rest\[2\] -ne 'credential\.useHttpPath'/, 'git config only as that read');
+  // a public repo never sees the token: asked without one first, the token read only after a 404 or 401
+  const ci = src.slice(src.indexOf('function Get-CiState'), src.indexOf('function Format-Jobs'));
+  const first = ci.indexOf("try { $res = Read-CiResults $Slug $Sha '' }"), read = ci.indexOf('Get-GitHubToken $Slug');
+  assert.ok(first > 0 && read > first && /if \(\$code -ne 404 -and \$code -ne 401\) \{ return/.test(ci.slice(first, read)), 'without a token first; the token only after a 404 or 401');
+  // with the token, the Actions API (fine-grained tokens cannot read check runs), into the same gate
+  assert.ok(ci.indexOf('try { $res = Read-ActionsResults $Slug $Sha $token }') > read, 'the private path reads the Actions API');
+  assert.strictEqual([...src.matchAll(/Read-ActionsResults \$Slug/g)].length, 1);
+  const act = src.slice(src.indexOf('function Read-ActionsResults'), src.indexOf('function Get-WebCode'));
+  assert.match(act, /\/actions\/runs\?head_sha=\$Sha&per_page=100&page=\$page/);
+  assert.match(act, /\/actions\/runs\/\$id\/jobs\?filter=latest&per_page=100&page=\$page/, 'the latest attempt');
+  assert.match(act, /if \(\$id -notmatch '\^\\d\+\$'\) \{ throw/, 'a run id is a plain number');
+  assert.match(act, /\/commits\/\$Sha\/status\?per_page=100/, 'the statuses as before');
+  assert.ok(!/check-runs/.test(act), 'no check runs call on the private path');
+  assert.match(ci, /return \(Resolve-CiState \$res\.checks \$res\.statuses\)/, 'one gate for both paths');
 });
 
 test('the task moves to the hidden launcher at -InstallChartBridge (after the re-pin); the automatic run only warns (Anthony 2026-10-23)', () => {

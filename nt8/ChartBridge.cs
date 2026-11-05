@@ -120,7 +120,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         //                                  off. accountChecks: gate 2 is the page's per-account checkmark, saved in accounts.txt;
         //                                  see ChartBridgeAccounts.cs. The others: orderTypes, strategies, merge, cancelFromList,
         //                                  copier, bot. trading = true stays the master switch above them all)
-        //   allowOrigins = https://desk.example.com, http://100.88.192.33:8800
+        //   allowOrigins = https://desk.example.com, http://100.64.0.10:8800
         //                                 (web pages besides ChartBridge's own that may open the read-only
         //                                  WebSocket, such as The Desk; exact scheme://host[:port], no wildcard;
         //                                  they can never trade. Requests still have to come from this PC.

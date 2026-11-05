@@ -38,7 +38,7 @@ HTTP.sys's system-wide listen list (other programs use it).
 in `config.txt`:
 
 ```
-allowOrigins = https://desk.golivepage.com, http://100.88.192.33:8800
+allowOrigins = https://desk.example.com, http://100.64.0.10:8800
 ```
 
 Each entry is an exact `scheme://host[:port]` (http or https), compared lower-cased; a default port (`:80`,

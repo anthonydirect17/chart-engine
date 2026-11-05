@@ -16,4 +16,12 @@
 - Every release: a `CHANGELOG.md` entry, and the version bumped in `package.json` and the file header /
   `VERSION` in `src/chart-engine.js`.
 - Sample data (`demo/sample-feed.js`) is fake and must stay labelled as sample data wherever it shows.
+- Server rules: `SERVER_RULES.md` (Drive `TradingApp_Handoff`, version 1.0 locked by Anthony 2026-11-04) wins over
+  anything here; cite it by rule number instead of copying it. Most used here: this repo goes private (Anthony 2026-11-04)
+  and its Windows CI then moves to HOMESERVER's runner (rule 6.1; until it reads Private on the repo page, never a runner
+  here); no secrets, account names or addresses in code, docs, tests or commits (8.3; examples use `desk.example.com`
+  and `100.64.0.10`); scheduled work runs overnight (4.1; the PC page updaters move to an overnight check,
+  `update-pc.ps1 register -DailyAt 03:45`, Anthony 2026-11-04, BOARD.md GO log; the code's default is unchanged
+  for now); the PC updaters read a private chart-engine with a fine-grained read-only token for it alone, never the
+  whole-account login (8.5); ChartBridge never runs on HOMESERVER (10.8).
 - Ask Anthony before anything uncertain; Anthony does not want guessing.

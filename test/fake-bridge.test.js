@@ -565,17 +565,17 @@ function wsStatus(port, origin, unlock) {
 
 test('server (ChartBridge 0.3.1 rule): a browser WebSocket only from ChartBridge\'s own page or allowOrigins', async () => {
   const port = 18600 + Math.floor(Math.random() * 90);
-  const child = await startBridge(port, ['--allow-origins=https://desk.example,http://100.88.192.33:8800', '--test-pin=' + TEST_PIN]);
+  const child = await startBridge(port, ['--allow-origins=https://desk.example,http://100.64.0.10:8800', '--test-pin=' + TEST_PIN]);
   try {
     const unlock = await unlockFor(port);
     assert.equal(await wsStatus(port, 'http://localhost:' + port), 403, '0.3.2: the own page without the unlock');
     assert.equal(await wsStatus(port, 'http://localhost:' + port, unlock), 101, '0.3.2: the own page with the unlock');
-    const want = [['https://desk.example', 101], ['http://100.88.192.33:8800', 101], [undefined, 101],
+    const want = [['https://desk.example', 101], ['http://100.64.0.10:8800', 101], [undefined, 101],
       ['http://evil.example', 403], ['http://127.0.0.1:' + port, 403], ['https://desk.example.evil.example', 403], ['http://desk.example', 403],
       ['null', 403], ['', 403]];
     for (const [origin, status] of want) assert.equal(await wsStatus(port, origin), status, 'Origin ' + JSON.stringify(origin));
     const diag = JSON.parse((await get(port, '/diag')).body);
-    assert.deepEqual(diag.network.allowOrigins, ['http://localhost:' + port, 'https://desk.example', 'http://100.88.192.33:8800']);
+    assert.deepEqual(diag.network.allowOrigins, ['http://localhost:' + port, 'https://desk.example', 'http://100.64.0.10:8800']);
     assert.equal(diag.network.loopbackOnly, true);
     assert.equal(diag.network.refusedOrigin, 6);
   } finally { child.kill(); }

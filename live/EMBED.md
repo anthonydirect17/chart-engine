@@ -154,7 +154,7 @@ ChartBridge 0.3.1 and newer accept a browser WebSocket only from their own page 
 it (`scheme://host[:port]`, no wildcard, the last `allowOrigins` line wins), for example:
 
 ```
-allowOrigins = https://desk.golivepage.com, http://100.88.192.33:8800, http://localhost:8800
+allowOrigins = https://desk.example.com, http://100.64.0.10:8800, http://localhost:8800
 ```
 
 Otherwise ChartBridge answers 403, the chart stays on CONNECTING and "Waiting for ChartBridge", and `onStatus`

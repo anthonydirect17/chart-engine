@@ -30,6 +30,15 @@ $script:FakeCi = 'success'
 $script:FakeDiag = $null
 $script:Toasts = @()
 $script:RealGitHubJson = ${function:Invoke-GitHubJson}
+$script:RealGitHubToken = ${function:Get-GitHubToken}
+# This PC's chart-engine token as Get-GitHubToken would give it ('' = none); the real reader is tested with a fake helper
+$script:FakeLogin = ''
+$script:TokenAsks = 0
+function Get-GitHubToken([string]$Slug) {
+  $script:TokenAsks++
+  if ($script:FakeLogin) { return @{ token = $script:FakeLogin; why = '' } }
+  return @{ token = ''; why = 'stub: no chart-engine token on this PC' }
+}
 $script:RealMove = ${function:Move-FileAtomic}
 # A power loss (a laptop lid): from the crash point on, nothing more is written anywhere through the updater.
 $script:CrashAt = ''; $script:PowerLost = $false
@@ -46,9 +55,15 @@ function Move-FileAtomic([string]$Source, [string]$Dest) {
 }
 # GitHub's API as the updater reads it: check runs and statuses for a commit (the real Get-CiState runs on these).
 function Get-RepoSlug { return 'owner/chart-engine' }
-function Invoke-GitHubJson([string]$Path) {
+function Invoke-GitHubJson([string]$Path, [string]$Token = '') {
   if ($script:FakeCi -eq 'unknown') { throw (New-Object System.Net.WebException 'stub: no network') }
   if ($Path -match '/status\?') { return @{ statuses = @() } }
+  # step B's workflow on main: the HOMESERVER job, the Linux job skipped (box), or only that skipped Linux job (neither)
+  if ($script:FakeCi -eq 'box') { return @{ total_count = 2; check_runs = @(
+      @{ name = 'unit-linux'; status = 'completed'; conclusion = 'skipped'; app = @{ slug = 'github-actions' } },
+      @{ name = $script:BoxCheck; status = 'completed'; conclusion = 'success'; app = @{ slug = 'github-actions' } }) } }
+  if ($script:FakeCi -eq 'neither') { return @{ total_count = 1; check_runs = @(
+      @{ name = 'unit-linux'; status = 'completed'; conclusion = 'skipped'; app = @{ slug = 'github-actions' } }) } }
   $win = @{ success = @('completed', 'success'); pending = @('in_progress', $null); failure = @('completed', 'failure') }[$script:FakeCi]
   return @{ total_count = 3; check_runs = @(
       @{ name = 'unit (ubuntu-latest)'; status = 'completed'; conclusion = 'success'; app = @{ slug = 'github-actions' } },
@@ -247,6 +262,311 @@ Test 'CI failure and unknown: no update (unknown is a STOP)' {
   Assert (-not (Test-Path (Get-WwwFile 'live.js'))) 'no page file'
 }
 
+# ---------------------------------------------------------------------------------------------- going private (step A)
+# Anthony 2026-11-04: chart-engine goes private, and its Windows job moves to HOMESERVER's runner (step B). The updater
+# already installed on WORK and HOME must keep working before and after: either required set, and this PC's chart-engine
+# token (Anthony 2026-11-04, SERVER_RULES.md rule 8.5: fine-grained, read-only, chart-engine only; never the whole login).
+
+function Job([string]$Name, [string]$Conclusion = 'success', [string]$Status = 'completed') {
+  if (-not $Conclusion) { $Conclusion = $null }
+  return @{ name = $Name; status = $Status; conclusion = $Conclusion; app = @{ slug = 'github-actions' } }
+}
+$script:TestLogin = 'github_pat_not-a-real-token-7f3a9c'      # made up (a real one has no hyphen)
+function Assert-NoLogin([string]$Where, [string]$Text) { Assert (-not "$Text".Contains($script:TestLogin)) "the token is not in $Where" }
+function Assert-LoginNowhere {
+  Assert-NoLogin 'update.log' (Get-Text $script:P.Log)
+  Assert-NoLogin 'state.json' (Get-Text $script:P.State)
+  if (Test-Path -LiteralPath $script:P.Status) { Assert-NoLogin 'status.json' (Get-Text $script:P.Status) }
+  if (Test-Path -LiteralPath (Get-WwwFile 'update.json')) { Assert-NoLogin 'update.json' (Get-Text (Get-WwwFile 'update.json')) }
+  Assert-NoLogin 'the printed output' ($script:Said -join "`n")
+  Assert-NoLogin 'the toasts' ($script:Toasts -join "`n")
+}
+# GitHub's API through the real reader (Invoke-GitHubJson): each request's Authorization header is recorded, and the
+# answer is WebAnswer, or an HTTP error: CodeWith when a token was sent, CodeWithout when none was ('throw-with-login':
+# a request with the token fails with a message that carries it; RateLeft: the X-RateLimit-Remaining header)
+function Use-FakeApi {
+  $script:KeepJson = ${function:Invoke-GitHubJson}
+  ${function:script:Invoke-GitHubJson} = $script:RealGitHubJson
+  $script:SeenAuth = New-Object System.Collections.ArrayList
+  $script:SeenUris = New-Object System.Collections.ArrayList
+  $script:Routes = $null
+  $script:CodeWith = 0; $script:CodeWithout = 0; $script:WebAnswer = '{}'; $script:TokenAsks = 0; $script:RateLeft = ''
+  ${function:script:Invoke-WebRequest} = {
+    param($Uri, $Headers, [switch]$UseBasicParsing, $TimeoutSec)
+    $auth = ''; if ($Headers.ContainsKey('Authorization')) { $auth = [string]$Headers['Authorization'] }
+    [void]$script:SeenAuth.Add($auth); [void]$script:SeenUris.Add([string]$Uri)
+    $c = $script:CodeWithout; if ($auth) { $c = $script:CodeWith }
+    if ($auth -and $script:WebAnswer -eq 'throw-with-login') { throw (New-Object System.Net.WebException "stub: refused, sent $auth to https://x-access-token:$($script:FakeLogin)@api.github.com") }
+    if ($c) {
+      $e = New-Object System.Net.WebException "stub: the remote server returned an error: ($c)"
+      $e | Add-Member -NotePropertyName Response -NotePropertyValue @{ StatusCode = $c; Headers = @{ 'X-RateLimit-Remaining' = $script:RateLeft } } -Force
+      throw $e
+    }
+    if ($script:Routes) {
+      foreach ($k in $script:Routes.Keys) { if ([string]$Uri -match $k) { return @{ Content = $script:Routes[$k] } } }
+      return @{ Content = '{}' }
+    }
+    return @{ Content = $script:WebAnswer }
+  }
+}
+function Reset-FakeApi {
+  Remove-Item function:\Invoke-WebRequest -ErrorAction SilentlyContinue
+  ${function:script:Invoke-GitHubJson} = $script:KeepJson
+  $script:FakeLogin = ''; $script:Routes = $null
+}
+$script:BoxGreen = '{"check_runs":[{"name":"unit-linux","status":"completed","conclusion":"skipped","app":{"slug":"github-actions"}},{"name":"unit-windows","status":"completed","conclusion":"success","app":{"slug":"github-actions"}}]}'
+
+Test 'CI (going private): the HOMESERVER job unit-windows green is success, with the Linux job skipped or absent; today''s pair still is' {
+  Assert ($script:BoxCheck -eq 'unit-windows') "the box job is named unit-windows (as Bot-Lab's), got $($script:BoxCheck)"
+  foreach ($checks in @(@((Job 'unit-linux' 'skipped'), (Job 'unit-windows')), @(Job 'unit-windows'), @((Job 'unit (ubuntu-latest)' 'skipped'), (Job 'unit-windows')), @((Job 'unit-windows'), (Job 'deploy' 'neutral')))) {
+    $r = Resolve-CiState $checks @()
+    Assert ($r.state -eq 'success' -and $r.detail -eq 'green: unit-windows') "$($r.state): $($r.detail)"
+  }
+  $r = Resolve-CiState @((Job 'unit (ubuntu-latest)'), (Job 'unit (windows-latest)')) @()
+  Assert ($r.state -eq 'success' -and $r.detail -eq 'green: unit (ubuntu-latest), unit (windows-latest)') "today's pair: $($r.detail)"
+  $script:FakeCi = 'box'
+  try { Assert ((Get-CiState 'owner/chart-engine' 'abc').state -eq 'success') 'the box job green through the stubbed API' } finally { $script:FakeCi = 'success' }
+}
+Test 'CI (going private): the box job failed, skipped or queued is not success; with neither set there it waits and names both' {
+  $r = Resolve-CiState @((Job 'unit-linux' 'skipped'), (Job 'unit-windows' 'failure')) @()
+  Assert ($r.state -eq 'failure' -and $r.detail -match 'unit-windows=failure') "failed: $($r.detail)"
+  $r = Resolve-CiState @(Job 'unit-windows' 'skipped') @()
+  Assert ($r.state -eq 'failure' -and $r.detail -eq "'unit-windows' did not succeed") "skipped: $($r.detail)"
+  $r = Resolve-CiState @((Job 'unit-linux' 'skipped'), (Job 'unit-windows' '' 'queued')) @()
+  Assert ($r.state -eq 'pending' -and $r.detail -eq 'still running: unit-windows') "queued (the box holds jobs in market hours): $($r.detail)"
+  $r = Resolve-CiState @((Job 'unit-windows'), (Job 'unit-linux' 'failure')) @()
+  Assert ($r.state -eq 'failure') "another check that failed still fails: $($r.detail)"
+  $r = Resolve-CiState @((Job 'unit-windows' 'skipped'), (Job 'unit (ubuntu-latest)'), (Job 'unit (windows-latest)')) @()
+  Assert ($r.state -eq 'success') "either set: today's pair green is enough: $($r.detail)"
+  $r = Resolve-CiState @(Job 'unit-linux' 'skipped') @()
+  Assert ($r.state -eq 'pending' -and $r.detail -eq "no 'unit (ubuntu-latest)' and 'unit (windows-latest)' (or 'unit-windows') result yet") "neither: $($r.detail)"
+  Assert ($r.detail -like "no '* result yet") 'the 24 hour note (Invoke-Pass) reads it'
+  $r = Resolve-CiState @(Job 'unit (ubuntu-latest)') @()
+  Assert ($r.state -eq 'pending' -and $r.detail -eq "no 'unit (windows-latest)' (or 'unit-windows') result yet") "half of today's pair: $($r.detail)"
+  $r = Resolve-CiState @((Job 'unit (ubuntu-latest)' 'skipped')) @()
+  Assert ($r.state -eq 'pending') "a skipped Linux job with nothing else is waiting, not failure: $($r.detail)"
+}
+Test 'CI: after 24 hours with neither required set, the reason asks whether a job was renamed and names both sets' {
+  $script:FakeCi = 'neither'
+  try {
+    $r = Run-Update
+    Assert ($r.outcome -eq 'ci_pending' -and $r.reason -notmatch 'renamed') "first: $($r.reason)"
+    $s = Read-State; $s['ciPending']['since'] = (Get-NowMs) - 90000000; Save-State $s
+    $r = Run-Update
+    Assert ($r.outcome -eq 'ci_pending' -and $r.reason -match 'for over 24 hours: was a required job renamed\?' -and $r.reason -match (Rx 'update-pc.ps1 wants unit (ubuntu-latest) and unit (windows-latest) green, or unit-windows green')) $r.reason
+    Assert (-not (Test-Path (Get-WwwFile 'live.js'))) 'nothing installed'
+  } finally { $script:FakeCi = 'success'; $s = Read-State; if ($s.Contains('ciPending')) { $s.Remove('ciPending') }; Save-State $s }
+}
+Test 'chart-engine token: only with useHttpPath set for the repo URL, one ask with the repo path, never interactively, a fine-grained token only' {
+  $rec = Join-Path $tmpRoot 'helper-seen.txt'
+  $recSh = $rec.Replace('\', '/')
+  $url = 'https://github.com/owner/chart-engine.git'
+  $keys = @('credential.helper', 'credential.useHttpPath', "credential.$url.useHttpPath", 'credential.https://github.com.useHttpPath', 'credential.https://github.com/owner/other.git.useHttpPath')
+  $keepEnv = @{ p = $env:GIT_TERMINAL_PROMPT; g = $env:GCM_INTERACTIVE }
+  # the window this runs in would allow prompts: the hidden run must not
+  $env:GIT_TERMINAL_PROMPT = '1'; $env:GCM_INTERACTIVE = 'always'
+  # a stand-in credential helper (only `get`): it records what it was asked and the two variables, never the token
+  function Set-Helper([string]$Answer, [string]$HttpPathKey = '') {
+    foreach ($k in $keys) { [void](Invoke-Native (Get-GitExe) @('-C', $clone, 'config', '--local', '--unset-all', $k) 30) }
+    [void](G $clone @('config', '--local', '--add', 'credential.helper', ''))   # this PC's own helpers (GCM) left out
+    if ($HttpPathKey) { [void](G $clone @('config', '--local', $HttpPathKey, 'true')) }
+    if ($Answer -eq 'none') { return }
+    $sh = '!f() { test "$1" = get || exit 0; p=nopath; while IFS= read -r l; do [ -z "$l" ] && break; case "$l" in path=*) p="$l";; esac; done; ' +
+      'echo "prompt=$GIT_TERMINAL_PROMPT gcm=$GCM_INTERACTIVE $p" >> ''' + $recSh + '''; echo username=x-access-token; echo password=' + $Answer + '; }; f'
+    [void](G $clone @('config', '--local', '--add', 'credential.helper', $sh))
+  }
+  function Get-Seen { if (-not (Test-Path -LiteralPath $rec)) { return @() }; $t = @((Get-Text $rec) -split "`r?`n" | Where-Object { $_ }); Remove-Item -LiteralPath $rec -Force; return $t }
+  try {
+    # useHttpPath not set: git would drop the path and hand over the login stored for github.com: never asked
+    Set-Helper $script:TestLogin
+    $t = & $script:RealGitHubToken 'owner/chart-engine'
+    Assert ($t.token -eq '' -and $t.why -match (Rx "credential.useHttpPath is not set for $url") -and $t.why -match 'rule 8\.5' -and $t.why -match 'chart-engine token') "no useHttpPath: $($t.why)"
+    Assert (@(Get-Seen).Count -eq 0) 'the helper was never asked'
+    # set for the exact URL (as the README sets it), for github.com, or plainly: git's own URL matching decides
+    foreach ($key in @("credential.$url.useHttpPath", 'credential.https://github.com.useHttpPath', 'credential.useHttpPath')) {
+      Set-Helper $script:TestLogin $key
+      $t = & $script:RealGitHubToken 'owner/chart-engine'
+      Assert ($t.token -eq $script:TestLogin -and $t.why -eq '') "$key`: the token ($($t.why))"
+      $seen = @(Get-Seen)
+      Assert ($seen.Count -eq 1 -and $seen[0] -eq 'prompt=0 gcm=never path=owner/chart-engine.git') "$key`: one ask, with the repo path, never interactively: $($seen -join ' | ')"
+    }
+    # useHttpPath set for another repo only: not this one
+    Set-Helper $script:TestLogin 'credential.https://github.com/owner/other.git.useHttpPath'
+    Assert ((& $script:RealGitHubToken 'owner/chart-engine').token -eq '') 'another repo''s setting does not count'
+    Assert (@(Get-Seen).Count -eq 0) 'and the helper was never asked'
+    # a stored login that is not a fine-grained token (a whole-account OAuth login) is never used
+    Set-Helper 'gho_not-a-real-oauth-login' "credential.$url.useHttpPath"
+    $t = & $script:RealGitHubToken 'owner/chart-engine'
+    Assert ($t.token -eq '' -and $t.why -match 'not a fine-grained token' -and $t.why -notmatch 'gho_not') "an OAuth login: $($t.why)"
+    [void](Get-Seen)
+    Set-Helper 'none' "credential.$url.useHttpPath"
+    $t = & $script:RealGitHubToken 'owner/chart-engine'
+    Assert ($t.token -eq '' -and $t.why -match (Rx "git has no token stored for $url")) "none stored, and no prompt (it would hang the test): $($t.why)"
+    foreach ($bad in @(@('credential', 'approve'), @('credential', 'reject'), @('credential', 'store'), @('credential', 'fill', 'x'), @('credential'),
+        @('config', '--bool', '--get-urlmatch', 'credential.helper', $url), @('config', 'credential.useHttpPath', 'true'), @('config', '--bool', '--get-urlmatch', 'credential.useHttpPath', 'https://example.invalid/x.git'))) {
+      $threw = $false
+      try { [void](Invoke-Git $bad 15 "protocol=https`nhost=github.com`n`n") } catch { $threw = $_.Exception.Message -match 'allowed only|not allowed' }
+      Assert $threw "refused: git $($bad -join ' ') (the PC's stored logins and git config are never changed)"
+    }
+    Assert-NoLogin 'the printed output' ($script:Said -join "`n")
+    Assert-NoLogin 'update.log' (Get-Text $script:P.Log)
+  } finally {
+    foreach ($k in $keys) { [void](Invoke-Native (Get-GitExe) @('-C', $clone, 'config', '--local', '--unset-all', $k) 30) }
+    $env:GIT_TERMINAL_PROMPT = $keepEnv.p; $env:GCM_INTERACTIVE = $keepEnv.g
+  }
+}
+Test 'chart-engine token: a public repo never sees it; sent as Bearer only after a 404 without; never in update.log, state.json, status.json, update.json, output or an error text' {
+  Use-FakeApi
+  try {
+    $script:FakeLogin = $script:TestLogin
+    $script:WebAnswer = $script:BoxGreen
+    $r = Get-CiState 'owner/chart-engine' 'abc'
+    Assert ($r.state -eq 'success' -and $script:SeenAuth.Count -eq 2 -and @($script:SeenAuth | Where-Object { $_ }).Count -eq 0 -and $script:TokenAsks -eq 0) "public: no token read or sent ($($script:SeenAuth.Count) requests, $($script:TokenAsks) reads)"
+    # private: 404 without a token, then the token, through the Actions API (one run, its jobs, the statuses)
+    $script:CodeWithout = 404; $script:SeenAuth.Clear()
+    $script:Routes = [ordered]@{ '/actions/runs\?head_sha=' = '{"total_count":1,"workflow_runs":[{"id":7,"name":"test","run_number":7,"run_attempt":1,"status":"completed","conclusion":"success"}]}'
+      '/actions/runs/7/jobs\?filter=latest' = '{"total_count":1,"jobs":[{"name":"unit-windows","status":"completed","conclusion":"success"}]}' }
+    $r = Get-CiState 'owner/chart-engine' 'abc'
+    Assert ($r.state -eq 'success' -and $script:TokenAsks -eq 1) "private with the token: $($r.state) $($r.detail)"
+    Assert ($script:SeenAuth.Count -eq 4 -and $script:SeenAuth[0] -eq '' -and @($script:SeenAuth | Select-Object -Skip 1 | Where-Object { $_ -ne "Bearer $($script:TestLogin)" }).Count -eq 0) "first without, then every call with it: $($script:SeenAuth.Count)"
+    $script:Routes = $null
+    # whole runs: one that waits, and one whose error text carries the token (it is taken out)
+    $script:WebAnswer = '{"check_runs":[]}'
+    $r = Run-Update
+    Assert ($r.outcome -eq 'ci_pending') $r.outcome
+    $script:WebAnswer = 'throw-with-login'
+    $r = Run-Update
+    Assert ($r.outcome -eq 'ci_unknown' -and $r.reason -match '\[token\]' -and $r.reason -notmatch 'x-access-token:') $r.reason
+    Assert-LoginNowhere
+    Assert (-not (Test-Path (Get-WwwFile 'live.js'))) 'nothing installed'
+  } finally { Reset-FakeApi; $s = Read-State; if ($s.Contains('ciPending')) { $s.Remove('ciPending') }; Save-State $s }
+}
+Test 'chart-engine token: a 404 or 401 without one says the repo is private (or not found) and this PC has no token (unknown, never failure); a refused token says why' {
+  Use-FakeApi
+  try {
+    foreach ($c in @(404, 401)) {
+      $script:FakeLogin = ''; $script:CodeWithout = $c
+      $r = Get-CiState 'owner/chart-engine' 'abc'
+      Assert ($r.state -eq 'unknown' -and $r.detail -eq "GitHub answered $c`: the repo is private (or not found at owner/chart-engine) and this PC has no GitHub token for it: nothing installed; stub: no chart-engine token on this PC") "$c without a token: $($r.state) $($r.detail)"
+    }
+    $script:CodeWithout = 404
+    $r = Run-Update
+    Assert ($r.outcome -eq 'ci_unknown' -and $r.reason -match (Rx 'the repo is private (or not found at owner/chart-engine) and this PC has no GitHub token for it') -and $script:StopOutcomes -contains $r.outcome) $r.reason
+    Assert (-not (Test-Path (Get-WwwFile 'live.js'))) 'nothing installed'
+    # the token refused: never green (a private repo without it is unknown), and the reason is said
+    $script:FakeLogin = $script:TestLogin; $script:WebAnswer = $script:BoxGreen
+    $script:CodeWith = 401
+    $r = Get-CiState 'owner/chart-engine' 'abc'
+    Assert ($r.state -eq 'unknown' -and $r.detail -match "refused this PC's chart-engine token \(401") $r.detail
+    $script:CodeWith = 403
+    $r = Get-CiState 'owner/chart-engine' 'abc'
+    Assert ($r.state -eq 'unknown' -and $r.detail -match "refused this PC's chart-engine token \(403: it lacks a permission") "403, not the rate limit: $($r.detail)"
+    $script:RateLeft = '0'
+    Assert ((Get-CiState 'owner/chart-engine' 'abc').detail -eq "GitHub answered 403 (rate limited, with this PC's chart-engine token)") 'rate limited with the token'
+    $script:RateLeft = ''; $script:CodeWith = 429
+    Assert ((Get-CiState 'owner/chart-engine' 'abc').detail -eq "GitHub answered 429 (rate limited, with this PC's chart-engine token)") '429 with the token'
+    $script:CodeWith = 404
+    $r = Get-CiState 'owner/chart-engine' 'abc'
+    Assert ($r.state -eq 'unknown' -and $r.detail -match "404 with this PC's chart-engine token: it cannot see owner/chart-engine") $r.detail
+    $before = $script:TokenAsks
+    $script:FakeLogin = ''; $script:CodeWithout = 403
+    Assert ((Get-CiState 'owner/chart-engine' 'abc').detail -eq 'GitHub answered 403 (rate limited: 60 requests an hour without a token)') 'rate limited without (as today)'
+    Assert ($script:TokenAsks -eq $before) 'the token is read only after a 404 or 401 without one'
+    Assert-LoginNowhere
+  } finally { Reset-FakeApi }
+}
+
+# The Actions path (the private repo, with the token): a stand-in GitHub that answers check runs, workflow runs, each
+# run's jobs (filter=latest only: without it the earlier attempts' jobs come too) and statuses from one scenario.
+function Set-Scenario($Runs, $Statuses = @()) {
+  $checks = @(); $wr = @()
+  $script:Routes = [ordered]@{}
+  foreach ($run in @($Runs)) {
+    $wr += @{ id = $run.id; name = 'test'; run_number = $run.id; run_attempt = $(if ($run.Contains('attempt')) { $run.attempt } else { 1 }); status = $run.status; conclusion = $run.conclusion }
+    $checks += @($run.jobs)
+    $script:Routes["/actions/runs/$($run.id)/jobs\?filter=latest&"] = (ConvertTo-Json -Depth 6 -Compress @{ total_count = @($run.jobs).Count; jobs = @($run.jobs) })
+    $all = @($run.jobs); if ($run.Contains('earlier')) { $all = @($run.earlier) + $all }
+    $script:Routes["/actions/runs/$($run.id)/jobs"] = (ConvertTo-Json -Depth 6 -Compress @{ total_count = $all.Count; jobs = $all })
+  }
+  $script:Routes['/actions/runs\?head_sha=abc&'] = (ConvertTo-Json -Depth 6 -Compress @{ total_count = $wr.Count; workflow_runs = $wr })
+  $script:Routes['/commits/abc/check-runs\?'] = (ConvertTo-Json -Depth 6 -Compress @{ total_count = $checks.Count; check_runs = $checks })
+  $script:Routes['/commits/abc/status\?'] = (ConvertTo-Json -Depth 6 -Compress @{ statuses = @($Statuses) })
+}
+function Get-Private { $script:FakeLogin = $script:TestLogin; $script:CodeWithout = 404; $script:SeenAuth.Clear(); $script:SeenUris.Clear(); return (Get-CiState 'owner/chart-engine' 'abc') }
+function Get-Public { $script:FakeLogin = $script:TestLogin; $script:CodeWithout = 0; $script:SeenAuth.Clear(); $script:SeenUris.Clear(); return (Get-CiState 'owner/chart-engine' 'abc') }
+function Run([int]$Id, [string]$Status, [string]$Conclusion, $Jobs) { return @{ id = $Id; status = $Status; conclusion = $(if ($Conclusion) { $Conclusion } else { $null }); jobs = @($Jobs) } }
+
+Test 'private path (the token): CI is read through the Actions API, workflow runs then each run''s latest jobs, with the same gate' {
+  Use-FakeApi
+  try {
+    Set-Scenario @(Run 11 'completed' 'success' @((Job 'unit (ubuntu-latest)'), (Job 'unit (windows-latest)')))
+    $r = Get-Private
+    Assert ($r.state -eq 'success' -and $r.detail -eq 'green: unit (ubuntu-latest), unit (windows-latest)') "green: $($r.state) $($r.detail)"
+    $uris = @($script:SeenUris)
+    Assert ($uris -match 'actions/runs\?head_sha=abc&per_page=100&page=1' -and $uris -match 'actions/runs/11/jobs\?filter=latest&per_page=100&page=1' -and $uris -match '/commits/abc/status\?') "the Actions calls: $($uris -join ' | ')"
+    Assert (@($script:SeenAuth | Select-Object -Skip 1 | Where-Object { $_ -ne "Bearer $($script:TestLogin)" }).Count -eq 0) 'every call after the first 404 carries the token'
+    Set-Scenario @(Run 12 'completed' 'success' @((Job 'unit-linux' 'skipped'), (Job 'unit-windows')))
+    $r = Get-Private; Assert ($r.state -eq 'success' -and $r.detail -eq 'green: unit-windows') "the box job: $($r.detail)"
+    # pending: a run or a job not finished, or no runs yet
+    Set-Scenario @(Run 13 'in_progress' '' @((Job 'unit-linux' 'skipped'), (Job 'unit-windows' '' 'queued')))
+    $r = Get-Private; Assert ($r.state -eq 'pending' -and $r.detail -match 'still running: .*unit-windows') "queued: $($r.detail)"
+    Set-Scenario @(Run 14 'queued' '' @())
+    $r = Get-Private; Assert ($r.state -eq 'pending' -and $r.detail -match (Rx 'still running: workflow run test (run 14, attempt 1)')) "a run with no jobs yet: $($r.detail)"
+    Set-Scenario @()
+    $r = Get-Private; Assert ($r.state -eq 'pending' -and $r.detail -eq 'no CI results for this commit yet') "no runs yet: $($r.detail)"
+    # failure: a job failed, a run cancelled, a run that never started its jobs
+    Set-Scenario @(Run 15 'completed' 'failure' @((Job 'unit (ubuntu-latest)'), (Job 'unit (windows-latest)' 'failure')))
+    $r = Get-Private; Assert ($r.state -eq 'failure' -and $r.detail -match 'unit \(windows-latest\)=failure') "failed: $($r.detail)"
+    Set-Scenario @(Run 16 'completed' 'cancelled' @((Job 'unit-windows' 'cancelled')))
+    $r = Get-Private; Assert ($r.state -eq 'failure' -and $r.detail -match 'unit-windows=cancelled') "cancelled: $($r.detail)"
+    foreach ($c in @('timed_out', 'action_required', 'startup_failure', 'failure', 'cancelled')) {
+      Set-Scenario @((Run 17 'completed' 'success' @((Job 'unit-windows'))), (Run 18 'completed' $c @()))
+      $r = Get-Private; Assert ($r.state -eq 'failure' -and $r.detail -match (Rx "workflow run test (run 18, attempt 1)=$c")) "a run that ended $c fails even with the box job green: $($r.detail)"
+    }
+    # a re-run: only the latest attempt's jobs count (filter=latest; the run's own conclusion is the latest attempt's)
+    $rerun = Run 19 'completed' 'success' @((Job 'unit (ubuntu-latest)'), (Job 'unit (windows-latest)'))
+    $rerun['attempt'] = 2; $rerun['earlier'] = @((Job 'unit (windows-latest)' 'failure'))
+    Set-Scenario @($rerun)
+    $r = Get-Private; Assert ($r.state -eq 'success') "the re-run's latest attempt passed: $($r.state) $($r.detail)"
+    # a missing required job: waits, naming it
+    Set-Scenario @(Run 20 'completed' 'success' @((Job 'unit (ubuntu-latest)')))
+    $r = Get-Private; Assert ($r.state -eq 'pending' -and $r.detail -eq "no 'unit (windows-latest)' (or 'unit-windows') result yet") "missing: $($r.detail)"
+    # statuses as today
+    Set-Scenario @(Run 21 'completed' 'success' @((Job 'unit-windows'))) @(@{ context = 'x'; state = 'error' })
+    $r = Get-Private; Assert ($r.state -eq 'failure' -and $r.detail -match 'x=error') "a status in error: $($r.detail)"
+    Set-Scenario @(Run 22 'completed' 'success' @((Job 'unit-windows'))) @(@{ context = 'y'; state = 'pending' })
+    $r = Get-Private; Assert ($r.state -eq 'pending' -and $r.detail -match 'still running: y') "a status pending: $($r.detail)"
+    # the public path stays on check runs: no Actions call, no token
+    Set-Scenario @(Run 23 'completed' 'success' @((Job 'unit-windows')))
+    $r = Get-Public
+    Assert ($r.state -eq 'success' -and @($script:SeenUris | Where-Object { $_ -match '/actions/' }).Count -eq 0 -and @($script:SeenAuth | Where-Object { $_ }).Count -eq 0) "public: check runs only, no token ($($script:SeenUris -join ' | '))"
+    Assert-LoginNowhere
+  } finally { Reset-FakeApi }
+}
+Test 'private path: the same scenarios give the same verdicts through the Actions API as through the check runs' {
+  Use-FakeApi
+  try {
+    $scenarios = [ordered]@{
+      'today''s pair green' = @(Run 31 'completed' 'success' @((Job 'unit (ubuntu-latest)'), (Job 'unit (windows-latest)')))
+      'box green, Linux skipped' = @(Run 32 'completed' 'success' @((Job 'unit-linux' 'skipped'), (Job 'unit-windows')))
+      'box alone, a neutral job' = @(Run 33 'completed' 'success' @((Job 'unit-windows'), (Job 'deploy' 'neutral')))
+      'box failed' = @(Run 34 'completed' 'failure' @((Job 'unit-linux' 'skipped'), (Job 'unit-windows' 'failure')))
+      'box skipped' = @(Run 35 'completed' 'success' @((Job 'unit-windows' 'skipped')))
+      'box cancelled' = @(Run 36 'completed' 'cancelled' @((Job 'unit-windows' 'cancelled')))
+      'box queued' = @(Run 37 'in_progress' '' @((Job 'unit-windows' '' 'queued')))
+      'neither' = @(Run 38 'completed' 'success' @((Job 'unit-linux' 'skipped')))
+      'half of today''s pair' = @(Run 39 'completed' 'success' @((Job 'unit (ubuntu-latest)')))
+      'Linux skipped in today''s pair' = @(Run 40 'completed' 'success' @((Job 'unit (ubuntu-latest)' 'skipped'), (Job 'unit (windows-latest)')))
+      'two workflows, one failed' = @((Run 41 'completed' 'success' @((Job 'unit-windows'))), (Run 42 'completed' 'failure' @((Job 'lint' 'failure'))))
+      'nothing yet' = @()
+    }
+    foreach ($name in $scenarios.Keys) {
+      Set-Scenario $scenarios[$name]
+      $pub = Get-Public; $priv = Get-Private
+      Assert ($pub.state -eq $priv.state) "$name`: check runs say $($pub.state) ($($pub.detail)), the Actions API $($priv.state) ($($priv.detail))"
+    }
+  } finally { Reset-FakeApi }
+}
 # ---------------------------------------------------------------------------------------------- ChartBridge version gates
 
 Test 'unknown ChartBridge version: the page is not installed, and the log says why' {
@@ -319,6 +639,30 @@ Test 'a program that times out is ended with the programs it started (taskkill /
   $stat = "/proc/$child/stat"
   $state = if (Test-Path -LiteralPath $stat) { ((Get-Text $stat) -split '\) ')[1].Substring(0, 1) } else { 'gone' }
   Assert ($state -eq 'gone' -or $state -eq 'Z') "the child it started (pid $child) is ended too (state $state)"
+}
+
+Test 'standard input reaches the program exactly, with no byte order mark, even when the console input encoding is UTF-8 with one' {
+  # Windows PowerShell 5.1 builds the input writer from the console's input encoding; UTF-8 with its mark (code page
+  # 65001, as on GitHub's Windows image) put the mark in front of git credential fill's question, so git refused it.
+  # The mark is forced here, so the case runs on every PC and runner, not only on one set to 65001.
+  $text = "protocol=https`nhost=github.com`npath=owner/chart-engine.git`n"
+  $body = [Text.Encoding]::ASCII.GetBytes($text)
+  $sha1 = [Security.Cryptography.SHA1]::Create()
+  try { $want = -join ($sha1.ComputeHash([byte[]]([Text.Encoding]::ASCII.GetBytes("blob $($body.Length)`0") + $body)) | ForEach-Object { $_.ToString('x2') }) }
+  finally { $sha1.Dispose() }
+  $keep = $null; $forced = $false
+  try {
+    $keep = [Console]::InputEncoding
+    [Console]::InputEncoding = New-Object System.Text.UTF8Encoding($true)
+    $forced = ([Console]::InputEncoding.CodePage -eq 65001 -and [Console]::InputEncoding.GetPreamble().Length -gt 0)
+  } catch { $forced = $false }
+  try {
+    $r = Invoke-Native (Get-GitExe) @('hash-object', '--stdin') 30 $text
+    $after = $null; try { $after = [Console]::InputEncoding } catch { }
+  } finally { if ($keep) { try { [Console]::InputEncoding = $keep } catch { } } }
+  Assert ($r.code -eq 0 -and $r.out.Trim() -eq $want) "git read exactly the text, nothing in front (forced mark: $forced): got '$($r.out.Trim())' code $($r.code), want $want"
+  if ($forced) { Assert ($after -and $after.GetPreamble().Length -gt 0) 'the console input encoding is put back as it was after the start' }
+  elseif ($IsWin -and $PSVersionTable.PSEdition -ne 'Core') { throw 'this console input encoding could not be set to UTF-8 with its mark: the case did not run' }
 }
 
 # ---------------------------------------------------------------------------------------------- staging and the swap
@@ -1072,6 +1416,21 @@ Test 'a fetch refused for another reason is not waited for (fetch_failed, a STOP
     $s = Read-State; $r = Invoke-Pass -DryRun -State $s
     Assert ($r.outcome -eq 'offline' -and $script:Waits.Count -eq 0 -and $script:Fetches -eq 1) "check: $($r.outcome) waits $($script:Waits.Count)"
     Assert ((Test-NetworkDown 'fatal: unable to access ''https://github.com/x/'': Could not resolve host: github.com') -and (Test-NetworkDown 'ssh: connect to host github.com port 22: Network is unreachable') -and -not (Test-NetworkDown 'fatal: Authentication failed')) 'network errors told apart'
+  } finally { Reset-FlakyFetch }
+}
+Test 'a fetch with no GitHub token for a private repo, or a token refused, says so plainly (fetch_failed, nothing installed)' {
+  Use-FlakyFetch
+  try {
+    $script:NetDown = 1; $script:FetchErr = "fatal: could not read Username for 'https://github.com': terminal prompts disabled"
+    $r = Run-Update
+    Assert ($r.outcome -eq 'fetch_failed' -and $r.reason -match (Rx 'git fetch failed: the repo is private (or not found) and this PC has no GitHub token for it: nothing installed; Anthony sets up this PC''s chart-engine token once') -and $r.reason -match 'terminal prompts disabled' -and $script:Waits.Count -eq 0) $r.reason
+    $script:NetDown = 1; $script:FetchErr = "remote: Invalid username or token.`nfatal: Authentication failed for 'https://x-access-token:$($script:TestLogin)@github.com/owner/chart-engine.git/'"
+    $r = Run-Update
+    Assert ($r.outcome -eq 'fetch_failed' -and $r.reason -match "GitHub refused this PC's GitHub token" -and $r.reason -match 'makes a new chart-engine token') $r.reason
+    Assert-NoLogin 'the reason' $r.reason
+    Assert-LoginNowhere
+    $script:NetDown = 1; $script:FetchErr = 'fatal: something else broke'
+    Assert ((Run-Update).reason -eq 'git fetch failed: fatal: something else broke') 'anything else as git said it (as before)'
   } finally { Reset-FlakyFetch }
 }
 Test 'staged.tmp\files.zip held by an antivirus for a moment: its delete is tried again, and staging carries on' {
