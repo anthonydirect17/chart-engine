@@ -377,8 +377,16 @@ function Invoke-Native([string]$Exe, [string[]]$ArgList, [int]$TimeoutSec = 120,
   $psi.EnvironmentVariables['GIT_ASKPASS'] = ''
   $psi.EnvironmentVariables['SSH_ASKPASS'] = ''
   $psi.EnvironmentVariables['GIT_SSH_COMMAND'] = 'ssh -o BatchMode=yes'
-  if ($InputText) { $psi.RedirectStandardInput = $true }
-  $p = [System.Diagnostics.Process]::Start($psi)
+  # Windows PowerShell 5.1 (.NET Framework) writes standard input in the console's input encoding and, when that is
+  # UTF-8 (code page 65001), sends its byte order mark first: git credential fill then reads no protocol and refuses.
+  # So for the start only, the same code page without the mark.
+  $keepIn = $null
+  if ($InputText) {
+    $psi.RedirectStandardInput = $true
+    try { if ([Console]::InputEncoding.CodePage -eq 65001 -and [Console]::InputEncoding.GetPreamble().Length) { $keepIn = [Console]::InputEncoding; [Console]::InputEncoding = $script:Utf8 } } catch { $keepIn = $null }
+  }
+  try { $p = [System.Diagnostics.Process]::Start($psi) }
+  finally { if ($keepIn) { try { [Console]::InputEncoding = $keepIn } catch { } } }
   $out = $p.StandardOutput.ReadToEndAsync()
   $err = $p.StandardError.ReadToEndAsync()
   if ($InputText) {

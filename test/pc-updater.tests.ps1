@@ -386,7 +386,7 @@ Test 'chart-engine token: only with useHttpPath set for the repo URL, one ask wi
     foreach ($key in @("credential.$url.useHttpPath", 'credential.https://github.com.useHttpPath', 'credential.useHttpPath')) {
       Set-Helper $script:TestLogin $key
       $t = & $script:RealGitHubToken 'owner/chart-engine'
-      Assert ($t.token -eq $script:TestLogin -and $t.why -eq '') "$key`: the token"
+      Assert ($t.token -eq $script:TestLogin -and $t.why -eq '') "$key`: the token ($($t.why))"
       $seen = @(Get-Seen)
       Assert ($seen.Count -eq 1 -and $seen[0] -eq 'prompt=0 gcm=never path=owner/chart-engine.git') "$key`: one ask, with the repo path, never interactively: $($seen -join ' | ')"
     }
@@ -639,6 +639,30 @@ Test 'a program that times out is ended with the programs it started (taskkill /
   $stat = "/proc/$child/stat"
   $state = if (Test-Path -LiteralPath $stat) { ((Get-Text $stat) -split '\) ')[1].Substring(0, 1) } else { 'gone' }
   Assert ($state -eq 'gone' -or $state -eq 'Z') "the child it started (pid $child) is ended too (state $state)"
+}
+
+Test 'standard input reaches the program exactly, with no byte order mark, even when the console input encoding is UTF-8 with one' {
+  # Windows PowerShell 5.1 builds the input writer from the console's input encoding; UTF-8 with its mark (code page
+  # 65001, as on GitHub's Windows image) put the mark in front of git credential fill's question, so git refused it.
+  # The mark is forced here, so the case runs on every PC and runner, not only on one set to 65001.
+  $text = "protocol=https`nhost=github.com`npath=owner/chart-engine.git`n"
+  $body = [Text.Encoding]::ASCII.GetBytes($text)
+  $sha1 = [Security.Cryptography.SHA1]::Create()
+  try { $want = -join ($sha1.ComputeHash([byte[]]([Text.Encoding]::ASCII.GetBytes("blob $($body.Length)`0") + $body)) | ForEach-Object { $_.ToString('x2') }) }
+  finally { $sha1.Dispose() }
+  $keep = $null; $forced = $false
+  try {
+    $keep = [Console]::InputEncoding
+    [Console]::InputEncoding = New-Object System.Text.UTF8Encoding($true)
+    $forced = ([Console]::InputEncoding.CodePage -eq 65001 -and [Console]::InputEncoding.GetPreamble().Length -gt 0)
+  } catch { $forced = $false }
+  try {
+    $r = Invoke-Native (Get-GitExe) @('hash-object', '--stdin') 30 $text
+    $after = $null; try { $after = [Console]::InputEncoding } catch { }
+  } finally { if ($keep) { try { [Console]::InputEncoding = $keep } catch { } } }
+  Assert ($r.code -eq 0 -and $r.out.Trim() -eq $want) "git read exactly the text, nothing in front (forced mark: $forced): got '$($r.out.Trim())' code $($r.code), want $want"
+  if ($forced) { Assert ($after -and $after.GetPreamble().Length -gt 0) 'the console input encoding is put back as it was after the start' }
+  elseif ($IsWin -and $PSVersionTable.PSEdition -ne 'Core') { throw 'this console input encoding could not be set to UTF-8 with its mark: the case did not run' }
 }
 
 # ---------------------------------------------------------------------------------------------- staging and the swap
