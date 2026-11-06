@@ -189,7 +189,7 @@ test('L1: outside the Agent tab only one trade panel is lit; lighting one turns 
   doc.documentElement.add(ticket);
   assert.strictEqual(k.light(ticket, trade()), false);
   assert.deepStrictEqual(litTrade(), [deskTrades], 'a refusal turns nothing off');
-  // a trade panel lit on the Agent tab never turns off the trading screen's
+  // a trade panel lit on the Agent tab never turns off Aureus's (the chart page's)
   assert.strictEqual(k.light(agentTrade, trade('loss')), true);
   assert.deepStrictEqual(litTrade(), [deskTrades]);
   // flat: off, and nothing else lights in its place

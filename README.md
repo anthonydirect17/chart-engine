@@ -920,6 +920,7 @@ npm run smoke:bot        # the Bot tab against the fake's v3 bot channel: strip,
 npm run smoke:quoterows  # a Quote board's markets menu: hide YM and ZN on one board, reload, the other board unaffected
 npm run smoke:v038       # the page with a ChartBridge without v3: no new control, no v3 message; V115_ROOT=dir compares the orders with 1.15.0
 npm run smoke:fit        # Fit stop and target: on, the stop and target in view; off, edge markers, the view still, a drag unchanged
+npm run smoke:brand      # the IMPERIUM over AUREUS wordmark in the 40 px bar at 1600 and 1000 px, legible, Cinzel nowhere else
 npm run perf:bot         # the Bot tab's entrance and Library playing while its live chart draws: the chart's gates hold
 node test/perf-live.mjs --view=range --et=01:30   # the full measurement (frames, ticks, GC, heap); --root=DIR for another checkout
 npm run check:nt8        # compile ChartBridge as C# 5 against stand-in NinjaTrader types (needs mono-mcs)

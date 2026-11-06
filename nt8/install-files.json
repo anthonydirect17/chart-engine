@@ -83,6 +83,10 @@
     { "from": "live/fonts/JetBrainsMono-SemiBold.woff2", "to": "fonts/JetBrainsMono-SemiBold.woff2" },
     { "from": "live/fonts/OFL-orbitron.txt", "to": "fonts/OFL-orbitron.txt" },
     { "from": "live/fonts/Orbitron-Medium.woff2", "to": "fonts/Orbitron-Medium.woff2" },
-    { "from": "live/fonts/Orbitron-Bold.woff2", "to": "fonts/Orbitron-Bold.woff2" }
+    { "from": "live/fonts/Orbitron-Bold.woff2", "to": "fonts/Orbitron-Bold.woff2" },
+    { "from": "live/fonts/cinzel.css", "to": "fonts/cinzel.css" },
+    { "from": "live/fonts/OFL-cinzel.txt", "to": "fonts/OFL-cinzel.txt" },
+    { "from": "live/fonts/Cinzel-SemiBold.woff2", "to": "fonts/Cinzel-SemiBold.woff2" },
+    { "from": "live/fonts/Cinzel-Bold.woff2", "to": "fonts/Cinzel-Bold.woff2" }
   ]
 }

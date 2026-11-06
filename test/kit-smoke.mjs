@@ -177,7 +177,7 @@ try {
   check(sims.length === 1 && sims[0] === 'Sim101', 'no account name but Sim101 on the page: ' + JSON.stringify(sims));
   await page.click('[data-show="tradingChart"]');
   check(JSON.stringify(await tradeLit(page)) === '["tradingChart"]' && await page.evaluate(() => document.querySelector('[data-show="tradingChart"]').getAttribute('aria-pressed') === 'true' && document.querySelector('[data-trade="flat"]').getAttribute('aria-pressed') === 'true'),
-    'the trade on the trading screen: only its chart is lit, and the light demo shows flat');
+    'the trade on Aureus (the chart page): only its chart is lit, and the light demo shows flat');
   await page.locator('#v-trading').screenshot({ path: path.join(out, 'kit-trading.png') });
   await page.click('[data-show="deskTrades"]');
   check(JSON.stringify(await tradeLit(page)) === '["deskTrades"]', 'the trade on The Desk: only Today\'s trades is lit');

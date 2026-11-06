@@ -55,6 +55,32 @@ possible as far as we can go."
   click with no motion; the order dialogs (the group entry, Flatten every account, Order Strategies) appear at once. Reduced
   motion (the system's, or the page's Less motion) turns all of it off. `npm run smoke:v2` checks these in a page.
 
+## The brand: Imperium and Aureus (page 1.44.0)
+
+**Anthony, 2026-11-06:** the suite is **IMPERIUM**; the chart page (the workspace, `live/index.html`, "TRADING SCREEN"
+before) is **AUREUS**. ChartBridge keeps its name ("LIVE · ChartBridge" is unchanged), and so do the Agent and Bot pages'
+titles and every name inside a panel.
+
+- **The wordmark** (`.ws-title.ws-mark`), where TRADING SCREEN was, at the left of the 40 px top bar (the bar stays 40 px):
+  a small **IMPERIUM** (Cinzel 600 10px, letter spacing .32em) above **AUREUS** (Cinzel 700 17px, letter spacing .12em),
+  2 px apart, centered on each other, about 29 px tall and 83 px wide (TRADING SCREEN was 102 px), both in the wordmark's
+  gold text `#E2C687` (`--ws-gold-text`, 11.78:1 on the bar's `#0C0C0F`) with its soft gold glow. Screen readers hear
+  "Aureus, Imperium".
+- **Cinzel is for titles and headers only:** the wordmark, page titles and major section headers, bold (600 to 700),
+  never below 14px except the small IMPERIUM line (10px, its capitals 8 px tall as drawn; `npm run smoke:brand` wants at
+  least 6.5). The stack is `"Cinzel", "Trajan Pro", Georgia, serif` (`--ws-title-font`). Cinzel, the Latin subset of 600
+  and 700, is served from the page's folder (`live/fonts/cinzel.css`, `Cinzel-SemiBold.woff2`, `Cinzel-Bold.woff2`; SIL Open Font
+  License 1.1 in `OFL-cinzel.txt`), never from the internet.
+- **IBM Plex stays for everything else:** panel titles, buttons, tabs, labels and text in Plex Sans and Sans Condensed, and
+  every price, time and live value in Plex Mono, unchanged. A live value is never in Cinzel.
+- **The browser tab:** "Aureus · Imperium" while the page loads, then "Main · Aureus · Imperium" (the layout's name first,
+  and "ARMED · ..." in front while this window's ticket is Armed, as before; "Main · Workspace" before 1.44.0). A middle
+  dot, never an em or en dash.
+- The engine draws no title: `src/chart-engine.js` has no font for it and stays one dependency-free file.
+- **No font from another host** (Anthony 2026-11-06, "bundle Plex too"): every page (the chart page, the kit, the Markup
+  Studio, the demo page) takes IBM Plex, the Agent tab's fonts and Cinzel from `live/fonts`; `live/fonts/SOURCE.txt` records
+  each file's source, copyright line and SHA-256. `test/font-hosts.test.js` fails on a font host or an outside link.
+
 ## Colors
 
 Candle colors are Anthony's choice and can be changed in the chart's **Colors** panel (presets and
@@ -692,7 +718,7 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
 
 ## The workspace (1.12.0)
 
-- **Top bar**, 40 px: TRADING SCREEN, the connection, the New York clock, one status line for the window (worst feed
+- **Top bar**, 40 px: the wordmark (IMPERIUM above AUREUS since 1.44.0, "The brand" above; TRADING SCREEN before), the connection, the New York clock, one status line for the window (worst feed
   and local delay, frame rate), notes, then on the right **KEYS ON / KEYS OFF** (mono 11 px in a 1 px box: ON in the
   buy green, OFF muted), **Flatten all** (the sell red on its dark ground, semibold; dimmed only while not connected or
   not signed in, never for Armed), Colors, Layout, + Add panel, Settings. 1.14.0: the connection's tooltip says

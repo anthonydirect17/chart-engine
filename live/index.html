@@ -3,11 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Workspace</title>
+<title>Aureus · Imperium</title>
 <!-- IBM Plex from this PC (1.16.0): nothing is loaded from the internet -->
 <link rel="stylesheet" href="fonts/plex.css">
 <!-- 1.17.0: the Agent tab's own fonts (Chakra Petch, JetBrains Mono; 1.23.0 Orbitron for its headers), from this PC too; used inside the Agent tab and (1.38.0) Orbitron in the Agents panel's Drone sky -->
 <link rel="stylesheet" href="fonts/agent-fonts.css">
+<!-- 1.44.0 (Anthony 2026-11-06): Cinzel, from this PC too, for the wordmark (titles and headers only, never a live value) -->
+<link rel="stylesheet" href="fonts/cinzel.css">
 <link rel="stylesheet" href="live.css">
 <link rel="stylesheet" href="pin.css">
 <link rel="stylesheet" href="workspace.css">
@@ -30,7 +32,8 @@
      screen, each with its own layout (?layout=Main, ?layout=Second). One chart: a layout with one chart panel (chart 1.22.0
      removed the single chart page, single.html). -->
 <header class="ws-top">
-  <span class="ws-title">TRADING SCREEN</span>
+  <!-- 1.44.0 (Anthony 2026-11-06): the wordmark, the suite IMPERIUM small above the chart page AUREUS, both gold, in Cinzel -->
+  <span class="ws-title ws-mark" role="img" aria-label="Aureus, Imperium"><span class="ws-mark-suite" aria-hidden="true">IMPERIUM</span><span class="ws-mark-name" aria-hidden="true">AUREUS</span></span>
   <span class="ws-conn wait" id="wsConn" role="status"><span class="ws-dot" aria-hidden="true">●</span> <span id="wsConnText">CONNECTING · ChartBridge</span></span>
   <span class="ws-clock"><span id="wsClock">--:--:--</span> <span class="ws-et">ET</span></span>
   <span class="ws-stat" id="wsStat" aria-live="off"><span>feed <b id="wsFeed">-</b></span><span class="ws-sep">·</span><span>local <b id="wsLocal">-</b></span><span class="ws-sep">·</span><b id="wsFps">-</b></span>

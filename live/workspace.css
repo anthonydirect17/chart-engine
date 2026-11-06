@@ -24,6 +24,8 @@
   --tape-big-lift: #FFFFFF;   /* what a big trade's color is mixed toward (30%) */
   --ws-sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
   --ws-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
+  /* 1.44.0 (Anthony 2026-11-06): Cinzel for titles and headers only (fonts/cinzel.css), never for a live value */
+  --ws-title-font: "Cinzel", "Trajan Pro", Georgia, serif;
 }
 html, body { height: 100%; margin: 0; }
 body { background: radial-gradient(1200px 600px at 70% -200px, rgba(201, 165, 92, .06), transparent 60%) no-repeat, var(--ws-bg); background-color: var(--ws-bg); color: var(--ws-text); font: 12px var(--ws-sans); display: flex; flex-direction: column; overflow: hidden; }
@@ -483,6 +485,12 @@ body.ws-tight .ws-body > .chart-live { padding: 2px 3px 2px; }
    of every panel and popover, the wordmark in gold. */
 .ws-top::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 1px; background: linear-gradient(90deg, transparent, var(--ws-gold-border), transparent); pointer-events: none; }
 .ws-title { color: var(--ws-gold-text); font-family: "IBM Plex Sans Condensed", var(--ws-sans); font-weight: 700; letter-spacing: .04em; text-shadow: 0 0 18px var(--ws-gold-glow); }
+/* 1.44.0 (Anthony 2026-11-06): the chart page's wordmark, IMPERIUM (the suite) small above AUREUS (the page), both in the
+   wordmark's gold, in Cinzel, inside the 40 px bar (about 29 px tall). Each line's letter spacing is taken back on its right
+   so the two lines center on each other. The Agent and Bot pages keep their one-line Plex title. */
+.ws-title.ws-mark { display: inline-flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; font-family: var(--ws-title-font); letter-spacing: 0; }
+.ws-mark-suite { font: 600 10px/1 var(--ws-title-font); letter-spacing: .32em; margin-right: -.32em; }
+.ws-mark-name { font: 700 17px/1 var(--ws-title-font); letter-spacing: .12em; margin-right: -.12em; }
 .ws-btn { border-radius: 999px; }
 .ws-btn.ws-gear { border-radius: 50%; }
 /* the gold hover border: never on a button whose border says danger (Flatten, the NO STOP question's Send, Delete group) */
