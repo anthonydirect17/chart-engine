@@ -9,11 +9,13 @@ const path = require('path');
 const root = path.resolve(__dirname, '..');
 const www = JSON.parse(fs.readFileSync(path.join(root, 'nt8', 'install-files.json'), 'utf8')).www;
 const LICENCE = 'live/fonts/OFL.txt';                   // the SIL Open Font License text: never loaded by a page
+// 1.44.0: every font's licence text (OFL*.txt) is kept as its project ships it, addresses included; no page loads one
+const isLicence = f => /^live\/fonts\/OFL[^/]*\.txt$/.test(f);
 
 test('no file in the www list refers to an http(s) address other than this PC', () => {
   let checked = 0;
   for (const f of www) {
-    if (/\.woff2$/.test(f.from) || f.from === LICENCE) continue;
+    if (/\.woff2$/.test(f.from) || isLicence(f.from)) continue;
     const text = fs.readFileSync(path.join(root, f.from), 'utf8');
     for (const m of text.matchAll(/https?:\/\/([^/\s"'`)<>:]*)/gi)) {
       assert.ok(/^(localhost|127\.0\.0\.1)$/i.test(m[1]), f.from + ' refers to ' + m[0]);

@@ -1,10 +1,11 @@
 # The kit (ChartKit), version 1
 
 `live/kit.css` and `live/kit.js` are one shared visual kit for Anthony's trading apps: the colours, the type, the
-components and the light. Approved by Anthony on 2026-10-08 from three boards (the Agent tab, the trading screen and The
-Desk's Today screen). `live/kit.html` is the gallery: every token, the fonts, every component in every state, the three
-surfaces side by side, the armed outline, the light in each colour and the refusal on a mock ticket. It sits next to the
-motion kit (`docs/MOTION.md`) and follows the same pattern: one file of styles, one of script, no dependencies, no build.
+components and the light. Approved by Anthony on 2026-10-08 from three boards (the Agent tab, the trading screen,
+Aureus since chart 1.44.0, and The Desk's Today screen). `live/kit.html` is the gallery: every token, the fonts, every
+component in every state, the three surfaces side by side, the armed outline, the light in each colour and the refusal on
+a mock ticket. It sits next to the motion kit (`docs/MOTION.md`) and follows the same pattern: one file of styles, one of
+script, no dependencies, no build.
 
 Nothing in this version moves an existing screen onto the kit. Each screen moves over in its own branch.
 
@@ -74,7 +75,7 @@ the system's.
 
 | Class | Where | What changes |
 |---|---|---|
-| `.kit-trading` | the trading screen | Lines and labels a dim cool grey-blue (lines `rgba(120,146,166,.20)`, hot `#dfe8ef`, body `#b7c6d1`, dim `#7d8fa0`), so the chart's blue candles stay the brightest thing. Cyan only for the light, active states and key buttons. No text glow. 13 px body. |
+| `.kit-trading` | Aureus, the chart page (the trading screen before 1.44.0) | Lines and labels a dim cool grey-blue (lines `rgba(120,146,166,.20)`, hot `#dfe8ef`, body `#b7c6d1`, dim `#7d8fa0`), so the chart's blue candles stay the brightest thing. Cyan only for the light, active states and key buttons. No text glow. 13 px body. |
 | `.kit-desk` | The Desk, the Studio (also a plain `.kit`) | Cyan lines (`rgba(93,242,255,.20)`). Glow only on page titles, the active tab and the light. Body text 15 px. |
 | `.kit-agent` | the Agent tab | The fuller glow: numbers with `.kit-glow`, the brand name, meters, the drawer title. Lines `rgba(93,242,255,.26)`. 14 px body. |
 
@@ -134,7 +135,7 @@ The gallery shows each ratio.
 | `.kit-card`, `.kit-card-head`, `.kit-h` | a card, its header row, its heading |
 | `.kit-title`, `.kit-label`, `.kit-brand`, `.kit-glow`, `.kit-hot`, `.kit-dim` | page title, section label, brand name, glowing value (Agent tab), hot and dim text |
 | `.kit-num`, `.kit-big` (with `<small>`), `.kit-profit-text`, `.kit-loss-text` | a number (mono, tabular), a big number, money colours |
-| `.kit-btn` with `.kit-btn-primary`, `.kit-btn-accent`, `.kit-btn-danger`, `.kit-btn-compact` | buttons: default, primary cyan, accent purple, danger red; 44 px tall, 34 px compact for the dense trading screen. States: hover, `:focus-visible`, `:disabled`, `aria-pressed="true"` (the kill switch on). |
+| `.kit-btn` with `.kit-btn-primary`, `.kit-btn-accent`, `.kit-btn-danger`, `.kit-btn-compact` | buttons: default, primary cyan, accent purple, danger red; 44 px tall, 34 px compact for the dense chart page (Aureus). States: hover, `:focus-visible`, `:disabled`, `aria-pressed="true"` (the kill switch on). |
 | `.kit-chip` with `.kit-chip-purple`, `.kit-chip-profit`, `.kit-chip-loss`, `.kit-chip-danger`, or a colour class | chips, 11 px Chakra Petch 600 uppercase (LONG, ARMED, COPILOT); a number inside one keeps `.kit-num` (mono) |
 | `.kit-tag` with a colour class | the small tag on a stream row (LOOK, PLAN, FILL), 10 px Chakra Petch 600 uppercase; a number inside one keeps `.kit-num` (mono) |
 | `.kit-pill` with `.kit-dot` (`.is-off`, `.is-warn`, `.is-bad`) | a status pill with a dot |
@@ -190,7 +191,7 @@ ChartKit.whyNoLight(ticket, 'trade');                                       // t
 ```
 
 Colours by name: `screen` (or `cyan`), `eyes`, `judgment`, `checks`, `go`, `pass` (or `caution`), `danger`, `profit`,
-`loss`, `armed`; or any `#rrggbb`. On the trading screen and The Desk use `profit` and `loss`, the chart's locked colours.
+`loss`, `armed`; or any `#rrggbb`. On Aureus and The Desk use `profit` and `loss`, the chart's locked colours.
 An unknown colour is refused, never guessed. `light()` writes only what changed, so it is cheap to call on every P&L
 update, and it makes the two layers (`.kit-orbit` and `.kit-halo`) once per panel and keeps them. The panel must be
 positioned (`.kit-panel` and `.kit-card` are).

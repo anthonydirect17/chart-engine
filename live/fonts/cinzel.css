@@ -1,0 +1,16 @@
+/*
+ * Cinzel, served by this PC (chart 1.44.0, Anthony 2026-11-06): the page loads nothing from the internet. Cinzel is for
+ * titles and headers only (the wordmark, page titles, major section headers), bold 600 and 700; IBM Plex stays for
+ * everything else and every price, time and live value stays IBM Plex Mono (CHART_STYLE.md, "The brand").
+ * The Latin subset only, weights 600 and 700, as Google Fonts serves them (the CSS of
+ * fonts.googleapis.com/css2?family=Cinzel:wght@600 and @700 lists these files, Cinzel v26:
+ * fonts.gstatic.com/s/cinzel/v26/8vIU7ww63mVu7gtR-kwKxNvkNOjw-gjgfY3lDQ.woff2 (600) and
+ * fonts.gstatic.com/s/cinzel/v26/8vIU7ww63mVu7gtR-kwKxNvkNOjw-jHgfY3lDQ.woff2 (700)), unchanged, renamed. A
+ * character outside it falls back to the stack each page names after Cinzel ("Trajan Pro", Georgia, serif).
+ * Licence: SIL Open Font License 1.1, in OFL-cinzel.txt beside them, from the Cinzel project
+ * (github.com/NDISCOVER/Cinzel/blob/master/OFL.txt): "Copyright 2020 The Cinzel Project Authors
+ * (github.com/NDISCOVER/Cinzel)". Loaded by live/index.html after plex.css and agent-fonts.css; a face is fetched
+ * only when a page uses it. Listed in nt8/install-files.json.
+ */
+@font-face { font-family: "Cinzel"; font-style: normal; font-weight: 600; font-display: swap; src: url("Cinzel-SemiBold.woff2") format("woff2"); }
+@font-face { font-family: "Cinzel"; font-style: normal; font-weight: 700; font-display: swap; src: url("Cinzel-Bold.woff2") format("woff2"); }

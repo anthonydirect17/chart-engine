@@ -63,6 +63,79 @@
   `test/pc-updater.test.js`: the allowed git subcommands, the box job's name, useHttpPath read before the one ask, the
   token only after a 404 or 401 and then through the Actions API, one place that asks for it and one that sends it.
 
+## chart 1.44.0 (2026-11-06): the brand: AUREUS, the chart page, in the IMPERIUM suite (page only, no F5)
+
+In plain words: Anthony named the suite IMPERIUM and the chart page AUREUS (2026-11-06). Where the top bar said TRADING
+SCREEN it now shows a small IMPERIUM above AUREUS, both in the wordmark's gold, in Cinzel, and the browser tab reads "Aureus ·
+Imperium". Nothing else changes: the colors, the layout, the motion, the chart, every panel and its names, IBM Plex for all
+other text and IBM Plex Mono for every price, time and live value. "LIVE · ChartBridge" stays (ChartBridge is not renamed).
+Also: the Markup Studio and the demo page now take IBM Plex from this repo too, as the chart page does, never from Google.
+
+Install: the PC updater installs the page from green main as usual; no F5 needed. Page only: ChartBridge and NinjaTrader code
+do not change, nothing needs a recompile. ChartBridge stays 0.6.14; `minChartBridge` stays 0.6.2 (COMPAT.json follows the page
+to 1.44.0).
+
+**1. The wordmark** (CHART_STYLE.md "The brand: Imperium and Aureus"; `live/index.html`, `live/workspace.css`):
+
+- `.ws-title.ws-mark` where `TRADING SCREEN` was: IMPERIUM in Cinzel 600 10px (letter spacing .32em) above AUREUS in Cinzel
+  700 17px (letter spacing .12em), 2 px apart and centered on each other, in the V2 wordmark rule's gold text `#E2C687` with
+  its glow (11.78:1 on the bar). Two lines fit: the wordmark is about 29 px tall in the 40 px bar (5 px to 34 px), which stays
+  40 px, and 83 px wide (TRADING SCREEN was 102 px, so the bar has a little more room at narrow widths). Screen readers hear
+  "Aureus, Imperium" (`role="img"`, `aria-label`).
+- The legibility of the small line, checked in a page at 1x and 2x: its capitals are 8 px tall as drawn; readable at 1x,
+  where Cinzel's fine serifs soften (`test/out/brand-wordmark-1x.png`).
+- Only the chart page: the Agent and Bot pages keep their one-line Plex titles, and the engine draws no title.
+
+**2. Cinzel, from this PC** (`live/fonts/cinzel.css`, `Cinzel-SemiBold.woff2`, `Cinzel-Bold.woff2`, `OFL-cinzel.txt`):
+
+- Cinzel v26, the Latin subset of weights 600 and 700, exactly as Google Fonts serves them (the files the CSS of
+  `fonts.googleapis.com/css2?family=Cinzel:wght@600` and `@700` lists on `fonts.gstatic.com`), renamed; nothing is loaded
+  from the internet at run time. SIL Open Font License 1.1, the Cinzel project's own `OFL.txt`
+  (`github.com/NDISCOVER/Cinzel/blob/master/OFL.txt`), unchanged: "Copyright 2020 The Cinzel Project Authors
+  (https://github.com/NDISCOVER/Cinzel)" and "Copyright © 2012 Natanael Gama (www.ndiscovered.com), with Reserved Font
+  Name "Cinzel Decorative"".
+- The stack `"Cinzel", "Trajan Pro", Georgia, serif` (`--ws-title-font`), used only by the wordmark's three rules. Loaded by
+  `live/index.html` after `plex.css` and `agent-fonts.css`; listed in `nt8/install-files.json`, so the installer and the
+  updater copy it.
+- The rule (CHART_STYLE.md): Cinzel for titles and headers only (the wordmark, page titles, major section headers), bold 600
+  to 700, never below 14px except the small IMPERIUM line; a live value is never in Cinzel.
+
+**3. The tab title:** "Aureus · Imperium" in the page's `<title>`, and `syncTitle` gives "Main · Aureus · Imperium" (the
+layout's name, then the page and the suite; "ARMED · <root> · <account> · " in front while this window's ticket is Armed, as
+before). It was "Main · Workspace".
+
+**4. The kit and the docs say Aureus:** the kit gallery's surface switch (AUREUS), its trading surface's label and two
+sentences (`live/kit.html`), the `.kit-trading` comment (`live/kit.css`) and `docs/KIT.md`. The kit's own look and fonts are
+unchanged.
+
+**5. IBM Plex bundled everywhere** (Anthony 2026-11-06: "bundle Plex too"): the chart page and the kit already took IBM
+Plex from `live/fonts` (1.16.0); the Markup Studio (`live/markup.html`) and the engine's demo page (`index.html`) still
+asked Google Fonts for it. Both now load `plex.css` from `live/fonts` instead, the exact families, weights and styles they
+asked for (IBM Plex Mono 400 500 600, IBM Plex Sans 400 500 600, IBM Plex Sans Condensed 500 600 700, normal only), so the
+family names and fallback stacks are unchanged and nothing looks different; the preconnects and the outside links are gone.
+The Studio's server serves `.woff2` as `font/woff2` (`tools/markup_studio.py`). The files are IBM's own (npm
+`@ibm/plex-mono` 2.5.0, `@ibm/plex-sans` 1.1.0, `@ibm/plex-sans-condensed` 2.0.0, `fonts/complete/woff2`, checked again
+byte for byte on 2026-11-06), IBM's complete files rather than a Latin-only subset, as the chart page has used since 1.16.0;
+the licence stays `OFL.txt` (the packages' own, "Copyright © 2017 IBM Corp. with Reserved Font Name "Plex""). New
+`live/fonts/SOURCE.txt`: the source of every Plex and Cinzel file, the copyright lines and each file's SHA-256.
+
+**6. Tests:** `test/brand.test.js` (new): the wordmark's markup and place, the tab title in the page and `syncTitle`, the two
+faces and their files (woff2, installed, the licence with its copyright line and source), Cinzel named in no live stylesheet
+but through `--ws-title-font` and that only in the wordmark's rules, the sizes and weights, the gold, the 40 px bar, the clock
+and status line in Plex Mono, no Cinzel or title in the engine, no em or en dashes. `test/offline.test.js` skips every font's
+licence text (`OFL*.txt`, kept as its project ships it, addresses included), as it skipped Plex's. `test/kit.test.js` and
+`test/kit-smoke.mjs` name Aureus. `npm run smoke:brand` (`test/brand-smoke.mjs`, new) against the fake bridge at 1600 and
+1000 px: the bar 40 px, two lines stacked and centered, inside the bar, no wider than the old title and clear of the
+connection, Cinzel 600 and 700 loaded and nothing from the internet, IMPERIUM's capitals at least 6.5 px as drawn, at least
+7:1, nothing but the wordmark in Cinzel and the live values in Plex Mono, the tab title; screenshots `brand-topbar-1600.png`,
+`brand-topbar-1000.png`, `brand-page-1600.png`, `brand-page-1000.png`, `brand-wordmark-1x.png`. `test/font-hosts.test.js`
+(new): every page and stylesheet in the repo (comments aside) names no font host (Google Fonts, Typekit, Bunny and others)
+and has no link, preconnect, `@import` or `url()` to another host, every font face is a woff2 file in the repo, the Studio
+and the demo page load `plex.css`, and SOURCE.txt holds each Plex and Cinzel file's SHA-256.
+
+**7. The release:** `package.json`, the engine's header and `VERSION` 1.44.0 (the engine itself is unchanged);
+`live/COMPAT.json` page 1.44.0 and its history row (`minChartBridge` stays 0.6.2); CHART_STYLE.md's brand section and top bar.
+
 ## chart 1.43.0 (2026-11-04): a group's stops and targets a tick or two apart draw as one line (page only, no F5)
 
 In plain words: on a group ticket, a MARKET entry fills each account at its own price, and ChartBridge places each account's stop

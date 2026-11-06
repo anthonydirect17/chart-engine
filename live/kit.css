@@ -1,7 +1,7 @@
 /*
  * The shared visual kit (docs/KIT.md, live/kit.js): colours, type, components and the light, approved by Anthony
  * 2026-10-08. Everything sits under one root class, .kit, with three surfaces:
- *   .kit-trading  the trading screen: dim cool grey-blue lines and labels, so the chart's blue candles stay the brightest
+ *   .kit-trading  Aureus, the chart page (the trading screen before 1.44.0): dim cool grey-blue lines and labels, so the chart's blue candles stay the brightest
  *                 thing; cyan only for the light, active states and key buttons; no text glow.
  *   .kit-desk     The Desk and the Studio (also the plain .kit): cyan lines; glow only on page titles, the active tab
  *                 and the light; body text 15 px.

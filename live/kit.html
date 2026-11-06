@@ -142,7 +142,7 @@
     <header>
       <span class="kit-label">3</span>
       <h2>Components</h2>
-      <p>Each one in every state. Switch the surface to see it on the trading screen, The Desk or the Agent tab.</p>
+      <p>Each one in every state. Switch the surface to see it on Aureus (the chart page), The Desk or the Agent tab.</p>
     </header>
     <div class="kit-seg" role="group" aria-label="Surface" id="compSurface" style="max-width: 520px">
       <button type="button" data-surface="trading" aria-pressed="false">TRADING</button>
@@ -313,18 +313,18 @@
     <header>
       <span class="kit-label">4</span>
       <h2>The three surfaces side by side</h2>
-      <p>The trading screen keeps its lines and labels a dim grey-blue so the chart's candles stay the brightest thing. The Desk has cyan lines and glows only on the title, the active tab and the light. The Agent tab glows fully. As on a real screen, these carry no legend and no sentence explaining the page: only titles, field names, values, buttons and warnings.</p>
+      <p>Aureus, the chart page, keeps its lines and labels a dim grey-blue so the chart's candles stay the brightest thing. The Desk has cyan lines and glows only on the title, the active tab and the light. The Agent tab glows fully. As on a real screen, these carry no legend and no sentence explaining the page: only titles, field names, values, buttons and warnings.</p>
       <p>One sample trade, one lit panel: outside the Agent tab only the panel showing the trade lights, so lighting a trade panel anywhere on this page turns the others off. Pick where the trade shows.</p>
     </header>
     <div class="kit-seg" role="group" aria-label="The trade shows on" style="max-width: 520px">
-      <button type="button" data-show="tradingChart" aria-pressed="false">TRADING SCREEN</button>
+      <button type="button" data-show="tradingChart" aria-pressed="false">AUREUS</button>
       <button type="button" data-show="deskTrades" aria-pressed="false">THE DESK</button>
     </div>
     <div class="gal-trio">
 
       <div class="kit kit-trading gal-surface" id="v-trading">
         <div class="kit-panel" style="flex-direction: row; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 8px 10px">
-          <span class="kit-label" style="color: var(--kit-hot)">Trading screen</span>
+          <span class="kit-label" style="color: var(--kit-hot)">Aureus</span>
           <span class="kit-num" style="color: var(--kit-hot)">10:42:05 <span class="kit-dim">ET</span></span>
           <span class="gal-fill"></span>
           <span class="kit-chip kit-chip-profit">Keys on</span>
@@ -418,7 +418,7 @@
     <header>
       <span class="kit-label">6</span>
       <h2>The light</h2>
-      <p>A slow comet around a panel's border, with a soft glow. On the trading screen and The Desk it runs only while you are in a trade, only around the panel showing that trade: green in profit, red under water, none when flat. The page says when it is in a trade; the kit keeps only one trade panel lit. On the Agent tab it follows what the agent is doing. Only the light's colour fades between states; numbers never move.</p>
+      <p>A slow comet around a panel's border, with a soft glow. On Aureus and The Desk it runs only while you are in a trade, only around the panel showing that trade: green in profit, red under water, none when flat. The page says when it is in a trade; the kit keeps only one trade panel lit. On the Agent tab it follows what the agent is doing. Only the light's colour fades between states; numbers never move.</p>
     </header>
     <div class="gal-grid-wide">
       <div class="kit kit-trading gal-col" style="padding: 12px; gap: 10px" id="lightTrading">
@@ -592,7 +592,7 @@
     else { K.light($('#armedLit'), { on: false }); sync(); }
   }));
 
-  /* ---- the light: trade states on the trading screen */
+  /* ---- the light: trade states on Aureus, the chart page */
   function trade(state) {
     const on = state !== 'flat';
     const lit = on ? lightTrade($('#lightDemo'), state) : K.light($('#lightDemo'), { on: false });

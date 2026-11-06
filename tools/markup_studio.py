@@ -2069,7 +2069,8 @@ class WsClient:
 
 # ------------------------------------------------------------------------------------------------ HTTP
 TYPES = {'.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
-         '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png'}
+         '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png',
+         '.woff2': 'font/woff2'}   # 1.44.0: the page's IBM Plex from live/fonts (never from the internet)
 
 
 NO_ITEM = 'no work item is open: pick one from the Work list'

@@ -1,0 +1,34 @@
+Where the bundled fonts in this folder come from (chart 1.44.0). Every page loads its fonts from this folder, never
+from the internet. Each file below is unchanged from its source (renamed only where said); SHA-256 of the file here.
+Chakra Petch, JetBrains Mono and Orbitron (the Agent tab) are recorded in agent-fonts.css and OFL-agent.txt, OFL-orbitron.txt.
+
+IBM Plex (plex.css, chart 1.16.0; the live page, the kit, the Markup Studio and the demo page)
+  Licence: SIL Open Font License 1.1, OFL.txt here (the packages' LICENSE.txt, identical in all three).
+  Copyright line: Copyright © 2017 IBM Corp. with Reserved Font Name "Plex"
+  Source: IBM's npm release, fonts/complete/woff2/ in each package, not renamed:
+    registry.npmjs.org/@ibm/plex-mono/-/plex-mono-2.5.0.tgz
+    registry.npmjs.org/@ibm/plex-sans/-/plex-sans-1.1.0.tgz
+    registry.npmjs.org/@ibm/plex-sans-condensed/-/plex-sans-condensed-2.0.0.tgz
+  Families, weights and styles (normal only): IBM Plex Mono 400 500 600, IBM Plex Sans 400 500 600,
+  IBM Plex Sans Condensed 500 600 700 (the same set the Studio and the demo page asked Google Fonts for before 1.44.0).
+  These are IBM's complete files (Latin and more), checked again against the packages on 2026-11-06.
+    ba204497f16b6d334cee9d1e963a831b73e3a56e1d6300a8489d18df7214b350  IBMPlexMono-Regular.woff2
+    33faf307fa6031fb4062276d7320a6d632de890cbb347576fd80cfa01077bc25  IBMPlexMono-Medium.woff2
+    6a825b4824c01cbb401e829e5a066a1818411bcb3538b5a5792c5ca9b82343c3  IBMPlexMono-SemiBold.woff2
+    ba711a3085ff9f27440b6b9c4550cfc47c97bf36591d5da958b975bb3add8c1a  IBMPlexSans-Regular.woff2
+    5660f8a658f8bb50dbc005232f885eadffd2bc1c235c4f6fbb63469d1f9cde6d  IBMPlexSans-Medium.woff2
+    f78048030eab62e860efa39a0df79e2e5581bf122eb95b9bc42c0b8a4988d205  IBMPlexSans-SemiBold.woff2
+    eb93da02ace70c39e4c4e811b8b02dd5f5d4804d186202d6668bea60d22f57d0  IBMPlexSansCondensed-Medium.woff2
+    385a082a1eac88343eab01fb6746be04b7175dacaf4550b17dee76ea0f78126d  IBMPlexSansCondensed-SemiBold.woff2
+    e1481c7a925b4bfb31bcbff09182b43d5f1c1eab7834a2b6ac51ac75b8c3f9a1  IBMPlexSansCondensed-Bold.woff2
+
+Cinzel (cinzel.css, chart 1.44.0; the chart page's wordmark)
+  Licence: SIL Open Font License 1.1, OFL-cinzel.txt here, from the Cinzel project:
+    github.com/NDISCOVER/Cinzel/blob/master/OFL.txt
+  Copyright line: Copyright 2020 The Cinzel Project Authors (github.com/NDISCOVER/Cinzel)
+  Source: Google Fonts, Cinzel v26, the Latin subset, as the CSS of fonts.googleapis.com/css2?family=Cinzel:wght@600
+  (and @700) lists it, renamed:
+    fonts.gstatic.com/s/cinzel/v26/8vIU7ww63mVu7gtR-kwKxNvkNOjw-gjgfY3lDQ.woff2  ->  Cinzel-SemiBold.woff2 (600)
+    fonts.gstatic.com/s/cinzel/v26/8vIU7ww63mVu7gtR-kwKxNvkNOjw-jHgfY3lDQ.woff2  ->  Cinzel-Bold.woff2 (700)
+    61efc27ceb7d08bb841652fa8979c0b6833b92548b7f9544c07968a6c02f28e4  Cinzel-SemiBold.woff2
+    8efa224fe70fef188a39c095e218b81fd31061809f2752537e33a9ec7b9c2263  Cinzel-Bold.woff2

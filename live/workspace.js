@@ -985,9 +985,10 @@ function renderOrders() {
   renderFlat();
   syncTitle();
 }
-/* The window's title says when this window's ticket is Armed, and on which account (as the single chart page's tab). */
+/* The window's title says when this window's ticket is Armed, and on which account (as the single chart page's tab).
+   1.44.0 (Anthony 2026-11-06): the page is Aureus, the suite Imperium ("Main · Aureus · Imperium"; Workspace before). */
 function syncTitle() {
-  const t = (holds() && core.TR.armed ? 'ARMED · ' + ticketRoot() + ' · ' + String(core.TR.account).replace(/^group:/, 'group ') + ' · ' : '') + (layout || W.DEFAULT_NAME) + ' · Workspace';
+  const t = (holds() && core.TR.armed ? 'ARMED · ' + ticketRoot() + ' · ' + String(core.TR.account).replace(/^group:/, 'group ') + ' · ' : '') + (layout || W.DEFAULT_NAME) + ' · Aureus · Imperium';
   if (document.title !== t) document.title = t;
 }
 function renderFlat() {
