@@ -35,7 +35,7 @@ test('no page or stylesheet names a font host or loads a font, stylesheet or pre
     const name = path.relative(root, f), text = code(f, fs.readFileSync(f, 'utf8'));
     assert.doesNotMatch(text, FONT_HOSTS, name + ' names a font host');
     for (const m of text.matchAll(/<link\b[^>]*>/gi)) {
-      const href = (/\bhref\s*=\s*["']([^"']*)["']/i.exec(m[0]) || [])[1] || '', h = host(href);
+      const hm = /\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/i.exec(m[0]) || [], href = hm[1] || hm[2] || hm[3] || '', h = host(href);
       assert.ok(!h || LOCAL.test(h), name + ': ' + m[0] + ' loads from another host');
       assert.doesNotMatch(m[0], /\brel\s*=\s*["'][^"']*\b(preconnect|dns-prefetch)\b/i, name + ': ' + m[0] + ' (a preconnect is only for another host)');
     }
@@ -43,6 +43,23 @@ test('no page or stylesheet names a font host or loads a font, stylesheet or pre
     for (const m of text.matchAll(/url\(\s*["']?([^"')\s]+)/gi)) { const h = host(m[1]); assert.ok(!h || LOCAL.test(h), name + ': url(' + m[1] + ')'); }
     for (const m of text.matchAll(/@font-face\s*\{([^}]*)\}/gi)) assert.match(m[1], /src:\s*url\("(?:\.\.\/)*[\w.-]+(?:\/[\w.-]+)*\.woff2"\) format\("woff2"\)/, name + ': a font face from a file in this repo');
   }
+});
+
+// Code that could build a page at run time (a script adding a <link>, the Studio or ChartBridge writing HTML) names no font
+// host either, comments included: none needs one, so any mention fails. The tests themselves are not read.
+function scripts(dir, out = []) {
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (SKIP.has(e.name) || (dir === root && e.name === 'test')) continue;
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) scripts(p, out); else if (/\.(js|mjs|py|cs|ps1)$/.test(e.name)) out.push(p);
+  }
+  return out;
+}
+
+test('no script, the Studio or ChartBridge names a font host', () => {
+  const list = scripts(root), rel = list.map(f => path.relative(root, f).split(path.sep).join('/'));
+  for (const f of ['src/chart-engine.js', 'live/workspace.js', 'tools/markup_studio.py', 'nt8/ChartBridge.cs']) assert.ok(rel.includes(f), f + ' is checked');
+  for (const f of list) assert.doesNotMatch(fs.readFileSync(f, 'utf8'), FONT_HOSTS, path.relative(root, f) + ' names a font host');
 });
 
 test('the Markup Studio and the demo page take IBM Plex from live/fonts, the same families and weights as before', () => {
