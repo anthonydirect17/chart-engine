@@ -23,14 +23,20 @@ updater to accept the box job; this is step B, the workflow itself.
   its sha256 (downloaded from PyPI and hashed, and checked against the hash PyPI lists; the header says how). The box
   job installs it with `--require-hashes --only-binary :all: --target`, so pip stops rather than build from source.
 - **`test/ci-workflow.test.js`** (new, no dependencies, plain text reading), over every `.github/workflows/*.yml` and
-  `*.yaml`: fails if any job runs on a GitHub-hosted Windows or macOS image (`runs-on` or a matrix list), or if
-  `unit-windows` in `test.yml` is missing or not on exactly `[self-hosted, Windows, homeserver]`. Every job whose
-  `runs-on` names `self-hosted` must not run `npm install`, `npm i`, `npm exec`, `npx`, yarn, pnpm, uv (`add`, `sync`,
-  `pip install`) or pipx, nor `npm ci` without `--ignore-scripts`, nor pip (`pip`, `pip3`, `py -m pip`,
-  `python -m pip`) install without `--require-hashes` and `--only-binary :all:`; its checkout needs
-  `persist-credentials: false`; and no `cancel-in-progress` but `false` may reach it (its own or a workflow-wide one).
-  A line of `requirements-box-ci.txt` without `--hash=sha256:` fails too. It checks its own guard against made-up
-  workflows, one per case.
+  `*.yaml`. It fails if any job runs on a GitHub-hosted Windows or macOS image (`runs-on` or a matrix list), if
+  `unit-windows` in `test.yml` is missing or not on exactly `[self-hosted, Windows, homeserver]`, or if a job calls a
+  reusable workflow from another repo (its runners cannot be read). A job counts as self-hosted unless every label of
+  its `runs-on`, written on one line or as a block list, is a GitHub image name (`ubuntu-latest`, `ubuntu-24.04`,
+  `windows-2022`, `macos-14` and the like); an expression (`${{ ... }}`) or a runner group counts as self-hosted. A
+  self-hosted job fails on: `npm install`, `npm i`, `npm exec`, `npx`, uv (`add`, `sync`, `pip install`,
+  `tool install`, `run`), `uvx` or pipx anywhere on a line; yarn, pnpm or corepack run as a command (at a line's start,
+  after `run:`, or after `;`, `&`, `|`, `(`, `{`, a backtick, `then`, `do` or `else`, so `npm run check-no-yarn` is
+  fine); `npm ci` without `--ignore-scripts`; a pip install (`pip`, `pip3`, `py -m pip`, `python -m pip`) without
+  `--require-hashes` and `--only-binary :all:`; a checkout without `persist-credentials: false`; and any `concurrency:`
+  in the job. A file with a self-hosted job may have no workflow-level `concurrency:` at all (rule 6.8); a Linux-only
+  workflow may. A `#` starts a comment only at a line's start or after a space, outside quotes, so `echo "x #y" && pip
+  install numpy` is still read. A line of `requirements-box-ci.txt` without `--hash=sha256:` fails too. Its self-test
+  has a made-up workflow for every case it must catch and for those it must let through.
 - **Test servers on port 0** (rule 6.5: a test server binds 127.0.0.1 on port 0, and the box job now brings the tests
   under it). The unit tests that started `test/fake-bridge.mjs` or `test/fake-desk.mjs` on a random fixed port
   (`fake-bridge`, `fake-bot`, `fake-v3`, `live-first`, `trade-sides` and `account-types`) now start them on port 0 and

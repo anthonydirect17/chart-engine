@@ -4,10 +4,13 @@
 //   - No job anywhere runs on a GitHub-hosted Windows or macOS image (runs-on or a matrix list).
 //   - The Windows gate is unit-windows in test.yml, on exactly [self-hosted, Windows, homeserver] (nt8/update-pc.ps1
 //     waits for exactly that name).
-//   - Every job on a self-hosted runner installs nothing from npm, yarn, pnpm, npx or uv, runs `npm ci` only with
+//   - No job calls a reusable workflow from another repo (its runners cannot be read here).
+//   - A job is self-hosted unless every label of its runs-on (one line or a block list) is a GitHub image name; an
+//     expression or a runner group counts as self-hosted.
+//   - Every self-hosted job installs nothing from npm, yarn, pnpm, corepack, npx, uv or pipx, runs `npm ci` only with
 //     --ignore-scripts, runs pip only with --require-hashes and --only-binary :all:, checks out without leaving the
-//     token behind (persist-credentials: false), and is never cancelled by a push (no cancel-in-progress but false,
-//     and no workflow-wide concurrency that cancels).
+//     token behind (persist-credentials: false), and has no concurrency of its own; a file with a self-hosted job has
+//     no workflow-level concurrency (rule 6.8: nothing a push sets off cancels a box job, running or queued).
 // Plain text reading, no YAML library (the tests need no package).
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -19,34 +22,61 @@ const WORKFLOWS = path.join(root, '.github', 'workflows');
 const BOX_REQS = path.join(root, 'requirements-box-ci.txt');
 const BOX_RUNNER = '[self-hosted, Windows, homeserver]';
 
-// The workflow's lines without comments (a # at the start of a line or after a space; no value here holds one).
-function codeLines(text) {
-  return text.split(/\r?\n/).map(l => l.replace(/(^|\s)#.*$/, '').replace(/\s+$/, ''));
+// A line without its comment: a # at the start (after the indentation) or after a space, outside single and double
+// quotes, as YAML and the shells read it. A # inside quotes (echo "x #y") is kept.
+function stripComment(line) {
+  let q = '';
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (q) { if (c === q) q = ''; else if (c === '\\' && q === '"') i++; continue; }
+    if (c === '"' || c === "'") { q = c; continue; }
+    if (c === '#' && (i === 0 || /\s/.test(line[i - 1]))) return line.slice(0, i);
+  }
+  return line;
 }
+function codeLines(text) {
+  return text.split(/\r?\n/).map(l => stripComment(l).replace(/\s+$/, ''));
+}
+const indentOf = l => l.length - l.trimStart().length;
 
-// The top-level lines (indent 0 keys and what is under them) and the jobs under `jobs:`, each as its own lines.
+// The workflow-level lines (every line outside `jobs:`) and the jobs, each as its own lines.
 function parse(text) {
   const lines = codeLines(text);
-  const start = lines.findIndex(l => l === 'jobs:');
-  const top = start < 0 ? lines : lines.slice(0, start);
-  const jobs = {};
-  let name = null, indent = -1;
-  if (start >= 0) {
-    for (const line of lines.slice(start + 1)) {
-      if (!line.trim()) continue;
-      const ind = line.length - line.trimStart().length;
-      if (ind === 0) break;                                 // the next top-level key
-      const m = /^(\s+)([A-Za-z0-9_-]+):$/.exec(line);
-      if (m && (indent < 0 || ind <= indent)) { name = m[2]; indent = ind; jobs[name] = []; continue; }
-      if (name) jobs[name].push(line);
-    }
+  const top = [], jobs = {};
+  let inJobs = false, name = null, indent = -1;
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    const ind = indentOf(line);
+    if (ind === 0) { inJobs = line === 'jobs:'; name = null; indent = -1; if (!inJobs) top.push(line); continue; }
+    if (!inJobs) { top.push(line); continue; }
+    const m = /^(\s+)([A-Za-z0-9_-]+):$/.exec(line);
+    if (m && (indent < 0 || ind <= indent)) { name = m[2]; indent = ind; jobs[name] = []; continue; }
+    if (name) jobs[name].push(line);
   }
   return { top, jobs };
 }
 
+// A job's runs-on as one text: the one-line form as written, a block list (- a / - b) as [a, b], any other block (a
+// runner group, labels) as its lines joined. null when the job has none (a job that calls a reusable workflow).
 function runsOn(lines) {
-  const hit = lines.find(l => /^\s*runs-on:/.test(l));
-  return hit ? hit.replace(/^\s*runs-on:\s*/, '').trim() : null;
+  const i = lines.findIndex(l => /^\s*runs-on:/.test(l));
+  if (i < 0) return null;
+  const inline = lines[i].replace(/^\s*runs-on:\s*/, '').trim();
+  if (inline) return inline;
+  const ind = indentOf(lines[i]), block = [];
+  for (const n of lines.slice(i + 1)) { if (indentOf(n) <= ind) break; block.push(n.trim()); }
+  if (block.length && block.every(b => /^-\s+\S/.test(b))) return '[' + block.map(b => b.replace(/^-\s+/, '').replace(/^['"]|['"]$/g, '')).join(', ') + ']';
+  return block.join(' ');
+}
+
+// GitHub's hosted images by name; a job is self-hosted unless every label of its runs-on is one of them. An expression
+// (${{ ... }}, fromJSON) or a runner group cannot be read here, so it counts as self-hosted.
+const HOSTED_LABEL = /^(?:ubuntu-(?:latest|slim|\d{2}\.\d{2}(?:-arm)?)|windows-(?:latest|20\d\d|11-arm)|macos-(?:latest|\d+)(?:-large|-xlarge|-intel)?)$/;
+function selfHosted(value) {
+  if (value === null) return false;
+  if (/\$\{\{/.test(value) || /:/.test(value)) return true;
+  const labels = value.replace(/^\[|\]$/g, '').split(',').map(x => x.trim().replace(/^['"]|['"]$/g, '')).filter(Boolean);
+  return labels.length === 0 || !labels.every(x => HOSTED_LABEL.test(x));
 }
 
 // A GitHub-hosted Windows or macOS image (windows-latest, windows-2022, windows-11-arm, macos-14, ...).
@@ -56,12 +86,14 @@ function hostedProblem(value) {
   return null;
 }
 
-// What a self-hosted job may not run, line by line (rule 8.7).
+// What a self-hosted job may not run, line by line (rule 8.7). A command "at the start of a statement": after the
+// indentation, a list dash, `run:`, or ; & | ( { ` then do, as the shells start a command.
+const AT_START = String.raw`(?:^\s*(?:-\s+)?(?:run:\s*)?(?:[|>][-+]?\s*)?|[;&|({` + '`' + String.raw`]\s*|\b(?:then|do|else)\s+)`;
 const PIP = /(?:^|[\s;&|(`'"])(?:pip3?(?:\.exe)?|(?:py|python3?)(?:\.exe)?(?:\s+-[\w.]+)*\s+-m\s+pip)\s+install\b/i;
 const FORBIDDEN = [
   [/(?:^|[\s;&|(`'"])npx\b/, 'npx'],
   [/\bnpm\s+(?:install|i|in|isntall|add|exec|x)\b/, 'an npm install or npm exec'],
-  [/\b(?:yarn|pnpm)\b/, 'yarn or pnpm'],
+  [new RegExp(AT_START + String.raw`(?:yarn|pnpm|corepack)(?:\.cmd|\.exe)?(?=\s|$)`), 'yarn, pnpm or corepack'],
   [/\buv\s+(?:add|sync|pip\s+install|tool\s+install|run)\b|\buvx\b/, 'uv installing packages'],
   [/\bpipx\b/, 'pipx'],
 ];
@@ -100,9 +132,11 @@ function checkoutProblems(job, lines) {
 function fileProblems(file, text) {
   const problems = [];
   const { top, jobs } = parse(text);
-  const topCancel = top.filter(l => /^\s+cancel-in-progress:/.test(l));
-  for (const l of topCancel) {
-    if (!/cancel-in-progress:\s*false$/.test(l)) problems.push(`${file}: a workflow-wide concurrency that can cancel a self-hosted job: ${l.trim()}`);
+  const boxJobs = Object.keys(jobs).filter(n => selfHosted(runsOn(jobs[n])));
+  // rule 6.8: nothing a push sets off may cancel a self-hosted job, so a file with one has no workflow-level
+  // concurrency at all (any form), and the self-hosted job none of its own
+  if (boxJobs.length) for (const l of top) if (/^concurrency:/.test(l)) {
+    problems.push(`${file}: a workflow-level concurrency in a file with a self-hosted job (${boxJobs.join(', ')}): ${l.trim()}`);
   }
   for (const [name, lines] of Object.entries(jobs)) {
     const job = `${file} ${name}`;
@@ -114,11 +148,12 @@ function fileProblems(file, text) {
       const b = hostedProblem(l);
       if (b) problems.push(`${job} names ${b}: ${l.trim()}`);
     }
-    if (r && /self-hosted/i.test(r)) {
+    if (r === null && lines.some(l => { const m = /^\s*uses:\s*(\S+)/.exec(l); return m && !m[1].startsWith('./') && indentOf(l) === indentOf(lines[0]); })) {
+      problems.push(`${job} calls a reusable workflow from elsewhere, whose runners this check cannot read`);
+    }
+    if (boxJobs.includes(name)) {
       problems.push(...installProblems(job, lines), ...checkoutProblems(job, lines));
-      for (const l of lines) if (/^\s*cancel-in-progress:/.test(l) && !/cancel-in-progress:\s*false$/.test(l)) {
-        problems.push(`${job}: a self-hosted job a push could cancel (rule 6.8): ${l.trim()}`);
-      }
+      for (const l of lines) if (/^\s*concurrency:/.test(l)) problems.push(`${job}: a concurrency on a self-hosted job (rule 6.8): ${l.trim()}`);
     }
   }
   return problems;
@@ -186,6 +221,7 @@ test('ci-workflow: the guard itself catches what it should (made-up workflows)',
   const edited = (from, to) => { const t = ok.replace(from, to); assert.notEqual(t, ok, `the made-up change applies: ${from}`); return t; };
   const inBox = cmd => edited(boxRun, `        run: ${cmd}\n`);
   const extra = (runs, cmd) => `name: other\non: push\njobs:\n  extra:\n    runs-on: ${runs}\n    steps:\n      - run: ${cmd}\n`;
+  const wf = (runsOnLines, cmd) => `name: other\non: push\njobs:\n  extra:\n${runsOnLines}    steps:\n      - run: ${cmd}\n`;
   const cases = [
     ['a hosted Windows job', { 'test.yml': edited('runs-on: ubuntu-latest', 'runs-on: windows-latest') }],
     ['a dated Windows image', { 'test.yml': edited('runs-on: ubuntu-latest', 'runs-on: windows-2022') }],
@@ -214,8 +250,36 @@ test('ci-workflow: the guard itself catches what it should (made-up workflows)',
     ['checkout keeping the token', { 'test.yml': edited('          persist-credentials: false\n', '          fetch-depth: 1\n') }],
     ['a box job a push can cancel', { 'test.yml': edited(`    runs-on: ${BOX_RUNNER}\n`, `    runs-on: ${BOX_RUNNER}\n    concurrency:\n      group: box\n      cancel-in-progress: true\n`) }],
     ['a workflow-wide cancel', { 'test.yml': edited('permissions:\n  contents: read\n', 'concurrency:\n  group: test-${{ github.ref }}\n  cancel-in-progress: ${{ github.event_name == \'pull_request\' }}\npermissions:\n  contents: read\n') }],
+    // the re-review's false passes (2026-11-08)
+    ['runs-on as a block list', { 'test.yml': ok, 'box.yml': wf('    runs-on:\n      - self-hosted\n      - Windows\n', 'python -m pip install numpy') }],
+    ['runs-on as an expression', { 'test.yml': ok, 'box.yml': wf('    runs-on: ${{ fromJSON(inputs.runner) }}\n', 'python -m pip install numpy') }],
+    ['runs-on as a runner group', { 'test.yml': ok, 'box.yml': wf('    runs-on:\n      group: box\n      labels: [Windows]\n', 'npm install') }],
+    ['runs-on as a label that is not a GitHub image', { 'test.yml': ok, 'box.yml': wf('    runs-on: ubuntu-homeserver\n', 'pip install numpy') }],
+    ['a workflow-level concurrency group without cancel-in-progress', { 'test.yml': edited('permissions:\n  contents: read\n', 'concurrency:\n  group: test-${{ github.ref }}\npermissions:\n  contents: read\n') }],
+    ['a one-line workflow-level concurrency', { 'test.yml': edited('permissions:\n  contents: read\n', 'concurrency: test-${{ github.ref }}\npermissions:\n  contents: read\n') }],
+    ['a workflow-level concurrency after jobs', { 'test.yml': ok + 'concurrency: late\n' }],
+    ['a box job with a group and cancel-in-progress false', { 'test.yml': edited(`    runs-on: ${BOX_RUNNER}\n`, `    runs-on: ${BOX_RUNNER}\n    concurrency:\n      group: box\n      cancel-in-progress: false\n`) }],
+    ['a one-line concurrency on the box job', { 'test.yml': edited(`    runs-on: ${BOX_RUNNER}\n`, `    runs-on: ${BOX_RUNNER}\n    concurrency: box\n`) }],
+    ['pip after a # in double quotes', { 'test.yml': inBox('echo "x #y" && pip install numpy') }],
+    ['yarn after a # in single quotes', { 'test.yml': inBox("echo 'a #b'; yarn install") }],
+    ['yarn in a block script', { 'test.yml': inBox('|\n          echo start\n          yarn install') }],
+    ['pnpm after &&', { 'test.yml': inBox('cd x && pnpm i') }],
+    ['corepack', { 'test.yml': inBox('corepack yarn install') }],
+    ['a reusable workflow from another repo', { 'test.yml': ok, 'call.yml': 'name: call\non: push\njobs:\n  call:\n    uses: someone/else/.github/workflows/x.yml@v1\n' }],
   ];
   for (const [what, files] of cases) assert.ok(workflowProblems(files).length > 0, `${what}: caught`);
+  // what the guard must let through (no false fails)
+  const linuxOnly = 'name: lint\non: pull_request\nconcurrency:\n  group: lint-${{ github.ref }}\n  cancel-in-progress: true\njobs:\n  lint:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm install && yarn lint\n';
+  const fine = [
+    ['a Linux-only workflow with its own cancelling concurrency', { 'test.yml': ok, 'lint.yml': linuxOnly }],
+    ['a hosted job as a block list', { 'test.yml': ok, 'more.yml': wf('    runs-on:\n      - ubuntu-24.04\n', 'pip install numpy') }],
+    ['a local reusable workflow', { 'test.yml': ok, 'call.yml': 'name: call\non: push\njobs:\n  call:\n    uses: ./.github/workflows/test.yml\n' }],
+  ];
+  for (const [what, files] of fine) assert.deepEqual(workflowProblems(files), [], `allowed: ${what}`);
+  for (const cmd of ['npm run check-no-yarn', 'echo "no yarn or pnpm here"', 'echo hi # pip install numpy', 'node tools/yarn-free.js',
+    'echo "#" && npm test']) {
+    assert.deepEqual(workflowProblems({ 'test.yml': ok.replace(boxRun, `        run: ${cmd}\n`) }), [], `allowed: ${cmd}`);
+  }
   for (const cmd of ['npm ci --ignore-scripts', 'npm test', 'npm run test:markup', 'python -m pip install --require-hashes --only-binary :all: -r requirements-box-ci.txt']) {
     assert.deepEqual(workflowProblems({ 'test.yml': ok.replace(boxRun, `        run: ${cmd}\n`) }), [], `allowed: ${cmd}`);
   }
