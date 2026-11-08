@@ -50,8 +50,12 @@ class Instruments(unittest.TestCase):
         self.assertIn('ES or NQ', str(cm.exception.code))
 
     def test_already_seen_defaults_are_nq_only(self):
-        self.assertEqual(ms.default_seen('ES'), [])                            # NQ events match by date and time, not price
-        self.assertTrue(ms.default_seen('NQ'))
+        # a made-up runs folder in the temp folder: a test never looks at tickbench's real one (SERVER_RULES.md rule 6.5)
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.assertEqual(ms.default_seen('ES', base=tmp.name), [])            # NQ events match by date and time, not price
+        self.assertEqual(ms.default_seen('NQ', base=tmp.name), [os.path.join(tmp.name, 'sweep_blind', 'KEY.csv')])
+        self.assertEqual(ms.SEEN_BASE, r'E:\SchwabDesk_bulk\tickbench\runs')   # Anthony's default, unchanged (text only)
 
     def test_the_page_assumes_no_symbol(self):
         """The page takes the root, header, tick and dollar labels from the server: no NQ in its code."""
@@ -146,7 +150,8 @@ class SplitGuard(Base):
                 self.studio(run, scan=False)
             self.assertEqual(self.split_text(), before)                      # never rewritten
         with self.assertRaises(SystemExit) as cm:
-            ms.main(['--symbol=NQ', '--source=npz', '--data=' + self.data, '--marks=' + self.marks, '--no-browser', '--port=1'])
+            ms.main(['--symbol=NQ', '--source=npz', '--data=' + self.data, '--marks=' + self.marks, '--no-browser', '--port=0',
+                     '--seen=' + os.path.join(self.marks, 'no-seen.csv')])   # never the default files outside the repo
         self.assertIn('cannot use the marks folder', str(cm.exception.code))
         self.assertIn('is for ES, not NQ', str(cm.exception.code))
 

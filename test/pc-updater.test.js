@@ -128,7 +128,7 @@ test('the automatic path never moves Anthony\'s clone, and git never asks anythi
 
 test('going private, step A (Anthony 2026-11-04): either required set, and this PC\'s chart-engine token only read and only sent to the API', () => {
   const src = code(updater);
-  assert.match(src, /\$script:RequiredChecks = @\('unit \(ubuntu-latest\)', 'unit \(windows-latest\)'\)/, 'today\'s pair');
+  assert.match(src, /\$script:RequiredChecks = @\('unit \(ubuntu-latest\)', 'unit \(windows-latest\)'\)/, 'the pair from before step B');
   assert.match(src, /\$script:BoxCheck = 'unit-windows'/, 'the HOMESERVER job, as Bot-Lab names it');
   assert.match(src, /\$script:RequiredSets = @\(@\{ jobs = \$script:RequiredChecks \}, @\{ jobs = @\(\$script:BoxCheck\) \}\)/);
   assert.match(src, /if \(\$rest\.Count -ne 1 -or \$rest\[0\] -ne 'fill'\) \{ return/, 'git credential runs only as fill');

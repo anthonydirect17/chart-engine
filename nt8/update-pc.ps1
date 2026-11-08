@@ -15,8 +15,8 @@
                           with STOP; a task whose state folder is not this window's has its own last run said
     check                 dry run: fetches main and says what `update` would do; changes nothing
     update                the automatic path (the scheduled task runs this): installs the newest commit on main
-                          whose CI is green (unit on ubuntu-latest and windows-latest, or the HOMESERVER job
-                          unit-windows), only when its page works with the
+                          whose CI is green (the HOMESERVER job unit-windows, or, before step B, unit on
+                          ubuntu-latest and windows-latest), only when its page works with the
                           ChartBridge compiled on this PC; stages a new ChartBridge but never installs it. A network
                           that is not up yet (the run at sign-in) is waited for up to 2 minutes, then the run ends
                           quietly (offline) until the next one
@@ -41,8 +41,8 @@
       (updater\swap.json) makes an interrupted install finish or undo itself at the start of the next run.
     - Windows PowerShell 5.1 and git only. No PowerShell command strings: scripts run with -File.
 
-  Going private (Anthony 2026-11-04), step A: CI is green with either today's pair (unit (ubuntu-latest) and
-  unit (windows-latest)) or HOMESERVER's job unit-windows (step B moves the Windows job there, SERVER_RULES.md rule
+  Going private (Anthony 2026-11-04), step A: CI is green with either the pair from before step B (unit (ubuntu-latest)
+  and unit (windows-latest)) or HOMESERVER's job unit-windows (step B moved the Windows job there, SERVER_RULES.md rule
   6.1, and runs Linux on pull requests only). GitHub's API is asked without a token first, as before; only when it
   answers 404 (a private repo) is this PC's fine-grained, read-only chart-engine token read (SERVER_RULES.md rule
   8.5: never the whole-account login; git credential fill for the repo's path, only with credential.useHttpPath set

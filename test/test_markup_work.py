@@ -97,7 +97,7 @@ class Tool(TBase):
         rc, out = self.run_tool('add', f'--work={wd}', '--id=label-a', '--title=Again', f'--marks={self.marks}')
         self.assertEqual(rc, 2)
         self.assertIn('written once', out)
-        rc, out = self.run_tool('add', f'--work={wd}', '--id=x', '--title=X', f'--marks={self.marks}', '--bot=/no/such.py', '--tab=bot')
+        rc, out = self.run_tool('add', f'--work={wd}', '--id=x', '--title=X', f'--marks={self.marks}', '--bot=' + os.path.join(wd, 'no', 'such.py'), '--tab=bot')
         self.assertEqual(rc, 2)
         self.assertIn('no such file', out)
         rc, out = self.run_tool('add', f'--work={wd}', '--id=x', '--title=X', f'--marks={self.marks}', '--colour=red')
@@ -292,7 +292,7 @@ class CommandLine(unittest.TestCase):
                               (['--work=' + os.path.join(d, 'gone')], 'does not exist'),
                               (['--work=' + d, '--allow-origin=https://desk.example.com/path'], 'no path')):
                 with self.assertRaises(SystemExit) as cm:
-                    ms.main(args + ['--source=npz', '--data=' + d, '--no-browser', '--port=1'])
+                    ms.main(args + ['--source=npz', '--data=' + d, '--no-browser', '--port=0'])
                 self.assertIn(why, str(cm.exception.code), args)
         self.assertEqual(ms.origins('https://a.example.com, http://127.0.0.1:8800/'), ['https://a.example.com', 'http://127.0.0.1:8800'])
 

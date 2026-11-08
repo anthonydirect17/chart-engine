@@ -2,7 +2,7 @@
 
 ## Unreleased (2026-11-08): going private, step B: the Windows gate moves to HOMESERVER's runner (unit-windows), Linux on pull requests only
 
-CI files and docs only (no page change, no version bump, as step A). Anthony decided (2026-11-04) to make chart-engine
+CI files, tests and docs only (no page change, no version bump, as step A; the Markup Studio gains a test seam only). Anthony decided (2026-11-04) to make chart-engine
 private, with its Windows CI on HOMESERVER's self-hosted runner (SERVER_RULES.md rule 6.1). Step A (#81) taught the PC
 updater to accept the box job; this is step B, the workflow itself.
 
@@ -14,16 +14,23 @@ updater to accept the box job; this is step B, the workflow itself.
   Markup Studio tests. `unit-linux` runs on GitHub's ubuntu runners for pull requests only (not when a draft is marked
   ready: that commit's Linux run is done), now with no npm install either (`npm test` needs no package; playwright is
   for the smoke runs on a PC). On `main` only `unit-windows` runs, the one check the PC updater reads. Triggers add
-  `ready_for_review`, so marking a draft ready starts the box job; a concurrency group cancels a superseded pull request
-  run, never a run on `main`; `permissions: contents: read`.
+  `ready_for_review`, so marking a draft ready starts the box job. Cancelling is per job: a new push to a pull request
+  cancels that pull request's older `unit-linux` only; `unit-windows` has no concurrency group at all, so no push ever
+  cancels it, running or queued, on a pull request or on `main` (rule 6.8: only the box's guard stops a box job; GitHub
+  would cancel a job still waiting in a group when a newer one joins). Its checkout has `persist-credentials: false`, so
+  no token is left in the workspace on the shared box. `permissions: contents: read`.
 - **`requirements-box-ci.txt`** (new, rule 8.7): numpy 2.5.4, the box's version, the one `cp312-win_amd64` wheel with
   its sha256 (downloaded from PyPI and hashed, and checked against the hash PyPI lists; the header says how). The box
   job installs it with `--require-hashes --only-binary :all: --target`, so pip stops rather than build from source.
-- **`test/ci-workflow.test.js`** (new, no dependencies, plain text reading): fails if any job runs on a GitHub-hosted
-  Windows or macOS image (`runs-on` or a matrix list), if `unit-windows` is missing or not on exactly
-  `[self-hosted, Windows, homeserver]`, if it runs `npm install` or `npm ci` without `--ignore-scripts`, if its pip
-  install lacks `--require-hashes` or `--only-binary :all:`, or if a line of `requirements-box-ci.txt` has no
-  `--hash=sha256:`. It also checks its own guard against made-up workflows.
+- **`test/ci-workflow.test.js`** (new, no dependencies, plain text reading), over every `.github/workflows/*.yml` and
+  `*.yaml`: fails if any job runs on a GitHub-hosted Windows or macOS image (`runs-on` or a matrix list), or if
+  `unit-windows` in `test.yml` is missing or not on exactly `[self-hosted, Windows, homeserver]`. Every job whose
+  `runs-on` names `self-hosted` must not run `npm install`, `npm i`, `npm exec`, `npx`, yarn, pnpm, uv (`add`, `sync`,
+  `pip install`) or pipx, nor `npm ci` without `--ignore-scripts`, nor pip (`pip`, `pip3`, `py -m pip`,
+  `python -m pip`) install without `--require-hashes` and `--only-binary :all:`; its checkout needs
+  `persist-credentials: false`; and no `cancel-in-progress` but `false` may reach it (its own or a workflow-wide one).
+  A line of `requirements-box-ci.txt` without `--hash=sha256:` fails too. It checks its own guard against made-up
+  workflows, one per case.
 - **Test servers on port 0** (rule 6.5: a test server binds 127.0.0.1 on port 0, and the box job now brings the tests
   under it). The unit tests that started `test/fake-bridge.mjs` or `test/fake-desk.mjs` on a random fixed port
   (`fake-bridge`, `fake-bot`, `fake-v3`, `live-first`, `trade-sides` and `account-types`) now start them on port 0 and
@@ -37,9 +44,20 @@ updater to accept the box job; this is step B, the workflow itself.
   or a variable other than those two fakes' own), on an address other than `127.0.0.1`, on `fake-bridge.mjs` started
   other than through `fake-bridge-start.js` with `'0'`, on `startDesk(` in a test with a port other than 0, or on a port
   picked with `Math.random`; it also checks itself against made-up code. The markup tests already bind port 0.
+- **Markup tests read nothing outside the repo** (rule 6.5). Two tests reached the Studio's HOME defaults for the
+  already-seen files (`E:\SchwabDesk_bulk\tickbench\runs\...`, probed with a folder check and opened if there): the
+  `ms.main` calls in `test_markup_symbol.py` and `test_markup_trades.py` now give `--seen=` a file in their temp folder,
+  and `default_seen` takes a `base` (default `SEEN_BASE`, the same HOME folder as before, so Anthony's use is
+  unchanged) that the test gives as a temp folder. `test_markup_work.py` gives `--bot=` a missing file in its temp
+  folder instead of `/no/such.py`, and the `ms.main` calls that stop before serving pass `--port=0`.
+  **`test/test_markup_paths.py`** (new, runs with the markup tests) starts every `test_markup*.py` once more in its own
+  process under **`test/markup_path_audit.py`**, which records each path opened, listed, globbed, made, moved, removed
+  or checked (Python's audit events plus `os.stat`, `os.lstat` and the `os.path` checks) and fails on any outside the
+  repo, the temp folder, Python's own folders and the system's (a Windows drive path is outside on any system).
 - **Docs:** the README's "Going private" step B and the updater paragraph now name `unit-windows` as today's workflow;
-  two comments in `nt8/update-pc.ps1` that called the matrix job "today's" now say "before step B" (comment text only,
-  no code change; the updater keeps accepting either set).
+  the comments and help text in `nt8/update-pc.ps1` and the test messages in `test/pc-updater.test.js` and
+  `test/pc-updater.tests.ps1` that called the matrix job "today's" now say "before step B" (text only, no code change;
+  the updater keeps accepting either set).
 - **Order:** the pull request stays a draft (Linux only) while the repo is public, since a public repo never gets a box
   runner. Anthony makes the repo private; the HOMESERVER coordinator registers the runner once the repo page reads
   Private; then the pull request is marked ready, `unit-windows` runs on the box, and it merges on an independent

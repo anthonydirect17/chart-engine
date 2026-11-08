@@ -11,12 +11,10 @@ on:
     branches: [main]
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
-# A new push to the same pull request cancels the older run. Pushes to main are never cancelled, so every main
-# commit gets its own result. Marking a draft ready runs Windows only, in its own group, so it never cancels the
-# draft's Linux run still going on the same commit.
-concurrency:
-  group: test-${{ github.event.pull_request.number || github.sha }}-${{ github.event.action == 'ready_for_review' && 'ready' || 'push' }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+# Cancelling is per job, never for the whole run: a new push to a pull request cancels that pull request's older Linux
+# job only. unit-windows is never cancelled by a push, on a pull request or on main (SERVER_RULES.md rule 6.8: only the
+# box's guard stops a running box job), and it has no concurrency group at all, because GitHub cancels a job still
+# waiting in a group when a newer one joins it, and a queued box job is left alone too.
 permissions:
   contents: read
 jobs:
@@ -26,6 +24,9 @@ jobs:
     if: github.event_name == 'pull_request' && github.event.action != 'ready_for_review'
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    concurrency:
+      group: unit-linux-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -54,8 +55,11 @@ jobs:
     # Each step below keeps its own limit, so a hung step is still stopped.
     timeout-minutes: 180
     steps:
+      # No token left in the workspace's git config on the shared box.
       - uses: actions/checkout@v4
         timeout-minutes: 45
+        with:
+          persist-credentials: false
       # Node 24, the box's cached Node (as The Desk's box job uses). No cache: there is no lock file.
       - uses: actions/setup-node@v4
         timeout-minutes: 45
