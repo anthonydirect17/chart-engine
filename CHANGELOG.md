@@ -94,14 +94,15 @@ with ChartBridge 0.6.2 or newer (`minChartBridge` stays 0.6.2).
 - **The pass** (`PlanOnce`): the 1-minute bars as before, then the tick file's final pull (`ChartBridgeTicks.PlanDay`), at most
   one request a pass as before. Until now it ran only in a pass where the 1 second pull asked nothing; with `bars1s = off` it
   already ran this way.
-- **An old `config.txt` line** (`bars1s = on` or `off`, `bars1sRoots = ...`) is taken and does nothing: each load says once in
-  the Output window "config.txt: bars1s is retired (ChartBridge 0.6.15: the 1 second pull no longer runs; the NQ tick file is the
+- **An old `config.txt` line** (`bars1s = on` or `off`, `bars1sRoots = ...`) is taken and does nothing: each load writes one
+  line per such config line in the Output window, "config.txt: bars1s is retired (ChartBridge 0.6.15: the 1 second pull no longer runs; the NQ tick file is the
   one source and The Desk builds its 1 second bars from it); the line does nothing". Never an error, and never the "not a
   ChartBridge setting" line. Anthony may delete the line.
 - **What the 1 second pull left on a PC** (`bars1s/` with any sets never sent, `sent_bars1s.txt`, `refused_bars1s.txt`,
   `rejected_bars1s.jsonl`) is never read, sent, changed or deleted. The bars worker names what is there in one Output line at its
   start ("... are no longer read or sent; ChartBridge leaves them as they are, and they may be deleted"). Deleting them is
-  Anthony's call; nothing depends on them.
+  Anthony's call; nothing depends on them. Sets left in `bars1s/` (about 4 to 5 MB each) are no longer pruned after 10 days as
+  before: they stay until Anthony deletes them.
 - **No order path change:** `ChartBridge.cs` changes only its version and comments (the gate's code is the same), and every other
   add-on file, the whole order path among them, is the 0.6.14 file byte for byte (`test/nt8-record.test.js`).
 
@@ -112,8 +113,10 @@ bars asked nothing", and the tick file examples say 0.6.15.
 **3. Tests:** `nt8/check/BarsHarness.cs` (`npm run check:orders`): the OneSecond cases are gone with the code; the new `Retired1s`
 case: an old `bars1s` or `bars1sRoots` line is taken, said and changes nothing; the leftovers are named by the worker's start and
 left byte for byte; one pass at Wednesday 16:20 asks the 1-minute bars and the tick day's final pull from the open to the close,
-nothing else, and The Desk gets the minutes and the tick day and never a post to `/api/bars-1s`; `/diag` has no `oneSecond`. The
-tick day morning case asks the bars worker at 08:40 with an old `bars1s = on` line: no 1 second request, only the tick day's
+nothing else, and The Desk gets the minutes and the tick day and never a post to `/api/bars-1s`; `/diag` has no `oneSecond`. The new
+`EveningWindow` case keeps the evening window's table (16:14 out, 16:15 and 17:59 in, 18:00 out, Friday 20:00 out, the weekend,
+Sunday 18:00 out; a start by 17:49, none at 17:50, Saturday 23:59) since it still times the tick file's final pull, sends and
+packed asks (review of #83). The tick day morning case asks the bars worker at 08:40 with an old `bars1s = on` line: no 1 second request, only the tick day's
 pull. Every tick file case is unchanged and passes. `test/nt8-ticks.test.js`: the 1 second code is gone; the window, the time
 limit and the gate's tick request exactly as 0.6.14; the old config line, the leftovers only looked at. `test/nt8-record.test.js`:
 while ChartBridge is 0.6.15, every add-on file but `ChartBridgeBars.cs` is checked against 0.6.14: byte for byte, or for

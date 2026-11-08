@@ -20,7 +20,7 @@
 // source, and The Desk builds its 1 second bars from the master tick day. The tick file's final pull keeps what it shared with the
 // 1 second pull, unchanged: its evening window (In1sWindow, In1sStartWindow, StartMargin1s), its time limit at the gate
 // (Request1sTimeoutMs) and the gate's build hook (BarsTicket.Built); the names are kept so ChartBridgeTicks.cs needs no change.
-// An old bars1s or bars1sRoots line in config.txt does nothing (one Output line, never an error), and the files the 1 second pull
+// An old bars1s or bars1sRoots line in config.txt does nothing (one Output line per such config line, never an error), and the files the 1 second pull
 // left (bars1s/, sent_bars1s.txt, refused_bars1s.txt, rejected_bars1s.jsonl) are never read, sent or deleted (one Output line a start).
 // The 1-minute bars are unchanged.
 //

@@ -1109,7 +1109,7 @@ is the one source: The Desk builds its 1 second bars from the master tick day, s
 - **The tick file is unchanged:** its capture, chunks, final pull, check, day sends and packed asks are the 0.6.14 code. The window
   and the time limit it shared with the 1 second pull keep their names and values (`ChartBridgeBars.In1sStartWindow`,
   `In1sWindow`, `StartMargin1s`, `Request1sTimeoutMs` 180 s), as does the gate's tick request with a build (`BarsTicket.Built`).
-- **`config.txt`:** an old `bars1s` or `bars1sRoots` line is taken and does nothing; each load says so once in the Output window
+- **`config.txt`:** an old `bars1s` or `bars1sRoots` line is taken and does nothing; each load writes one line per such config line in the Output window
   (`config.txt: bars1s is retired (ChartBridge 0.6.15: ...); the line does nothing`), never an error.
 - **What it left on a PC** (`bars1s/` with any sets never sent, `sent_bars1s.txt`, `refused_bars1s.txt`, `rejected_bars1s.jsonl`)
   is never read, sent or deleted; the bars worker names what is there in one Output line at its start, and Anthony may delete them.

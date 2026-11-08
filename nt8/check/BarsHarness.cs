@@ -115,6 +115,7 @@ public static class BarsHarness
             TickFileDays(dir);           // the final day: the check, the parts, stored, packed, the raw kept or deleted
             TickFileUnstored(dir);       // a day not stored: kept and sent again later (3 times), never deleted before stored
             TickFilePull(dir);           // the final pull through the gate, only in the window, from the open to the close
+            EveningWindow();             // the evening window's edges (In1sWindow, In1sStartWindow), the tick file's final pull, sends and packed asks
             TickDayMorningWindow();      // Anthony 2026-11-03: the final pull's morning catch-up before 09:15 ET on weekdays (pure)
             TickDayMorning(dir);         // the catch-up through the gate: closed sessions only, starts before 09:15, the 1 second bars not widened
             TickFilePacked(dir);         // 2026-11-03: stored, not packed: the last part sent again once a day; packed: the raw deleted
@@ -2151,6 +2152,41 @@ public static class BarsHarness
                   "tick day morning: through the bars worker at 08:40, only the tick day's pull asks NinjaTrader: " + made.Count);
         }
         finally { desk.Stop(); ChartBridgeTicks.Stop(); ChartBridgeTicks.ResetConfig(); typeof(ChartBridgeTicks).GetField("capturing", BindingFlags.NonPublic | BindingFlags.Static).SetValue(null, false); }
+    }
+
+    // The evening window (Anthony's coordinator, 2026-10-24; the names In1sWindow and In1sStartWindow kept from the 1 second bars,
+    // retired in 0.6.15): it still decides when the NQ tick file's final pull starts, its day sends and its packed asks. The same table
+    // the 1 second bars' OneSecondWindow case had (review of #83, LOW 1), so a later refactor cannot move a boundary unnoticed.
+    static void EveningWindow()
+    {
+        // 2026-10-07 is a Wednesday, 10-10 a Saturday, 10-11 a Sunday, 10-09 a Friday
+        foreach (var c in new[] {
+            new { At = W(2026, 10, 7, 8, 0), In = false, What = "Wednesday 08:00 (premarket)" },
+            new { At = W(2026, 10, 7, 9, 30), In = false, What = "Wednesday 09:30 (regular hours)" },
+            new { At = W(2026, 10, 7, 16, 14), In = false, What = "Wednesday 16:14" },
+            new { At = W(2026, 10, 7, 16, 15), In = true, What = "Wednesday 16:15 (the window opens)" },
+            new { At = W(2026, 10, 7, 17, 59), In = true, What = "Wednesday 17:59" },
+            new { At = W(2026, 10, 7, 18, 0), In = false, What = "Wednesday 18:00 (the evening session opens)" },
+            new { At = W(2026, 10, 7, 23, 0), In = false, What = "Wednesday 23:00 (evening session)" },
+            new { At = W(2026, 10, 8, 2, 0), In = false, What = "Thursday 02:00 (overnight)" },
+            new { At = W(2026, 10, 9, 16, 15), In = true, What = "Friday 16:15" },
+            new { At = W(2026, 10, 9, 20, 0), In = false, What = "Friday 20:00 (a weekday evening, outside the window)" },
+            new { At = W(2026, 10, 10, 0, 0), In = true, What = "Saturday 00:00" },
+            new { At = W(2026, 10, 10, 13, 0), In = true, What = "Saturday 13:00" },
+            new { At = W(2026, 10, 11, 17, 59), In = true, What = "Sunday 17:59" },
+            new { At = W(2026, 10, 11, 18, 0), In = false, What = "Sunday 18:00 (the week's evening session opens)" },
+            new { At = W(2026, 10, 12, 16, 15), In = true, What = "Monday 16:15" } })
+            Check(ChartBridgeBars.In1sWindow(c.At) == c.In, "evening window: " + c.What + (c.In ? ": the tick day's sends and packed asks may go" : ": nothing sent or asked"));
+        // review of #71 (MEDIUM 2): a new request starts by 17:50 (the window's end less 10 minutes); sends may go on to 18:00
+        foreach (var c in new[] {
+            new { At = W(2026, 10, 7, 16, 15), In = true, What = "Wednesday 16:15" },
+            new { At = W(2026, 10, 7, 17, 49), In = true, What = "Wednesday 17:49" },
+            new { At = W(2026, 10, 7, 17, 50), In = false, What = "Wednesday 17:50" },
+            new { At = W(2026, 10, 7, 17, 59), In = false, What = "Wednesday 17:59" },
+            new { At = W(2026, 10, 10, 23, 59), In = true, What = "Saturday 23:59" },
+            new { At = W(2026, 10, 11, 17, 49), In = true, What = "Sunday 17:49" },
+            new { At = W(2026, 10, 11, 17, 50), In = false, What = "Sunday 17:50" } })
+            Check(ChartBridgeBars.In1sStartWindow(c.At) == c.In, "evening start window: " + c.What + (c.In ? ": a final pull may start" : ": no new request (one may run past 18:00)"));
     }
 
     // ------------------------------------------------------------ 0.6.15: the 1 second pull retired (Anthony 2026-11-03)
