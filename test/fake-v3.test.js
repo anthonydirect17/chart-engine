@@ -7,7 +7,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const http = require('node:http');
 const crypto = require('node:crypto');
-const { spawn } = require('node:child_process');
+const { startFakeBridge } = require('./fake-bridge-start.js');   // on 127.0.0.1 port 0 (rule 6.5)
 
 const FIX = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'protocol-v3.json'), 'utf8'));
 const INSTR = { MNQ: { name: 'MNQ 12-26', tick: 0.25, pointValue: 2 }, NQ: { name: 'NQ 12-26', tick: 0.25, pointValue: 20 },
@@ -475,9 +475,7 @@ function get(port, p, unlock) {
 }
 
 test('server --v3: hello lists v3 and quote-only roots; client gets accounts; auth names the switches; /bot needs its secret', async () => {
-  const port = 18900 + Math.floor(Math.random() * 90);
-  const child = spawn(process.execPath, [path.join(__dirname, 'fake-bridge.mjs'), String(port), '--v3', '--trading', '--test-controls', '--test-pin=5820', '--gone-grace-ms=300', '--bot-account=Sim101'], { stdio: ['ignore', 'pipe', 'inherit'] });
-  await new Promise(r => child.stdout.once('data', r));
+  const { child, port } = await startFakeBridge(['--v3', '--trading', '--test-controls', '--test-pin=5820', '--gone-grace-ms=300', '--bot-account=Sim101']);
   try {
     const own = 'http://localhost:' + port;
     const unlock = (await post(port, '/pin/unlock', { pin: '5820' })).json.token;
@@ -899,9 +897,7 @@ test('agents: with no agents in config.txt every agent message is refused and no
 });
 
 test('server --agents: /agent/<id> needs its secret, no Origin, one at a time; hello says 0.5.2; a v3 page gets the agent', async () => {
-  const port = 18990 + Math.floor(Math.random() * 9);
-  const child = spawn(process.execPath, [path.join(__dirname, 'fake-bridge.mjs'), String(port), '--v3', '--agents=demo', '--agent-any-time', '--trading', '--test-controls', '--test-pin=5820'], { stdio: ['ignore', 'pipe', 'inherit'] });
-  await new Promise(r => child.stdout.once('data', r));
+  const { child, port } = await startFakeBridge(['--v3', '--agents=demo', '--agent-any-time', '--trading', '--test-controls', '--test-pin=5820']);
   try {
     const own = 'http://localhost:' + port;
     const unlock = (await post(port, '/pin/unlock', { pin: '5820' })).json.token;

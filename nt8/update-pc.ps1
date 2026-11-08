@@ -15,8 +15,8 @@
                           with STOP; a task whose state folder is not this window's has its own last run said
     check                 dry run: fetches main and says what `update` would do; changes nothing
     update                the automatic path (the scheduled task runs this): installs the newest commit on main
-                          whose CI is green (unit on ubuntu-latest and windows-latest, or the HOMESERVER job
-                          unit-windows), only when its page works with the
+                          whose CI is green (the HOMESERVER job unit-windows, or, before step B, unit on
+                          ubuntu-latest and windows-latest), only when its page works with the
                           ChartBridge compiled on this PC; stages a new ChartBridge but never installs it. A network
                           that is not up yet (the run at sign-in) is waited for up to 2 minutes, then the run ends
                           quietly (offline) until the next one
@@ -41,8 +41,8 @@
       (updater\swap.json) makes an interrupted install finish or undo itself at the start of the next run.
     - Windows PowerShell 5.1 and git only. No PowerShell command strings: scripts run with -File.
 
-  Going private (Anthony 2026-11-04), step A: CI is green with either today's pair (unit (ubuntu-latest) and
-  unit (windows-latest)) or HOMESERVER's job unit-windows (step B moves the Windows job there, SERVER_RULES.md rule
+  Going private (Anthony 2026-11-04), step A: CI is green with either the pair from before step B (unit (ubuntu-latest)
+  and unit (windows-latest)) or HOMESERVER's job unit-windows (step B moved the Windows job there, SERVER_RULES.md rule
   6.1, and runs Linux on pull requests only). GitHub's API is asked without a token first, as before; only when it
   answers 404 (a private repo) is this PC's fine-grained, read-only chart-engine token read (SERVER_RULES.md rule
   8.5: never the whole-account login; git credential fill for the repo's path, only with credential.useHttpPath set
@@ -131,7 +131,7 @@ $script:UpdaterSelf = $MyInvocation.MyCommand.Path
 $script:Bound = @{}                            # the options given on this command line (register keeps the task's others)
 foreach ($k in $PSBoundParameters.Keys) { $script:Bound[$k] = $PSBoundParameters[$k] }
 # The jobs a main commit's CI must pass (Resolve-CiState): either set, every job in it green from GitHub Actions.
-# Today's .github/workflows/test.yml: the matrix job on GitHub's ubuntu-latest and windows-latest.
+# The matrix job on GitHub's ubuntu-latest and windows-latest (.github/workflows/test.yml before step B).
 $script:RequiredChecks = @('unit (ubuntu-latest)', 'unit (windows-latest)')
 # Step B of going private (Anthony 2026-11-04): test.yml moves the Windows job, the gate, to HOMESERVER's self-hosted
 # runner (SERVER_RULES.md rule 6.1) under this name, as Bot-Lab names its box job, and the Linux job runs on pull
@@ -650,7 +650,7 @@ function Get-CiProblem($Err, [bool]$Sent, [string]$Slug, [string]$Token) {
 }
 
 # Did CI pass for a commit? The same rule as The Desk's updater (ops/updater.py GitHubCI), plus the jobs Anthony
-# named, as either of two sets (RequiredSets): 'unit (ubuntu-latest)' and 'unit (windows-latest)' (today's workflow),
+# named, as either of two sets (RequiredSets): 'unit (ubuntu-latest)' and 'unit (windows-latest)' (before step B),
 # or 'unit-windows' (HOMESERVER's job, step B of going private), every job of the set there and green.
 #   success  a required set green, and every other check and status finished green (a skipped one is fine)
 #   pending  no results yet, or something still running, or no required set complete yet

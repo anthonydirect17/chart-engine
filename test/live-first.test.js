@@ -9,7 +9,7 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const http = require('node:http');
 const crypto = require('node:crypto');
-const { spawn } = require('node:child_process');
+const { startFakeBridge } = require('./fake-bridge-start.js');
 const BB = require('../live/bar-builder.js');
 const CE = require('../src/chart-engine.js');
 const U = CE.util;
@@ -198,16 +198,12 @@ function wsConnect(port) {
     req.end();
   });
 }
-async function startBridge(port, flags) {
-  const child = spawn(process.execPath, [path.join(__dirname, 'fake-bridge.mjs'), String(port), '--pin-off', '--test-controls'].concat(flags), { stdio: ['ignore', 'pipe', 'inherit'] });
-  await new Promise(r => child.stdout.once('data', r));
-  return child;
-}
+// On 127.0.0.1 port 0 (rule 6.5): { child, port }, the port read from the bridge's ready line.
+const startBridge = flags => startFakeBridge(['--pin-off', '--test-controls'].concat(flags));
 
 
 test('fake bridge --live-first: the served window, the profile before ready, and a second page from the served window', async () => {
-  const port = 19600 + Math.floor(Math.random() * 300);
-  const child = await startBridge(port, ['--live-first', '--window-ms=300', '--live-rate=300']);
+  const { child, port } = await startBridge(['--live-first', '--window-ms=300', '--live-rate=300']);
   try {
     const ws = await wsConnect(port);
     assert.ok(await ws.until(() => ws.msgs.some(m => m.type === 'hello')));
@@ -259,8 +255,7 @@ test('fake bridge --live-first: the served window, the profile before ready, and
 });
 
 test('fake bridge --live-first --table-building: the table from the fake\'s start, then whole and pushed to live pages (no sub)', async () => {
-  const port = 19600 + Math.floor(Math.random() * 300);
-  const child = await startBridge(port, ['--live-first', '--table-building=1500', '--live-rate=200']);
+  const { child, port } = await startBridge(['--live-first', '--table-building=1500', '--live-rate=200']);
   try {
     const ws = await wsConnect(port);
     ws.send({ type: 'subscribe', root: 'MNQ', days: 1, tickHours: 0, sub: 3, profile: true });
@@ -276,8 +271,7 @@ test('fake bridge --live-first --table-building: the table from the fake\'s star
 });
 
 test('fake bridge --live-first: a page that does not ask for liveFirst (1.6.x, The Desk relay) gets the served window too, and no profile', async () => {
-  const port = 19600 + Math.floor(Math.random() * 300);
-  const child = await startBridge(port, ['--live-first']);
+  const { child, port } = await startBridge(['--live-first']);
   try {
     const ws = await wsConnect(port);
     ws.send({ type: 'subscribe', root: 'MNQ', days: 1, tickHours: 17 });

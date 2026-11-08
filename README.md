@@ -280,8 +280,8 @@ new ChartBridge ready for Anthony to install by hand. Windows PowerShell and git
 its own (once the repo is private it reads CI with this PC's chart-engine token, the one git fetch uses: below).
 
 - **The page updates by itself.** The updater checks when you sign in and twice a day, at 9:00 AM and 5:00 PM New York
-  time (Anthony, 2026-10-23: every updater checks twice a day and at sign-in). It installs the newest commit on `main` whose CI is green: `unit` on both ubuntu-latest and
-  windows-latest (today's workflow), or `unit-windows` on HOMESERVER's runner (after the move below), and only when that page works with the ChartBridge compiled on this PC (`live/COMPAT.json`). An open
+  time (Anthony, 2026-10-23: every updater checks twice a day and at sign-in). It installs the newest commit on `main` whose CI is green: `unit-windows` on HOMESERVER's runner
+  (today's workflow, step B below), or `unit` on both ubuntu-latest and windows-latest (the workflow before it), and only when that page works with the ChartBridge compiled on this PC (`live/COMPAT.json`). An open
   page keeps running what it loaded, so an open trade is never disturbed.
 - **ChartBridge never installs by itself.** A new one is fetched and staged; Anthony installs it with one command while
   flat, then presses F5.
@@ -480,9 +480,31 @@ self-hosted runner (SERVER_RULES.md rule 6.1). In two steps, so the updaters on 
    runs its pinned copy, which changes only at `register` or `-InstallChartBridge`; `status` names the commit the
    task's copy is from. A copy pinned before step A waits on the missing `unit (windows-latest)` for good and cannot
    read a private repo.
-3. **Step B (later):** `.github/workflows/test.yml` moves the Windows job to the box as `unit-windows` once the
-   HOMESERVER coordinator's runner card is done, then Anthony makes the repo private. From then on, bring the clone up
-   to date (its `git fetch` and pull with the token below) before any `register`.
+3. **Step B (this change, 2026-11-08):** `.github/workflows/test.yml` drops the matrix job (`unit` on ubuntu-latest and
+   windows-latest). The Windows job, the gate, is `unit-windows` on HOMESERVER's runner (`[self-hosted, Windows,
+   homeserver]`), on pushes to `main` and on pull requests into `main` that are not drafts; the Linux job
+   `unit-linux` runs on GitHub's ubuntu runners for pull requests only, so on `main` `unit-windows` is the one check
+   the updater reads. Neither job installs anything from npm (`npm test` needs no package; rule 8.7 allows only
+   `npm ci --ignore-scripts` from a lock file, and this repo keeps none). The box job takes numpy for the Markup Studio
+   tests only from `requirements-box-ci.txt` (one hash-checked Windows wheel, binary only, into the job's own folder).
+   No push cancels `unit-windows`, running or queued (rule 6.8); only a pull request's older `unit-linux` is
+   cancelled. `test/ci-workflow.test.js` reads every `.github/workflows/*.yml` and `*.yaml` and fails on: a job on a
+   GitHub-hosted Windows or macOS image; `unit-windows` in `test.yml` missing or not on exactly `[self-hosted, Windows,
+   homeserver]`; a job from another repo's reusable workflow (its runners cannot be read). A job counts as
+   self-hosted unless every label of its `runs-on` (one line or a block list) is a GitHub image name; an expression or
+   a runner group counts as self-hosted. In a self-hosted job it fails on `npm install`, `npm i`, `npm exec`, `npx`,
+   uv (`add`, `sync`, `pip install`, `tool install`, `run`), `uvx` or pipx anywhere on a line, on yarn, pnpm or corepack
+   run as a command, on `npm ci` without `--ignore-scripts`, on a pip install (`pip`, `pip3`, `py -m pip`,
+   `python -m pip`) without `--require-hashes` and `--only-binary :all:`, on a checkout without
+   `persist-credentials: false`, and on any `concurrency:` in the job; a file with a self-hosted job may have no
+   workflow-level `concurrency:` at all. A `#` starts a comment only at a line's start or after a space outside
+   quotes. Every test server binds 127.0.0.1 on port 0 and the test learns
+   the port (rule 6.5; `test/fake-bridge-start.js`, checked by `test/test-ports.test.js`), and no markup test touches a
+   path outside the repo or the temp folder (`test/test_markup_paths.py`). The order: the pull request stays a draft
+   (Linux only) while the repo is public, since a public repo never gets a box runner; Anthony makes the repo
+   private; the HOMESERVER coordinator registers the runner once the repo page reads Private; then the pull request
+   is marked ready, `unit-windows` runs on the box, and it merges on an independent APPROVE plus green. From then on,
+   bring the clone up to date (its `git fetch` and pull with the token below) before any `register`.
 
 **This PC's chart-engine token** (Anthony 2026-11-04, SERVER_RULES.md rule 8.5: a fine-grained, read-only token for
 chart-engine only, never the whole-account GitHub login). Once the repo is private, once per PC, as the Windows user
