@@ -1,5 +1,37 @@
 # Changelog
 
+## Unreleased (2026-11-08): going private, step B: the Windows gate moves to HOMESERVER's runner (unit-windows), Linux on pull requests only
+
+CI files and docs only (no page change, no version bump, as step A). Anthony decided (2026-11-04) to make chart-engine
+private, with its Windows CI on HOMESERVER's self-hosted runner (SERVER_RULES.md rule 6.1). Step A (#81) taught the PC
+updater to accept the box job; this is step B, the workflow itself.
+
+- **`.github/workflows/test.yml`:** the matrix job `unit` (ubuntu-latest and windows-latest) is gone. `unit-windows`,
+  the gate, runs on `[self-hosted, Windows, homeserver]` on pushes to `main` and on pull requests into `main` that are
+  not drafts, with a 180 minute job limit (the box's queue never cuts a run off, Anthony 2026-11-05) and 45 minutes per
+  step: Node 24 (the box's cached Node), `npm test` with no install of any kind, the cached Python 3.12.10 checked
+  complete as Bot-Lab's box job does, then numpy into the job's own folder (`RUNNER_TEMP\pylib`, on `PYTHONPATH`) and the
+  Markup Studio tests. `unit-linux` runs on GitHub's ubuntu runners for pull requests only (not when a draft is marked
+  ready: that commit's Linux run is done), now with no npm install either (`npm test` needs no package; playwright is
+  for the smoke runs on a PC). On `main` only `unit-windows` runs, the one check the PC updater reads. Triggers add
+  `ready_for_review`, so marking a draft ready starts the box job; a concurrency group cancels a superseded pull request
+  run, never a run on `main`; `permissions: contents: read`.
+- **`requirements-box-ci.txt`** (new, rule 8.7): numpy 2.5.4, the box's version, the one `cp312-win_amd64` wheel with
+  its sha256 (downloaded from PyPI and hashed, and checked against the hash PyPI lists; the header says how). The box
+  job installs it with `--require-hashes --only-binary :all: --target`, so pip stops rather than build from source.
+- **`test/ci-workflow.test.js`** (new, no dependencies, plain text reading): fails if any job runs on a GitHub-hosted
+  Windows or macOS image (`runs-on` or a matrix list), if `unit-windows` is missing or not on exactly
+  `[self-hosted, Windows, homeserver]`, if it runs `npm install` or `npm ci` without `--ignore-scripts`, if its pip
+  install lacks `--require-hashes` or `--only-binary :all:`, or if a line of `requirements-box-ci.txt` has no
+  `--hash=sha256:`. It also checks its own guard against made-up workflows.
+- **Docs:** the README's "Going private" step B and the updater paragraph now name `unit-windows` as today's workflow;
+  two comments in `nt8/update-pc.ps1` that called the matrix job "today's" now say "before step B" (comment text only,
+  no code change; the updater keeps accepting either set).
+- **Order:** the pull request stays a draft (Linux only) while the repo is public, since a public repo never gets a box
+  runner. Anthony makes the repo private; the HOMESERVER coordinator registers the runner once the repo page reads
+  Private; then the pull request is marked ready, `unit-windows` runs on the box, and it merges on an independent
+  APPROVE plus green CI. The PC token steps in the README stay as they are.
+
 ## Unreleased (2026-11-04): getting ready to go private: the PC updater accepts the box job and reads a chart-engine token; placeholders
 
 `nt8/update-pc.ps1` and docs only (no page change, no version bump, as the 2026-10-23 updater entries). Anthony decided

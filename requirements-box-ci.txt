@@ -1,0 +1,13 @@
+# The box's CI install for chart-engine (HOMESERVER, Windows x64, CPython 3.12.10; SERVER_RULES.md rule 8.7): numpy for
+# the Markup Studio unit tests, the box's numpy version, the one binary wheel the box uses, hash-checked.
+# The workflow's unit-windows job installs it with
+#   python -m pip install --require-hashes --only-binary :all: --target <the job's own folder> -r requirements-box-ci.txt
+# Made on 2026-11-08 by downloading that wheel from PyPI and hashing it:
+#   pip download numpy==2.5.4 --platform win_amd64 --python-version 3.12 --implementation cp --only-binary :all: --no-deps -d <folder>
+#   sha256sum <folder>/numpy-2.5.4-cp312-cp312-win_amd64.whl
+# and the hash checked against the sha256 PyPI lists for numpy-2.5.4-cp312-cp312-win_amd64.whl
+# (https://pypi.org/pypi/numpy/2.5.4/json). numpy has no dependencies of its own. To move to a new numpy, repeat both
+# steps for the new version and replace the line below (test/ci-workflow.test.js checks every line has a hash).
+--only-binary :all:
+
+numpy==2.5.4 --hash=sha256:a7b1b6353e36a7e50de2973a38d705c88ee93adcf120673cee7f45a4a3fa223a

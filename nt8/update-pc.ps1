@@ -131,7 +131,7 @@ $script:UpdaterSelf = $MyInvocation.MyCommand.Path
 $script:Bound = @{}                            # the options given on this command line (register keeps the task's others)
 foreach ($k in $PSBoundParameters.Keys) { $script:Bound[$k] = $PSBoundParameters[$k] }
 # The jobs a main commit's CI must pass (Resolve-CiState): either set, every job in it green from GitHub Actions.
-# Today's .github/workflows/test.yml: the matrix job on GitHub's ubuntu-latest and windows-latest.
+# The matrix job on GitHub's ubuntu-latest and windows-latest (.github/workflows/test.yml before step B).
 $script:RequiredChecks = @('unit (ubuntu-latest)', 'unit (windows-latest)')
 # Step B of going private (Anthony 2026-11-04): test.yml moves the Windows job, the gate, to HOMESERVER's self-hosted
 # runner (SERVER_RULES.md rule 6.1) under this name, as Bot-Lab names its box job, and the Linux job runs on pull
@@ -650,7 +650,7 @@ function Get-CiProblem($Err, [bool]$Sent, [string]$Slug, [string]$Token) {
 }
 
 # Did CI pass for a commit? The same rule as The Desk's updater (ops/updater.py GitHubCI), plus the jobs Anthony
-# named, as either of two sets (RequiredSets): 'unit (ubuntu-latest)' and 'unit (windows-latest)' (today's workflow),
+# named, as either of two sets (RequiredSets): 'unit (ubuntu-latest)' and 'unit (windows-latest)' (before step B),
 # or 'unit-windows' (HOMESERVER's job, step B of going private), every job of the set there and green.
 #   success  a required set green, and every other check and status finished green (a skipped one is fine)
 #   pending  no results yet, or something still running, or no required set complete yet
