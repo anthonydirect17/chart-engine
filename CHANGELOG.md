@@ -63,6 +63,66 @@
   `test/pc-updater.test.js`: the allowed git subcommands, the box job's name, useHttpPath read before the one ask, the
   token only after a 404 or 401 and then through the Actions API, one place that asks for it and one that sends it.
 
+## ChartBridge 0.6.15 and chart 1.44.1 (2026-11-08): the 1 second pull retired; the NQ tick file is the one source
+
+In plain words: nothing changes on the chart. ChartBridge no longer runs its separate 1 second pull between 16:15 and 18:00 New
+York (each session's 1 second bars for NQ and MNQ, asked of NinjaTrader and posted to The Desk). Ticks are the one source: The
+Desk builds its 1 second bars from the master tick day (Anthony 2026-11-03: "I would prefer to just build everything from the
+ticks ... Just capture all of the tick data with volume and delta, that way we can build any bars we want out of it for
+backtests"; MNQ takes its bars from NQ's ticks, his decision of 2026-10-29). The NQ tick file itself is unchanged: the same
+capture, chunks, final pull, check and sends. In the evening window the tick file's final pull now goes in the same pass as the
+1-minute bars instead of waiting until the 1 second pull had nothing left to ask. The 1-minute bars are unchanged. The chart page
+itself does not change (1.44.1 only follows the version).
+
+Install: the PC updater installs the page from green main as usual. ChartBridge 0.6.15 is a recompile: run the updater with
+`-InstallChartBridge`, then F5 in NinjaTrader while flat, on WORK and on HOME. No order is needed against The Desk: The Desk
+keeps `POST /api/bars-1s` and its 1 second store for a PC still on 0.6.14 or older, so either PC may go first. The page works
+with ChartBridge 0.6.2 or newer (`minChartBridge` stays 0.6.2).
+
+**1. The 1 second pull is gone** (`nt8/ChartBridgeBars.cs`):
+
+- Removed: the pass's 1 second step (`Plan1s`), its request and build (`Fetch1s`, `NarrowFrom1s`, `Cover1sMinutes`, `Wide1s`,
+  `BuildSeconds`, `SecondsBuilder`, `SecondsBuild`, `SecondBar`), its messages (`Messages1s`, `Message1s`, `Rows1sPerPart`), its
+  queue and its posts to The Desk's `POST /api/bars-1s` (`ChartBridgeBars1sQueue`, the `bars1s/` folder), its settings
+  (`OneSecondOn`, `Roots1s`), its retry records (`Key1s`, `Later1s`, `Note1s`) and `/diag` `bars.oneSecond` (`Diag1sJson`,
+  `Covered1s`, `Planned1s`).
+- **Kept, unchanged, because the tick file's final pull shares them:** the evening window (`In1sStartWindow`, `In1sWindow`,
+  `StartMargin1s`: a request starts 16:15 to 17:50 New York on weekdays, Saturday, and Sunday before 17:50; sends to 18:00), the
+  time limit at the gate (`Request1sTimeoutMs`, 180 s) and the gate's tick request with a build (`BarsTicket.Built`, `BuildMs`,
+  `GateBars` with `build`). Their names stay, so `nt8/ChartBridgeTicks.cs` needs no change: its code is the 0.6.14 code, only
+  comments that spoke of the 1 second bars now say the evening window.
+- **The pass** (`PlanOnce`): the 1-minute bars as before, then the tick file's final pull (`ChartBridgeTicks.PlanDay`), at most
+  one request a pass as before. Until now it ran only in a pass where the 1 second pull asked nothing; with `bars1s = off` it
+  already ran this way.
+- **An old `config.txt` line** (`bars1s = on` or `off`, `bars1sRoots = ...`) is taken and does nothing: each load says once in
+  the Output window "config.txt: bars1s is retired (ChartBridge 0.6.15: the 1 second pull no longer runs; the NQ tick file is the
+  one source and The Desk builds its 1 second bars from it); the line does nothing". Never an error, and never the "not a
+  ChartBridge setting" line. Anthony may delete the line.
+- **What the 1 second pull left on a PC** (`bars1s/` with any sets never sent, `sent_bars1s.txt`, `refused_bars1s.txt`,
+  `rejected_bars1s.jsonl`) is never read, sent, changed or deleted. The bars worker names what is there in one Output line at its
+  start ("... are no longer read or sent; ChartBridge leaves them as they are, and they may be deleted"). Deleting them is
+  Anthony's call; nothing depends on them.
+- **No order path change:** `ChartBridge.cs` changes only its version and comments (the gate's code is the same), and every other
+  add-on file, the whole order path among them, is the 0.6.14 file byte for byte (`test/nt8-record.test.js`).
+
+**2. Docs:** `nt8/PROTOCOL.md`: the 1 second section is marked retired in 0.6.15 (what changes, what does not; its contract kept as
+the record of what 0.6.14 and older send), the tick file sections say the evening window and no longer "only when the 1 second
+bars asked nothing", and the tick file examples say 0.6.15.
+
+**3. Tests:** `nt8/check/BarsHarness.cs` (`npm run check:orders`): the OneSecond cases are gone with the code; the new `Retired1s`
+case: an old `bars1s` or `bars1sRoots` line is taken, said and changes nothing; the leftovers are named by the worker's start and
+left byte for byte; one pass at Wednesday 16:20 asks the 1-minute bars and the tick day's final pull from the open to the close,
+nothing else, and The Desk gets the minutes and the tick day and never a post to `/api/bars-1s`; `/diag` has no `oneSecond`. The
+tick day morning case asks the bars worker at 08:40 with an old `bars1s = on` line: no 1 second request, only the tick day's
+pull. Every tick file case is unchanged and passes. `test/nt8-ticks.test.js`: the 1 second code is gone; the window, the time
+limit and the gate's tick request exactly as 0.6.14; the old config line, the leftovers only looked at. `test/nt8-record.test.js`:
+while ChartBridge is 0.6.15, every add-on file but `ChartBridgeBars.cs` is checked against 0.6.14: byte for byte, or for
+`ChartBridge.cs` and `ChartBridgeTicks.cs` their code lines (comments and the version left out).
+
+**4. The release:** `package.json`, the engine's header and `VERSION` 1.44.1; ChartBridge's `Version` 0.6.15 with its comment;
+`live/COMPAT.json` page 1.44.1 and its history row (`minChartBridge` stays 0.6.2); `nt8/PROTOCOL.md`'s title list; the version
+pins in the tests and `BarsHarness` take 0.6.15.
+
 ## chart 1.44.0 (2026-11-06): the brand: AUREUS, the chart page, in the IMPERIUM suite (page only, no F5)
 
 In plain words: Anthony named the suite IMPERIUM and the chart page AUREUS (2026-11-06). Where the top bar said TRADING

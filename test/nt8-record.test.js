@@ -156,6 +156,39 @@ test('0.6.14: the add-on files this release does not touch are the 0.6.13 files,
   for (const [f, h] of Object.entries(want)) assert.strictEqual(crypto.createHash('sha256').update(read(f).replace(/\r/g, '')).digest('hex'), h, f + ' is the 0.6.13 file');
 });
 
+test('0.6.15: the add-on files this release does not touch are the 0.6.14 files, byte for byte; ChartBridge.cs and ChartBridgeTicks.cs change only in comments and the version (while ChartBridge is 0.6.15)', () => {
+  if (!/public const string Version = "0\.6\.15";/.test(read('ChartBridge.cs'))) return;   // a later release may change them
+  // 0.6.15 (Anthony 2026-11-03: everything is built from the ticks) retires the 1 second pull in ChartBridgeBars.cs; ChartBridge.cs
+  // changes only its version and comments, ChartBridgeTicks.cs only comments (the tick capture and its final pull are the 0.6.14
+  // code); every other add-on file, the whole order path among them, is the one compiled for 0.6.14 (hashes from main 91222fb)
+  const want = {
+    'ChartBridgeAccounts.cs': 'fafc11f2257267a41d26863401261f92c8468d260de4d144a3b2d00b787e01ad',
+    'ChartBridgeAgents.cs': '87f8f18b0f806ec3693aae385ec4228659df0bf8e93a267e4db871084d766e73',
+    'ChartBridgeBot.cs': '33ca2af1f1867f14ab188f659ad63210933801b62c951234255972111fef84b1',
+    'ChartBridgeCopier.cs': 'bb90a637610b3b56236c6cfba014c1a1db40110f2b821bbeecf7778f2f4e6e49',
+    'ChartBridgeGroups.cs': '95baae61b5c8d135d0a1b84e5a0c7fd13e63ff936d22da76170259bc2e4610ff',
+    'ChartBridgeMerge.cs': '7aa31e37d38c1875eb236e1575d20f49ed31c1e2c08fc9d265d5aa7e0a32952c',
+    'ChartBridgeOrderRecord.cs': 'de33b77a1d774d2ce8d11a5f3a8e927f1ff085c7d8f47259ff6a542d18ccc1f1',
+    'ChartBridgeOrders.cs': 'e1baf6f7237c5b0ce32cc3abdd6a227b3f98344aa44f94e3f49bc72841b291ac',
+    'ChartBridgePin.cs': '8c6b28abf30cc716b7175fa3c1fd4e1cb9ca0c9407a19a03357830028481e3eb',
+    'ChartBridgeStops.cs': 'f2d74c58a904a5ba448ca5ebceb05f25b01d55642ddfdf1323b0c7dbf95f5d3c',
+    'ChartBridgeStrategies.cs': '968179e96aa887424b9df26148f8ae65bc3c60238f6f9de90f238e7781ab9193',
+    'ChartBridgeTape.cs': 'b5150cf7dbea2244da11d49511d163b4666a2403b9e21ebd10ea44a25da87fd1',
+    'ChartBridgeV3.cs': '4ea9774ee3d30e619d1b849965b68565c24eed8f276194deaf93ee23242261dc',
+  };
+  // the code lines only (comment lines and trailing comments left out, the version emptied), as nt8-ticks.test.js strips them
+  const codeOnly = src => src.replace(/\r/g, '').split('\n').map(l => l.replace(/^\s*\/\/.*$/, '').replace(/([;{})])\s*\/\/.*$/, '$1').replace(/\s+$/, '')).filter(l => l.length > 0).join('\n')
+    .replace(/public const string Version = "[0-9.]+";/, 'public const string Version = "";');
+  const code = {
+    'ChartBridge.cs': 'd99231ee25cfe0a56d2ae1e9c71eb7976ba5badb07d71b669dd532d832c7804d',
+    'ChartBridgeTicks.cs': '776a93d3cc8b5c21dae588307b2e1d00e8a303c9902cb6f1b9a7447f91cbf16f',
+  };
+  const addons = JSON.parse(read('install-files.json')).addons.map(f => f.replace(/^nt8\//, ''));
+  assert.deepStrictEqual(addons.filter(f => !want[f] && !code[f]).sort(), ['ChartBridgeBars.cs'], 'every add-on file is checked or named as changed');
+  for (const [f, h] of Object.entries(want)) assert.strictEqual(crypto.createHash('sha256').update(read(f).replace(/\r/g, '')).digest('hex'), h, f + ' is the 0.6.14 file');
+  for (const [f, h] of Object.entries(code)) assert.strictEqual(crypto.createHash('sha256').update(codeOnly(read(f))).digest('hex'), h, f + ': the 0.6.14 code (comments and the version only changed)');
+});
+
 test('0.6.9: the decision id: the group entry\'s PlaceOrder call unchanged, set and cleared around it, noted before Submit', () => {
   const g = read('ChartBridgeGroups.cs');
   const loop = body(g, 'private static string GroupPlaceLocked(');
@@ -168,27 +201,25 @@ test('0.6.9: the decision id: the group entry\'s PlaceOrder call unchanged, set 
   assert.match(read('check/GroupsHarness.cs'), /DecisionIds\(\);/);
 });
 
-test('0.6.9: the 1 second bars: NQ and MNQ, through the gate, only 16:15 to 18:00 ET on weekdays and on the weekend, their own path and queue', () => {
+test('0.6.9 to 0.6.14: the 1 second bars; retired in 0.6.15 (Anthony 2026-11-03: everything from the ticks), the 1-minute bars and the gate as they were', () => {
   const b = read('ChartBridgeBars.cs');
-  assert.match(b, /private static string\[\] DefaultRoots1s\(\) \{ return new string\[\] \{ "NQ", "MNQ" \}; \}/);
-  assert.match(body(b, 'private static bool Plan1s('), /nowEt = NowEt\(\);[^\n]*\n\s*if \(!In1sStartWindow\(nowEt\)\) \{ state1s = "waiting: 1 second bars go 16:15 to 18:00 ET/);
-  assert.match(body(b, 'private static bool Plan1s('), /if \(!In1sStartWindow\(NowEt\(\)\)\)[^\n]*\n\s*Outcome o = Fetch1s\(j, stopping\);/, 'the clock read again right before a request');
+  for (const gone of ['private static bool Plan1s(', 'private static Outcome Fetch1s(', 'BuildSeconds(', 'class SecondsBuilder', 'public static class ChartBridgeBars1sQueue', '"/api/bars-1s"', 'Rows1sPerPart', 'DefaultRoots1s']) assert.ok(!b.includes(gone), 'gone: ' + gone);
+  // the window and the time limit the tick file's final pull shares, unchanged
   assert.match(b, /public static TimeSpan StartMargin1s = TimeSpan\.FromMinutes\(10\);/);
   assert.match(body(b, 'public static bool In1sWindow('), /return tod >= new TimeSpan\(16, 15, 0\) && tod < TimeSpan\.FromHours\(18\);/);
-  assert.match(body(b, 'private static bool Plan1s('), /return true;   \/\/ one a pass/);
-  assert.match(body(b, 'private static Outcome Fetch1s('), /ChartBridgeServer\.GateBars\("1s " \+ j\.Key, inst, fromNt, toNt, Request1sTimeoutMs, stopping, t, bars => BuildSeconds\(bars, fromMs, toMs\)\)/);
-  assert.match(b, /"\/api\/bars-1s"/);
-  assert.match(body(b, 'public static void Flush(Func<bool> stopping)\n        {\n            if (!ChartBridgeBars.OneSecondOn)'), /if \(!ChartBridgeBars\.In1sWindow\(/, 'the sends keep the same window');
-  assert.match(read('check/BarsHarness.cs'), /OneSecondWindow\(\);/);
-  assert.match(b, /public static int Rows1sPerPart = 1500;/);
+  assert.match(b, /public static int Request1sTimeoutMs = 180000;/);
+  // the 1-minute bars: the same request through the gate and the same message
+  assert.match(body(b, 'private static Outcome Fetch('), /ChartBridgeServer\.GateBars\(j\.Key, inst, fromNt, toNt, RequestTimeoutMs, stopping, t\);/);
+  assert.match(b, /\.Append\(",\\"tf\\":\\"1m\\",\\"stamp\\":\\"open\\",\\"bars\\":\["\);/);
+  assert.match(b, /"\/api\/bars"\);/);
+  assert.match(read('check/BarsHarness.cs'), /Retired1s\(dir\);/);
   const cb = read('ChartBridge.cs');
   assert.match(cb, /: new BarsPeriod \{ BarsPeriodType = BarsPeriodType\.Tick, Value = 1, MarketDataType = MarketDataType\.Last \};/);
-  assert.match(read('check/BarsHarness.cs'), /OneSecondSession\(dir\);/);
 });
 
 test('0.6.9: PROTOCOL documents the three, with versions; the CHANGELOG says what changed and what did not', () => {
   const p = read('PROTOCOL.md');
-  for (const h of ['### 1 second bars to The Desk (0.6.9, contract v2)', '### The order record to The Desk (0.6.9)', '### The decision id of a group entry (0.6.9)']) assert.ok(p.includes(h), h);
+  for (const h of ['### 1 second bars to The Desk (0.6.9 to 0.6.14, contract v2; retired in 0.6.15)', '### The order record to The Desk (0.6.9)', '### The decision id of a group entry (0.6.9)']) assert.ok(p.includes(h), h);
   for (const k of ['`POST /api/order-events`', '`/api/bars-1s`', '`decision_id`', '`bv`', '`sv`', '`sides.method`', '`setRows`', '`quote`', '`change`', '`start`, `seq`', 'decisions.txt', 'bars1s/']) assert.ok(p.includes(k), k);
   const cl = fs.readFileSync(path.join(__dirname, '..', 'CHANGELOG.md'), 'utf8');
   const sec = cl.split('\n## ').find(x => /^ChartBridge 0\.6\.9 /.test(x)) || '';   // 1.39.1: no longer the newest entry

@@ -15,7 +15,7 @@
 # 0.5.8: prop groups: groups.txt and account-marks.txt, one direction per group (every source), the account numbers (check/GroupsHarness.cs).
 # 0.6.6: the stop record to The Desk: every stop's price at send and each modify, the switch, the queue and the post (check/StopsHarness.cs).
 # 0.6.9: the order record to The Desk: every order type and change, the quotes at submission, the queue and the post (check/RecordHarness.cs);
-# the decision id of a group entry, the orders sent unchanged (check/GroupsHarness.cs); the 1 second bars (check/BarsHarness.cs).
+# the decision id of a group entry, the orders sent unchanged (check/GroupsHarness.cs). 0.6.15: the 1 second pull retired (check/BarsHarness.cs Retired1s).
 # 0.5.6: the time check: SNTP time stamps and its formula, every answer that is none, a time server of its own on 127.0.0.1, what the pages and the Output window are told (check/ClockHarness.cs).
 # The build goes to $CHARTBRIDGE_ORDERS_EXE when set (kept); else to a path of its own for this run ($TMPDIR or /tmp, chartbridge-orders-<pid>.exe, deleted after), so parallel runs never share a build.
 out="${CHARTBRIDGE_ORDERS_EXE:-${TMPDIR:-/tmp}/chartbridge-orders-$$.exe}"

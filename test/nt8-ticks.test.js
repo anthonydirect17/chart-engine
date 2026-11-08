@@ -54,7 +54,8 @@ test('tick file: the final pull goes through the gate, only in its start window,
   assert.match(plan, /if \(!InDayStartWindow\(nowEt\)\) \{ dayState = DayWaitText; return false; \}/);
   assert.match(plan, /ChartBridgeServer\.GateBars\("ticks " \+ key, inst, fromNt, toNt, ChartBridgeBars\.Request1sTimeoutMs, stopping, t, bars => BuildTickDay\(/);
   assert.ok(!/new BarsRequest/.test(ticks), 'no request goes around the gate');
-  assert.match(bars, /bool asked1s = Plan1s\(stopping, nowEt, sessions\);\s*if \(!asked1s && !stopping\(\)\) ChartBridgeTicks\.PlanDay\(stopping\);/);
+  // 0.6.15: the 1 second pull is retired, so the final pull follows the pass's 1-minute bars without waiting for a pass it asked nothing in
+  assert.match(between(bars, 'public static void PlanOnce(', 'public static string Retired1sLeftovers('), /catchUpDone = true;\s*waitingForGate = null;\s*state = "idle";\s*if \(!stopping\(\)\) ChartBridgeTicks\.PlanDay\(stopping\);\s*\}/);
   // the raw is deleted only when the check passed and The Desk stored and packed the day
   assert.match(between(ticks, 'private static void DayTaken(', '// ----'), /if \(stored && packed && passed\)/);
   // chunks and days never go through a proxy
@@ -68,16 +69,29 @@ test('tick file: installed, compiled by the checks, no em or en dashes', () => {
     assert.doesNotMatch(read(...f), /[–—]/, f.join('/') + ': no em or en dashes');
 });
 
-test('1 second bars (item 11, next build narrowed): from 12:00 AM of the session\'s own date (never before the open), from the open itself when that answer misses the open; never the day before', () => {
-  const f = between(bars, 'private static Outcome Fetch1s(', 'public static string Diag1sJson(');
-  assert.match(f, /DateTime openNt = TimeZoneInfo\.ConvertTimeFromUtc\(openUtc, ntZone\);/);
-  assert.match(f, /DateTime fromNt = wide \? openNt : NarrowFrom1s\(openNt, toNt\);/);
-  assert.match(bars, /public static DateTime NarrowFrom1s\(DateTime openNt, DateTime closeNt\) \{ DateTime d = closeNt\.Date; return d > openNt \? d : openNt; \}/);
-  assert.match(f, /if \(!wide && \(sb == null \|\| sb\.Rows\.Count == 0 \|\| sb\.Rows\[0\]\.T > fromMs \+ Cover1sMinutes \* 60000L\)\)/, 'a narrow answer that misses the open is never sent');
-  assert.ok(!/ConvertTimeFromUtc\(openUtc, ntZone\)\.Date/.test(f));
+test('0.6.15: the 1 second pull is retired; what the tick file shares with it (the window, the time limit, the gate) stays as it was', () => {
+  for (const gone of ['Plan1s', 'Fetch1s', 'BuildSeconds', 'SecondsBuild', 'SecondBar', 'Messages1s', 'ChartBridgeBars1sQueue', 'OneSecondOn', 'Roots1s', 'Diag1sJson', 'NarrowFrom1s', 'Wide1s', 'Rows1sPerPart', '/api/bars-1s'])
+    assert.ok(!bars.includes(gone) && !main.includes(gone) && !ticks.includes(gone), 'gone from the code: ' + gone);
+  // the evening window and the time limit, exactly as 0.6.14 had them (the names kept, so ChartBridgeTicks.cs is unchanged)
+  assert.match(bars, /public static TimeSpan StartMargin1s = TimeSpan\.FromMinutes\(10\);/);
+  assert.match(between(bars, 'public static bool In1sStartWindow(', 'public static bool In1sWindow('), /if \(!In1sWindow\(et\)\) return false;\s*if \(et\.DayOfWeek == DayOfWeek\.Saturday\) return true;\s*return et\.TimeOfDay < TimeSpan\.FromHours\(18\) - StartMargin1s;/);
+  assert.match(between(bars, 'public static bool In1sWindow(', 'public static long OpenUtcMs('), /if \(et\.DayOfWeek == DayOfWeek\.Saturday\) return true;\s*if \(et\.DayOfWeek == DayOfWeek\.Sunday\) return tod < TimeSpan\.FromHours\(18\);\s*return tod >= new TimeSpan\(16, 15, 0\) && tod < TimeSpan\.FromHours\(18\);/);
+  assert.match(bars, /public static int Request1sTimeoutMs = 180000;/);
+  // the gate's tick request with a build, the one the final pull uses
+  assert.match(main, /: new BarsPeriod \{ BarsPeriodType = BarsPeriodType\.Tick, Value = 1, MarketDataType = MarketDataType\.Last \};/);
+  assert.match(main, /else if \(req\.Bars != null && build != null\) \{ Stopwatch bw = Stopwatch\.StartNew\(\); t\.Built = build\(req\.Bars\); t\.BuildMs = bw\.Elapsed\.TotalMilliseconds; \}/);
+  assert.match(bars, /public object Built;/);
+  // an old config line is taken (never "not a ChartBridge setting") and said; the leftovers are said once a start, never touched
+  assert.match(bars, /public static readonly string\[\] RetiredKeys = \{ "bars1s", "bars1sRoots" \};/);
+  assert.match(between(bars, 'public static bool ReadConfig(', 'private static string CleanPc('), /if \(Array\.IndexOf\(RetiredKeys, key\) >= 0\) \{ ChartBridgeServer\.Log\(RetiredKeyText\(key\)\); return true; \}/);
+  const left = between(bars, 'public static string Retired1sLeftovers(', 'private static void Later(');
+  assert.ok(!/File\.(Delete|Move|Write|Append|Replace|Open|Read)|Directory\.Delete|WebRequest/.test(left), 'the leftovers are only looked at');
+  assert.match(between(bars, 'private static void Run(', 'private static bool Nap('), /string left = Retired1sLeftovers\(\);[^\n]*\n\s*if \(left != null\) ChartBridgeServer\.Log\(left\);/);
+  assert.ok(!/oneSecond/.test(between(bars, 'public static string DiagJson(', 'public class BarsTicket')), '/diag bars has no oneSecond');
+  assert.match(read('nt8', 'check', 'BarsHarness.cs'), /Retired1s\(dir\);/);
 });
 
-test('tick file (Anthony 2026-11-03): the morning catch-up before 09:15 ET is the tick day pull\'s own; the 1 second bars are not widened', () => {
+test('tick file (Anthony 2026-11-03): the morning catch-up before 09:15 ET is the tick day pull\'s own; the evening window is not widened', () => {
   const win = between(ticks, 'public static TimeSpan MorningEnd', 'public static bool PlanDay(');
   assert.match(win, /public static TimeSpan MorningEnd = new TimeSpan\(9, 15, 0\);/);
   assert.match(win, /if \(et\.DayOfWeek == DayOfWeek\.Saturday \|\| et\.DayOfWeek == DayOfWeek\.Sunday\) return false;\s*return et\.TimeOfDay >= MorningStart && et\.TimeOfDay < MorningEnd;/);
@@ -92,7 +106,7 @@ test('tick file (Anthony 2026-11-03): the morning catch-up before 09:15 ET is th
   assert.match(plan, /if \(t\.NotStarted\) \{ dayState = DayWaitText; return true; \}\s*if \(t\.Error != null\) \{ LaterDay\(/, 'not started is not a try');
   const run = between(main, 'private static void RunBars(', 'req0.Request(');
   assert.ok(run.indexOf('t.MayStart') >= 0 && run.indexOf('t.MayStart') < run.indexOf('new BarsRequest('), 'MayStart is asked before the request is made');
-  // the 1 second bars and the day's sends keep their own window
+  // the evening window (In1sStartWindow, In1sWindow) and the day's sends keep their own window
   assert.ok(!/InMorningWindow|InDayStartWindow|MorningEnd/.test(bars), 'ChartBridgeBars.cs does not use the morning window');
   assert.match(between(ticks, 'public static int SendDays(', 'private static string DayKeyOf('), /if \(!ChartBridgeBars\.In1sWindow\(/);
 });
