@@ -9,7 +9,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
 const http = require('node:http');
-const { spawn } = require('node:child_process');
+const { startFakeBridge } = require('./fake-bridge-start.js');
 
 function post(port, p, body) {
   return new Promise((resolve, reject) => {
@@ -28,12 +28,9 @@ function get(port, p, unlock) {
     }).on('error', reject);
   });
 }
+// On 127.0.0.1 port 0 (rule 6.5): { port, child }, the port read from the bridge's ready line.
 async function bridge(extra) {
-  const port = 19000 + Math.floor(Math.random() * 900);
-  const child = spawn(process.execPath, [path.join(__dirname, 'fake-bridge.mjs'), String(port), '--v3', '--trading', '--test-controls', '--test-pin=5820', '--no-v3-seed'].concat(extra || []),
-    { stdio: ['ignore', 'pipe', 'inherit'] });
-  await new Promise(r => child.stdout.once('data', r));
-  return { port, child };
+  return startFakeBridge(['--v3', '--trading', '--test-controls', '--test-pin=5820', '--no-v3-seed'].concat(extra || []));
 }
 async function nextWhere(ws, type, pred, ms) {
   const end = Date.now() + (ms || 3000);

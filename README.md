@@ -488,7 +488,8 @@ self-hosted runner (SERVER_RULES.md rule 6.1). In two steps, so the updaters on 
    `npm ci --ignore-scripts` from a lock file, and this repo keeps none). The box job takes numpy for the Markup Studio
    tests only from `requirements-box-ci.txt` (one hash-checked Windows wheel, binary only, into the job's own folder).
    `test/ci-workflow.test.js` fails if a GitHub-hosted Windows or macOS image comes back, if `unit-windows` is renamed
-   or moved off the box, or if the box job installs anything unhashed. The order: the pull request stays a draft
+   or moved off the box, or if the box job installs anything unhashed. Every test server binds 127.0.0.1 on port 0
+   and the test learns the port (rule 6.5; `test/fake-bridge-start.js`, checked by `test/test-ports.test.js`). The order: the pull request stays a draft
    (Linux only) while the repo is public, since a public repo never gets a box runner; Anthony makes the repo
    private; the HOMESERVER coordinator registers the runner once the repo page reads Private; then the pull request
    is marked ready, `unit-windows` runs on the box, and it merges on an independent APPROVE plus green. From then on,

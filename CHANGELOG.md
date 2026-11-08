@@ -24,6 +24,19 @@ updater to accept the box job; this is step B, the workflow itself.
   `[self-hosted, Windows, homeserver]`, if it runs `npm install` or `npm ci` without `--ignore-scripts`, if its pip
   install lacks `--require-hashes` or `--only-binary :all:`, or if a line of `requirements-box-ci.txt` has no
   `--hash=sha256:`. It also checks its own guard against made-up workflows.
+- **Test servers on port 0** (rule 6.5: a test server binds 127.0.0.1 on port 0, and the box job now brings the tests
+  under it). The unit tests that started `test/fake-bridge.mjs` or `test/fake-desk.mjs` on a random fixed port
+  (`fake-bridge`, `fake-bot`, `fake-v3`, `live-first`, `trade-sides` and `account-types`) now start them on port 0 and
+  learn the port: the bridge through the new helper `test/fake-bridge-start.js`, which starts it with port `0` and
+  reads the port from its ready line ("fake ChartBridge on http://localhost:<port>/live/ ..."), and the fake Desk through
+  `desk.port`. The fakes behave as before: `fake-bridge.mjs` still defaults to 8765 (`npm run bridge` and the smoke runs
+  by hand are unchanged) and, given 0, takes the port the system picked for its own origin, Host check and PIN pages;
+  `startDesk(port)` still listens where it is told. The two PIN restart tests now restart on a new port (port 0 again):
+  the unlock token is not tied to a port, so they test the same thing. **`test/test-ports.test.js`** (new) reads every
+  `test/*.test.js` and each test/ helper they load or start, and fails on a `.listen(` on a port other than 0 (a number,
+  or a variable other than those two fakes' own), on an address other than `127.0.0.1`, on `fake-bridge.mjs` started
+  other than through `fake-bridge-start.js` with `'0'`, on `startDesk(` in a test with a port other than 0, or on a port
+  picked with `Math.random`; it also checks itself against made-up code. The markup tests already bind port 0.
 - **Docs:** the README's "Going private" step B and the updater paragraph now name `unit-windows` as today's workflow;
   two comments in `nt8/update-pc.ps1` that called the matrix job "today's" now say "before step B" (comment text only,
   no code change; the updater keeps accepting either set).

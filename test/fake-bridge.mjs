@@ -1,6 +1,8 @@
 // A stand-in for the ChartBridge NT8 add-on, speaking nt8/PROTOCOL.md with sample data.
 // For tests and offline work only; prices are NOT market data and no order reaches a broker.
 //   node test/fake-bridge.mjs [port] [flags]      then open http://localhost:<port>/live/
+//   (port 8765 by default; port 0 lets the system pick a free one, which the ready line names: the tests use 0,
+//   SERVER_RULES.md rule 6.5, and read the port from that line)
 // Flags (the config.txt keys of the real add-on):
 //   --trading                       trading = true (off by default, like ChartBridge)
 //   --trade-accounts=Sim101,DEMO-EVAL   tradeAccounts
@@ -187,7 +189,7 @@ function flagValueEarly(name) { const a = process.argv.slice(2).find(x => x.star
 const args = process.argv.slice(2);
 const flag = name => args.find(a => a === '--' + name || a.startsWith('--' + name + '='));
 const flagValue = name => { const a = flag(name); return a && a.includes('=') ? a.slice(a.indexOf('=') + 1) : ''; };
-const PORT = +(args.find(a => /^\d+$/.test(a)) || process.env.PORT || 8765);
+let PORT = +(args.find(a => /^\d+$/.test(a)) || process.env.PORT || 8765);   // 0: the system's pick, set once bound (below)
 const SCENE = flagValue('scene'), SCENE_WARP = +flagValue('scene-warp') || 36, SCENE_DELAY = flagValue('scene-delay') === '' ? 1500 : +flagValue('scene-delay');
 const PIN_OFF = !!flag('pin-off');
 const NO_HELLO_ACCOUNTS = !!flag('no-hello-accounts');
@@ -247,7 +249,7 @@ const config = {
 const ACCOUNTS = V3 ? V3_ACCOUNTS.concat(AGENT_ACCOUNTS).map(a => a.name) : ['DEMO-EVAL', 'DEMO-EMPTY', 'Sim101'];
 const pin = new PinLock({ file: flagValue('pin-file') || null });
 const pinReady = flagValue('test-pin') && !pin.isSet() ? pin.set(flagValue('test-pin')) : Promise.resolve();
-const OWN = 'http://localhost:' + PORT;
+let OWN = 'http://localhost:' + PORT;
 
 const CLOCK_OFFSET = +flagValue('clock-offset') || 0;
 const PC_CLOCK_OFFSET = flagValue('pc-clock-offset') !== '' ? +flagValue('pc-clock-offset') : CLOCK_OFFSET;
@@ -1075,5 +1077,9 @@ function agentControl(p, q, req, res) {
   if (p === '/test/agent-expire') { const x = a.proposals.get(q.get('id') || ''); if (x) x.expiresAt = desk.now() + +(q.get('ms') || 0); if (x) desk.broadcastV3(x); return json(200, { expiresAt: x ? x.expiresAt : null }); }
   return json(404, { error: 'unknown control' });
 }
-pinReady.then(() => server.listen(PORT, '127.0.0.1', () => console.log('fake ChartBridge on http://localhost:' + PORT + '/live/' +
-  (config.trading ? ' (trading on: ' + desk.accounts.join(', ') + ')' : ' (trading off)') + (pin.isSet() ? ' (PIN set)' : ' (no PIN set)'))));
+// The ready line (the first line on stdout): the tests start this with port 0 and read the bound port from it.
+pinReady.then(() => server.listen(PORT, '127.0.0.1', () => {
+  PORT = server.address().port; OWN = 'http://localhost:' + PORT; config.port = PORT; desk.config.port = PORT;
+  console.log('fake ChartBridge on http://localhost:' + PORT + '/live/' +
+    (config.trading ? ' (trading on: ' + desk.accounts.join(', ') + ')' : ' (trading off)') + (pin.isSet() ? ' (PIN set)' : ' (no PIN set)'));
+}));

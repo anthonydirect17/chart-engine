@@ -4,6 +4,7 @@
 // localhost page (the real one allows http://localhost:8765 and http://127.0.0.1:8765 only; a test page has another port).
 // Sample data only. With `down` set it answers nothing (the connection is dropped), as a Desk that is not running.
 //   const desk = await startDesk(port, { hotkeys, strategies });  desk.docs, desk.log, desk.down = true, desk.bump(which), desk.close();
+//   port 0 picks a free port (the unit tests, SERVER_RULES.md rule 6.5); desk.port is the port it listens on
 //   desk.oldDesk = true: a Desk before the bar trail (a barTrail key refused, 400)
 // Chart 1.30.0 (wave 5, SPEC "account types"): the account types ledger as the spec's API contract gives it, for the chart page only:
 //   GET /api/account-types ({"v":1,"types":[...every field...],"asOf"}; archived left out unless ?all=1), GET /api/chart-accounts
@@ -169,5 +170,6 @@ export async function startDesk(port, seed) {
     });
   });
   await new Promise(r => server.listen(port, '127.0.0.1', r));
+  desk.port = server.address().port;   // port 0 (the tests, rule 6.5): the one the system picked
   return desk;
 }
