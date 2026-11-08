@@ -363,20 +363,20 @@ test('0.6.10: the remove-only relief and Hide leaving the group are in the sourc
   assert.match(ag, /if \(why != null && FindAccount\(m\) == null && ChartBridgeOrders\.Enabled && !ChartBridgeOrders\.IsNeverTradable\(m\)\) why = null;/);
   assert.match(a, /ChartBridgeGroups\.HideAndLeave\(/);
   assert.match(a, /notListed/);
-  assert.match(read('nt8/ChartBridge.cs'), /public const string Version = "0\.6\.1[0-4]";/);   // 0.6.14: the tick day check rule; 0.6.11: the bar trail and the narrower 1 second request; 0.6.12: the bar trail follow-ups; 0.6.13: the tick day's morning catch-up (the account lifecycle unchanged)
+  assert.match(read('nt8/ChartBridge.cs'), /public const string Version = "0\.6\.1[0-5]";/);   // 0.6.15: the 1 second pull retired; 0.6.14: the tick day check rule; 0.6.11: the bar trail and the narrower 1 second request; 0.6.12: the bar trail follow-ups; 0.6.13: the tick day's morning catch-up (the account lifecycle unchanged)
   assert.ok(p.includes('### The account lifecycle (0.6.10)'));
   for (const k of ['notListed', 'remove-only', 'HideAndLeave']) assert.ok(p.includes(k), k);
 });
 
-test('versions and the changelog (1.40.0, 1.41.0, 1.42.0, 1.42.1, 1.42.2, 1.42.3, 1.43.0, now 1.44.0)', () => {
-  assert.equal(JSON.parse(read('package.json')).version, '1.44.0');   // 1.44.0: the brand, AUREUS in the IMPERIUM suite (page only); 1.43.0: a group's stops and targets within 2 ticks merge into one line (page only); 1.42.3: ChartBridge 0.6.14, the tick day check rule (the page unchanged); 1.42.2: ChartBridge 0.6.13, the tick day's morning catch-up and the raw deleted once packed (the page unchanged); 1.42.1: the ticket's bar trail lines short, no false League folder warning (page only); 1.42.0: Fit stop and target, the bar trail follow-ups, the ticket's bar trail line
-  assert.match(read('src/chart-engine.js'), /const VERSION = '1\.44\.0';/);
-  assert.match(read('src/chart-engine.js'), /^\/\*!\n \* chart-engine 1\.44\.0\n/);
+test('versions and the changelog (1.40.0, 1.41.0, 1.42.0, 1.42.1, 1.42.2, 1.42.3, 1.43.0, 1.44.0, now 1.44.1)', () => {
+  assert.equal(JSON.parse(read('package.json')).version, '1.44.1');   // 1.44.1: ChartBridge 0.6.15, the 1 second pull retired (the page unchanged); 1.44.0: the brand, AUREUS in the IMPERIUM suite (page only); 1.43.0: a group's stops and targets within 2 ticks merge into one line (page only); 1.42.3: ChartBridge 0.6.14, the tick day check rule (the page unchanged); 1.42.2: ChartBridge 0.6.13, the tick day's morning catch-up and the raw deleted once packed (the page unchanged); 1.42.1: the ticket's bar trail lines short, no false League folder warning (page only); 1.42.0: Fit stop and target, the bar trail follow-ups, the ticket's bar trail line
+  assert.match(read('src/chart-engine.js'), /const VERSION = '1\.44\.1';/);
+  assert.match(read('src/chart-engine.js'), /^\/\*!\n \* chart-engine 1\.44\.1\n/);
   /* the first released heading (an Unreleased entry for the next release may sit above it until that release), 1.43.0, 1.42.1, 1.42.0, 1.41.0 and 1.40.0 under it */
-  assert.match(read('CHANGELOG.md'), /^# Changelog\n\n(## Unreleased [^\n]*\n(?!## )[\s\S]*?\n)?## chart 1\.44\.0 \(2026-11-06\)[^\n]*\(page only, no F5\)\n(?!## )[\s\S]*?\n## chart 1\.43\.0 \(2026-11-04\)[^\n]*\(page only, no F5\)\n(?!## )[\s\S]*?\n## ChartBridge 0\.6\.14 and chart 1\.42\.3 \(2026-11-03\)[^\n]*\n(?!## )[\s\S]*?\n## ChartBridge 0\.6\.13 and chart 1\.42\.2 \(2026-11-03\)[^\n]*\n(?!## )[\s\S]*?\n## chart 1\.42\.1 \(2026-11-02\)[^\n]*\(page only, no F5\)\n(?!## )[\s\S]*?\n## ChartBridge 0\.6\.12 and chart 1\.42\.0 \(2026-11-02\)[^\n]*\n(?!## )[\s\S]*?\n## ChartBridge 0\.6\.11 and chart 1\.41\.0 \(2026-11-01\)[^\n]*\n(?!## )[\s\S]*?\n## ChartBridge 0\.6\.10 and chart 1\.40\.0 \(2026-11-01\)/);
-  assert.match(read('nt8/ChartBridge.cs'), /public const string Version = "0\.6\.14";/);
+  assert.match(read('CHANGELOG.md'), /^# Changelog\n\n(## Unreleased [^\n]*\n(?!## )[\s\S]*?\n)?## ChartBridge 0\.6\.15 and chart 1\.44\.1 \(2026-11-08\)[^\n]*\n(?!## )[\s\S]*?\n## chart 1\.44\.0 \(2026-11-06\)[^\n]*\(page only, no F5\)\n(?!## )[\s\S]*?\n## chart 1\.43\.0 \(2026-11-04\)[^\n]*\(page only, no F5\)\n(?!## )[\s\S]*?\n## ChartBridge 0\.6\.14 and chart 1\.42\.3 \(2026-11-03\)[^\n]*\n(?!## )[\s\S]*?\n## ChartBridge 0\.6\.13 and chart 1\.42\.2 \(2026-11-03\)[^\n]*\n(?!## )[\s\S]*?\n## chart 1\.42\.1 \(2026-11-02\)[^\n]*\(page only, no F5\)\n(?!## )[\s\S]*?\n## ChartBridge 0\.6\.12 and chart 1\.42\.0 \(2026-11-02\)[^\n]*\n(?!## )[\s\S]*?\n## ChartBridge 0\.6\.11 and chart 1\.41\.0 \(2026-11-01\)[^\n]*\n(?!## )[\s\S]*?\n## ChartBridge 0\.6\.10 and chart 1\.40\.0 \(2026-11-01\)/);
+  assert.match(read('nt8/ChartBridge.cs'), /public const string Version = "0\.6\.15";/);
   const compat = JSON.parse(read('live/COMPAT.json'));
-  assert.equal(compat.page, '1.44.0'); assert.equal(compat.minChartBridge, '0.6.2');
-  assert.deepEqual(compat.history.slice(0, 7).map(h => h.page + ' ' + h.minChartBridge), ['1.44.0 0.6.2', '1.43.0 0.6.2', '1.42.3 0.6.2', '1.42.2 0.6.2', '1.42.1 0.6.2', '1.42.0 0.6.2', '1.41.0 0.6.2']);
-  for (const f of ['live/accounts.js', 'live/multi-account.js', 'nt8/PROTOCOL.md', 'CHANGELOG.md', 'CHART_STYLE.md', 'live/trade.js', 'live/order-ticket.js', 'test/group-merge.test.js', 'test/group-merge-smoke.mjs', 'test/lifecycle.test.js']) assert.ok(!/[\u2013\u2014]/.test(read(f)), f + ': no en or em dashes');
+  assert.equal(compat.page, '1.44.1'); assert.equal(compat.minChartBridge, '0.6.2');
+  assert.deepEqual(compat.history.slice(0, 8).map(h => h.page + ' ' + h.minChartBridge), ['1.44.1 0.6.2', '1.44.0 0.6.2', '1.43.0 0.6.2', '1.42.3 0.6.2', '1.42.2 0.6.2', '1.42.1 0.6.2', '1.42.0 0.6.2', '1.41.0 0.6.2']);
+  for (const f of ['live/accounts.js', 'live/multi-account.js', 'nt8/PROTOCOL.md', 'CHANGELOG.md', 'CHART_STYLE.md', 'live/trade.js', 'live/order-ticket.js', 'test/group-merge.test.js', 'test/group-merge-smoke.mjs', 'test/lifecycle.test.js', 'nt8/ChartBridgeBars.cs', 'nt8/ChartBridgeTicks.cs', 'nt8/check/BarsHarness.cs', 'live/COMPAT.json']) assert.ok(!/[\u2013\u2014]/.test(read(f)), f + ': no en or em dashes');
 });

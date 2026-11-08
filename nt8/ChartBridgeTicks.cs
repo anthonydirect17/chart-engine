@@ -1,9 +1,10 @@
 // ChartBridge: the NQ tick file to The Desk (the Sunday 11-01 build), for NinjaTrader 8.
 // Anthony's decisions of 2026-10-29: one NQ tick file per session is the only market data kept; everything is built from it (1
-// second bars, 1 minute bars, the evening profile tape, the master day); MNQ trades take their bars from NQ's ticks. This release
-// adds; it retires nothing (the 1-minute request, the evening profile export and the 1 second pull stay as they are).
+// second bars, 1 minute bars, the evening profile tape, the master day); MNQ trades take their bars from NQ's ticks. That release
+// added; it retired nothing (the 1-minute request, the evening profile export and the 1 second pull stayed). 0.6.15 retires the 1
+// second pull (Anthony 2026-11-03: "build everything from the ticks"); this file is unchanged by it (comments only).
 //
-// ON with "bars = on" (as the 1 second bars); "tickFile = off" in config.txt turns only it off. "tickFileMaxMB = 2048" bounds the
+// ON with "bars = on"; "tickFile = off" in config.txt turns only it off. "tickFileMaxMB = 2048" bounds the
 // ticks folder.
 //
 // 1. Live capture. Every NQ trade ChartBridge already receives (OnMarketData, after the pages, the tape and the other work, in its
@@ -15,7 +16,8 @@
 //    in <same>.state, so a resend is the same chunk) and posts them to The Desk's POST /api/ticks/chunk (10 s each). The Desk keys a
 //    chunk by contract, session, PC, run and seq and ignores one sent again. Chunks go at any hour: they go to The Desk, never to
 //    NinjaTrader. NO request goes to NinjaTrader for them.
-// 3. The final file. After the close, on the bars worker, in the 1 second bars' window (16:15 to 17:50 New York on weekdays, the
+// 3. The final file. After the close, on the bars worker, in the evening window (ChartBridgeBars.In1sStartWindow, named for the 1
+//    second bars that used it until 0.6.15: 16:15 to 17:50 New York on weekdays, the
 //    weekend while shut; never in trading hours) and, as a catch-up for a session closed and not done (Anthony 2026-11-03: he may
 //    close NinjaTrader before 16:15), on weekday mornings before 09:15 New York (this pull only), through the 0.3.5 gate, one tick
 //    request per captured session, from the open to the close (NinjaTrader's history), checked against the live capture second by
@@ -929,8 +931,8 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         // Anthony 2026-11-03: he sometimes closes NinjaTrader before 16:15 (e.g. 16:05), so a session's final pull never ran that day.
         // The catch-up: the final pull of a session that has CLOSED (a raw file, not done) may also START on a weekday morning, from
-        // ChartBridge's start until 09:15 New York (Monday to Friday; the weekend keeps its own rule). Only this pull: the 1 second
-        // bars keep In1sStartWindow, and the day's sends keep In1sWindow. A request out at 09:15 is never cut: the gate checks the
+        // ChartBridge's start until 09:15 New York (Monday to Friday; the weekend keeps its own rule). Only this pull: the evening
+        // window In1sStartWindow is not widened, and the day's sends keep In1sWindow. A request out at 09:15 is never cut: the gate checks the
         // window only at the moment it would send the request (BarsTicket.MayStart); one already out finishes as any other.
         // MorningStart: when the morning window opens (New York). 00:00 is the behaviour Anthony has today (from ChartBridge's start,
         // any time after midnight); a later start (e.g. 06:00) is this one line once Anthony answers. dayState's text follows it.
@@ -941,7 +943,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (et.DayOfWeek == DayOfWeek.Saturday || et.DayOfWeek == DayOfWeek.Sunday) return false;
             return et.TimeOfDay >= MorningStart && et.TimeOfDay < MorningEnd;
         }
-        // When a final pull may start: the 1 second bars' start window, or a weekday morning in the morning window.
+        // When a final pull may start: the evening start window (In1sStartWindow), or a weekday morning in the morning window.
         public static bool InDayStartWindow(DateTime et) { return ChartBridgeBars.In1sStartWindow(et) || InMorningWindow(et); }
         public static string DayWaitText
         {
@@ -954,8 +956,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static string Hm(TimeSpan t) { return t.Hours.ToString("00", Inv) + ":" + t.Minutes.ToString("00", Inv); }
         private static DateTime NowEt() { return TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(ChartBridgeBars.UtcNow(), DateTimeKind.Utc), ChartBridgeTime.Eastern); }
 
-        // On the bars worker, after the 1-minute and 1 second bars of a pass, and only when those asked nothing this pass: at most one
-        // session's final pull, only in InDayStartWindow. Returns true when it asked NinjaTrader.
+        // On the bars worker, after the 1-minute bars of a pass (until 0.6.15 also after the 1 second bars, and only when those asked
+        // nothing that pass): at most one session's final pull, only in InDayStartWindow. Returns true when it asked NinjaTrader.
         public static bool PlanDay(Func<bool> stopping)
         {
             if (!On) { dayState = "off"; return false; }
@@ -1154,7 +1156,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         private static readonly Regex StoredRx = new Regex("\"stored\"\\s*:\\s*true"), PackedRx = new Regex("\"packed\"\\s*:\\s*true");
 
-        // Sends the days waiting (their parts in order, from the first not taken), only in the 1 second bars' window. When The Desk
+        // Sends the days waiting (their parts in order, from the first not taken), only in the evening window (In1sWindow). When The Desk
         // answers the last part: stored noted; the raw deleted only when the check passed and the answer says stored and packed.
         public static int SendDays(Func<bool> stopping)
         {
@@ -1278,7 +1280,7 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         // ---------------------------------------------------------- the raw deleted once packed (2026-11-03)
         // A day stored and passed but not packed keeps its raw and its last part (<base>.day.last). At most once a New York day, in the
-        // final pull's windows (InPackAskWindow: the 1 second bars' window or a weekday morning before 09:15), the last part is sent to
+        // final pull's windows (InPackAskWindow: the evening window, In1sWindow, or a weekday morning before 09:15), the last part is sent to
         // /api/ticks/day again: The Desk ignores the part (it has the set) and answers the day's stored and packed state now. Stored and
         // packed: the raw, its state and the last part are deleted and the day noted packed in tickdays.txt. A failed day is never
         // asked (it never packs; its raw stays until Anthony rules). 404 keeps everything and asks again when the route is tried again
