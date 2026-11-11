@@ -5319,6 +5319,109 @@ public static class AgentHarness
             }
             finally { if (groupsWas != null) File.WriteAllText(GroupsFile, groupsWas); else Gone(GroupsFile); ChartBridgeGroups.StartNow(); }
         });
+        // ---- 0.6.17: Kill all for the prop accounts
+        Part("kill all: no setting: refused, nothing touched", () =>
+        {
+            PropStart("PROP-1", false);
+            Mode("manrae", "auto");
+            Order e = PlacedOn(prop1, Good(NewId()));
+            Fill(e, 1, 24999);
+            Check(e != null && PosOf(prop1, mnq) == 1 && Legs(prop1, e).Count(IsLive) == 2, "kill all setup: manrae long 1 MNQ on PROP-1 with its stop and target: " + AgentReject());
+            int calls = prop1.Calls.Count;
+            P("{\"type\":\"agentKillAllProp\",\"cid\":\"ka0\"}");
+            Advance(2000);
+            Check(PageReject().Contains("\"cid\":\"ka0\"") && PageReject().Contains("no personal account is picked") && !M.Killed && ModeNow() == "auto" && prop1.Calls.Count == calls && PosOf(prop1, mnq) == 1,
+                  "kill all, no personal account picked: refused, the agent, its position and its orders exactly as they were: " + PageReject());
+            Settle(prop1);
+        });
+        Part("kill all: an agent on prop accounts is flattened, killed and put in Shadow; others are not touched", () =>
+        {
+            PropStart("PROP-1", true);
+            // demob on a Sim account, in Auto, with an open trade of its own
+            dc = new ChartBridgeClient(null, -101);
+            dc.Tap = s => { lock (demobOut) demobOut.Add(s); };
+            D.Attach(dc);
+            B("{\"type\":\"agentHello\",\"name\":\"Demob\",\"build\":\"sample-build-2\"}");
+            P("{\"type\":\"agentAccount\",\"cid\":\"kd\",\"agent\":\"demob\",\"account\":\"SIM-B\"}");
+            Mode("demob", "auto");
+            Mode("manrae", "auto");
+            Order e = PlacedOn(prop1, Good(NewId()));
+            Fill(e, 1, 24999);
+            Check(e != null && PosOf(prop1, mnq) == 1 && Legs(prop1, e).Count(IsLive) == 2 && AutoFileThere, "kill all setup: manrae long 1 MNQ on PROP-1 in Auto, its Auto saved: " + AgentReject());
+            // a manual order and a position that are not the agent's, on the personal account and on another prop account
+            SetPos(mine, mnq, 2);
+            SetPos(prop2, mnq, 1);
+            int mineCalls = mine.Calls.Count, prop2Calls = prop2.Calls.Count, simbCalls = simb.Calls.Count, calls = prop1.Calls.Count, s0 = N(page), a0 = N(agentOut);
+            bool demobKilled = D.Killed;
+            string demobMode = Regex.Match(D.StripJson(), "\"mode\":\"([a-z]+)\"").Groups[1].Value;
+            P("{\"type\":\"agentKillAllProp\",\"cid\":\"ka1\"}");
+            Check(!PageReject().Contains("\"cid\":\"ka1\"") && M.Killed && ModeNow() == "shadow" && !AutoFileThere && File.Exists(Path.Combine(Dir, "agent-manrae-kill.txt")),
+                  "kill all: manrae: the kill switch on (saved), mode Shadow, its saved Auto removed: " + PageReject());
+            Check(Any(page, s0, "Kill all (prop accounts): agent manrae on PROP-1: flattening what it owns, the kill switch on, mode shadow") && Any(page, s0, "Not touched (not on prop accounts): demob") &&
+                  Any(agentOut, a0, "\"mode\":\"shadow\""), "kill all: one status names who was killed and who was not; the agent is told its mode");
+            foreach (Order o in Legs(prop1, e)) if (IsLive(o)) { o.OrderState = OrderState.Cancelled; Update(o); }
+            Advance(1500);
+            Order close;
+            lock (prop1.Orders) close = prop1.Orders.LastOrDefault(o => Regex.IsMatch(o.Name ?? "", "^CB#[0-9a-f]{8} ag:manrae flat$"));
+            Check(close != null && close.OrderType == OrderType.Market && close.OrderAction == OrderAction.Sell && close.Quantity == 1,
+                  "kill all: its stop and target cancelled, then its position closed at market by its own flatten, with the kill switch on and in Shadow: " + string.Join(" | ", prop1.Calls.Skip(calls)));
+            Check(mine.Calls.Count == mineCalls && PosOf(mine, mnq) == 2 && prop2.Calls.Count == prop2Calls && PosOf(prop2, mnq) == 1,
+                  "kill all: the personal account and a prop account the agent does not trade: no order, no cancel, positions as they were");
+            Check(D.Killed == demobKilled && Regex.Match(D.StripJson(), "\"mode\":\"([a-z]+)\"").Groups[1].Value == demobMode && demobMode == "auto" && simb.Calls.Count == simbCalls,
+                  "kill all: an agent on a Sim account is not touched (mode, kill switch, orders)");
+            if (close != null)
+            {
+                close.OrderId = "NTK" + Guid.NewGuid().ToString("N").Substring(0, 6);
+                close.Filled = 1; close.AverageFillPrice = 25001; close.OrderState = OrderState.Filled;
+                Update(close);
+                Deliver("PROP-1", mnq, MarketPosition.Short, 1, 25001, close.OrderId);
+                SetPos(prop1, mnq, 0);
+                ClearMoves();
+                Advance(1000);
+            }
+            Check(PosOf(prop1, mnq) == 0, "kill all: flat");
+            // after a release Auto stays off; a restart keeps the kill switch and restores nothing
+            Restart();
+            Advance(3000);
+            Check(M.Killed && ModeNow() == "shadow", "kill all: a restart keeps the kill switch on and Shadow");
+            P("{\"type\":\"agentKill\",\"cid\":\"k\",\"agent\":\"manrae\",\"on\":false}");
+            Advance(3000);
+            Check(!M.Killed && ModeNow() == "shadow" && !AutoFileThere, "kill all: released: Auto stays off until it is set on the page");
+            // a second Kill all with nothing open: still kills, nothing to flatten
+            Mode("manrae", "auto");
+            int s1 = N(page), c1 = prop1.Calls.Count;
+            P("{\"type\":\"agentKillAllProp\",\"cid\":\"ka2\"}");
+            Advance(1500);
+            Check(M.Killed && ModeNow() == "shadow" && !AutoFileThere && prop1.Calls.Count == c1 && Any(page, s1, "nothing of its own to flatten"), "kill all with nothing open: the kill switch on, Shadow, no order sent");
+            P("{\"type\":\"agentKill\",\"cid\":\"k\",\"agent\":\"manrae\",\"on\":false}");
+            SetPos(mine, mnq, 0); SetPos(prop2, mnq, 0);
+            Mode("demob", "shadow");
+        });
+        Part("kill all: the personal account and a group with a member that is not prop are never touched", () =>
+        {
+            PropStart("MINE-1", true);
+            Mode("manrae", "auto");
+            Order e = PlacedOn(mine, Good(NewId()));
+            Fill(e, 1, 24999);
+            int calls = mine.Calls.Count, s0 = N(page);
+            P("{\"type\":\"agentKillAllProp\",\"cid\":\"ka3\"}");
+            Advance(2000);
+            Check(e != null && !M.Killed && ModeNow() == "auto" && mine.Calls.Count == calls && PosOf(mine, mnq) == 1 && Any(page, s0, "no agent is on prop accounts: nothing was done"),
+                  "kill all: an agent on the personal account: not killed, not flattened, still in Auto: " + AgentReject());
+            Settle(mine);
+            string groupsWas = File.Exists(GroupsFile) ? File.ReadAllText(GroupsFile) : null;
+            try
+            {
+                WriteGroup("PROP-1", "SIM-E");
+                PropStart("group:g1", true);
+                Mode("manrae", "auto");
+                P("{\"type\":\"agentKillAllProp\",\"cid\":\"ka4\"}");
+                Check(!M.Killed && ModeNow() == "auto", "kill all: a group with a Sim member is not all prop: not touched");
+                P("{\"type\":\"agentKillAllProp\",\"cid\":\"ka5\",\"agent\":\"manrae\"}");
+                Check(PageReject().Contains("unknown key \\\"agent\\\" in agentKillAllProp"), "kill all takes no agent: " + PageReject());
+            }
+            finally { if (groupsWas != null) File.WriteAllText(GroupsFile, groupsWas); else Gone(GroupsFile); ChartBridgeGroups.StartNow(); }
+        });
         Part("prop: the harness is left as it was", () =>
         {
             try { Gone(AutoFilePath); } catch (Exception) { }

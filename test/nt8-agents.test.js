@@ -34,7 +34,7 @@ test('0.5.0 agents: the new file ships, is compile-checked and harnessed', () =>
   for (const f of ['check.sh', 'orders.sh']) assert.match(read(path.join('check', f)), /ChartBridgeBot\.cs ChartBridgeAgents\.cs ChartBridgeStrategies\.cs/);
   assert.match(read(path.join('check', 'orders.sh')), /check\/AgentHarness\.cs/);
   assert.match(read(path.join('check', 'OrdersHarness.cs')), /Section\("agents \(0\.5\.0\)", AgentHarness\.Run\);/);
-  assert.match(main, /public const string Version = "0\.(5\.[0-8]|6\.([0-9]|1[0-6]))";/);   // 0.6.16: prop accounts (Auto kept through the reset and one restore after a restart, prop only); 0.6.15: the 1 second pull retired; 0.6.14: the tick day check rule; 0.6.13: the tick day's morning catch-up, the raw deleted once packed; 0.6.12: the bar trail follow-ups; 0.6.10: the account lifecycle (remove-only for an account NinjaTrader no longer lists, Hide leaves the group); 0.6.9: the stats suite's Phase 2 (1 second bars, the order record, decision ids; recording only); 0.6.8: the minute book (the history path only); 0.6.7: the bench, no hedging always on, a group's own rules optional; 0.6.6: the firm's limits on entries, riskAlert, firmMinimum, copierFollowerRemove; 0.6.5: each member's own rules and the risk percent; 0.6.4: no false no-trade-record alarm, the alarm cleared, Merge on an off follower; 0.6.3: the audit fixes (a missed reset caught up, closes not seen, files that survive a power cut, the kill switch kept); 0.6.2: group stand-downs and league seats; 0.6.1: a group's type and default hero; 0.6.0: group trading (seats); 0.5.8: groups and accountState; 0.5.7: the plan id, the TradeLost hold, None and the daily reset; 0.5.1: the accounts follow NinjaTrader, on top of 0.5.0; 0.5.3: the agents' MNQ cap; 0.5.4: the window while exposed; 0.5.5: the accounts line and unknown keys; 0.5.6: the time check
+  assert.match(main, /public const string Version = "0\.(5\.[0-8]|6\.([0-9]|1[0-7]))";/);   // 0.6.17: Kill all for the prop accounts; 0.6.16: prop accounts (Auto kept through the reset and one restore after a restart, prop only); 0.6.15: the 1 second pull retired; 0.6.14: the tick day check rule; 0.6.13: the tick day's morning catch-up, the raw deleted once packed; 0.6.12: the bar trail follow-ups; 0.6.10: the account lifecycle (remove-only for an account NinjaTrader no longer lists, Hide leaves the group); 0.6.9: the stats suite's Phase 2 (1 second bars, the order record, decision ids; recording only); 0.6.8: the minute book (the history path only); 0.6.7: the bench, no hedging always on, a group's own rules optional; 0.6.6: the firm's limits on entries, riskAlert, firmMinimum, copierFollowerRemove; 0.6.5: each member's own rules and the risk percent; 0.6.4: no false no-trade-record alarm, the alarm cleared, Merge on an off follower; 0.6.3: the audit fixes (a missed reset caught up, closes not seen, files that survive a power cut, the kill switch kept); 0.6.2: group stand-downs and league seats; 0.6.1: a group's type and default hero; 0.6.0: group trading (seats); 0.5.8: groups and accountState; 0.5.7: the plan id, the TradeLost hold, None and the daily reset; 0.5.1: the accounts follow NinjaTrader, on top of 0.5.0; 0.5.3: the agents' MNQ cap; 0.5.4: the window while exposed; 0.5.5: the accounts line and unknown keys; 0.5.6: the time check
   assert.ok(!/(^|[\s(=,+:?])\$"/m.test(acode) && !/\?\.\w/.test(acode) && !/\bnameof\(/.test(acode), 'C# 5');
 });
 
@@ -248,7 +248,8 @@ test('0.6.16 prop accounts: every new branch passes through IsProp; nothing is p
   assert.match(tr, /lock \(Sync\) \{ mode = "auto"; autoRestorePending = false; \}/);
   // saved and removed with the page's changes, and removed by the kill switch
   assert.match(bodies(acode, 'SetModeLocked'), /SyncAutoIntent\("the mode changed to " \+ m\);/);
-  assert.match(bodies(acode, 'SetKillLocked'), /DropAutoIntent\("the kill switch is on"\);/);
+  assert.match(bodies(acode, 'SetKillLocked'), /return KillLocked\(on\);/);
+  assert.match(bodies(acode, 'KillLocked'), /DropAutoIntent\("the kill switch is on"\);/);
   assert.match(bodies(acode, 'SetAccountLocked'), /SyncAutoIntent\("its account changed"\);/);
   assert.match(bodies(acode, 'SetGroupLocked'), /SyncAutoIntent\("its account changed"\);/);
   assert.match(bodies(acode, 'GoNone'), /DropAutoIntent\("its account is None"\);/);
@@ -259,6 +260,28 @@ test('0.6.16 prop accounts: every new branch passes through IsProp; nothing is p
   for (const s of ['PropAccounts();', 'no setting: the 17:00 reset puts the agent on None, as before', 'no setting: every start is Shadow, the file is not even read', ': a restart from Auto is Shadow', ': the 17:00 reset puts the agent on None, as before', 'prop: the 17:00 reset keeps the account and Auto', 'prop: a position at the start: Shadow, the file removed, the pages told'])
     assert.ok(h.includes(s), s);
   assert.ok(!/[\u2013\u2014]/.test(h + read('ChartBridgeAgents.cs') + read('ChartBridgeAccounts.cs')), 'no en or em dashes');
+});
+
+test('0.6.17 Kill all for the prop accounts: only agents whose every account is prop; its own flatten first, then the kill switch, then Shadow', () => {
+  assert.match(acode, /\{ "agentKillAllProp", new\[\] \{ "type", "cid" \} \},/, 'no agent key: it is every agent on prop accounts');
+  const all = bodies(acode, 'PageKillAllProp');
+  assert.match(all, /if \(!ChartBridgeBranches\.PersonalNamed\) return "Kill all acts on prop accounts only/, 'no personal account picked: refused, nothing done');
+  assert.match(all, /foreach \(ChartBridgeAgent a in All\(\)\)\s*\{\s*string words = a\.KillProp\(\);/);
+  assert.ok(!/ChartBridgeBot|ChartBridgeCopier|ChartBridgeOrders\.|Flatten|Cancel/.test(all), 'it reaches the bot, the copier and the order path nowhere');
+  const one = bodies(acode, 'KillProp');
+  assert.match(one, /lock \(PlaceGate\)/);
+  assert.match(one, /List<string> seats = AllSeats\(\)\.Select\(x => x\.Name\)\.ToList\(\);\s*if \(seats\.Count == 0 \|\| !seats\.All\(x => ChartBridgeBranches\.IsProp\(x\)\)\) return null;/, 'every account it follows must be prop, or it is not touched');
+  assert.match(one, /int roots = StartFlatten\("Kill all \(prop accounts\)", false\);\s*string err = KillLocked\(true\);[\s\S]*mode = "shadow";/, 'the flatten, then the kill switch, then Shadow');
+  assert.match(one, /DropAutoIntent\("Kill all \(prop accounts\)"\);/);
+  assert.ok(!/\.Submit\s*\(|\.CreateOrder\s*\(|PlaceOrder|PlaceAgentEntry/.test(one), 'no order call of its own: the close is the agent\'s flatten job, as at the flat time');
+  assert.equal((acode.match(/KillProp\(\)/g) || []).length, 2, 'defined once, called once');
+  assert.match(acode, /if \(type == "agentKillAllProp"\) \{ why = PageKillAllProp\(\);/);
+  const h = read(path.join('check', 'AgentHarness.cs'));
+  for (const s of ['kill all, no personal account picked: refused', 'kill all: the personal account and a prop account the agent does not trade: no order, no cancel', 'kill all: an agent on a Sim account is not touched', 'kill all: an agent on the personal account: not killed, not flattened, still in Auto', 'kill all: released: Auto stays off until it is set on the page'])
+    assert.ok(h.includes(s), s);
+  // the page does not send it yet (the button comes with the Fleet tab); the Board's KILL ALL AGENTS is as it was
+  const fsx = require('node:fs');
+  for (const f of fsx.readdirSync(path.join(__dirname, '..', 'live')).filter(f => f.endsWith('.js'))) assert.ok(!fsx.readFileSync(path.join(__dirname, '..', 'live', f), 'utf8').includes('agentKillAllProp'), f);
 });
 
 test('0.6.0 group trading: one plan, each seat through PlaceAgentEntry on its own account and size, never PlaceLock across seats', () => {

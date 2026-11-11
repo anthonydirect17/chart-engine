@@ -989,7 +989,31 @@ namespace NinjaTrader.NinjaScript.AddOns
             { "agentAccount", new[] { "type", "cid", "agent", "account", "group", "keepMode", "league" } },   // 0.5.2: keepMode, the mode the page's question named; 0.6.0: group (a group id) in place of account
             { "agentRules", new[] { "type", "cid", "agent", "roots", "maxQtyNQ", "maxQtyMNQ", "maxQtyES", "maxQtyMES", "entryFrom", "entryUntil", "flatAt", "maxExpireSec", "maxTrades", "maxLosses" } },
             { "agentStandDownClear", new[] { "type", "cid", "build", "group" } },   // 0.6.2: Anthony's Clear stand-down (the Board); no agent key: a stand-down is the build's on the group
+            { "agentKillAllProp", new[] { "type", "cid" } },   // 0.6.17: Kill all for the prop accounts: flatten, the kill switch on, Shadow; no agent key: every agent on prop accounts
         };
+
+        // 0.6.17: Kill all for the prop accounts (Anthony's ruling of 2026-11-11, B question 6). Every agent whose accounts are ALL
+        // prop (ChartBridgeBranches.IsProp) is flattened (what it owns, by its own flatten: never a manual or copier order), its
+        // kill switch goes on (saved, so a restart keeps it; its saved Auto is removed) and its mode goes to Shadow, so releasing
+        // the kill switch later leaves Auto off until it is set on the page. An agent on the personal account, a Sim account,
+        // None, or a group with a member that is not prop is never touched; the bot, the copier, the order ticket and every
+        // manual order are never touched. With no personal account picked nothing is prop: refused, nothing done. The older
+        // agentKill (one agent, no flatten) is unchanged.
+        private static string PageKillAllProp()
+        {
+            if (!ChartBridgeBranches.PersonalNamed) return "Kill all acts on prop accounts only, and no personal account is picked (the Accounts tab), so no account is prop: nothing was done";
+            List<string> did = new List<string>(), left = new List<string>();
+            foreach (ChartBridgeAgent a in All())
+            {
+                string words = a.KillProp();
+                if (words != null) did.Add(words); else left.Add(a.Id);
+            }
+            string text = "Kill all (prop accounts): " + (did.Count > 0 ? string.Join("; ", did) : "no agent is on prop accounts: nothing was done") +
+                          (left.Count > 0 ? ". Not touched (not on prop accounts): " + string.Join(", ", left) : "") + ". The bot, the copier and manual orders are never touched";
+            ChartBridgeServer.Log("agent " + text);
+            ChartBridgeV3.SendToV3Traders("{\"type\":\"status\",\"level\":\"warn\",\"text\":" + CbJson.Str(text) + "}");
+            return null;
+        }
 
         public static void OnPageMessage(ChartBridgeClient client, string type, string text)
         {
@@ -1010,6 +1034,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (d.ContainsKey("cid") && cid == null) { PageReject(client, cid, id, "cid must be a plain string"); return; }
                 if (!RateOk(client.Actions)) { PageReject(client, cid, id, "too many order actions (more than " + MaxActionsPerSecond + " a second)"); return; }
                 if (type == "agentStandDownClear") { why = PageClear(d); if (why != null) PageReject(client, cid, id, why); return; }   // 0.6.2
+                if (type == "agentKillAllProp") { why = PageKillAllProp(); if (why != null) PageReject(client, cid, id, why); return; }   // 0.6.17
                 ChartBridgeAgent a = Get(ChartBridgeAgent.S(d, "agent") ?? "");
                 if (a == null) { PageReject(client, cid, id, "there is no agent " + (ChartBridgeAgent.S(d, "agent") ?? "(none)") + " (agents in config.txt)"); return; }
                 why = a.OnPage(type, d);
@@ -4302,6 +4327,12 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             bool on;
             if (!Bool(d, "on", out on)) return "on must be true or false";
+            return KillLocked(on);
+        }
+
+        // The kill switch on or off (under PlaceGate): from the page's agentKill, and on from Kill all for the prop accounts.
+        private string KillLocked(bool on)
+        {
             List<Proposal> expired = new List<Proposal>();
             // 0.6.3 (audit C5): saved, so a restart keeps it; a release whose file cannot be removed is refused (it would come back)
             string saveErr = null;
@@ -4321,6 +4352,34 @@ namespace NinjaTrader.NinjaScript.AddOns
             else { Log("agent " + Id + " kill switch released by the page"); AgentLog("kill switch released by the page"); SyncAutoIntent("the kill switch was released"); }   // prop accounts: still in Auto on prop seats: saved again
             Notify();
             return null;
+        }
+
+        // 0.6.17: Kill all for the prop accounts, this agent's part (ChartBridgeAgents.PageKillAllProp). Null when it is not on
+        // prop accounts (untouched): every account it follows, a seat that left while it holds its trade included, must be prop.
+        // Else, under the placement gate: its own flatten starts on every seat (the flat time's job: it cancels the agent's orders
+        // and closes only what the agent owns), then the kill switch goes on (its unfilled entries cancelled, its saved Auto
+        // removed), then the mode goes to Shadow. The flatten is started first and runs whatever the mode or the kill switch,
+        // as the flat time's does. Returns the words for the pages.
+        internal string KillProp()
+        {
+            lock (PlaceGate)
+            {
+                List<string> seats = AllSeats().Select(x => x.Name).ToList();
+                if (seats.Count == 0 || !seats.All(x => ChartBridgeBranches.IsProp(x))) return null;
+                int roots = StartFlatten("Kill all (prop accounts)", false);
+                string err = KillLocked(true);
+                string old;
+                List<Proposal> expired = new List<Proposal>();
+                lock (Sync) { old = mode; mode = "shadow"; autoRestorePending = false; if (old == "copilot") expired = ExpireOpenLocked("not answered"); }
+                foreach (Proposal p in expired) { ToPages(ProposalJson(p)); ToAgent(AnswerJson(p.P.Id, "not answered", "Kill all (prop accounts)")); }
+                DropAutoIntent("Kill all (prop accounts)");
+                string say = "Kill all (prop accounts): " + (roots > 0 ? "flattening what it owns on " + AccountWords() : "nothing of its own to flatten on " + AccountWords()) +
+                             "; the kill switch is on; mode shadow" + (old != "shadow" ? " (was " + old + ")" : "") + (err != null ? "; " + err : "");
+                Log("agent " + Id + ": " + say); AgentLog(say);
+                ToAgent(WelcomeJson());
+                Notify();
+                return "agent " + Id + " on " + AccountWords() + ": " + (roots > 0 ? "flattening what it owns" : "nothing of its own to flatten") + ", the kill switch on, mode shadow";
+            }
         }
 
         private string Seen(Dictionary<string, Val> d)

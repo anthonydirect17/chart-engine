@@ -17,6 +17,7 @@
 # 0.6.9: the order record to The Desk: every order type and change, the quotes at submission, the queue and the post (check/RecordHarness.cs);
 # the decision id of a group entry, the orders sent unchanged (check/GroupsHarness.cs). 0.6.15: the 1 second pull retired (check/BarsHarness.cs Retired1s).
 # 0.6.16: prop accounts: Auto kept through the 17:00 reset and one restore after a restart, prop only; a no-setting install, the personal account and Sim as before (check/AgentHarness.cs PropAccounts).
+# 0.6.17: Kill all for the prop accounts: flatten, the kill switch, Shadow; agents not on prop accounts, the personal account and other accounts untouched (check/AgentHarness.cs PropAccounts, kill all).
 # 0.5.6: the time check: SNTP time stamps and its formula, every answer that is none, a time server of its own on 127.0.0.1, what the pages and the Output window are told (check/ClockHarness.cs).
 # The build goes to $CHARTBRIDGE_ORDERS_EXE when set (kept); else to a path of its own for this run ($TMPDIR or /tmp, chartbridge-orders-<pid>.exe, deleted after), so parallel runs never share a build.
 out="${CHARTBRIDGE_ORDERS_EXE:-${TMPDIR:-/tmp}/chartbridge-orders-$$.exe}"

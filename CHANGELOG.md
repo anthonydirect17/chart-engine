@@ -63,6 +63,24 @@
   `test/pc-updater.test.js`: the allowed git subcommands, the box job's name, useHttpPath read before the one ask, the
   token only after a 404 or 401 and then through the Actions API, one place that asks for it and one that sends it.
 
+## ChartBridge 0.6.17 and chart 1.44.3 (2026-11-11): Kill all for the prop accounts
+
+In plain words: nothing changes on the chart yet, and nothing changes for hand trading. ChartBridge learns one new command,
+for the Fleet tab's Kill all button to come (Anthony 2026-11-11: Kill all acts on prop accounts only).
+
+- **What it does.** For every agent trading prop accounts: it closes what that agent holds (the agent's own flatten, the one
+  that runs at its flat time), turns its kill switch on (kept through a restart), and puts it in Shadow. Releasing the kill
+  switch later leaves it in Shadow: Auto is your click again.
+- **What it never touches.** An agent on the personal account or a Sim account; the bot; the copier; the order ticket; any
+  manual order or any position an agent does not own, on any account. With no personal account picked no account is prop,
+  and the command is refused.
+- **Not changed.** The agent's own kill switch and the Board's KILL ALL AGENTS (every agent, no flatten) work as before.
+  Every add-on file but `ChartBridge.cs` (its version) and `ChartBridgeAgents.cs` is the 0.6.16 file byte for byte.
+- **Not there yet.** No button sends it: that comes with the Fleet tab.
+
+`nt8/PROTOCOL.md`, "Kill all for the prop accounts (0.6.17)". ChartBridge 0.6.17 is a recompile (`-InstallChartBridge`, then
+F5 while flat).
+
 ## ChartBridge 0.6.16 and chart 1.44.2 (2026-11-11): prop accounts: pick your personal account on the page; an agent's Auto is kept through the 17:00 reset and comes back once after a restart
 
 In plain words: nothing changes for hand trading. This is the first ChartBridge piece of the Prop Business (Anthony's build

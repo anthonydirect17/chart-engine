@@ -1,4 +1,4 @@
-# ChartBridge protocol (v1 market data and fills, v2 orders, v3 accounts, strategies, copier and bot, 0.5.0 agents, 0.5.1 accounts, 0.5.8 prop groups, 0.6.0 group trading, 0.6.1 a group's Type and default hero, 0.6.3 the audit fixes, 0.6.4 the no-trade-record alarm and Merge on an off follower, 0.6.8 the minute book, 0.6.10 the account lifecycle and the NQ tick file, 0.6.11 the bar trail and the narrower 1 second request, 0.6.12 the bar trail follow-ups, 0.6.13 the tick day's morning catch-up and the raw deleted once packed, 0.6.14 the tick day check's rule: short and holes, 0.6.15 the 1 second pull retired: the NQ tick file is the one source, 0.6.16 prop accounts: Auto kept through the reset and a restart)
+# ChartBridge protocol (v1 market data and fills, v2 orders, v3 accounts, strategies, copier and bot, 0.5.0 agents, 0.5.1 accounts, 0.5.8 prop groups, 0.6.0 group trading, 0.6.1 a group's Type and default hero, 0.6.3 the audit fixes, 0.6.4 the no-trade-record alarm and Merge on an off follower, 0.6.8 the minute book, 0.6.10 the account lifecycle and the NQ tick file, 0.6.11 the bar trail and the narrower 1 second request, 0.6.12 the bar trail follow-ups, 0.6.13 the tick day's morning catch-up and the raw deleted once packed, 0.6.14 the tick day check's rule: short and holes, 0.6.15 the 1 second pull retired: the NQ tick file is the one source, 0.6.16 prop accounts: Auto kept through the reset and a restart, 0.6.17 Kill all for the prop accounts)
 
 ChartBridge is a NinjaTrader 8 add-on. It serves the live chart page at `http://localhost:8765/` and
 talks to it over one WebSocket at `ws://localhost:8765/ws`. Everything stays on the local machine.
@@ -3620,6 +3620,40 @@ outside brake (a runner without it sends no plan). A ChartBridge started in the 
 so it never adopts a position. Checked in `check/AgentHarness.cs` (`PropAccounts`: a no-setting install, the personal account,
 a Sim account, a prop account and a prop group; the reset, the restart flat and not flat, an account not known yet, the kill
 switch, an account change) and `test/nt8-agents.test.js` (every new branch passes through `IsProp`).
+
+### Kill all for the prop accounts (0.6.17)
+
+Anthony's ruling of 2026-11-11 (the build answers, B question 6; the addendum: "Fleet's Kill all acts on prop accounts
+only"). One page message, no agent key:
+
+```json
+{"type": "agentKillAllProp", "cid": "k1"}
+```
+
+Guarded as every agent page message (a signed-in v3 page from an allowed origin, trading on, the action rate). For every
+agent whose accounts are ALL prop (every account it follows: its account or every member of its group, and a seat that left
+while it holds the agent's trade; `ChartBridgeBranches.IsProp`, "Prop accounts" above), under its placement gate and in this
+order:
+
+1. **Its own flatten starts** on every seat: the flat time's job (`CB#<tag> ag:<id> flat`). It cancels the agent's working
+   orders there, waits for NinjaTrader to confirm them, and closes at market only what the agent owns. It never touches a
+   manual order, a copier order, or a position that is not the agent's, on any account. It runs whatever the mode and with
+   the kill switch on, as the flat time's flatten does, and is loud until flat ("NOT FLAT?", every 10 s).
+2. **Its kill switch goes on** (`agentKill` on: saved in `agent-<id>-kill.txt`, so a restart keeps it; its unfilled entries
+   cancelled; its saved Auto removed).
+3. **Its mode goes to Shadow**, so releasing the kill switch later leaves Auto off until it is set on the page again.
+
+The pages get one `status` `warn`: "Kill all (prop accounts): agent <id> on <account>: flattening what it owns, the kill
+switch on, mode shadow; ... . Not touched (not on prop accounts): <ids>. The bot, the copier and manual orders are never
+touched". The agent gets `welcome` again.
+
+**Never touched:** an agent on the personal account, a Sim account, None, or a group with a member that is not prop; the
+bot; the copier; the order ticket and every manual order. With no personal account picked nothing is prop: the message is
+refused ("no personal account is picked ... nothing was done") and nothing changes. The older `agentKill` (one agent,
+no flatten) and the Board's KILL ALL AGENTS (agentKill on to every agent) are unchanged.
+
+No page sends this message yet: the button comes with the Fleet tab. Checked in `check/AgentHarness.cs` (`PropAccounts`, the
+"kill all" parts) and `test/nt8-agents.test.js`.
 
 ### Prop groups and account state (0.5.8)
 
