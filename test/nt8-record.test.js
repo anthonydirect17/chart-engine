@@ -334,15 +334,26 @@ test('0.6.19: the day\'s profit stop: only ChartBridgeAgents.cs changed; every o
   const addons = JSON.parse(read('install-files.json')).addons.map(f => f.replace(/^nt8\//, ''));
   assert.deepStrictEqual(addons.filter(f => !want[f]).sort(), ['ChartBridge.cs', 'ChartBridgeAgents.cs', 'ChartBridgeGroups.cs'], 'every add-on file is checked or named as changed');
   for (const [f, h] of Object.entries(want)) assert.strictEqual(sha(read(f).replace(/\r/g, '')), h, f + ' is the 0.6.18 file');
-  // the review of 88 (F6): ChartBridgeGroups.cs gains only the profit side of the day's number (two fields, worked out beside
-  // Realized, which is unchanged); with those lines taken out it is the 0.6.18 file byte for byte
-  const groups18 = read('ChartBridgeGroups.cs').replace(/\r/g, '')
-    .replace(/\n\s*\/\/ 0\.6\.19 \(the review of 88, F6\)[^\n]*\n(?:\s*\/\/[^\n]*\n)*\s*public double\? ProfitPnl;\n\s*public string ProfitWhy;/, '')
-    .replace(/\n\s*double\? profitReal = null;[^\n]*/, '')
-    .replace(/ profitReal = [^;]+; \}/g, ' }')
-    .replace(/\n\s*n\.ProfitPnl = [^\n]*\n\s*n\.ProfitWhy = [^\n]*/, '');
-  assert.strictEqual(sha(groups18), '95baae61b5c8d135d0a1b84e5a0c7fd13e63ff936d22da76170259bc2e4610ff', 'ChartBridgeGroups.cs: the 0.6.18 file but for the F6 lines');
-  assert.strictEqual((read('ChartBridgeGroups.cs').match(/profitReal = /g) || []).length, 4, 'F6: set once for each realized source, nowhere else');
+  // The review of 88 and its second look (F6, D2; B4: pinned by the exact diff, never by stripping lines): ChartBridgeGroups.cs
+  // gains only the profit side of the day's number. Every added line and every changed line is listed here word for word;
+  // undone, the file is the 0.6.18 file byte for byte, so the loss side (Realized and every room) cannot change unseen.
+  const undo = (text, added, changed) => {
+    let lines = text.replace(/\r/g, '').split('\n');
+    for (const [now, was] of changed) {
+      assert.strictEqual(lines.filter(l => l === now).length, 1, 'a changed line is there once: ' + now.trim().slice(0, 80));
+      lines = lines.map(l => (l === now ? was : l));
+    }
+    for (const a of added) {
+      const at = lines.indexOf(a);
+      assert.ok(at >= 0, 'an added line is there: ' + a.trim().slice(0, 80));
+      lines.splice(at, 1);
+    }
+    return lines.join('\n');
+  };
+  const groupsAdded = ["            // 0.6.19 (the review of 88, F6): the day's number for a PROFIT stop (realized plus open). After a late start (ChartBridge", "            // started after 18:02 ET) the realized part is the LARGER of ChartBridge's own figure and NinjaTrader's (Realized keeps the", "            // smaller, right for a loss limit); null, with ProfitWhy, when it is not known. Read by the agents' day stop only.", "            public double? ProfitPnl;", "            public string ProfitWhy;", "            // D2: in the first second after 18:00 ET, before the groups' tick rolls the day start, NinjaTrader's realized may", "            // still be yesterday's: while a day start of another session is held, the profit side is not known (never latched)", "            public const string RollPendingWhy = \"the new session's day start is not read yet (18:00 ET)\";", "            double? profitReal = null;   // F6", "            string profitWhy = null;     // the review of 88's second look (D2)", "            n.ProfitPnl = profitReal.HasValue && n.Unrealized.HasValue ? profitReal.Value + n.Unrealized.Value : (double?)null;", "            n.ProfitWhy = n.ProfitPnl.HasValue ? null : profitWhy ?? (profitReal.HasValue ? \"NinjaTrader gives no open P&L for this account\" : realWhy);"];
+  const groupsChanged = [["                if (!late) { n.Realized = comp; realSrc = \"computed\"; profitReal = comp; }", "                if (!late) { n.Realized = comp; realSrc = \"computed\"; }"], ["                else if (ntReal.HasValue) { n.Realized = Math.Min(comp, ntReal.Value); realSrc = ntReal.Value < comp ? \"ninjatrader\" : \"computed\"; profitReal = Math.Max(comp, ntReal.Value); }", "                else if (ntReal.HasValue) { n.Realized = Math.Min(comp, ntReal.Value); realSrc = ntReal.Value < comp ? \"ninjatrader\" : \"computed\"; }"], ["            else if (ntReal.HasValue) { n.Realized = ntReal; realSrc = \"ninjatrader\"; realWhy = null; if (mark == null || mark.Session == n.Session) profitReal = ntReal; else profitWhy = Numbers.RollPendingWhy; }", "            else if (ntReal.HasValue) { n.Realized = ntReal; realSrc = \"ninjatrader\"; realWhy = null; }"]];
+  assert.strictEqual(sha(undo(read('ChartBridgeGroups.cs'), groupsAdded, groupsChanged)), '95baae61b5c8d135d0a1b84e5a0c7fd13e63ff936d22da76170259bc2e4610ff', 'ChartBridgeGroups.cs: the 0.6.18 file but for the listed profit-side lines');
+  for (const [now, was] of groupsChanged) assert.strictEqual(now.replace(/ profitReal = [^;]+; \}$/, ' }').replace(/ if \(mark == null \|\| mark\.Session == n\.Session\) profitReal = ntReal; else profitWhy = Numbers\.RollPendingWhy; \}$/, ' }'), was, 'a changed line only adds the profit side: ' + was.trim());
   const codeOnly = src => src.replace(/\r/g, '').split('\n').map(l => l.replace(/^\s*\/\/.*$/, '').replace(/([;{})])\s*\/\/.*$/, '$1').replace(/\s+$/, '')).filter(l => l.length > 0).join('\n')
     .replace(/public const string Version = "[0-9.]+";/, 'public const string Version = "";');
   // the review of 90 (N6): the saved Auto file's second header line now says Auto ends at 17:00 ET (words only)
@@ -362,9 +373,8 @@ test('0.6.19: the day\'s profit stop: only ChartBridgeAgents.cs changed; every o
     'check/Nt8Stubs.cs': 'e5aa806364ceb7470d845238e6ee3adc552525f4171784be5caeaa46569777c1',
   };
   for (const [f, h] of Object.entries(harness)) assert.strictEqual(sha(read(f).replace(/\r/g, '')), h, f + ' is the 0.6.18 file');
-  // the review of 88 (F6): GroupsHarness.cs gains only the two checks of the profit side; without them it is the 0.6.18 file
-  const gh18 = read('check/GroupsHarness.cs').replace(/\r/g, '').replace(/\n\s*ChartBridgeGroups\.Numbers pn = [^\n]*\n[^\n]*\n[^\n]*/, '').replace(/\n\s*pn = ChartBridgeGroups\.Read[^\n]*\n[^\n]*/, '');
-  assert.strictEqual(sha(gh18), 'c9b37698b0c2643a28545b0631d2f820558f06bd8994056d8a10cce08c97a27a', 'check/GroupsHarness.cs: the 0.6.18 file but for the F6 checks');
+  // GroupsHarness.cs gains only the checks of the profit side (F6, D2), listed word for word
+  assert.strictEqual(sha(undo(read('check/GroupsHarness.cs'), ["        ChartBridgeGroups.Numbers pn = ChartBridgeGroups.Read(\"SIM-B\", simB, false);", "        Check(pn.Realized == -400 && pn.ProfitPnl == -150 && pn.ProfitWhy == null,", "              \"0.6.19 (the review of 88, F6): for a PROFIT stop the larger of the two (-100), plus open (-50): \" + pn.ProfitPnl + \"; the loss side keeps the smaller: \" + pn.Realized);", "        pn = ChartBridgeGroups.Read(\"SIM-B\", simB, false);", "        Check(!pn.ProfitPnl.HasValue && (pn.ProfitWhy ?? \"\").Contains(\"started mid-session\"), \"F6: no NinjaTrader realized after a late start: the profit side is not known, with why: \" + pn.ProfitWhy);", "        // D2 (the review of 88's second look): 18:00:00, before the tick rolls the day start: NinjaTrader's realized may still be", "        // yesterday's, so the profit side is not known (and never latched); the loss side reads as before", "        simB.Items[AccountItem.RealizedProfitLoss] = 700;", "        ClockEt(2026, 10, 16, 18, 0);", "        pn = ChartBridgeGroups.Read(\"SIM-B\", simB, false);", "        Check(!pn.ProfitPnl.HasValue && pn.ProfitWhy == ChartBridgeGroups.Numbers.RollPendingWhy && pn.Realized == 700,", "              \"D2: in the second after 18:00 before the day start rolls: no profit figure (\" + pn.ProfitWhy + \"); the loss side as before: \" + pn.Realized);", "        simB.Items[AccountItem.RealizedProfitLoss] = 0;"], [])), 'c9b37698b0c2643a28545b0631d2f820558f06bd8994056d8a10cce08c97a27a', 'check/GroupsHarness.cs: the 0.6.18 file but for the listed checks');
 });
 
 test('0.6.9: the decision id: the group entry\'s PlaceOrder call unchanged, set and cleared around it, noted before Submit', () => {

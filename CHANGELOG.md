@@ -85,7 +85,26 @@ fix is taken out.
 - **F6:** after a late start the profit stop counts the larger realized figure (the loss side keeps the smaller); a day's
   number not known is said once a session (N7). `ChartBridgeGroups.cs` gains only the two fields for this.
 - **N6:** the stale words (the page's confirm row, the saved Auto file's header, comments, `orders.sh`, PROTOCOL).
-- Not in this round: F7 (a contract added by hand on the bot's own contract is closed with the bot's), waiting for Anthony.
+- **F7, ruled by Anthony (2026-11-11):** "When the bot is trading the account, its the bots account for that day. I would
+  never touch it." So Kill all and the day's profit stop close the trader's position on its account and contract whole, a
+  contract added by hand included, and the status lines and PROTOCOL say so.
+
+**The second round (the second look at 88, 2026-11-11).**
+
+- **D1:** the reached latch survives a restart of ChartBridge (a new process): the day file's `#dayreached` lines fill the
+  list every trader's plan check reads. The harness restart now starts that list empty, as a new process has it.
+- **D2:** in the second after 18:00 ET, before the day start rolls, NinjaTrader's realized may still be yesterday's: the
+  profit side is not known then and nothing is latched.
+- **D3:** at the plan check the session's mark counts too (the smaller of it and the plan's own), so a plan naming a
+  higher mark just before a pass is refused.
+- **Kill all (the coordinator's ruling):** a group holding any prop account is stopped (a prop and a Sim account together
+  was "Not touched"); only its prop accounts are flattened; the personal account is never touched.
+- **The accepted race:** a hand order and the bot's close both fill: the status line says plainly the account is now
+  short (or long) and why; nothing more is done (Anthony's ruling).
+- **F6:** PROTOCOL says the larger figure can overstate the day after a late start that follows a loss. The groups files
+  are pinned by their exact diff, not by stripping lines.
+- Checks that fail for each break the review found passing: the latch never read back, not per session, kept by the
+  roll; Auto ending at 17:59; Auto renewed by setting it again; the personal account not excepted; D2; D3; the words.
 
 In plain words: nothing changes on the chart, and nothing changes for hand trading. A trader (a bot or an agent) now has a
 hard stop on the day's profit on the account it trades, so one big day can never break a firm's consistency rule, and a
