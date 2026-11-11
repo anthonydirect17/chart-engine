@@ -3630,30 +3630,42 @@ only"). One page message, no agent key:
 {"type": "agentKillAllProp", "cid": "k1"}
 ```
 
-Guarded as every agent page message (a signed-in v3 page from an allowed origin, trading on, the action rate). For every
-agent whose accounts are ALL prop (every account it follows: its account or every member of its group, and a seat that left
-while it holds the agent's trade; `ChartBridgeBranches.IsProp`, "Prop accounts" above), under its placement gate and in this
-order:
+Guarded as every agent page message (a signed-in v3 page from an allowed origin, trading on), except the action rate: Kill
+all is never refused as "too many order actions" (the review of 0.6.17, N2). For every agent whose accounts are ALL in
+scope (every account it follows: its account or every member of its group, and a seat that left while it holds the agent's
+trade), under its placement gate and in this order:
 
-1. **Its own flatten starts** on every seat: the flat time's job (`CB#<tag> ag:<id> flat`). It cancels the agent's working
-   orders there, waits for NinjaTrader to confirm them, and closes at market only what the agent owns. It never touches a
-   manual order, a copier order, or a position that is not the agent's, on any account. It runs whatever the mode and with
-   the kill switch on, as the flat time's flatten does, and is loud until flat ("NOT FLAT?", every 10 s).
+1. **Its own flatten starts** on every seat (`CB#<tag> ag:<id> flat`). It cancels **only the agent's own working orders**
+   there, waits for NinjaTrader to confirm them, and closes at market only what the agent owns. An order placed by hand, by
+   the bot or by the copier on the same account and contract is **not cancelled: it stays and can still fill** (the review's
+   F2; Anthony 2026-11-11: "yes, okay"). The flat time's flatten and the agent's own `flatten` are unchanged: on a pair the
+   agent owns they cancel every order that may fill there. It runs whatever the mode and with the kill switch on, and is
+   loud until flat ("NOT FLAT?", every 10 s).
 2. **Its kill switch goes on** (`agentKill` on: saved in `agent-<id>-kill.txt`, so a restart keeps it; its unfilled entries
    cancelled; its saved Auto removed).
 3. **Its mode goes to Shadow**, so releasing the kill switch later leaves Auto off until it is set on the page again.
 
-The pages get one `status` `warn`: "Kill all (prop accounts): agent <id> on <account>: flattening what it owns, the kill
-switch on, mode shadow; ... . Not touched (not on prop accounts): <ids>. The bot, the copier and manual orders are never
-touched". The agent gets `welcome` again.
+**In scope, for Kill all only** (the review's F1, `ChartBridgeAgent.KillScope`): every account except the personal account,
+an account NinjaTrader lists as Sim, Backtest, Playback and None. **An account NinjaTrader does not list right now is in
+scope**: `IsProp` answers no for it (the careful side for keeping Auto), which would be the wrong side for a kill. So an
+agent in Auto on a prop account that dropped off NinjaTrader's list, or is not listed yet after a restart, gets the kill
+switch and Shadow and loses its saved Auto; nothing can be flattened on an account that is not listed, and the kill switch
+then refuses every plan when it is back.
 
-**Never touched:** an agent on the personal account, a Sim account, None, or a group with a member that is not prop; the
-bot; the copier; the order ticket and every manual order. With no personal account picked nothing is prop: the message is
-refused ("no personal account is picked ... nothing was done") and nothing changes. The older `agentKill` (one agent,
-no flatten) and the Board's KILL ALL AGENTS (agentKill on to every agent) are unchanged.
+The pages get one `status` `warn`: "Kill all (prop accounts): agent <id> on <account>: flattening what it owns, the kill
+switch on, mode shadow; ... . NOT STOPPED, still trading its prop accounts (it trades the personal account too; stop it on
+the Agent tab): <ids>. FAILED, stop it on the Agent tab now: <ids>. Not touched (not on prop accounts): <ids>. Only the
+traders' own orders were cancelled: an order placed by hand, the bot's or the copier's stays and can still fill" (each of
+the three lists only when it has a name). One agent that throws never stops the others (N3). The agent gets `welcome` again.
+
+**Never touched:** an agent on the personal account, a Sim account, None, or a group with a member that is out of scope (a
+group that holds the personal account and prop accounts is left alone and named loudly as NOT STOPPED, N1); the bot; the
+copier; the order ticket and every manual order. With no personal account picked nothing is prop: the message is refused
+("no personal account is picked ... nothing was done") and nothing changes. The older `agentKill` (one agent, no flatten)
+and the Board's KILL ALL AGENTS (agentKill on to every agent) are unchanged.
 
 No page sends this message yet: the button comes with the Fleet tab. Checked in `check/AgentHarness.cs` (`PropAccounts`, the
-"kill all" parts) and `test/nt8-agents.test.js`.
+"kill all" parts, the review's three scenarios among them) and `test/nt8-agents.test.js`.
 
 ### Entry rules per trader (0.6.18)
 

@@ -5549,6 +5549,104 @@ public static class AgentHarness
             }
             finally { if (groupsWas != null) File.WriteAllText(GroupsFile, groupsWas); else Gone(GroupsFile); ChartBridgeGroups.StartNow(); }
         });
+        // ---- the review of 86 (REVIEW_2026-11-11_chartengine_85_86_87.md): F2, F1 (its scenarios A, B, C), N1, N2
+        Part("kill all: an order placed by hand on the same account and contract stays (F2)", () =>
+        {
+            PropStart("PROP-1", true);
+            Mode("manrae", "auto");
+            Order e = PlacedOn(prop1, Good(NewId()));
+            Fill(e, 1, 24999);
+            Advance(500);
+            // a sell limit named Exit, placed in NinjaTrader itself on the pair the agent holds its trade on
+            Order hand = prop1.CreateOrder(mnq, OrderAction.Sell, OrderType.Limit, OrderEntry.Manual, TimeInForce.Day, 1, 25050, 0, "", "Exit", NinjaTrader.Core.Globals.MaxDate, null);
+            hand.OrderState = OrderState.Working; lock (prop1.Orders) prop1.Orders.Add(hand);
+            Check(e != null && PosOf(prop1, mnq) == 1 && Legs(prop1, e).Count(IsLive) == 2, "kill all F2 setup: manrae long 1 MNQ on PROP-1 with its stop and target, and a hand order Exit resting there: " + AgentReject());
+            int calls = prop1.Calls.Count, s0 = N(page);
+            P("{\"type\":\"agentKillAllProp\",\"cid\":\"kf2\"}");
+            Advance(500);
+            foreach (Order o in Legs(prop1, e)) if (IsLive(o)) { o.OrderState = OrderState.Cancelled; Update(o); }
+            Advance(1500);
+            List<string> since = prop1.Calls.Skip(calls).ToList();
+            Check(since.Any(c => c.StartsWith("cancel") && c.Contains(" stop ")) && since.Any(c => c.StartsWith("cancel") && c.Contains(" target ")), "kill all F2: the agent's own stop and target are cancelled: " + string.Join(" | ", since));
+            Check(!since.Any(c => c.Contains("Exit")) && hand.OrderState == OrderState.Working, "kill all F2: the hand order is not cancelled and still works: " + string.Join(" | ", since));
+            Order close;
+            lock (prop1.Orders) close = prop1.Orders.LastOrDefault(o => Regex.IsMatch(o.Name ?? "", "^CB#[0-9a-f]{8} ag:manrae flat$"));
+            Check(close != null && close.OrderType == OrderType.Market && close.OrderAction == OrderAction.Sell && close.Quantity == 1, "kill all F2: the agent's own 1 contract is closed at market with the hand order still resting");
+            Check(Any(page, s0, "Only the traders' own orders were cancelled: an order placed by hand, the bot's or the copier's stays and can still fill") && M.Killed && ModeNow() == "shadow",
+                  "kill all F2: the status line says a hand order stays and can still fill; the kill switch is on, Shadow");
+            lock (prop1.Orders) prop1.Orders.Remove(hand);
+            Settle(prop1);
+            P("{\"type\":\"agentKill\",\"cid\":\"k\",\"agent\":\"manrae\",\"on\":false}");
+        });
+        Part("kill all: a prop account NinjaTrader does not list right now is still in scope (F1)", () =>
+        {
+            // scenario A: in Auto on PROP-1; PROP-1 leaves the list; Kill all
+            PropStart("PROP-1", true);
+            Mode("manrae", "auto");
+            Check(AutoFileThere && ModeNow() == "auto", "kill all F1 A setup: Auto on PROP-1, saved");
+            lock (Account.All) Account.All.Remove(prop1);
+            int s0 = N(page);
+            P("{\"type\":\"agentKillAllProp\",\"cid\":\"kf1a\"}");
+            Check(M.Killed && ModeNow() == "shadow" && !AutoFileThere && Any(page, s0, "agent manrae on PROP-1") && !Any(page, s0, "no agent is on prop accounts"),
+                  "kill all F1 A: the account is not listed: the kill switch is on, Shadow, the saved Auto removed: " + string.Join(" | ", page.Skip(s0)));
+            lock (Account.All) Account.All.Add(prop1);
+            Advance(40000);
+            Check(M.Killed && ModeNow() == "shadow" && !AutoFileThere, "kill all F1 A: the account is back: still killed, still Shadow");
+            P("{\"type\":\"agentKill\",\"cid\":\"k\",\"agent\":\"manrae\",\"on\":false}");
+            // scenario B: ChartBridge restarts, PROP-1 not listed yet, Kill all, the account arrives flat: no Auto, no plan placed
+            PropStart("PROP-1", true);
+            Mode("manrae", "auto");
+            lock (Account.All) Account.All.Remove(prop1);
+            Restart();
+            Check(AutoFileThere && ModeNow() != "auto", "kill all F1 B setup: after the restart the saved Auto waits for the account");
+            s0 = N(page);
+            P("{\"type\":\"agentKillAllProp\",\"cid\":\"kf1b\"}");
+            Check(M.Killed && ModeNow() == "shadow" && !AutoFileThere && !Any(page, s0, "no agent is on prop accounts"), "kill all F1 B: before the account is listed: killed, the saved Auto removed: " + string.Join(" | ", page.Skip(s0)));
+            lock (Account.All) Account.All.Add(prop1);
+            Last2();
+            Advance(40000);
+            int calls = prop1.Calls.Count;
+            Check(M.Killed && ModeNow() == "shadow" && !NinjaTrader.Code.Output.Lines.Skip(Math.Max(0, NinjaTrader.Code.Output.Lines.Count - 40)).Any(x => x.Contains("Auto restored")), "kill all F1 B: the account arrives flat: Auto is not restored");
+            Last2();
+            A(Good(NewId()));
+            Check(prop1.Calls.Count == calls && AgentReject().Contains("kill switch"), "kill all F1 B: and a plan is refused, nothing placed on PROP-1: " + AgentReject());
+            P("{\"type\":\"agentKill\",\"cid\":\"k\",\"agent\":\"manrae\",\"on\":false}");
+            // scenario C: a group whose third member is no longer listed; and N1, a group with the personal account in it
+            string groupsWas = File.Exists(GroupsFile) ? File.ReadAllText(GroupsFile) : null;
+            try
+            {
+                WriteGroup("PROP-1", "PROP-2", "PROP-GONE");
+                PropStart("group:g1", true);
+                Mode("manrae", "auto");
+                s0 = N(page);
+                P("{\"type\":\"agentKillAllProp\",\"cid\":\"kf1c\"}");
+                Check(M.Killed && ModeNow() == "shadow" && !Any(page, s0, "no agent is on prop accounts"), "kill all F1 C: a group with a member NinjaTrader no longer lists: killed, Shadow: " + string.Join(" | ", page.Skip(s0)));
+                P("{\"type\":\"agentKill\",\"cid\":\"k\",\"agent\":\"manrae\",\"on\":false}");
+                WriteGroup("MINE-1", "PROP-1");
+                PropStart("group:g1", true);
+                Mode("manrae", "auto");
+                s0 = N(page);
+                int mineCalls = mine.Calls.Count;
+                P("{\"type\":\"agentKillAllProp\",\"cid\":\"kn1\"}");
+                Check(!M.Killed && mine.Calls.Count == mineCalls && Any(page, s0, "NOT STOPPED, still trading its prop accounts (it trades the personal account too; stop it on the Agent tab): manrae"),
+                      "kill all N1: a group with the personal account in it is not touched, and the status line says so loudly: " + string.Join(" | ", page.Skip(s0)));
+            }
+            finally { if (groupsWas != null) File.WriteAllText(GroupsFile, groupsWas); else Gone(GroupsFile); ChartBridgeGroups.StartNow(); }
+            Check(!ChartBridgeAgent.KillScope("MINE-1") && !ChartBridgeAgent.KillScope("SIM-E") && !ChartBridgeAgent.KillScope("Playback101") && !ChartBridgeAgent.KillScope("Backtest") && !ChartBridgeAgent.KillScope("") &&
+                  ChartBridgeAgent.KillScope("PROP-1") && ChartBridgeAgent.KillScope("NOT-LISTED-9"), "kill all F1: in scope unless the personal account, a listed Sim account, Backtest, Playback or none");
+        });
+        Part("kill all is never refused for the action rate (N2)", () =>
+        {
+            PropStart("PROP-1", true);
+            Mode("manrae", "auto");
+            for (int i = 0; i < 12; i++) OnClient(pc, "{\"type\":\"agentKill\",\"cid\":\"r" + i + "\",\"agent\":\"manrae\",\"on\":false}");
+            Check(PageReject().Contains("too many order actions"), "kill all N2 setup: an ordinary message is refused as too many: " + PageReject());
+            int s0 = N(page);
+            OnClient(pc, "{\"type\":\"agentKillAllProp\",\"cid\":\"kn2\"}");
+            Check(M.Killed && ModeNow() == "shadow" && Any(page, s0, "Kill all (prop accounts): agent manrae on PROP-1"), "kill all N2: sent right after, it is carried out: " + string.Join(" | ", page.Skip(s0)));
+            clock += 2000;
+            P("{\"type\":\"agentKill\",\"cid\":\"k\",\"agent\":\"manrae\",\"on\":false}");
+        });
         Part("prop: the harness is left as it was", () =>
         {
             try { Gone(AutoFilePath); } catch (Exception) { }

@@ -101,6 +101,17 @@ for the Fleet tab's Kill all button to come (Anthony 2026-11-11: Kill all acts o
 - **Not changed.** The agent's own kill switch and the Board's KILL ALL AGENTS (every agent, no flatten) work as before.
   Every add-on file but `ChartBridge.cs` (its version) and `ChartBridgeAgents.cs` is the 0.6.16 file byte for byte.
 - **Not there yet.** No button sends it: that comes with the Fleet tab.
+- **After its review** (2026-11-11, before any PC had it; Anthony: "yes, okay"):
+  - It cancels **only the trader's own orders**. An order you placed by hand on the same account and contract is not
+    cancelled: it stays and can still fill, and the status line says so. (At its flat time a trader still cancels every
+    order on a contract it holds, as before.)
+  - A prop account that NinjaTrader does not list at that moment (it dropped off the list, or ChartBridge just restarted)
+    **is still stopped**: the trader's kill switch goes on, it drops to Shadow and its saved Auto is removed, so it cannot
+    trade when the account comes back.
+  - A trader that trades your personal account and prop accounts together is left alone, as before, and is now named
+    loudly as NOT STOPPED.
+  - Kill all is never refused for sending too many actions in a second, and one trader that fails never stops the others
+    from being stopped.
 
 `nt8/PROTOCOL.md`, "Kill all for the prop accounts (0.6.17)". ChartBridge 0.6.17 is a recompile (`-InstallChartBridge`, then
 F5 while flat).

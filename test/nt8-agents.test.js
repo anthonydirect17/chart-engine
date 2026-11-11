@@ -78,7 +78,8 @@ test('0.5.0 agents: order calls only where the contract allows; a market entry o
   // contract section 10: an agent entry's protective exit is named for the agent; its legs keep v2's names (the entry's tag)
   assert.match(bodies(ocode, 'PlaceLegs'), /agentOf != null \? "CB#" \+ br\.Tag \+ " ag:" \+ agentOf \+ " protect f" \+ filled\.ToString\(CultureInfo\.InvariantCulture\) : "CB#" \+ br\.Tag \+ " exit" \+ mark/);
   assert.match(bodies(acode, 'SendCancel'), /try \{ o\.Account\.Cancel\(new\[\] \{ o \}\); \}\s*catch \(Exception ex\)/);
-  assert.match(bodies(acode, 'StepFlatten'), /may\.Where\(o => o != j\.Close && \(j\.Owned \|\| \(IsMine\(o\) && !\(IsReStop\(o\) && \(p1 != 0 \|\| p2 != 0\)\)\)\)\)/, 'a pair it does not own: only its own orders, never its stop placed again over a position');
+  // the review of 0.6.17 (F2): on a pair it owns, every order there unless the job is own orders only (Kill all), then only its own
+  assert.match(bodies(acode, 'StepFlatten'), /may\.Where\(o => o != j\.Close && \(j\.Owned \? \(!j\.OwnOnly \|\| IsMine\(o\)\) : \(IsMine\(o\) && !\(IsReStop\(o\) && \(p1 != 0 \|\| p2 != 0\)\)\)\)\)/, 'a pair it does not own: only its own orders, never its stop placed again over a position');
   // every entry goes through ChartBridgeOrders.PlaceAgentEntry: the page's order path with the agent as its source
   assert.match(bodies(acode, 'Place'), /ChartBridgeOrders\.PlaceAgentEntry\(Id, p\.Id, text, out placed\)/);
   assert.match(bodies(acode, 'Place'), /string why = Checks\(p, forAccount, forAccount != null, out acct\);/, 'every check again at the moment of placing, and the account they validated is the one used');
@@ -266,12 +267,24 @@ test('0.6.17 Kill all for the prop accounts: only agents whose every account is 
   assert.match(acode, /\{ "agentKillAllProp", new\[\] \{ "type", "cid" \} \},/, 'no agent key: it is every agent on prop accounts');
   const all = bodies(acode, 'PageKillAllProp');
   assert.match(all, /if \(!ChartBridgeBranches\.PersonalNamed\) return "Kill all acts on prop accounts only/, 'no personal account picked: refused, nothing done');
-  assert.match(all, /foreach \(ChartBridgeAgent a in All\(\)\)\s*\{\s*string words = a\.KillProp\(\);/);
-  assert.ok(!/ChartBridgeBot|ChartBridgeCopier|ChartBridgeOrders\.|Flatten|Cancel/.test(all), 'it reaches the bot, the copier and the order path nowhere');
+  assert.match(all, /foreach \(ChartBridgeAgent a in All\(\)\)\s*\{[^\n]*\n\s*try\s*\{\s*string words = a\.KillProp\(\);[\s\S]*?\}\s*catch \(Exception ex\) \{ failed\.Add\(a\.Id\);/, 'one agent that throws never stops the others (the review\'s N3)');
+  assert.match(all, /else if \(a\.KillMixed\(\)\) mixed\.Add\(a\.Id\);/, 'an agent on the personal account and prop accounts is named, loudly (N1)');
+  assert.match(all, /Only the traders' own orders were cancelled: an order placed by hand, the bot's or the copier's stays and can still fill/, 'the status line says a hand order stays (F2)');
+  assert.ok(!/ChartBridgeBot|ChartBridgeCopier|ChartBridgeOrders\.|Flatten|Cancel\(/.test(all), 'it reaches the bot, the copier and the order path nowhere');
   const one = bodies(acode, 'KillProp');
   assert.match(one, /lock \(PlaceGate\)/);
-  assert.match(one, /List<string> seats = AllSeats\(\)\.Select\(x => x\.Name\)\.ToList\(\);\s*if \(seats\.Count == 0 \|\| !seats\.All\(x => ChartBridgeBranches\.IsProp\(x\)\)\) return null;/, 'every account it follows must be prop, or it is not touched');
-  assert.match(one, /int roots = StartFlatten\("Kill all \(prop accounts\)", false\);\s*string err = KillLocked\(true\);[\s\S]*mode = "shadow";/, 'the flatten, then the kill switch, then Shadow');
+  assert.match(one, /List<string> seats = AllSeats\(\)\.Select\(x => x\.Name\)\.ToList\(\);\s*if \(seats\.Count == 0 \|\| !seats\.All\(x => KillScope\(x\)\)\) return null;/, 'every account it follows must be in scope, or it is not touched');
+  assert.match(one, /int roots = StartFlatten\("Kill all \(prop accounts\)", false, null, false, true\);[^\n]*\n\s*string err = KillLocked\(true\);[\s\S]*mode = "shadow";/, 'the flatten (its own orders only), then the kill switch, then Shadow');
+  // the review of 0.6.17: F1 (scope for a kill: an unlisted account is in), F2 (own orders only), N2 (never the action rate)
+  const scope = bodies(acode, 'KillScope');
+  assert.match(scope, /if \(!ChartBridgeBranches\.PersonalNamed \|\| ChartBridgeBranches\.IsPersonal\(name\)\) return false;/);
+  assert.match(scope, /if \(ChartBridgeOrders\.IsNeverTradable\(name\)\) return false;/);
+  assert.match(scope, /Account listed = FindAccount\(name\);\s*return listed == null \|\| !\(ChartBridgeBot\.IsSim\(listed\) \|\| ChartBridgeAccounts\.IsSim\(listed\)\);/, 'not listed: in scope');
+  assert.match(acode, /List<Order> others = may\.Where\(o => o != j\.Close && \(j\.Owned \? \(!j\.OwnOnly \|\| IsMine\(o\)\) : \(IsMine\(o\) && !\(IsReStop\(o\) && \(p1 != 0 \|\| p2 != 0\)\)\)\)\)\.ToList\(\);/, 'own orders only when the job says so; every other flatten as before');
+  assert.strictEqual((acode.match(/, false, true\);/g) || []).length, 1, 'only Kill all asks for own orders only here');
+  assert.match(acode, /if \(type == "agentKillAllProp"\) \{ why = PageKillAllProp\(\);[^\n]*\n\s*if \(!RateOk\(client\.Actions\)\)/, 'Kill all is handled before the action rate gate');
+  for (const s of ['kill all F2: the hand order is not cancelled and still works', 'kill all F1 A: the account is not listed', 'kill all F1 B: and a plan is refused, nothing placed', 'kill all F1 C: a group with a member NinjaTrader no longer lists', 'kill all N1:', 'kill all N2: sent right after, it is carried out'])
+    assert.ok(read(path.join('check', 'AgentHarness.cs')).includes(s), s);
   assert.match(one, /DropAutoIntent\("Kill all \(prop accounts\)"\);/);
   assert.ok(!/\.Submit\s*\(|\.CreateOrder\s*\(|PlaceOrder|PlaceAgentEntry/.test(one), 'no order call of its own: the close is the agent\'s flatten job, as at the flat time');
   assert.equal((acode.match(/KillProp\(\)/g) || []).length, 2, 'defined once, called once');
