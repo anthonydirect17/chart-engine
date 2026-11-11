@@ -34,11 +34,11 @@ test('0.5.0 agents: the new file ships, is compile-checked and harnessed', () =>
   for (const f of ['check.sh', 'orders.sh']) assert.match(read(path.join('check', f)), /ChartBridgeBot\.cs ChartBridgeAgents\.cs ChartBridgeStrategies\.cs/);
   assert.match(read(path.join('check', 'orders.sh')), /check\/AgentHarness\.cs/);
   assert.match(read(path.join('check', 'OrdersHarness.cs')), /Section\("agents \(0\.5\.0\)", AgentHarness\.Run\);/);
-  assert.match(main, /public const string Version = "0\.(5\.[0-8]|6\.([0-9]|1[0-7]))";/);   // 0.6.17: Kill all for the prop accounts; 0.6.16: prop accounts (Auto kept through the reset and one restore after a restart, prop only); 0.6.15: the 1 second pull retired; 0.6.14: the tick day check rule; 0.6.13: the tick day's morning catch-up, the raw deleted once packed; 0.6.12: the bar trail follow-ups; 0.6.10: the account lifecycle (remove-only for an account NinjaTrader no longer lists, Hide leaves the group); 0.6.9: the stats suite's Phase 2 (1 second bars, the order record, decision ids; recording only); 0.6.8: the minute book (the history path only); 0.6.7: the bench, no hedging always on, a group's own rules optional; 0.6.6: the firm's limits on entries, riskAlert, firmMinimum, copierFollowerRemove; 0.6.5: each member's own rules and the risk percent; 0.6.4: no false no-trade-record alarm, the alarm cleared, Merge on an off follower; 0.6.3: the audit fixes (a missed reset caught up, closes not seen, files that survive a power cut, the kill switch kept); 0.6.2: group stand-downs and league seats; 0.6.1: a group's type and default hero; 0.6.0: group trading (seats); 0.5.8: groups and accountState; 0.5.7: the plan id, the TradeLost hold, None and the daily reset; 0.5.1: the accounts follow NinjaTrader, on top of 0.5.0; 0.5.3: the agents' MNQ cap; 0.5.4: the window while exposed; 0.5.5: the accounts line and unknown keys; 0.5.6: the time check
+  assert.match(main, /public const string Version = "0\.(5\.[0-8]|6\.([0-9]|1[0-8]))";/);   // 0.6.18: entry rules per trader (market entry, no target); 0.6.17: Kill all for the prop accounts; 0.6.16: prop accounts (Auto kept through the reset and one restore after a restart, prop only); 0.6.15: the 1 second pull retired; 0.6.14: the tick day check rule; 0.6.13: the tick day's morning catch-up, the raw deleted once packed; 0.6.12: the bar trail follow-ups; 0.6.10: the account lifecycle (remove-only for an account NinjaTrader no longer lists, Hide leaves the group); 0.6.9: the stats suite's Phase 2 (1 second bars, the order record, decision ids; recording only); 0.6.8: the minute book (the history path only); 0.6.7: the bench, no hedging always on, a group's own rules optional; 0.6.6: the firm's limits on entries, riskAlert, firmMinimum, copierFollowerRemove; 0.6.5: each member's own rules and the risk percent; 0.6.4: no false no-trade-record alarm, the alarm cleared, Merge on an off follower; 0.6.3: the audit fixes (a missed reset caught up, closes not seen, files that survive a power cut, the kill switch kept); 0.6.2: group stand-downs and league seats; 0.6.1: a group's type and default hero; 0.6.0: group trading (seats); 0.5.8: groups and accountState; 0.5.7: the plan id, the TradeLost hold, None and the daily reset; 0.5.1: the accounts follow NinjaTrader, on top of 0.5.0; 0.5.3: the agents' MNQ cap; 0.5.4: the window while exposed; 0.5.5: the accounts line and unknown keys; 0.5.6: the time check
   assert.ok(!/(^|[\s(=,+:?])\$"/m.test(acode) && !/\?\.\w/.test(acode) && !/\bnameof\(/.test(acode), 'C# 5');
 });
 
-test('0.5.0 agents: order calls only where the contract allows; never a market entry, never a flatten call', () => {
+test('0.5.0 agents: order calls only where the contract allows; a market entry only by its own rules (0.6.18), never a flatten call', () => {
   let rest = acode;
   for (const f of ['SendCancel', 'StepFlatten', 'SendClose', 'SendStop']) rest = rest.replace(bodies(acode, f), '');
   for (const re of [/\.Submit\s*\(/, /\.CreateOrder\s*\(/, /\.Change\s*\(/, /\.Cancel\s*\(/, /\.Flatten\s*\(/, /CancelAllOrders/, /\bAtm\w*\./])
@@ -85,8 +85,8 @@ test('0.5.0 agents: order calls only where the contract allows; never a market e
   for (const f of ['SetMode', 'SetKill', 'SetRules']) assert.match(bodies(acode, f), /lock \(PlaceGate\) return \w+Locked\(d\);/, f + ' waits for a placement under way');
   assert.match(bodies(acode, 'SetAccount'), /lock \(PlaceGate\)\s*\{\s*why = SetAccountLocked\(d\);\s*if \(why == null\) dropped = ChartBridgeBranches\.Chosen\("agent:" \+ Id\);/, 'SetAccount waits for a placement under way (0.6.3: and drops a pending reset under the same lock)');
   assert.match(bodies(ocode, 'PlaceOrderLocked'), /if \(agent != null\) \{ string agentWhy = ChartBridgeAgents\.PlacingProblem\(agent, account\.Name, kind, isBuy, price, limitPx, tick\);/, 'the order path asks the agent at the last moment');
-  assert.match(bodies(ocode, 'PlaceOrderLocked'), /if \(agent != null && \(\(kind != "limit" && kind != "stopLimit"\) \|\| strategyBody != null \|\| bracketBody == null\)\) return/);
-  assert.match(bodies(ocode, 'PlaceOrderLocked'), /if \(agent != null && \(stopTicks < 1 \|\| targetTicks < 1\)\) return "every agent entry needs a stop and a target";/);
+  assert.match(bodies(ocode, 'PlaceOrderLocked'), /if \(agent != null && \(\(kind != "limit" && kind != "stopLimit" && !\(kind == "market" && ChartBridgeAgents\.MayMarket\(agent\)\)\) \|\| strategyBody != null \|\| bracketBody == null\)\) return/);
+  assert.match(bodies(ocode, 'PlaceOrderLocked'), /if \(agent != null && \(stopTicks < 1 \|\| \(targetTicks < 1 && !ChartBridgeAgents\.MayNoTarget\(agent\)\)\)\) return "every agent entry needs a stop and a target";/);
   assert.match(bodies(ocode, 'PlaceOrderLocked'), /if \(agent != null\) cap = AgentEntryCap\(agent, root, out capWhy\);/);   // 0.5.3 review: same cap, its words named
   assert.match(bodies(acode, 'AgentEntryCap'), /int own = ChartBridgeAgents\.CapFor\(agent, root\), conf = AgentCap\(root\);\s*if \(conf < own\) \{[^}]*return conf; \}[\s\S]*return own;/);
   assert.match(bodies(ocode, 'PlaceOrderLocked'), /if \(agent != null\) \{ name = "CB#" \+ tag \+ " ag:" \+ agent \+ " s" \+ stopTicks \+ " t" \+ targetTicks;/);
@@ -282,6 +282,27 @@ test('0.6.17 Kill all for the prop accounts: only agents whose every account is 
   // the page does not send it yet (the button comes with the Fleet tab); the Board's KILL ALL AGENTS is as it was
   const fsx = require('node:fs');
   for (const f of fsx.readdirSync(path.join(__dirname, '..', 'live')).filter(f => f.endsWith('.js'))) assert.ok(!fsx.readFileSync(path.join(__dirname, '..', 'live', f), 'utf8').includes('agentKillAllProp'), f);
+});
+
+test('0.6.18 entry rules per trader: a market entry and an entry with no target only when that trader\'s rules allow each; a stop always', () => {
+  assert.match(acode, /public bool MarketEntry, NoTarget;/);
+  assert.match(acode, /"maxTrades", "maxLosses", "marketEntry", "noTarget" \} \},/);
+  const checks = bodies(acode, 'Checks');
+  assert.match(checks, /if \(p\.Kind != "limit" && p\.Kind != "stopLimit" && !\(p\.Kind == "market" && r\.MarketEntry\)\)\s*return "an agent's entry is a limit or a stop-limit \(/, 'market only with the rule');
+  assert.match(checks, /if \(p\.StopTicks < 1 \|\| p\.TargetTicks < 0 \|\| \(p\.TargetTicks < 1 && !r\.NoTarget\)\)\s*return "every agent entry needs a stop and a target/, 'a stop always; no target only with the rule');
+  assert.match(checks, /if \(p\.Kind == "market"\)\s*\{[\s\S]*bad = ChartBridgeOrders\.AgentLastPrice\(root, out last\);[\s\S]*Math\.Abs\(p\.Price - last\) > ChartBridgeAgents\.MarketMaxTicks \* tick \+ 1e-9/, 'a market plan\'s price against ChartBridge\'s own fresh last trade');
+  assert.match(acode, /public const int MarketMaxTicks = 20;/);
+  // off unless the page says so: an older page (no key) turns both off; the file carries a line only when on
+  assert.match(acode, /if \(d\.ContainsKey\("marketEntry"\)\) \{ if \(!Bool\(d, "marketEntry", out flag\)\) return "marketEntry must be true or false"; r\.MarketEntry = flag; \}/);
+  assert.match(acode, /if \(r\.MarketEntry\) lines\.Add\("marketEntry\\ton"\);/);
+  assert.match(acode, /\.Append\(r\.MarketEntry \? ",\\"marketEntry\\":true" : ""\)\.Append\(r\.NoTarget \? ",\\"noTarget\\":true" : ""\);/, 'each key only when on: a trader with neither reads as in 0.6.17');
+  // the order path asks the same rules, and an agent whose rules cannot be read is allowed neither
+  assert.match(acode, /public static bool MayMarket\(string id\) \{ ChartBridgeAgent a = Get\(id\); return a != null && a\.RuleAllows\(true\); \}/);
+  assert.match(acode, /internal bool RuleAllows\(bool market\) \{ lock \(Sync\) return rulesBroken == null && \(market \? rules\.MarketEntry : rules\.NoTarget\); \}/);
+  assert.equal((ocode.match(/ChartBridgeAgents\.May(Market|NoTarget)\(agent\)/g) || []).length, 2);
+  const h = read(path.join('check', 'AgentHarness.cs'));
+  for (const s of ['EntryRules();', 'entry rules: by default a market plan is refused, nothing sent', 'entry rules: the order path refuses an agent\'s market order by itself', 'entry rules: filled: one stop 8 ticks under the fill, and no target', 'entry rules: no stop is refused always', 'entry rules: a page that does not send them (an older page) turns both off'])
+    assert.ok(h.includes(s), s);
 });
 
 test('0.6.0 group trading: one plan, each seat through PlaceAgentEntry on its own account and size, never PlaceLock across seats', () => {

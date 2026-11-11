@@ -195,6 +195,7 @@ public static class AgentHarness
             GroupsAndAccountState();   // 0.5.8: plan check 10b (one direction per group) and accountState
             GroupTrading();   // 0.6.0: one agent trades a whole prop group (seats)
             StandDownsAndLeague();   // 0.6.2 (SPEC CE-2): a hero stood down on a group (agent-standdowns.txt) and league seats (Sim only)
+            EntryRules();     // 0.6.18: a trader's rules may allow a market entry and an entry with no target (both off by default)
             PropAccounts();   // prop accounts: Auto through the 17:00 reset and one restore after a restart; the personal account, Sim and a no-setting install as before
         }
         catch (Exception ex) { Check(false, "agent harness threw: " + ex); }
@@ -5019,6 +5020,111 @@ public static class AgentHarness
                 Check(AgentReject().Contains("was refused: 200") && LogLines(alarm) == a0 + 1, "fix round 2: the alarm once per build and group");
             }
             finally { File.WriteAllText(GroupsFile, groupsWas); ChartBridgeGroups.StartNow(); NoStandDowns(); Restart(); }
+        });
+    }
+
+    // ------------------------------------------------------------ 0.6.18: entry rules per trader (market entry, no target)
+    static string RulesWith(string extra) { string r = Rules("NQ,MNQ", ",\"maxQtyNQ\":2,\"maxQtyMNQ\":20", "09:45", "15:00", "15:55", 1800, 0, 0); return r.Substring(0, r.Length - 1) + extra + "}"; }
+    static string MarketPlan(string id, int stop, int target, string price = "25000") { return Plan(id, "MNQ", "buy", "market", price, 1, stop, target, 600); }
+    static void EntryRules()
+    {
+        Part("entry rules: off by default: a market entry and an entry with no target are refused", () =>
+        {
+            Fresh();   // manrae on SIM-E, auto, 10:00, the default rules
+            int calls = sime.Calls.Count;
+            A(MarketPlan(NewId(), 8, 16));
+            Check(AgentReject().Contains("a market entry is not allowed by agent manrae's rules") && sime.Calls.Count == calls, "entry rules: by default a market plan is refused, nothing sent: " + AgentReject());
+            A(Plan(NewId(), "MNQ", "buy", "limit", "24999", 1, 8, 0, 600));
+            Check(AgentReject().Contains("an entry with no target is not allowed by agent manrae's rules") && sime.Calls.Count == calls, "entry rules: by default a plan with no target is refused: " + AgentReject());
+            Check(!Last(agentOut, "welcome").Contains("marketEntry") && !Last(agentOut, "welcome").Contains("noTarget") && !FileText("agent-manrae-rules.txt").Contains("marketEntry"), "entry rules: off: welcome and the rules file carry neither key, as in 0.6.17");
+            // the order path itself refuses it too, whatever the agent code let through
+            Order none;
+            string why = ChartBridgeOrders.PlaceAgentEntry("manrae", "{\"type\":\"order\",\"account\":\"SIM-E\",\"root\":\"MNQ\",\"side\":\"buy\",\"kind\":\"market\",\"qty\":1,\"bracket\":{\"stop\":8,\"target\":16}}", out none);
+            Check(why != null && why.Contains("an agent's entry is a limit or a stop-limit") && none == null && sime.Calls.Count == calls, "entry rules: the order path refuses an agent's market order by itself: " + why);
+            why = ChartBridgeOrders.PlaceAgentEntry("manrae", "{\"type\":\"order\",\"account\":\"SIM-E\",\"root\":\"MNQ\",\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":24999,\"bracket\":{\"stop\":8,\"target\":0}}", out none);
+            Check(why != null && why.Contains("every agent entry needs a stop and a target") && none == null && sime.Calls.Count == calls, "entry rules: and an agent's entry with no target: " + why);
+        });
+        Part("entry rules: set on the page, saved, told to the trader", () =>
+        {
+            Fresh();
+            P(RulesWith(",\"marketEntry\":true,\"noTarget\":true"));
+            Check(!PageReject().Contains("marketEntry") && FileText("agent-manrae-rules.txt").Contains("marketEntry\ton") && FileText("agent-manrae-rules.txt").Contains("noTarget\ton") &&
+                  Last(agentOut, "welcome").Contains("\"marketEntry\":true,\"noTarget\":true") && Logged("market entry allowed, no target allowed"), "entry rules: both set on the page: saved, welcome again, logged: " + PageReject());
+            Restart(); Mode("manrae", "auto");
+            Check(Last(agentOut, "welcome").Contains("\"marketEntry\":true,\"noTarget\":true"), "entry rules: kept through a restart (the rules file)");
+            P(RulesWith(",\"marketEntry\":\"yes\""));
+            Check(PageReject().Contains("marketEntry must be true or false"), "entry rules: only true or false: " + PageReject());
+            P(Rules("NQ,MNQ", ",\"maxQtyNQ\":2,\"maxQtyMNQ\":20", "09:45", "15:00", "15:55", 1800, 0, 0));
+            Check(!Last(agentOut, "welcome").Contains("marketEntry") && !Last(agentOut, "welcome").Contains("noTarget") && !FileText("agent-manrae-rules.txt").Contains("marketEntry"), "entry rules: a page that does not send them (an older page) turns both off");
+        });
+        Part("entry rules: a market entry with a stop and no target", () =>
+        {
+            Fresh();
+            P(RulesWith(",\"marketEntry\":true,\"noTarget\":true"));
+            Last2();
+            Order e = PlacedOn(sime, MarketPlan(NewId(), 8, 0));
+            Check(e != null && e.OrderType == OrderType.Market && e.OrderAction == OrderAction.Buy && e.Quantity == 1 && Regex.IsMatch(e.Name ?? "", "^CB#[0-9a-f]{8} ag:manrae s8 t0$"),
+                  "entry rules: allowed: a market order goes out, named with its stop and t0: " + AgentReject() + " " + (e != null ? e.Name : ""));
+            if (e == null) return;
+            Fill(e, 1, 25000);
+            Advance(500);
+            List<Order> legs = Legs(sime, e);
+            Check(legs.Count(IsLive) == 1 && legs.Any(o => IsLive(o) && Regex.IsMatch(o.Name ?? "", " stop ") && o.OrderAction == OrderAction.Sell && Math.Abs(o.StopPrice - 24998) < 1e-9) && !legs.Any(o => Regex.IsMatch(o.Name ?? "", " target ")),
+                  "entry rules: filled: one stop 8 ticks under the fill, and no target: " + string.Join(" | ", legs.Select(o => o.Name + " " + o.OrderState)));
+            // the flat time still closes it: the stop cancelled, then a market close
+            et = new DateTime(2026, 10, 9, 15, 55, 0);
+            Advance(500);
+            foreach (Order o in Legs(sime, e)) if (IsLive(o)) { o.OrderState = OrderState.Cancelled; Update(o); }
+            Advance(1000);
+            Order close;
+            lock (sime.Orders) close = sime.Orders.LastOrDefault(o => Regex.IsMatch(o.Name ?? "", "^CB#[0-9a-f]{8} ag:manrae flat$"));
+            Check(close != null && close.OrderType == OrderType.Market && close.OrderAction == OrderAction.Sell && close.Quantity == 1, "entry rules: at its flat time the stop is cancelled and the position closed at market");
+            Settle(sime);
+        });
+        Part("entry rules: each rule alone, and what stays refused", () =>
+        {
+            Fresh();
+            P(RulesWith(",\"marketEntry\":true"));
+            Last2();
+            int calls = sime.Calls.Count;
+            A(MarketPlan(NewId(), 8, 0));
+            Check(AgentReject().Contains("an entry with no target is not allowed by agent manrae's rules") && sime.Calls.Count == calls, "entry rules: market allowed, no target not: a market plan with no target is refused: " + AgentReject());
+            Order e = PlacedOn(sime, MarketPlan(NewId(), 8, 16));
+            Check(e != null && e.OrderType == OrderType.Market && Regex.IsMatch(e.Name ?? "", " ag:manrae s8 t16$"), "entry rules: a market plan with a stop and a target goes out: " + AgentReject());
+            if (e != null) { Fill(e, 1, 25000); Advance(500); Check(Legs(sime, e).Count(IsLive) == 2, "entry rules: filled: its stop and its target"); }
+            Settle(sime);
+            Fresh();
+            P(RulesWith(",\"noTarget\":true"));
+            Last2();
+            calls = sime.Calls.Count;
+            A(MarketPlan(NewId(), 8, 0));
+            Check(AgentReject().Contains("a market entry is not allowed by agent manrae's rules") && sime.Calls.Count == calls, "entry rules: no target allowed, market not: a market plan is refused: " + AgentReject());
+            Order l = PlacedOn(sime, Plan(NewId(), "MNQ", "buy", "limit", "24999", 1, 8, 0, 600));
+            Check(l != null && l.OrderType == OrderType.Limit && Regex.IsMatch(l.Name ?? "", " ag:manrae s8 t0$"), "entry rules: a limit plan with a stop and no target goes out: " + AgentReject());
+            if (l != null) { Fill(l, 1, 24999); Advance(500); List<Order> legs = Legs(sime, l); Check(legs.Count(IsLive) == 1 && legs.Any(o => IsLive(o) && Regex.IsMatch(o.Name ?? "", " stop ")), "entry rules: filled: a stop only"); }
+            Settle(sime);
+            // always a stop, whatever the rules allow; never a limitPrice on a market plan; the price near ChartBridge's own last trade
+            Fresh();
+            P(RulesWith(",\"marketEntry\":true,\"noTarget\":true"));
+            Last2();
+            calls = sime.Calls.Count;
+            A(MarketPlan(NewId(), 0, 0));
+            Check(AgentReject().Contains("a stop is always needed") && sime.Calls.Count == calls, "entry rules: no stop is refused always: " + AgentReject());
+            A(Plan(NewId(), "MNQ", "buy", "market", "25000", 1, 8, 0, 600, ",\"limitPrice\":25001"));
+            Check(AgentReject().Contains("limitPrice goes on a stopLimit plan only") && sime.Calls.Count == calls, "entry rules: a market plan takes no limitPrice: " + AgentReject());
+            A(MarketPlan(NewId(), 8, 0, "25005.25"));
+            Check(AgentReject().Contains("within 20 ticks of the last MNQ trade") && sime.Calls.Count == calls, "entry rules: a market plan priced over 20 ticks from ChartBridge's last trade is refused: " + AgentReject());
+            A(MarketPlan(NewId(), 8, 0, "25000.10"));
+            Check(AgentReject().Contains("is not on the 0.25 tick grid") && sime.Calls.Count == calls, "entry rules: its price on the tick grid: " + AgentReject());
+            A(MarketPlan(NewId(), 8, 0, "25005"));
+            Check(Entry(sime) != null && Entry(sime).OrderType == OrderType.Market && sime.Calls.Count > calls, "entry rules: exactly 20 ticks away is taken: " + AgentReject());
+            Settle(sime);
+            Mode("manrae", "shadow");
+            calls = sime.Calls.Count;
+            A(MarketPlan(NewId(), 8, 0));
+            Check(sime.Calls.Count == calls, "entry rules: in Shadow nothing is sent, as for every plan");
+            try { Gone(Path.Combine(Dir, "agent-manrae-rules.txt")); } catch (Exception) { }
+            Restart();
         });
     }
 

@@ -510,6 +510,12 @@ namespace NinjaTrader.NinjaScript.AddOns
             return null;
         }
 
+        // 0.6.18: what the order path asks about an agent's entry: may it be a market order, may it have no target (its rules,
+        // set on the page; an unknown agent: no).
+        public static bool MayMarket(string id) { ChartBridgeAgent a = Get(id); return a != null && a.RuleAllows(true); }
+        public static bool MayNoTarget(string id) { ChartBridgeAgent a = Get(id); return a != null && a.RuleAllows(false); }
+        public const int MarketMaxTicks = 20;   // a market plan's price is the last trade the trader saw: within this of ChartBridge's own
+
         // The ceiling for an agent entry in PlaceOrderLocked (gate 3's own count): the agent's maxQty for the root, never above the
         // hard ceiling; 0 (nothing) for an unknown agent or a root it does not trade.
         public static int CapFor(string id, string root)
@@ -987,7 +993,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             { "agentSeen", new[] { "type", "agent", "id", "at" } },
             { "agentAnswer", new[] { "type", "cid", "agent", "id", "answer", "at" } },
             { "agentAccount", new[] { "type", "cid", "agent", "account", "group", "keepMode", "league" } },   // 0.5.2: keepMode, the mode the page's question named; 0.6.0: group (a group id) in place of account
-            { "agentRules", new[] { "type", "cid", "agent", "roots", "maxQtyNQ", "maxQtyMNQ", "maxQtyES", "maxQtyMES", "entryFrom", "entryUntil", "flatAt", "maxExpireSec", "maxTrades", "maxLosses" } },
+            { "agentRules", new[] { "type", "cid", "agent", "roots", "maxQtyNQ", "maxQtyMNQ", "maxQtyES", "maxQtyMES", "entryFrom", "entryUntil", "flatAt", "maxExpireSec", "maxTrades", "maxLosses", "marketEntry", "noTarget" } },   // 0.6.18: marketEntry, noTarget (true or false; left out: false)
             { "agentStandDownClear", new[] { "type", "cid", "build", "group" } },   // 0.6.2: Anthony's Clear stand-down (the Board); no agent key: a stand-down is the build's on the group
             { "agentKillAllProp", new[] { "type", "cid" } },   // 0.6.17: Kill all for the prop accounts: flatten, the kill switch on, Shadow; no agent key: every agent on prop accounts
         };
@@ -1092,10 +1098,14 @@ namespace NinjaTrader.NinjaScript.AddOns
             public Dictionary<string, int> MaxQty = new Dictionary<string, int> { { "NQ", 2 }, { "MNQ", 20 } };
             public int EntryFrom = 9 * 60 + 45, EntryUntil = 15 * 60, FlatAt = 15 * 60 + 55;   // New York minutes of the day (0.5.2: in session order, Sm)
             public int MaxExpireSec = 1800, MaxTrades, MaxLosses;                             // 0: none
+            // 0.6.18 (Anthony 2026-11-11: many bots to come, most with a stop and a target): what this trader's entries may be, set
+            // on the page, both off by default. MarketEntry: a market entry (else limit or stop-limit only). NoTarget: an entry with
+            // a stop and no target (targetTicks 0). A stop is always required.
+            public bool MarketEntry, NoTarget;
             public Rules Copy()
             {
                 return new Rules { Roots = Roots.ToList(), MaxQty = new Dictionary<string, int>(MaxQty), EntryFrom = EntryFrom, EntryUntil = EntryUntil, FlatAt = FlatAt,
-                                   MaxExpireSec = MaxExpireSec, MaxTrades = MaxTrades, MaxLosses = MaxLosses };
+                                   MaxExpireSec = MaxExpireSec, MaxTrades = MaxTrades, MaxLosses = MaxLosses, MarketEntry = MarketEntry, NoTarget = NoTarget };
             }
             // A root's maxQty: its line, else the hard ceiling (NQ 2 and MNQ 20 are the contract's defaults; ES 2, MES 20).
             public int QtyFor(string root) { int n; return MaxQty.TryGetValue(root ?? "", out n) ? n : DefaultQty(root); }
@@ -2244,6 +2254,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private bool autoRestorePending;   // set at a start that finds the intent; one try, ended by the first answer or any page change
         internal List<string> SeatsForProp() { return SeatNames(); }
         internal bool ModeIs(string m) { lock (Sync) return mode == m; }
+        internal bool RuleAllows(bool market) { lock (Sync) return rulesBroken == null && (market ? rules.MarketEntry : rules.NoTarget); }
         internal void ForgetAuto(string why) { lock (PlaceGate) DropAutoIntent(why); }
         private bool AllSeatsProp() { List<string> seats = SeatNames(); return seats.Count > 0 && seats.All(x => ChartBridgeBranches.IsProp(x)); }
         // The saved intent names this account (or group:<id>): asked by the reset (ChartBridgeBranches.KeepThroughReset).
@@ -2542,6 +2553,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                             if (v != "none" && val < 1) { broken1 = "agent-" + Id + "-rules.txt: " + k + " must be none or a whole number of 1 or more"; break; }
                             if (k == "maxTrades") r.MaxTrades = val; else r.MaxLosses = val;
                         }
+                        else if ((k == "marketEntry" || k == "noTarget") && (v == "on" || v == "off")) { if (k == "marketEntry") r.MarketEntry = v == "on"; else r.NoTarget = v == "on"; }   // 0.6.18
                         else { broken1 = "agent-" + Id + "-rules.txt has a line ChartBridge does not understand"; break; }
                     }
                     if (broken1 == null)
@@ -2579,6 +2591,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                 lines.Add("maxExpireSec\t" + r.MaxExpireSec.ToString(CultureInfo.InvariantCulture));
                 lines.Add("maxTrades\t" + (r.MaxTrades > 0 ? r.MaxTrades.ToString(CultureInfo.InvariantCulture) : "none"));
                 lines.Add("maxLosses\t" + (r.MaxLosses > 0 ? r.MaxLosses.ToString(CultureInfo.InvariantCulture) : "none"));
+                if (r.MarketEntry) lines.Add("marketEntry\ton");   // 0.6.18: written only when on, so a file with both off is the file 0.6.17 wrote
+                if (r.NoTarget) lines.Add("noTarget\ton");
                 WriteWhole(RulesFile, lines);
                 return null;
             }
@@ -3571,9 +3585,11 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (ChartBridgeConfig.QuoteOnly(root)) return root + " is quote only: ChartBridge shows its prices on the Quote board and refuses every order for it (quoteRoots in config.txt)";
             Instrument inst = ChartBridgeServer.InstrumentFor(root);
             if (inst == null) return "instrument " + root + " is not served by ChartBridge";
-            if (p.Kind != "limit" && p.Kind != "stopLimit") return "an agent's entry is a limit or a stop-limit (" + (p.Kind ?? "(none)") + " refused)";
+            // 0.6.18: a market entry only when this trader's rules allow it (the Agent tab's rules; off by default)
+            if (p.Kind != "limit" && p.Kind != "stopLimit" && !(p.Kind == "market" && r.MarketEntry))
+                return "an agent's entry is a limit or a stop-limit (" + (p.Kind ?? "(none)") + " refused)" + (p.Kind == "market" ? ": a market entry is not allowed by agent " + Id + "'s rules (Market entry, on the Agent tab)" : "");
             if (p.Kind == "stopLimit" && p.LimitText == null) return "a stopLimit plan needs a limitPrice";
-            if (p.Kind == "limit" && p.LimitText != null) return "limitPrice goes on a stopLimit plan only";
+            if (p.Kind != "stopLimit" && p.LimitText != null) return "limitPrice goes on a stopLimit plan only";
             if (p.Kind == "stopLimit" && !ChartBridgeOrders.AgentOrderTypes) return "stop-limit entries are off (orderTypes = off in config.txt)";
             // 4. the size, the stop and the target
             int ceiling = Math.Min(ChartBridgeAgents.HardCeiling(root), r.QtyFor(root)), cap;
@@ -3587,7 +3603,10 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if (p.Sizes[i] > ceiling) return "sizes: " + seats[i] + "'s " + p.Sizes[i] + " is over " + ceiling + " (" + ChartBridgeAgents.CapWords(Id, root, ceiling) + ")";
                     if (p.Sizes[i] > cap) return "sizes: " + seats[i] + "'s " + p.Sizes[i] + " is over the " + root + " cap of " + cap + " (" + capWhy + ")";
                 }
-            if (p.StopTicks < 1 || p.TargetTicks < 1) return "every agent entry needs a stop and a target: stopTicks and targetTicks must be whole numbers of 1 or more";
+            // 0.6.18: always a stop; no target (targetTicks 0) only when this trader's rules allow it (off by default)
+            if (p.StopTicks < 1 || p.TargetTicks < 0 || (p.TargetTicks < 1 && !r.NoTarget))
+                return "every agent entry needs a stop and a target: stopTicks and targetTicks must be whole numbers of 1 or more" +
+                       (r.NoTarget ? " (agent " + Id + "'s rules allow no target, targetTicks 0; a stop is always needed)" : p.StopTicks >= 1 && p.TargetTicks == 0 ? ": an entry with no target is not allowed by agent " + Id + "'s rules (No target, on the Agent tab)" : "");
             int mb = ChartBridgeOrders.AgentMaxBracketTicks;
             if (mb > 0 && (p.StopTicks > mb || p.TargetTicks > mb)) return "stopTicks and targetTicks must be at most " + mb + " (maxBracketTicks in config.txt)";
             // 5. the risk in dollars (0.6.0, a group: the sum over its seats' sizes)
@@ -3636,7 +3655,18 @@ namespace NinjaTrader.NinjaScript.AddOns
                 }
             // 11. the price (v2 gate 5): on the grid, a fresh last trade, the side of the market; a stop-limit's limit within 20 ticks
             bool buy = p.Side == "buy";
-            string bad = ChartBridgeOrders.AgentPriceProblem(root, tick, p.Kind == "limit" ? "limit" : "stop", buy, p.Price);
+            string bad;
+            if (p.Kind == "market")
+            {
+                // 0.6.18: a market plan's price is the last trade its trader saw. ChartBridge needs a fresh last trade of its own, and
+                // the two within MarketMaxTicks: a trader looking at another market, or at old prices, is refused.
+                double last;
+                bad = ChartBridgeOrders.AgentLastPrice(root, out last);
+                if (bad == null && (!(p.Price > 0) || !ChartBridgeOrders.AgentOnGrid(p.Price, tick))) bad = "price " + p.PriceText + " is not on the " + CbJson.Num(tick) + " tick grid";
+                if (bad == null && Math.Abs(p.Price - last) > ChartBridgeAgents.MarketMaxTicks * tick + 1e-9)
+                    bad = "a market plan's price must be within " + ChartBridgeAgents.MarketMaxTicks + " ticks of the last " + root + " trade (" + CbJson.Num(last) + "); the plan says " + p.PriceText;
+            }
+            else bad = ChartBridgeOrders.AgentPriceProblem(root, tick, p.Kind == "limit" ? "limit" : "stop", buy, p.Price);
             if (bad != null) return bad;
             if (p.Kind == "stopLimit")
             {
@@ -3691,7 +3721,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 {
                     string root = p.Root.ToUpperInvariant();
                     string text = "{\"type\":\"order\",\"account\":" + CbJson.Str(acct) + ",\"root\":\"" + root + "\",\"side\":\"" + p.Side + "\",\"kind\":\"" + p.Kind + "\",\"qty\":" +
-                                  p.Qty.ToString(CultureInfo.InvariantCulture) + ",\"price\":" + p.PriceText + (p.Kind == "stopLimit" ? ",\"limitPrice\":" + p.LimitText : "") +
+                                  p.Qty.ToString(CultureInfo.InvariantCulture) + (p.Kind == "market" ? "" : ",\"price\":" + p.PriceText) + (p.Kind == "stopLimit" ? ",\"limitPrice\":" + p.LimitText : "") +
                                   ",\"bracket\":{\"stop\":" + p.StopTicks.ToString(CultureInfo.InvariantCulture) + ",\"target\":" + p.TargetTicks.ToString(CultureInfo.InvariantCulture) + "}}";
                     why = ChartBridgeOrders.PlaceAgentEntry(Id, p.Id, text, out placed);
                     if (why != null) { placed = null; return why; }
@@ -3739,7 +3769,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (s != null) lock (Sync) { s.Out = p.Outs[i]; s.LastSize = p.Sizes[i]; s.LastRisk = Math.Round(p.StopTicks * tick * pv * p.Sizes[i], 2); s.LastPlanId = p.Id; }
                 if (p.Outs[i] != null) continue;
                 string text = "{\"type\":\"order\",\"account\":" + CbJson.Str(seat) + ",\"root\":\"" + root + "\",\"side\":\"" + p.Side + "\",\"kind\":\"" + p.Kind + "\",\"qty\":" +
-                              p.Sizes[i].ToString(CultureInfo.InvariantCulture) + ",\"price\":" + p.PriceText + (p.Kind == "stopLimit" ? ",\"limitPrice\":" + p.LimitText : "") +
+                              p.Sizes[i].ToString(CultureInfo.InvariantCulture) + (p.Kind == "market" ? "" : ",\"price\":" + p.PriceText) + (p.Kind == "stopLimit" ? ",\"limitPrice\":" + p.LimitText : "") +
                               ",\"bracket\":{\"stop\":" + p.StopTicks.ToString(CultureInfo.InvariantCulture) + ",\"target\":" + p.TargetTicks.ToString(CultureInfo.InvariantCulture) + "}}";
                 Order o = null;
                 string why;
@@ -4702,6 +4732,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             r.MaxTrades = n;
             if (Whole(d, "maxLosses", out n) != 1) return "maxLosses must be a whole number (0 = none)";
             r.MaxLosses = n;
+            // 0.6.18: left out (an older page): off, so a page that does not know them can never grant them
+            bool flag;
+            if (d.ContainsKey("marketEntry")) { if (!Bool(d, "marketEntry", out flag)) return "marketEntry must be true or false"; r.MarketEntry = flag; }
+            if (d.ContainsKey("noTarget")) { if (!Bool(d, "noTarget", out flag)) return "noTarget must be true or false"; r.NoTarget = flag; }
             string bad = RulesProblem(r);
             if (bad != null) return bad;
             // 0.5.4 (Anthony 2026-10-10, DECISION ag: "I do not want to be locked out of changing the time ... during live trading"):
@@ -4730,7 +4764,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // maxQty, maxExpireSec, maxTrades and maxLosses.
         private static bool SameButWindow(Rules a, Rules b)
         {
-            return a.Roots.SequenceEqual(b.Roots) && a.Roots.All(x => a.QtyFor(x) == b.QtyFor(x)) && a.MaxExpireSec == b.MaxExpireSec && a.MaxTrades == b.MaxTrades && a.MaxLosses == b.MaxLosses;
+            return a.Roots.SequenceEqual(b.Roots) && a.Roots.All(x => a.QtyFor(x) == b.QtyFor(x)) && a.MaxExpireSec == b.MaxExpireSec && a.MaxTrades == b.MaxTrades && a.MaxLosses == b.MaxLosses && a.MarketEntry == b.MarketEntry && a.NoTarget == b.NoTarget;
         }
 
         // 0.5.2: why an entry is refused outside the window: the market closed, or the time.
@@ -4744,7 +4778,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             return "roots " + string.Join(",", r.Roots) + ", maxQty " + string.Join(" ", r.Roots.Select(x => x + " " + r.QtyFor(x))) + ", entries " + Hm(r.EntryFrom) + " to " + Hm(r.EntryUntil) +
                    ", flat at " + Hm(r.FlatAt) + ", maxExpireSec " + r.MaxExpireSec + ", maxTrades " + (r.MaxTrades > 0 ? r.MaxTrades.ToString(CultureInfo.InvariantCulture) : "none") +
-                   ", maxLosses " + (r.MaxLosses > 0 ? r.MaxLosses.ToString(CultureInfo.InvariantCulture) : "none");
+                   ", maxLosses " + (r.MaxLosses > 0 ? r.MaxLosses.ToString(CultureInfo.InvariantCulture) : "none") +
+                   (r.MarketEntry ? ", market entry allowed" : "") + (r.NoTarget ? ", no target allowed" : "");
         }
 
         // Under Sync: every open proposal ends (never placed).
@@ -4989,7 +5024,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             b.Append(",\"entryFrom\":").Append(CbJson.Str(Hm(r.EntryFrom))).Append(",\"entryUntil\":").Append(CbJson.Str(Hm(r.EntryUntil))).Append(",\"flatAt\":").Append(CbJson.Str(Hm(r.FlatAt)))
              .Append(",\"maxExpireSec\":").Append(r.MaxExpireSec)
              .Append(",\"maxTrades\":").Append(r.MaxTrades > 0 ? r.MaxTrades.ToString(CultureInfo.InvariantCulture) : "null")
-             .Append(",\"maxLosses\":").Append(r.MaxLosses > 0 ? r.MaxLosses.ToString(CultureInfo.InvariantCulture) : "null");
+             .Append(",\"maxLosses\":").Append(r.MaxLosses > 0 ? r.MaxLosses.ToString(CultureInfo.InvariantCulture) : "null")
+             .Append(r.MarketEntry ? ",\"marketEntry\":true" : "").Append(r.NoTarget ? ",\"noTarget\":true" : "");   // 0.6.18: each only when on (left out: off), so the rules of a trader with neither read as in 0.6.17
             return b.Append('}').ToString();
         }
 

@@ -203,6 +203,8 @@ function create(o) {
             '<label><span>Entry lives, s</span><input class="ag-in" type="number" min="60" max="1800" step="1" data-r="maxExpireSec" data-parity="LR05 LR05-expire" aria-label="An entry lives at most, seconds (60 to 1800)"></label>' +
             '<label><span>Trades a day</span><input class="ag-in" type="number" min="0" max="50" step="1" data-r="maxTrades" data-parity="LR05 LR05-trades" aria-label="Trades a day, 0 for no limit"></label>' +
             '<label><span>Losing trades</span><input class="ag-in" type="number" min="0" max="20" step="1" data-r="maxLosses" data-parity="LR05 LR05-losses" aria-label="Losing trades before it stands down, 0 for no limit"></label>' +
+            '<label class="ag-rflag" data-k="rMarket" title="Allow this trader a market entry. Off: limit and stop-limit entries only. For plain-code bots that enter at market; a stop is always needed"><input type="checkbox" data-r="marketEntry" aria-label="Allow a market entry"><span>Market entry</span></label>' +
+            '<label class="ag-rflag" data-k="rNoTarget" title="Allow this trader an entry with a stop and no target. Off: every entry needs a stop and a target"><input type="checkbox" data-r="noTarget" aria-label="Allow an entry with no target"><span>No target</span></label>' +
             '<p class="ag-help" data-parity="LR06">New York time · 0 = no limit</p>' +
             '<div class="ag-row"><button type="button" class="ag-btn primary" data-act="rulesSave" data-parity="LR07 LR07-set">Set</button><button type="button" class="ag-btn" data-act="rulesCancel" data-parity="LR07 LR07-cancel">Cancel</button></div>' +
           '</div>' +
@@ -1481,6 +1483,9 @@ function create(o) {
         '<span class="mono">' + r + '</span><input class="ag-in ag-qty" type="number" min="1" max="' + AC.CEILING[r] + '" step="1" data-qty="' + r + '" data-parity="LR03-qty" value="' + esc(f.maxQty[r]) + '"' + (on ? '' : ' disabled') + ' aria-label="' + r + ' size at most (1 to ' + AC.CEILING[r] + ')"><span class="ag-lbl">max ' + AC.CEILING[r] + '</span></label>';
     }).join('');
     for (const k of ['entryFrom', 'entryUntil', 'flatAt', 'maxExpireSec', 'maxTrades', 'maxLosses']) q('[data-r="' + k + '"]').value = f[k];
+    /* ChartBridge 0.6.18: Market entry and No target, shown only to a ChartBridge that knows them */
+    const flags = AC.atLeast(S.version, '0.6.18');
+    for (const [k, r] of [['rMarket', 'marketEntry'], ['rNoTarget', 'noTarget']]) { q('[data-k="' + k + '"]').hidden = !flags; q('[data-r="' + r + '"]').checked = flags && f[r] === true; }
     /* the window alone (0.5.4, in a trade): every other input shows its value, closed */
     const wo = AC.rulesEditable(a, ctxNow(a)).windowOnly;
     for (const el of q('[data-k="rulesEdit"]').querySelectorAll('input')) if (!['entryFrom', 'entryUntil', 'flatAt'].includes(el.dataset.r)) el.disabled = wo || el.disabled;
@@ -1494,6 +1499,7 @@ function create(o) {
     const form = { roots: [...q('[data-k="rRoots"]').querySelectorAll('input[data-root]')].filter(x => x.checked).map(x => x.dataset.root), maxQty: {} };
     for (const x of q('[data-k="rRoots"]').querySelectorAll('input[data-qty]')) form.maxQty[x.dataset.qty] = x.value;
     for (const k of ['entryFrom', 'entryUntil', 'flatAt', 'maxExpireSec', 'maxTrades', 'maxLosses']) form[k] = q('[data-r="' + k + '"]').value;
+    for (const k of ['marketEntry', 'noTarget']) form[k] = q('[data-r="' + k + '"]').checked;   // ChartBridge 0.6.18
     const r = AC.rulesChange(a, form, ctxNow(a));
     if (r.error) { rulesWhy(r.error); return; }
     if (r.ask) { S.rulesAsk = r; renderPanel(); const y = q('[data-act="rulesNo"]'); if (y) y.focus(); return; }   // asked once, in the page

@@ -63,6 +63,30 @@
   `test/pc-updater.test.js`: the allowed git subcommands, the box job's name, useHttpPath read before the one ask, the
   token only after a 404 or 401 and then through the Actions API, one place that asks for it and one that sends it.
 
+## ChartBridge 0.6.18 and chart 1.44.4 (2026-11-11): entry rules per trader: a market entry, and an entry with no target, when you allow them
+
+In plain words: nothing changes for hand trading, and nothing changes for any trader until you switch something on. More
+bots are coming, most of them with a stop and a target, so nothing here is made for one bot (Anthony 2026-11-11). Each
+trader's rules on the Agent tab gain two switches, both off:
+
+- **Market entry.** Off: that trader's entries are limit and stop-limit only, as before. On: it may also enter at market.
+  ChartBridge takes a market plan only while it has a fresh last trade of its own within 20 ticks of the price the trader
+  saw, so a trader looking at old prices or another market is refused.
+- **No target.** Off: every entry needs a stop and a target, as before. On: an entry may have a stop and no target.
+- **A stop is always required.** No switch removes it. The trader's flat time, its window, its size caps, the kill switch and
+  the firm's limits apply to these entries as to every other.
+- **Set on the page, never in a file.** The rules form on the Agent tab has the two switches (shown with ChartBridge 0.6.18
+  or later). A page that does not send them turns both off.
+- **A trader with neither switch on** is exactly as in 0.6.17: the same refusals, the same rules file, the same messages.
+
+What changed in the order path: two lines of `ChartBridgeOrders.cs`, the two that refused every agent market entry and every
+agent entry with no target; they now ask that trader's rules. With those two lines left out the file is the 0.6.17 file, and
+every other add-on file but `ChartBridge.cs` (its version) and `ChartBridgeAgents.cs` is the 0.6.17 file byte for byte
+(`test/nt8-record.test.js`). The page's own orders, groups, the copier and the bot are untouched.
+
+`nt8/PROTOCOL.md`, "Entry rules per trader (0.6.18)". ChartBridge 0.6.18 is a recompile (`-InstallChartBridge`, then F5 while
+flat).
+
 ## ChartBridge 0.6.17 and chart 1.44.3 (2026-11-11): Kill all for the prop accounts
 
 In plain words: nothing changes on the chart yet, and nothing changes for hand trading. ChartBridge learns one new command,

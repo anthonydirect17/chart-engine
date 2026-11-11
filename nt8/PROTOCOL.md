@@ -1,4 +1,4 @@
-# ChartBridge protocol (v1 market data and fills, v2 orders, v3 accounts, strategies, copier and bot, 0.5.0 agents, 0.5.1 accounts, 0.5.8 prop groups, 0.6.0 group trading, 0.6.1 a group's Type and default hero, 0.6.3 the audit fixes, 0.6.4 the no-trade-record alarm and Merge on an off follower, 0.6.8 the minute book, 0.6.10 the account lifecycle and the NQ tick file, 0.6.11 the bar trail and the narrower 1 second request, 0.6.12 the bar trail follow-ups, 0.6.13 the tick day's morning catch-up and the raw deleted once packed, 0.6.14 the tick day check's rule: short and holes, 0.6.15 the 1 second pull retired: the NQ tick file is the one source, 0.6.16 prop accounts: Auto kept through the reset and a restart, 0.6.17 Kill all for the prop accounts)
+# ChartBridge protocol (v1 market data and fills, v2 orders, v3 accounts, strategies, copier and bot, 0.5.0 agents, 0.5.1 accounts, 0.5.8 prop groups, 0.6.0 group trading, 0.6.1 a group's Type and default hero, 0.6.3 the audit fixes, 0.6.4 the no-trade-record alarm and Merge on an off follower, 0.6.8 the minute book, 0.6.10 the account lifecycle and the NQ tick file, 0.6.11 the bar trail and the narrower 1 second request, 0.6.12 the bar trail follow-ups, 0.6.13 the tick day's morning catch-up and the raw deleted once packed, 0.6.14 the tick day check's rule: short and holes, 0.6.15 the 1 second pull retired: the NQ tick file is the one source, 0.6.16 prop accounts: Auto kept through the reset and a restart, 0.6.17 Kill all for the prop accounts, 0.6.18 entry rules per trader: market entry and no target)
 
 ChartBridge is a NinjaTrader 8 add-on. It serves the live chart page at `http://localhost:8765/` and
 talks to it over one WebSocket at `ws://localhost:8765/ws`. Everything stays on the local machine.
@@ -3654,6 +3654,38 @@ no flatten) and the Board's KILL ALL AGENTS (agentKill on to every agent) are un
 
 No page sends this message yet: the button comes with the Fleet tab. Checked in `check/AgentHarness.cs` (`PropAccounts`, the
 "kill all" parts) and `test/nt8-agents.test.js`.
+
+### Entry rules per trader (0.6.18)
+
+Anthony 2026-11-11: a market entry with a stop and no target is approved for a plain-code bot, and "ideally we will be making
+many more bots. Most of them will have stops and targets, so I dont want to overfit" for one. So nothing names a bot: each
+trader on the agent channel has two more rules, both off by default, set on the page with its other rules (`agentRules`).
+
+- `marketEntry` (true or false): on, a `plan` may have `"kind": "market"`. Off (the default): limit and stop-limit only
+  ("an agent's entry is a limit or a stop-limit (market refused): a market entry is not allowed by agent <id>'s rules").
+- `noTarget` (true or false): on, a `plan` may have `"targetTicks": 0`: a stop and no target. Off (the default): every entry
+  needs a stop and a target, as before.
+- **A stop is always required** (`stopTicks` of 1 or more), whatever the rules allow.
+
+A **market plan** has the same keys as every plan. Its `price` is the last trade the trader saw: ChartBridge needs a fresh last
+trade of its own (the page's rule, 5 s) and the two within 20 ticks (`MarketMaxTicks`), on the tick grid; else the plan is
+refused ("a market plan's price must be within 20 ticks of the last <root> trade"). It takes no `limitPrice`. `expireSec` is
+still sent (60 to the trader's maximum) and has nothing to cancel. Every other check applies as written: the mode, the kill
+switch, the window, the size caps, one trade at a time, maxTrades and maxLosses, the owner lock, the group's one direction, the
+firm's limits. The order is `OrderType.Market`, named `CB#<tag> ag:<id> s<stopTicks> t<targetTicks>` (`t0` with no target);
+on its fill v2's legs go on as for a page order: the stop `stopTicks` from the fill price, and the target only when there is
+one. The flat time and the trader's own flatten cancel what legs there are and close at market, as before.
+
+`agentRules` takes `marketEntry` and `noTarget` (each true or false; **left out: off**, so a page that does not know them can
+never grant them, and saving the rules from such a page turns both off). Saved in `agent-<id>-rules.txt` as `marketEntry<TAB>on`
+and `noTarget<TAB>on`, each line only when on, so the file of a trader with neither is the file 0.6.17 wrote. The rules object
+in `agent`, `welcome` and the strip carries `"marketEntry": true` and `"noTarget": true` the same way: each only when on. A
+trader with neither is as in 0.6.17 in every message and every refusal.
+
+The order path asks the same rules (`ChartBridgeAgents.MayMarket`, `MayNoTarget`) in the two lines of
+`ChartBridgeOrders.PlaceOrderLocked` that until 0.6.17 refused every agent market entry and every agent entry with no target; a
+trader whose rules file cannot be read is allowed neither. Checked in `check/AgentHarness.cs` (`EntryRules`) and
+`test/nt8-record.test.js` (the file differs from 0.6.17 in exactly those two lines).
 
 ### Prop groups and account state (0.5.8)
 

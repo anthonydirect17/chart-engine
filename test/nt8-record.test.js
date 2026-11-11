@@ -268,6 +268,51 @@ test('0.6.17: Kill all for the prop accounts: every add-on file but ChartBridge.
   for (const [f, h] of Object.entries(harness)) assert.strictEqual(crypto.createHash('sha256').update(read(f).replace(/\r/g, '')).digest('hex'), h, f + ' is the 0.6.16 file');
 });
 
+test('0.6.18: entry rules per trader: ChartBridgeOrders.cs differs from 0.6.17 in exactly two lines, the two that ask the agent\'s rules; every other add-on file but ChartBridge.cs (its version) and ChartBridgeAgents.cs is the 0.6.17 file byte for byte (while ChartBridge is 0.6.18)', () => {
+  if (!/public const string Version = "0\.6\.18";/.test(read('ChartBridge.cs'))) return;   // a later release may change them
+  const sha = t => crypto.createHash('sha256').update(t).digest('hex');
+  const want = {
+    'ChartBridgeAccounts.cs': 'a4a777575ab85bb10de21e9da32b7d785e6d5b17e1484ec280e41baab7d22da3',
+    'ChartBridgeBars.cs': '7a9de59769499d804767461f67f8442c7a44a04b8b8bfae8cf6f4879b5186664',
+    'ChartBridgeBot.cs': '33ca2af1f1867f14ab188f659ad63210933801b62c951234255972111fef84b1',
+    'ChartBridgeCopier.cs': 'bb90a637610b3b56236c6cfba014c1a1db40110f2b821bbeecf7778f2f4e6e49',
+    'ChartBridgeGroups.cs': '95baae61b5c8d135d0a1b84e5a0c7fd13e63ff936d22da76170259bc2e4610ff',
+    'ChartBridgeMerge.cs': '7aa31e37d38c1875eb236e1575d20f49ed31c1e2c08fc9d265d5aa7e0a32952c',
+    'ChartBridgeOrderRecord.cs': 'de33b77a1d774d2ce8d11a5f3a8e927f1ff085c7d8f47259ff6a542d18ccc1f1',
+    'ChartBridgePin.cs': '8c6b28abf30cc716b7175fa3c1fd4e1cb9ca0c9407a19a03357830028481e3eb',
+    'ChartBridgeStops.cs': 'f2d74c58a904a5ba448ca5ebceb05f25b01d55642ddfdf1323b0c7dbf95f5d3c',
+    'ChartBridgeStrategies.cs': '968179e96aa887424b9df26148f8ae65bc3c60238f6f9de90f238e7781ab9193',
+    'ChartBridgeTape.cs': 'b5150cf7dbea2244da11d49511d163b4666a2403b9e21ebd10ea44a25da87fd1',
+    'ChartBridgeTicks.cs': 'def1e998f0e49dda1287d5422a6375ea8152646f62e86bc0c34d34b219cb7851',
+    'ChartBridgeV3.cs': '4ea9774ee3d30e619d1b849965b68565c24eed8f276194deaf93ee23242261dc',
+  };
+  const addons = JSON.parse(read('install-files.json')).addons.map(f => f.replace(/^nt8\//, ''));
+  assert.deepStrictEqual(addons.filter(f => !want[f]).sort(), ['ChartBridge.cs', 'ChartBridgeAgents.cs', 'ChartBridgeOrders.cs'], 'every add-on file is checked or named as changed');
+  for (const [f, h] of Object.entries(want)) assert.strictEqual(sha(read(f).replace(/\r/g, '')), h, f + ' is the 0.6.17 file');
+  const codeOnly = src => src.replace(/\r/g, '').split('\n').map(l => l.replace(/^\s*\/\/.*$/, '').replace(/([;{})])\s*\/\/.*$/, '$1').replace(/\s+$/, '')).filter(l => l.length > 0).join('\n')
+    .replace(/public const string Version = "[0-9.]+";/, 'public const string Version = "";');
+  assert.strictEqual(sha(codeOnly(read('ChartBridge.cs'))), '23d9603f53f0e3dd79af59b20560b2a361230ee2c3f147528a762413481311ba', 'ChartBridge.cs: the 0.6.17 code (the version and its comment only changed)');
+  // the order path: the two lines that refused every agent market entry and every agent entry with no target now ask the agent's
+  // rules (ChartBridgeAgents.MayMarket, MayNoTarget); with those two lines left out the file is the 0.6.17 file
+  const lines = read('ChartBridgeOrders.cs').replace(/\r/g, '').split('\n');
+  const asks = lines.map((l, i) => (/ChartBridgeAgents\.May(Market|NoTarget)\(agent\)/.test(l) ? i : -1)).filter(i => i >= 0);
+  assert.strictEqual(asks.length, 2, 'two lines ask the rules');
+  assert.match(lines[asks[0]], /^\s*if \(agent != null && \(\(kind != "limit" && kind != "stopLimit" && !\(kind == "market" && ChartBridgeAgents\.MayMarket\(agent\)\)\) \|\| strategyBody != null \|\| bracketBody == null\)\) return "an agent's entry is a limit or a stop-limit with a stop and a target";/);
+  assert.match(lines[asks[1]], /^\s*if \(agent != null && \(stopTicks < 1 \|\| \(targetTicks < 1 && !ChartBridgeAgents\.MayNoTarget\(agent\)\)\)\) return "every agent entry needs a stop and a target";/, 'a stop always');
+  assert.strictEqual(sha(lines.filter((l, i) => !asks.includes(i)).join('\n')), 'fb1cfabc8a3e26c89f39a95514e3e642b5ae76eba585213b01fa11c944e9342a', 'ChartBridgeOrders.cs: every other line is the 0.6.17 line');
+  const harness = {
+    'check/OrdersHarness.cs': '9467dda85c9cf43848d34ccc9c7d8482df41eaabe38b75e1e2511651c032c807',
+    'check/GroupsHarness.cs': 'c9b37698b0c2643a28545b0631d2f820558f06bd8994056d8a10cce08c97a27a',
+    'check/CopierHarness.cs': 'a14a4b5d06029af0932b53bc5e288c23d38ede2ba2e38577955b19435d1b74da',
+    'check/BotHarness.cs': '3c386b128226e817f8c88e17174c6ff64a8826e86878cb4b07908cf78872487d',
+    'check/StrategiesHarness.cs': '735be80f3fe11fba6ad72bab5efc115ef1b78bca13025374990c3c3f5fd428cf',
+    'check/MergeHarness.cs': '23af52cfc7de7310e70a521fedb190180a8ef28710ad97d66970d52053c3c3cf',
+    'check/IntegrationHarness.cs': '1bdca6796709285b9252d0929f66a5cd9216765c2aff6001dca61b68d7d38c96',
+    'check/Nt8Stubs.cs': 'e5aa806364ceb7470d845238e6ee3adc552525f4171784be5caeaa46569777c1',
+  };
+  for (const [f, h] of Object.entries(harness)) assert.strictEqual(sha(read(f).replace(/\r/g, '')), h, f + ' is the 0.6.17 file');
+});
+
 test('0.6.9: the decision id: the group entry\'s PlaceOrder call unchanged, set and cleared around it, noted before Submit', () => {
   const g = read('ChartBridgeGroups.cs');
   const loop = body(g, 'private static string GroupPlaceLocked(');
