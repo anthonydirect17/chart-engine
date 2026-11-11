@@ -34,7 +34,7 @@ test('0.5.0 agents: the new file ships, is compile-checked and harnessed', () =>
   for (const f of ['check.sh', 'orders.sh']) assert.match(read(path.join('check', f)), /ChartBridgeBot\.cs ChartBridgeAgents\.cs ChartBridgeStrategies\.cs/);
   assert.match(read(path.join('check', 'orders.sh')), /check\/AgentHarness\.cs/);
   assert.match(read(path.join('check', 'OrdersHarness.cs')), /Section\("agents \(0\.5\.0\)", AgentHarness\.Run\);/);
-  assert.match(main, /public const string Version = "0\.(5\.[0-8]|6\.([0-9]|1[0-9]))";/);   // 0.6.19: the day's profit stop; 0.6.18: entry rules per trader (market entry, no target); 0.6.17: Kill all for the prop accounts; 0.6.16: prop accounts (Auto kept through the reset and one restore after a restart, prop only); 0.6.15: the 1 second pull retired; 0.6.14: the tick day check rule; 0.6.13: the tick day's morning catch-up, the raw deleted once packed; 0.6.12: the bar trail follow-ups; 0.6.10: the account lifecycle (remove-only for an account NinjaTrader no longer lists, Hide leaves the group); 0.6.9: the stats suite's Phase 2 (1 second bars, the order record, decision ids; recording only); 0.6.8: the minute book (the history path only); 0.6.7: the bench, no hedging always on, a group's own rules optional; 0.6.6: the firm's limits on entries, riskAlert, firmMinimum, copierFollowerRemove; 0.6.5: each member's own rules and the risk percent; 0.6.4: no false no-trade-record alarm, the alarm cleared, Merge on an off follower; 0.6.3: the audit fixes (a missed reset caught up, closes not seen, files that survive a power cut, the kill switch kept); 0.6.2: group stand-downs and league seats; 0.6.1: a group's type and default hero; 0.6.0: group trading (seats); 0.5.8: groups and accountState; 0.5.7: the plan id, the TradeLost hold, None and the daily reset; 0.5.1: the accounts follow NinjaTrader, on top of 0.5.0; 0.5.3: the agents' MNQ cap; 0.5.4: the window while exposed; 0.5.5: the accounts line and unknown keys; 0.5.6: the time check
+  assert.match(main, /public const string Version = "0\.(5\.[0-8]|6\.([0-9]|1[0-9]|20))";/);   // 0.6.20: the roster served; 0.6.19: the day's profit stop; 0.6.18: entry rules per trader (market entry, no target); 0.6.17: Kill all for the prop accounts; 0.6.16: prop accounts (Auto kept through the reset and one restore after a restart, prop only); 0.6.15: the 1 second pull retired; 0.6.14: the tick day check rule; 0.6.13: the tick day's morning catch-up, the raw deleted once packed; 0.6.12: the bar trail follow-ups; 0.6.10: the account lifecycle (remove-only for an account NinjaTrader no longer lists, Hide leaves the group); 0.6.9: the stats suite's Phase 2 (1 second bars, the order record, decision ids; recording only); 0.6.8: the minute book (the history path only); 0.6.7: the bench, no hedging always on, a group's own rules optional; 0.6.6: the firm's limits on entries, riskAlert, firmMinimum, copierFollowerRemove; 0.6.5: each member's own rules and the risk percent; 0.6.4: no false no-trade-record alarm, the alarm cleared, Merge on an off follower; 0.6.3: the audit fixes (a missed reset caught up, closes not seen, files that survive a power cut, the kill switch kept); 0.6.2: group stand-downs and league seats; 0.6.1: a group's type and default hero; 0.6.0: group trading (seats); 0.5.8: groups and accountState; 0.5.7: the plan id, the TradeLost hold, None and the daily reset; 0.5.1: the accounts follow NinjaTrader, on top of 0.5.0; 0.5.3: the agents' MNQ cap; 0.5.4: the window while exposed; 0.5.5: the accounts line and unknown keys; 0.5.6: the time check
   assert.ok(!/(^|[\s(=,+:?])\$"/m.test(acode) && !/\?\.\w/.test(acode) && !/\bnameof\(/.test(acode), 'C# 5');
 });
 
@@ -360,6 +360,23 @@ test('0.6.19 the day\'s profit stop: the plan\'s dayStopDollars, the smaller of 
     assert.ok(h.includes('Part("' + part + '"'), part);
   const p = read('PROTOCOL.md');
   assert.ok(p.includes("### The day's profit stop (0.6.19)") && p.includes('`dayStopDollars`') && p.includes('#daystop<TAB><dollars>'));
+});
+
+test('0.6.20 the roster: GET /roster serves the Lab\'s files read only, each checked, never the folder\'s path', () => {
+  const main = read('ChartBridge.cs');
+  assert.match(main, /if \(path == "\/roster"\) \{ ChartBridgeRoster\.Serve\(ctx\); return; \}/, 'one route');
+  assert.match(acode, /if \(key == "rosterFolder"\) \{ ChartBridgeRoster\.FolderSetting = \(val \?\? ""\)\.Trim\(\); return true; \}/);
+  assert.match(bodies(acode, 'ResetConfig'), /ChartBridgeRoster\.FolderSetting = "";/, 'a load without the line has none');
+  const ro = acode.slice(acode.indexOf('public static class ChartBridgeRoster'));
+  assert.match(ro, /if \(ctx\.Request\.Headers\["Host"\] != "localhost:" \+ ChartBridgeConfig\.Port\) \{ Answer\(ctx, 403\); return; \}/, 'by the localhost name only');
+  assert.match(ro, /d\.GetFiles\("\*\.json", SearchOption\.TopDirectoryOnly\)/, 'never a subfolder');
+  assert.match(ro, /\(d\.Attributes & FileAttributes\.ReparsePoint\) != 0/, 'the folder is no link');
+  assert.match(ro, /\(f\.Attributes & FileAttributes\.ReparsePoint\) != 0/, 'a file is no link');
+  assert.ok(!/(File|Directory)\.(Create|Write|Delete|Move|Copy|Append|Replace)|FileMode\.(Create|Append|Truncate|OpenOrCreate)|FileAccess\.(Write|ReadWrite)/.test(ro), 'it writes nothing');
+  assert.match(ro, /new FileStream\(f\.FullName, FileMode\.Open, FileAccess\.Read, FileShare\.ReadWrite \| FileShare\.Delete\)/, 'read only, never holding the file');
+  assert.ok(!/Submit|CreateOrder|Cancel\(|Flatten|PlaceOrder/.test(ro), 'it touches no order');
+  assert.ok(!/Log\(|AgentLog\(/.test(ro), 'it logs nothing (never the folder\'s path)');
+  assert.ok(!/FolderSetting\)|folder\)/.test(ro.replace(/new DirectoryInfo\(folder\)/, '').replace(/Path\.IsPathRooted\(folder\)/, '')), 'the path goes nowhere but the read');
 });
 
 test('0.6.18 entry rules per trader: a market entry and an entry with no target only when that trader\'s rules allow each; a stop always', () => {

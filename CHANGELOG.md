@@ -63,6 +63,19 @@
   `test/pc-updater.test.js`: the allowed git subcommands, the box job's name, useHttpPath read before the one ask, the
   token only after a 404 or 401 and then through the Actions API, one place that asks for it and one that sends it.
 
+## ChartBridge 0.6.20 and chart 1.44.6 (2026-11-11): the roster, the Lab's files served read only
+
+In plain words: nothing changes on the chart, for hand trading or for any trader. ChartBridge can now hand the chart page
+the Lab's roster files (one small file of numbers for each bot and each lineup: the playbook it sizes with, its profit per
+$1 and its no-edge range), so the Bots tab can show them. Build answers 7, part C2.
+
+- **`rosterFolder`** in `config.txt` names the folder (Bot-Lab's `roster/` on this PC, filled by Bot-Lab's own install).
+  None: nothing is served.
+- **`GET /roster`**: every roster file in that folder, as it is, or why one is not served (not a plain name, a link, over
+  256 KB, not valid JSON, not a roster file). Only by the localhost name; never a subfolder; at most 200 files; the
+  folder's path is never sent or logged.
+- ChartBridge decides nothing from the files. No order path file changes.
+
 ## ChartBridge 0.6.19 and chart 1.44.5 (2026-11-11): the day's profit stop, a dollar mark per account
 
 **The fix round of the review of 90 and 88 (2026-11-11), in this release.** Each with a harness check that fails when the

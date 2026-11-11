@@ -748,7 +748,7 @@ public static class BotHarness
             Check(s == 403, "/roster asked for by another name than localhost: 403 (" + s + ")");
             for (int i = 0; i < ChartBridgeRoster.MaxFiles + 3; i++) File.WriteAllText(Path.Combine(rf, "z" + i.ToString("000", CultureInfo.InvariantCulture) + ".json"), ro);
             body = Get(port, "/roster", null, null, out s);
-            Check(s == 200 && body.EndsWith("],\"left\":" + (7 + ChartBridgeRoster.MaxFiles + 3 - ChartBridgeRoster.MaxFiles) + "}"), "/roster: at most 200 files, and how many are left over is said: " + body.Substring(Math.Max(0, body.Length - 40)));
+            Check(s == 200 && Regex.Matches(body, "\\{\"name\":").Count == ChartBridgeRoster.MaxFiles && body.EndsWith("],\"left\":" + (7 + ChartBridgeRoster.MaxFiles + 3 - ChartBridgeRoster.MaxFiles) + "}"), "/roster: at most 200 files, and how many are left over is said: " + body.Substring(Math.Max(0, body.Length - 40)));
             ChartBridgeRoster.FolderSetting = "relative\\roster";
             body = Get(port, "/roster", null, null, out s);
             Check(s == 500 && body.Contains("not a full path"), "/roster: a rosterFolder that is not a full path is refused (" + s + ")");

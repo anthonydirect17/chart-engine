@@ -1,4 +1,4 @@
-# ChartBridge protocol (v1 market data and fills, v2 orders, v3 accounts, strategies, copier and bot, 0.5.0 agents, 0.5.1 accounts, 0.5.8 prop groups, 0.6.0 group trading, 0.6.1 a group's Type and default hero, 0.6.3 the audit fixes, 0.6.4 the no-trade-record alarm and Merge on an off follower, 0.6.8 the minute book, 0.6.10 the account lifecycle and the NQ tick file, 0.6.11 the bar trail and the narrower 1 second request, 0.6.12 the bar trail follow-ups, 0.6.13 the tick day's morning catch-up and the raw deleted once packed, 0.6.14 the tick day check's rule: short and holes, 0.6.15 the 1 second pull retired: the NQ tick file is the one source, 0.6.16 prop accounts: one Auto restore after a restart (Auto ends at 17:00 ET since 0.6.18), 0.6.17 Kill all for the prop accounts, 0.6.18 entry rules per trader: market entry and no target, 0.6.19 the day's profit stop: a dollar mark per account)
+# ChartBridge protocol (v1 market data and fills, v2 orders, v3 accounts, strategies, copier and bot, 0.5.0 agents, 0.5.1 accounts, 0.5.8 prop groups, 0.6.0 group trading, 0.6.1 a group's Type and default hero, 0.6.3 the audit fixes, 0.6.4 the no-trade-record alarm and Merge on an off follower, 0.6.8 the minute book, 0.6.10 the account lifecycle and the NQ tick file, 0.6.11 the bar trail and the narrower 1 second request, 0.6.12 the bar trail follow-ups, 0.6.13 the tick day's morning catch-up and the raw deleted once packed, 0.6.14 the tick day check's rule: short and holes, 0.6.15 the 1 second pull retired: the NQ tick file is the one source, 0.6.16 prop accounts: one Auto restore after a restart (Auto ends at 17:00 ET since 0.6.18), 0.6.17 Kill all for the prop accounts, 0.6.18 entry rules per trader: market entry and no target, 0.6.19 the day's profit stop: a dollar mark per account, 0.6.20 the roster served)
 
 ChartBridge is a NinjaTrader 8 add-on. It serves the live chart page at `http://localhost:8765/` and
 talks to it over one WebSocket at `ws://localhost:8765/ws`. Everything stays on the local machine.
@@ -3702,6 +3702,35 @@ and the Board's KILL ALL AGENTS (agentKill on to every agent) are unchanged.
 
 No page sends this message yet: the button comes with the Fleet tab. Checked in `check/AgentHarness.cs` (`PropAccounts`, the
 "kill all" parts, the review's three scenarios among them) and `test/nt8-agents.test.js`.
+
+### The roster: the Lab's files, served read only (0.6.20)
+
+Build answers 7, part C2. Each bot (and each lineup) the Lab built has one small JSON file of numbers, made by Bot-Lab's
+`specrunner/roster.py` on the box from a finished run: the playbook it sizes with on 50K with the daily loss limit, its
+profit per $1 with its range and its no-edge range, and whether the spec runner can run it. A file holds no price, no level
+and no time of day, and no bot rule: it names its spec by file name and sha256. The files reach each trading PC with
+Bot-Lab's own install (a reviewed pull request puts them under Bot-Lab's `roster/` folder; nothing goes through The Desk).
+
+- **`rosterFolder`** in `config.txt`: the full path of that folder on this PC. None: `GET /roster` answers 404.
+- **`GET /roster`**, only when asked for by the localhost name (as `/bot-library`; loopback only, as every request), GET
+  or HEAD; read fresh each time. 200 with:
+
+  ```json
+  {"files": [{"name": "germanicus.json", "ok": true, "roster": {"format": "specrunner.roster/1", "...": "..."}},
+             {"name": "broken.json", "ok": false, "why": "not valid JSON"}],
+   "left": 0}
+  ```
+
+  One entry a file, in name order: the file's JSON as it is (`roster`), or why it is not served (`why`). Only plain
+  `*.json` files directly in the folder whose name is letters, digits, `-` and `_` (40 at most) before `.json`; never a
+  subfolder, never a link (the folder itself must not be one either); at most 200 files (`left` says how many more),
+  each at most 256 KB, valid JSON, an object whose `format` is `specrunner.roster/1` or `specrunner.lineup/1`. A
+  folder that is not there, is a link, or is not a full path: 500 with `{"error": "<why>"}`. The folder's path is never
+  sent or logged (it can hold an account's user name).
+- ChartBridge decides nothing from these files. The Bots tab shows them; the spec runner reads its own copy with
+  Bot-Lab's strict reader (`specrunner.roster.load`), which also refuses a file built with `--quick`.
+
+Checked in `check/BotHarness.cs` (the real request handler).
 
 ### The day's profit stop (0.6.19)
 

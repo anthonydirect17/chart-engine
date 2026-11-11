@@ -19,6 +19,7 @@
 # 0.6.16: prop accounts: one Auto restore after a restart, prop only, inside the same trading day; since 0.6.18 Auto ends at 17:00 ET for every agent, also when the reset did not run (check/AgentHarness.cs PropAccounts).
 # 0.6.17: Kill all for the prop accounts: flatten, the kill switch, Shadow; agents not on prop accounts, the personal account and other accounts untouched (check/AgentHarness.cs PropAccounts, kill all).
 # 0.6.19: the day's profit stop: a plan's dayStopDollars and the consistency mark on an account that is not funded; reached, the trader's own flatten and a stand-down until the roll; nothing while it holds nothing (check/AgentHarness.cs DayStop).
+# 0.6.20: the roster: GET /roster serves the Lab's roster files from rosterFolder, read only, each checked (check/BotHarness.cs Http).
 # 0.6.18: entry rules per trader: a market entry and an entry with no target only when the trader's rules allow each; a stop always (check/AgentHarness.cs EntryRules).
 # 0.5.6: the time check: SNTP time stamps and its formula, every answer that is none, a time server of its own on 127.0.0.1, what the pages and the Output window are told (check/ClockHarness.cs).
 # The build goes to $CHARTBRIDGE_ORDERS_EXE when set (kept); else to a path of its own for this run ($TMPDIR or /tmp, chartbridge-orders-<pid>.exe, deleted after), so parallel runs never share a build.
