@@ -1,4 +1,4 @@
-# ChartBridge protocol (v1 market data and fills, v2 orders, v3 accounts, strategies, copier and bot, 0.5.0 agents, 0.5.1 accounts, 0.5.8 prop groups, 0.6.0 group trading, 0.6.1 a group's Type and default hero, 0.6.3 the audit fixes, 0.6.4 the no-trade-record alarm and Merge on an off follower, 0.6.8 the minute book, 0.6.10 the account lifecycle and the NQ tick file, 0.6.11 the bar trail and the narrower 1 second request, 0.6.12 the bar trail follow-ups, 0.6.13 the tick day's morning catch-up and the raw deleted once packed, 0.6.14 the tick day check's rule: short and holes, 0.6.15 the 1 second pull retired: the NQ tick file is the one source)
+# ChartBridge protocol (v1 market data and fills, v2 orders, v3 accounts, strategies, copier and bot, 0.5.0 agents, 0.5.1 accounts, 0.5.8 prop groups, 0.6.0 group trading, 0.6.1 a group's Type and default hero, 0.6.3 the audit fixes, 0.6.4 the no-trade-record alarm and Merge on an off follower, 0.6.8 the minute book, 0.6.10 the account lifecycle and the NQ tick file, 0.6.11 the bar trail and the narrower 1 second request, 0.6.12 the bar trail follow-ups, 0.6.13 the tick day's morning catch-up and the raw deleted once packed, 0.6.14 the tick day check's rule: short and holes, 0.6.15 the 1 second pull retired: the NQ tick file is the one source, 0.6.16 prop accounts: one Auto restore after a restart (Auto ends at 17:00 ET since 0.6.18), 0.6.17 Kill all for the prop accounts, 0.6.18 entry rules per trader: market entry and no target, 0.6.19 the day's profit stop: a dollar mark per account, 0.6.20 the roster served)
 
 ChartBridge is a NinjaTrader 8 add-on. It serves the live chart page at `http://localhost:8765/` and
 talks to it over one WebSocket at `ws://localhost:8765/ws`. Everything stays on the local machine.
@@ -3029,7 +3029,8 @@ included) and one `order` for each working order of the agent's own on those roo
 `{"type":"snapshot","roots":[...]}` (the same roots), after every `agentHello`. `welcome.instruments` lists only the roots
 ChartBridge serves at that moment (NinjaTrader connected, the contract found). A runner without a complete snapshot is "not
 ready" (no plans; it reconnects after 30 s), which is not a stand-down. Every start
-of ChartBridge puts every agent in `shadow`; `auto` never survives a restart. 0.6.3 (audit C5, Anthony's decision): **the kill
+of ChartBridge puts every agent in `shadow`; `auto` never survives a restart (0.6.16: one exception, an agent on prop accounts
+with a saved Auto, see "Prop accounts" below; the start itself is still `shadow`). 0.6.3 (audit C5, Anthony's decision): **the kill
 switch does survive a restart.** `agentKill` on writes `agent-<id>-kill.txt` (two `#` lines, then `killed<TAB><UTC ms>`), one
 per agent; `agentKill` off removes it (a release whose file cannot be removed is refused: "agent-<id>-kill.txt could not be
 removed (...): the kill switch stays on"). Only the page's kill message writes or removes it. At every start a file that is
@@ -3074,7 +3075,7 @@ not even the window. A change is saved, logged and sent to the agent in a new `w
 | `agentHello` | `name` (1 to 40), `build` (1 to 40) | first message |
 | `beat` | none | |
 | `subscribe` | `root`, `days`, `tickHours`, `sub` (as the page's) | answered as for a page: `history`, `ticks`, `ready`, then live `tick` for that root (the agent gets live `tick` for every served root anyway) |
-| `plan` | `id` (1 to 40, unique per agent per trading day), `root`, `side` (`buy`/`sell`), `kind` (`limit`/`stopLimit`), `price`, `limitPrice` (stopLimit only, and then required), `qty`, `stopTicks`, `targetTicks`, `expireSec`, `riskDollars`, `setup` (1 to 40), `reason` (1 to 200), `confidence` (0 to 1); 0.6.0: `seatsRev` and `sizes` ("Group trading (0.6.0)") | one entry plan; checked, then by mode: logged, proposed or placed |
+| `plan` | `id` (1 to 40, unique per agent per trading day), `root`, `side` (`buy`/`sell`), `kind` (`limit`/`stopLimit`), `price`, `limitPrice` (stopLimit only, and then required), `qty`, `stopTicks`, `targetTicks`, `expireSec`, `riskDollars`, `setup` (1 to 40), `reason` (1 to 200), `confidence` (0 to 1); 0.6.0: `seatsRev` and `sizes` ("Group trading (0.6.0)"); 0.6.19: `dayStopDollars` (optional: "The day's profit stop (0.6.19)") | one entry plan; checked, then by mode: logged, proposed or placed |
 | `skip` | `id`, `setup` (optional), `reason` | a decision not to trade; logged and shown |
 | `withdraw` | `id`, `reason` | expires an open proposal, cancels an unfilled entry |
 | `note` | `kind` (`look`, `thinking`, `lesson`, `notebook`, `status`), `text` (1 to 1,000) | display only, never the order path; the last 200 per agent are kept for pages that sign in later |
@@ -3532,12 +3533,300 @@ refused, both with "waiting for the daily reset: <account> was <branch>'s accoun
 yet ...", which is also the status (`agentState` and the strip's `standDown`, `bot.standDown`); the copier copies no new leader
 entry. Exits, legs and flattens are never affected, and a working entry is not cancelled for it. A ChartBridge before 0.6.3
 reads only the day line.
-`ChartBridgeBranches.KeepThroughReset` is the one place an exception would go (Anthony is still deciding whether a branch
-running a hero on Sim101 is left alone); for now there is none. The ticket's account is each page's own, so the page applies
+`ChartBridgeBranches.KeepThroughReset` is the one place an exception goes. Until 0.6.15 there was none. 0.6.16 made one, an
+agent in Auto on prop accounts; 0.6.18 took it away again (Auto ends with the trading day, "Prop accounts" below), so today the
+bot, the copier and every agent are reset alike. The ticket's account is each page's own, so the page applies
 the same rule to it (`LivePrefs.ticketReset`, every 5 s in the window with the ticket, and only once that connection's
 sign-in snapshot of orders and positions is whole, never on a timer): a pick made before the latest 17:00 ET
 (`live-account-at-v1`, the time of the last pick) goes to None when that account is flat with no working order, else it is
 kept with a note naming it; either way once.
+
+### Prop accounts: Auto ends at the reset, and one restore after a restart (0.6.16)
+
+Anthony's rulings of 2026-11-10 (the Prop Business build plan and its addendum) and 2026-11-11 (the build answers): agents and
+bots trade the prop accounts, with no Accept; "Auto stays armed through the 17:00 reset"; after a ChartBridge or PC restart the
+agent "resumes on its own when ... the account is flat". This section is those rulings in ChartBridge. They override, for prop
+accounts only, "`auto` never survives a restart" and "Every start is Shadow; Auto stays one click and Confirm on his desk"
+above. Built in `nt8/ChartBridgeAccounts.cs` (`ChartBridgeBranches.IsProp`, `SetPersonal`, `KeepThroughReset`),
+`nt8/ChartBridgeAgents.cs` (the saved Auto), `nt8/ChartBridge.cs` (the file helpers) and `live/accounts.js` (the pick). No file of the order path changes: the order
+ticket, hotkeys, groups, the copier, the bot, Order Strategies, Merge and Flatten behave exactly as in 0.6.15 on every account
+(Anthony 2026-11-11: hand orders on a prop account are not refused; "I will not touch them").
+
+**What is prop.** Anthony picks his personal account once, on the chart page (2026-11-11: "make it a one-time pick on the
+chart page"; nothing is typed into a file by hand). The page message:
+
+```json
+{"type": "accountPersonal", "cid": "p1", "account": "<name>"}
+{"type": "accountPersonal", "cid": "p2", "clear": true}
+```
+
+Guarded as every account message (a signed-in v3 page of ChartBridge's own; it works with `accountChecks` on or off). The
+account must be one NinjaTrader lists now, never a Sim account, Backtest or Playback. `clear` takes the pick away. Either is
+refused while any agent is in Auto ("set every agent to Shadow first"), because what is prop would change under it; a change
+also removes every agent's saved Auto (it was saved under the old pick). ChartBridge keeps the pick in `personal-account.txt`
+next to `config.txt` (two `#` lines, then `account<TAB><name>`) and reads it at each start, before the agents. The page asks
+first (a confirm row on the Accounts tab, in the account's settings), then sends the one message; a done pick is a `status`
+`info` and a new `accounts` message.
+
+With a pick, an account is **prop** when it is not that account, not a Sim account (NinjaTrader's simulator, by both existing
+tests) and not Backtest or Playback, and NinjaTrader lists it (an account it does not list is not prop: its Sim cannot be read).
+With no pick, **nothing is prop and ChartBridge behaves exactly as 0.6.15**: no file below is written or read. This is a new
+notion beside `accountState.kind` (`prop` = in a group, `personal` = in no group), which keeps its meaning. The account's name
+is never written to the Output window or a log, never sent to an agent or The Desk, and never in this repo. The accounts
+message gains `personalNamed` (true or false, last) and each entry gains `personal` and `prop` (true or false, before
+`unserved`); a ChartBridge before 0.6.16 sends none of them, and the page then offers no pick.
+
+**The saved Auto** (`agent-<id>-auto.txt` next to `config.txt`, two `#` lines, then `auto<TAB><account>` or
+`auto<TAB>group:<id>`; the kill file's pattern; only the file itself counts, never a `.bak`). It is the agent's Auto intent:
+
+- **Written** when the page sets `agentMode` `auto`, when `agentAccount` changes the account and keeps Auto (`keepMode`), and
+  when `agentKill` off releases the kill switch while the mode is still Auto, and only if a personal account is picked and
+  every seat (its one account, or every member of its group) is prop. A save that fails is a `status` `warn`: Auto is on, but
+  it is not kept.
+- **Removed** on any other mode, on an account change that does not keep Auto on prop seats (None and the daily reset's None
+  included), and when the kill switch goes on. A file that cannot be removed is a `status` `warn` ("delete it by hand, or Auto
+  may come back after a restart").
+- Shadow and Copilot save nothing: an agent in either on a prop account goes to None at 17:00 as before.
+
+**At the 17:00 ET reset: Auto ends with the trading day** (Anthony 2026-11-11, after the review of this section: "Arm should
+turn off when the trading day ends, if I want to re-arm the bot, I either start it up at home for the overnight session, or
+remote into work and turn it back on"). This replaces "Auto stays armed through the 17:00 reset". At the reset, for EVERY agent in Auto, on every kind of account
+(prop, the personal account, a Sim account, a mixed group; the review of 90, N4, the coordinator's ruling: Anthony's rule has
+no exception), or with a saved Auto: its mode goes to `shadow`, its unfilled
+entries are cancelled, the saved Auto is removed, and the pages get `status` `info` "Agent <id>: the trading day ended (17:00
+ET): Auto is off on <account> (mode shadow); set Auto again when you want it to trade". This happens whether or not the
+reset can take its account to None at that moment (it holds a position, or an account is not known yet). Then the reset is
+the reset every branch has: the account goes to None when it is flat and idle, and stays while it holds something. Nothing
+is kept through the reset: `KeepThroughReset` reads the saved Auto, which is gone by then, so it answers no for every branch.
+
+**Auto ends with its trading day even when the reset does not run** (the review of 90, F4). A PC asleep through the whole
+17:00 to 18:00 break has no reset to run when it wakes if it has no `daily-reset.txt`, and a plan can come in the seconds after
+a wake before the reset's 2 second pass. So ChartBridge also keeps, in memory, the trading day each agent's Auto was set in
+(the date of the latest 17:00 ET at or before then), and compares it with the trading day now on every pass and in every plan
+check, before anything is placed. On a mismatch Auto ends exactly as at the reset (the same steps and words), and that plan is
+refused: "the trading day ended (17:00 ET): Auto is off for agent <id>; set Auto again on the Agent tab".
+
+**After a restart: one restore.** Every start is still Shadow. A start that finds the saved Auto (only looked for when a
+personal account is picked) tries ONE restore, on the 2 s pass, under the placement gate, and only inside the trading day
+the Auto was set in:
+
+1. It waits only while a seat is not known yet (not in NinjaTrader, not Connected, or Connected under 30 s: the reset's
+   `UnknownWhy` rule). The first pass that knows every seat decides, and that answer is final for this start.
+2. Auto comes back only if all of these hold: the kill switch is off; the saved Auto names the agent's account or group as it
+   is now; every seat is prop; every seat is flat with no working order (the reset's `Idle` rule) and the agent holds
+   nothing (no trade, entry or proposal); Auto's own check passes (the account tradable now, no clash); and the saved Auto
+   is of this trading day. The file carries the day it was set in (`day<TAB>yyyy-MM-dd`, the reset's own day rule: the date
+   of the latest 17:00 ET at or before then); another day, or no day, is "its saved Auto is from an earlier trading day
+   (Auto ends at 17:00 ET)". That is the backstop for a reset that was missed; the reset itself removes the file.
+3. Yes: the mode is `auto`, the pages get `status` `warn` "Agent <id>: Auto restored after the restart on <account> (prop,
+   flat, nothing working, the kill switch off)", the agent gets `welcome` again, the file stays.
+4. No: the agent stays in Shadow, the file is removed, and the pages get `status` `warn` "Agent <id>: Auto was NOT restored
+   after the restart (<why>): it is in shadow; set Auto on the page when ready". A position that closes later does not bring
+   Auto back: that is one click on the page.
+
+Any mode, account or kill message from the page before the restore has an answer ends it: the page's word wins. A kill switch
+that was on at the stop is on at the start (0.6.3), so Auto stays off, and releasing it after that restart leaves Shadow.
+
+**What this does not do.** It places, cancels and flattens nothing; it never changes an account; it never reads or sets a
+mode for the bot or the copier; it never acts for an agent on the personal account, a Sim account or a group with a member
+that is not prop (those get the 0.6.15 result in every case: the reset to None, Shadow at every start). Going back to 0.6.15
+is safe: it ignores both files.
+
+**Risks, stated.** The restore arms a live prop account with nobody at the desk; the runner's on-duty claim on The Desk is the
+outside brake (a runner without it sends no plan). A ChartBridge started in the middle of a session restores only when flat,
+so it never adopts a position. Checked in `check/AgentHarness.cs` (`PropAccounts`: a no-setting install, the personal account,
+a Sim account, a prop account and a prop group; the reset, the restart flat and not flat, an account not known yet, the kill
+switch, an account change) and `test/nt8-agents.test.js` (every new branch passes through `IsProp`).
+
+### Kill all for the prop accounts (0.6.17)
+
+Anthony's ruling of 2026-11-11 (the build answers, B question 6; the addendum: "Fleet's Kill all acts on prop accounts
+only"). One page message, no agent key:
+
+```json
+{"type": "agentKillAllProp", "cid": "k1"}
+```
+
+Guarded as every agent page message (a signed-in v3 page from an allowed origin, trading on), except the action rate: Kill
+all is never refused as "too many order actions" (the review of 0.6.17, N2). For every agent whose accounts are ALL in
+scope (every account it follows: its account or every member of its group, and a seat that left while it holds the agent's
+trade), under its placement gate and in this order:
+
+1. **Its kill switch goes on** (`agentKill` on: saved in `agent-<id>-kill.txt`, so a restart keeps it; its unfilled entries
+   cancelled; its saved Auto removed) and **its mode goes to Shadow**, so releasing the kill switch later leaves Auto off
+   until it is set on the page again. These come FIRST (the review of 90, N1), so nothing after them can leave it trading.
+2. **Its own flatten starts** on every seat (`CB#<tag> ag:<id> flat`), in its own try. It cancels **only the agent's own
+   working orders** there, waits for NinjaTrader to confirm them, and closes at market only what the agent owns. An order
+   placed by hand, by the bot or by the copier on the same account and contract is **not cancelled: it stays and can still
+   fill** (the review's F2; Anthony 2026-11-11: "yes, okay"), and it does **not hold back the agent's own close** (the review
+   of 90, S1: before the fix such an order left the agent's position open with its stop cancelled). If that order fills
+   first and makes the account flat, no close is sent; if it fills after the close, that position is the hand's own and
+   ChartBridge sends nothing for it. The flat time's flatten and the agent's own `flatten` are unchanged: on a pair the
+   agent owns they cancel every order that may fill there. It runs whatever the mode and with the kill switch on, and is
+   loud until flat ("NOT FLAT?", every 10 s). A flatten that cannot be started is said loudly ("its flatten could NOT be
+   started (...): act in NinjaTrader now"); the agent is killed and in Shadow all the same.
+
+**A saved Auto waiting is stopped too** (the review of 90, F3): an agent with no seats right now (a restart while
+`groups.txt` cannot be read) whose saved Auto waits to be restored gets the kill switch, Shadow and its saved Auto removed,
+whatever its seats, and the line names it "(no prop account known now; its saved Auto was waiting)". Never an agent on the
+personal account.
+
+**In scope, for Kill all only** (the review's F1, `ChartBridgeAgent.KillScope`): every account except the personal account,
+an account NinjaTrader lists as Sim, Backtest, Playback and None. **An account NinjaTrader does not list right now is in
+scope**: `IsProp` answers no for it (the careful side for keeping Auto), which would be the wrong side for a kill. So an
+agent in Auto on a prop account that dropped off NinjaTrader's list, or is not listed yet after a restart, gets the kill
+switch and Shadow and loses its saved Auto; nothing can be flattened on an account that is not listed, and the kill switch
+then refuses every plan when it is back.
+
+The pages get one `status` `warn`: "Kill all (prop accounts): agent <id> on <account>: flattening what it owns, the kill
+switch on, mode shadow; ... . NOT STOPPED, still trading its prop accounts (it trades the personal account too; stop it on
+the Agent tab): <ids>. FAILED, stop it on the Agent tab now: <ids>. Not touched (not on prop accounts): <ids>. Only the
+traders' own orders were cancelled: an order placed by hand, the bot's or the copier's stays and can still fill. On the
+account and contract a trader holds, its position is closed whole, a contract added by hand included (an account a bot
+trades is the bot's for the day)" (each of the three lists only when it has a name).
+
+**The account a bot trades is the bot's for the day** (Anthony 2026-11-11, on the review's F7: "When the bot is trading the
+account, its the bots account for that day. I would never touch it."). Kill all and the day's profit stop close the
+trader's position on its account and contract whole: a contract added there by hand is closed with it (the 0.5.0 rule:
+the trader's record takes every fill on a pair it owns). Nothing caps the close at what the trader's own entries bought,
+and nothing refuses or flattens a hand order. The one race left (a hand order resting there and the trader's close both
+fill) leaves the account short or long; the status line says so plainly ("<account> <root> is now SHORT 1: agent <id>'s
+close and an order placed by hand both filled. ChartBridge sends nothing for it; act in NinjaTrader now"), and nothing
+more is done. One agent that throws never stops the others (N3). The agent gets `welcome` again.
+
+**Never touched:** an agent on the personal account, a Sim account, None, or a group with a member that is out of scope (a
+group that holds the personal account and prop accounts is left alone and named loudly as NOT STOPPED, N1); the bot; the
+copier; the order ticket and every manual order. With no personal account picked nothing is prop: the message is refused
+("no personal account is picked ... nothing was done") and nothing changes. The older `agentKill` (one agent, no flatten)
+and the Board's KILL ALL AGENTS (agentKill on to every agent) are unchanged.
+
+No page sends this message yet: the button comes with the Fleet tab. Checked in `check/AgentHarness.cs` (`PropAccounts`, the
+"kill all" parts, the review's three scenarios among them) and `test/nt8-agents.test.js`.
+
+### The roster: the Lab's files, served read only (0.6.20)
+
+Build answers 7, part C2. Each bot (and each lineup) the Lab built has one small JSON file of numbers, made by Bot-Lab's
+`specrunner/roster.py` on the box from a finished run: the playbook it sizes with on 50K with the daily loss limit, its
+profit per $1 with its range and its no-edge range, and whether the spec runner can run it. A file holds no price, no level
+and no time of day, and no bot rule: it names its spec by file name and sha256. The files reach each trading PC with
+Bot-Lab's own install (a reviewed pull request puts them under Bot-Lab's `roster/` folder; nothing goes through The Desk).
+
+- **`rosterFolder`** in `config.txt`: the full path of that folder on this PC. None: `GET /roster` answers 404.
+- **`GET /roster`**, only when asked for by the localhost name (as `/bot-library`; loopback only, as every request), GET
+  or HEAD; read fresh each time. 200 with:
+
+  ```json
+  {"files": [{"name": "germanicus.json", "ok": true, "roster": {"format": "specrunner.roster/1", "...": "..."}},
+             {"name": "broken.json", "ok": false, "why": "not valid JSON"}],
+   "left": 0}
+  ```
+
+  One entry a file, in name order: the file's JSON as it is (`roster`), or why it is not served (`why`). Only plain
+  `*.json` files directly in the folder whose name is letters, digits, `-` and `_` (40 at most) before `.json`; never a
+  subfolder, never a link (the folder itself must not be one either); at most 200 files (`left` says how many more),
+  each at most 256 KB, valid JSON, an object whose `format` is `specrunner.roster/1` or `specrunner.lineup/1`. A
+  folder that is not there, is a link, or is not a full path: 500 with `{"error": "<why>"}`. The folder's path is never
+  sent or logged (it can hold an account's user name).
+- ChartBridge decides nothing from these files. The Bots tab shows them; the spec runner reads its own copy with
+  Bot-Lab's strict reader (`specrunner.roster.load`), which also refuses a file built with `--quick`.
+
+Checked in `check/BotHarness.cs` (the real request handler).
+
+### The day's profit stop (0.6.19)
+
+Anthony 2026-11-10 (build plan decision 8: "a hard daily target stop at the consistency rule... we would never really want to
+go over that") and 2026-11-11 (the runner sends the playbook's value with each plan; nobody types it). Built in
+`ChartBridgeAgents.cs` only: it reads an account's numbers (`ChartBridgeGroups.Read`) and starts the trader's own flatten;
+`ChartBridgeGroups.cs` and `ChartBridgeOrders.cs` are the 0.6.18 files.
+
+- **`dayStopDollars`** on a `plan` (optional): dollars above 0, at most 1,000,000 ("dayStopDollars must be dollars above 0
+  ..." otherwise). It is the day's profit stop the runner's playbook asks for on the account. When a plan is **placed** (auto,
+  or an accepted proposal), its value becomes the session's value for that trader; a placed plan without the key clears it. A
+  plan that is only logged (shadow), proposed, or refused changes nothing.
+- **The mark for an account** is the smaller of what apply: the session's `dayStopDollars`; and, when the account is **not
+  funded** (its group's Type is `eval` or not set) and its rules have both a consistency percent and a profit target, that
+  percent of the target (50% of 3,000 is 1,500). A funded account: the plan's value, or no mark. Neither: no mark.
+- **The day's number** is realized plus open for the 18:00 session, as in `accountState.pnlToday`, with one difference (the
+  review of 88, F6): when ChartBridge started after 18:02 ET, `pnlToday` takes the SMALLER of ChartBridge's own realized
+  figure and NinjaTrader's (right for a loss limit); the profit stop takes the LARGER. When it is not known (no NinjaTrader
+  realized after a late start, or no open P&L), the profit stop is not checked on that account and that is said once a
+  session, to the pages and the trader: "Agent <id>: the day's profit stop ($<mark>) is NOT checked on <account>: the day's
+  number is not known (<why>)" (`status` `warn`, N7).
+  The larger figure can OVERSTATE the day after a late start that follows a loss (the second look's B3: a 500 loss before
+  the start and 600 made after it reads +600 where the day is +100), so the stop can act early; that is the side the
+  ruling allows (never too low). In the second after 18:00 ET, before the day start rolls, NinjaTrader's realized may
+  still be yesterday's: while a day start of another session is held, the profit side is not known and nothing is
+  latched (D2), and that one second is not said.
+- **Reached once is reached for the session** (the review of 88, F5). The first time ANY pass or plan check sees an account's
+  day at or over its mark, flat or not, the account is remembered as reached for that session, for every trader (the
+  account's day counts every trader on it), and saved in the trader's day file (`#dayreached<TAB><account><TAB><dollars>`, a
+  comment to a ChartBridge before this; read again at a start into the list every trader's plan check reads, so a
+  restart of ChartBridge refuses as before (the second look's D1); cleared at the roll). From then on every plan for that account
+  is refused, whatever `dayStopDollars` it names and even when the day falls back under the mark (at the plan check the
+  session's mark counts too, the smaller of it and the plan's own, so a plan naming a higher mark in the moment before
+  the next pass is refused as well: D3): "the day's profit stop is
+  reached on <account> this session ($<mark>, <from>; the day was at $<pnl>, realized plus open): no new entry there until
+  18:00 ET". No later plan raises or clears it.
+- **The check**, every pass (1 s), for every account the trader follows; the flatten and the stand-down only where it holds a
+  position or a working order: the day's number at or above the mark. Then the trader's own flatten starts on that
+  account (the flat time's job: its orders cancelled, what it owns closed at market, `CB#<tag> ag:<id> flat`), and it stands
+  down for the session: `agentState.standDown` reads "the day's profit stop is reached on <account> ($<mark>, <where the mark
+  came from>; the day is at $<pnl>, realized plus open): flat (its position on that account closed whole, a contract added by hand included), and no new
+  entries for agent <id> until 18:00 ET". The 18:00
+  roll clears it, as it clears a `maxLosses` stand-down; a rules change does not.
+- **Only its own orders.** The flatten is "own orders only", as Kill all's (the review's F2): an order placed by hand, by
+  the bot or by the copier on the same account and contract is not cancelled and can still fill. Nothing of another
+  trader's is cancelled. The trader's position there is closed whole, a contract added by hand included (the account
+  is the bot's for the day, above).
+- **No new entry on an account already at its mark** (plan check 9b). A plan is refused while an account it would go to was
+  reached this session (above), or is at or over its mark now (which then marks it reached). The mark counts the plan's own
+  `dayStopDollars` when it names one, else the session's. A refusal is not a stand-down.
+- **Several traders on one account's day.** The mark belongs to the account and counts everything on it: every trader's
+  trades and trades placed by hand. Today one account belongs to one trader (an agent never shares an account), so this
+  matters when traders take turns on an account, and it is ready for a lineup: the trader holding a trade there when the
+  mark is reached is flattened and stands down; any other trader's later plan for that account is refused by check 9b; a
+  trader holding nothing is not stood down and may trade another account. The session's plan value is kept per trader.
+- **Not checked** while the day's number is not known, said once (above); the stop and the flat time still hold.
+- **Saved**: `agent-<id>-day.txt` gains one line, `#daystop<TAB><dollars>`, only while a value is set (a comment to a
+  ChartBridge before 0.6.19; a malformed one is read as a comment). Kept through a restart, cleared at the roll. The
+  stand-down is the day file's `standDown` line, as for `maxLosses`.
+- **`agentState`** (to the trader) and **`agent`** (to the pages) carry `"dayStop": <dollars>` (the session's plan value)
+  only when one is set; left out: none. A trader
+  that sends no `dayStopDollars`, on an account with no consistency rule and target, is as in 0.6.18 in every message.
+
+Checked in `check/AgentHarness.cs` (`DayStop`).
+
+### Entry rules per trader (0.6.18)
+
+Anthony 2026-11-11: a market entry with a stop and no target is approved for a plain-code bot, and "ideally we will be making
+many more bots. Most of them will have stops and targets, so I dont want to overfit" for one. So nothing names a bot: each
+trader on the agent channel has two more rules, both off by default, set on the page with its other rules (`agentRules`).
+
+- `marketEntry` (true or false): on, a `plan` may have `"kind": "market"`. Off (the default): limit and stop-limit only
+  ("an agent's entry is a limit or a stop-limit (market refused): a market entry is not allowed by agent <id>'s rules").
+- `noTarget` (true or false): on, a `plan` may have `"targetTicks": 0`: a stop and no target. Off (the default): every entry
+  needs a stop and a target, as before.
+- **A stop is always required** (`stopTicks` of 1 or more), whatever the rules allow.
+
+A **market plan** has the same keys as every plan. Its `price` is the last trade the trader saw: ChartBridge needs a fresh last
+trade of its own (the page's rule, 5 s) and the two within 20 ticks (`MarketMaxTicks`), on the tick grid; else the plan is
+refused ("a market plan's price must be within 20 ticks of the last <root> trade"). It takes no `limitPrice`. `expireSec` is
+still sent (60 to the trader's maximum) and has nothing to cancel. Every other check applies as written: the mode, the kill
+switch, the window, the size caps, one trade at a time, maxTrades and maxLosses, the owner lock, the group's one direction, the
+firm's limits. The order is `OrderType.Market`, named `CB#<tag> ag:<id> s<stopTicks> t<targetTicks>` (`t0` with no target);
+on its fill v2's legs go on as for a page order: the stop `stopTicks` from the fill price, and the target only when there is
+one. The flat time and the trader's own flatten cancel what legs there are and close at market, as before.
+
+`agentRules` takes `marketEntry` and `noTarget` (each true or false; **left out: off**, so a page that does not know them can
+never grant them, and saving the rules from such a page turns both off). Saved in `agent-<id>-rules.txt` as `marketEntry<TAB>on`
+and `noTarget<TAB>on`, each line only when on, so the file of a trader with neither is the file 0.6.17 wrote. The rules object
+in `agent`, `welcome` and the strip carries `"marketEntry": true` and `"noTarget": true` the same way: each only when on. A
+trader with neither is as in 0.6.17 in every message and every refusal.
+
+The order path asks the same rules (`ChartBridgeAgents.MayMarket`, `MayNoTarget`) in the two lines of
+`ChartBridgeOrders.PlaceOrderLocked` that until 0.6.17 refused every agent market entry and every agent entry with no target; a
+trader whose rules file cannot be read is allowed neither. Checked in `check/AgentHarness.cs` (`EntryRules`) and
+`test/nt8-record.test.js` (the file differs from 0.6.17 in exactly those two lines).
 
 ### Prop groups and account state (0.5.8)
 
@@ -3833,7 +4122,8 @@ does not know heroes or tiers, and nothing in the order path reads them (no new 
   existing `agentAccount` `{agent, group, keepMode: "shadow"}` (a LIVE member asked once in the page), waits up to 10 s for the
   `agent` message naming the group, then the helper's existing `POST /on` with the group's default hero in Shadow (no default hero
   the helper has: he picks one). No free slot: "add an agent id to config.txt (agents = ...)"; ChartBridge never writes config.txt.
-  Every start is Shadow; Auto stays one click and Confirm on his desk.
+  Every start is Shadow; Auto stays one click and Confirm on his desk (0.6.16: except the one restore for an agent on prop
+  accounts, "Prop accounts" below).
 
 ### Group stand-downs and league seats (0.6.2)
 

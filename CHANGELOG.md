@@ -63,6 +63,185 @@
   `test/pc-updater.test.js`: the allowed git subcommands, the box job's name, useHttpPath read before the one ask, the
   token only after a 404 or 401 and then through the Actions API, one place that asks for it and one that sends it.
 
+## ChartBridge 0.6.20 and chart 1.44.6 (2026-11-11): the roster, the Lab's files served read only
+
+In plain words: nothing changes on the chart, for hand trading or for any trader. ChartBridge can now hand the chart page
+the Lab's roster files (one small file of numbers for each bot and each lineup: the playbook it sizes with, its profit per
+$1 and its no-edge range), so the Bots tab can show them. Build answers 7, part C2.
+
+- **`rosterFolder`** in `config.txt` names the folder (Bot-Lab's `roster/` on this PC, filled by Bot-Lab's own install).
+  None: nothing is served.
+- **`GET /roster`**: every roster file in that folder, as it is, or why one is not served (not a plain name, a link, over
+  256 KB, not valid JSON, not a roster file). Only by the localhost name; never a subfolder; at most 200 files; the
+  folder's path is never sent or logged.
+- ChartBridge decides nothing from the files. No order path file changes.
+
+## ChartBridge 0.6.19 and chart 1.44.5 (2026-11-11): the day's profit stop, a dollar mark per account
+
+**The fix round of the review of 90 and 88 (2026-11-11), in this release.** Each with a harness check that fails when the
+fix is taken out.
+
+- **S1:** an order resting by hand (or the bot's, or the copier's) on the account and contract no longer holds back the
+  agent's own market close in a flatten that cancels only its own orders. Before, Kill all and the day's profit stop
+  cancelled the agent's stop and target and never closed its position. The harness now counts the close from the calls
+  made inside each part (the old check found an earlier part's close: a false pass), with two more cases: the hand order
+  fills first (no close, never short), and it fills after the close (the hand's own position, nothing sent).
+- **F3:** Kill all also stops an agent whose saved Auto waits with no seats (a restart while `groups.txt` cannot be read).
+- **N1:** Kill all puts the kill switch and Shadow on first, then starts the flatten in its own try; a flatten that cannot
+  be started is said loudly.
+- **F4:** Auto keeps its trading day in memory and ends on every pass and every plan check once that day is over, so it
+  never outlives 17:00 ET when the PC slept through the break and the reset never ran.
+- **N4** (the coordinator's ruling): at 17:00 ET Auto ends for every agent on every kind of account (prop, personal, Sim,
+  mixed group), flat or not.
+- **F5:** once an account's day is seen at or over its mark (any pass, flat or not, or at a refusal) it is reached for the
+  rest of the session, for every trader, saved in the day file (`#dayreached`); no later plan raises or clears it.
+- **F6:** after a late start the profit stop counts the larger realized figure (the loss side keeps the smaller); a day's
+  number not known is said once a session (N7). `ChartBridgeGroups.cs` gains only the two fields for this.
+- **N6:** the stale words (the page's confirm row, the saved Auto file's header, comments, `orders.sh`, PROTOCOL).
+- **F7, ruled by Anthony (2026-11-11):** "When the bot is trading the account, its the bots account for that day. I would
+  never touch it." So Kill all and the day's profit stop close the trader's position on its account and contract whole, a
+  contract added by hand included, and the status lines and PROTOCOL say so.
+
+**The second round (the second look at 88, 2026-11-11).**
+
+- **D1:** the reached latch survives a restart of ChartBridge (a new process): the day file's `#dayreached` lines fill the
+  list every trader's plan check reads. The harness restart now starts that list empty, as a new process has it.
+- **D2:** in the second after 18:00 ET, before the day start rolls, NinjaTrader's realized may still be yesterday's: the
+  profit side is not known then and nothing is latched.
+- **D3:** at the plan check the session's mark counts too (the smaller of it and the plan's own), so a plan naming a
+  higher mark just before a pass is refused.
+- **Kill all (the coordinator's ruling):** a group holding any prop account is stopped (a prop and a Sim account together
+  was "Not touched"); only its prop accounts are flattened; the personal account is never touched.
+- **The accepted race:** a hand order and the bot's close both fill: the status line says plainly the account is now
+  short (or long) and why; nothing more is done (Anthony's ruling).
+- **F6:** PROTOCOL says the larger figure can overstate the day after a late start that follows a loss. The groups files
+  are pinned by their exact diff, not by stripping lines.
+- Checks that fail for each break the review found passing: the latch never read back, not per session, kept by the
+  roll; Auto ending at 17:59; Auto renewed by setting it again; the personal account not excepted; D2; D3; the words.
+
+In plain words: nothing changes on the chart, and nothing changes for hand trading. A trader (a bot or an agent) now has a
+hard stop on the day's profit on the account it trades, so one big day can never break a firm's consistency rule, and a
+playbook's own day stop is kept by ChartBridge itself, not only by the runner (Anthony 2026-11-10, decision 8: "a hard daily
+target stop at the consistency rule... we would never really want to go over that"; and 2026-11-11: nothing is typed by hand).
+
+- **The mark** is in dollars, for one account, for ChartBridge's trading day (18:00 to 18:00 New York). It counts realized
+  plus open profit, the account's own number on the Accounts tab.
+- **Where it comes from.** The runner sends its playbook's day stop with each plan (`dayStopDollars`); the plan that is
+  placed sets it for the session. On an account that is not funded, ChartBridge also knows the account's consistency percent
+  of its profit target (50% of a 3,000 target is 1,500), from the account's rules or its group's. **The smaller of the two
+  is the mark.** A funded account has the plan's value, or none.
+- **When it is reached** while the trader holds a position or a working entry on that account: the trader's own flatten
+  starts (as at its flat time: it cancels the trader's orders and closes only what the trader owns), and the trader takes
+  no new entry until 18:00. The reason is on the Agent tab and in its log, with the mark and where it came from.
+- **No new trade on an account that is already there.** A plan for an account whose day is at or over the mark is
+  refused, with the reason. So when several bots share an account's day, one that was flat when the mark was reached
+  opens nothing on it afterwards.
+- **What it never does.** It never cancels your own orders, another trader's, the copier's or the bot's: an order you
+  placed by hand on the same contract stays and can still fill. When the account's number is not known it does nothing,
+  and the stop and the flat time still hold.
+- **A trader that sends no day stop, on an account with no consistency rule,** is exactly as in 0.6.18.
+
+Only `ChartBridgeAgents.cs` changed (and `ChartBridge.cs`, its version): every other add-on file is the 0.6.18 file byte
+for byte, `ChartBridgeGroups.cs` and `ChartBridgeOrders.cs` included (`test/nt8-record.test.js`). The value is saved in the
+trader's day file (`#daystop`, a comment to an older ChartBridge), kept through a restart and cleared at the 18:00 roll.
+
+`nt8/PROTOCOL.md`, "The day's profit stop (0.6.19)". ChartBridge 0.6.19 is a recompile (`-InstallChartBridge`, then F5 while
+flat).
+
+## ChartBridge 0.6.18 and chart 1.44.4 (2026-11-11): entry rules per trader: a market entry, and an entry with no target, when you allow them
+
+In plain words: nothing changes for hand trading, and nothing changes for any trader until you switch something on. More
+bots are coming, most of them with a stop and a target, so nothing here is made for one bot (Anthony 2026-11-11). Each
+trader's rules on the Agent tab gain two switches, both off:
+
+- **Market entry.** Off: that trader's entries are limit and stop-limit only, as before. On: it may also enter at market.
+  ChartBridge takes a market plan only while it has a fresh last trade of its own within 20 ticks of the price the trader
+  saw, so a trader looking at old prices or another market is refused.
+- **No target.** Off: every entry needs a stop and a target, as before. On: an entry may have a stop and no target.
+- **A stop is always required.** No switch removes it. The trader's flat time, its window, its size caps, the kill switch and
+  the firm's limits apply to these entries as to every other.
+- **Set on the page, never in a file.** The rules form on the Agent tab has the two switches (shown with ChartBridge 0.6.18
+  or later). A page that does not send them turns both off.
+- **A trader with neither switch on** is exactly as in 0.6.17: the same refusals, the same rules file, the same messages.
+
+What changed in the order path: two lines of `ChartBridgeOrders.cs`, the two that refused every agent market entry and every
+agent entry with no target; they now ask that trader's rules. With those two lines left out the file is the 0.6.17 file, and
+every other add-on file but `ChartBridge.cs` (its version) and `ChartBridgeAgents.cs` is the 0.6.17 file byte for byte
+(`test/nt8-record.test.js`). The page's own orders, groups, the copier and the bot are untouched.
+
+`nt8/PROTOCOL.md`, "Entry rules per trader (0.6.18)". ChartBridge 0.6.18 is a recompile (`-InstallChartBridge`, then F5 while
+flat).
+
+## ChartBridge 0.6.17 and chart 1.44.3 (2026-11-11): Kill all for the prop accounts
+
+In plain words: nothing changes on the chart yet, and nothing changes for hand trading. ChartBridge learns one new command,
+for the Fleet tab's Kill all button to come (Anthony 2026-11-11: Kill all acts on prop accounts only).
+
+- **What it does.** For every agent trading prop accounts: it closes what that agent holds (the agent's own flatten, the one
+  that runs at its flat time), turns its kill switch on (kept through a restart), and puts it in Shadow. Releasing the kill
+  switch later leaves it in Shadow: Auto is your click again.
+- **What it never touches.** An agent on the personal account or a Sim account; the bot; the copier; the order ticket; any
+  manual order or any position an agent does not own, on any account. With no personal account picked no account is prop,
+  and the command is refused.
+- **Not changed.** The agent's own kill switch and the Board's KILL ALL AGENTS (every agent, no flatten) work as before.
+  Every add-on file but `ChartBridge.cs` (its version) and `ChartBridgeAgents.cs` is the 0.6.16 file byte for byte.
+- **Not there yet.** No button sends it: that comes with the Fleet tab.
+- **After its review** (2026-11-11, before any PC had it; Anthony: "yes, okay"):
+  - It cancels **only the trader's own orders**. An order you placed by hand on the same account and contract is not
+    cancelled: it stays and can still fill, and the status line says so. (At its flat time a trader still cancels every
+    order on a contract it holds, as before.)
+  - A prop account that NinjaTrader does not list at that moment (it dropped off the list, or ChartBridge just restarted)
+    **is still stopped**: the trader's kill switch goes on, it drops to Shadow and its saved Auto is removed, so it cannot
+    trade when the account comes back.
+  - A trader that trades your personal account and prop accounts together is left alone, as before, and is now named
+    loudly as NOT STOPPED.
+  - Kill all is never refused for sending too many actions in a second, and one trader that fails never stops the others
+    from being stopped.
+
+`nt8/PROTOCOL.md`, "Kill all for the prop accounts (0.6.17)". ChartBridge 0.6.17 is a recompile (`-InstallChartBridge`, then
+F5 while flat).
+
+## ChartBridge 0.6.16 and chart 1.44.2 (2026-11-11): prop accounts: pick your personal account on the page; an agent's Auto ends with the trading day and comes back once after a restart the same day
+
+In plain words: nothing changes for hand trading. This is the first ChartBridge piece of the Prop Business (Anthony's build
+plan of 2026-11-10, its addendum, and the build answers of 2026-11-11). Until you pick your personal account on a trading PC,
+ChartBridge 0.6.16 behaves exactly as 0.6.15.
+
+- **Pick your personal account once, on the page** (Anthony 2026-11-11: "make it a one-time pick on the chart page"; nothing is
+  typed into a file by hand). On the Accounts tab, open an account's settings (the three dots) and press **This is my personal
+  account**, then confirm. ChartBridge remembers it on that PC (`personal-account.txt`). From then on every other live account
+  is a **prop** account: the tab marks your account "personal" and the others "prop". A Sim account can never be the pick. The
+  pick cannot be changed while an agent is in Auto. Its name is never written to the Output window or a log.
+- **Auto ends with the trading day** (your ruling of 2026-11-11, made after this was first built: "Arm should turn off
+  when the trading day ends"). At the 17:00 ET reset an agent in Auto on prop accounts drops to Shadow, and the page says
+  so. To have it trade the next session you set Auto again. Nothing is kept through the reset.
+- **Auto after a restart, once, only when flat.** Every start is still Shadow. If the agent was in Auto on prop accounts when
+  ChartBridge stopped, Auto comes back one time, and only if the account is the same, prop, known to NinjaTrader, flat with
+  nothing working, and the kill switch is off. If any of that is not so (a position is open, for one), the agent stays in
+  Shadow, the page says why, and Auto is one click as before. A position that closes later does not bring Auto back.
+  It comes back only inside the trading day it was set in: a restart after 17:00 never brings yesterday's Auto back.
+- **The kill switch wins.** Turning it on removes the saved Auto. A kill switch that was on stays on through a restart, and
+  releasing it after that restart leaves Shadow.
+- **Not changed, on any account:** the order ticket, hotkeys, groups and group entries, the copier, the bot, Order
+  Strategies, Merge, and Flatten every account. Every add-on file but `ChartBridge.cs`, `ChartBridgeAccounts.cs` and
+  `ChartBridgeAgents.cs` is the 0.6.15 file byte for byte (`test/nt8-record.test.js`), and the order, groups, copier, bot,
+  strategies, merge and integration harnesses are unchanged files that pass as they were.
+- **The personal account, a Sim account and a PC with no pick** get the 0.6.15 result in every case (the reset to None,
+  Shadow at every start); the agent harness proves each (`check/AgentHarness.cs`, `PropAccounts`).
+- **Shadow and Copilot on a prop account** are as before: None at 17:00, Shadow at a start.
+
+The files are `personal-account.txt` and `agent-<id>-auto.txt` next to `config.txt` (written and removed by ChartBridge; do
+not edit). `nt8/PROTOCOL.md`, "Prop accounts: Auto ends at the reset, and one restore after a restart (0.6.16)", has every rule. Going back
+to 0.6.15 is safe: it ignores both files.
+
+**To install:** ChartBridge 0.6.16 is a recompile (`-InstallChartBridge`, then F5 while flat); the page updates as usual.
+Nothing happens until the personal account is picked on that PC. Still to come, each its own change: Kill all for the prop
+accounts, the day profit stop, and a bot's market entry.
+
+Risks: the restore arms a live prop account with nobody at the desk. The outside brake is the runner's on-duty claim on The
+Desk (a runner without it sends no plan), which is not in this release. Until it is, keep an agent's kill switch on overnight,
+or leave the pick for later.
+
 ## ChartBridge 0.6.15 and chart 1.44.1 (2026-11-08): the 1 second pull retired; the NQ tick file is the one source
 
 In plain words: nothing changes on the chart. ChartBridge no longer runs its separate 1 second pull between 16:15 and 18:00 New

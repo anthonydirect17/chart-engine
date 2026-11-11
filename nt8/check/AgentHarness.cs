@@ -41,6 +41,7 @@ public static class AgentHarness
     static ChartBridgeAgent D { get { return ChartBridgeAgents.Get("demob"); } }
     static ConcurrentDictionary<int, ChartBridgeClient> Clients() { return (ConcurrentDictionary<int, ChartBridgeClient>)typeof(ChartBridgeServer).GetField("Clients", PS).GetValue(null); }
     static Dictionary<string, Instrument> Named() { return (Dictionary<string, Instrument>)typeof(ChartBridgeServer).GetField("Instruments", PS).GetValue(null); }
+    static string ManraeAgent() { lock (page) { for (int i = page.Count - 1; i >= 0; i--) if (page[i].StartsWith("{\"type\":\"agent\",\"agent\":\"manrae\"")) return page[i]; } return ""; }
     static string Last(List<string> l, string type) { lock (l) { for (int i = l.Count - 1; i >= 0; i--) if (l[i].StartsWith("{\"type\":\"" + type + "\"")) return l[i]; } return ""; }
     static int Count(List<string> l, string type) { lock (l) return l.Count(x => x.StartsWith("{\"type\":\"" + type + "\"")); }
     static bool Any(List<string> l, int from, string has) { lock (l) return l.Skip(from).Any(x => x.Contains(has)); }
@@ -195,6 +196,9 @@ public static class AgentHarness
             GroupsAndAccountState();   // 0.5.8: plan check 10b (one direction per group) and accountState
             GroupTrading();   // 0.6.0: one agent trades a whole prop group (seats)
             StandDownsAndLeague();   // 0.6.2 (SPEC CE-2): a hero stood down on a group (agent-standdowns.txt) and league seats (Sim only)
+            EntryRules();     // 0.6.18: a trader's rules may allow a market entry and an entry with no target (both off by default)
+            DayStop();        // 0.6.19: the day's profit stop: the plan's dollar value, and the consistency mark on an account that is not funded
+            PropAccounts();   // prop accounts: Auto through the 17:00 reset and one restore after a restart; the personal account, Sim and a no-setting install as before
         }
         catch (Exception ex) { Check(false, "agent harness threw: " + ex); }
         finally
@@ -944,8 +948,11 @@ public static class AgentHarness
     }
 
     // ------------------------------------------------------------ files that cannot be read: stand down, never written over
+    // A restart of ChartBridge is a new process: what the agents keep in memory alone is gone (the review of 88's second look,
+    // D1: the shared latch of the day's profit stop was kept by the old harness restart and so passed falsely)
     static void Restart()
     {
+        ChartBridgeAgents.ForgetDayReachedForCheck();
         ChartBridgeAgents.Stop();
         ChartBridgeAgents.Start(false);
         ac = new ChartBridgeClient(null, -100);
@@ -1330,14 +1337,18 @@ public static class AgentHarness
     {
         string s = Last(page, "agent");
         Check(!s.Contains("\"trades\":0"), "trades today before 18:00");
+        Check(ModeNow() == "auto", "F4 setup: manrae in Auto, set this trading day");
         et = new DateTime(2026, 10, 8, 17, 59, 59);
         Advance(500);
-        Check(!Last(page, "agent").Contains("\"trades\":0,"), "17:59:59: still today");
+        Check(!ManraeAgent().Contains("\"trades\":0,"), "17:59:59: still today");
+        // the review of 90 (F4): the clock passed 17:00 ET with no reset run (a PC asleep through the break): Auto ends anyway
+        Check(ModeNow() == "shadow" && Any(page, 0, "Agent manrae: the trading day ended (17:00 ET): Auto is off"), "F4: past 17:00 ET with no reset run, the Auto of the earlier trading day is off: " + ModeNow());
         et = new DateTime(2026, 10, 8, 18, 0, 0);
         Advance(500);
-        Check(Last(page, "agent").Contains("\"trades\":0,\"losses\":0") && Last(page, "agent").Contains("\"pnlToday\":0"), "18:00 ET: trades, losses and P&L start over");
+        Check(ManraeAgent().Contains("\"trades\":0,\"losses\":0") && ManraeAgent().Contains("\"pnlToday\":0"), "18:00 ET: trades, losses and P&L start over");
         Check(FileText("agent-manrae-day.txt").Contains("session\t2026-10-09"), "the day file says the new session");
         et = new DateTime(2026, 10, 9, 10, 0, 0);
+        Mode("manrae", "auto");   // Anthony sets Auto again for the new trading day
         Last2();
         A(Good("plan-2"));
         Check(Answer().Contains("\"id\":\"plan-2\",\"answer\":\"placed\"") && Entry(sim) != null && IsLive(Entry(sim)), "a plan id from yesterday is new today");
@@ -1609,6 +1620,7 @@ public static class AgentHarness
     static void Fresh()
     {
         Hold = null;
+        ChartBridgeAgents.ForgetDayReachedForCheck();
         foreach (Account a in Account.All.ToList()) Settle(a);
         foreach (string f in new[] { "agent-manrae-day.txt", "agent-manrae-rules.txt" }) { try { Gone(Path.Combine(Dir, f)); } catch (Exception) { } }
         File.WriteAllLines(Path.Combine(Dir, "agent-manrae-account.txt"), new[] { "# made-up", "# test", "account\tSIM-E" });
@@ -2401,6 +2413,7 @@ public static class AgentHarness
             GroupFresh();
             Order[] e = PlaceAll(GPlan(NewId(), "1,1,1", Rev()));
             if (e[1] != null) Fill(e[1], 1, 24999);
+            Hold = (kd, o) => kd == "cancel";   // N4: Auto ends at 17:00 here too; the entries' cancels are held, so they still work
             Func<DateTime> was = ChartBridgeBranches.ClockUtc;
             ChartBridgeBranches.Forget();
             try { Gone(Path.Combine(Dir, "daily-reset.txt")); } catch (Exception) { }
@@ -2411,6 +2424,9 @@ public static class AgentHarness
                 SteadyAll(); ChartBridgeBranches.Check();
                 Check(M.GroupId == "g1" && Any(page, s0, "Daily reset (17:00 ET): agent manrae stays on group Lucid (SIM-A, SIM-B, SIM-C): SIM-A, SIM-B, SIM-C have a position or a working order"),
                       "0.6.0 reset: a seat exposed: the agent stays on its group, the note names the accounts holding something");
+                Check(ModeNow() == "shadow", "N4: a group of Sim accounts: Auto is off at 17:00 too: " + ModeNow());
+                Hold = null;
+                foreach (Order o in e) if (o != null && o != e[1] && IsLive(o)) { o.OrderState = OrderState.Cancelled; Update(o); }
                 Close(simb, mnq, 25000);   // its trade closes (an execution), then every seat is flat with nothing working
                 SettleAll(); Settle(sima);
                 ChartBridgeBranches.ClockUtc = () => new DateTime(2026, 10, 12, 21, 5, 0, DateTimeKind.Utc);   // a Monday, flat
@@ -3856,6 +3872,7 @@ public static class AgentHarness
         SessionRules("18:00", "15:25", "15:55");
         et = when;
         Advance(1000);
+        if (ModeNow() != "auto") Mode("manrae", "auto");   // F4: the clock moved to another trading day, where Auto is set again
     }
     static bool PlacesAt(DateTime when) { FullFresh(when); Order e = PlacedOn(sime, Good(NewId())); bool ok = e != null; Settle(sime); return ok; }
     static string RefusedAt(DateTime when) { FullFresh(when); int n = Count(agentOut, "reject"); A(Good(NewId())); return Count(agentOut, "reject") > n ? AgentReject() : ""; }
@@ -3969,6 +3986,7 @@ public static class AgentHarness
         Fresh();   // 09:45 to 15:00, flat 15:55 (the defaults)
         et = fill.AddMinutes(-10);
         Advance(1000);
+        if (ModeNow() != "auto") Mode("manrae", "auto");   // F4: the clock moved to another trading day, where Auto is set again
         Order e = PlacedOn(sime, Good(NewId()));
         Check(e != null, label + ": placed before the halt");
         if (e == null) return;
@@ -4248,6 +4266,7 @@ public static class AgentHarness
         Fresh();   // manrae on SIM-E (chosen), auto; demob on SIM-B
         Order e = PlacedOn(sime, Good(NewId()));
         Check(e != null, "0.5.7 reset: manrae has a working entry: " + AgentReject());
+        Hold = (kd, o) => kd == "cancel";   // N4: Auto ends at 17:00 on a Sim account too and its entry's cancel is sent; held here, so it still works
         Func<DateTime> was = ChartBridgeBranches.ClockUtc;
         ChartBridgeBranches.Forget();
         try { Gone(Path.Combine(Dir, "daily-reset.txt")); } catch (Exception) { }
@@ -4258,6 +4277,9 @@ public static class AgentHarness
             SteadyAll(); ChartBridgeBranches.Check();
             Check(M.Account == "SIM-E" && Any(page, s0, "Daily reset (17:00 ET): agent manrae stays on SIM-E: it has a position or a working order there"),
                   "0.5.7 reset: manrae with a working entry keeps SIM-E; the pages get a note naming it");
+            Check(ModeNow() == "shadow" && sime.Calls.Any(c => c.StartsWith("cancel " + e.Name)) && Any(page, s0, "Agent manrae: the trading day ended (17:00 ET): Auto is off on SIM-E"),
+                  "N4: on a Sim account too, Auto is off at 17:00 and its unfilled entry is sent a cancel; the account stays while it works: " + ModeNow());
+            Hold = null;
             Check(D.Account == "-" && FileText("agent-demob-account.txt").Contains("account\t-") && page.Skip(s0).Any(x => x.Contains("Daily reset (17:00 ET): ") && x.Contains("agent demob") && x.Contains(" on None now")) && D.StripJson().Contains("\"account\":null"),
                   "0.5.7 reset: demob, flat with nothing working on SIM-B: None, saved, the pages told");
             Check(Logged("agent demob account None (nothing trades), was SIM-B, by the daily reset (17:00 ET)"), "0.5.7 reset: logged");
@@ -4342,6 +4364,7 @@ public static class AgentHarness
         SessionRules("18:00", "15:25", "15:55");
         et = new DateTime(2026, 10, 8, 12, 0, 0);
         Advance(1000);
+        if (ModeNow() != "auto") Mode("manrae", "auto");   // F4: the clock moved back a trading day, where Auto is set again
         Order e = PlacedOn(sime, Good(NewId()));
         Check(e != null, "a position from Thursday's session");
         if (e != null)
@@ -4371,6 +4394,7 @@ public static class AgentHarness
         SessionRules("18:00", "15:25", "15:55");
         et = new DateTime(2026, 10, 8, 12, 0, 0);
         Advance(1000);
+        if (ModeNow() != "auto") Mode("manrae", "auto");   // F4, as above
         e = PlacedOn(sime, Good(NewId()));
         Check(e != null, "re-review B: a position from Thursday's session");
         if (e != null)
@@ -5018,6 +5042,1172 @@ public static class AgentHarness
                 Check(AgentReject().Contains("was refused: 200") && LogLines(alarm) == a0 + 1, "fix round 2: the alarm once per build and group");
             }
             finally { File.WriteAllText(GroupsFile, groupsWas); ChartBridgeGroups.StartNow(); NoStandDowns(); Restart(); }
+        });
+    }
+
+    // ------------------------------------------------------------ 0.6.18: entry rules per trader (market entry, no target)
+    static string RulesWith(string extra) { string r = Rules("NQ,MNQ", ",\"maxQtyNQ\":2,\"maxQtyMNQ\":20", "09:45", "15:00", "15:55", 1800, 0, 0); return r.Substring(0, r.Length - 1) + extra + "}"; }
+    // ------------------------------------------------------------ 0.6.19: the day's profit stop
+    static string WithDayStop(string plan, string dollars) { return plan.Substring(0, plan.Length - 1) + ",\"dayStopDollars\":" + dollars + "}"; }
+    static int dayStopFlats;   // manrae's flat closes on SIM-E before the case (earlier parts left theirs in the list)
+    static int FlatCloses(Account a) { lock (a.Orders) return a.Orders.Count(o => Regex.IsMatch(o.Name ?? "", "^CB#[0-9a-f]{8} ag:manrae flat$")); }
+    static Order FlatClose(Account a) { if (FlatCloses(a) <= dayStopFlats) return null; lock (a.Orders) return a.Orders.LastOrDefault(o => Regex.IsMatch(o.Name ?? "", "^CB#[0-9a-f]{8} ag:manrae flat$")); }
+    static void DayStopFresh() { Fresh(); sime.Items.Remove(AccountItem.UnrealizedProfitLoss); dayStopFlats = FlatCloses(sime); }
+    // An entry of manrae on SIM-E, filled, its legs working. Null when it was not placed.
+    static Order DayStopEntry(string plan)
+    {
+        Order e = PlacedOn(sime, plan);
+        if (e == null) return null;
+        Fill(e, 1, 24999);
+        Advance(500);
+        return e;
+    }
+    // The flatten runs to its end: the legs confirmed cancelled, then the market close. Returns that close (null: none).
+    static Order DayStopFlatten(Order e)
+    {
+        Advance(500);
+        foreach (Order o in Legs(sime, e)) if (IsLive(o)) { o.OrderState = OrderState.Cancelled; Update(o); }
+        Advance(1000);
+        return FlatClose(sime);
+    }
+    static void DayStop()
+    {
+        string groups = Path.Combine(Dir, "groups.txt");
+        Part("day stop: the plan's dollar value", () =>
+        {
+            DayStopFresh();   // manrae on SIM-E, auto, 10:00
+            int calls = sime.Calls.Count;
+            foreach (string bad in new[] { "0", "-5", "\"600\"", "true", "1000001" })
+            {
+                A(WithDayStop(Good(NewId()), bad));
+                Check((AgentReject().Contains("dayStopDollars must be dollars above 0") || AgentReject().Contains("dayStopDollars is not a plain value")) && sime.Calls.Count == calls, "day stop: dayStopDollars " + bad + " is refused, nothing sent: " + AgentReject());
+            }
+            Check(!Last(agentOut, "agentState").Contains("dayStop") && !FileText("agent-manrae-day.txt").Contains("#daystop"), "day stop: none yet: agentState and the day file as in 0.6.18");
+            Order e = DayStopEntry(WithDayStop(Good(NewId()), "600"));
+            Check(e != null, "day stop: a plan with dayStopDollars 600 is placed: " + AgentReject());
+            if (e == null) return;
+            Check(FileText("agent-manrae-day.txt").Contains("#daystop\t600\n") || FileText("agent-manrae-day.txt").Contains("#daystop\t600\r"), "day stop: saved in the day file: " + FileText("agent-manrae-day.txt").Replace("\n", " | "));
+            Check(Last(agentOut, "agentState").Contains(",\"dayStop\":600}"), "day stop: agentState carries it: " + Last(agentOut, "agentState"));
+            Check(Regex.IsMatch(ChartBridgeAgents.Get("manrae").StripJson(), ",\"lastPlan\":(null|\\{.*\\}),\"dayStop\":600"), "day stop: and the page's agent message: " + ChartBridgeAgents.Get("manrae").StripJson());
+            Check(Legs(sime, e).Count(IsLive) == 2, "day stop: the position has its stop and target");
+            sime.Items[AccountItem.UnrealizedProfitLoss] = 599.99;
+            Advance(2000);
+            Check(Legs(sime, e).Count(IsLive) == 2 && FlatClose(sime) == null && !Last(agentOut, "agentState").Contains("profit stop"), "day stop: one cent under the mark: nothing happens");
+            Restart(); Mode("manrae", "auto");
+            Advance(2000);
+            Check(Last(agentOut, "agentState").Contains(",\"dayStop\":600}") && Legs(sime, e).Count(IsLive) == 2 && FlatClose(sime) == null, "day stop: kept through a restart (the day file): " + Last(agentOut, "agentState"));
+            sime.Items[AccountItem.UnrealizedProfitLoss] = 600;
+            Order close = DayStopFlatten(e);
+            Check(close != null && close.OrderType == OrderType.Market && close.OrderAction == OrderAction.Sell && close.Quantity == 1 && !Legs(sime, e).Any(IsLive),
+                  "day stop: at the mark (realized plus open): its legs cancelled and the position closed at market");
+            string st = Last(agentOut, "agentState");
+            Check(st.Contains("\"standDown\":\"the day's profit stop is reached on SIM-E ($600, the plan's day stop; the day is at $600, realized plus open): flat (its position on that account closed whole, a contract added by hand included), and no new entries for agent manrae until 18:00 ET\""), "day stop: the trader stands down for the session, and says why: " + st);
+            Check(FileText("agent-manrae-day.txt").Contains("standDown\tthe day's profit stop is reached") && Logged("the day's profit stop is reached on SIM-E"), "day stop: the stand-down is saved and logged");
+            Settle(sime);
+            sime.Items.Remove(AccountItem.UnrealizedProfitLoss);
+            calls = sime.Calls.Count;
+            A(Good(NewId()));
+            Check(AgentReject().Contains("the day's profit stop is reached") && sime.Calls.Count == calls, "day stop: a new plan the same session is refused: " + AgentReject());
+            Restart(); Mode("manrae", "auto");
+            A(Good(NewId()));
+            Check(AgentReject().Contains("the day's profit stop is reached") && sime.Calls.Count == calls, "day stop: and after a restart: " + AgentReject());
+            // the 18:00 roll: a new session starts with no stand-down and no day stop
+            et = new DateTime(2026, 10, 9, 18, 0, 30);
+            Advance(1500);
+            st = Last(agentOut, "agentState");
+            Check(!ChartBridgeAgents.Get("manrae").StripJson().Contains("dayStop"), "day stop: after the roll the page's agent message has no dayStop");
+            Check(!st.Contains("profit stop") && !st.Contains("dayStop") && !FileText("agent-manrae-day.txt").Contains("#daystop"), "day stop: after the roll: no profit stand-down, no dayStop in agentState or the day file: " + st);
+        });
+        Part("day stop: a plan with no value clears the one before it, and nothing is checked while it holds nothing", () =>
+        {
+            DayStopFresh();
+            Order e = PlacedOn(sime, WithDayStop(Good(NewId()), "600"));
+            Check(e != null && Last(agentOut, "agentState").Contains(",\"dayStop\":600}"), "day stop: placed with 600");
+            if (e == null) return;
+            e.OrderState = OrderState.Cancelled; Update(e); Advance(500);
+            Order e2 = PlacedOn(sime, Good(NewId()));
+            Check(e2 != null && !Last(agentOut, "agentState").Contains("dayStop") && !FileText("agent-manrae-day.txt").Contains("#daystop"), "day stop: the next placed plan names none: the value is cleared: " + Last(agentOut, "agentState"));
+            if (e2 != null) { e2.OrderState = OrderState.Cancelled; Update(e2); Advance(500); }
+            // the review of 88 (F5): over the mark while it holds nothing: no flatten and no stand-down, but the mark is remembered:
+            // a later plan for that account is refused for the rest of the session, whatever value it names
+            e2 = PlacedOn(sime, WithDayStop(Good(NewId()), "600"));
+            if (e2 != null) { e2.OrderState = OrderState.Cancelled; Update(e2); Advance(500); }
+            sime.Items[AccountItem.UnrealizedProfitLoss] = 5000;   // the account is far over the mark (other trading), and manrae holds nothing
+            Advance(2000);
+            Check(e2 != null && FlatClose(sime) == null && !Last(agentOut, "agentState").Contains("profit stop"), "day stop: it holds nothing: no flatten, no stand-down: " + Last(agentOut, "agentState"));
+            sime.Items[AccountItem.UnrealizedProfitLoss] = 0;   // a later loss takes the day back under
+            int c5 = sime.Calls.Count;
+            A(WithDayStop(Good(NewId()), "50000"));
+            Check(AgentReject().Contains("the day's profit stop is reached on SIM-E this session ($600") && sime.Calls.Count == c5, "F5: reached while flat is remembered: a later plan naming a higher mark is refused, the day under it again: " + AgentReject());
+            sime.Items.Remove(AccountItem.UnrealizedProfitLoss);
+            ChartBridgeAgents.ForgetDayReachedForCheck();   // the next check is a new session's (made up here)
+            Restart(); Mode("manrae", "auto");
+            try { Gone(Path.Combine(Dir, "agent-manrae-day.txt")); } catch (Exception) { }
+            Restart(); Mode("manrae", "auto");
+            // a working entry counts as holding something: over the mark, it is cancelled and the day ends
+            Order e3 = PlacedOn(sime, WithDayStop(Good(NewId()), "300"));
+            Check(e3 != null, "day stop: a third plan, with 300: " + AgentReject());
+            if (e3 == null) return;
+            sime.Items[AccountItem.UnrealizedProfitLoss] = 300;
+            Advance(1500);
+            Check(sime.Calls.Any(c => c.StartsWith("Cancel") && c.Contains(e3.Name)) || e3.OrderState == OrderState.CancelPending || e3.OrderState == OrderState.Cancelled, "day stop: over the mark with only a working entry: the entry is cancelled: " + string.Join(" | ", sime.Calls.Skip(Math.Max(0, sime.Calls.Count - 3))));
+            Check(Last(agentOut, "agentState").Contains("the day's profit stop is reached on SIM-E ($300, the plan's day stop"), "day stop: and the day is over: " + Last(agentOut, "agentState"));
+            sime.Items.Remove(AccountItem.UnrealizedProfitLoss);
+            Settle(sime);
+        });
+        Part("day stop: the consistency mark on an account that is not funded", () =>
+        {
+            try
+            {
+                DayStopFresh();
+                // a group with a 3,000 target and 50% consistency, Type eval: one day may make at most 1,500
+                File.WriteAllText(groups, ChartBridgeGroups.Header + "\n#\ngroup\tg1\tLucid\ton\t-\t2000\teod\t3000\t50000\t-\t50\teval\t-\t-\nmember\tSIM-E\tg1\n");
+                ChartBridgeGroups.StartNow();
+                Tick();
+                Check(Last(agentOut, "accountState").Contains("\"accountType\":\"eval\"") && Last(agentOut, "accountState").Contains("\"consistency\":50"), "day stop: SIM-E in an eval group with 50% consistency: " + Last(agentOut, "accountState"));
+                Order e = DayStopEntry(Good(NewId()));   // the plan names no day stop
+                Check(e != null, "day stop: eval: a plan with no dayStopDollars is placed: " + AgentReject());
+                if (e == null) return;
+                sime.Items[AccountItem.UnrealizedProfitLoss] = 1499;
+                Advance(2000);
+                Check(Legs(sime, e).Count(IsLive) == 2 && FlatClose(sime) == null, "day stop: eval: under 50% of the target: nothing happens");
+                sime.Items[AccountItem.UnrealizedProfitLoss] = 1500;
+                Order close = DayStopFlatten(e);
+                Check(close != null && close.OrderType == OrderType.Market, "day stop: eval: at 50% of the 3,000 target the position is closed at market");
+                Check(Last(agentOut, "agentState").Contains("the day's profit stop is reached on SIM-E ($1500, 50% of the profit target (the consistency rule); the day is at $1500"), "day stop: eval: and it says which mark: " + Last(agentOut, "agentState"));
+                Settle(sime); sime.Items.Remove(AccountItem.UnrealizedProfitLoss);
+                // the smaller of the two: a plan's 2,000 does not lift the consistency mark; a plan's 900 is under it
+                DayStopFresh();
+                File.WriteAllText(groups, ChartBridgeGroups.Header + "\n#\ngroup\tg1\tLucid\ton\t-\t2000\teod\t3000\t50000\t-\t50\teval\t-\t-\nmember\tSIM-E\tg1\n");
+                ChartBridgeGroups.StartNow(); Tick();
+                e = DayStopEntry(WithDayStop(Good(NewId()), "2000"));
+                if (e == null) { Check(false, "day stop: eval: a plan with 2000 is placed: " + AgentReject()); return; }
+                sime.Items[AccountItem.UnrealizedProfitLoss] = 1500;
+                close = DayStopFlatten(e);
+                Check(close != null && Last(agentOut, "agentState").Contains("($1500, 50% of the profit target"), "day stop: eval: the plan's 2,000 does not lift the consistency mark: " + Last(agentOut, "agentState"));
+                Settle(sime); sime.Items.Remove(AccountItem.UnrealizedProfitLoss);
+                DayStopFresh();
+                File.WriteAllText(groups, ChartBridgeGroups.Header + "\n#\ngroup\tg1\tLucid\ton\t-\t2000\teod\t3000\t50000\t-\t50\teval\t-\t-\nmember\tSIM-E\tg1\n");
+                ChartBridgeGroups.StartNow(); Tick();
+                e = DayStopEntry(WithDayStop(Good(NewId()), "900"));
+                if (e == null) { Check(false, "day stop: eval: a plan with 900 is placed: " + AgentReject()); return; }
+                sime.Items[AccountItem.UnrealizedProfitLoss] = 900;
+                close = DayStopFlatten(e);
+                Check(close != null && Last(agentOut, "agentState").Contains("($900, the plan's day stop"), "day stop: eval: the plan's 900 is under the consistency mark and is the one kept: " + Last(agentOut, "agentState"));
+                Settle(sime); sime.Items.Remove(AccountItem.UnrealizedProfitLoss);
+                // funded: the plan's value or none; the consistency rule sets no mark
+                DayStopFresh();
+                File.WriteAllText(groups, ChartBridgeGroups.Header + "\n#\ngroup\tg1\tLucid\ton\t-\t2000\teod\t3000\t50000\t-\t50\tfunded\t-\t-\nmember\tSIM-E\tg1\n");
+                ChartBridgeGroups.StartNow(); Tick();
+                e = DayStopEntry(Good(NewId()));
+                if (e == null) { Check(false, "day stop: funded: a plan with no value is placed: " + AgentReject()); return; }
+                sime.Items[AccountItem.UnrealizedProfitLoss] = 2600;
+                Advance(2000);
+                Check(Legs(sime, e).Count(IsLive) == 2 && FlatClose(sime) == null && !Last(agentOut, "agentState").Contains("profit stop"), "day stop: funded, no plan value: no mark at all: " + Last(agentOut, "agentState"));
+                Settle(sime); sime.Items.Remove(AccountItem.UnrealizedProfitLoss);
+                DayStopFresh();
+                File.WriteAllText(groups, ChartBridgeGroups.Header + "\n#\ngroup\tg1\tLucid\ton\t-\t2000\teod\t3000\t50000\t-\t50\tfunded\t-\t-\nmember\tSIM-E\tg1\n");
+                ChartBridgeGroups.StartNow(); Tick();
+                e = DayStopEntry(WithDayStop(Good(NewId()), "2000"));
+                if (e == null) { Check(false, "day stop: funded: a plan with 2000 is placed: " + AgentReject()); return; }
+                sime.Items[AccountItem.UnrealizedProfitLoss] = 1999;
+                Advance(2000);
+                Check(Legs(sime, e).Count(IsLive) == 2 && FlatClose(sime) == null, "day stop: funded: under the plan's 2,000 (and over the consistency figure): nothing happens");
+                sime.Items[AccountItem.UnrealizedProfitLoss] = 2000;
+                close = DayStopFlatten(e);
+                Check(close != null && Last(agentOut, "agentState").Contains("($2000, the plan's day stop"), "day stop: funded: at the plan's 2,000 it is closed: " + Last(agentOut, "agentState"));
+                Settle(sime); sime.Items.Remove(AccountItem.UnrealizedProfitLoss);
+            }
+            finally
+            {
+                sime.Items.Remove(AccountItem.UnrealizedProfitLoss);
+                try { File.Delete(groups); } catch (Exception) { }
+                ChartBridgeGroups.StartNow();
+            }
+        });
+    }
+
+    static string MarketPlan(string id, int stop, int target, string price = "25000") { return Plan(id, "MNQ", "buy", "market", price, 1, stop, target, 600); }
+    static void EntryRules()
+    {
+        Part("entry rules: off by default: a market entry and an entry with no target are refused", () =>
+        {
+            Fresh();   // manrae on SIM-E, auto, 10:00, the default rules
+            int calls = sime.Calls.Count;
+            A(MarketPlan(NewId(), 8, 16));
+            Check(AgentReject().Contains("a market entry is not allowed by agent manrae's rules") && sime.Calls.Count == calls, "entry rules: by default a market plan is refused, nothing sent: " + AgentReject());
+            A(Plan(NewId(), "MNQ", "buy", "limit", "24999", 1, 8, 0, 600));
+            Check(AgentReject().Contains("an entry with no target is not allowed by agent manrae's rules") && sime.Calls.Count == calls, "entry rules: by default a plan with no target is refused: " + AgentReject());
+            Check(!Last(agentOut, "welcome").Contains("marketEntry") && !Last(agentOut, "welcome").Contains("noTarget") && !FileText("agent-manrae-rules.txt").Contains("marketEntry"), "entry rules: off: welcome and the rules file carry neither key, as in 0.6.17");
+            // the order path itself refuses it too, whatever the agent code let through
+            Order none;
+            string why = ChartBridgeOrders.PlaceAgentEntry("manrae", "{\"type\":\"order\",\"account\":\"SIM-E\",\"root\":\"MNQ\",\"side\":\"buy\",\"kind\":\"market\",\"qty\":1,\"bracket\":{\"stop\":8,\"target\":16}}", out none);
+            Check(why != null && why.Contains("an agent's entry is a limit or a stop-limit") && none == null && sime.Calls.Count == calls, "entry rules: the order path refuses an agent's market order by itself: " + why);
+            why = ChartBridgeOrders.PlaceAgentEntry("manrae", "{\"type\":\"order\",\"account\":\"SIM-E\",\"root\":\"MNQ\",\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":24999,\"bracket\":{\"stop\":8,\"target\":0}}", out none);
+            Check(why != null && why.Contains("every agent entry needs a stop and a target") && none == null && sime.Calls.Count == calls, "entry rules: and an agent's entry with no target: " + why);
+        });
+        // The coordinator's condition (build answers 5, 2026-11-11): only a person at the page changes the two switches, never a
+        // message from an agent or a runner. The agent channel has no rules message at all, and a plan takes no such key.
+        Part("entry rules: a trader cannot turn its own switches on", () =>
+        {
+            Fresh();
+            int calls = sime.Calls.Count;
+            string before = FileText("agent-manrae-rules.txt"), welcome = Last(agentOut, "welcome");
+            A("{\"type\":\"agentRules\",\"agent\":\"manrae\",\"roots\":\"NQ,MNQ\",\"marketEntry\":true,\"noTarget\":true}");
+            Check(AgentReject().Contains("unknown agent message type agentRules"), "entry rules: the agent channel has no agentRules message: " + AgentReject());
+            A("{\"type\":\"agentHello\",\"name\":\"manrae\",\"build\":\"b1\",\"marketEntry\":true}");
+            Check(AgentReject().Contains("marketEntry"), "entry rules: a hello carrying the switch is refused whole: " + AgentReject());
+            string plan = MarketPlan(NewId(), 8, 0);
+            A(plan.Substring(0, plan.Length - 1) + ",\"marketEntry\":true,\"noTarget\":true}");
+            Check(AgentReject().Contains("marketEntry") && sime.Calls.Count == calls, "entry rules: a plan carrying the switches is refused whole, nothing sent: " + AgentReject());
+            A("{\"type\":\"note\",\"kind\":\"status\",\"text\":\"marketEntry on, noTarget on\"}");
+            A(MarketPlan(NewId(), 8, 16));
+            Check(AgentReject().Contains("a market entry is not allowed by agent manrae's rules") && sime.Calls.Count == calls, "entry rules: after all of that a market plan is still refused: " + AgentReject());
+            Check(FileText("agent-manrae-rules.txt") == before && !Last(agentOut, "welcome").Contains("marketEntry") && Last(agentOut, "welcome") == welcome && !Logged("market entry allowed"),
+                  "entry rules: the rules file and the welcome did not change, and nothing was logged as allowed");
+            Check(!ChartBridgeAgents.MayMarket("manrae") && !ChartBridgeAgents.MayNoTarget("manrae"), "entry rules: the order path's own answer is still no to both");
+        });
+        Part("entry rules: set on the page, saved, told to the trader", () =>
+        {
+            Fresh();
+            P(RulesWith(",\"marketEntry\":true,\"noTarget\":true"));
+            Check(!PageReject().Contains("marketEntry") && FileText("agent-manrae-rules.txt").Contains("marketEntry\ton") && FileText("agent-manrae-rules.txt").Contains("noTarget\ton") &&
+                  Last(agentOut, "welcome").Contains("\"marketEntry\":true,\"noTarget\":true") && Logged("market entry allowed, no target allowed"), "entry rules: both set on the page: saved, welcome again, logged: " + PageReject());
+            Restart(); Mode("manrae", "auto");
+            Check(Last(agentOut, "welcome").Contains("\"marketEntry\":true,\"noTarget\":true"), "entry rules: kept through a restart (the rules file)");
+            P(RulesWith(",\"marketEntry\":\"yes\""));
+            Check(PageReject().Contains("marketEntry must be true or false"), "entry rules: only true or false: " + PageReject());
+            P(Rules("NQ,MNQ", ",\"maxQtyNQ\":2,\"maxQtyMNQ\":20", "09:45", "15:00", "15:55", 1800, 0, 0));
+            Check(!Last(agentOut, "welcome").Contains("marketEntry") && !Last(agentOut, "welcome").Contains("noTarget") && !FileText("agent-manrae-rules.txt").Contains("marketEntry"), "entry rules: a page that does not send them (an older page) turns both off");
+        });
+        Part("entry rules: a market entry with a stop and no target", () =>
+        {
+            Fresh();
+            P(RulesWith(",\"marketEntry\":true,\"noTarget\":true"));
+            Last2();
+            Order e = PlacedOn(sime, MarketPlan(NewId(), 8, 0));
+            Check(e != null && e.OrderType == OrderType.Market && e.OrderAction == OrderAction.Buy && e.Quantity == 1 && Regex.IsMatch(e.Name ?? "", "^CB#[0-9a-f]{8} ag:manrae s8 t0$"),
+                  "entry rules: allowed: a market order goes out, named with its stop and t0: " + AgentReject() + " " + (e != null ? e.Name : ""));
+            if (e == null) return;
+            Fill(e, 1, 25000);
+            Advance(500);
+            List<Order> legs = Legs(sime, e);
+            Check(legs.Count(IsLive) == 1 && legs.Any(o => IsLive(o) && Regex.IsMatch(o.Name ?? "", " stop ") && o.OrderAction == OrderAction.Sell && Math.Abs(o.StopPrice - 24998) < 1e-9) && !legs.Any(o => Regex.IsMatch(o.Name ?? "", " target ")),
+                  "entry rules: filled: one stop 8 ticks under the fill, and no target: " + string.Join(" | ", legs.Select(o => o.Name + " " + o.OrderState)));
+            // the flat time still closes it: the stop cancelled, then a market close
+            et = new DateTime(2026, 10, 9, 15, 55, 0);
+            Advance(500);
+            foreach (Order o in Legs(sime, e)) if (IsLive(o)) { o.OrderState = OrderState.Cancelled; Update(o); }
+            Advance(1000);
+            Order close;
+            lock (sime.Orders) close = sime.Orders.LastOrDefault(o => Regex.IsMatch(o.Name ?? "", "^CB#[0-9a-f]{8} ag:manrae flat$"));
+            Check(close != null && close.OrderType == OrderType.Market && close.OrderAction == OrderAction.Sell && close.Quantity == 1, "entry rules: at its flat time the stop is cancelled and the position closed at market");
+            Settle(sime);
+        });
+        Part("entry rules: each rule alone, and what stays refused", () =>
+        {
+            Fresh();
+            P(RulesWith(",\"marketEntry\":true"));
+            Last2();
+            int calls = sime.Calls.Count;
+            A(MarketPlan(NewId(), 8, 0));
+            Check(AgentReject().Contains("an entry with no target is not allowed by agent manrae's rules") && sime.Calls.Count == calls, "entry rules: market allowed, no target not: a market plan with no target is refused: " + AgentReject());
+            Order e = PlacedOn(sime, MarketPlan(NewId(), 8, 16));
+            Check(e != null && e.OrderType == OrderType.Market && Regex.IsMatch(e.Name ?? "", " ag:manrae s8 t16$"), "entry rules: a market plan with a stop and a target goes out: " + AgentReject());
+            if (e != null) { Fill(e, 1, 25000); Advance(500); Check(Legs(sime, e).Count(IsLive) == 2, "entry rules: filled: its stop and its target"); }
+            Settle(sime);
+            Fresh();
+            P(RulesWith(",\"noTarget\":true"));
+            Last2();
+            calls = sime.Calls.Count;
+            A(MarketPlan(NewId(), 8, 0));
+            Check(AgentReject().Contains("a market entry is not allowed by agent manrae's rules") && sime.Calls.Count == calls, "entry rules: no target allowed, market not: a market plan is refused: " + AgentReject());
+            Order l = PlacedOn(sime, Plan(NewId(), "MNQ", "buy", "limit", "24999", 1, 8, 0, 600));
+            Check(l != null && l.OrderType == OrderType.Limit && Regex.IsMatch(l.Name ?? "", " ag:manrae s8 t0$"), "entry rules: a limit plan with a stop and no target goes out: " + AgentReject());
+            if (l != null) { Fill(l, 1, 24999); Advance(500); List<Order> legs = Legs(sime, l); Check(legs.Count(IsLive) == 1 && legs.Any(o => IsLive(o) && Regex.IsMatch(o.Name ?? "", " stop ")), "entry rules: filled: a stop only"); }
+            Settle(sime);
+            // always a stop, whatever the rules allow; never a limitPrice on a market plan; the price near ChartBridge's own last trade
+            Fresh();
+            P(RulesWith(",\"marketEntry\":true,\"noTarget\":true"));
+            Last2();
+            calls = sime.Calls.Count;
+            A(MarketPlan(NewId(), 0, 0));
+            Check(AgentReject().Contains("a stop is always needed") && sime.Calls.Count == calls, "entry rules: no stop is refused always: " + AgentReject());
+            A(Plan(NewId(), "MNQ", "buy", "market", "25000", 1, 8, 0, 600, ",\"limitPrice\":25001"));
+            Check(AgentReject().Contains("limitPrice goes on a stopLimit plan only") && sime.Calls.Count == calls, "entry rules: a market plan takes no limitPrice: " + AgentReject());
+            A(MarketPlan(NewId(), 8, 0, "25005.25"));
+            Check(AgentReject().Contains("within 20 ticks of the last MNQ trade") && sime.Calls.Count == calls, "entry rules: a market plan priced over 20 ticks from ChartBridge's last trade is refused: " + AgentReject());
+            A(MarketPlan(NewId(), 8, 0, "25000.10"));
+            Check(AgentReject().Contains("is not on the 0.25 tick grid") && sime.Calls.Count == calls, "entry rules: its price on the tick grid: " + AgentReject());
+            A(MarketPlan(NewId(), 8, 0, "25005"));
+            Check(Entry(sime) != null && Entry(sime).OrderType == OrderType.Market && sime.Calls.Count > calls, "entry rules: exactly 20 ticks away is taken: " + AgentReject());
+            Settle(sime);
+            Mode("manrae", "shadow");
+            calls = sime.Calls.Count;
+            A(MarketPlan(NewId(), 8, 0));
+            Check(sime.Calls.Count == calls, "entry rules: in Shadow nothing is sent, as for every plan");
+            try { Gone(Path.Combine(Dir, "agent-manrae-rules.txt")); } catch (Exception) { }
+            Restart();
+        });
+    }
+
+    // ------------------------------------------------------------ prop accounts (the personal account picked on the page): Auto kept, prop only
+    // Every name here is made up. MINE-1 stands in for the personal account, PROP-1 and PROP-2 for prop accounts (LIVE to
+    // NinjaTrader: Provider Rithmic), SIM-E for a Sim account.
+    static Account mine, prop1, prop2;
+    static string AutoFilePath { get { return Path.Combine(Dir, "agent-manrae-auto.txt"); } }
+    static bool AutoFileThere { get { return File.Exists(AutoFilePath) || File.Exists(AutoFilePath + ".bak"); } }
+    // With or without the personal account picked (personal-account.txt, as the page's pick saves it); manrae on `account` (its file), every account flat, a restart (Shadow).
+    static void PropStart(string account, bool personalLine, bool keepAutoFile = false)
+    {
+        Hold = null;
+        ChartBridgeAgents.ForgetDayReachedForCheck();
+        Config("agents = manrae, demob");
+        string pf = Path.Combine(Dir, "personal-account.txt");
+        if (personalLine) File.WriteAllLines(pf, new[] { "# made-up", "# test", "account\tMINE-1" }); else { try { Gone(pf); } catch (Exception) { } }
+        ChartBridgeBranches.LoadPersonal();
+        ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, EVAL-A, SIM-A, SIM-B, SIM-C, SIM-D, SIM-E, MINE-1, PROP-1, PROP-2");
+        foreach (Account a in Account.All.ToList()) { a.Connection.Status = ConnectionStatus.Connected; Settle(a); }
+        SteadyAll();
+        foreach (string f in new[] { "agent-manrae-day.txt", "agent-manrae-rules.txt", "agent-manrae-kill.txt" }) { try { Gone(Path.Combine(Dir, f)); } catch (Exception) { } }
+        if (!keepAutoFile) { try { Gone(AutoFilePath); } catch (Exception) { } }
+        File.WriteAllLines(Path.Combine(Dir, "agent-manrae-account.txt"), new[] { "# made-up", "# test", account.StartsWith("group:") ? "group\t" + account.Substring(6) : "account\t" + account });
+        et = new DateTime(2026, 10, 9, 10, 0, 0);
+        Restart();
+        Last2();
+    }
+    static string ModeNow() { Match m = Regex.Match(M.StripJson(), "\"mode\":\"([a-z]+)\""); return m.Success ? m.Groups[1].Value : "?"; }
+    // The 17:00 ET reset runs once (17:05 EDT on a made-up Friday); true when it ran without throwing.
+    static void ResetOnce(Action then)
+    {
+        Func<DateTime> was = ChartBridgeBranches.ClockUtc;
+        ChartBridgeBranches.Forget();
+        try { Gone(Path.Combine(Dir, "daily-reset.txt")); } catch (Exception) { }
+        ChartBridgeBranches.ClockUtc = () => new DateTime(2026, 10, 9, 21, 5, 0, DateTimeKind.Utc);
+        try { SteadyAll(); ChartBridgeBranches.Check(); then(); }
+        finally { ChartBridgeBranches.ClockUtc = was; ChartBridgeBranches.Forget(); try { Gone(Path.Combine(Dir, "daily-reset.txt")); } catch (Exception) { } }
+    }
+
+    static void PropAccounts()
+    {
+        Part("prop setup", () =>
+        {
+            mine = Account.All.FirstOrDefault(x => x.Name == "MINE-1") ?? NewAccount("MINE-1", Provider.Rithmic);
+            prop1 = Account.All.FirstOrDefault(x => x.Name == "PROP-1") ?? NewAccount("PROP-1", Provider.Rithmic);
+            prop2 = Account.All.FirstOrDefault(x => x.Name == "PROP-2") ?? NewAccount("PROP-2", Provider.Rithmic);
+            PropStart("PROP-1", false);
+            Check(!ChartBridgeBranches.PersonalNamed && !ChartBridgeBranches.IsProp("PROP-1") && !ChartBridgeBranches.IsProp("MINE-1") && !ChartBridgeBranches.IsProp("SIM-E"),
+                  "prop: no personal account picked: nothing is prop");
+            PropStart("PROP-1", true);
+            Check(ChartBridgeBranches.PersonalNamed && ChartBridgeBranches.IsProp("PROP-1") && ChartBridgeBranches.IsProp("prop-2") && !ChartBridgeBranches.IsProp("MINE-1") && !ChartBridgeBranches.IsProp("mine-1") &&
+                  !ChartBridgeBranches.IsProp("SIM-E") && !ChartBridgeBranches.IsProp("Sim101") && !ChartBridgeBranches.IsProp("Playback101") && !ChartBridgeBranches.IsProp("Backtest") &&
+                  !ChartBridgeBranches.IsProp("NOT-LISTED") && !ChartBridgeBranches.IsProp("-") && !ChartBridgeBranches.IsProp(null),
+                  "prop: with the line: every account but the personal one, Sim, Playback, Backtest, None and one NinjaTrader does not list");
+            Check(!NinjaTrader.Code.Output.Lines.Any(x => x.Contains("personal account") && x.Contains("MINE-1")), "prop: the personal account's name is never in the Output window");
+            string aj = ChartBridgeAccounts.AccountsJson(Account.All.ToList(), 0);
+            // each account's own marks: the first personal and prop after its name
+            Func<string, string> marks = n => { int i = aj.IndexOf("\"name\":\"" + n + "\""); Match mm = i < 0 ? Match.Empty : Regex.Match(aj.Substring(i), "\"personal\":(true|false),\"prop\":(true|false)"); return mm.Success ? mm.Groups[1].Value + "," + mm.Groups[2].Value : "?"; };
+            Check(aj.Contains("\"personalNamed\":true") && marks("MINE-1") == "true,false" && marks("PROP-1") == "false,true" && marks("SIM-E") == "false,false",
+                  "prop: the accounts message marks the personal account and every prop account: " + marks("MINE-1") + " " + marks("PROP-1") + " " + marks("SIM-E"));
+        });
+
+        // ---- the pick itself: the page's accountPersonal message
+        Part("prop: the personal account is picked on the page, once", () =>
+        {
+            PropStart("PROP-1", false);
+            string pf = Path.Combine(Dir, "personal-account.txt");
+            int s0 = N(page);
+            P("{\"type\":\"accountPersonal\",\"cid\":\"pp1\",\"account\":\"MINE-1\"}");
+            Check(!PageReject().Contains("\"cid\":\"pp1\"") && ChartBridgeBranches.PersonalNamed && ChartBridgeBranches.IsPersonal("MINE-1") && ChartBridgeBranches.IsProp("PROP-1") && !ChartBridgeBranches.IsProp("MINE-1") &&
+                  FileText("personal-account.txt").Contains("account\tMINE-1") && Any(page, s0, "\"personalNamed\":true") && Any(page, s0, "MINE-1 is the personal account"),
+                  "pick: MINE-1 picked on the page: saved, every other live account prop, the pages told: " + PageReject());
+            // kept through a restart of ChartBridge (the file is read again)
+            ChartBridgeBranches.LoadPersonal();
+            Check(ChartBridgeBranches.IsPersonal("mine-1") && !Logged("MINE-1 is picked") && !NinjaTrader.Code.Output.Lines.Any(x => x.Contains("personal account") && x.Contains("MINE-1")), "pick: read again at a start; its name never in the Output window");
+            foreach (string[] bad in new[] { new[] { "SIM-E", "is a Sim account" }, new[] { "Sim101", "is a Sim account" }, new[] { "Playback101", "cannot be the personal account" }, new[] { "NOT-LISTED", "is not in NinjaTrader now" } })
+            {
+                P("{\"type\":\"accountPersonal\",\"cid\":\"ppb\",\"account\":\"" + bad[0] + "\"}");
+                Check(PageReject().Contains("\"cid\":\"ppb\"") && PageReject().Contains(bad[1]) && ChartBridgeBranches.IsPersonal("MINE-1"), "pick: " + bad[0] + " refused, the pick as it was: " + PageReject());
+            }
+            P("{\"type\":\"accountPersonal\",\"cid\":\"ppc\"}");
+            Check(PageReject().Contains("\"cid\":\"ppc\"") && PageReject().Contains("takes account"), "pick: neither account nor clear: refused: " + PageReject());
+            P("{\"type\":\"accountPersonal\",\"cid\":\"ppd\",\"account\":\"PROP-2\",\"clear\":true}");
+            Check(PageReject().Contains("\"cid\":\"ppd\"") && ChartBridgeBranches.IsPersonal("MINE-1"), "pick: both account and clear: refused");
+            // never while an agent is in Auto: what is prop would change under it
+            Mode("manrae", "auto");
+            Check(AutoFileThere, "pick setup: manrae in Auto on PROP-1, its Auto saved");
+            P("{\"type\":\"accountPersonal\",\"cid\":\"ppe\",\"account\":\"PROP-2\"}");
+            Check(PageReject().Contains("\"cid\":\"ppe\"") && PageReject().Contains("agent manrae is in Auto") && ChartBridgeBranches.IsPersonal("MINE-1") && AutoFileThere, "pick: refused while an agent is in Auto: " + PageReject());
+            P("{\"type\":\"accountPersonal\",\"cid\":\"ppf\",\"clear\":true}");
+            Check(PageReject().Contains("\"cid\":\"ppf\"") && ChartBridgeBranches.PersonalNamed, "pick: taking it away is refused in Auto too");
+            // a saved Auto left from the old pick goes with a change (the agent in Shadow, a restore still waiting)
+            Mode("manrae", "shadow");
+            File.WriteAllLines(AutoFilePath, new[] { "# made-up", "# test", "auto\tPROP-1" });
+            P("{\"type\":\"accountPersonal\",\"cid\":\"ppg\",\"account\":\"PROP-2\"}");
+            Check(!PageReject().Contains("\"cid\":\"ppg\"") && ChartBridgeBranches.IsPersonal("PROP-2") && ChartBridgeBranches.IsProp("MINE-1") && !AutoFileThere && FileText("personal-account.txt").Contains("account\tPROP-2"),
+                  "pick: changed in Shadow: saved, and a saved Auto from the old pick is removed: " + PageReject());
+            P("{\"type\":\"accountPersonal\",\"cid\":\"pph\",\"clear\":true}");
+            Check(!PageReject().Contains("\"cid\":\"pph\"") && !ChartBridgeBranches.PersonalNamed && !ChartBridgeBranches.IsProp("PROP-1") && !File.Exists(pf), "pick: taken away: the file gone, nothing is prop");
+            // only a signed-in page of ChartBridge's own may pick
+            ChartBridgeClient other = new ChartBridgeClient(null, 777) { Origin = "http://localhost:8765" };
+            List<string> got = new List<string>();
+            other.Tap = s => { lock (got) got.Add(s); };
+            OnClient(other, "{\"type\":\"client\",\"v\":3}");
+            OnClient(other, "{\"type\":\"accountPersonal\",\"cid\":\"ppx\",\"account\":\"MINE-1\"}");
+            Check(!ChartBridgeBranches.PersonalNamed && got.Any(x => x.Contains("\"type\":\"reject\"") && x.Contains("may not trade")), "pick: a page that is not signed in cannot pick: " + got.LastOrDefault());
+        });
+
+        // ---- a no-setting install: exactly as 0.6.15 in every case
+        Part("prop: no setting, the reset", () =>
+        {
+            PropStart("PROP-1", false);
+            Mode("manrae", "auto");
+            Check(ModeNow() == "auto" && !AutoFileThere, "no setting: Auto on PROP-1 writes no agent-manrae-auto.txt");
+            ResetOnce(() => Check(M.Account == "-" && FileText("agent-manrae-account.txt").Contains("account\t-"), "no setting: the 17:00 reset puts the agent on None, as before"));
+        });
+        Part("prop: no setting, a restart from Auto (a file left by hand does nothing)", () =>
+        {
+            PropStart("PROP-1", false);
+            Mode("manrae", "auto");
+            File.WriteAllLines(AutoFilePath, new[] { "# made-up", "# test", "auto\tPROP-1" });
+            Restart();
+            Advance(3000);
+            Check(ModeNow() == "shadow" && Last(agentOut, "welcome").Contains("\"mode\":\"shadow\"") && !Logged("a saved Auto is there"), "no setting: every start is Shadow, the file is not even read");
+            Check(!ChartBridgeBranches.KeepThroughReset("agent:manrae", "PROP-1"), "no setting: no exception to the reset");
+            ResetOnce(() => Check(M.Account == "-", "no setting: with a file left there, the reset still goes to None"));
+            Gone(AutoFilePath);
+        });
+
+        // ---- the personal account and a Sim account, with the line: as before
+        foreach (string acct in new[] { "MINE-1", "SIM-E" })
+        {
+            string a = acct, what = acct == "MINE-1" ? "the personal account" : "a Sim account";
+            Part("prop: " + what + ", the reset and a restart", () =>
+            {
+                PropStart(a, true);
+                Mode("manrae", "auto");
+                Check(ModeNow() == "auto" && !AutoFileThere && !ChartBridgeBranches.KeepThroughReset("agent:manrae", a), what + ": Auto writes no file and has no exception to the reset");
+                Restart();
+                Advance(3000);
+                Check(ModeNow() == "shadow", what + ": a restart from Auto is Shadow");
+                File.WriteAllLines(AutoFilePath, new[] { "# made-up", "# test", "auto\t" + a });
+                Restart();
+                int s0 = N(page);
+                Advance(3000);
+                Check(ModeNow() == "shadow" && !AutoFileThere && Any(page, s0, "Auto was NOT restored after the restart (" + a + " is not prop)"), what + ": a file left there restores nothing and is removed: " + Last(page, "status"));
+                Mode("manrae", "auto");
+                ResetOnce(() => Check(M.Account == "-", what + ": the 17:00 reset puts the agent on None, as before"));
+            });
+        }
+
+        // ---- a prop account
+        Part("prop: Auto is saved, and switched off at the reset (Anthony 2026-11-11)", () =>
+        {
+            PropStart("PROP-1", true);
+            Check(ModeNow() == "shadow" && !AutoFileThere, "prop: a start with no saved Auto is Shadow");
+            Mode("manrae", "copilot");
+            Check(!AutoFileThere && !ChartBridgeBranches.KeepThroughReset("agent:manrae", "PROP-1"), "prop: Copilot saves nothing (it goes to None at the reset as before)");
+            ResetOnce(() => Check(M.Account == "-", "prop: an agent in Copilot on a prop account goes to None at the reset"));
+            PropStart("PROP-1", true);
+            Mode("manrae", "auto");
+            Check(FileText("agent-manrae-auto.txt").Contains("auto\tPROP-1") && FileText("agent-manrae-auto.txt").Contains("day\t2026-10-08") &&
+                  !ChartBridgeBranches.KeepThroughReset("bot", "PROP-1") && !ChartBridgeBranches.KeepThroughReset("copier", "PROP-1"),
+                  "prop: Auto on PROP-1: agent-manrae-auto.txt names it and the trading day it was set in: " + FileText("agent-manrae-auto.txt").Replace("\n", " | "));
+            int s17 = N(page);
+            ResetOnce(() => Check(M.Account == "-" && ModeNow() == "shadow" && !AutoFileThere && !ChartBridgeBranches.KeepThroughReset("agent:manrae", "PROP-1") &&
+                                  Any(page, s17, "the trading day ended (17:00 ET): Auto is off on PROP-1"),
+                                  "prop: the 17:00 reset switches Auto off (Shadow), removes the saved Auto and takes the account to None as for every branch: " + ModeNow() + " " + M.Account));
+            Restart();
+            Advance(40000);
+            Check(ModeNow() == "shadow" && !Logged("Auto restored after the restart on None"), "prop: and a restart after it restores nothing");
+            // in a trade at 17:00 (it should never be: its flat time is earlier): the account stays, Auto still goes off
+            PropStart("PROP-1", true);
+            Mode("manrae", "auto");
+            Order held = PlacedOn(prop1, Good(NewId()));
+            Fill(held, 1, 24999);
+            Advance(500);
+            ResetOnce(() => Check(held != null && M.Account == "PROP-1" && ModeNow() == "shadow" && !AutoFileThere && Legs(prop1, held).Count(IsLive) == 2,
+                                  "prop: holding a trade at the reset: it stays on its account with its stop and target, and Auto is off all the same: " + ModeNow() + " " + M.Account));
+            Settle(prop1);
+            // a saved Auto from an earlier trading day never restores (the backstop when a reset was missed)
+            PropStart("PROP-1", true);
+            Mode("manrae", "auto");
+            File.WriteAllText(AutoFilePath, FileText("agent-manrae-auto.txt").Replace("day\t2026-10-08", "day\t2026-10-07"));
+            int sOld = N(page);
+            Restart();
+            Advance(40000);
+            Check(ModeNow() == "shadow" && !AutoFileThere && Any(page, sOld, "Auto was NOT restored after the restart (its saved Auto is from an earlier trading day"), "prop: a saved Auto from an earlier trading day is not restored and is removed: " + ModeNow());
+            PropStart("PROP-1", true);
+            Mode("manrae", "auto");
+            File.WriteAllLines(AutoFilePath, new[] { "# made-up", "# test", "auto\tPROP-1" });   // no day at all
+            Restart();
+            Advance(40000);
+            Check(ModeNow() == "shadow" && !AutoFileThere, "prop: a saved Auto with no day is not restored either");
+            PropStart("PROP-1", true);
+            Mode("manrae", "auto");
+            // the review of 90 (N4, the coordinator's ruling): Anthony's rule has no exception: Auto on the personal account ends at 17:00 too
+            PropStart("MINE-1", true);
+            Mode("manrae", "auto");
+            ResetOnce(() => Check(M.Account == "-" && ModeNow() == "shadow", "N4: the personal account: at the reset Auto is off too, and the account goes to None when flat: " + ModeNow() + " " + M.Account));
+            PropStart("PROP-1", true);
+            Mode("manrae", "auto");
+            Mode("manrae", "shadow");
+            Check(!AutoFileThere && !ChartBridgeBranches.KeepThroughReset("agent:manrae", "PROP-1"), "prop: Shadow removes the saved Auto");
+            ResetOnce(() => Check(M.Account == "-", "prop: then the reset goes to None"));
+        });
+        Part("prop: one restore after a restart, flat", () =>
+        {
+            PropStart("PROP-1", true);
+            Mode("manrae", "auto");
+            Restart();
+            Check(ModeNow() == "shadow" && Last(agentOut, "welcome").Contains("\"mode\":\"shadow\""), "prop: the start itself is Shadow");
+            int s0 = N(page), a0 = N(agentOut);
+            Advance(2000);
+            Check(ModeNow() == "auto" && Any(page, s0, "Agent manrae: Auto restored after the restart on PROP-1") && Any(agentOut, a0, "\"mode\":\"auto\"") && AutoFileThere,
+                  "prop: the first pass that knows the account restores Auto, tells the pages and the agent, and keeps the file: " + Last(page, "status"));
+            Order e = PlacedOn(prop1, Good(NewId()));
+            Check(e != null, "prop: restored, a plan is placed on PROP-1: " + AgentReject());
+            Settle(prop1);
+        });
+        Part("prop: not flat at the start: no restore, ever", () =>
+        {
+            PropStart("PROP-1", true);
+            Mode("manrae", "auto");
+            SetPos(prop1, mnq, 1);
+            Restart();
+            int s0 = N(page);
+            Advance(2000);
+            Check(ModeNow() == "shadow" && !AutoFileThere && Any(page, s0, "Auto was NOT restored after the restart (PROP-1 has a position or a working order)"), "prop: a position at the start: Shadow, the file removed, the pages told: " + Last(page, "status"));
+            Settle(prop1);
+            Advance(5000);
+            Check(ModeNow() == "shadow", "prop: flat later: still Shadow (Auto is one click on the page)");
+            ResetOnce(() => Check(M.Account == "-", "prop: and the reset goes to None"));
+        });
+        Part("prop: the account not known yet: the restore waits, then decides once", () =>
+        {
+            PropStart("PROP-1", true);
+            Mode("manrae", "auto");
+            prop1.Connection.Status = ConnectionStatus.Disconnected;
+            Restart();
+            Advance(6000);
+            Check(ModeNow() == "shadow" && AutoFileThere, "prop: PROP-1 not Connected: no decision yet, the file stays");
+            prop1.Connection.Status = ConnectionStatus.Connected;
+            SteadyAll();
+            Advance(2000);
+            Check(ModeNow() == "auto", "prop: Connected and steady, flat: Auto restored");
+            // and the same wait ending with a position: no
+            prop1.Connection.Status = ConnectionStatus.Disconnected;
+            Restart();
+            Advance(2000);
+            SetPos(prop1, mnq, -1);
+            prop1.Connection.Status = ConnectionStatus.Connected;
+            SteadyAll();
+            Advance(2000);
+            Check(ModeNow() == "shadow" && !AutoFileThere, "prop: known with a position: not restored, the file removed");
+            Settle(prop1);
+        });
+        Part("prop: the kill switch", () =>
+        {
+            PropStart("PROP-1", true);
+            Mode("manrae", "auto");
+            P("{\"type\":\"agentKill\",\"cid\":\"k\",\"agent\":\"manrae\",\"on\":true}");
+            Check(M.Killed && !AutoFileThere && !ChartBridgeBranches.KeepThroughReset("agent:manrae", "PROP-1"), "prop: the kill switch on removes the saved Auto");
+            Restart();
+            Advance(3000);
+            Check(M.Killed && ModeNow() == "shadow", "prop: a restart with the kill switch on: Shadow");
+            P("{\"type\":\"agentKill\",\"cid\":\"k\",\"agent\":\"manrae\",\"on\":false}");
+            Advance(3000);
+            Check(!M.Killed && ModeNow() == "shadow" && !AutoFileThere, "prop: released after that restart: still Shadow, nothing saved");
+            // a kill file and a saved Auto both there at a start (the file written by hand): the kill switch wins
+            File.WriteAllLines(AutoFilePath, new[] { "# made-up", "# test", "auto\tPROP-1" });
+            File.WriteAllLines(Path.Combine(Dir, "agent-manrae-kill.txt"), new[] { "# made-up", "# test", "killed\t1791467200000" });
+            Restart();
+            int s0 = N(page);
+            Advance(3000);
+            Check(M.Killed && ModeNow() == "shadow" && !AutoFileThere && Any(page, s0, "Auto was NOT restored after the restart (the kill switch is on)"), "prop: both files at a start: not restored, the saved Auto removed");
+            P("{\"type\":\"agentKill\",\"cid\":\"k\",\"agent\":\"manrae\",\"on\":false}");
+            // released without a restart while still in Auto: Auto is on again, so it is saved again
+            Mode("manrae", "auto");
+            P("{\"type\":\"agentKill\",\"cid\":\"k\",\"agent\":\"manrae\",\"on\":true}");
+            Check(!AutoFileThere, "prop: on again: removed");
+            P("{\"type\":\"agentKill\",\"cid\":\"k\",\"agent\":\"manrae\",\"on\":false}");
+            Check(ModeNow() == "auto" && FileText("agent-manrae-auto.txt").Contains("auto\tPROP-1"), "prop: released with no restart, still in Auto: saved again");
+        });
+        Part("prop: an account change", () =>
+        {
+            PropStart("PROP-1", true);
+            Mode("manrae", "auto");
+            P("{\"type\":\"agentAccount\",\"cid\":\"pa\",\"agent\":\"manrae\",\"account\":\"PROP-2\",\"keepMode\":\"auto\"}");
+            Check(M.Account == "PROP-2" && ModeNow() == "auto" && FileText("agent-manrae-auto.txt").Contains("auto\tPROP-2") && !ChartBridgeBranches.KeepThroughReset("agent:manrae", "PROP-1"),
+                  "prop: to another prop account keeping Auto: the saved Auto names the new one: " + PageReject());
+            P("{\"type\":\"agentAccount\",\"cid\":\"pa\",\"agent\":\"manrae\",\"account\":\"PROP-1\"}");
+            Check(M.Account == "PROP-1" && ModeNow() == "shadow" && !AutoFileThere, "prop: a change that does not keep Auto: removed");
+            Mode("manrae", "auto");
+            P("{\"type\":\"agentAccount\",\"cid\":\"pa\",\"agent\":\"manrae\",\"account\":\"MINE-1\",\"keepMode\":\"auto\"}");
+            Check(M.Account == "MINE-1" && ModeNow() == "auto" && !AutoFileThere, "prop: to the personal account keeping Auto: removed (nothing is kept there)");
+            P("{\"type\":\"agentAccount\",\"cid\":\"pa\",\"agent\":\"manrae\",\"account\":\"PROP-1\",\"keepMode\":\"auto\"}");
+            Check(AutoFileThere, "prop: back on a prop account keeping Auto: saved");
+            P("{\"type\":\"agentAccount\",\"cid\":\"pa\",\"agent\":\"manrae\",\"account\":null,\"keepMode\":\"auto\"}");
+            Check(M.Account == "-" && !AutoFileThere, "prop: None: removed");
+            // the saved Auto names another account than the one at the start: no restore
+            File.WriteAllLines(Path.Combine(Dir, "agent-manrae-account.txt"), new[] { "# made-up", "# test", "account\tPROP-2" });
+            File.WriteAllLines(AutoFilePath, new[] { "# made-up", "# test", "auto\tPROP-1" });
+            Restart();
+            Advance(3000);
+            Check(ModeNow() == "shadow" && !AutoFileThere, "prop: a saved Auto for another account restores nothing");
+            // a file that names nothing readable: never Auto from it
+            File.WriteAllText(AutoFilePath, "garbage\n");
+            Restart();
+            Advance(3000);
+            Check(ModeNow() == "shadow" && !AutoFileThere, "prop: a file that cannot be understood restores nothing");
+        });
+        Part("prop: a group is prop only when every member is", () =>
+        {
+            string groupsWas = File.Exists(GroupsFile) ? File.ReadAllText(GroupsFile) : null;
+            try
+            {
+                WriteGroup("PROP-1", "PROP-2");
+                PropStart("group:g1", true);
+                Mode("manrae", "auto");
+                Check(ModeNow() == "auto" && FileText("agent-manrae-auto.txt").Contains("auto\tgroup:g1"), "prop group: Auto saved for the group: " + PageReject());
+                ResetOnce(() => Check(M.GroupId == null && ModeNow() == "shadow" && !AutoFileThere, "prop group: the reset switches Auto off and removes the saved Auto: " + ModeNow()));
+                PropStart("group:g1", true);
+                Mode("manrae", "auto");
+                Restart();
+                Advance(2000);
+                Check(ModeNow() == "auto", "prop group: restored after a restart, every seat flat");
+                SetPos(prop2, mnq, 1);
+                Restart();
+                Advance(2000);
+                Check(ModeNow() == "shadow" && !AutoFileThere, "prop group: one seat with a position: not restored");
+                Settle(prop2);
+                WriteGroup("PROP-1", "SIM-E");
+                PropStart("group:g1", true);
+                Mode("manrae", "auto");
+                Check(ModeNow() == "auto" && !AutoFileThere && !ChartBridgeBranches.KeepThroughReset("agent:manrae", "group:g1"), "prop group: a Sim member: nothing saved, no exception");
+            }
+            finally { if (groupsWas != null) File.WriteAllText(GroupsFile, groupsWas); else Gone(GroupsFile); ChartBridgeGroups.StartNow(); }
+        });
+        // ---- 0.6.17: Kill all for the prop accounts
+        Part("kill all: no setting: refused, nothing touched", () =>
+        {
+            PropStart("PROP-1", false);
+            Mode("manrae", "auto");
+            Order e = PlacedOn(prop1, Good(NewId()));
+            Fill(e, 1, 24999);
+            Check(e != null && PosOf(prop1, mnq) == 1 && Legs(prop1, e).Count(IsLive) == 2, "kill all setup: manrae long 1 MNQ on PROP-1 with its stop and target: " + AgentReject());
+            int calls = prop1.Calls.Count;
+            P("{\"type\":\"agentKillAllProp\",\"cid\":\"ka0\"}");
+            Advance(2000);
+            Check(PageReject().Contains("\"cid\":\"ka0\"") && PageReject().Contains("no personal account is picked") && !M.Killed && ModeNow() == "auto" && prop1.Calls.Count == calls && PosOf(prop1, mnq) == 1,
+                  "kill all, no personal account picked: refused, the agent, its position and its orders exactly as they were: " + PageReject());
+            Settle(prop1);
+        });
+        Part("kill all: an agent on prop accounts is flattened, killed and put in Shadow; others are not touched", () =>
+        {
+            PropStart("PROP-1", true);
+            // demob on a Sim account, in Auto, with an open trade of its own
+            dc = new ChartBridgeClient(null, -101);
+            dc.Tap = s => { lock (demobOut) demobOut.Add(s); };
+            D.Attach(dc);
+            B("{\"type\":\"agentHello\",\"name\":\"Demob\",\"build\":\"sample-build-2\"}");
+            P("{\"type\":\"agentAccount\",\"cid\":\"kd\",\"agent\":\"demob\",\"account\":\"SIM-B\"}");
+            Mode("demob", "auto");
+            Mode("manrae", "auto");
+            Order e = PlacedOn(prop1, Good(NewId()));
+            Fill(e, 1, 24999);
+            Check(e != null && PosOf(prop1, mnq) == 1 && Legs(prop1, e).Count(IsLive) == 2 && AutoFileThere, "kill all setup: manrae long 1 MNQ on PROP-1 in Auto, its Auto saved: " + AgentReject());
+            // a manual order and a position that are not the agent's, on the personal account and on another prop account
+            SetPos(mine, mnq, 2);
+            SetPos(prop2, mnq, 1);
+            int mineCalls = mine.Calls.Count, prop2Calls = prop2.Calls.Count, simbCalls = simb.Calls.Count, calls = prop1.Calls.Count, s0 = N(page), a0 = N(agentOut);
+            bool demobKilled = D.Killed;
+            string demobMode = Regex.Match(D.StripJson(), "\"mode\":\"([a-z]+)\"").Groups[1].Value;
+            P("{\"type\":\"agentKillAllProp\",\"cid\":\"ka1\"}");
+            Check(!PageReject().Contains("\"cid\":\"ka1\"") && M.Killed && ModeNow() == "shadow" && !AutoFileThere && File.Exists(Path.Combine(Dir, "agent-manrae-kill.txt")),
+                  "kill all: manrae: the kill switch on (saved), mode Shadow, its saved Auto removed: " + PageReject());
+            Check(Any(page, s0, "Kill all (prop accounts): agent manrae on PROP-1: flattening what it owns, the kill switch on, mode shadow") && Any(page, s0, "Not touched (not on prop accounts): demob") &&
+                  Any(agentOut, a0, "\"mode\":\"shadow\""), "kill all: one status names who was killed and who was not; the agent is told its mode");
+            foreach (Order o in Legs(prop1, e)) if (IsLive(o)) { o.OrderState = OrderState.Cancelled; Update(o); }
+            Advance(1500);
+            Order close;
+            lock (prop1.Orders) close = prop1.Orders.LastOrDefault(o => Regex.IsMatch(o.Name ?? "", "^CB#[0-9a-f]{8} ag:manrae flat$"));
+            Check(close != null && close.OrderType == OrderType.Market && close.OrderAction == OrderAction.Sell && close.Quantity == 1,
+                  "kill all: its stop and target cancelled, then its position closed at market by its own flatten, with the kill switch on and in Shadow: " + string.Join(" | ", prop1.Calls.Skip(calls)));
+            Check(mine.Calls.Count == mineCalls && PosOf(mine, mnq) == 2 && prop2.Calls.Count == prop2Calls && PosOf(prop2, mnq) == 1,
+                  "kill all: the personal account and a prop account the agent does not trade: no order, no cancel, positions as they were");
+            Check(D.Killed == demobKilled && Regex.Match(D.StripJson(), "\"mode\":\"([a-z]+)\"").Groups[1].Value == demobMode && demobMode == "auto" && simb.Calls.Count == simbCalls,
+                  "kill all: an agent on a Sim account is not touched (mode, kill switch, orders)");
+            if (close != null)
+            {
+                close.OrderId = "NTK" + Guid.NewGuid().ToString("N").Substring(0, 6);
+                close.Filled = 1; close.AverageFillPrice = 25001; close.OrderState = OrderState.Filled;
+                Update(close);
+                Deliver("PROP-1", mnq, MarketPosition.Short, 1, 25001, close.OrderId);
+                SetPos(prop1, mnq, 0);
+                ClearMoves();
+                Advance(1000);
+            }
+            Check(PosOf(prop1, mnq) == 0, "kill all: flat");
+            // after a release Auto stays off; a restart keeps the kill switch and restores nothing
+            Restart();
+            Advance(3000);
+            Check(M.Killed && ModeNow() == "shadow", "kill all: a restart keeps the kill switch on and Shadow");
+            P("{\"type\":\"agentKill\",\"cid\":\"k\",\"agent\":\"manrae\",\"on\":false}");
+            Advance(3000);
+            Check(!M.Killed && ModeNow() == "shadow" && !AutoFileThere, "kill all: released: Auto stays off until it is set on the page");
+            // a second Kill all with nothing open: still kills, nothing to flatten
+            Mode("manrae", "auto");
+            int s1 = N(page), c1 = prop1.Calls.Count;
+            P("{\"type\":\"agentKillAllProp\",\"cid\":\"ka2\"}");
+            Advance(1500);
+            Check(M.Killed && ModeNow() == "shadow" && !AutoFileThere && prop1.Calls.Count == c1 && Any(page, s1, "nothing of its own to flatten"), "kill all with nothing open: the kill switch on, Shadow, no order sent");
+            P("{\"type\":\"agentKill\",\"cid\":\"k\",\"agent\":\"manrae\",\"on\":false}");
+            SetPos(mine, mnq, 0); SetPos(prop2, mnq, 0);
+            Mode("demob", "shadow");
+        });
+        Part("kill all: the personal account and a group with a member that is not prop are never touched", () =>
+        {
+            PropStart("MINE-1", true);
+            Mode("manrae", "auto");
+            Order e = PlacedOn(mine, Good(NewId()));
+            Fill(e, 1, 24999);
+            int calls = mine.Calls.Count, s0 = N(page);
+            P("{\"type\":\"agentKillAllProp\",\"cid\":\"ka3\"}");
+            Advance(2000);
+            Check(e != null && !M.Killed && ModeNow() == "auto" && mine.Calls.Count == calls && PosOf(mine, mnq) == 1 && Any(page, s0, "no agent is on prop accounts: nothing was done"),
+                  "kill all: an agent on the personal account: not killed, not flattened, still in Auto: " + AgentReject());
+            Settle(mine);
+            string groupsWas = File.Exists(GroupsFile) ? File.ReadAllText(GroupsFile) : null;
+            try
+            {
+                WriteGroup("PROP-1", "SIM-E");
+                PropStart("group:g1", true);
+                Mode("manrae", "auto");
+                P("{\"type\":\"agentKillAllProp\",\"cid\":\"ka4\"}");
+                // the coordinator's ruling (the review of 88's second look, B1): a group holding ANY prop account is stopped
+                Check(M.Killed && ModeNow() == "shadow" && Any(page, 0, "Kill all (prop accounts): agent manrae on group"), "kill all: a group of a prop and a Sim account is stopped too (the coordinator's ruling): " + ModeNow());
+                P("{\"type\":\"agentKill\",\"cid\":\"k\",\"agent\":\"manrae\",\"on\":false}");
+                P("{\"type\":\"agentKillAllProp\",\"cid\":\"ka5\",\"agent\":\"manrae\"}");
+                Check(PageReject().Contains("unknown key \\\"agent\\\" in agentKillAllProp"), "kill all takes no agent: " + PageReject());
+            }
+            finally { if (groupsWas != null) File.WriteAllText(GroupsFile, groupsWas); else Gone(GroupsFile); ChartBridgeGroups.StartNow(); }
+        });
+        // ---- the review of 86 (REVIEW_2026-11-11_chartengine_85_86_87.md): F2, F1 (its scenarios A, B, C), N1, N2
+        Part("kill all: an order placed by hand on the same account and contract stays (F2)", () =>
+        {
+            PropStart("PROP-1", true);
+            Mode("manrae", "auto");
+            Order e = PlacedOn(prop1, Good(NewId()));
+            Fill(e, 1, 24999);
+            Advance(500);
+            // a sell limit named Exit, placed in NinjaTrader itself on the pair the agent holds its trade on
+            Order hand = prop1.CreateOrder(mnq, OrderAction.Sell, OrderType.Limit, OrderEntry.Manual, TimeInForce.Day, 1, 25050, 0, "", "Exit", NinjaTrader.Core.Globals.MaxDate, null);
+            hand.OrderState = OrderState.Working; lock (prop1.Orders) prop1.Orders.Add(hand);
+            Check(e != null && PosOf(prop1, mnq) == 1 && Legs(prop1, e).Count(IsLive) == 2, "kill all F2 setup: manrae long 1 MNQ on PROP-1 with its stop and target, and a hand order Exit resting there: " + AgentReject());
+            int calls = prop1.Calls.Count, s0 = N(page);
+            P("{\"type\":\"agentKillAllProp\",\"cid\":\"kf2\"}");
+            Advance(500);
+            foreach (Order o in Legs(prop1, e)) if (IsLive(o)) { o.OrderState = OrderState.Cancelled; Update(o); }
+            Advance(1500);
+            List<string> since = prop1.Calls.Skip(calls).ToList();
+            Check(since.Any(c => c.StartsWith("cancel") && c.Contains(" stop ")) && since.Any(c => c.StartsWith("cancel") && c.Contains(" target ")), "kill all F2: the agent's own stop and target are cancelled: " + string.Join(" | ", since));
+            Check(!since.Any(c => c.Contains("Exit")) && hand.OrderState == OrderState.Working, "kill all F2: the hand order is not cancelled and still works: " + string.Join(" | ", since));
+            // the review's S1: counted from the calls made inside THIS part (the last close in the whole list is an earlier part's)
+            List<string> closes = since.Where(c => c.Contains(" ag:manrae flat ")).ToList();
+            Check(closes.Count == 1 && closes[0].Contains(" ag:manrae flat Sell Market 1 ") && hand.OrderState == OrderState.Working,
+                  "kill all S1: the agent's own 1 contract is closed at market, once, with the hand order still resting: " + string.Join(" | ", since));
+            { Order cl = FlatOn(prop1); if (cl != null) Fill(cl, 1, 25001); }       // the stand-in broker fills nothing by itself
+            Advance(2000);
+            Check(PosOf(prop1, mnq) == 0 && prop1.Calls.Skip(calls).Count(c => c.Contains(" ag:manrae flat ")) == 1 && hand.OrderState == OrderState.Working && !prop1.Calls.Skip(calls).Any(c => c.Contains("Exit")),
+                  "kill all S1: then it is flat, one close only, the hand order never touched: position " + PosOf(prop1, mnq));
+            Check(Any(page, s0, "Only the traders' own orders were cancelled: an order placed by hand, the bot's or the copier's stays and can still fill") && M.Killed && ModeNow() == "shadow",
+                  "kill all F2: the status line says a hand order stays and can still fill; the kill switch is on, Shadow");
+            lock (prop1.Orders) prop1.Orders.Remove(hand);
+            Settle(prop1);
+            P("{\"type\":\"agentKill\",\"cid\":\"k\",\"agent\":\"manrae\",\"on\":false}");
+        });
+        Part("kill all: a hand order that fills during the flatten (S1)", () =>
+        {
+            // the hand order takes the position flat before the close can go: no close is sent, nothing is sold short
+            PropStart("PROP-1", true);
+            Mode("manrae", "auto");
+            Order e = PlacedOn(prop1, Good(NewId()));
+            Fill(e, 1, 24999);
+            Advance(500);
+            Order hand = prop1.CreateOrder(mnq, OrderAction.Sell, OrderType.Limit, OrderEntry.Manual, TimeInForce.Day, 1, 25050, 0, "", "Exit", NinjaTrader.Core.Globals.MaxDate, null);
+            hand.OrderState = OrderState.Working; lock (prop1.Orders) prop1.Orders.Add(hand);
+            int calls = prop1.Calls.Count;
+            P("{\"type\":\"agentKillAllProp\",\"cid\":\"ks1\"}");
+            Advance(500);
+            Fill(hand, 1, 25050);                                   // the hand order fills while the agent's legs are being cancelled
+            foreach (Order o in Legs(prop1, e)) if (IsLive(o)) { o.OrderState = OrderState.Cancelled; Update(o); }
+            Advance(4000);
+            List<string> since = prop1.Calls.Skip(calls).ToList();
+            Check(e != null && PosOf(prop1, mnq) == 0 && !since.Any(c => c.Contains(" ag:manrae flat ")) && M.Killed && ModeNow() == "shadow",
+                  "kill all S1: the hand order filled first: flat by it, no close sent, never short: position " + PosOf(prop1, mnq) + ": " + string.Join(" | ", since));
+            Settle(prop1);
+            P("{\"type\":\"agentKill\",\"cid\":\"k\",\"agent\":\"manrae\",\"on\":false}");
+        });
+        Part("kill all: a hand order that fills after the close was sent (S1)", () =>
+        {
+            // the agent's close goes with the hand order resting; the hand order fills later, as the status line said it can
+            PropStart("PROP-1", true);
+            Mode("manrae", "auto");
+            Order e = PlacedOn(prop1, Good(NewId()));
+            Fill(e, 1, 24999);
+            Advance(500);
+            Order hand = prop1.CreateOrder(mnq, OrderAction.Sell, OrderType.Limit, OrderEntry.Manual, TimeInForce.Day, 1, 25050, 0, "", "Exit", NinjaTrader.Core.Globals.MaxDate, null);
+            hand.OrderState = OrderState.Working; lock (prop1.Orders) prop1.Orders.Add(hand);
+            int calls = prop1.Calls.Count;
+            P("{\"type\":\"agentKillAllProp\",\"cid\":\"ks2\"}");
+            Advance(500);
+            foreach (Order o in Legs(prop1, e)) if (IsLive(o)) { o.OrderState = OrderState.Cancelled; Update(o); }
+            Advance(1500);
+            { Order cl = FlatOn(prop1); if (cl != null) Fill(cl, 1, 25001); }       // the stand-in broker fills nothing by itself
+            Advance(2000);
+            Check(e != null && PosOf(prop1, mnq) == 0 && prop1.Calls.Skip(calls).Count(c => c.Contains(" ag:manrae flat Sell Market 1 ")) == 1, "kill all S1: closed, once, with the hand order resting: position " + PosOf(prop1, mnq));
+            int after = prop1.Calls.Count;
+            Fill(hand, 1, 25050);                                   // the hand order's own fill: the account is short 1 by Anthony's order
+            Advance(6000);
+            Check(PosOf(prop1, mnq) == -1 && !prop1.Calls.Skip(after).Any(c => c.Contains(" ag:manrae ")), "kill all S1: a hand order that fills afterwards is the hand's own position: ChartBridge sends nothing for it: position " + PosOf(prop1, mnq) + ": " + string.Join(" | ", prop1.Calls.Skip(after)));
+            Deliver(prop1.Name, mnq, MarketPosition.Long, 1, 25000, "HANDBACK" + Guid.NewGuid().ToString("N").Substring(0, 6));   // Anthony buys his 1 back
+            SetPos(prop1, mnq, 0);
+            Settle(prop1);
+            P("{\"type\":\"agentKill\",\"cid\":\"k\",\"agent\":\"manrae\",\"on\":false}");
+        });
+        Part("kill all: the day's profit stop cancels only its own orders too (F2)", () =>
+        {
+            PropStart("PROP-1", true);
+            Mode("manrae", "auto");
+            Order e = PlacedOn(prop1, WithDayStop(Good(NewId()), "400"));
+            Fill(e, 1, 24999);
+            Advance(500);
+            Order hand = prop1.CreateOrder(mnq, OrderAction.Sell, OrderType.Limit, OrderEntry.Manual, TimeInForce.Day, 1, 25050, 0, "", "Exit", NinjaTrader.Core.Globals.MaxDate, null);
+            hand.OrderState = OrderState.Working; lock (prop1.Orders) prop1.Orders.Add(hand);
+            int calls = prop1.Calls.Count;
+            prop1.Items[AccountItem.UnrealizedProfitLoss] = 400;
+            Advance(1500);
+            foreach (Order o in Legs(prop1, e)) if (IsLive(o)) { o.OrderState = OrderState.Cancelled; Update(o); }
+            Advance(4000);
+            List<string> since = prop1.Calls.Skip(calls).ToList();
+            Check(e != null && since.Any(c => c.StartsWith("cancel") && c.Contains(" stop ")) && !since.Any(c => c.Contains("Exit")) && hand.OrderState == OrderState.Working,
+                  "day stop F2: reached: its own legs cancelled, the hand order left alone: " + string.Join(" | ", since));
+            List<string> closes = since.Where(c => c.Contains(" ag:manrae flat ")).ToList();
+            Check(closes.Count == 1 && closes[0].Contains(" ag:manrae flat Sell Market 1 "), "day stop S1: and its 1 contract is closed at market, once, with the hand order still resting: " + string.Join(" | ", since));
+            { Order cl = FlatOn(prop1); if (cl != null) Fill(cl, 1, 25001); }       // the stand-in broker fills nothing by itself
+            Advance(2000);
+            Check(PosOf(prop1, mnq) == 0 && prop1.Calls.Skip(calls).Count(c => c.Contains(" ag:manrae flat ")) == 1 && hand.OrderState == OrderState.Working,
+                  "day stop S1: then it is flat, one close only, the hand order still works: position " + PosOf(prop1, mnq));
+            prop1.Items.Remove(AccountItem.UnrealizedProfitLoss);
+            lock (prop1.Orders) prop1.Orders.Remove(hand);
+            Settle(prop1);
+        });
+        Part("day stop: an account already at its mark takes no new entry (several traders share one account's day)", () =>
+        {
+            PropStart("PROP-1", true);
+            Mode("manrae", "auto");
+            // the account's day is at 400 from someone else's trading (another trader on it earlier, or a hand trade); manrae is flat
+            prop1.Items[AccountItem.UnrealizedProfitLoss] = 400;
+            int calls = prop1.Calls.Count;
+            A(WithDayStop(Good(NewId()), "400"));
+            Check(AgentReject().Contains("the day's profit stop is reached on PROP-1 this session ($400, the plan's day stop; the day was at $400, realized plus open): no new entry there until 18:00 ET") && prop1.Calls.Count == calls,
+                  "day stop: a plan whose own day stop the account has already reached is refused, nothing sent: " + AgentReject());
+            Check(!M.StripJson().Contains("\"standDown\":\"the day's profit stop"), "day stop: a refusal is not a stand-down: the trader may trade another account, or this one once it is under the mark");
+            // the review of 88 (F5): reached once this session is reached for the rest of it: the day falling back under the mark (a
+            // later loss, a fee, a slipped close) or a plan naming a higher mark changes nothing
+            prop1.Items[AccountItem.UnrealizedProfitLoss] = 399.99;
+            calls = prop1.Calls.Count;
+            A(WithDayStop(Good(NewId()), "400"));
+            Check(AgentReject().Contains("the day's profit stop is reached on PROP-1 this session") && prop1.Calls.Count == calls, "F5: the day back under the mark: the same plan is still refused: " + AgentReject());
+            A(WithDayStop(Good(NewId()), "5000"));
+            Check(AgentReject().Contains("the day's profit stop is reached on PROP-1 this session") && prop1.Calls.Count == calls, "F5: a plan naming a higher mark is refused too: " + AgentReject());
+            Check(FileText("agent-manrae-day.txt").Contains("#dayreached\tPROP-1\t400"), "F5: saved in the day file: " + FileText("agent-manrae-day.txt").Replace("\n", " | "));
+            Restart(); Mode("manrae", "auto");
+            A(WithDayStop(Good(NewId()), "400"));
+            Check(AgentReject().Contains("the day's profit stop is reached on PROP-1 this session") && prop1.Calls.Count == calls, "F5: and after a restart (read from the day file): " + AgentReject());
+            ChartBridgeAgents.ForgetDayReachedForCheck();
+            try { Gone(Path.Combine(Dir, "agent-manrae-day.txt")); } catch (Exception) { }
+            Restart(); Mode("manrae", "auto");
+            Order e = PlacedOn(prop1, WithDayStop(Good(NewId()), "400"));
+            Check(e != null, "day stop: a fresh session one cent under the mark: the plan is placed: " + AgentReject());
+            if (e != null) { e.OrderState = OrderState.Cancelled; Update(e); Advance(500); }
+            // the session's value, set by that placed plan, also refuses a later plan that names none
+            prop1.Items[AccountItem.UnrealizedProfitLoss] = 400;
+            calls = prop1.Calls.Count;
+            A(Good(NewId()));
+            Check(AgentReject().Contains("the day's profit stop is reached on PROP-1 this session ($400, the plan's day stop") && prop1.Calls.Count == calls, "day stop: the session's value refuses a later plan that names none, nothing sent: " + AgentReject());
+            prop1.Items.Remove(AccountItem.UnrealizedProfitLoss);
+            Settle(prop1);
+        });
+        Part("kill all: a prop account NinjaTrader does not list right now is still in scope (F1)", () =>
+        {
+            // scenario A: in Auto on PROP-1; PROP-1 leaves the list; Kill all
+            PropStart("PROP-1", true);
+            Mode("manrae", "auto");
+            Check(AutoFileThere && ModeNow() == "auto", "kill all F1 A setup: Auto on PROP-1, saved");
+            lock (Account.All) Account.All.Remove(prop1);
+            int s0 = N(page);
+            P("{\"type\":\"agentKillAllProp\",\"cid\":\"kf1a\"}");
+            Check(M.Killed && ModeNow() == "shadow" && !AutoFileThere && Any(page, s0, "agent manrae on PROP-1") && !Any(page, s0, "no agent is on prop accounts"),
+                  "kill all F1 A: the account is not listed: the kill switch is on, Shadow, the saved Auto removed: " + string.Join(" | ", page.Skip(s0)));
+            lock (Account.All) Account.All.Add(prop1);
+            Advance(40000);
+            Check(M.Killed && ModeNow() == "shadow" && !AutoFileThere, "kill all F1 A: the account is back: still killed, still Shadow");
+            P("{\"type\":\"agentKill\",\"cid\":\"k\",\"agent\":\"manrae\",\"on\":false}");
+            // scenario B: ChartBridge restarts, PROP-1 not listed yet, Kill all, the account arrives flat: no Auto, no plan placed
+            PropStart("PROP-1", true);
+            Mode("manrae", "auto");
+            lock (Account.All) Account.All.Remove(prop1);
+            Restart();
+            Check(AutoFileThere && ModeNow() != "auto", "kill all F1 B setup: after the restart the saved Auto waits for the account");
+            s0 = N(page);
+            P("{\"type\":\"agentKillAllProp\",\"cid\":\"kf1b\"}");
+            Check(M.Killed && ModeNow() == "shadow" && !AutoFileThere && !Any(page, s0, "no agent is on prop accounts"), "kill all F1 B: before the account is listed: killed, the saved Auto removed: " + string.Join(" | ", page.Skip(s0)));
+            lock (Account.All) Account.All.Add(prop1);
+            Last2();
+            Advance(40000);
+            int calls = prop1.Calls.Count;
+            Check(M.Killed && ModeNow() == "shadow" && !NinjaTrader.Code.Output.Lines.Skip(Math.Max(0, NinjaTrader.Code.Output.Lines.Count - 40)).Any(x => x.Contains("Auto restored")), "kill all F1 B: the account arrives flat: Auto is not restored");
+            Last2();
+            A(Good(NewId()));
+            Check(prop1.Calls.Count == calls && AgentReject().Contains("kill switch"), "kill all F1 B: and a plan is refused, nothing placed on PROP-1: " + AgentReject());
+            P("{\"type\":\"agentKill\",\"cid\":\"k\",\"agent\":\"manrae\",\"on\":false}");
+            // scenario C: a group whose third member is no longer listed; and N1, a group with the personal account in it
+            string groupsWas = File.Exists(GroupsFile) ? File.ReadAllText(GroupsFile) : null;
+            try
+            {
+                WriteGroup("PROP-1", "PROP-2", "PROP-GONE");
+                PropStart("group:g1", true);
+                Mode("manrae", "auto");
+                s0 = N(page);
+                P("{\"type\":\"agentKillAllProp\",\"cid\":\"kf1c\"}");
+                Check(M.Killed && ModeNow() == "shadow" && !Any(page, s0, "no agent is on prop accounts"), "kill all F1 C: a group with a member NinjaTrader no longer lists: killed, Shadow: " + string.Join(" | ", page.Skip(s0)));
+                P("{\"type\":\"agentKill\",\"cid\":\"k\",\"agent\":\"manrae\",\"on\":false}");
+                WriteGroup("MINE-1", "PROP-1");
+                PropStart("group:g1", true);
+                Mode("manrae", "auto");
+                s0 = N(page);
+                int mineCalls = mine.Calls.Count;
+                P("{\"type\":\"agentKillAllProp\",\"cid\":\"kn1\"}");
+                Check(!M.Killed && mine.Calls.Count == mineCalls && Any(page, s0, "NOT STOPPED, still trading its prop accounts (it trades the personal account too; stop it on the Agent tab): manrae"),
+                      "kill all N1: a group with the personal account in it is not touched, and the status line says so loudly: " + string.Join(" | ", page.Skip(s0)));
+            }
+            finally { if (groupsWas != null) File.WriteAllText(GroupsFile, groupsWas); else Gone(GroupsFile); ChartBridgeGroups.StartNow(); }
+            Check(!ChartBridgeAgent.KillScope("MINE-1") && !ChartBridgeAgent.KillScope("SIM-E") && !ChartBridgeAgent.KillScope("Playback101") && !ChartBridgeAgent.KillScope("Backtest") && !ChartBridgeAgent.KillScope("") &&
+                  ChartBridgeAgent.KillScope("PROP-1") && ChartBridgeAgent.KillScope("NOT-LISTED-9"), "kill all F1: in scope unless the personal account, a listed Sim account, Backtest, Playback or none");
+        });
+        Part("kill all: a saved Auto waiting with no seats is stopped too (F3)", () =>
+        {
+            string groupsWas = File.Exists(GroupsFile) ? File.ReadAllText(GroupsFile) : null;
+            FileStream held = null;
+            try
+            {
+                WriteGroup("PROP-1", "PROP-2");
+                PropStart("group:g1", true);
+                Mode("manrae", "auto");
+                Check(AutoFileThere && ModeNow() == "auto", "kill all F3 setup: Auto on group Lucid (PROP-1, PROP-2), saved");
+                string good = File.ReadAllText(GroupsFile);
+                File.WriteAllText(GroupsFile, "broken\n");   // groups.txt cannot be read at the restart
+                File.WriteAllText(GroupsFile + ".bak", "not a groups file");
+                string goodCopy = File.Exists(GroupsFile + ".good") ? File.ReadAllText(GroupsFile + ".good") : null;
+                try { Gone(GroupsFile + ".good"); } catch (Exception) { }   // no last good copy either: the machines wait
+                ChartBridgeGroups.StartNow();
+                Restart();
+                Check(AutoFileThere && ModeNow() == "shadow" && M.StripJson().Contains("\"seats\":[]"), "kill all F3 setup: after the restart the saved Auto waits, no seats while groups.txt cannot be read: " + M.StripJson());
+                int s0 = N(page);
+                P("{\"type\":\"agentKillAllProp\",\"cid\":\"kf3\"}");
+                Check(M.Killed && ModeNow() == "shadow" && !AutoFileThere && !Any(page, s0, "no agent is on prop accounts") && Any(page, s0, "its saved Auto was waiting"),
+                      "kill all F3: with no seats and a saved Auto waiting: the kill switch is on and the saved Auto removed: " + string.Join(" | ", page.Skip(s0)));
+                File.WriteAllText(GroupsFile, good);
+                if (goodCopy != null) File.WriteAllText(GroupsFile + ".good", goodCopy);
+                ChartBridgeGroups.StartNow();
+                Last2();
+                Advance(40000);
+                int calls = prop1.Calls.Count + prop2.Calls.Count;
+                Check(M.Killed && ModeNow() == "shadow" && !NinjaTrader.Code.Output.Lines.Skip(Math.Max(0, NinjaTrader.Code.Output.Lines.Count - 60)).Any(x => x.Contains("Auto restored")), "kill all F3: groups.txt readable again: Auto is not restored");
+                A(GPlan(NewId(), "1,1", Rev()));
+                Check(prop1.Calls.Count + prop2.Calls.Count == calls && AgentReject().Contains("kill switch"), "kill all F3: and a plan is refused, nothing placed: " + AgentReject());
+            }
+            finally
+            {
+                if (held != null) held.Dispose();
+                try { Gone(GroupsFile + ".bak"); } catch (Exception) { }
+                if (groupsWas != null) File.WriteAllText(GroupsFile, groupsWas); else Gone(GroupsFile);
+                ChartBridgeGroups.StartNow();
+                P("{\"type\":\"agentKill\",\"cid\":\"k\",\"agent\":\"manrae\",\"on\":false}");
+            }
+        });
+        // ---- the review of 88's second look (REVIEW_2026-11-11_chartengine_88_delta.md): D1, D2, D3, A1, and the breaks no check caught
+        Part("day stop: the reached latch survives a restart (a new process), is per session, and the roll clears it (D1)", () =>
+        {
+            PropStart("PROP-1", true);
+            Mode("manrae", "auto");
+            prop1.Items[AccountItem.UnrealizedProfitLoss] = 400;
+            A(WithDayStop(Good(NewId()), "400"));                              // refused at the plan check: latched there
+            Check(AgentReject().Contains("is reached on PROP-1 this session"), "D1 setup: reached at a refusal: " + AgentReject());
+            prop1.Items[AccountItem.UnrealizedProfitLoss] = 0;                 // the day falls back under the mark
+            int calls = prop1.Calls.Count;
+            Restart(); Mode("manrae", "auto");                                 // a new process: the shared latch starts empty
+            A(WithDayStop(Good(NewId()), "5000"));
+            Check(AgentReject().Contains("is reached on PROP-1 this session") && AgentReject().Contains("read back from the day file") && prop1.Calls.Count == calls,
+                  "D1: after a restart, read back from the day file: a plan naming a higher mark is refused, nothing sent: " + AgentReject());
+            // the 18:00 roll: a new session; the latch was the old session's
+            et = new DateTime(2026, 10, 11, 18, 0, 30);                        // Sunday's open: the next session (Monday's)
+            Advance(2000);
+            Mode("manrae", "auto");                                            // Auto ended with Friday's trading day (F4)
+            Check(!FileText("agent-manrae-day.txt").Contains("#dayreached"), "D1: the roll clears the saved latch: " + FileText("agent-manrae-day.txt").Replace("\n", " | "));
+            et = new DateTime(2026, 10, 12, 10, 0, 0);                         // Monday 10:00, inside the entry window
+            Advance(1000);
+            Mode("manrae", "auto");
+            Order e = PlacedOn(prop1, WithDayStop(Good(NewId()), "400"));
+            Check(e != null, "D1: the latch is per session: the new session places a plan on PROP-1: " + AgentReject());
+            Restart(); Mode("manrae", "auto");
+            Check(e != null && ChartBridgeAgents.DayReachedWords("2026-10-12", "PROP-1") == null, "D1: and a restart in the new session reads no old latch back");
+            Settle(prop1);
+            prop1.Items.Remove(AccountItem.UnrealizedProfitLoss);
+        });
+        Part("day stop: a plan naming a higher mark before the next pass is refused by the session's mark (D3)", () =>
+        {
+            PropStart("PROP-1", true);
+            Mode("manrae", "auto");
+            Order e = PlacedOn(prop1, WithDayStop(Good(NewId()), "600"));
+            if (e != null) { e.OrderState = OrderState.Cancelled; Update(e); }
+            int calls = prop1.Calls.Count;
+            prop1.Items[AccountItem.UnrealizedProfitLoss] = 700;               // no pass in between
+            A(WithDayStop(Good(NewId()), "5000"));
+            Check(e != null && AgentReject().Contains("is reached on PROP-1 this session ($600") && prop1.Calls.Count == calls && Last(agentOut, "agentState").Contains(",\"dayStop\":600}"),
+                  "D3: refused by the session's 600, nothing sent, and the session's mark is still 600: " + AgentReject() + " " + Last(agentOut, "agentState"));
+            prop1.Items.Remove(AccountItem.UnrealizedProfitLoss);
+            Settle(prop1);
+        });
+        Part("kill all: a hand order and the agent's close both fill: the line says the account is short (A1)", () =>
+        {
+            PropStart("PROP-1", true);
+            Mode("manrae", "auto");
+            Order e = PlacedOn(prop1, Good(NewId()));
+            Fill(e, 1, 24999);
+            Advance(500);
+            Order hand = prop1.CreateOrder(mnq, OrderAction.Sell, OrderType.Limit, OrderEntry.Manual, TimeInForce.Day, 1, 25050, 0, "", "Exit", NinjaTrader.Core.Globals.MaxDate, null);
+            hand.OrderState = OrderState.Working; lock (prop1.Orders) prop1.Orders.Add(hand);
+            int s0 = N(page);
+            P("{\"type\":\"agentKillAllProp\",\"cid\":\"ka1\"}");
+            Advance(500);
+            foreach (Order o in Legs(prop1, e)) if (IsLive(o)) { o.OrderState = OrderState.Cancelled; Update(o); }
+            Advance(1500);
+            Order cl = FlatOn(prop1);
+            Check(e != null && cl != null, "A1 setup: the agent's close is out with the hand order resting");
+            if (cl == null) return;
+            Fill(hand, 1, 25050);                                              // the hand order fills first ...
+            Fill(cl, 1, 25049);                                                // ... and the close too: short 1
+            Advance(3000);
+            Check(PosOf(prop1, mnq) == -1 && Any(page, s0, "PROP-1 MNQ is now SHORT 1: agent manrae's close and an order placed by hand both filled. ChartBridge sends nothing for it; act in NinjaTrader now"),
+                  "A1: the line says plainly the account is short 1 and why: " + string.Join(" | ", page.Skip(s0).Where(x => x.Contains("PROP-1 MNQ"))));
+            Check(Any(page, s0, "On the account and contract a trader holds, its position is closed whole, a contract added by hand included (an account a bot trades is the bot's for the day)"),
+                  "F7 (Anthony 2026-11-11): Kill all's line says the trader's position is closed whole, a contract added by hand included");
+            Deliver(prop1.Name, mnq, MarketPosition.Long, 1, 25000, "HANDBACK" + Guid.NewGuid().ToString("N").Substring(0, 6));
+            SetPos(prop1, mnq, 0);
+            Settle(prop1);
+            P("{\"type\":\"agentKill\",\"cid\":\"k\",\"agent\":\"manrae\",\"on\":false}");
+        });
+        Part("Auto ends at 17:00:00 exactly, and setting Auto again while in Auto does not renew its day (F4)", () =>
+        {
+            PropStart("PROP-1", true);
+            Mode("manrae", "auto");
+            et = new DateTime(2026, 10, 9, 16, 59, 59);
+            Advance(500);
+            Check(ModeNow() == "auto", "F4: 16:59:59: still Auto");
+            et = new DateTime(2026, 10, 9, 17, 0, 0);
+            Advance(500);
+            Check(ModeNow() == "shadow", "F4: 17:00:00: Auto is off");
+            PropStart("PROP-1", true);
+            Mode("manrae", "auto");
+            et = new DateTime(2026, 10, 12, 10, 0, 0);                         // the next trading day, no pass yet
+            P("{\"type\":\"agentMode\",\"cid\":\"m\",\"agent\":\"manrae\",\"mode\":\"auto\"}");   // Auto again while in Auto
+            int calls = prop1.Calls.Count;
+            A(Good(NewId()));
+            Check(prop1.Calls.Count == calls && AgentReject().Contains("the trading day ended (17:00 ET)"), "F4: Auto set again while in Auto keeps its first day: the plan is refused: " + AgentReject());
+        });
+        Part("kill all: an agent on the personal account with a saved Auto file is never killed (F3)", () =>
+        {
+            PropStart("MINE-1", true);
+            Mode("manrae", "auto");
+            File.WriteAllLines(AutoFilePath, new[] { "# made-up", "# test", "auto\tMINE-1" });   // left by hand
+            P("{\"type\":\"agentKillAllProp\",\"cid\":\"kp\"}");
+            Check(!M.Killed && ModeNow() == "auto", "F3: the personal account is never touched, a saved Auto file or not");
+            try { Gone(AutoFilePath); } catch (Exception) { }
+        });
+        Part("kill all: the kill switch and Shadow go on before the flatten (N1)", () =>
+        {
+            PropStart("PROP-1", true);
+            Mode("manrae", "auto");
+            Order e = PlacedOn(prop1, Good(NewId()));
+            Fill(e, 1, 24999);
+            Advance(500);
+            int s0 = N(page);
+            try
+            {
+                ChartBridgeAgent.FlattenFaultForCheck = "manrae";
+                P("{\"type\":\"agentKillAllProp\",\"cid\":\"kn1b\"}");
+            }
+            finally { ChartBridgeAgent.FlattenFaultForCheck = null; }
+            Check(e != null && M.Killed && ModeNow() == "shadow" && !AutoFileThere && Any(page, s0, "its flatten could NOT be started (a fault made by the harness): act in NinjaTrader now"),
+                  "kill all N1: the flatten throws: the agent is still killed, Shadow, its saved Auto removed, and the line says act now: " + string.Join(" | ", page.Skip(s0)));
+            Settle(prop1);
+            P("{\"type\":\"agentKill\",\"cid\":\"k\",\"agent\":\"manrae\",\"on\":false}");
+        });
+        Part("Auto ends with its trading day at the plan check too (F4)", () =>
+        {
+            PropStart("PROP-1", true);
+            Mode("manrae", "auto");
+            Check(ModeNow() == "auto", "F4 setup: Auto on PROP-1 at 10:00");
+            et = new DateTime(2026, 10, 12, 10, 0, 0);   // the PC slept from Friday to Monday: no pass has run since it woke
+            Last2();
+            int calls = prop1.Calls.Count;
+            A(Good(NewId()));
+            Check(prop1.Calls.Count == calls && AgentReject().Contains("the trading day ended (17:00 ET): Auto is off for agent manrae") && ModeNow() == "shadow" && !AutoFileThere,
+                  "F4: a plan in the moment after a wake, before any pass: refused, Auto off, the saved Auto removed: " + AgentReject());
+            Mode("manrae", "auto");
+            Order e = PlacedOn(prop1, Good(NewId()));
+            Check(e != null, "F4: Auto set again on the new trading day: placed: " + AgentReject());
+            Settle(prop1);
+        });
+        Part("day stop: the day's number not known is said once (F6)", () =>
+        {
+            PropStart("PROP-1", true);
+            Mode("manrae", "auto");
+            Order e = PlacedOn(prop1, WithDayStop(Good(NewId()), "400"));
+            Fill(e, 1, 24999);
+            prop1.Items[AccountItem.UnrealizedProfitLoss] = double.NaN;   // NinjaTrader gives no open P&L: the day's number is not known
+            int s0 = N(page);
+            Advance(6000);
+            Check(e != null && page.Skip(s0).Count(x => x.Contains("the day's profit stop ($400) is NOT checked on PROP-1: the day's number is not known")) == 1 && FlatClose(prop1) == null,
+                  "F6/N7: the day's number not known: said once to the pages, nothing closed: " + string.Join(" | ", page.Skip(s0).Where(x => x.Contains("NOT checked"))));
+            prop1.Items.Remove(AccountItem.UnrealizedProfitLoss);
+            Settle(prop1);
+        });
+        Part("kill all is never refused for the action rate (N2)", () =>
+        {
+            PropStart("PROP-1", true);
+            Mode("manrae", "auto");
+            for (int i = 0; i < 12; i++) OnClient(pc, "{\"type\":\"agentKill\",\"cid\":\"r" + i + "\",\"agent\":\"manrae\",\"on\":false}");
+            Check(PageReject().Contains("too many order actions"), "kill all N2 setup: an ordinary message is refused as too many: " + PageReject());
+            int s0 = N(page);
+            OnClient(pc, "{\"type\":\"agentKillAllProp\",\"cid\":\"kn2\"}");
+            Check(M.Killed && ModeNow() == "shadow" && Any(page, s0, "Kill all (prop accounts): agent manrae on PROP-1"), "kill all N2: sent right after, it is carried out: " + string.Join(" | ", page.Skip(s0)));
+            clock += 2000;
+            P("{\"type\":\"agentKill\",\"cid\":\"k\",\"agent\":\"manrae\",\"on\":false}");
+        });
+        Part("prop: the harness is left as it was", () =>
+        {
+            try { Gone(AutoFilePath); } catch (Exception) { }
+            File.WriteAllLines(Path.Combine(Dir, "agent-manrae-account.txt"), new[] { "# made-up", "# test", "account\tSIM-E" });
+            Config("agents = manrae, demob");
+            try { Gone(Path.Combine(Dir, "personal-account.txt")); } catch (Exception) { }
+            ChartBridgeBranches.LoadPersonal();
+            ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, EVAL-A, SIM-A, SIM-B, SIM-C, SIM-D, SIM-E");
+            Restart();
+            Check(!ChartBridgeBranches.PersonalNamed, "prop: the pick gone: nothing is prop again");
         });
     }
 }

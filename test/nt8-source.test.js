@@ -861,7 +861,7 @@ test('0.4.0 accounts: ChartBridgeAccounts.cs ships, never places an order, and t
   assert.ok(!/Save\(\)|FlushLog\(\)/.test(bodyOf(acode, 'public static void StartNow(')), 'no write at start (NinjaTrader\'s thread)');
   assert.match(acode, /public const double GraceMs = 10000;/);
   // the main file: client, accountTrade, accountArchive and accountUnarchive (0.5.1) go to ChartBridgeAccounts; "accounts" rides the order lane
-  assert.match(code, /else if \(type == "client" \|\| type == "accountTrade" \|\| type == "accountArchive" \|\| type == "accountUnarchive"\)\s*ChartBridgeAccounts\.OnMessage\(client, type, text\);/);
+  assert.match(code, /else if \(type == "client" \|\| type == "accountTrade" \|\| type == "accountArchive" \|\| type == "accountUnarchive" \|\| type == "accountPersonal"\)\s*ChartBridgeAccounts\.OnMessage\(client, type, text\);/);
   assert.match(code, /ChartBridgeAccounts\.Start\(\);[^\n]*\n[\s\S]*?WatchAccounts\(\);/);
 });
 
@@ -1163,7 +1163,7 @@ test('0.4.0 integration: exactly one v3 handshake and one v3 send; no lane keeps
   // the one "client" dispatch, to the accounts lane, which marks the page through ChartBridgeV3.OnClient and tells the lanes
   const clientLines = code.split('\n').filter(l => /type == "client"/.test(l));
   assert.equal(clientLines.length, 1, 'one client dispatch: ' + clientLines.join(' | '));
-  assert.match(code, /else if \(type == "client" \|\| type == "accountTrade" \|\| type == "accountArchive" \|\| type == "accountUnarchive"\)\s*ChartBridgeAccounts\.OnMessage\(client, type, text\);/);
+  assert.match(code, /else if \(type == "client" \|\| type == "accountTrade" \|\| type == "accountArchive" \|\| type == "accountUnarchive" \|\| type == "accountPersonal"\)\s*ChartBridgeAccounts\.OnMessage\(client, type, text\);/);
   const acode = strip(fs.readFileSync(path.join(nt8, 'ChartBridgeAccounts.cs'), 'utf8'));
   assert.match(bodyOf(acode, 'private static void OnClient(ChartBridgeClient client, string text)'), /if \(!ChartBridgeV3\.OnClient\(client, text\)\) return;[\s\S]*ChartBridgeV3\.TellLanes\(client\);/);
   // every switch is read once, by ChartBridgeSwitches; each lane's Enabled reads it
@@ -1283,7 +1283,7 @@ test('0.4.0 B1: order calls only where the gates and the upkeep are; legs GTC; n
 
 test('ChartBridge 0.5.1: connected accounts only; the accounts line no longer filters; accounts.txt keeps 0.5.0\'s format', () => {
   const asrc = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'ChartBridgeAccounts.cs'), 'utf8');
-  assert.match(code, /public const string Version = "0\.(5\.[1-8]|6\.([0-9]|1[0-5]))";/);
+  assert.match(code, /public const string Version = "0\.(5\.[1-8]|6\.([0-9]|1[0-9]|20))";/);
   // the 10 s watch (fills to The Desk) takes only accounts seen Connected this NinjaTrader session
   assert.match(bodyOf(code, 'private static void WatchAccounts()'), /fresh = fresh\.Where\(ChartBridgeAccounts\.SeenConnected\)\.ToList\(\);/);
   // AccountAllowed is never Backtest or Playback and reads no list
@@ -1312,7 +1312,7 @@ test('ChartBridge 0.5.5: the accounts line\'s one-time conversion and notConnect
 });
 
 test('ChartBridge 0.5.6: the time check (build list #77) only measures, on its own thread, and tells hello, the pages and /diag', () => {
-  assert.match(code, /public const string Version = "0\.(5\.[6-8]|6\.([0-9]|1[0-5]))";/);
+  assert.match(code, /public const string Version = "0\.(5\.[6-8]|6\.([0-9]|1[0-9]|20))";/);
   const clk = code.slice(code.indexOf('public static class ChartBridgeClock'));
   assert.ok(code.indexOf('public static class ChartBridgeClock') > code.indexOf('public static class ChartBridgeServer') && clk.length > 1000, 'ChartBridgeClock is the last class of ChartBridge.cs');
   // never sets the clock or a setting: no Win32 time call, no w32tm, no process, no registry, in any add-on file

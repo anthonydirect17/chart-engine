@@ -309,6 +309,10 @@ body:not(.ag-on) .ag-view.ag-in-ws { display: none !important; }
 .ag-view .ag-rroots { display: grid; gap: 4px; padding-bottom: 6px; border-bottom: 1px solid var(--f-line2); }
 .ag-view .ag-rroot { display: grid; grid-template-columns: 18px 44px 60px auto; align-items: center; gap: 6px; font-size: 13px; color: var(--f-hot); }
 .ag-view .ag-rroot.off { opacity: .45; }
+/* 1.44.4 (ChartBridge 0.6.18): Market entry and No target, two switches of a trader's rules */
+.ag-view .ag-rflag { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--f-hot); }
+.ag-view .ag-rflag input[type="checkbox"] { accent-color: var(--f-c); margin: 0; }
+.ag-view .ag-rflag[hidden] { display: none; }
 .ag-view .ag-rroot input[type="checkbox"] { accent-color: var(--f-c); margin: 0; }
 .ag-view .ag-in { width: 100%; height: 26px; box-sizing: border-box; background: #01070d; color: var(--f-hot); border: 1px solid var(--f-line); padding: 0 6px; font: 13px var(--f-num); }
 .ag-view .ag-in:focus { border-color: var(--f-c); outline: none; }

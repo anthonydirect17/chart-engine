@@ -758,9 +758,22 @@ public static class GroupsHarness
         string st = State("SIM-B");
         Check(st.Contains("\"pnlToday\":-450,\"realizedToday\":-400,") && st.Contains("\"realizedToday\":\"ninjatrader\"") && st.Contains("\"pnlToday\":\"ninjatrader\""),
               "review item 3: a day start read mid-session: the smaller of the computed (-100) and NinjaTrader's (-400): " + st);
+        ChartBridgeGroups.Numbers pn = ChartBridgeGroups.Read("SIM-B", simB, false);
+        Check(pn.Realized == -400 && pn.ProfitPnl == -150 && pn.ProfitWhy == null,
+              "0.6.19 (the review of 88, F6): for a PROFIT stop the larger of the two (-100), plus open (-50): " + pn.ProfitPnl + "; the loss side keeps the smaller: " + pn.Realized);
         simB.Items[AccountItem.RealizedProfitLoss] = double.NaN;
+        pn = ChartBridgeGroups.Read("SIM-B", simB, false);
+        Check(!pn.ProfitPnl.HasValue && (pn.ProfitWhy ?? "").Contains("started mid-session"), "F6: no NinjaTrader realized after a late start: the profit side is not known, with why: " + pn.ProfitWhy);
         st = State("SIM-B");
         Check(st.Contains("\"pnlToday\":null") && st.Contains("\"roomDaily\":null") && st.Contains("started mid-session"), "review item 3: no NinjaTrader realized to compare: today's P&L and the daily room null, with why: " + st);
+        simB.Items[AccountItem.RealizedProfitLoss] = 0;
+        // D2 (the review of 88's second look): 18:00:00, before the tick rolls the day start: NinjaTrader's realized may still be
+        // yesterday's, so the profit side is not known (and never latched); the loss side reads as before
+        simB.Items[AccountItem.RealizedProfitLoss] = 700;
+        ClockEt(2026, 10, 16, 18, 0);
+        pn = ChartBridgeGroups.Read("SIM-B", simB, false);
+        Check(!pn.ProfitPnl.HasValue && pn.ProfitWhy == ChartBridgeGroups.Numbers.RollPendingWhy && pn.Realized == 700,
+              "D2: in the second after 18:00 before the day start rolls: no profit figure (" + pn.ProfitWhy + "); the loss side as before: " + pn.Realized);
         simB.Items[AccountItem.RealizedProfitLoss] = 0;
         ClockEt(2026, 10, 16, 18, 1); Money(simB, 52000, 0, 0); Tick();
         Money(simB, 51900, 0, -999);

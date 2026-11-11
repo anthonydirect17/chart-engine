@@ -764,7 +764,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (side != "buy" && side != "sell") return "side must be buy or sell";
             if (kind != "market" && kind != "limit" && kind != "stop" && !(OrderTypesOn && NewKind(kind))) return "kind must be market, limit or stop";   // 0.4.0 B1: stopLimit, mit
             if (bot && (NewKind(kind) || strategyBody != null)) return "the bot places market, limit and stop entries with a plain stop and target only";   // 0.4.0 bot: (integration) never a new kind or an Order Strategy
-            if (agent != null && ((kind != "limit" && kind != "stopLimit") || strategyBody != null || bracketBody == null)) return "an agent's entry is a limit or a stop-limit with a stop and a target";   // 0.5.0 agents: never market, stop or MIT, never a strategy
+            if (agent != null && ((kind != "limit" && kind != "stopLimit" && !(kind == "market" && ChartBridgeAgents.MayMarket(agent))) || strategyBody != null || bracketBody == null)) return "an agent's entry is a limit or a stop-limit with a stop and a target";   // 0.5.0 agents: never stop or MIT, never a strategy; 0.6.18: market only when its rules allow it
             int qty;
             if (Int(top, "qty", out qty) != 1 || qty < 1) return "qty must be a whole number of 1 or more";
             bool isBuy = side == "buy";
@@ -836,7 +836,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     return "the bracket would put a leg at or below zero from " + (kind == "market" ? "the last price " : "the entry price ") + CbJson.Num(from);
             }
             bool wantsLegs = stopTicks > 0 || targetTicks > 0;
-            if (agent != null && (stopTicks < 1 || targetTicks < 1)) return "every agent entry needs a stop and a target";   // 0.5.0 agents
+            if (agent != null && (stopTicks < 1 || (targetTicks < 1 && !ChartBridgeAgents.MayNoTarget(agent)))) return "every agent entry needs a stop and a target";   // 0.5.0 agents; 0.6.18: always a stop; no target only when its rules allow it
             // Refused only when both readings agree the order reduces the position (legs on a reducing order
             // could open a new position; one stale reading must not block a fresh entry).
             bool reduces = ((posNow > 0 && !isBuy) || (posNow < 0 && isBuy)) && ((posEff > 0 && !isBuy) || (posEff < 0 && isBuy));

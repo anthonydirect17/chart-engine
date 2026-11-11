@@ -184,6 +184,10 @@
 .apg-simtg { margin-left: auto; padding: 0 8px; font-size: 11px; }
 .apg-drawer { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 6px 4px 8px 12px; border-left: 2px solid var(--ws-line2); }
 .apg-dfield { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+/* 1.44.2 (ChartBridge 0.6.16): the personal and prop marks beside an account's name, and the pick in its drawer */
+.apg-ptag { margin-left: 6px; font: 600 9px var(--ws-sans); letter-spacing: .06em; text-transform: uppercase; color: var(--ws-muted); }
+.apg-ptag.apg-pmine { color: var(--ws-accent, #C9A55C); }
+.apg-pis { font: 11px var(--ws-sans); color: var(--ws-muted); }
 .apg-dlbl { font: 600 10px var(--ws-sans); letter-spacing: .05em; text-transform: uppercase; color: var(--ws-muted); }
 .apg-dflags { flex-basis: 100%; color: #F5C977; font-size: 11px; }
 .apg-fmin, .apg-label { width: 110px; }

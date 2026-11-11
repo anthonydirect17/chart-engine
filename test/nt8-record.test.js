@@ -189,6 +189,194 @@ test('0.6.15: the add-on files this release does not touch are the 0.6.14 files,
   for (const [f, h] of Object.entries(code)) assert.strictEqual(crypto.createHash('sha256').update(codeOnly(read(f))).digest('hex'), h, f + ': the 0.6.14 code (comments and the version only changed)');
 });
 
+test('0.6.16: prop accounts: every add-on file but ChartBridge.cs, ChartBridgeAccounts.cs and ChartBridgeAgents.cs is the 0.6.15 file, byte for byte, the order path among them; the order, group, copier, bot, strategy and merge harnesses too (while ChartBridge is 0.6.16)', () => {
+  if (!/public const string Version = "0\.6\.16";/.test(read('ChartBridge.cs'))) return;   // a later release may change them
+  // 0.6.16 (Anthony 2026-11-10 and 2026-11-11: agents trade the prop accounts) touches the config reader and the files helper
+  // (ChartBridge.cs), the reset's one exception and the accounts message (ChartBridgeAccounts.cs) and the agent's saved Auto
+  // (ChartBridgeAgents.cs). The order path (ChartBridgeOrders.cs), groups, the copier, the bot, strategies and Merge are the
+  // files compiled for 0.6.15 (hashes from main 70a95bb), so no manual order, hotkey, group entry, copied order or bot order
+  // can behave differently.
+  const want = {
+    'ChartBridgeBars.cs': '7a9de59769499d804767461f67f8442c7a44a04b8b8bfae8cf6f4879b5186664',
+    'ChartBridgeBot.cs': '33ca2af1f1867f14ab188f659ad63210933801b62c951234255972111fef84b1',
+    'ChartBridgeCopier.cs': 'bb90a637610b3b56236c6cfba014c1a1db40110f2b821bbeecf7778f2f4e6e49',
+    'ChartBridgeGroups.cs': '95baae61b5c8d135d0a1b84e5a0c7fd13e63ff936d22da76170259bc2e4610ff',
+    'ChartBridgeMerge.cs': '7aa31e37d38c1875eb236e1575d20f49ed31c1e2c08fc9d265d5aa7e0a32952c',
+    'ChartBridgeOrderRecord.cs': 'de33b77a1d774d2ce8d11a5f3a8e927f1ff085c7d8f47259ff6a542d18ccc1f1',
+    'ChartBridgeOrders.cs': 'e1baf6f7237c5b0ce32cc3abdd6a227b3f98344aa44f94e3f49bc72841b291ac',
+    'ChartBridgePin.cs': '8c6b28abf30cc716b7175fa3c1fd4e1cb9ca0c9407a19a03357830028481e3eb',
+    'ChartBridgeStops.cs': 'f2d74c58a904a5ba448ca5ebceb05f25b01d55642ddfdf1323b0c7dbf95f5d3c',
+    'ChartBridgeStrategies.cs': '968179e96aa887424b9df26148f8ae65bc3c60238f6f9de90f238e7781ab9193',
+    'ChartBridgeTape.cs': 'b5150cf7dbea2244da11d49511d163b4666a2403b9e21ebd10ea44a25da87fd1',
+    'ChartBridgeTicks.cs': 'def1e998f0e49dda1287d5422a6375ea8152646f62e86bc0c34d34b219cb7851',
+    'ChartBridgeV3.cs': '4ea9774ee3d30e619d1b849965b68565c24eed8f276194deaf93ee23242261dc',
+  };
+  const addons = JSON.parse(read('install-files.json')).addons.map(f => f.replace(/^nt8\//, ''));
+  assert.deepStrictEqual(addons.filter(f => !want[f]).sort(), ['ChartBridge.cs', 'ChartBridgeAccounts.cs', 'ChartBridgeAgents.cs'], 'every add-on file is checked or named as changed');
+  for (const [f, h] of Object.entries(want)) assert.strictEqual(crypto.createHash('sha256').update(read(f).replace(/\r/g, '')).digest('hex'), h, f + ' is the 0.6.15 file');
+  // the harnesses the plan names stay as they were: the existing order and group checks pass unchanged
+  const harness = {
+    'check/OrdersHarness.cs': '9467dda85c9cf43848d34ccc9c7d8482df41eaabe38b75e1e2511651c032c807',
+    'check/GroupsHarness.cs': 'c9b37698b0c2643a28545b0631d2f820558f06bd8994056d8a10cce08c97a27a',
+    'check/CopierHarness.cs': 'a14a4b5d06029af0932b53bc5e288c23d38ede2ba2e38577955b19435d1b74da',
+    'check/BotHarness.cs': '3c386b128226e817f8c88e17174c6ff64a8826e86878cb4b07908cf78872487d',
+    'check/StrategiesHarness.cs': '735be80f3fe11fba6ad72bab5efc115ef1b78bca13025374990c3c3f5fd428cf',
+    'check/MergeHarness.cs': '23af52cfc7de7310e70a521fedb190180a8ef28710ad97d66970d52053c3c3cf',
+    'check/IntegrationHarness.cs': '1bdca6796709285b9252d0929f66a5cd9216765c2aff6001dca61b68d7d38c96',
+    'check/Nt8Stubs.cs': 'e5aa806364ceb7470d845238e6ee3adc552525f4171784be5caeaa46569777c1',
+  };
+  for (const [f, h] of Object.entries(harness)) assert.strictEqual(crypto.createHash('sha256').update(read(f).replace(/\r/g, '')).digest('hex'), h, f + ' is the 0.6.15 file');
+});
+
+test('0.6.17: Kill all for the prop accounts: every add-on file but ChartBridge.cs (its version) and ChartBridgeAgents.cs is the 0.6.16 file, byte for byte, the order path among them; the order, group, copier, bot, strategy and merge harnesses too (while ChartBridge is 0.6.17)', () => {
+  if (!/public const string Version = "0\.6\.17";/.test(read('ChartBridge.cs'))) return;   // a later release may change them
+  // 0.6.17 adds one page message to the agent channel (ChartBridgeAgents.cs): its flatten is the agent's own, as the flat
+  // time's. The order path (ChartBridgeOrders.cs), the accounts and the reset (ChartBridgeAccounts.cs), groups, the copier, the
+  // bot, strategies and Merge are the files compiled for 0.6.16.
+  const want = {
+    'ChartBridgeAccounts.cs': 'a4a777575ab85bb10de21e9da32b7d785e6d5b17e1484ec280e41baab7d22da3',
+    'ChartBridgeBars.cs': '7a9de59769499d804767461f67f8442c7a44a04b8b8bfae8cf6f4879b5186664',
+    'ChartBridgeBot.cs': '33ca2af1f1867f14ab188f659ad63210933801b62c951234255972111fef84b1',
+    'ChartBridgeCopier.cs': 'bb90a637610b3b56236c6cfba014c1a1db40110f2b821bbeecf7778f2f4e6e49',
+    'ChartBridgeGroups.cs': '95baae61b5c8d135d0a1b84e5a0c7fd13e63ff936d22da76170259bc2e4610ff',
+    'ChartBridgeMerge.cs': '7aa31e37d38c1875eb236e1575d20f49ed31c1e2c08fc9d265d5aa7e0a32952c',
+    'ChartBridgeOrderRecord.cs': 'de33b77a1d774d2ce8d11a5f3a8e927f1ff085c7d8f47259ff6a542d18ccc1f1',
+    'ChartBridgeOrders.cs': 'e1baf6f7237c5b0ce32cc3abdd6a227b3f98344aa44f94e3f49bc72841b291ac',
+    'ChartBridgePin.cs': '8c6b28abf30cc716b7175fa3c1fd4e1cb9ca0c9407a19a03357830028481e3eb',
+    'ChartBridgeStops.cs': 'f2d74c58a904a5ba448ca5ebceb05f25b01d55642ddfdf1323b0c7dbf95f5d3c',
+    'ChartBridgeStrategies.cs': '968179e96aa887424b9df26148f8ae65bc3c60238f6f9de90f238e7781ab9193',
+    'ChartBridgeTape.cs': 'b5150cf7dbea2244da11d49511d163b4666a2403b9e21ebd10ea44a25da87fd1',
+    'ChartBridgeTicks.cs': 'def1e998f0e49dda1287d5422a6375ea8152646f62e86bc0c34d34b219cb7851',
+    'ChartBridgeV3.cs': '4ea9774ee3d30e619d1b849965b68565c24eed8f276194deaf93ee23242261dc',
+  };
+  const addons = JSON.parse(read('install-files.json')).addons.map(f => f.replace(/^nt8\//, ''));
+  assert.deepStrictEqual(addons.filter(f => !want[f]).sort(), ['ChartBridge.cs', 'ChartBridgeAgents.cs'], 'every add-on file is checked or named as changed');
+  for (const [f, h] of Object.entries(want)) assert.strictEqual(crypto.createHash('sha256').update(read(f).replace(/\r/g, '')).digest('hex'), h, f + ' is the 0.6.16 file');
+  const codeOnly = src => src.replace(/\r/g, '').split('\n').map(l => l.replace(/^\s*\/\/.*$/, '').replace(/([;{})])\s*\/\/.*$/, '$1').replace(/\s+$/, '')).filter(l => l.length > 0).join('\n')
+    .replace(/public const string Version = "[0-9.]+";/, 'public const string Version = "";');
+  assert.strictEqual(crypto.createHash('sha256').update(codeOnly(read('ChartBridge.cs'))).digest('hex'), '23d9603f53f0e3dd79af59b20560b2a361230ee2c3f147528a762413481311ba', 'ChartBridge.cs: the 0.6.16 code (the version and its comment only changed)');
+  const harness = {
+    'check/OrdersHarness.cs': '9467dda85c9cf43848d34ccc9c7d8482df41eaabe38b75e1e2511651c032c807',
+    'check/GroupsHarness.cs': 'c9b37698b0c2643a28545b0631d2f820558f06bd8994056d8a10cce08c97a27a',
+    'check/CopierHarness.cs': 'a14a4b5d06029af0932b53bc5e288c23d38ede2ba2e38577955b19435d1b74da',
+    'check/BotHarness.cs': '3c386b128226e817f8c88e17174c6ff64a8826e86878cb4b07908cf78872487d',
+    'check/StrategiesHarness.cs': '735be80f3fe11fba6ad72bab5efc115ef1b78bca13025374990c3c3f5fd428cf',
+    'check/MergeHarness.cs': '23af52cfc7de7310e70a521fedb190180a8ef28710ad97d66970d52053c3c3cf',
+    'check/IntegrationHarness.cs': '1bdca6796709285b9252d0929f66a5cd9216765c2aff6001dca61b68d7d38c96',
+    'check/Nt8Stubs.cs': 'e5aa806364ceb7470d845238e6ee3adc552525f4171784be5caeaa46569777c1',
+  };
+  for (const [f, h] of Object.entries(harness)) assert.strictEqual(crypto.createHash('sha256').update(read(f).replace(/\r/g, '')).digest('hex'), h, f + ' is the 0.6.16 file');
+});
+
+test('0.6.18: entry rules per trader: ChartBridgeOrders.cs differs from 0.6.17 in exactly two lines, the two that ask the agent\'s rules; every other add-on file but ChartBridge.cs (its version) and ChartBridgeAgents.cs is the 0.6.17 file byte for byte (while ChartBridge is 0.6.18)', () => {
+  if (!/public const string Version = "0\.6\.18";/.test(read('ChartBridge.cs'))) return;   // a later release may change them
+  const sha = t => crypto.createHash('sha256').update(t).digest('hex');
+  const want = {
+    'ChartBridgeAccounts.cs': 'a4a777575ab85bb10de21e9da32b7d785e6d5b17e1484ec280e41baab7d22da3',
+    'ChartBridgeBars.cs': '7a9de59769499d804767461f67f8442c7a44a04b8b8bfae8cf6f4879b5186664',
+    'ChartBridgeBot.cs': '33ca2af1f1867f14ab188f659ad63210933801b62c951234255972111fef84b1',
+    'ChartBridgeCopier.cs': 'bb90a637610b3b56236c6cfba014c1a1db40110f2b821bbeecf7778f2f4e6e49',
+    'ChartBridgeGroups.cs': '95baae61b5c8d135d0a1b84e5a0c7fd13e63ff936d22da76170259bc2e4610ff',
+    'ChartBridgeMerge.cs': '7aa31e37d38c1875eb236e1575d20f49ed31c1e2c08fc9d265d5aa7e0a32952c',
+    'ChartBridgeOrderRecord.cs': 'de33b77a1d774d2ce8d11a5f3a8e927f1ff085c7d8f47259ff6a542d18ccc1f1',
+    'ChartBridgePin.cs': '8c6b28abf30cc716b7175fa3c1fd4e1cb9ca0c9407a19a03357830028481e3eb',
+    'ChartBridgeStops.cs': 'f2d74c58a904a5ba448ca5ebceb05f25b01d55642ddfdf1323b0c7dbf95f5d3c',
+    'ChartBridgeStrategies.cs': '968179e96aa887424b9df26148f8ae65bc3c60238f6f9de90f238e7781ab9193',
+    'ChartBridgeTape.cs': 'b5150cf7dbea2244da11d49511d163b4666a2403b9e21ebd10ea44a25da87fd1',
+    'ChartBridgeTicks.cs': 'def1e998f0e49dda1287d5422a6375ea8152646f62e86bc0c34d34b219cb7851',
+    'ChartBridgeV3.cs': '4ea9774ee3d30e619d1b849965b68565c24eed8f276194deaf93ee23242261dc',
+  };
+  const addons = JSON.parse(read('install-files.json')).addons.map(f => f.replace(/^nt8\//, ''));
+  assert.deepStrictEqual(addons.filter(f => !want[f]).sort(), ['ChartBridge.cs', 'ChartBridgeAgents.cs', 'ChartBridgeOrders.cs'], 'every add-on file is checked or named as changed');
+  for (const [f, h] of Object.entries(want)) assert.strictEqual(sha(read(f).replace(/\r/g, '')), h, f + ' is the 0.6.17 file');
+  const codeOnly = src => src.replace(/\r/g, '').split('\n').map(l => l.replace(/^\s*\/\/.*$/, '').replace(/([;{})])\s*\/\/.*$/, '$1').replace(/\s+$/, '')).filter(l => l.length > 0).join('\n')
+    .replace(/public const string Version = "[0-9.]+";/, 'public const string Version = "";');
+  assert.strictEqual(sha(codeOnly(read('ChartBridge.cs'))), '23d9603f53f0e3dd79af59b20560b2a361230ee2c3f147528a762413481311ba', 'ChartBridge.cs: the 0.6.17 code (the version and its comment only changed)');
+  // the order path: the two lines that refused every agent market entry and every agent entry with no target now ask the agent's
+  // rules (ChartBridgeAgents.MayMarket, MayNoTarget); with those two lines left out the file is the 0.6.17 file
+  const lines = read('ChartBridgeOrders.cs').replace(/\r/g, '').split('\n');
+  const asks = lines.map((l, i) => (/ChartBridgeAgents\.May(Market|NoTarget)\(agent\)/.test(l) ? i : -1)).filter(i => i >= 0);
+  assert.strictEqual(asks.length, 2, 'two lines ask the rules');
+  assert.match(lines[asks[0]], /^\s*if \(agent != null && \(\(kind != "limit" && kind != "stopLimit" && !\(kind == "market" && ChartBridgeAgents\.MayMarket\(agent\)\)\) \|\| strategyBody != null \|\| bracketBody == null\)\) return "an agent's entry is a limit or a stop-limit with a stop and a target";/);
+  assert.match(lines[asks[1]], /^\s*if \(agent != null && \(stopTicks < 1 \|\| \(targetTicks < 1 && !ChartBridgeAgents\.MayNoTarget\(agent\)\)\)\) return "every agent entry needs a stop and a target";/, 'a stop always');
+  assert.strictEqual(sha(lines.filter((l, i) => !asks.includes(i)).join('\n')), 'fb1cfabc8a3e26c89f39a95514e3e642b5ae76eba585213b01fa11c944e9342a', 'ChartBridgeOrders.cs: every other line is the 0.6.17 line');
+  const harness = {
+    'check/OrdersHarness.cs': '9467dda85c9cf43848d34ccc9c7d8482df41eaabe38b75e1e2511651c032c807',
+    'check/GroupsHarness.cs': 'c9b37698b0c2643a28545b0631d2f820558f06bd8994056d8a10cce08c97a27a',
+    'check/CopierHarness.cs': 'a14a4b5d06029af0932b53bc5e288c23d38ede2ba2e38577955b19435d1b74da',
+    'check/BotHarness.cs': '3c386b128226e817f8c88e17174c6ff64a8826e86878cb4b07908cf78872487d',
+    'check/StrategiesHarness.cs': '735be80f3fe11fba6ad72bab5efc115ef1b78bca13025374990c3c3f5fd428cf',
+    'check/MergeHarness.cs': '23af52cfc7de7310e70a521fedb190180a8ef28710ad97d66970d52053c3c3cf',
+    'check/IntegrationHarness.cs': '1bdca6796709285b9252d0929f66a5cd9216765c2aff6001dca61b68d7d38c96',
+    'check/Nt8Stubs.cs': 'e5aa806364ceb7470d845238e6ee3adc552525f4171784be5caeaa46569777c1',
+  };
+  for (const [f, h] of Object.entries(harness)) assert.strictEqual(sha(read(f).replace(/\r/g, '')), h, f + ' is the 0.6.17 file');
+});
+
+test('0.6.19: the day\'s profit stop: only ChartBridgeAgents.cs changed; every other add-on file but ChartBridge.cs (its version) is the 0.6.18 file byte for byte, the groups and the order path included', () => {
+  if (!/public const string Version = "0\.6\.19";/.test(read('ChartBridge.cs'))) return;   // a later release may change them
+  const sha = t => crypto.createHash('sha256').update(t).digest('hex');
+  const want = {
+    'ChartBridgeAccounts.cs': 'a4a777575ab85bb10de21e9da32b7d785e6d5b17e1484ec280e41baab7d22da3',
+    'ChartBridgeBars.cs': '7a9de59769499d804767461f67f8442c7a44a04b8b8bfae8cf6f4879b5186664',
+    'ChartBridgeBot.cs': '33ca2af1f1867f14ab188f659ad63210933801b62c951234255972111fef84b1',
+    'ChartBridgeCopier.cs': 'bb90a637610b3b56236c6cfba014c1a1db40110f2b821bbeecf7778f2f4e6e49',
+    'ChartBridgeMerge.cs': '7aa31e37d38c1875eb236e1575d20f49ed31c1e2c08fc9d265d5aa7e0a32952c',
+    'ChartBridgeOrderRecord.cs': 'de33b77a1d774d2ce8d11a5f3a8e927f1ff085c7d8f47259ff6a542d18ccc1f1',
+    'ChartBridgeOrders.cs': '8e15e56a06b1f2597b5ff1ecebccba724b27a019819fa691b9f0a30c16bfaffd',
+    'ChartBridgePin.cs': '8c6b28abf30cc716b7175fa3c1fd4e1cb9ca0c9407a19a03357830028481e3eb',
+    'ChartBridgeStops.cs': 'f2d74c58a904a5ba448ca5ebceb05f25b01d55642ddfdf1323b0c7dbf95f5d3c',
+    'ChartBridgeStrategies.cs': '968179e96aa887424b9df26148f8ae65bc3c60238f6f9de90f238e7781ab9193',
+    'ChartBridgeTape.cs': 'b5150cf7dbea2244da11d49511d163b4666a2403b9e21ebd10ea44a25da87fd1',
+    'ChartBridgeTicks.cs': 'def1e998f0e49dda1287d5422a6375ea8152646f62e86bc0c34d34b219cb7851',
+    'ChartBridgeV3.cs': '4ea9774ee3d30e619d1b849965b68565c24eed8f276194deaf93ee23242261dc',
+  };
+  const addons = JSON.parse(read('install-files.json')).addons.map(f => f.replace(/^nt8\//, ''));
+  assert.deepStrictEqual(addons.filter(f => !want[f]).sort(), ['ChartBridge.cs', 'ChartBridgeAgents.cs', 'ChartBridgeGroups.cs'], 'every add-on file is checked or named as changed');
+  for (const [f, h] of Object.entries(want)) assert.strictEqual(sha(read(f).replace(/\r/g, '')), h, f + ' is the 0.6.18 file');
+  // The review of 88 and its second look (F6, D2; B4: pinned by the exact diff, never by stripping lines): ChartBridgeGroups.cs
+  // gains only the profit side of the day's number. Every added line and every changed line is listed here word for word;
+  // undone, the file is the 0.6.18 file byte for byte, so the loss side (Realized and every room) cannot change unseen.
+  const undo = (text, added, changed) => {
+    let lines = text.replace(/\r/g, '').split('\n');
+    for (const [now, was] of changed) {
+      assert.strictEqual(lines.filter(l => l === now).length, 1, 'a changed line is there once: ' + now.trim().slice(0, 80));
+      lines = lines.map(l => (l === now ? was : l));
+    }
+    for (const a of added) {
+      const at = lines.indexOf(a);
+      assert.ok(at >= 0, 'an added line is there: ' + a.trim().slice(0, 80));
+      lines.splice(at, 1);
+    }
+    return lines.join('\n');
+  };
+  const groupsAdded = ["            // 0.6.19 (the review of 88, F6): the day's number for a PROFIT stop (realized plus open). After a late start (ChartBridge", "            // started after 18:02 ET) the realized part is the LARGER of ChartBridge's own figure and NinjaTrader's (Realized keeps the", "            // smaller, right for a loss limit); null, with ProfitWhy, when it is not known. Read by the agents' day stop only.", "            public double? ProfitPnl;", "            public string ProfitWhy;", "            // D2: in the first second after 18:00 ET, before the groups' tick rolls the day start, NinjaTrader's realized may", "            // still be yesterday's: while a day start of another session is held, the profit side is not known (never latched)", "            public const string RollPendingWhy = \"the new session's day start is not read yet (18:00 ET)\";", "            double? profitReal = null;   // F6", "            string profitWhy = null;     // the review of 88's second look (D2)", "            n.ProfitPnl = profitReal.HasValue && n.Unrealized.HasValue ? profitReal.Value + n.Unrealized.Value : (double?)null;", "            n.ProfitWhy = n.ProfitPnl.HasValue ? null : profitWhy ?? (profitReal.HasValue ? \"NinjaTrader gives no open P&L for this account\" : realWhy);"];
+  const groupsChanged = [["                if (!late) { n.Realized = comp; realSrc = \"computed\"; profitReal = comp; }", "                if (!late) { n.Realized = comp; realSrc = \"computed\"; }"], ["                else if (ntReal.HasValue) { n.Realized = Math.Min(comp, ntReal.Value); realSrc = ntReal.Value < comp ? \"ninjatrader\" : \"computed\"; profitReal = Math.Max(comp, ntReal.Value); }", "                else if (ntReal.HasValue) { n.Realized = Math.Min(comp, ntReal.Value); realSrc = ntReal.Value < comp ? \"ninjatrader\" : \"computed\"; }"], ["            else if (ntReal.HasValue) { n.Realized = ntReal; realSrc = \"ninjatrader\"; realWhy = null; if (mark == null || mark.Session == n.Session) profitReal = ntReal; else profitWhy = Numbers.RollPendingWhy; }", "            else if (ntReal.HasValue) { n.Realized = ntReal; realSrc = \"ninjatrader\"; realWhy = null; }"]];
+  assert.strictEqual(sha(undo(read('ChartBridgeGroups.cs'), groupsAdded, groupsChanged)), '95baae61b5c8d135d0a1b84e5a0c7fd13e63ff936d22da76170259bc2e4610ff', 'ChartBridgeGroups.cs: the 0.6.18 file but for the listed profit-side lines');
+  for (const [now, was] of groupsChanged) assert.strictEqual(now.replace(/ profitReal = [^;]+; \}$/, ' }').replace(/ if \(mark == null \|\| mark\.Session == n\.Session\) profitReal = ntReal; else profitWhy = Numbers\.RollPendingWhy; \}$/, ' }'), was, 'a changed line only adds the profit side: ' + was.trim());
+  const codeOnly = src => src.replace(/\r/g, '').split('\n').map(l => l.replace(/^\s*\/\/.*$/, '').replace(/([;{})])\s*\/\/.*$/, '$1').replace(/\s+$/, '')).filter(l => l.length > 0).join('\n')
+    .replace(/public const string Version = "[0-9.]+";/, 'public const string Version = "";');
+  // the review of 90 (N6): the saved Auto file's second header line now says Auto ends at 17:00 ET (words only)
+  const headerNow = '"# while this file names the agent\'s account and its trading day, Auto comes back once after a restart when flat; Auto ends at 17:00 ET and this file goes with it"';
+  const header18 = '"# while this file names the agent\'s account, Auto is kept through the 17:00 ET reset and comes back once after a restart when flat"';
+  assert.ok(read('ChartBridge.cs').includes(headerNow));
+  assert.strictEqual(sha(codeOnly(read('ChartBridge.cs').replace(headerNow, header18))), '23d9603f53f0e3dd79af59b20560b2a361230ee2c3f147528a762413481311ba', 'ChartBridge.cs: the 0.6.17 code still (the version and its comment only changed)');
+  // the flatten is the trader's own (ChartBridgeAgents.cs): the groups file has no word of the day stop
+  assert.ok(!/dayStop|DayStop|daystop/.test(read('ChartBridgeGroups.cs')) && !/dayStop|DayStop|daystop/.test(read('ChartBridgeOrders.cs')), 'nothing of the day stop in the groups or the order path');
+  const harness = {
+    'check/OrdersHarness.cs': '9467dda85c9cf43848d34ccc9c7d8482df41eaabe38b75e1e2511651c032c807',
+    'check/CopierHarness.cs': 'a14a4b5d06029af0932b53bc5e288c23d38ede2ba2e38577955b19435d1b74da',
+    'check/BotHarness.cs': '3c386b128226e817f8c88e17174c6ff64a8826e86878cb4b07908cf78872487d',
+    'check/StrategiesHarness.cs': '735be80f3fe11fba6ad72bab5efc115ef1b78bca13025374990c3c3f5fd428cf',
+    'check/MergeHarness.cs': '23af52cfc7de7310e70a521fedb190180a8ef28710ad97d66970d52053c3c3cf',
+    'check/IntegrationHarness.cs': '1bdca6796709285b9252d0929f66a5cd9216765c2aff6001dca61b68d7d38c96',
+    'check/Nt8Stubs.cs': 'e5aa806364ceb7470d845238e6ee3adc552525f4171784be5caeaa46569777c1',
+  };
+  for (const [f, h] of Object.entries(harness)) assert.strictEqual(sha(read(f).replace(/\r/g, '')), h, f + ' is the 0.6.18 file');
+  // GroupsHarness.cs gains only the checks of the profit side (F6, D2), listed word for word
+  assert.strictEqual(sha(undo(read('check/GroupsHarness.cs'), ["        ChartBridgeGroups.Numbers pn = ChartBridgeGroups.Read(\"SIM-B\", simB, false);", "        Check(pn.Realized == -400 && pn.ProfitPnl == -150 && pn.ProfitWhy == null,", "              \"0.6.19 (the review of 88, F6): for a PROFIT stop the larger of the two (-100), plus open (-50): \" + pn.ProfitPnl + \"; the loss side keeps the smaller: \" + pn.Realized);", "        pn = ChartBridgeGroups.Read(\"SIM-B\", simB, false);", "        Check(!pn.ProfitPnl.HasValue && (pn.ProfitWhy ?? \"\").Contains(\"started mid-session\"), \"F6: no NinjaTrader realized after a late start: the profit side is not known, with why: \" + pn.ProfitWhy);", "        // D2 (the review of 88's second look): 18:00:00, before the tick rolls the day start: NinjaTrader's realized may still be", "        // yesterday's, so the profit side is not known (and never latched); the loss side reads as before", "        simB.Items[AccountItem.RealizedProfitLoss] = 700;", "        ClockEt(2026, 10, 16, 18, 0);", "        pn = ChartBridgeGroups.Read(\"SIM-B\", simB, false);", "        Check(!pn.ProfitPnl.HasValue && pn.ProfitWhy == ChartBridgeGroups.Numbers.RollPendingWhy && pn.Realized == 700,", "              \"D2: in the second after 18:00 before the day start rolls: no profit figure (\" + pn.ProfitWhy + \"); the loss side as before: \" + pn.Realized);", "        simB.Items[AccountItem.RealizedProfitLoss] = 0;"], [])), 'c9b37698b0c2643a28545b0631d2f820558f06bd8994056d8a10cce08c97a27a', 'check/GroupsHarness.cs: the 0.6.18 file but for the listed checks');
+});
+
 test('0.6.9: the decision id: the group entry\'s PlaceOrder call unchanged, set and cleared around it, noted before Submit', () => {
   const g = read('ChartBridgeGroups.cs');
   const loop = body(g, 'private static string GroupPlaceLocked(');

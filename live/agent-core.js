@@ -145,6 +145,8 @@ function parseRules(r) {
   return {
     roots, maxQty, entryFrom: str(r.entryFrom), entryUntil: str(r.entryUntil), flatAt: str(r.flatAt),
     maxExpireSec: isInt(r.maxExpireSec) ? r.maxExpireSec : null, maxTrades: noneOrInt(r.maxTrades), maxLosses: noneOrInt(r.maxLosses),
+    /* ChartBridge 0.6.18: what this trader's entries may be (each key is sent only when on) */
+    marketEntry: r.marketEntry === true, noTarget: r.noTarget === true,
   };
 }
 /** The rules in a few lines for the panel: [[label, value]]. */
@@ -159,7 +161,7 @@ function rulesLines(rules) {
     ['Entry lives', isInt(r.maxExpireSec) ? 'at most ' + durationText(r.maxExpireSec) : '-'],
     ['Trades a day', r.maxTrades === null ? 'no limit' : 'at most ' + r.maxTrades],
     ['Losing trades', r.maxLosses === null ? 'no limit' : 'stand down at ' + r.maxLosses],
-  ];
+  ].concat(r.marketEntry ? [['Market entry', 'allowed']] : [], r.noTarget ? [['No target', 'allowed (a stop always)']] : []);
 }
 /** 1800 s is "30 min", 90 s "1 min 30 s". */
 function durationText(s) {
@@ -171,7 +173,7 @@ function durationText(s) {
 function rulesForm(rules) {
   const r = parseRules(rules) || parseRules(DEFAULT_RULES);
   const f = { roots: r.roots.slice(), entryFrom: r.entryFrom, entryUntil: r.entryUntil, flatAt: r.flatAt,
-    maxExpireSec: isInt(r.maxExpireSec) ? String(r.maxExpireSec) : '', maxTrades: r.maxTrades === null ? '0' : String(r.maxTrades), maxLosses: r.maxLosses === null ? '0' : String(r.maxLosses), maxQty: {} };
+    maxExpireSec: isInt(r.maxExpireSec) ? String(r.maxExpireSec) : '', maxTrades: r.maxTrades === null ? '0' : String(r.maxTrades), maxLosses: r.maxLosses === null ? '0' : String(r.maxLosses), maxQty: {}, marketEntry: r.marketEntry, noTarget: r.noTarget };
   for (const x of RULE_ROOTS) f.maxQty[x] = isInt(r.maxQty[x]) ? String(r.maxQty[x]) : String(CEILING[x]);
   return f;
 }
@@ -248,7 +250,10 @@ function rulesChange(agent, form, ctx, cid) {
   if (!isInt(tr) || tr < 0 || tr > LIMITS.tradesMax) return { error: 'Trades a day must be 0 (no limit) or a whole number from 1 to ' + LIMITS.tradesMax + ': nothing was sent.' };
   if (!isInt(lo) || lo < 0 || lo > LIMITS.lossesMax) return { error: 'Losing trades must be 0 (no limit) or a whole number from 1 to ' + LIMITS.lossesMax + ': nothing was sent.' };
   const cur = parseRules(a.rules);
-  const sameRest = !!cur && cur.roots.join(',') === roots.join(',') && roots.every(x => cur.maxQty[x] === qty[x]) && cur.maxExpireSec === exp && (cur.maxTrades || 0) === tr && (cur.maxLosses || 0) === lo;
+  /* ChartBridge 0.6.18: Market entry and No target (an older ChartBridge refuses the keys, so they are sent only to one that knows them) */
+  const me = f.marketEntry === true, nt = f.noTarget === true, knows = atLeast(c.version, '0.6.18');
+  if ((me || nt) && !knows) return { error: 'Market entry and No target need ChartBridge 0.6.18 or later: nothing was sent.' };
+  const sameRest = !!cur && cur.roots.join(',') === roots.join(',') && roots.every(x => cur.maxQty[x] === qty[x]) && cur.maxExpireSec === exp && (cur.maxTrades || 0) === tr && (cur.maxLosses || 0) === lo && cur.marketEntry === me && cur.noTarget === nt;
   if (sameRest && cur.entryFrom === from && cur.entryUntil === until && cur.flatAt === flat) return { error: 'Nothing to change.' };
   if (can.windowOnly && !sameRest) return { error: can.why.replace(/\.$/, '') + ': the other rules wait until it is flat. Nothing was sent.' };
   const msg = { type: 'agentRules' };
@@ -257,6 +262,7 @@ function rulesChange(agent, form, ctx, cid) {
   msg.roots = roots.join(',');
   for (const x of roots) msg['maxQty' + x] = qty[x];
   Object.assign(msg, { entryFrom: from, entryUntil: until, flatAt: flat, maxExpireSec: exp, maxTrades: tr, maxLosses: lo });
+  if (knows) Object.assign(msg, { marketEntry: me, noTarget: nt });
   const flattens = windowFlattensNow(a, from, flat, isNum(c.now) ? c.now : Date.now());
   return flattens ? { msg, ask: 'This window puts ' + agentName(a) + ' in his flat hours now (flat at ' + flat + ', new entries from ' + from + '): ChartBridge flattens his position at once, by his rules. Set it?' } : { msg };
 }
