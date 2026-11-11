@@ -3696,8 +3696,19 @@ go over that") and 2026-11-11 (the runner sends the playbook's value with each p
   down for the session: `agentState.standDown` reads "the day's profit stop is reached on <account> ($<mark>, <where the mark
   came from>; the day is at $<pnl>, realized plus open): flat, and no new entries for agent <id> until 18:00 ET". The 18:00
   roll clears it, as it clears a `maxLosses` stand-down; a rules change does not.
-- **Not checked** while the trader holds nothing on the account, or while `pnlToday` is not known (the stop and the flat
-  time still hold). Nothing of another trader's, the page's, the copier's or the bot's is cancelled or closed.
+- **Only its own orders.** The flatten is "own orders only", as Kill all's (the review's F2): an order placed by hand, by
+  the bot or by the copier on the same account and contract is not cancelled and can still fill. Nothing of another
+  trader's is cancelled or closed.
+- **No new entry on an account already at its mark** (plan check 9b). A plan is refused while an account it would go to is
+  at or over its mark: "the day's profit stop is reached on <account> ($<mark>, <from>; the day is at $<pnl>, realized plus
+  open): no new entry there until 18:00 ET". The mark counts the plan's own `dayStopDollars` when it names one, else the
+  session's. A refusal is not a stand-down.
+- **Several traders on one account's day.** The mark belongs to the account and counts everything on it: every trader's
+  trades and trades placed by hand. Today one account belongs to one trader (an agent never shares an account), so this
+  matters when traders take turns on an account, and it is ready for a lineup: the trader holding a trade there when the
+  mark is reached is flattened and stands down; any other trader's later plan for that account is refused by check 9b; a
+  trader holding nothing is not stood down and may trade another account. The session's plan value is kept per trader.
+- **Not checked** while `pnlToday` is not known (the stop and the flat time still hold).
 - **Saved**: `agent-<id>-day.txt` gains one line, `#daystop<TAB><dollars>`, only while a value is set (a comment to a
   ChartBridge before 0.6.19; a malformed one is read as a comment). Kept through a restart, cleared at the roll. The
   stand-down is the day file's `standDown` line, as for `maxLosses`.

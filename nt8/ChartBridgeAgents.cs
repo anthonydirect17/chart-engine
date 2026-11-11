@@ -3729,6 +3729,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (Sync) { trades = TradesLocked(); StandDownLocked(); lossWhy = lossStandDown; }
             if (r.MaxTrades > 0 && trades >= r.MaxTrades) return "agent " + Id + " has made " + trades + " trades today (maxTrades " + r.MaxTrades + ")";
             if (lossWhy != null) return lossWhy;
+            // 9b. 0.6.19: an account this plan would go to is already at or over its day's profit stop (the account's day counts
+            // every trader on it, so one that was flat when the mark was reached opens nothing after it)
+            string dayWhy = DayStopRefusal(p, grp ? (IEnumerable<string>)seats : new[] { acct });
+            if (dayWhy != null) return dayWhy;
             if (!grp)
             {
                 // 10. the owner lock
@@ -4409,11 +4413,12 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         // The mark for one account now (0: none) and what set it. n: the account's numbers (its rules and its group with them).
-        private double DayMark(ChartBridgeGroups.Numbers n, out string from)
+        private double DayMark(ChartBridgeGroups.Numbers n, out string from) { double plan; lock (Sync) plan = dayStop; return DayMark(n, plan, out from); }
+        // plan: the day stop to count as the plan's (the session's, or the one a plan now being checked names)
+        private double DayMark(ChartBridgeGroups.Numbers n, double plan, out string from)
         {
             from = null;
-            double plan, m = 0;
-            lock (Sync) plan = dayStop;
+            double m = 0;
             if (plan > 0) { m = plan; from = "the plan's day stop"; }
             string stage = n != null && n.G != null ? n.G.AccountType : null;
             if (stage != "funded" && n != null && n.R != null && n.R.Consistency > 0 && n.R.Target > 0)
@@ -4422,6 +4427,28 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (c > 0 && (m == 0 || c < m)) { m = c; from = n.R.Consistency.ToString("0.##", CultureInfo.InvariantCulture) + "% of the profit target (the consistency rule)"; }
             }
             return m;
+        }
+
+        // A new entry is refused while an account it would go to is already at or over its mark (the account's day counts every
+        // trader on it, and hand trades): several traders share one account's day, so one that was flat when the mark was reached
+        // must not open a trade afterwards. p: the plan being checked (its own dayStopDollars counts for it, else the session's).
+        // Null when it may go on. A number that is not known: no refusal here (the size and the firm's limits still apply).
+        private string DayStopRefusal(Plan p, IEnumerable<string> seatNames)
+        {
+            double plan;
+            lock (Sync) plan = dayStop;
+            if (p != null && p.DayStopText != null) plan = p.DayStop;
+            foreach (string name in seatNames)
+            {
+                ChartBridgeGroups.Numbers n;
+                try { n = ChartBridgeGroups.Read(name, FindAccount(name), false); }
+                catch (Exception) { continue; }
+                string from;
+                double mark = DayMark(n, plan, out from);
+                if (mark > 0 && n != null && n.Pnl.HasValue && n.Pnl.Value >= mark - 1e-9)
+                    return DayStopWords + " is reached on " + name + " (" + DayDollars(mark) + ", " + from + "; the day is at " + DayDollars(n.Pnl.Value) + ", realized plus open): no new entry there until 18:00 ET";
+            }
+            return null;
         }
 
         // Every pass, for each account it holds something on. Returns how many accounts reached their mark this pass.
@@ -4443,7 +4470,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                              ", realized plus open): flat, and no new entries for agent " + Id + " until 18:00 ET";
                 bool fresh;
                 lock (Sync) { fresh = lossStandDown == null; if (fresh) lossStandDown = say; }
-                StartFlatten("Agent " + Id + ": " + DayStopWords + " (" + money + ") is reached on " + x.Name + ": flattened by its rules", true, x.Name);
+                StartFlatten("Agent " + Id + ": " + DayStopWords + " (" + money + ") is reached on " + x.Name + ": flattened by its rules", true, x.Name, false, true);   // its own orders only (the review's F2)
                 if (fresh) { SaveDay(); Log("agent " + Id + ": " + say); AgentLog(say); Notify(); }
             }
             return hit;

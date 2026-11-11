@@ -79,9 +79,12 @@ target stop at the consistency rule... we would never really want to go over tha
 - **When it is reached** while the trader holds a position or a working entry on that account: the trader's own flatten
   starts (as at its flat time: it cancels the trader's orders and closes only what the trader owns), and the trader takes
   no new entry until 18:00. The reason is on the Agent tab and in its log, with the mark and where it came from.
-- **What it never does.** It never touches your own orders, another trader's, the copier's or the bot's. It does nothing
-  while the trader holds nothing. When the account's number is not known it does nothing, and the stop and the flat time
-  still hold.
+- **No new trade on an account that is already there.** A plan for an account whose day is at or over the mark is
+  refused, with the reason. So when several bots share an account's day, one that was flat when the mark was reached
+  opens nothing on it afterwards.
+- **What it never does.** It never cancels your own orders, another trader's, the copier's or the bot's: an order you
+  placed by hand on the same contract stays and can still fill. When the account's number is not known it does nothing,
+  and the stop and the flat time still hold.
 - **A trader that sends no day stop, on an account with no consistency rule,** is exactly as in 0.6.18.
 
 Only `ChartBridgeAgents.cs` changed (and `ChartBridge.cs`, its version): every other add-on file is the 0.6.18 file byte

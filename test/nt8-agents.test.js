@@ -291,7 +291,7 @@ test('0.6.17 Kill all for the prop accounts: only agents whose every account is 
   assert.match(scope, /if \(ChartBridgeOrders\.IsNeverTradable\(name\)\) return false;/);
   assert.match(scope, /Account listed = FindAccount\(name\);\s*return listed == null \|\| !\(ChartBridgeBot\.IsSim\(listed\) \|\| ChartBridgeAccounts\.IsSim\(listed\)\);/, 'not listed: in scope');
   assert.match(acode, /List<Order> others = may\.Where\(o => o != j\.Close && \(j\.Owned \? \(!j\.OwnOnly \|\| IsMine\(o\)\) : \(IsMine\(o\) && !\(IsReStop\(o\) && \(p1 != 0 \|\| p2 != 0\)\)\)\)\)\.ToList\(\);/, 'own orders only when the job says so; every other flatten as before');
-  assert.strictEqual((acode.match(/, false, true\);/g) || []).length, 1, 'only Kill all asks for own orders only here');
+  assert.strictEqual((acode.match(/, false, true\);/g) || []).length, 2, 'only Kill all and the day\'s profit stop (0.6.19) ask for own orders only');
   assert.match(acode, /if \(type == "agentKillAllProp"\) \{ why = PageKillAllProp\(\);[^\n]*\n\s*if \(!RateOk\(client\.Actions\)\)/, 'Kill all is handled before the action rate gate');
   for (const s of ['kill all F2: the hand order is not cancelled and still works', 'kill all F1 A: the account is not listed', 'kill all F1 B: and a plan is refused, nothing placed', 'kill all F1 C: a group with a member NinjaTrader no longer lists', 'kill all N1:', 'kill all N2: sent right after, it is carried out'])
     assert.ok(read(path.join('check', 'AgentHarness.cs')).includes(s), s);
@@ -321,9 +321,14 @@ test('0.6.19 the day\'s profit stop: the plan\'s dayStopDollars, the smaller of 
   const check = bodies(acode, 'CheckDayStop');
   assert.match(check, /if \(!roots\.Any\(y => x\.Owns\(y\)\)\) continue;/, 'only an account it holds something on');
   assert.match(check, /if \(!\(mark > 0\) \|\| n == null \|\| !n\.Pnl\.HasValue \|\| n\.Pnl\.Value < mark - 1e-9\) continue;/, 'no mark, or a number not known: no check');
-  assert.match(check, /StartFlatten\("Agent " \+ Id \+ ": " \+ DayStopWords \+ [^\n]*, true, x\.Name\);/, 'its own flatten, on that account only');
+  assert.match(check, /StartFlatten\("Agent " \+ Id \+ ": " \+ DayStopWords \+ [^\n]*, true, x\.Name, false, true\);/, 'its own flatten, on that account only, its own orders only');
   assert.ok(!/PlaceOrder|Submit\(|\.Cancel\(|Flatten\(new|GroupCancel/.test(check.replace(/StartFlatten\(/g, '')), 'the check itself places and cancels nothing: the flatten job does, as at the flat time');
   assert.match(acode, /CheckDayStop\(seats, roots\);[^\n]*\n\s*if \(flatHours\) StartFlatten\(/, 'checked every pass, before the flat time\'s own flatten');
+  assert.match(acode, /if \(lossWhy != null\) return lossWhy;[\s\S]{0,400}string dayWhy = DayStopRefusal\(p, grp \? \(IEnumerable<string>\)seats : new\[\] \{ acct \}\);\s*if \(dayWhy != null\) return dayWhy;/, 'plan check 9b: no new entry on an account already at its mark');
+  const refusal = bodies(acode, 'DayStopRefusal');
+  assert.match(refusal, /if \(p != null && p\.DayStopText != null\) plan = p\.DayStop;/, 'the plan\'s own value counts for it');
+  assert.match(refusal, /if \(mark > 0 && n != null && n\.Pnl\.HasValue && n\.Pnl\.Value >= mark - 1e-9\)/);
+  assert.ok(!/lossStandDown|StartFlatten|mode =/.test(refusal), 'a refusal only: no stand-down, no flatten, no mode change');
   assert.match(bodies(acode, 'RollDay'), /lossStandDown = null;\s*dayStop = 0;/, 'the 18:00 roll clears both');
   assert.match(acode, /if \(dayStop > 0\) lines\.Add\(DayStopPrefix \+ dayStop\.ToString\("0\.##", CultureInfo\.InvariantCulture\)\);/, 'saved only while set');
   assert.match(acode, /internal const string DayStopPrefix = "#daystop\\t";/, 'a comment line to a ChartBridge before 0.6.19');

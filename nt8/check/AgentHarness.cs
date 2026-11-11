@@ -5786,6 +5786,50 @@ public static class AgentHarness
             Settle(prop1);
             P("{\"type\":\"agentKill\",\"cid\":\"k\",\"agent\":\"manrae\",\"on\":false}");
         });
+        Part("kill all: the day's profit stop cancels only its own orders too (F2)", () =>
+        {
+            PropStart("PROP-1", true);
+            Mode("manrae", "auto");
+            Order e = PlacedOn(prop1, WithDayStop(Good(NewId()), "400"));
+            Fill(e, 1, 24999);
+            Advance(500);
+            Order hand = prop1.CreateOrder(mnq, OrderAction.Sell, OrderType.Limit, OrderEntry.Manual, TimeInForce.Day, 1, 25050, 0, "", "Exit", NinjaTrader.Core.Globals.MaxDate, null);
+            hand.OrderState = OrderState.Working; lock (prop1.Orders) prop1.Orders.Add(hand);
+            int calls = prop1.Calls.Count;
+            prop1.Items[AccountItem.UnrealizedProfitLoss] = 400;
+            Advance(1500);
+            foreach (Order o in Legs(prop1, e)) if (IsLive(o)) { o.OrderState = OrderState.Cancelled; Update(o); }
+            Advance(1500);
+            List<string> since = prop1.Calls.Skip(calls).ToList();
+            Check(e != null && since.Any(c => c.StartsWith("cancel") && c.Contains(" stop ")) && !since.Any(c => c.Contains("Exit")) && hand.OrderState == OrderState.Working,
+                  "day stop F2: reached: its own legs cancelled, the hand order left alone: " + string.Join(" | ", since));
+            prop1.Items.Remove(AccountItem.UnrealizedProfitLoss);
+            lock (prop1.Orders) prop1.Orders.Remove(hand);
+            Settle(prop1);
+        });
+        Part("day stop: an account already at its mark takes no new entry (several traders share one account's day)", () =>
+        {
+            PropStart("PROP-1", true);
+            Mode("manrae", "auto");
+            // the account's day is at 400 from someone else's trading (another trader on it earlier, or a hand trade); manrae is flat
+            prop1.Items[AccountItem.UnrealizedProfitLoss] = 400;
+            int calls = prop1.Calls.Count;
+            A(WithDayStop(Good(NewId()), "400"));
+            Check(AgentReject().Contains("the day's profit stop is reached on PROP-1 ($400, the plan's day stop; the day is at $400, realized plus open): no new entry there until 18:00 ET") && prop1.Calls.Count == calls,
+                  "day stop: a plan whose own day stop the account has already reached is refused, nothing sent: " + AgentReject());
+            Check(!M.StripJson().Contains("\"standDown\":\"the day's profit stop"), "day stop: a refusal is not a stand-down: the trader may trade another account, or this one once it is under the mark");
+            prop1.Items[AccountItem.UnrealizedProfitLoss] = 399.99;
+            Order e = PlacedOn(prop1, WithDayStop(Good(NewId()), "400"));
+            Check(e != null, "day stop: one cent under the mark the plan is placed: " + AgentReject());
+            if (e != null) { e.OrderState = OrderState.Cancelled; Update(e); Advance(500); }
+            // the session's value, set by that placed plan, also refuses a later plan that names none
+            prop1.Items[AccountItem.UnrealizedProfitLoss] = 400;
+            calls = prop1.Calls.Count;
+            A(Good(NewId()));
+            Check(AgentReject().Contains("the day's profit stop is reached on PROP-1 ($400, the plan's day stop") && prop1.Calls.Count == calls, "day stop: the session's value refuses a later plan that names none, nothing sent: " + AgentReject());
+            prop1.Items.Remove(AccountItem.UnrealizedProfitLoss);
+            Settle(prop1);
+        });
         Part("kill all: a prop account NinjaTrader does not list right now is still in scope (F1)", () =>
         {
             // scenario A: in Auto on PROP-1; PROP-1 leaves the list; Kill all
