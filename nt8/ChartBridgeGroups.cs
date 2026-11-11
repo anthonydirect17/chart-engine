@@ -1687,6 +1687,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             // smaller, right for a loss limit); null, with ProfitWhy, when it is not known. Read by the agents' day stop only.
             public double? ProfitPnl;
             public string ProfitWhy;
+            // D2: in the first second after 18:00 ET, before the groups' tick rolls the day start, NinjaTrader's realized may
+            // still be yesterday's: while a day start of another session is held, the profit side is not known (never latched)
+            public const string RollPendingWhy = "the new session's day start is not read yet (18:00 ET)";
             public readonly Dictionary<string, string> Src = new Dictionary<string, string>(), Why = new Dictionary<string, string>();
             public void Set(string key, double? v, string src, string why) { if (v.HasValue) Src[key] = src; else Why[key] = why ?? "not known"; }
         }
@@ -1735,6 +1738,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             n.Set("unrealized", n.Unrealized, "ninjatrader", up ? "NinjaTrader gives no open P&L for this account" : down);
             string realSrc = null, realWhy = null;
             double? profitReal = null;   // F6
+            string profitWhy = null;     // the review of 88's second look (D2)
             if (n.Balance.HasValue && marksErr == null && mark != null && mark.DayStart.HasValue && mark.Session == n.Session)
             {
                 double comp = n.Balance.Value - mark.DayStart.Value;
@@ -1745,10 +1749,10 @@ namespace NinjaTrader.NinjaScript.AddOns
                 else if (ntReal.HasValue) { n.Realized = Math.Min(comp, ntReal.Value); realSrc = ntReal.Value < comp ? "ninjatrader" : "computed"; profitReal = Math.Max(comp, ntReal.Value); }
                 else realWhy = "ChartBridge started mid-session (its first reading came after 18:02 ET) and NinjaTrader gives no realized P&L: today's P&L is not known";
             }
-            else if (ntReal.HasValue) { n.Realized = ntReal; realSrc = "ninjatrader"; realWhy = null; profitReal = ntReal; }
+            else if (ntReal.HasValue) { n.Realized = ntReal; realSrc = "ninjatrader"; realWhy = null; if (mark == null || mark.Session == n.Session) profitReal = ntReal; else profitWhy = Numbers.RollPendingWhy; }
             else realWhy = up ? "NinjaTrader gives no realized P&L for this account" : down;
             n.ProfitPnl = profitReal.HasValue && n.Unrealized.HasValue ? profitReal.Value + n.Unrealized.Value : (double?)null;
-            n.ProfitWhy = n.ProfitPnl.HasValue ? null : profitReal.HasValue ? "NinjaTrader gives no open P&L for this account" : realWhy;
+            n.ProfitWhy = n.ProfitPnl.HasValue ? null : profitWhy ?? (profitReal.HasValue ? "NinjaTrader gives no open P&L for this account" : realWhy);
             n.Set("realizedToday", n.Realized, realSrc, realWhy);
             n.Pnl = n.Realized.HasValue && n.Unrealized.HasValue ? n.Realized.Value + n.Unrealized.Value : (double?)null;
             n.Set("pnlToday", n.Pnl, realSrc, n.Realized.HasValue ? "NinjaTrader gives no open P&L for this account" : realWhy);

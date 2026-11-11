@@ -291,12 +291,13 @@ test('0.6.17 Kill all for the prop accounts: only agents whose every account is 
   assert.ok(!/ChartBridgeBot|ChartBridgeCopier|ChartBridgeOrders\.|Flatten|Cancel\(/.test(all), 'it reaches the bot, the copier and the order path nowhere');
   const one = bodies(acode, 'KillProp');
   assert.match(one, /lock \(PlaceGate\)/);
-  assert.match(one, /bool inScope = seats\.Count > 0 && seats\.All\(x => KillScope\(x\)\);/, 'every account it follows must be in scope');
+  // the coordinator's ruling on the review of 88's second look (B1): a group holding ANY prop account is stopped
+  assert.match(one, /List<string> scope = seats\.Where\(x => KillScope\(x\)\)\.ToList\(\);\s*bool inScope = scope\.Count > 0;/, 'any account in scope');
   // the review of 90 (F3): or a saved Auto waits (no seats yet), never on the personal account
-  assert.match(one, /if \(!inScope && !\(saved && !personal\)\) return null;/);
+  assert.match(one, /if \(personal \|\| \(!inScope && !saved\)\) return null;/, 'never the personal account; else in scope, or a saved Auto waiting');
   assert.match(one, /try \{ saved = saved \|\| File\.Exists\(AutoFile\) \|\| File\.Exists\(ChartBridgeFiles\.BackupOf\(AutoFile\)\); \} catch \(Exception\) \{ saved = true; \}/);
   // the review of 90 (N1): the kill switch and Shadow FIRST, the flatten (its own orders only) after, in its own try
-  assert.match(one, /string err = KillLocked\(true\);[\s\S]*mode = "shadow";[\s\S]*DropAutoIntent\("Kill all \(prop accounts\)"\);[\s\S]*if \(inScope\)\s*\{\s*try\s*\{\s*if \(FlattenFaultForCheck == Id\) throw new InvalidOperationException\("a fault made by the harness"\);\s*roots = StartFlatten\("Kill all \(prop accounts\)", false, null, false, true\);[^\n]*\n\s*\}\s*catch \(Exception ex\) \{ flatErr = ex\.Message; \}/, 'the kill switch and Shadow, then the flatten');
+  assert.match(one, /string err = KillLocked\(true\);[\s\S]*mode = "shadow";[\s\S]*DropAutoIntent\("Kill all \(prop accounts\)"\);[\s\S]*if \(inScope\)\s*\{\s*try\s*\{\s*if \(FlattenFaultForCheck == Id\) throw new InvalidOperationException\("a fault made by the harness"\);\s*foreach \(string x in scope\) roots \+= StartFlatten\("Kill all \(prop accounts\)", false, x, false, true\);[^\n]*\n\s*\}\s*catch \(Exception ex\) \{ flatErr = ex\.Message; \}/, 'the kill switch and Shadow, then the flatten');
   assert.ok(one.indexOf('KillLocked(true)') < one.indexOf('StartFlatten('), 'N1: in that order');
   // the review of 0.6.17: F1 (scope for a kill: an unlisted account is in), F2 (own orders only), N2 (never the action rate)
   const scope = bodies(acode, 'KillScope');

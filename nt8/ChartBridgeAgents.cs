@@ -1042,7 +1042,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                           (mixed.Count > 0 ? ". NOT STOPPED, still trading its prop accounts (it trades the personal account too; stop it on the Agent tab): " + string.Join(", ", mixed) : "") +
                           (failed.Count > 0 ? ". FAILED, stop it on the Agent tab now: " + string.Join(", ", failed) : "") +
                           (left.Count > 0 ? ". Not touched (not on prop accounts): " + string.Join(", ", left) : "") +
-                          ". Only the traders' own orders were cancelled: an order placed by hand, the bot's or the copier's stays and can still fill";
+                          ". Only the traders' own orders were cancelled: an order placed by hand, the bot's or the copier's stays and can still fill" +
+                          // F7, Anthony 2026-11-11: "When the bot is trading the account, its the bots account for that day. I would never touch it."
+                          ". On the account and contract a trader holds, its position is closed whole, a contract added by hand included (an account a bot trades is the bot's for the day)";
             ChartBridgeServer.Log("agent " + text);
             ChartBridgeV3.SendToV3Traders("{\"type\":\"status\",\"level\":\"warn\",\"text\":" + CbJson.Str(text) + "}");
             return null;
@@ -1824,6 +1826,14 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 lock (Sync) { Flats.Remove(key); if (!(openTag != null && openRoot == j.Root)) Sticky.Remove(j.Root); }
                 string text = say ?? (a != null ? a.Name : Account) + " " + j.Root + " is no longer agent " + Id + "'s: ChartBridge did not close it";
+                // the review of 88's second look (A1, the race the ruling accepts): a hand order and the agent's close both filled
+                if (say == null && a != null && j.Close != null && j.Close.Filled > 0)
+                {
+                    int now = ChartBridgeOrders.AgentListed(a, j.Inst);
+                    if (now != 0 && Math.Sign(now) != Math.Sign(j.StartQty))
+                        text = a.Name + " " + j.Root + " is now " + (now > 0 ? "LONG " : "SHORT ") + Math.Abs(now) + ": agent " + Id + "'s close and an order placed by hand both filled. " +
+                               "ChartBridge sends nothing for it; act in NinjaTrader now";
+                }
                 Log(text); AgentLog(text + " (its flatten: " + j.Why + ")");
                 ChartBridgeServer.SendToTraders(StatusJson("warn", text));
                 Notify();
@@ -2918,6 +2928,11 @@ namespace NinjaTrader.NinjaScript.AddOns
                         lossStandDown = held;
                         dayStop = fileDayStop;   // 0.6.19
                         foreach (KeyValuePair<string, double> kv in fileReached) if (!DayReachedHere.ContainsKey(kv.Key)) DayReachedHere[kv.Key] = kv.Value;   // F5
+                        // the review of 88's second look (D1): the shared latch every plan check reads is filled from the file too,
+                        // so a new process (a restart of ChartBridge) refuses as the old one did
+                        foreach (KeyValuePair<string, double> kv in DayReachedHere)
+                            ChartBridgeAgents.NoteDayReached(today, kv.Key, DayStopWords + " is reached on " + kv.Key + " this session (" + DayDollars(kv.Value) +
+                                                             ", read back from the day file after a start): no new entry there until 18:00 ET");
                     }
                     else stale = trades.Count(kv => double.IsNaN(kv.Value));
                 }
@@ -4510,8 +4525,11 @@ namespace NinjaTrader.NinjaScript.AddOns
                 ChartBridgeGroups.Numbers n;
                 try { n = ChartBridgeGroups.Read(name, FindAccount(name), false); }
                 catch (Exception) { continue; }
-                string from;
-                double mark = DayMark(n, plan, out from);
+                // the review of 88's second look (D3): the session's own mark counts too, the smaller of the two, so a plan
+                // naming a higher mark in the moment before the next pass cannot get past a mark the day has reached
+                string from, fromSession;
+                double mark = DayMark(n, plan, out from), session = DayMark(n, out fromSession);
+                if (session > 0 && (mark <= 0 || session < mark)) { mark = session; from = fromSession; }
                 double? day = DayNumber(n, name, mark);
                 if (mark > 0 && day.HasValue && day.Value >= mark - 1e-9)
                 {
@@ -4529,7 +4547,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             if (n == null) return null;
             if (n.ProfitPnl.HasValue) return n.ProfitPnl;
-            if (mark > 0)
+            if (mark > 0 && n.ProfitWhy != ChartBridgeGroups.Numbers.RollPendingWhy)   // D2: the second at 18:00 is not news
             {
                 bool fresh;
                 lock (Sync) fresh = DayUnknownSaid.Add(name);
@@ -4574,7 +4592,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 hit++;
                 string money = DayDollars(mark);
                 string say = DayStopWords + " is reached on " + x.Name + " (" + money + ", " + from + "; the day is at " + DayDollars(day.Value) +
-                             ", realized plus open): flat, and no new entries for agent " + Id + " until 18:00 ET";
+                             ", realized plus open): flat (its position on that account closed whole, a contract added by hand included), and no new entries for agent " + Id + " until 18:00 ET";
                 bool fresh;
                 lock (Sync) { fresh = lossStandDown == null; if (fresh) lossStandDown = say; }
                 StartFlatten("Agent " + Id + ": " + DayStopWords + " (" + money + ") is reached on " + x.Name + ": flattened by its rules", true, x.Name, false, true);   // its own orders only (the review's F2)
@@ -4715,7 +4733,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (PlaceGate)
             {
                 List<string> seats = AllSeats().Select(x => x.Name).ToList();
-                bool inScope = seats.Count > 0 && seats.All(x => KillScope(x));
+                // the coordinator's ruling on the review of 88's second look (B1): a group holding ANY prop account is stopped (a
+                // prop and a Sim account together was "Not touched"); one holding the personal account still never is (below)
+                List<string> scope = seats.Where(x => KillScope(x)).ToList();
+                bool inScope = scope.Count > 0;
                 // the review of 90 (F3): a saved Auto waiting (a restart while groups.txt could not be read: no seats yet, the restore
                 // pending) is stopped too, whatever the seats, or Auto would come back and place a plan after Kill all said "nothing".
                 // Never an agent on the personal account (it is never touched).
@@ -4723,7 +4744,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 lock (Sync) saved = autoRestorePending;
                 try { saved = saved || File.Exists(AutoFile) || File.Exists(ChartBridgeFiles.BackupOf(AutoFile)); } catch (Exception) { saved = true; }
                 bool personal = seats.Any(x => ChartBridgeBranches.IsPersonal(x)) || ChartBridgeBranches.IsPersonal(Account);
-                if (!inScope && !(saved && !personal)) return null;
+                if (personal || (!inScope && !saved)) return null;   // the personal account is never touched (KillMixed names it)
                 // the review of 90 (N1): the kill switch and Shadow go on FIRST, so nothing here can leave it trading; the flatten
                 // comes after, in its own try
                 string err = KillLocked(true);
@@ -4739,7 +4760,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                     try
                     {
                         if (FlattenFaultForCheck == Id) throw new InvalidOperationException("a fault made by the harness");
-                        roots = StartFlatten("Kill all (prop accounts)", false, null, false, true);   // its own orders only (F2)
+                        // its own orders only (F2), and only on the prop accounts: a Sim member's trade keeps its stop and target
+                        foreach (string x in scope) roots += StartFlatten("Kill all (prop accounts)", false, x, false, true);
                     }
                     catch (Exception ex) { flatErr = ex.Message; }
                 }

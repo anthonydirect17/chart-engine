@@ -3681,8 +3681,18 @@ then refuses every plan when it is back.
 The pages get one `status` `warn`: "Kill all (prop accounts): agent <id> on <account>: flattening what it owns, the kill
 switch on, mode shadow; ... . NOT STOPPED, still trading its prop accounts (it trades the personal account too; stop it on
 the Agent tab): <ids>. FAILED, stop it on the Agent tab now: <ids>. Not touched (not on prop accounts): <ids>. Only the
-traders' own orders were cancelled: an order placed by hand, the bot's or the copier's stays and can still fill" (each of
-the three lists only when it has a name). One agent that throws never stops the others (N3). The agent gets `welcome` again.
+traders' own orders were cancelled: an order placed by hand, the bot's or the copier's stays and can still fill. On the
+account and contract a trader holds, its position is closed whole, a contract added by hand included (an account a bot
+trades is the bot's for the day)" (each of the three lists only when it has a name).
+
+**The account a bot trades is the bot's for the day** (Anthony 2026-11-11, on the review's F7: "When the bot is trading the
+account, its the bots account for that day. I would never touch it."). Kill all and the day's profit stop close the
+trader's position on its account and contract whole: a contract added there by hand is closed with it (the 0.5.0 rule:
+the trader's record takes every fill on a pair it owns). Nothing caps the close at what the trader's own entries bought,
+and nothing refuses or flattens a hand order. The one race left (a hand order resting there and the trader's close both
+fill) leaves the account short or long; the status line says so plainly ("<account> <root> is now SHORT 1: agent <id>'s
+close and an order placed by hand both filled. ChartBridge sends nothing for it; act in NinjaTrader now"), and nothing
+more is done. One agent that throws never stops the others (N3). The agent gets `welcome` again.
 
 **Never touched:** an agent on the personal account, a Sim account, None, or a group with a member that is out of scope (a
 group that holds the personal account and prop accounts is left alone and named loudly as NOT STOPPED, N1); the bot; the
@@ -3713,22 +3723,32 @@ go over that") and 2026-11-11 (the runner sends the playbook's value with each p
   realized after a late start, or no open P&L), the profit stop is not checked on that account and that is said once a
   session, to the pages and the trader: "Agent <id>: the day's profit stop ($<mark>) is NOT checked on <account>: the day's
   number is not known (<why>)" (`status` `warn`, N7).
+  The larger figure can OVERSTATE the day after a late start that follows a loss (the second look's B3: a 500 loss before
+  the start and 600 made after it reads +600 where the day is +100), so the stop can act early; that is the side the
+  ruling allows (never too low). In the second after 18:00 ET, before the day start rolls, NinjaTrader's realized may
+  still be yesterday's: while a day start of another session is held, the profit side is not known and nothing is
+  latched (D2), and that one second is not said.
 - **Reached once is reached for the session** (the review of 88, F5). The first time ANY pass or plan check sees an account's
   day at or over its mark, flat or not, the account is remembered as reached for that session, for every trader (the
   account's day counts every trader on it), and saved in the trader's day file (`#dayreached<TAB><account><TAB><dollars>`, a
-  comment to a ChartBridge before this; read again at a start, cleared at the roll). From then on every plan for that account
-  is refused, whatever `dayStopDollars` it names and even when the day falls back under the mark: "the day's profit stop is
+  comment to a ChartBridge before this; read again at a start into the list every trader's plan check reads, so a
+  restart of ChartBridge refuses as before (the second look's D1); cleared at the roll). From then on every plan for that account
+  is refused, whatever `dayStopDollars` it names and even when the day falls back under the mark (at the plan check the
+  session's mark counts too, the smaller of it and the plan's own, so a plan naming a higher mark in the moment before
+  the next pass is refused as well: D3): "the day's profit stop is
   reached on <account> this session ($<mark>, <from>; the day was at $<pnl>, realized plus open): no new entry there until
   18:00 ET". No later plan raises or clears it.
 - **The check**, every pass (1 s), for every account the trader follows; the flatten and the stand-down only where it holds a
   position or a working order: the day's number at or above the mark. Then the trader's own flatten starts on that
   account (the flat time's job: its orders cancelled, what it owns closed at market, `CB#<tag> ag:<id> flat`), and it stands
   down for the session: `agentState.standDown` reads "the day's profit stop is reached on <account> ($<mark>, <where the mark
-  came from>; the day is at $<pnl>, realized plus open): flat, and no new entries for agent <id> until 18:00 ET". The 18:00
+  came from>; the day is at $<pnl>, realized plus open): flat (its position on that account closed whole, a contract added by hand included), and no new
+  entries for agent <id> until 18:00 ET". The 18:00
   roll clears it, as it clears a `maxLosses` stand-down; a rules change does not.
 - **Only its own orders.** The flatten is "own orders only", as Kill all's (the review's F2): an order placed by hand, by
   the bot or by the copier on the same account and contract is not cancelled and can still fill. Nothing of another
-  trader's is cancelled or closed.
+  trader's is cancelled. The trader's position there is closed whole, a contract added by hand included (the account
+  is the bot's for the day, above).
 - **No new entry on an account already at its mark** (plan check 9b). A plan is refused while an account it would go to was
   reached this session (above), or is at or over its mark now (which then marks it reached). The mark counts the plan's own
   `dayStopDollars` when it names one, else the session's. A refusal is not a stand-down.
