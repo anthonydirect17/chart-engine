@@ -850,6 +850,7 @@ function createFeed(env) {
         if (S.got) for (const a of S.archived) if (!was.has(a.name)) log(a.name + ': archived');
         const first = !S.got;
         S.accounts = list; S.got = true; S.lostAt = null;
+        S.personalNamed = typeof m.personalNamed === 'boolean' ? m.personalNamed : null;   // ChartBridge 0.6.16: whether a personal account is picked (null: an older ChartBridge)
         if (first && env.desk !== false) reportListed();   // 1.40.0 (Sunday item A): The Desk hears of them now, not a minute later
         S.notListed = Array.isArray(m.notListed) ? m.notListed.filter(a => a && typeof a.name === 'string') : [];   // 1.40.0: ChartBridge 0.6.10
         firmPrune();                                          // review 7: a minimum set under other rules is forgotten
@@ -1067,6 +1068,9 @@ function createFeed(env) {
     accountTrade: (name, on) => S.switches.accountChecks && send({ type: 'accountTrade', cid: cid(), account: name, on: !!on }),
     accountArchive: name => S.switches.accountChecks && send({ type: 'accountArchive', cid: cid(), account: name, confirm: true }),
     accountUnarchive: name => S.switches.accountChecks && send({ type: 'accountUnarchive', cid: cid(), account: name }),   // ChartBridge 0.5.1: Show
+    /* ChartBridge 0.6.16 (Anthony 2026-11-11: a one-time pick on the chart page): the personal account, or the pick taken away */
+    accountPersonal: name => S.personalNamed !== null && send({ type: 'accountPersonal', cid: cid(), account: name }),
+    accountPersonalClear: () => S.personalNamed !== null && send({ type: 'accountPersonal', cid: cid(), clear: true }),
     cancelFromList: id => S.switches.cancelFromList && sendOrder({ type: 'cancel', cid: cid(), id, from: 'list' }),
     copierSet: (what) => S.switches.copier && send(Object.assign({ type: 'copierSet', cid: cid() }, what)),
     copierFollower: row => {
@@ -1208,6 +1212,14 @@ function mount(v, host) {
     if (a === 'archive') { P.confirm = id; render(); }
     else if (a === 'archive-no') { P.confirm = ''; render(); }
     else if (a === 'archive-yes') { if (P.confirm === id) F.accountArchive(id); P.confirm = ''; render(); }
+    /* 1.44.2 (ChartBridge 0.6.16): the personal account's pick asks first, on the page, then one message */
+    else if (a === 'personal' || a === 'personal-clear') { P.personalAsk = { account: id, clear: a === 'personal-clear' }; render(); }
+    else if (a === 'personal-no') { P.personalAsk = null; render(); }
+    else if (a === 'personal-yes') {
+      const q = P.personalAsk; P.personalAsk = null;
+      if (q && q.account === id) { if (q.clear) F.accountPersonalClear(); else F.accountPersonal(id); }
+      render();
+    }
     else if (a === 'unarchive') {   // 1.40.0 (audit 5): what Show does, said as it is
       if (F.accountUnarchive(id)) host.note('Show ' + id + ': sent. It is back in the list, unchecked, once NinjaTrader has it connected this session; until then it is under Not in NinjaTrader now.');
     }
@@ -1751,7 +1763,8 @@ function mount(v, host) {
         const nameTip = [a.name, a.sim ? 'NinjaTrader Sim account' : '', hero ? 'A seat of ' + hero + ' (the Agent tab): the copier and the bot never trade it' : '',
           stale ? 'Not connected to ChartBridge since ' + hms(S.lostAt) + ' ET: this account\'s connection is not known' : up ? '' : (CONN[a.connection] || a.connection)].filter(Boolean).join('\n');
         const nameCell = `<span role="cell" class="apg-name">` + ci('', stale ? 'apg-dot unk' : up ? 'apg-dot' : 'apg-dot down', stale ? 'Connection not known' : up ? '' : (CONN[a.connection] || a.connection) + ': not connected') +
-          ci((lab || a.name) + (hero ? ' · ' + hero + '\'s seat' : ''), 'b', nameTip) + (lab ? ci(a.name, 'mut apg-raw', a.name) : '') + ci(flags.length ? '!' : '', flags.length ? 'apg-flag' : 'apg-flag off', flags.join('\n')) + '</span>';
+          ci((lab || a.name) + (hero ? ' · ' + hero + '\'s seat' : ''), 'b', nameTip) + (lab ? ci(a.name, 'mut apg-raw', a.name) : '') +
+          (a.personal === true ? ci('personal', 'apg-ptag apg-pmine', 'Your personal account: traded by hand. Agents and bots never keep Auto here through the daily reset') : a.prop === true ? ci('prop', 'apg-ptag', 'A prop account: every live account that is not your personal one') : '') + ci(flags.length ? '!' : '', flags.length ? 'apg-flag' : 'apg-flag off', flags.join('\n')) + '</span>';
         /* 1.40.0 (Anthony 2026-10-29): both limits on one line, "DD $1,800 · D $647", the tighter in amber; the bar shows the drawdown room;
            every figure's source stays in the hover (roomTip) */
         const rp = AC.roomParts(s);
@@ -1768,10 +1781,19 @@ function mount(v, host) {
         const trailing = mr && (mr.drawdownType === 'eod' || mr.drawdownType === 'intraday');
         const firm = firmOn() && grpKnown && canGroup && trailing ? `<input type="text" inputmode="decimal" class="oin apg-ll-in apg-fmin" data-act="firm-min" data-id="${esc(a.name)}" placeholder="${esc(S.desk.get(a.name) && isNum(S.desk.get(a.name).seedFloor) ? 'Desk seed ' + GroupsCore.usd(S.desk.get(a.name).seedFloor) : 'from the dashboard')}" maxlength="12" aria-label="Minimum balance from the firm's dashboard for ${esc(a.name)}" title="The minimum balance the firm's dashboard shows for ${esc(a.name)}: ChartBridge's floor equals it from then on (and trails from there)"><button type="button" class="ac-btn" data-act="firm-min-set" data-id="${esc(a.name)}">Set floor</button>` : '';
         const labBox = `<input type="text" class="oin apg-ll-in apg-label" data-act="label" data-id="${esc(a.name)}" ${pr({ value: lab })} placeholder="${esc(a.name.slice(0, 12))}" maxlength="24" aria-label="Short label for ${esc(a.name)}" title="A short name shown in place of ${esc(a.name)} on this page (this browser only; empty: the name)">`;
+        /* 1.44.2 (ChartBridge 0.6.16): the personal account, picked once here (never a Sim account; an older ChartBridge has no such key) */
+        const pq = P.personalAsk && P.personalAsk.account === a.name ? P.personalAsk : null;
+        const personalCell = typeof a.personal !== 'boolean' || a.sim || !canAct ? '' : pq ? ''
+          : a.personal ? `<span class="apg-pis">Your personal account</span><button type="button" class="ac-btn apg-pbtn" data-act="personal-clear" data-id="${esc(a.name)}" title="Take the pick away: then no account is your personal one and no account is prop">Not this one</button>`
+          : `<button type="button" class="ac-btn apg-pbtn" data-act="personal" data-id="${esc(a.name)}" title="Pick ${esc(a.name)} as your one personal account. Every other live account is then a prop account">This is my personal account</button>`;
+        const askPersonal = !pq ? '' : row('pask|' + a.name, `<span role="cell" class="apg-confirm">` + (pq.clear
+          ? `Take the personal account pick away from ${esc(a.name)}? Then no account is prop, and agents go to None at the daily reset as before.`
+          : `Make ${esc(a.name)} your personal account? Every other live account becomes a prop account: an agent in Auto there keeps Auto through the daily reset and after a restart.`) +
+          ` <button type="button" class="ac-btn apg-yes" data-act="personal-yes" data-id="${esc(a.name)}">${pq.clear ? 'Take it away' : 'Yes, it is mine'}</button><button type="button" class="ac-btn" data-act="personal-no" data-id="${esc(a.name)}">Cancel</button></span>`, 'apg-ask');
         const hideBtn = canAct && a.canHide === true ? `<button type="button" class="ac-btn apg-hide" data-act="archive" data-id="${esc(a.name)}" title="Hide ${esc(a.name)}: it leaves every list until you Show it; its fills and history stay">Hide</button>` : '';
         const drawer = row('dr|' + a.name, `<span role="cell" class="apg-drawer">` + fld('Group', unrole(grp)) + fld('Account type', unrole(typeCell(a))) + fld('Limits', unrole(lims)) +
-          fld('Firm minimum', firm) + fld('Label', labBox) + fld('', hideBtn) + fld('Prop', outcomeCell(a.name)) + (flags.length ? `<span class="apg-dflags">${esc(flags.join(' · '))}</span>` : '') + '</span>', 'apg-ask apg-drawerrow');
-        return main + drawer + ask(a) + askOutcome(a.name) + askJoin(a) + askRules(a) + typeRow(a) + askApply(a);
+          fld('Firm minimum', firm) + fld('Label', labBox) + fld('', hideBtn) + fld('Prop', outcomeCell(a.name)) + fld('Personal', personalCell) + (flags.length ? `<span class="apg-dflags">${esc(flags.join(' · '))}</span>` : '') + '</span>', 'apg-ask apg-drawerrow');
+        return main + drawer + askPersonal + ask(a) + askOutcome(a.name) + askJoin(a) + askRules(a) + typeRow(a) + askApply(a);
       };
       /* the sections: each group (its members), then the accounts in no group, then the Sim accounts (folded until opened) */
       const secRow = (k, title, tot, extra) => row('sec|' + k, `<span role="cell" class="apg-sec">` + ci(title, 'apg-stitle') + ci(tot, 'apg-stot') + (extra || '') + '</span>', 'apg-secrow');

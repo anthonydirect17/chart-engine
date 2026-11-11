@@ -200,22 +200,34 @@ test('0.5.7 None and the daily reset (DECISION 2026-10-14e): ChartBridge runs it
   for (const f of ['BotHarness.cs', 'AgentHarness.cs', 'CopierHarness.cs']) assert.match(read(path.join('check', f)), /0\.5\.7 reset/, f);
 });
 
-test('0.6.16 prop accounts: every new branch passes through IsProp, and nothing is prop without the personalAccount line', () => {
+test('0.6.16 prop accounts: every new branch passes through IsProp; nothing is prop until the personal account is picked on the page', () => {
   const acc = strip(read('ChartBridgeAccounts.cs'));
-  // the one predicate: no line, the personal account itself, Backtest or Playback, Sim, or not listed: not prop
+  // the one predicate: no pick, the personal account itself, Backtest or Playback, Sim, or not listed: not prop
   const isProp = bodies(acc, 'IsProp');
-  assert.match(isProp, /string p = personal;\s*if \(p == null \|\| string\.IsNullOrEmpty\(name\) \|\| IsNone\(name\)\) return false;/, 'no personalAccount line: nothing is prop');
+  assert.match(isProp, /string p = personal;\s*if \(p == null \|\| string\.IsNullOrEmpty\(name\) \|\| IsNone\(name\)\) return false;/, 'no pick: nothing is prop');
   assert.match(isProp, /if \(string\.Equals\(name, p, StringComparison\.OrdinalIgnoreCase\)\) return false;/, 'the personal account is never prop');
   assert.match(isProp, /if \(ChartBridgeOrders\.IsNeverTradable\(name\)\) return false;/, 'Backtest and Playback are never prop');
   assert.match(isProp, /if \(same\.Count == 0\) return false;\s*return same\.All\(a => !ChartBridgeBot\.IsSim\(a\) && !ChartBridgeAccounts\.IsSim\(a\)\);/, 'not listed, or Sim by either test: not prop');
-  assert.match(acc, /public static void ResetConfig\(\) \{ personal = null; \}/);
-  assert.match(main, /ChartBridgeBranches\.ResetConfig\(\);/, 'every config load starts with no personal account');
-  assert.match(main, /else if \(ChartBridgeBranches\.ReadConfig\(key, val\)\) \{ \}/);
-  // the name is never logged and never sent
-  const rc = bodies(acc, 'ReadConfig');
-  assert.ok(/key != "personalAccount"/.test(rc) && !/Log\([^;]*\+ (personal|v|val)\b/.test(rc), 'the Output line never carries the name');
-  assert.match(acc, /"\],\\"personalNamed\\":"\)\.Append\(ChartBridgeBranches\.PersonalNamed \? "true" : "false"\)/, 'the pages learn only that one is named');
-  assert.match(acc, /b\.Append\(",\\"prop\\":"\)\.Append\(ChartBridgeBranches\.IsProp\(name\) \? "true" : "false"\);/);
+  // Anthony 2026-11-11: a one-time pick on the chart page, nothing typed into a file by hand: no config.txt key
+  assert.ok(!/personalAccount/.test(main) && !/ReadConfig|ResetConfig/.test(acc.slice(acc.indexOf('public static class ChartBridgeBranches'))), 'no config.txt line names it');
+  assert.match(acc, /ChartBridgeBranches\.LoadPersonal\(\);[^\n]*\n\s*StartNow\(ChartBridgeTime\.NowUtcMs\(\)\);/, 'read at start, before the agents');
+  assert.match(main, /type == "accountUnarchive" \|\| type == "accountPersonal"\)[^\n]*\n\s*ChartBridgeAccounts\.OnMessage\(client, type, text\);/);
+  const set = bodies(acc, 'SetPersonal');
+  assert.match(set, /List<string> auto = ChartBridgeAgents\.InAuto\(\);\s*if \(auto\.Count > 0\) return "agent "/, 'never while an agent is in Auto');
+  assert.match(set, /if \(same\.Count == 0\) return name \+ " is not in NinjaTrader now/);
+  assert.match(set, /if \(same\.Any\(x => ChartBridgeBot\.IsSim\(x\) \|\| ChartBridgeAccounts\.IsSim\(x\)\)\) return name \+ " is a Sim account/);
+  assert.match(set, /ChartBridgeAgents\.PersonalChanged\(\);/, 'every saved Auto goes with a change of the pick');
+  assert.match(acc, /string why = ChartBridgeV3\.Gate\(client\);[\s\S]*if \(why == null && type == "accountPersonal"\)/, 'behind the same gate as every account message: a signed-in page of ChartBridge\'s own');
+  // the name is never written to the Output window
+  for (const f of ['LoadPersonal', 'SetPersonal']) assert.ok(!/ChartBridgeServer\.Log\([^;]*\+ (personal|name|p)\b/.test(bodies(acc, f)), f + ': the Output line never carries the name');
+  assert.match(acc, /"\],\\"personalNamed\\":"\)\.Append\(ChartBridgeBranches\.PersonalNamed \? "true" : "false"\)/);
+  assert.match(acc, /b\.Append\(",\\"personal\\":"\)\.Append\(ChartBridgeBranches\.IsPersonal\(name\) \? "true" : "false"\)\s*\.Append\(",\\"prop\\":"\)\.Append\(ChartBridgeBranches\.IsProp\(name\) \? "true" : "false"\);/);
+  // the page: the pick asks first, then one message; nothing else on the page sends it
+  const pg = fs.readFileSync(path.join(__dirname, '..', 'live', 'accounts.js'), 'utf8');
+  assert.match(pg, /accountPersonal: name => S\.personalNamed !== null && send\(\{ type: 'accountPersonal', cid: cid\(\), account: name \}\),/);
+  assert.match(pg, /accountPersonalClear: \(\) => S\.personalNamed !== null && send\(\{ type: 'accountPersonal', cid: cid\(\), clear: true \}\),/);
+  assert.match(pg, /else if \(a === 'personal-yes'\) \{\s*const q = P\.personalAsk; P\.personalAsk = null;\s*if \(q && q\.account === id\) \{ if \(q\.clear\) F\.accountPersonalClear\(\); else F\.accountPersonal\(id\); \}/, 'only the confirm row\'s Yes sends it');
+  assert.match(pg, /typeof a\.personal !== 'boolean' \|\| a\.sim \|\| !canAct \? ''/, 'never offered on a Sim account, or with an older ChartBridge');
   // the agent: the file is written only behind PersonalNamed and AllSeatsProp (IsProp for every seat)
   assert.match(bodies(acode, 'AllSeatsProp'), /return seats\.Count > 0 && seats\.All\(x => ChartBridgeBranches\.IsProp\(x\)\);/);
   assert.equal((acode.match(/ChartBridgeFiles\.SaveAutoIntent\(/g) || []).length, 1, 'one place writes the file');

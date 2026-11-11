@@ -254,6 +254,10 @@ namespace NinjaTrader.NinjaScript.AddOns
         // 0.5.8: a group, rules or limits change: every agent its accountState again (when it changed).
         // 0.6.0: and a group's membership: each agent on a group reads its seats again (seatsRev up, welcome) first.
         public static void AccountStatesChanged() { foreach (ChartBridgeAgent a in All() ?? new ChartBridgeAgent[0]) { a.RefreshSeats(); a.SendAccountState(false); } }
+        // 0.6.16: the agents in Auto now (the personal account's pick is refused while there is one), and a change of that pick:
+        // every saved Auto was saved under the old pick, so it goes.
+        public static List<string> InAuto() { return (All() ?? new ChartBridgeAgent[0]).Where(a => a.ModeIs("auto")).Select(a => a.Id).ToList(); }
+        public static void PersonalChanged() { foreach (ChartBridgeAgent a in All() ?? new ChartBridgeAgent[0]) a.ForgetAuto("the personal account's pick changed"); }
         public static ChartBridgeAgent Get(string id)
         {
             foreach (ChartBridgeAgent a in All()) if (a.Id == id) return a;
@@ -2203,17 +2207,19 @@ namespace NinjaTrader.NinjaScript.AddOns
         private string LogFile { get { return Path.Combine(Folder, "agent-" + Id + ".log"); } }
 
         // ---------------------------------------------------------- prop accounts: the saved Auto intent (agent-<id>-auto.txt)
-        // Anthony's rulings of 2026-11-10 and 2026-11-11: an agent in Auto on prop accounts (ChartBridgeBranches.IsProp: config.txt
-        // names the personal account, and this is another account that is not Sim, Backtest or Playback) keeps Auto through the
+        // Anthony's rulings of 2026-11-10 and 2026-11-11: an agent in Auto on prop accounts (ChartBridgeBranches.IsProp: a personal
+        // account is picked, and this is another account that is not Sim, Backtest or Playback) keeps Auto through the
         // 17:00 ET reset and gets it back ONCE after a restart, only when every seat is prop, known to NinjaTrader, flat and idle,
         // and the kill switch is off. The file is the intent: it names the account or group Auto was set on. It is written when the
         // page sets Auto (or changes the account keeping Auto, or releases the kill switch while in Auto) and every seat is prop;
         // it is removed on any other mode, on an account change that does not keep Auto on prop seats, and when the kill switch
-        // goes on. With no personalAccount line no
+        // goes on. With no personal account picked no
         // file is ever written and none is read: every start is Shadow and the reset goes to None, exactly as 0.6.15.
         private string AutoFile { get { return Path.Combine(Folder, "agent-" + Id + "-auto.txt"); } }
         private bool autoRestorePending;   // set at a start that finds the intent; one try, ended by the first answer or any page change
         internal List<string> SeatsForProp() { return SeatNames(); }
+        internal bool ModeIs(string m) { lock (Sync) return mode == m; }
+        internal void ForgetAuto(string why) { lock (PlaceGate) DropAutoIntent(why); }
         private bool AllSeatsProp() { List<string> seats = SeatNames(); return seats.Count > 0 && seats.All(x => ChartBridgeBranches.IsProp(x)); }
         // The saved intent names this account (or group:<id>): asked by the reset (ChartBridgeBranches.KeepThroughReset).
         internal bool SavedAutoOn(string key)
@@ -2265,7 +2271,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (!pend) return;
                 string key = KeyNow(), intent = ChartBridgeFiles.AutoIntent(AutoFile), no = null;
                 List<string> seats = SeatNames();
-                if (!ChartBridgeBranches.PersonalNamed) no = "config.txt names no personal account";
+                if (!ChartBridgeBranches.PersonalNamed) no = "no personal account is picked";
                 else if (k) no = "the kill switch is on";
                 else if (m != "shadow") no = "its mode is " + m;
                 else if (string.IsNullOrEmpty(intent) || intent != key) no = "its saved Auto was set on another account";
@@ -2310,7 +2316,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (Sync) { noClientSinceMs = Now(); startedMs = noClientSinceMs; mode = "shadow"; killed = kill.HasValue; killedAt = Math.Max(0, kill ?? 0); killReadPending = kill == -1; }
             if (kill == -1) Log("agent " + Id + ": agent-" + Id + "-kill.txt is there but could not be read yet (held open): the kill switch is on; ChartBridge reads it again");
             if (kill.HasValue) Log("agent " + Id + ": its kill switch is still on (" + KilledWords(kill.Value) + "; kept through the restart): every agent order is refused until it is released on the page");
-            // prop accounts: a saved Auto intent is looked for only when config.txt names the personal account (no line: as 0.6.15)
+            // prop accounts: a saved Auto intent is looked for only when a personal account is picked (no pick: as 0.6.15)
             string intent = ChartBridgeBranches.PersonalNamed ? ChartBridgeFiles.AutoIntent(AutoFile) : null;
             lock (Sync) autoRestorePending = intent != null;
             if (intent != null) Log("agent " + Id + ": a saved Auto is there (agent-" + Id + "-auto.txt): Auto comes back once, only if its account is the same, prop, known, flat and idle, and the kill switch is off");

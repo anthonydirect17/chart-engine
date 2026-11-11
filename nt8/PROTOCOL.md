@@ -3546,31 +3546,40 @@ Anthony's rulings of 2026-11-10 (the Prop Business build plan and its addendum) 
 bots trade the prop accounts, with no Accept; "Auto stays armed through the 17:00 reset"; after a ChartBridge or PC restart the
 agent "resumes on its own when ... the account is flat". This section is those rulings in ChartBridge. They override, for prop
 accounts only, "`auto` never survives a restart" and "Every start is Shadow; Auto stays one click and Confirm on his desk"
-above. Built in `nt8/ChartBridgeAccounts.cs` (`ChartBridgeBranches.IsProp`, `KeepThroughReset`), `nt8/ChartBridgeAgents.cs`
-(the saved Auto) and `nt8/ChartBridge.cs` (the config line, the file helpers). No file of the order path changes: the order
+above. Built in `nt8/ChartBridgeAccounts.cs` (`ChartBridgeBranches.IsProp`, `SetPersonal`, `KeepThroughReset`),
+`nt8/ChartBridgeAgents.cs` (the saved Auto), `nt8/ChartBridge.cs` (the file helpers) and `live/accounts.js` (the pick). No file of the order path changes: the order
 ticket, hotkeys, groups, the copier, the bot, Order Strategies, Merge and Flatten behave exactly as in 0.6.15 on every account
 (Anthony 2026-11-11: hand orders on a prop account are not refused; "I will not touch them").
 
-**What is prop.** One line in `config.txt` on each trading PC names the personal account:
+**What is prop.** Anthony picks his personal account once, on the chart page (2026-11-11: "make it a one-time pick on the
+chart page"; nothing is typed into a file by hand). The page message:
 
-```
-personalAccount = <the account's exact name>
+```json
+{"type": "accountPersonal", "cid": "p1", "account": "<name>"}
+{"type": "accountPersonal", "cid": "p2", "clear": true}
 ```
 
-With it, an account is **prop** when it is not that account, not a Sim account (NinjaTrader's simulator, by both existing
+Guarded as every account message (a signed-in v3 page of ChartBridge's own; it works with `accountChecks` on or off). The
+account must be one NinjaTrader lists now, never a Sim account, Backtest or Playback. `clear` takes the pick away. Either is
+refused while any agent is in Auto ("set every agent to Shadow first"), because what is prop would change under it; a change
+also removes every agent's saved Auto (it was saved under the old pick). ChartBridge keeps the pick in `personal-account.txt`
+next to `config.txt` (two `#` lines, then `account<TAB><name>`) and reads it at each start, before the agents. The page asks
+first (a confirm row on the Accounts tab, in the account's settings), then sends the one message; a done pick is a `status`
+`info` and a new `accounts` message.
+
+With a pick, an account is **prop** when it is not that account, not a Sim account (NinjaTrader's simulator, by both existing
 tests) and not Backtest or Playback, and NinjaTrader lists it (an account it does not list is not prop: its Sim cannot be read).
-With no line, or a line that names nothing, **nothing is prop and ChartBridge behaves exactly as 0.6.15**: no file below is
-written or read. This is a new notion beside `accountState.kind` (`prop` = in a group, `personal` = in no group), which keeps
-its meaning. The name stays in that local file: it is never logged (the Output line says only that one is set), never sent to
-a page, an agent or The Desk, and never in this repo. The accounts message gains `personalNamed` (true or false, last) and each
-entry gains `prop` (true or false, before `unserved`); a page reads them, nothing is set from a page. The line is read at
-start and when config.txt is loaded again.
+With no pick, **nothing is prop and ChartBridge behaves exactly as 0.6.15**: no file below is written or read. This is a new
+notion beside `accountState.kind` (`prop` = in a group, `personal` = in no group), which keeps its meaning. The account's name
+is never written to the Output window or a log, never sent to an agent or The Desk, and never in this repo. The accounts
+message gains `personalNamed` (true or false, last) and each entry gains `personal` and `prop` (true or false, before
+`unserved`); a ChartBridge before 0.6.16 sends none of them, and the page then offers no pick.
 
 **The saved Auto** (`agent-<id>-auto.txt` next to `config.txt`, two `#` lines, then `auto<TAB><account>` or
 `auto<TAB>group:<id>`; the kill file's pattern; only the file itself counts, never a `.bak`). It is the agent's Auto intent:
 
 - **Written** when the page sets `agentMode` `auto`, when `agentAccount` changes the account and keeps Auto (`keepMode`), and
-  when `agentKill` off releases the kill switch while the mode is still Auto, and only if a personal account is named and
+  when `agentKill` off releases the kill switch while the mode is still Auto, and only if a personal account is picked and
   every seat (its one account, or every member of its group) is prop. A save that fails is a `status` `warn`: Auto is on, but
   it is not kept.
 - **Removed** on any other mode, on an account change that does not keep Auto on prop seats (None and the daily reset's None
@@ -3579,13 +3588,13 @@ start and when config.txt is loaded again.
 - Shadow and Copilot save nothing: an agent in either on a prop account goes to None at 17:00 as before.
 
 **Through the 17:00 ET reset.** `KeepThroughReset("agent:<id>", <account or group:<id>>)` is true only when a personal account
-is named, every seat is prop now, and the saved Auto names that account or group. Then the reset leaves the agent alone: its
+is picked, every seat is prop now, and the saved Auto names that account or group. Then the reset leaves the agent alone: its
 account and its mode stay. It is decided from the file, never the live mode, so the reset caught up at a start (every agent
 still in Shadow) keeps the account too. The agent's own window still governs every entry (`entryFrom`, `entryUntil`, `flatAt`,
 unchanged), so nothing trades in the break.
 
 **After a restart: one restore.** Every start is still Shadow. A start that finds the saved Auto (only looked for when a
-personal account is named) tries ONE restore, on the 2 s pass, under the placement gate:
+personal account is picked) tries ONE restore, on the 2 s pass, under the placement gate:
 
 1. It waits only while a seat is not known yet (not in NinjaTrader, not Connected, or Connected under 30 s: the reset's
    `UnknownWhy` rule). The first pass that knows every seat decides, and that answer is final for this start.
@@ -3604,7 +3613,7 @@ that was on at the stop is on at the start (0.6.3), so Auto stays off, and relea
 **What this does not do.** It places, cancels and flattens nothing; it never changes an account; it never reads or sets a
 mode for the bot or the copier; it never acts for an agent on the personal account, a Sim account or a group with a member
 that is not prop (those get the 0.6.15 result in every case: the reset to None, Shadow at every start). Going back to 0.6.15
-is safe: it ignores the config line (one "does nothing" Output line) and the file.
+is safe: it ignores both files.
 
 **Risks, stated.** The restore arms a live prop account with nobody at the desk; the runner's on-duty claim on The Desk is the
 outside brake (a runner without it sends no plan). A ChartBridge started in the middle of a session restores only when flat,

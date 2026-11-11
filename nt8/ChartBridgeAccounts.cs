@@ -123,6 +123,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // here; every write happens later on the timer's thread or a page's thread, never NinjaTrader's.
         public static void Start()
         {
+            ChartBridgeBranches.LoadPersonal();   // 0.6.16: the personal account's pick, before the agents start
             StartNow(ChartBridgeTime.NowUtcMs());
             WatchStatus();
             timer = new Timer(delegate { try { Tick(ChartBridgeTime.NowUtcMs()); } catch (Exception ex) { ChartBridgeServer.Log("accounts check error: " + ex.Message); } }, null, TickMs, TickMs);
@@ -567,10 +568,21 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (type == "client") { OnClient(client, text); return; }
                 string why = ChartBridgeV3.Gate(client);
                 Dictionary<string, string> m = null;
-                string[] keys = type == "accountTrade" ? new[] { "type", "cid", "account", "on" } : type == "accountUnarchive" ? new[] { "type", "cid", "account" } : new[] { "type", "cid", "account", "confirm" };
+                string[] keys = type == "accountTrade" ? new[] { "type", "cid", "account", "on" } : type == "accountUnarchive" ? new[] { "type", "cid", "account" } : type == "accountPersonal" ? new[] { "type", "cid", "account", "clear" } : new[] { "type", "cid", "account", "confirm" };
                 if (why == null) m = ChartBridgeV3.Flat(text, type, keys, out why);
                 if (m != null) cid = ChartBridgeV3.Str(m, "cid");
                 if (why == null && m.ContainsKey("cid") && cid == null) why = "cid must be a plain string";
+                if (why == null && type == "accountPersonal")   // 0.6.16: the one-time pick of the personal account (works with accountChecks on or off)
+                {
+                    string acct = ChartBridgeV3.Str(m, "account");
+                    bool clear = m.ContainsKey("clear") && m["clear"] == "true";
+                    if (m.ContainsKey("account") && acct == null) why = "account must be a plain string";
+                    else if (m.ContainsKey("clear") && m["clear"] != "true") why = "clear must be true (or left out)";
+                    else why = ChartBridgeBranches.SetPersonal(acct, clear);
+                    if (why == null) { SendAccountsNow(); client.Send(Status("info", clear ? "The personal account's pick is taken away: no account is prop." : acct + " is the personal account. Every other live account is a prop account.")); }
+                    else client.Send(Reject(cid, why));
+                    return;
+                }
                 if (why == null && !On) why = type + " is off (accountChecks = off in config.txt)";
                 if (why == null) why = type == "accountTrade" ? AccountTrade(m) : type == "accountUnarchive" ? AccountUnarchive(m) : AccountArchive(m);
                 if (why != null) client.Send(Reject(cid, why));
@@ -1111,7 +1123,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 }
             for (int i = 0; i < unseen.Count; i++)
                 b.Append(i > 0 ? "," : "").Append("{\"name\":").Append(CbJson.Str(unseen[i][0])).Append(",\"trade\":").Append(unseen[i][1] == "trade" ? "true" : "false").Append(",\"lastConnected\":").Append(unseen[i][2]).Append('}');
-            // prop accounts: whether config.txt names a personal account (never which one); each row carries its own prop
+            // prop accounts: whether a personal account is picked; each row carries its own personal and prop
             return b.Append("],\"personalNamed\":").Append(ChartBridgeBranches.PersonalNamed ? "true" : "false").Append('}').ToString();
         }
 
@@ -1156,7 +1168,8 @@ namespace NinjaTrader.NinjaScript.AddOns
              .Append(",\"canHide\":").Append(hideWhy == null ? "true" : "false")
              .Append(",\"hideWhy\":").Append(hideWhy == null ? "null" : CbJson.Str(hideWhy));
             ChartBridgeGroups.AppendAccountFields(b, name, a);   // 0.5.8: group, myFloor, myDailyLoss, floor, roomFloor, roomDaily, targetLeft, src, why
-            b.Append(",\"prop\":").Append(ChartBridgeBranches.IsProp(name) ? "true" : "false");   // prop accounts (config.txt personalAccount): false with no line
+            b.Append(",\"personal\":").Append(ChartBridgeBranches.IsPersonal(name) ? "true" : "false")   // prop accounts: the one Anthony picked on the page; prop: every other live account (both false with no pick)
+             .Append(",\"prop\":").Append(ChartBridgeBranches.IsProp(name) ? "true" : "false");
             b.Append(",\"unserved\":[").Append(a != null ? UnservedJson(a) : "").Append(']');   // 0.6.6 (the review): what Flatten every account cannot cover
             b.Append('}');
         }
@@ -1529,20 +1542,52 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         // ---------------------------------------------------------- prop accounts (Anthony's rulings: agents trade the prop accounts)
-        // config.txt's personalAccount line names the personal account (read in ChartBridgeConfig.Load). With it, an account is prop
-        // when it is not that account, not Sim and not Backtest or Playback. With no line, nothing is prop and ChartBridge behaves
-        // as before. A NEW notion: the accounts' "kind" (prop = in a group, personal = in no group) keeps its own meaning.
-        // The name is never logged and never sent (the page learns only personalNamed and each row's prop, ChartBridgeAccounts).
+        // Anthony picks his personal account once on the chart page's Accounts tab (the accountPersonal message; 2026-11-11: "make
+        // it a one-time pick on the chart page", nothing typed into a file by hand). ChartBridge keeps it in personal-account.txt
+        // next to config.txt. With it, an account is prop when it is not that account, not Sim and not Backtest or Playback. With
+        // no pick, nothing is prop and ChartBridge behaves as before. A NEW notion: the accounts' "kind" (prop = in a group,
+        // personal = in no group) keeps its own meaning. The name is never written to the Output window or a log; the page that
+        // made the pick sees it marked on its own row (the accounts message's personal).
         private static volatile string personal;
-        public static void ResetConfig() { personal = null; }
-        public static bool ReadConfig(string key, string val)
+        private static string PersonalFile { get { return Path.Combine(ChartBridgeConfig.Folder, "personal-account.txt"); } }
+        // At start (ChartBridgeAccounts.StartNow, before the agents start) and in the harness.
+        public static void LoadPersonal()
         {
-            if (key != "personalAccount") return false;
-            string v = (val ?? "").Trim();
-            personal = v.Length > 0 && !IsNone(v) ? v : null;
-            ChartBridgeServer.Log(personal != null ? "config.txt: personalAccount is set: every other account that is not Sim, Backtest or Playback is prop (an agent's Auto on prop accounts is kept through the 17:00 ET reset and after a restart)"
-                                                   : "config.txt: personalAccount names no account: no account is prop");
-            return true;
+            string p = ChartBridgeFiles.PersonalAccount(PersonalFile);
+            personal = p != null && !IsNone(p) ? p : null;
+            ChartBridgeServer.Log(personal != null ? "the personal account is picked (personal-account.txt): every other account that is not Sim, Backtest or Playback is prop"
+                                                   : "no personal account is picked (the chart page's Accounts tab): no account is prop");
+        }
+        public static bool IsPersonal(string name) { string p = personal; return p != null && name != null && string.Equals(name, p, StringComparison.OrdinalIgnoreCase); }
+        // The page's accountPersonal: {account: "<name>"} picks it, {clear: true} takes the pick away. Refused while any agent is in
+        // Auto (what is prop would change under it: every agent to Shadow or Copilot first); the account must be one NinjaTrader
+        // lists now, never Sim, Backtest or Playback. Every agent's saved Auto goes with a change (it was saved under the old
+        // pick). Null when done, else why not.
+        public static string SetPersonal(string name, bool clear)
+        {
+            if (clear == (name != null)) return "accountPersonal takes account (a plain string) or clear true, one of them";
+            List<string> auto = ChartBridgeAgents.InAuto();
+            if (auto.Count > 0) return "agent " + string.Join(", ", auto) + (auto.Count == 1 ? " is" : " are") + " in Auto: set every agent to Shadow first, then change the personal account";
+            if (!clear)
+            {
+                if (IsNone(name) || ChartBridgeOrders.IsNeverTradable(name)) return name + " cannot be the personal account (Backtest and Playback never are)";
+                List<Account> same;
+                lock (Account.All) same = Account.All.Where(x => x.Name != null && x.Name.Equals(name, StringComparison.OrdinalIgnoreCase)).ToList();
+                if (same.Count == 0) return name + " is not in NinjaTrader now: pick the personal account while it is listed";
+                if (same.Any(x => ChartBridgeBot.IsSim(x) || ChartBridgeAccounts.IsSim(x))) return name + " is a Sim account: the personal account is a live account";
+                name = same[0].Name;
+                string err = ChartBridgeFiles.SavePersonalAccount(PersonalFile, name);
+                if (err != null) return "personal-account.txt could not be saved (" + err + "); nothing changed";
+            }
+            else
+            {
+                string err = ChartBridgeFiles.ClearKill(PersonalFile);
+                if (err != null) return "personal-account.txt could not be removed (" + err + "); nothing changed";
+            }
+            personal = clear ? null : name;
+            ChartBridgeAgents.PersonalChanged();
+            ChartBridgeServer.Log(clear ? "the personal account's pick was taken away on the page: no account is prop" : "the personal account was picked on the page: every other account that is not Sim, Backtest or Playback is prop");
+            return null;
         }
         public static bool PersonalNamed { get { return personal != null; } }
         // Prop: a personal account is named, and this account is not it, not Backtest or Playback (ChartBridgeOrders.IsNeverTradable),

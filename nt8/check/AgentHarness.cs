@@ -5022,17 +5022,20 @@ public static class AgentHarness
         });
     }
 
-    // ------------------------------------------------------------ prop accounts (config.txt personalAccount): Auto kept, prop only
+    // ------------------------------------------------------------ prop accounts (the personal account picked on the page): Auto kept, prop only
     // Every name here is made up. MINE-1 stands in for the personal account, PROP-1 and PROP-2 for prop accounts (LIVE to
     // NinjaTrader: Provider Rithmic), SIM-E for a Sim account.
     static Account mine, prop1, prop2;
     static string AutoFilePath { get { return Path.Combine(Dir, "agent-manrae-auto.txt"); } }
     static bool AutoFileThere { get { return File.Exists(AutoFilePath) || File.Exists(AutoFilePath + ".bak"); } }
-    // config.txt with or without the personalAccount line; manrae on `account` (its file), every account flat, a restart (Shadow).
+    // With or without the personal account picked (personal-account.txt, as the page's pick saves it); manrae on `account` (its file), every account flat, a restart (Shadow).
     static void PropStart(string account, bool personalLine, bool keepAutoFile = false)
     {
         Hold = null;
-        if (personalLine) Config("agents = manrae, demob", "personalAccount = MINE-1"); else Config("agents = manrae, demob");
+        Config("agents = manrae, demob");
+        string pf = Path.Combine(Dir, "personal-account.txt");
+        if (personalLine) File.WriteAllLines(pf, new[] { "# made-up", "# test", "account\tMINE-1" }); else { try { Gone(pf); } catch (Exception) { } }
+        ChartBridgeBranches.LoadPersonal();
         ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, EVAL-A, SIM-A, SIM-B, SIM-C, SIM-D, SIM-E, MINE-1, PROP-1, PROP-2");
         foreach (Account a in Account.All.ToList()) { a.Connection.Status = ConnectionStatus.Connected; Settle(a); }
         SteadyAll();
@@ -5064,14 +5067,64 @@ public static class AgentHarness
             prop2 = Account.All.FirstOrDefault(x => x.Name == "PROP-2") ?? NewAccount("PROP-2", Provider.Rithmic);
             PropStart("PROP-1", false);
             Check(!ChartBridgeBranches.PersonalNamed && !ChartBridgeBranches.IsProp("PROP-1") && !ChartBridgeBranches.IsProp("MINE-1") && !ChartBridgeBranches.IsProp("SIM-E"),
-                  "prop: no personalAccount line: nothing is prop");
+                  "prop: no personal account picked: nothing is prop");
             PropStart("PROP-1", true);
             Check(ChartBridgeBranches.PersonalNamed && ChartBridgeBranches.IsProp("PROP-1") && ChartBridgeBranches.IsProp("prop-2") && !ChartBridgeBranches.IsProp("MINE-1") && !ChartBridgeBranches.IsProp("mine-1") &&
                   !ChartBridgeBranches.IsProp("SIM-E") && !ChartBridgeBranches.IsProp("Sim101") && !ChartBridgeBranches.IsProp("Playback101") && !ChartBridgeBranches.IsProp("Backtest") &&
                   !ChartBridgeBranches.IsProp("NOT-LISTED") && !ChartBridgeBranches.IsProp("-") && !ChartBridgeBranches.IsProp(null),
                   "prop: with the line: every account but the personal one, Sim, Playback, Backtest, None and one NinjaTrader does not list");
-            Check(!Logged("MINE-1 is") && !NinjaTrader.Code.Output.Lines.Any(x => x.Contains("personalAccount") && x.Contains("MINE-1")), "prop: the personal account's name is never in the Output window");
-            Check(ChartBridgeAccounts.AccountsJson(Account.All.ToList(), 0).Contains("\"personalNamed\":true") && !ChartBridgeAccounts.AccountsJson(Account.All.ToList(), 0).Contains("personalAccount"), "prop: the pages learn only that one is named");
+            Check(!NinjaTrader.Code.Output.Lines.Any(x => x.Contains("personal account") && x.Contains("MINE-1")), "prop: the personal account's name is never in the Output window");
+            string aj = ChartBridgeAccounts.AccountsJson(Account.All.ToList(), 0);
+            // each account's own marks: the first personal and prop after its name
+            Func<string, string> marks = n => { int i = aj.IndexOf("\"name\":\"" + n + "\""); Match mm = i < 0 ? Match.Empty : Regex.Match(aj.Substring(i), "\"personal\":(true|false),\"prop\":(true|false)"); return mm.Success ? mm.Groups[1].Value + "," + mm.Groups[2].Value : "?"; };
+            Check(aj.Contains("\"personalNamed\":true") && marks("MINE-1") == "true,false" && marks("PROP-1") == "false,true" && marks("SIM-E") == "false,false",
+                  "prop: the accounts message marks the personal account and every prop account: " + marks("MINE-1") + " " + marks("PROP-1") + " " + marks("SIM-E"));
+        });
+
+        // ---- the pick itself: the page's accountPersonal message
+        Part("prop: the personal account is picked on the page, once", () =>
+        {
+            PropStart("PROP-1", false);
+            string pf = Path.Combine(Dir, "personal-account.txt");
+            int s0 = N(page);
+            P("{\"type\":\"accountPersonal\",\"cid\":\"pp1\",\"account\":\"MINE-1\"}");
+            Check(!PageReject().Contains("\"cid\":\"pp1\"") && ChartBridgeBranches.PersonalNamed && ChartBridgeBranches.IsPersonal("MINE-1") && ChartBridgeBranches.IsProp("PROP-1") && !ChartBridgeBranches.IsProp("MINE-1") &&
+                  FileText("personal-account.txt").Contains("account\tMINE-1") && Any(page, s0, "\"personalNamed\":true") && Any(page, s0, "MINE-1 is the personal account"),
+                  "pick: MINE-1 picked on the page: saved, every other live account prop, the pages told: " + PageReject());
+            // kept through a restart of ChartBridge (the file is read again)
+            ChartBridgeBranches.LoadPersonal();
+            Check(ChartBridgeBranches.IsPersonal("mine-1") && !Logged("MINE-1 is picked") && !NinjaTrader.Code.Output.Lines.Any(x => x.Contains("personal account") && x.Contains("MINE-1")), "pick: read again at a start; its name never in the Output window");
+            foreach (string[] bad in new[] { new[] { "SIM-E", "is a Sim account" }, new[] { "Sim101", "is a Sim account" }, new[] { "Playback101", "cannot be the personal account" }, new[] { "NOT-LISTED", "is not in NinjaTrader now" } })
+            {
+                P("{\"type\":\"accountPersonal\",\"cid\":\"ppb\",\"account\":\"" + bad[0] + "\"}");
+                Check(PageReject().Contains("\"cid\":\"ppb\"") && PageReject().Contains(bad[1]) && ChartBridgeBranches.IsPersonal("MINE-1"), "pick: " + bad[0] + " refused, the pick as it was: " + PageReject());
+            }
+            P("{\"type\":\"accountPersonal\",\"cid\":\"ppc\"}");
+            Check(PageReject().Contains("\"cid\":\"ppc\"") && PageReject().Contains("takes account"), "pick: neither account nor clear: refused: " + PageReject());
+            P("{\"type\":\"accountPersonal\",\"cid\":\"ppd\",\"account\":\"PROP-2\",\"clear\":true}");
+            Check(PageReject().Contains("\"cid\":\"ppd\"") && ChartBridgeBranches.IsPersonal("MINE-1"), "pick: both account and clear: refused");
+            // never while an agent is in Auto: what is prop would change under it
+            Mode("manrae", "auto");
+            Check(AutoFileThere, "pick setup: manrae in Auto on PROP-1, its Auto saved");
+            P("{\"type\":\"accountPersonal\",\"cid\":\"ppe\",\"account\":\"PROP-2\"}");
+            Check(PageReject().Contains("\"cid\":\"ppe\"") && PageReject().Contains("agent manrae is in Auto") && ChartBridgeBranches.IsPersonal("MINE-1") && AutoFileThere, "pick: refused while an agent is in Auto: " + PageReject());
+            P("{\"type\":\"accountPersonal\",\"cid\":\"ppf\",\"clear\":true}");
+            Check(PageReject().Contains("\"cid\":\"ppf\"") && ChartBridgeBranches.PersonalNamed, "pick: taking it away is refused in Auto too");
+            // a saved Auto left from the old pick goes with a change (the agent in Shadow, a restore still waiting)
+            Mode("manrae", "shadow");
+            File.WriteAllLines(AutoFilePath, new[] { "# made-up", "# test", "auto\tPROP-1" });
+            P("{\"type\":\"accountPersonal\",\"cid\":\"ppg\",\"account\":\"PROP-2\"}");
+            Check(!PageReject().Contains("\"cid\":\"ppg\"") && ChartBridgeBranches.IsPersonal("PROP-2") && ChartBridgeBranches.IsProp("MINE-1") && !AutoFileThere && FileText("personal-account.txt").Contains("account\tPROP-2"),
+                  "pick: changed in Shadow: saved, and a saved Auto from the old pick is removed: " + PageReject());
+            P("{\"type\":\"accountPersonal\",\"cid\":\"pph\",\"clear\":true}");
+            Check(!PageReject().Contains("\"cid\":\"pph\"") && !ChartBridgeBranches.PersonalNamed && !ChartBridgeBranches.IsProp("PROP-1") && !File.Exists(pf), "pick: taken away: the file gone, nothing is prop");
+            // only a signed-in page of ChartBridge's own may pick
+            ChartBridgeClient other = new ChartBridgeClient(null, 777) { Origin = "http://localhost:8765" };
+            List<string> got = new List<string>();
+            other.Tap = s => { lock (got) got.Add(s); };
+            OnClient(other, "{\"type\":\"client\",\"v\":3}");
+            OnClient(other, "{\"type\":\"accountPersonal\",\"cid\":\"ppx\",\"account\":\"MINE-1\"}");
+            Check(!ChartBridgeBranches.PersonalNamed && got.Any(x => x.Contains("\"type\":\"reject\"") && x.Contains("may not trade")), "pick: a page that is not signed in cannot pick: " + got.LastOrDefault());
         });
 
         // ---- a no-setting install: exactly as 0.6.15 in every case
@@ -5271,9 +5324,11 @@ public static class AgentHarness
             try { Gone(AutoFilePath); } catch (Exception) { }
             File.WriteAllLines(Path.Combine(Dir, "agent-manrae-account.txt"), new[] { "# made-up", "# test", "account\tSIM-E" });
             Config("agents = manrae, demob");
+            try { Gone(Path.Combine(Dir, "personal-account.txt")); } catch (Exception) { }
+            ChartBridgeBranches.LoadPersonal();
             ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, EVAL-A, SIM-A, SIM-B, SIM-C, SIM-D, SIM-E");
             Restart();
-            Check(!ChartBridgeBranches.PersonalNamed, "prop: the line gone from config.txt: nothing is prop again");
+            Check(!ChartBridgeBranches.PersonalNamed, "prop: the pick gone: nothing is prop again");
         });
     }
 }

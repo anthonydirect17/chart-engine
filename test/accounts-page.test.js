@@ -241,6 +241,35 @@ async function loadFeed() {
   });
   return { feed, page, sent, socks, notes, fetches, viaOrders, FakeSocket, settle: () => new Promise(r => setTimeout(r, 5)) };
 }
+test('1.44.2 (ChartBridge 0.6.16): the personal account is picked on the page: one message, and nothing to an older ChartBridge', async () => {
+  const F = await loadFeed();
+  const G = global.WebSocket; global.WebSocket = F.FakeSocket;
+  try {
+    F.feed.start(['liveFirst', 'v3']);
+    await F.settle();
+    const s = F.socks[0];
+    s.deliver({ type: 'hello', version: '0.6.15', instruments: [], features: ['v3'] });
+    await F.settle();
+    s.deliver({ type: 'trading', enabled: true, accounts: [], maxQty: {}, switches: { accountChecks: true } });
+    // an older ChartBridge: its accounts message has no personalNamed, so the page never sends the pick
+    s.deliver({ type: 'accounts', list: [{ name: 'EVAL-A', state: 'active', connection: 'connected' }], archived: [] });
+    F.sent.length = 0;
+    assert.equal(F.feed.S.personalNamed, null);
+    assert.ok(!F.feed.accountPersonal('EVAL-A') && !F.feed.accountPersonalClear());
+    assert.equal(F.sent.length, 0, 'nothing is sent to a ChartBridge that does not know the pick');
+    // ChartBridge 0.6.16: no pick yet, then picked
+    s.deliver({ type: 'accounts', list: [{ name: 'EVAL-A', state: 'active', connection: 'connected', personal: false, prop: false }], archived: [], personalNamed: false });
+    assert.equal(F.feed.S.personalNamed, false);
+    assert.ok(F.feed.accountPersonal('EVAL-A'));
+    assert.deepEqual(Object.keys(F.sent[0]).sort(), ['account', 'cid', 'type']);
+    assert.deepEqual([F.sent[0].type, F.sent[0].account], ['accountPersonal', 'EVAL-A']);
+    s.deliver({ type: 'accounts', list: [{ name: 'EVAL-A', state: 'active', connection: 'connected', personal: true, prop: false }], archived: [], personalNamed: true });
+    assert.equal(F.feed.S.personalNamed, true);
+    assert.ok(F.feed.accountPersonalClear());
+    assert.deepEqual(F.sent[1], { type: 'accountPersonal', cid: F.sent[1].cid, clear: true });
+  } finally { F.feed.stop && F.feed.stop(); global.WebSocket = G; }
+});
+
 test('the Account page\'s connection: client v3 right after hello, then auth; its actions are exactly the contract\'s messages', async () => {
   const V = await import('./fake-v3.mjs');
   const F = await loadFeed();
