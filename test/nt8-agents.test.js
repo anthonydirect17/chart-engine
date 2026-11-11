@@ -279,9 +279,11 @@ test('0.6.17 Kill all for the prop accounts: only agents whose every account is 
   const h = read(path.join('check', 'AgentHarness.cs'));
   for (const s of ['kill all, no personal account picked: refused', 'kill all: the personal account and a prop account the agent does not trade: no order, no cancel', 'kill all: an agent on a Sim account is not touched', 'kill all: an agent on the personal account: not killed, not flattened, still in Auto', 'kill all: released: Auto stays off until it is set on the page'])
     assert.ok(h.includes(s), s);
-  // the page does not send it yet (the button comes with the Fleet tab); the Board's KILL ALL AGENTS is as it was
+  // until chart 1.44.5 no page sent it; the Board's KILL ALL AGENTS is as it was
   const fsx = require('node:fs');
-  for (const f of fsx.readdirSync(path.join(__dirname, '..', 'live')).filter(f => f.endsWith('.js'))) assert.ok(!fsx.readFileSync(path.join(__dirname, '..', 'live', f), 'utf8').includes('agentKillAllProp'), f);
+  // chart 1.45.0: the Fleet tab is the one page file that sends it (asked first; test/fleet.test.js); no other page file names it
+  for (const f of fsx.readdirSync(path.join(__dirname, '..', 'live')).filter(f => f.endsWith('.js')))
+    assert.strictEqual(fsx.readFileSync(path.join(__dirname, '..', 'live', f), 'utf8').includes('agentKillAllProp'), f === 'fleet.js', f);
 });
 
 test('0.6.19 the day\'s profit stop: the plan\'s dayStopDollars, the smaller of it and the consistency mark off a funded account, the trader\'s own flatten, a stand-down until the roll', () => {

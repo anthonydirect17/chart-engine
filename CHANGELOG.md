@@ -63,6 +63,30 @@
   `test/pc-updater.test.js`: the allowed git subcommands, the box job's name, useHttpPath read before the one ask, the
   token only after a 404 or 401 and then through the Actions API, one place that asks for it and one that sends it.
 
+## chart 1.45.0 (2026-11-11): the Fleet tab, first cut: the traders, the prop accounts and Kill all (page only, no F5)
+
+In plain words: a new Fleet button in the top bar opens one screen for the Prop Business. Nothing changes for hand trading,
+and the Agent, Bot and League tabs are all still there: this first cut replaces none of them yet.
+
+- **Kill all: flatten and stop.** One button for every trader on the prop accounts: each is flattened, its kill switch goes
+  on and it drops to Shadow (ChartBridge 0.6.17 does the work). It asks first, on the page, with the focus on Cancel. Your
+  personal account, Sim accounts, the bot, the copier and orders placed by hand are never touched. It is not offered until you
+  are signed in and have picked your personal account, and it says why.
+- **Traders.** Each bot or agent: its mode, whether it is on duty (in Auto on prop accounts, connected, not stopped), its
+  account, its window and flat time, what it is doing now, and why it is stood down. And its two entry switches, **Market
+  entry** and **No target**, on or off, so a market entry with no target is never a surprise. They are shown here and changed
+  only on the Agent tab, by you.
+- **Prop accounts.** Each account that is not your personal one: Eval or Funded (its group's Type), progress to the target,
+  the cushion to the floor, today, and the day stop: how much of it is used, the mark, and whether it comes from the trader's
+  plan or from the consistency rule. An account in no group, or in a group with no Type, says that the runner will size it 0.
+- **Honest about what is missing.** Every number is ChartBridge's own, live; nothing is sample data. The money, today's plan
+  with each account's size, the live trades against the backtest band, and the feed are not built yet, and the tab says so
+  instead of showing a placeholder. On an older ChartBridge the switches and the day stop say which version they need.
+
+The button shows with ChartBridge 0.6.17 or later. The page sends one message from this tab, `agentKillAllProp`, and builds no
+order (`test/fleet.test.js`). New files `live/fleet.js` and `live/fleet.css`; `npm run smoke:fleet` (screenshots
+`test/out/fleet-*.png`). ChartBridge stays 0.6.19; no recompile.
+
 ## ChartBridge 0.6.19 and chart 1.44.5 (2026-11-11): the day's profit stop, a dollar mark per account
 
 In plain words: nothing changes on the chart, and nothing changes for hand trading. A trader (a bot or an agent) now has a
