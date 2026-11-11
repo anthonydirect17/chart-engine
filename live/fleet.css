@@ -1,4 +1,4 @@
-/* The Fleet tab (chart 1.45.0, live/fleet.js). The page's own look (the workspace tokens): black and charcoal with gold trim.
+/* The Bots tab (chart 1.45.0, live/fleet.js; drafted as Fleet, the fl- names keep the word). The page's own look (the workspace tokens): black and charcoal with gold trim.
    Green and red only on Today (a P&L). Every number here is a live value: nothing is eased, counted up or animated. */
 .ws-btn.fl-tabbtn { font-weight: 600; letter-spacing: .02em; }
 .ws-btn.fl-tabbtn[aria-pressed="true"] { border-color: var(--ws-tint-line); background: var(--ws-tint); color: var(--ws-soft); box-shadow: inset 0 0 0 1px var(--ws-tint-line); }
@@ -48,4 +48,20 @@ body:not(.fl-on) .fl-view.fl-in-ws { display: none !important; }
 .fl-pnl.down { color: var(--ws-sell); }
 .fl-empty, .fl-note, .fl-later { margin: 0; font-size: 12px; color: var(--ws-muted); }
 .fl-later { border: 1px dashed var(--ws-line); border-radius: 6px; padding: 6px 8px; }
+/* the roster: one card a bot or a lineup; gold trim only on what runs live or is above no edge (no green or red: not a P&L) */
+.fl-cards { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 8px; }
+.fl-card { border: 1px solid var(--ws-line); border-radius: 6px; padding: 8px 10px; display: flex; flex-direction: column; gap: 4px; font-size: 12px; min-width: 0; }
+.fl-card[data-tone="notlive"] { border-color: var(--ws-warn); }
+.fl-line { margin: 0; overflow-wrap: anywhere; }
+.fl-mutline { color: var(--ws-muted); font-size: 11px; }
+.fl-evidence { color: var(--ws-text2); font-weight: 600; }
+.fl-stages { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin-top: 2px; }
+.fl-stage { border-top: 1px solid var(--ws-line); padding-top: 5px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.fl-stname { font: 600 11px var(--ws-sans); letter-spacing: .04em; text-transform: uppercase; color: var(--ws-text2); }
+.fl-tag[data-kind="live"], .fl-tag[data-kind="edge"] { border-color: var(--ws-tint-line); color: var(--ws-soft); }
+.fl-tag[data-kind="notlive"], .fl-tag[data-kind="quick"] { border-color: var(--ws-warn); color: var(--ws-warn); }
+.fl-members { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 2px; }
+.fl-mname { font-weight: 600; }
+.fl-notshown { margin: 0; padding-left: 18px; font-size: 11px; color: var(--ws-warn); }
+.fl-roster .ws-btn[aria-disabled="true"] { opacity: .55; cursor: not-allowed; }
 @media (max-width: 900px) { .fl-cols { grid-template-columns: minmax(0, 1fr); } }

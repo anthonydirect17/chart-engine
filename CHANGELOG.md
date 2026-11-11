@@ -63,6 +63,39 @@
   `test/pc-updater.test.js`: the allowed git subcommands, the box job's name, useHttpPath read before the one ask, the
   token only after a 404 or 401 and then through the Actions API, one place that asks for it and one that sends it.
 
+## chart 1.45.0 (2026-11-11): the Bots tab: the roster, the traders, the prop accounts and Kill all (page only, no F5)
+
+In plain words: a new Bots button in the top bar opens one screen for the Prop Business. Nothing changes for hand trading,
+and the Agent, Bot and League tabs are all still there: this tab replaces none of them yet. Build answers 7, part D1.
+
+- **The roster.** Every bot and every lineup the Lab has built a roster file for, read from this PC by ChartBridge 0.6.20
+  (`GET /roster`). Each card says whether the runner can run it live, and why not when it cannot; the run its numbers come
+  from; **"In-sample, not confirmed"** and its try count; and for the eval stage and the funded stage: the playbook it
+  sizes with (risk a trade, the day's loss stop and profit stop, trades a day, the payout mark), its profit per $1 with its
+  range, and beside it what the same trades would show with no edge. A number is marked "Above no edge" only when the file
+  says so. A lineup lists its bots in order with what each took and skipped. A file made with `--quick` is marked "Quick
+  look: never traded". A file that cannot be shown whole is listed with why, never half shown. Roster numbers are never
+  green or red: they are not a P&L. With no roster folder set on the PC, or an older ChartBridge, the tab says so.
+- **Kill all: flatten and stop.** One button for every trader on a prop account: its position there is closed whole (a
+  contract added by hand on that account and contract included), its kill switch goes on and it drops to Shadow
+  (ChartBridge does the work). It asks first, on the page, with the focus on Cancel. Your personal account, a trader on Sim
+  accounts only, the bot and the copier are never touched. It is not offered until you are signed in and have picked your
+  personal account, and it says why.
+- **Traders.** Each trader slot: its mode, whether it is on duty (in Auto on prop accounts, connected, not stopped), its
+  account, its window and flat time, what it is doing now, and why it is stood down. And its two entry switches, **Market
+  entry** and **No target**, on or off. They are shown here and changed only on the Agent tab, by you.
+- **Prop accounts.** Each account that is not your personal one: Eval or Funded (its group's Type), progress to the target,
+  the cushion to the floor, today, and the day stop: how much of it is used, the mark, and whether it comes from the trader's
+  plan or from the consistency rule. An account in no group, or in a group with no Type, says that the runner will size it 0.
+- **Honest about what is missing.** Nothing on the tab is sample data. Not built yet, and said on the tab: the pick of which
+  bots run today on the eval accounts and on the funded accounts, the one Armed slider, and each bot's own state from the
+  runner. Until then nothing on this tab starts a bot.
+
+The button shows with ChartBridge 0.6.17 or later; the roster needs 0.6.20. The tab sends one message, `agentKillAllProp`,
+makes one request, `GET /roster`, and builds no order (`test/fleet.test.js`). New files `live/fleet.js` and `live/fleet.css`
+(the tab was drafted as "Fleet"; the file names keep the word); `npm run smoke:fleet` (screenshots `test/out/fleet-*.png`).
+ChartBridge stays 0.6.20; no recompile.
+
 ## ChartBridge 0.6.20 and chart 1.44.6 (2026-11-11): the roster, the Lab's files served read only
 
 In plain words: nothing changes on the chart, for hand trading or for any trader. ChartBridge can now hand the chart page

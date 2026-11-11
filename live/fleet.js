@@ -1,24 +1,33 @@
 /*
- * The Fleet tab (chart 1.45.0, build plan 2026-11-10, B1, first cut): the Prop Business on the chart page. One place for the
- * traders (the bots and agents on ChartBridge's agent channel) and the prop accounts they trade.
+ * The Bots tab (chart 1.45.0; build answers 7, part D1): the Prop Business on the chart page. One place for the roster (the
+ * bots and lineups the Lab built, with their numbers), the traders (the slots on ChartBridge's agent channel) and the prop
+ * accounts they trade. It was drafted as "Fleet" (the file and the fl- names keep that word); on screen it is Bots.
  *
- * FIRST CUT. It is added beside the Agent, Bot and League tabs and replaces none of them yet. It shows only what ChartBridge
- * itself says on the window's own connection, so every value is live and nothing is sample data:
+ * It is added beside the Agent, Bot and League tabs and replaces none of them yet. It shows only what ChartBridge itself says
+ * on the window's own connection, and the roster files ChartBridge serves from this PC, so nothing is sample data:
+ *   - The roster (ChartBridge 0.6.20's `GET /roster`, Bot-Lab's specrunner.roster/1 and specrunner.lineup/1 files): each bot
+ *     and each lineup, whether the spec runner can run it and why not, the run its numbers come from, and for the eval stage
+ *     and the funded stage the playbook it sizes with and its profit per $1 beside the no-edge range. Every card says
+ *     "In-sample, not confirmed" and its try count: a roster/1 file carries no confirmation, and a number from an in-sample
+ *     run is never shown as proof (build answers 8, section 4). A file built with --quick says so and is never traded.
+ *     The tab reads the files; it decides nothing from them and sends nothing about them.
  *   - Kill all: flatten and stop. ChartBridge 0.6.17's `agentKillAllProp`: every trader on prop accounts is flattened, its kill
  *     switch goes on and its mode goes to Shadow. It asks first, in the page (two buttons, no browser dialog). It never touches
- *     the personal account, a Sim account, the bot, the copier or an order placed by hand: ChartBridge decides that, not the page.
+ *     the personal account, a trader on Sim accounts only, the bot or the copier, and it cancels only the trader's own orders;
+ *     the trader's position on its account and contract is closed whole, a contract added by hand included (Anthony
+ *     2026-11-11: the account a bot trades is the bot's for the day). ChartBridge decides all of that, not the page.
  *   - Traders: each one's mode, account, window, what it is doing, why it is stood down, the day's profit stop its plan named
  *     (ChartBridge 0.6.19), and its two entry switches, Market entry and No target (0.6.18), so a market entry with no target is
  *     never a surprise (the coordinator's condition, 2026-11-11). Read only: a switch is changed on the Agent tab, by a person.
  *   - Prop accounts: stage (the group's Type), progress to the target, the cushion to the floor, today, the day's profit stop
  *     mark and where it comes from, and what would stop the runner sizing it (no group Type: size 0).
- * What the mockup also shows and this cut does not: the money tiles, today's plan, the live trades against the backtest band,
- * and the feed. They need The Desk and the live runner, and are said plainly on the tab as not built yet.
+ * Not in this cut, and said plainly on the tab: the pick of which bots run today on the eval and the funded accounts, the one
+ * Armed slider (D2), and each bot's own state from the spec runner (B3).
  *
  * "Prop" is ChartBridge's word (`prop` on each row of the `accounts` message, 0.6.16): every live account that is not the
  * personal account Anthony picked. With no pick nothing is prop, and the tab says how to pick.
  *
- * Nothing here places an order. The one message it can send is `agentKillAllProp`.
+ * Nothing here places an order. The one message it can send is `agentKillAllProp`. The one request it makes is GET /roster.
  *
  * Two parts, as league.js: FleetCore (pure: Node tests, test/fleet.test.js) and, in a browser, FleetView (the tab).
  */
@@ -31,6 +40,9 @@
 const KILL_MIN = '0.6.17';       // ChartBridge that knows agentKillAllProp
 const SWITCH_MIN = '0.6.18';     // ... the two entry switches
 const DAYSTOP_MIN = '0.6.19';    // ... the day's profit stop
+const ROSTER_MIN = '0.6.20';     // ... GET /roster
+const ROSTER_FORMAT = 'specrunner.roster/1', LINEUP_FORMAT = 'specrunner.lineup/1';   // Bot-Lab specrunner/roster.py
+const NAME_RX = /^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$/;
 const CONFIRM_MS = 8000;         // the Kill all question stays this long
 const MODE_NAME = { shadow: 'Shadow', copilot: 'Copilot', auto: 'Auto' };
 const isNum = v => typeof v === 'number' && isFinite(v);
@@ -176,6 +188,108 @@ function propAccounts(accountsMsg, groupsMsg, agents) {
   return rows.sort((x, y) => (x.name.toLowerCase() < y.name.toLowerCase() ? -1 : x.name.toLowerCase() > y.name.toLowerCase() ? 1 : 0));
 }
 
+/* ---------------------------------------------------------------- the roster (GET /roster, ChartBridge 0.6.20) */
+/** "+0.42", "-0.10", "0.00" (two places); "" when not a number. Profit per $1 is a ratio, not dollars. */
+function signed(v) { return isNum(v) ? (v > 0 ? '+' : '') + v.toFixed(2) : ''; }
+const pct = v => (isNum(v) ? Math.round(v * 100) + '%' : '');
+const count = v => (Number.isInteger(v) && v >= 0 ? v : null);
+const one = (n, word) => n + ' ' + word + (n === 1 ? '' : 's');
+
+/** One stage of a roster file as the tab shows it, or null when the file's playbook or numbers are not in the format's shape. */
+function stageCard(d, stage) {
+  const pb = plainObj(d.playbook) ? d.playbook[stage] : null, n = plainObj(d.numbers) ? d.numbers[stage] : null;
+  if (!plainObj(pb) || !plainObj(n) || !isNum(pb.risk_dollars) || pb.risk_dollars <= 0 || !isNum(n.profit_per_dollar)) return null;
+  const ne = n.no_edge, r = n.range95;
+  if (!plainObj(ne) || !isNum(ne.median) || !isNum(ne.p5) || !isNum(ne.p95) || typeof n.above_no_edge !== 'boolean') return null;
+  const opt = v => (isNum(v) && v > 0 ? v : null);
+  const out = {
+    stage, title: stage === 'eval' ? 'Eval' : 'Funded',
+    risk: pb.risk_dollars, dayLoss: opt(pb.daily_loss_stop), dayProfit: opt(pb.daily_profit_stop), maxTrades: opt(pb.max_trades),
+    payoutAt: stage === 'funded' ? opt(pb.payout_at) : null,
+    profitPerDollar: n.profit_per_dollar, range: Array.isArray(r) && isNum(r[0]) && isNum(r[1]) ? [r[0], r[1]] : null,
+    noEdge: { median: ne.median, p5: ne.p5, p95: ne.p95 }, aboveNoEdge: n.above_no_edge,
+    notSearchedOn: isNum(n.not_searched_on) ? n.not_searched_on : null,
+  };
+  out.playbookText = 'Risk ' + usd(out.risk) + ' a trade; day loss stop ' + (out.dayLoss === null ? 'none' : usd(out.dayLoss)) + '; day profit stop ' + (out.dayProfit === null ? 'none' : usd(out.dayProfit)) +
+    '; ' + (out.maxTrades === null ? 'no cap on trades a day' : 'at most ' + one(out.maxTrades, 'trade') + ' a day') + (stage === 'funded' ? '; payout ' + (out.payoutAt === null ? 'not set' : 'at ' + usd(out.payoutAt)) : '');
+  out.profitText = 'Profit per $1: ' + signed(out.profitPerDollar) + (out.range ? ' (95%: ' + signed(out.range[0]) + ' to ' + signed(out.range[1]) + ')' : '');
+  out.noEdgeText = 'No edge would show ' + signed(ne.median) + ' (5th to 95th: ' + signed(ne.p5) + ' to ' + signed(ne.p95) + ')';
+  out.edgeText = out.aboveNoEdge ? 'Above no edge' : 'Not above no edge';
+  out.heldBackText = 'On the sessions not searched: ' + (out.notSearchedOn === null ? 'none were held back' : signed(out.notSearchedOn));
+  if (stage === 'eval') out.stageText = (isNum(n.eval_pass) ? 'Passes ' + pct(n.eval_pass) + ' of evals' : 'Pass rate not known') + (isNum(n.sessions_to_pass) ? ', in ' + n.sessions_to_pass + ' sessions (median)' : '');
+  else out.stageText = (isNum(n.paid_per_funded) ? 'Paid ' + usd(n.paid_per_funded) + ' per funded account' : 'Paid per funded account not known') + (isNum(n.share_paid) ? '; ' + pct(n.share_paid) + ' reach a payout' : '') +
+    (isNum(n.sessions_to_first_payout) ? ', the first in ' + n.sessions_to_first_payout + ' sessions (median)' : '');
+  return out;
+}
+/** A bot's part (its own file, or one row of a lineup's `bots`): the name, whether it runs live and why not, its run. Or null. */
+function botPart(b) {
+  if (!plainObj(b) || typeof b.bot !== 'string' || !NAME_RX.test(b.bot) || typeof b.runs_live !== 'boolean' || !plainObj(b.record) || typeof b.record.run_id !== 'string') return null;
+  const r = b.record, sess = count(r.sessions), trades = count(r.trades), tries = count(r.try);
+  return {
+    name: b.bot, runsLive: b.runs_live, whyNot: b.runs_live ? '' : str(b.why_not, 400) || 'the file does not say why',
+    runId: str(r.run_id, 80), sessions: sess, trades, tries, instrument: str(r.instrument, 12), verdict: str(r.verdict, 200),
+    recordText: 'Run ' + str(r.run_id, 80) + ': ' + (sess === null ? 'sessions not known' : one(sess, 'session')) + ', ' + (trades === null ? 'trades not known' : one(trades, 'trade')) + (str(r.instrument, 12) ? ', ' + str(r.instrument, 12) : ''),
+    /* a roster/1 file carries no confirmation on locked weeks: every number in it is in-sample (build answers 8, section 4) */
+    evidenceText: 'In-sample, not confirmed' + (tries === null ? '; try count not known' : '; try ' + tries),
+  };
+}
+const planText = p => (plainObj(p) && typeof p.size === 'string' && typeof p.dll === 'boolean' ? str(p.size, 8) + (p.dll ? ' with the daily loss limit' : ' without the daily loss limit') : 'plan not known');
+
+/**
+ * The body of GET /roster as the tab shows it. body: the parsed JSON ({ files: [{ name, ok, roster | why }], left }).
+ * -> { ok, why, bots: [card], lineups: [card], notShown: [{ name, why }], left }
+ * A card: { kind: 'bot' | 'lineup', file, name, runsLive, whyNot, quick, planText, stages: [eval, funded], ... } and, for a bot,
+ * its botPart; for a lineup, bots: [botPart + { taken, skipped, sessionsLeftOut }] in the lineup's order and joinedText.
+ * The tab is not Bot-Lab's strict reader: a file whose shape it cannot show is listed under notShown with why, never half shown.
+ */
+function rosterCards(body) {
+  const out = { ok: false, why: '', bots: [], lineups: [], notShown: [], left: 0 };
+  if (!plainObj(body) || !Array.isArray(body.files)) { out.why = 'ChartBridge\'s answer is not a roster list'; return out; }
+  out.ok = true;
+  out.left = count(body.left) || 0;
+  for (const f of body.files) {
+    if (!plainObj(f) || typeof f.name !== 'string') continue;
+    const name = str(f.name, 60), no = why => out.notShown.push({ name, why });
+    if (f.ok !== true) { no(str(f.why, 200) || 'ChartBridge did not serve it'); continue; }
+    const d = f.roster;
+    if (!plainObj(d) || (d.format !== ROSTER_FORMAT && d.format !== LINEUP_FORMAT)) { no('not a roster file this tab knows'); continue; }
+    const stages = [stageCard(d, 'eval'), stageCard(d, 'funded')];
+    if (!stages[0] || !stages[1]) { no('its playbook or its numbers are not in the format\'s shape'); continue; }
+    const quick = plainObj(d.counts) && d.counts.quick === true;
+    const base = { file: name, quick, planText: planText(d.plan), stages };
+    if (d.format === ROSTER_FORMAT) {
+      const b = botPart(d);
+      if (!b) { no('its bot, its run or whether it runs live is not in the format\'s shape'); continue; }
+      out.bots.push(Object.assign({ kind: 'bot' }, base, b));
+    } else {
+      const parts = Array.isArray(d.bots) ? d.bots.map(x => { const b = botPart(x); return b && Object.assign(b, { taken: count(x.taken), skipped: count(x.skipped), sessionsLeftOut: count(x.sessions_left_out) }); }) : [];
+      if (typeof d.lineup !== 'string' || !NAME_RX.test(d.lineup) || parts.length < 2 || parts.some(b => !b) || typeof d.runs_live !== 'boolean') { no('its name or its bots are not in the format\'s shape'); continue; }
+      const j = plainObj(d.joined) ? d.joined : {};
+      const stopped = parts.filter(b => !b.runsLive);
+      out.lineups.push(Object.assign({ kind: 'lineup' }, base, {
+        name: d.lineup, bots: parts,
+        /* the lineup runs live only when the file says so AND every bot in it does: the stricter of the two */
+        runsLive: d.runs_live === true && !stopped.length,
+        whyNot: stopped.length ? stopped.map(b => b.name + ': ' + b.whyNot).join('; ') : d.runs_live ? '' : 'the file says the lineup does not run live',
+        joinedText: (count(j.sessions) === null ? 'sessions in common not known' : one(j.sessions, 'session') + ' in common') + ', ' + (count(j.trades) === null ? 'trades not known' : one(j.trades, 'trade') + ' taken') +
+          ', ' + (count(j.skipped) === null ? 'skips not known' : j.skipped + ' skipped because another bot\'s trade was open'),
+        evidenceText: 'In-sample, not confirmed; tries: ' + parts.map(b => b.name + ' ' + (b.tries === null ? 'not known' : b.tries)).join(', '),
+      }));
+    }
+  }
+  const byName = (x, y) => (x.name.toLowerCase() < y.name.toLowerCase() ? -1 : x.name.toLowerCase() > y.name.toLowerCase() ? 1 : 0);
+  out.bots.sort(byName); out.lineups.sort(byName);
+  return out;
+}
+/** Why the roster is not shown, for an answer of GET /roster that is not 200 (0: the request itself failed). */
+function rosterProblem(status, error) {
+  if (status === 404) return 'No roster folder is set on this PC. It is one line in ChartBridge\'s config.txt (rosterFolder), filled in when Bot-Lab is installed here.';
+  if (status === 403) return 'ChartBridge serves the roster only to a page opened by the localhost name. Open the chart page as localhost, not by a number.';
+  if (status === 500) return 'ChartBridge could not read the roster folder' + (str(error, 200) ? ': ' + str(error, 200) : '') + '.';
+  if (status === 0) return 'The roster could not be asked for: ChartBridge did not answer.';
+  return 'ChartBridge answered ' + status + ' for the roster.';
+}
+
 /** May Kill all be sent now? -> { ok, why }. */
 function killAllState(version, accountsMsg, signedIn, connected) {
   if (!connected) return { ok: false, why: 'ChartBridge is not connected' };
@@ -194,7 +308,7 @@ function dutyLine(rows) {
   return rows.length ? 'Nobody on duty: no trader is in Auto on prop accounts' : 'No traders yet';
 }
 
-return { KILL_MIN, SWITCH_MIN, DAYSTOP_MIN, CONFIRM_MS, MODE_NAME, atLeast, usd, kindOf, dayMark, traderAccounts, statusText, traders, propAccounts, killAllState, killAllMsg, dutyLine };
+return { KILL_MIN, SWITCH_MIN, DAYSTOP_MIN, ROSTER_MIN, ROSTER_FORMAT, LINEUP_FORMAT, CONFIRM_MS, MODE_NAME, atLeast, usd, signed, stageCard, rosterCards, rosterProblem, kindOf, dayMark, traderAccounts, statusText, traders, propAccounts, killAllState, killAllMsg, dutyLine };
 });
 
 /* ================================================================================================ the tab (browser only) */
@@ -207,13 +321,14 @@ const esc = s => String(s === undefined || s === null ? '' : s).replace(/[&<>"']
 function create(o) {
   o = o || {};
   const view = o.view || null, tabBtn = o.tab || null, V3 = o.v3 || null;
-  const S = { shown: false, version: '', connected: false, signedIn: false, accounts: null, groups: null, agents: new Map(), ask: 0, askTimer: 0, said: '', saidBad: false, saidState: false, cidSeq: 0, pending: '', sent: 0 };
+  const S = { shown: false, version: '', connected: false, signedIn: false, accounts: null, groups: null, agents: new Map(), ask: 0, askTimer: 0, said: '', saidBad: false, saidState: false, cidSeq: 0, pending: '', sent: 0,
+    roster: { state: 'idle', text: '', cards: null, seq: 0, asked: 0 } };
   const agentList = () => [...S.agents.values()];
   const cid = () => 'fl' + (++S.cidSeq).toString(36) + Math.random().toString(36).slice(2, 6);
 
   function onMessage(m) {
     switch (m && m.type) {
-      case 'hello': S.version = typeof m.version === 'string' ? m.version : ''; S.connected = true; offer(); break;
+      case 'hello': S.version = typeof m.version === 'string' ? m.version : ''; S.connected = true; offer(); if (S.shown && S.roster.state !== 'loading') loadRoster(); break;
       case 'trading': S.signedIn = !!m.enabled; break;
       case 'accounts': S.accounts = m; break;
       case 'groups': S.groups = m; break;
@@ -225,7 +340,7 @@ function create(o) {
     if (S.saidState && C.killAllState(S.version, S.accounts, S.signedIn, S.connected).why !== S.said) say('', false);
     if (S.shown) render();
   }
-  function lost() { S.connected = false; S.signedIn = false; S.agents.clear(); S.accounts = null; S.groups = null; S.pending = ''; say('', false); endAsk(); if (S.shown) render(); }
+  function lost() { S.roster.seq++; S.roster = { state: 'idle', text: '', cards: null, seq: S.roster.seq, asked: S.roster.asked }; S.connected = false; S.signedIn = false; S.agents.clear(); S.accounts = null; S.groups = null; S.pending = ''; say('', false); endAsk(); if (S.shown) render(); }
   /* the tab button shows with a ChartBridge that has prop accounts (0.6.17: Kill all) */
   function offer() { if (tabBtn) tabBtn.hidden = !C.atLeast(S.version, C.KILL_MIN); }
   /* fromState: the line only repeats why Kill all is not offered; it goes as soon as that reason does */
@@ -244,6 +359,59 @@ function create(o) {
     render();
   }
 
+  /* The roster: one GET /roster (ChartBridge 0.6.20), when the tab opens, when ChartBridge says hello while it is open, and on
+     Read again. Read only: nothing is sent about a file, and nothing here decides from one. A late answer of an older ask is dropped. */
+  function loadRoster() {
+    const R = S.roster, doFetch = typeof o.fetch === 'function' ? o.fetch : typeof fetch === 'function' ? fetch : null;
+    if (!S.connected) { S.roster = { state: 'idle', text: '', cards: null, seq: R.seq + 1, asked: R.asked }; render(); return; }
+    if (!C.atLeast(S.version, C.ROSTER_MIN)) { S.roster = { state: 'old', text: 'The roster needs ChartBridge ' + C.ROSTER_MIN + ' or later (this one is ' + (S.version || 'not known') + ').', cards: null, seq: R.seq + 1, asked: R.asked }; render(); return; }
+    if (!doFetch) return;
+    const seq = R.seq + 1;
+    S.roster = { state: 'loading', text: '', cards: R.cards, seq, asked: R.asked + 1 };
+    render();
+    const done = (state, text, cards) => { if (S.roster.seq !== seq) return; S.roster = { state, text, cards: cards || null, seq, asked: S.roster.asked }; if (S.shown) render(); };
+    const h = typeof o.headers === 'function' ? o.headers() : {};
+    Promise.resolve().then(() => doFetch('/roster', { cache: 'no-store', headers: h || {} }))
+      .then(r => {
+        if (r.status === 200) return r.json().then(b => { const c = C.rosterCards(b); if (c.ok) done('ok', '', c); else done('error', c.why + '.'); });
+        if (r.status === 500) return r.json().then(b => b && b.error, () => '').then(e => done('error', C.rosterProblem(500, e)));
+        done(r.status === 404 ? 'none' : 'error', C.rosterProblem(r.status));
+      })
+      .catch(() => done('error', C.rosterProblem(0)));
+  }
+  function stageHtml(st) {
+    return `<div class="fl-stage" data-stage="${esc(st.stage)}"><div class="fl-trow"><span class="fl-stname">${esc(st.title)}</span><span class="fl-tag" data-kind="${st.aboveNoEdge ? 'edge' : 'noedge'}">${esc(st.edgeText)}</span></div>
+      <p class="fl-line mono">${esc(st.profitText)}</p><p class="fl-line mono fl-mutline">${esc(st.noEdgeText)}</p>
+      <p class="fl-line mono fl-mutline">${esc(st.heldBackText)}</p><p class="fl-line">${esc(st.stageText)}</p><p class="fl-line fl-mutline">${esc(st.playbookText)}</p></div>`;
+  }
+  function cardHtml(c) {
+    const live = c.runsLive ? '<span class="fl-tag" data-kind="live">Runs live</span>' : '<span class="fl-tag" data-kind="notlive">Does not run live</span>';
+    const members = c.kind === 'lineup' ? `<ol class="fl-members">${c.bots.map(b => `<li><span class="fl-mname">${esc(b.name)}</span> <span class="fl-mut">took ${b.taken === null ? 'not known' : b.taken}, skipped ${b.skipped === null ? 'not known' : b.skipped}${b.sessionsLeftOut ? ', ' + b.sessionsLeftOut + ' of its sessions left out' : ''}; ${esc(b.recordText)}</span></li>`).join('')}</ol>
+        <p class="fl-line fl-mutline">${esc(c.joinedText)}. One playbook for the lineup; the bot listed first takes a tie.</p>` : `<p class="fl-line fl-mutline">${esc(c.recordText)}${c.verdict ? '. ' + esc(c.verdict) : ''}</p>`;
+    return `<li class="fl-card" data-kind="${c.kind}" data-name="${esc(c.name)}"${c.runsLive ? '' : ' data-tone="notlive"'}>
+      <div class="fl-trow"><span class="fl-tname">${esc(c.name)}</span><span class="fl-mut">${c.kind === 'lineup' ? 'Lineup' : 'Bot'}, ${esc(c.planText)}</span>${live}${c.quick ? '<span class="fl-tag" data-kind="quick">Quick look: never traded</span>' : ''}</div>
+      ${c.runsLive ? '' : `<p class="fl-line fl-warn">Why not: ${esc(c.whyNot)}</p>`}
+      <p class="fl-line fl-evidence">${esc(c.evidenceText)}</p>${members}
+      <div class="fl-stages">${c.stages.map(stageHtml).join('')}</div>
+    </li>`;
+  }
+  function rosterHtml() {
+    const R = S.roster, c = R.cards;
+    let body;
+    if (c && (c.bots.length || c.lineups.length || c.notShown.length)) {
+      body = (c.bots.length || c.lineups.length ? `<ul class="fl-cards">${c.lineups.concat(c.bots).map(cardHtml).join('')}</ul>` : '<p class="fl-empty">No roster file here can be shown.</p>') +
+        (c.notShown.length ? `<ul class="fl-notshown">${c.notShown.map(x => `<li><span class="mono">${esc(x.name)}</span>: not shown, ${esc(x.why)}</li>`).join('')}</ul>` : '') +
+        (c.left ? `<p class="fl-note">${c.left} more file${c.left === 1 ? '' : 's'} in the folder not read (ChartBridge reads 200 at most).</p>` : '');
+    } else if (R.state === 'ok') body = '<p class="fl-empty">The roster folder on this PC is empty. A bot shows here once the Lab has built its roster file and Bot-Lab is installed on this PC.</p>';
+    else if (R.state === 'loading') body = '<p class="fl-empty">Reading the roster...</p>';
+    else if (R.state === 'idle') body = `<p class="fl-empty">${S.connected ? 'The roster is not read yet.' : 'ChartBridge is not connected.'}</p>`;
+    else body = `<p class="fl-empty${R.state === 'error' ? ' fl-warn' : ''}">${esc(R.text)}</p>`;
+    return `<section class="fl-box fl-roster" aria-label="Roster" data-state="${esc(R.state)}"><div class="fl-trow"><h3 class="fl-h">Roster</h3><span class="fl-fill"></span>
+        <button type="button" class="ws-btn" data-do="roster"${R.state === 'loading' ? ' aria-disabled="true"' : ''}>Read again</button></div>
+      ${body}
+      <p class="fl-note">From the Lab's roster files on this PC, read as they are. Every number is from in-sample runs unless a card says confirmed, and none is a promise. Profit per $1 counts what the accounts cost; "no edge" is what the same trades would show with their edge taken out, so only a number above that range says anything.</p>
+    </section>`;
+  }
   function traderHtml(t) {
     const sw = t.switchesKnown
       ? `<span class="fl-sw${t.marketEntry ? ' on' : ''}">Market entry: ${t.marketEntry ? 'on' : 'off'}</span><span class="fl-sw${t.noTarget ? ' on' : ''}">No target: ${t.noTarget ? 'on' : 'off'}</span>`
@@ -278,13 +446,14 @@ function create(o) {
     const asking = S.ask > 0;
     view.innerHTML = `<div class="fl-wrap">
       <div class="fl-head">
-        <span class="fl-title">Fleet</span><span class="fl-dutyline">${esc(C.dutyLine(rows))}</span><span class="fl-fill"></span>
+        <span class="fl-title">Bots</span><span class="fl-dutyline">${esc(C.dutyLine(rows))}</span><span class="fl-fill"></span>
         ${asking
-          ? `<span class="fl-ask" role="alertdialog" aria-label="Kill all">Flatten every trader on the prop accounts and stop them?
+          ? `<span class="fl-ask" role="alertdialog" aria-label="Kill all">Close every trader's position on the prop accounts and stop them?
                <button type="button" class="ws-btn fl-kill" data-do="yes">Yes, kill all</button><button type="button" class="ws-btn" data-do="no">Cancel</button></span>`
           : `<button type="button" class="ws-btn fl-kill" data-do="ask"${st.ok ? '' : ` aria-disabled="true" title="${esc(st.why)}"`}>Kill all: flatten and stop</button>`}
       </div>
-      <p class="fl-said${S.saidBad ? ' bad' : ''}" role="status" aria-live="polite">${esc(S.said || (st.ok ? 'Kill all acts on the prop accounts only: your personal account, Sim accounts, the bot, the copier and orders placed by hand are never touched.' : st.why))}</p>
+      <p class="fl-said${S.saidBad ? ' bad' : ''}" role="status" aria-live="polite">${esc(S.said || (st.ok ? 'Kill all stops every trader on a prop account and closes its position there whole, a contract you added by hand on that account and contract included. Your personal account, a trader on Sim accounts only, the bot and the copier are never touched.' : st.why))}</p>
+      ${rosterHtml()}
       <div class="fl-cols">
         <section class="fl-box" aria-label="Traders"><h3 class="fl-h">Traders</h3>
           ${rows.length ? `<ul class="fl-traders">${rows.map(traderHtml).join('')}</ul>` : `<p class="fl-empty">${S.connected ? 'No trader is set up in ChartBridge yet.' : 'ChartBridge is not connected.'}</p>`}
@@ -297,12 +466,13 @@ function create(o) {
           <p class="fl-note">Today counts realized plus open. The day stop is held by ChartBridge itself: reached while a trader holds something on the account, that trader is flattened and stops until 18:00 New York.</p>
         </section>
       </div>
-      <p class="fl-later">Not built yet, so not shown: the money (spent, paid out, profit per $1), today's plan with each account's size, the live trades against the backtest band, and the feed. They come from The Desk and the live runner.</p>
+      <p class="fl-later">Not built yet, so not shown: the pick of which bots run today on the eval accounts and on the funded accounts, the one Armed slider, and each bot's own state from the runner. Until then nothing on this tab starts a bot: a trader's mode is changed on the Agent tab.</p>
     </div>`;
   }
   function onClick(e) {
     const b = e.target.closest('button[data-do]');
     if (!b) return;
+    if (b.dataset.do === 'roster') { if (S.roster.state !== 'loading') loadRoster(); return; }
     if (b.dataset.do === 'ask') {
       const st = C.killAllState(S.version, S.accounts, S.signedIn, S.connected);
       if (!st.ok) { say(st.why, true, true); render(); return; }
@@ -322,6 +492,7 @@ function create(o) {
     if (!on) { endAsk(); if (view) view.innerHTML = ''; }
     if (typeof o.onTab === 'function') o.onTab(on);
     render();
+    if (on) loadRoster();
   }
   if (view) view.addEventListener('click', onClick);
   if (tabBtn) tabBtn.addEventListener('click', () => showTab(!S.shown));
@@ -330,8 +501,10 @@ function create(o) {
     showTab, shown: () => S.shown, offered: () => !!tabBtn && !tabBtn.hidden,
     hello: m => onMessage(m),
     state: () => ({ shown: S.shown, version: S.version, connected: S.connected, signedIn: S.signedIn, asking: S.ask > 0, said: S.said, sent: S.sent,
-      traders: C.traders(agentList(), S.accounts, S.version), accounts: C.propAccounts(S.accounts, S.groups, agentList()) }),
-    destroy: () => { unlisten(); endAsk(); if (view) view.removeEventListener('click', onClick); },
+      traders: C.traders(agentList(), S.accounts, S.version), accounts: C.propAccounts(S.accounts, S.groups, agentList()),
+      roster: { state: S.roster.state, text: S.roster.text, asked: S.roster.asked, bots: S.roster.cards ? S.roster.cards.bots.map(c => c.name) : [], lineups: S.roster.cards ? S.roster.cards.lineups.map(c => c.name) : [], notShown: S.roster.cards ? S.roster.cards.notShown.length : 0 } }),
+    reloadRoster: loadRoster,
+    destroy: () => { S.roster.seq++; unlisten(); endAsk(); if (view) view.removeEventListener('click', onClick); },
   };
 }
 window.FleetView = { create };
