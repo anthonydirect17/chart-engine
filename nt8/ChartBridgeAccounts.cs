@@ -1570,7 +1570,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             ChartBridgeAgent ag = ChartBridgeAgents.Get(branch.Substring(6));
             if (ag == null) return false;
             List<string> seats = ag.SeatsForProp();
-            return seats.Count > 0 && seats.All(IsProp) && ag.SavedAutoOn(account);
+            return seats.Count > 0 && seats.All(x => IsProp(x)) && ag.SavedAutoOn(account);
         }
 
         // Every 2 s (ChartBridge's poll timer) and once at start: the reset once per day, in the break. 0.6.3 (audit C1): when the

@@ -1,4 +1,4 @@
-# ChartBridge protocol (v1 market data and fills, v2 orders, v3 accounts, strategies, copier and bot, 0.5.0 agents, 0.5.1 accounts, 0.5.8 prop groups, 0.6.0 group trading, 0.6.1 a group's Type and default hero, 0.6.3 the audit fixes, 0.6.4 the no-trade-record alarm and Merge on an off follower, 0.6.8 the minute book, 0.6.10 the account lifecycle and the NQ tick file, 0.6.11 the bar trail and the narrower 1 second request, 0.6.12 the bar trail follow-ups, 0.6.13 the tick day's morning catch-up and the raw deleted once packed, 0.6.14 the tick day check's rule: short and holes, 0.6.15 the 1 second pull retired: the NQ tick file is the one source)
+# ChartBridge protocol (v1 market data and fills, v2 orders, v3 accounts, strategies, copier and bot, 0.5.0 agents, 0.5.1 accounts, 0.5.8 prop groups, 0.6.0 group trading, 0.6.1 a group's Type and default hero, 0.6.3 the audit fixes, 0.6.4 the no-trade-record alarm and Merge on an off follower, 0.6.8 the minute book, 0.6.10 the account lifecycle and the NQ tick file, 0.6.11 the bar trail and the narrower 1 second request, 0.6.12 the bar trail follow-ups, 0.6.13 the tick day's morning catch-up and the raw deleted once packed, 0.6.14 the tick day check's rule: short and holes, 0.6.15 the 1 second pull retired: the NQ tick file is the one source, 0.6.16 prop accounts: Auto kept through the reset and a restart)
 
 ChartBridge is a NinjaTrader 8 add-on. It serves the live chart page at `http://localhost:8765/` and
 talks to it over one WebSocket at `ws://localhost:8765/ws`. Everything stays on the local machine.
@@ -3029,7 +3029,8 @@ included) and one `order` for each working order of the agent's own on those roo
 `{"type":"snapshot","roots":[...]}` (the same roots), after every `agentHello`. `welcome.instruments` lists only the roots
 ChartBridge serves at that moment (NinjaTrader connected, the contract found). A runner without a complete snapshot is "not
 ready" (no plans; it reconnects after 30 s), which is not a stand-down. Every start
-of ChartBridge puts every agent in `shadow`; `auto` never survives a restart. 0.6.3 (audit C5, Anthony's decision): **the kill
+of ChartBridge puts every agent in `shadow`; `auto` never survives a restart (0.6.16: one exception, an agent on prop accounts
+with a saved Auto, see "Prop accounts" below; the start itself is still `shadow`). 0.6.3 (audit C5, Anthony's decision): **the kill
 switch does survive a restart.** `agentKill` on writes `agent-<id>-kill.txt` (two `#` lines, then `killed<TAB><UTC ms>`), one
 per agent; `agentKill` off removes it (a release whose file cannot be removed is refused: "agent-<id>-kill.txt could not be
 removed (...): the kill switch stays on"). Only the page's kill message writes or removes it. At every start a file that is
@@ -3532,12 +3533,84 @@ refused, both with "waiting for the daily reset: <account> was <branch>'s accoun
 yet ...", which is also the status (`agentState` and the strip's `standDown`, `bot.standDown`); the copier copies no new leader
 entry. Exits, legs and flattens are never affected, and a working entry is not cancelled for it. A ChartBridge before 0.6.3
 reads only the day line.
-`ChartBridgeBranches.KeepThroughReset` is the one place an exception would go (Anthony is still deciding whether a branch
-running a hero on Sim101 is left alone); for now there is none. The ticket's account is each page's own, so the page applies
+`ChartBridgeBranches.KeepThroughReset` is the one place an exception goes. Until 0.6.15 there was none. 0.6.16: one, an agent
+in Auto on prop accounts ("Prop accounts" below); the bot, the copier and every other agent are reset as before. The ticket's account is each page's own, so the page applies
 the same rule to it (`LivePrefs.ticketReset`, every 5 s in the window with the ticket, and only once that connection's
 sign-in snapshot of orders and positions is whole, never on a timer): a pick made before the latest 17:00 ET
 (`live-account-at-v1`, the time of the last pick) goes to None when that account is flat with no working order, else it is
 kept with a note naming it; either way once.
+
+### Prop accounts: Auto kept through the reset and a restart (0.6.16)
+
+Anthony's rulings of 2026-11-10 (the Prop Business build plan and its addendum) and 2026-11-11 (the build answers): agents and
+bots trade the prop accounts, with no Accept; "Auto stays armed through the 17:00 reset"; after a ChartBridge or PC restart the
+agent "resumes on its own when ... the account is flat". This section is those rulings in ChartBridge. They override, for prop
+accounts only, "`auto` never survives a restart" and "Every start is Shadow; Auto stays one click and Confirm on his desk"
+above. Built in `nt8/ChartBridgeAccounts.cs` (`ChartBridgeBranches.IsProp`, `KeepThroughReset`), `nt8/ChartBridgeAgents.cs`
+(the saved Auto) and `nt8/ChartBridge.cs` (the config line, the file helpers). No file of the order path changes: the order
+ticket, hotkeys, groups, the copier, the bot, Order Strategies, Merge and Flatten behave exactly as in 0.6.15 on every account
+(Anthony 2026-11-11: hand orders on a prop account are not refused; "I will not touch them").
+
+**What is prop.** One line in `config.txt` on each trading PC names the personal account:
+
+```
+personalAccount = <the account's exact name>
+```
+
+With it, an account is **prop** when it is not that account, not a Sim account (NinjaTrader's simulator, by both existing
+tests) and not Backtest or Playback, and NinjaTrader lists it (an account it does not list is not prop: its Sim cannot be read).
+With no line, or a line that names nothing, **nothing is prop and ChartBridge behaves exactly as 0.6.15**: no file below is
+written or read. This is a new notion beside `accountState.kind` (`prop` = in a group, `personal` = in no group), which keeps
+its meaning. The name stays in that local file: it is never logged (the Output line says only that one is set), never sent to
+a page, an agent or The Desk, and never in this repo. The accounts message gains `personalNamed` (true or false, last) and each
+entry gains `prop` (true or false, before `unserved`); a page reads them, nothing is set from a page. The line is read at
+start and when config.txt is loaded again.
+
+**The saved Auto** (`agent-<id>-auto.txt` next to `config.txt`, two `#` lines, then `auto<TAB><account>` or
+`auto<TAB>group:<id>`; the kill file's pattern; only the file itself counts, never a `.bak`). It is the agent's Auto intent:
+
+- **Written** when the page sets `agentMode` `auto`, when `agentAccount` changes the account and keeps Auto (`keepMode`), and
+  when `agentKill` off releases the kill switch while the mode is still Auto, and only if a personal account is named and
+  every seat (its one account, or every member of its group) is prop. A save that fails is a `status` `warn`: Auto is on, but
+  it is not kept.
+- **Removed** on any other mode, on an account change that does not keep Auto on prop seats (None and the daily reset's None
+  included), and when the kill switch goes on. A file that cannot be removed is a `status` `warn` ("delete it by hand, or Auto
+  may come back after a restart").
+- Shadow and Copilot save nothing: an agent in either on a prop account goes to None at 17:00 as before.
+
+**Through the 17:00 ET reset.** `KeepThroughReset("agent:<id>", <account or group:<id>>)` is true only when a personal account
+is named, every seat is prop now, and the saved Auto names that account or group. Then the reset leaves the agent alone: its
+account and its mode stay. It is decided from the file, never the live mode, so the reset caught up at a start (every agent
+still in Shadow) keeps the account too. The agent's own window still governs every entry (`entryFrom`, `entryUntil`, `flatAt`,
+unchanged), so nothing trades in the break.
+
+**After a restart: one restore.** Every start is still Shadow. A start that finds the saved Auto (only looked for when a
+personal account is named) tries ONE restore, on the 2 s pass, under the placement gate:
+
+1. It waits only while a seat is not known yet (not in NinjaTrader, not Connected, or Connected under 30 s: the reset's
+   `UnknownWhy` rule). The first pass that knows every seat decides, and that answer is final for this start.
+2. Auto comes back only if all of these hold: the kill switch is off; the saved Auto names the agent's account or group as it
+   is now; every seat is prop; every seat is flat with no working order (the reset's `Idle` rule) and the agent holds
+   nothing (no trade, entry or proposal); and Auto's own check passes (the account tradable now, no clash).
+3. Yes: the mode is `auto`, the pages get `status` `warn` "Agent <id>: Auto restored after the restart on <account> (prop,
+   flat, nothing working, the kill switch off)", the agent gets `welcome` again, the file stays.
+4. No: the agent stays in Shadow, the file is removed, and the pages get `status` `warn` "Agent <id>: Auto was NOT restored
+   after the restart (<why>): it is in shadow; set Auto on the page when ready". A position that closes later does not bring
+   Auto back: that is one click on the page.
+
+Any mode, account or kill message from the page before the restore has an answer ends it: the page's word wins. A kill switch
+that was on at the stop is on at the start (0.6.3), so Auto stays off, and releasing it after that restart leaves Shadow.
+
+**What this does not do.** It places, cancels and flattens nothing; it never changes an account; it never reads or sets a
+mode for the bot or the copier; it never acts for an agent on the personal account, a Sim account or a group with a member
+that is not prop (those get the 0.6.15 result in every case: the reset to None, Shadow at every start). Going back to 0.6.15
+is safe: it ignores the config line (one "does nothing" Output line) and the file.
+
+**Risks, stated.** The restore arms a live prop account with nobody at the desk; the runner's on-duty claim on The Desk is the
+outside brake (a runner without it sends no plan). A ChartBridge started in the middle of a session restores only when flat,
+so it never adopts a position. Checked in `check/AgentHarness.cs` (`PropAccounts`: a no-setting install, the personal account,
+a Sim account, a prop account and a prop group; the reset, the restart flat and not flat, an account not known yet, the kill
+switch, an account change) and `test/nt8-agents.test.js` (every new branch passes through `IsProp`).
 
 ### Prop groups and account state (0.5.8)
 
@@ -3833,7 +3906,8 @@ does not know heroes or tiers, and nothing in the order path reads them (no new 
   existing `agentAccount` `{agent, group, keepMode: "shadow"}` (a LIVE member asked once in the page), waits up to 10 s for the
   `agent` message naming the group, then the helper's existing `POST /on` with the group's default hero in Shadow (no default hero
   the helper has: he picks one). No free slot: "add an agent id to config.txt (agents = ...)"; ChartBridge never writes config.txt.
-  Every start is Shadow; Auto stays one click and Confirm on his desk.
+  Every start is Shadow; Auto stays one click and Confirm on his desk (0.6.16: except the one restore for an agent on prop
+  accounts, "Prop accounts" below).
 
 ### Group stand-downs and league seats (0.6.2)
 

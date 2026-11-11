@@ -2202,6 +2202,99 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
         private string LogFile { get { return Path.Combine(Folder, "agent-" + Id + ".log"); } }
 
+        // ---------------------------------------------------------- prop accounts: the saved Auto intent (agent-<id>-auto.txt)
+        // Anthony's rulings of 2026-11-10 and 2026-11-11: an agent in Auto on prop accounts (ChartBridgeBranches.IsProp: config.txt
+        // names the personal account, and this is another account that is not Sim, Backtest or Playback) keeps Auto through the
+        // 17:00 ET reset and gets it back ONCE after a restart, only when every seat is prop, known to NinjaTrader, flat and idle,
+        // and the kill switch is off. The file is the intent: it names the account or group Auto was set on. It is written when the
+        // page sets Auto (or changes the account keeping Auto, or releases the kill switch while in Auto) and every seat is prop;
+        // it is removed on any other mode, on an account change that does not keep Auto on prop seats, and when the kill switch
+        // goes on. With no personalAccount line no
+        // file is ever written and none is read: every start is Shadow and the reset goes to None, exactly as 0.6.15.
+        private string AutoFile { get { return Path.Combine(Folder, "agent-" + Id + "-auto.txt"); } }
+        private bool autoRestorePending;   // set at a start that finds the intent; one try, ended by the first answer or any page change
+        internal List<string> SeatsForProp() { return SeatNames(); }
+        private bool AllSeatsProp() { List<string> seats = SeatNames(); return seats.Count > 0 && seats.All(x => ChartBridgeBranches.IsProp(x)); }
+        // The saved intent names this account (or group:<id>): asked by the reset (ChartBridgeBranches.KeepThroughReset).
+        internal bool SavedAutoOn(string key)
+        {
+            if (string.IsNullOrEmpty(key) || ChartBridgeBranches.IsNone(key)) return false;
+            string k = ChartBridgeFiles.AutoIntent(AutoFile);
+            return !string.IsNullOrEmpty(k) && k == key;
+        }
+        // After the page changed the mode or the account (under PlaceGate): the file follows what is true now. Any such change also
+        // ends a restore still waiting: the page's word wins.
+        private void SyncAutoIntent(string why)
+        {
+            string m;
+            lock (Sync) { m = mode; autoRestorePending = false; }
+            if (m == "auto" && ChartBridgeBranches.PersonalNamed && AllSeatsProp())
+            {
+                string err = ChartBridgeFiles.SaveAutoIntent(AutoFile, "agent " + Id, KeyNow());
+                if (err == null) { string t = "Auto on prop accounts (" + AccountWords() + "): kept through the 17:00 ET reset, and back once after a restart when flat with the kill switch off"; Log("agent " + Id + ": " + t); AgentLog(t); }
+                else { string w = "Agent " + Id + ": agent-" + Id + "-auto.txt could not be saved (" + err + "): Auto is on now, but it is not kept through the 17:00 ET reset or a restart"; ToPages(StatusJson("warn", w)); Log(w); AgentLog(w); }
+                return;
+            }
+            DropAutoIntent(why);
+        }
+        // The intent goes (no file: nothing to do, nothing said). A file that cannot be removed is said on the pages: Auto could
+        // come back after a restart.
+        private void DropAutoIntent(string why)
+        {
+            lock (Sync) autoRestorePending = false;
+            bool there;
+            try { there = File.Exists(AutoFile) || File.Exists(ChartBridgeFiles.BackupOf(AutoFile)); } catch (Exception) { there = true; }
+            if (!there) return;
+            string err = ChartBridgeFiles.ClearAutoIntent(AutoFile);
+            if (err == null) { string t = "its saved Auto is removed (" + why + "): Auto is no longer kept through the 17:00 ET reset or a restart"; Log("agent " + Id + ": " + t); AgentLog(t); }
+            else { string w = "Agent " + Id + ": agent-" + Id + "-auto.txt could not be removed (" + err + "): delete it by hand, or Auto may come back after a restart"; ToPages(StatusJson("warn", w)); Log(w); AgentLog(w); }
+        }
+        // The one restore per start (every 2 s pass until it has an answer). It waits only while a seat is not known yet (not in
+        // NinjaTrader, not Connected, or Connected under 30 s: ChartBridgeBranches.UnknownWhy); the first pass that knows every
+        // seat decides, yes or no, and that is final for this start. No: the intent is removed, the agent stays in Shadow.
+        private void TryRestoreAuto()
+        {
+            bool pend;
+            lock (Sync) pend = autoRestorePending;
+            if (!pend) return;
+            lock (PlaceGate)
+            {
+                bool k;
+                string m;
+                lock (Sync) { pend = autoRestorePending; k = killed; m = mode; }
+                if (!pend) return;
+                string key = KeyNow(), intent = ChartBridgeFiles.AutoIntent(AutoFile), no = null;
+                List<string> seats = SeatNames();
+                if (!ChartBridgeBranches.PersonalNamed) no = "config.txt names no personal account";
+                else if (k) no = "the kill switch is on";
+                else if (m != "shadow") no = "its mode is " + m;
+                else if (string.IsNullOrEmpty(intent) || intent != key) no = "its saved Auto was set on another account";
+                else if (seats.Count == 0) { if (GroupNow() && ChartBridgeGroups.Unreadable()) return; no = AccountWords() + " has no accounts"; }
+                else
+                {
+                    if (seats.Any(x => ChartBridgeBranches.UnknownWhy(FindAccount(x), x) != null)) return;   // not known yet: this pass does not decide
+                    List<string> notProp = seats.Where(x => !ChartBridgeBranches.IsProp(x)).ToList();
+                    List<string> busy = seats.Where(x => !ChartBridgeBranches.Idle(FindAccount(x))).ToList();
+                    if (notProp.Count > 0) no = string.Join(", ", notProp) + (notProp.Count == 1 ? " is" : " are") + " not prop";
+                    else if (busy.Count > 0 || Exposed()) no = (busy.Count > 0 ? string.Join(", ", busy) + (busy.Count == 1 ? " has" : " have") : "it has") + " a position or a working order";
+                    else { string why = AutoProblem(); if (why != null) no = why; }
+                }
+                if (no != null)
+                {
+                    DropAutoIntent("not restored after the restart: " + no);
+                    string w = "Agent " + Id + ": Auto was NOT restored after the restart (" + no + "): it is in " + m + "; set Auto on the page when ready";
+                    ToPages(StatusJson("warn", w)); Log(w); AgentLog(w);
+                    Notify();
+                    return;
+                }
+                lock (Sync) { mode = "auto"; autoRestorePending = false; }
+                string text = "Agent " + Id + ": Auto restored after the restart on " + AccountWords() + " (prop, flat, nothing working, the kill switch off)";
+                ToPages(StatusJson("warn", text)); Log(text); AgentLog(text);
+                ToAgent(WelcomeJson());
+                Notify();
+            }
+        }
+
         private static double Now() { return ChartBridgeAgents.Now(); }
         private static DateTime NowEt() { return ChartBridgeAgents.NowEt(); }
 
@@ -2217,6 +2310,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (Sync) { noClientSinceMs = Now(); startedMs = noClientSinceMs; mode = "shadow"; killed = kill.HasValue; killedAt = Math.Max(0, kill ?? 0); killReadPending = kill == -1; }
             if (kill == -1) Log("agent " + Id + ": agent-" + Id + "-kill.txt is there but could not be read yet (held open): the kill switch is on; ChartBridge reads it again");
             if (kill.HasValue) Log("agent " + Id + ": its kill switch is still on (" + KilledWords(kill.Value) + "; kept through the restart): every agent order is refused until it is released on the page");
+            // prop accounts: a saved Auto intent is looked for only when config.txt names the personal account (no line: as 0.6.15)
+            string intent = ChartBridgeBranches.PersonalNamed ? ChartBridgeFiles.AutoIntent(AutoFile) : null;
+            lock (Sync) autoRestorePending = intent != null;
+            if (intent != null) Log("agent " + Id + ": a saved Auto is there (agent-" + Id + "-auto.txt): Auto comes back once, only if its account is the same, prop, known, flat and idle, and the kill switch is off");
             Log("agent channel ON for " + Id + ": it may connect at ws://localhost:" + ChartBridgeConfig.Port + "/agent/" + Id + " (account " + AccountWords() + " (" + AcctMark() + ")" + (League ? ", a league seat" : "") + ", starting in shadow)");
         }
 
@@ -3979,6 +4076,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             RetryKill();    // review (C5): a kill file held open at the start
             RollDay();
             RefreshSeats();   // 0.6.0: a group's membership (and a deleted group: None)
+            TryRestoreAuto();   // prop accounts: the one Auto restore of this start (nothing to do without a saved intent)
             ChartBridgeClient silent = null, mute = null;
             bool none, strip = false;
             lock (Sync)
@@ -4172,6 +4270,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (old == "auto" && m != "auto") CancelUnfilled("the mode changed to " + m);   // leaving auto: its unfilled entries go (lead's default)
             Log("agent " + Id + " mode " + m + " (was " + old + "), set by the page");
             AgentLog("mode " + m + " (was " + old + "), set by the page");
+            SyncAutoIntent("the mode changed to " + m);   // prop accounts: Auto on prop seats is saved; any other mode removes it
             ToAgent(WelcomeJson());
             Notify();
             return null;
@@ -4207,12 +4306,13 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 if (saveErr != null) { string w = "agent-" + Id + "-kill.txt could not be saved (" + saveErr + "): the kill switch is on now but a restart would release it"; ToPages(StatusJson("warn", w)); Log(w); }
                 int n = CancelUnfilled("the kill switch is on");
+                DropAutoIntent("the kill switch is on");   // prop accounts: after a release Auto stays off until it is set on the page
                 foreach (Proposal p in expired) { ToPages(ProposalJson(p)); ToAgent(AnswerJson(p.P.Id, "not answered", "the kill switch is on")); }
                 string text = "Agent " + Id + ": the kill switch is on: " + n + " unfilled entr" + (n == 1 ? "y" : "ies") + " cancelled; any position keeps its stop and target; every agent order is refused until it is released";
                 ToPages(StatusJson("warn", text));
                 Log(text); AgentLog(text);
             }
-            else { Log("agent " + Id + " kill switch released by the page"); AgentLog("kill switch released by the page"); }
+            else { Log("agent " + Id + " kill switch released by the page"); AgentLog("kill switch released by the page"); SyncAutoIntent("the kill switch was released"); }   // prop accounts: still in Auto on prop seats: saved again
             Notify();
             return null;
         }
@@ -4371,6 +4471,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             string modeSay = kept ? "mode " + wasMode + " kept" : wasMode == "shadow" ? "mode shadow" : "mode shadow (was " + wasMode + (keep == null ? ": the page did not say which mode it showed" : ": the page's question named " + keep) + ")";
             Log("agent " + Id + " account " + nm + " (" + mark + "), was " + old + ", set by the page; " + modeSay);
             AgentLog("account " + nm + " (" + mark + "), was " + old + ", set by the page; " + modeSay);
+            SyncAutoIntent("its account changed");   // prop accounts: Auto kept on a prop account is saved for it; else removed
             ToAgent(WelcomeJson());
             Notify();
             return null;
@@ -4394,6 +4495,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             string say = "account None (nothing trades), was " + old + ", " + by + "; " + (kept || wasMode == "shadow" ? "mode " + wasMode + (kept ? " kept" : "") : "mode shadow (was " + wasMode + ")") +
                          (held.Count > 0 ? "; " + string.Join(", ", held) + " still " + (held.Count == 1 ? "holds" : "hold") + " its trade: owned and protected until flat, no new entry" : "");
             Log("agent " + Id + " " + say); AgentLog(say);
+            DropAutoIntent("its account is None");   // prop accounts: nothing to keep on None
             ToAgent(WelcomeJson());
             Notify();
             return null;
@@ -4476,6 +4578,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             string modeSay = kept ? "mode " + wasMode + " kept" : wasMode == "shadow" ? "mode shadow" : "mode shadow (was " + wasMode + (keep == null ? ": the page did not say which mode it showed" : ": the page's question named " + keep) + ")";
             Log("agent " + Id + " account " + AccountWords() + " (" + mark + "), was " + old + ", set by the page; seatsRev " + SeatsRevNow() + "; " + modeSay);
             AgentLog("account " + AccountWords() + " (" + mark + "), was " + old + ", set by the page; seatsRev " + SeatsRevNow() + "; " + modeSay);
+            SyncAutoIntent("its account changed");   // prop accounts: Auto kept on a prop group is saved for it; else removed
             ToAgent(WelcomeJson());
             Notify();
             return null;

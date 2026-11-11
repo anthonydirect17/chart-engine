@@ -195,6 +195,7 @@ public static class AgentHarness
             GroupsAndAccountState();   // 0.5.8: plan check 10b (one direction per group) and accountState
             GroupTrading();   // 0.6.0: one agent trades a whole prop group (seats)
             StandDownsAndLeague();   // 0.6.2 (SPEC CE-2): a hero stood down on a group (agent-standdowns.txt) and league seats (Sim only)
+            PropAccounts();   // prop accounts: Auto through the 17:00 reset and one restore after a restart; the personal account, Sim and a no-setting install as before
         }
         catch (Exception ex) { Check(false, "agent harness threw: " + ex); }
         finally
@@ -5018,6 +5019,261 @@ public static class AgentHarness
                 Check(AgentReject().Contains("was refused: 200") && LogLines(alarm) == a0 + 1, "fix round 2: the alarm once per build and group");
             }
             finally { File.WriteAllText(GroupsFile, groupsWas); ChartBridgeGroups.StartNow(); NoStandDowns(); Restart(); }
+        });
+    }
+
+    // ------------------------------------------------------------ prop accounts (config.txt personalAccount): Auto kept, prop only
+    // Every name here is made up. MINE-1 stands in for the personal account, PROP-1 and PROP-2 for prop accounts (LIVE to
+    // NinjaTrader: Provider Rithmic), SIM-E for a Sim account.
+    static Account mine, prop1, prop2;
+    static string AutoFilePath { get { return Path.Combine(Dir, "agent-manrae-auto.txt"); } }
+    static bool AutoFileThere { get { return File.Exists(AutoFilePath) || File.Exists(AutoFilePath + ".bak"); } }
+    // config.txt with or without the personalAccount line; manrae on `account` (its file), every account flat, a restart (Shadow).
+    static void PropStart(string account, bool personalLine, bool keepAutoFile = false)
+    {
+        Hold = null;
+        if (personalLine) Config("agents = manrae, demob", "personalAccount = MINE-1"); else Config("agents = manrae, demob");
+        ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, EVAL-A, SIM-A, SIM-B, SIM-C, SIM-D, SIM-E, MINE-1, PROP-1, PROP-2");
+        foreach (Account a in Account.All.ToList()) { a.Connection.Status = ConnectionStatus.Connected; Settle(a); }
+        SteadyAll();
+        foreach (string f in new[] { "agent-manrae-day.txt", "agent-manrae-rules.txt", "agent-manrae-kill.txt" }) { try { Gone(Path.Combine(Dir, f)); } catch (Exception) { } }
+        if (!keepAutoFile) { try { Gone(AutoFilePath); } catch (Exception) { } }
+        File.WriteAllLines(Path.Combine(Dir, "agent-manrae-account.txt"), new[] { "# made-up", "# test", account.StartsWith("group:") ? "group\t" + account.Substring(6) : "account\t" + account });
+        et = new DateTime(2026, 10, 9, 10, 0, 0);
+        Restart();
+        Last2();
+    }
+    static string ModeNow() { Match m = Regex.Match(M.StripJson(), "\"mode\":\"([a-z]+)\""); return m.Success ? m.Groups[1].Value : "?"; }
+    // The 17:00 ET reset runs once (17:05 EDT on a made-up Friday); true when it ran without throwing.
+    static void ResetOnce(Action then)
+    {
+        Func<DateTime> was = ChartBridgeBranches.ClockUtc;
+        ChartBridgeBranches.Forget();
+        try { Gone(Path.Combine(Dir, "daily-reset.txt")); } catch (Exception) { }
+        ChartBridgeBranches.ClockUtc = () => new DateTime(2026, 10, 9, 21, 5, 0, DateTimeKind.Utc);
+        try { SteadyAll(); ChartBridgeBranches.Check(); then(); }
+        finally { ChartBridgeBranches.ClockUtc = was; ChartBridgeBranches.Forget(); try { Gone(Path.Combine(Dir, "daily-reset.txt")); } catch (Exception) { } }
+    }
+
+    static void PropAccounts()
+    {
+        Part("prop setup", () =>
+        {
+            mine = Account.All.FirstOrDefault(x => x.Name == "MINE-1") ?? NewAccount("MINE-1", Provider.Rithmic);
+            prop1 = Account.All.FirstOrDefault(x => x.Name == "PROP-1") ?? NewAccount("PROP-1", Provider.Rithmic);
+            prop2 = Account.All.FirstOrDefault(x => x.Name == "PROP-2") ?? NewAccount("PROP-2", Provider.Rithmic);
+            PropStart("PROP-1", false);
+            Check(!ChartBridgeBranches.PersonalNamed && !ChartBridgeBranches.IsProp("PROP-1") && !ChartBridgeBranches.IsProp("MINE-1") && !ChartBridgeBranches.IsProp("SIM-E"),
+                  "prop: no personalAccount line: nothing is prop");
+            PropStart("PROP-1", true);
+            Check(ChartBridgeBranches.PersonalNamed && ChartBridgeBranches.IsProp("PROP-1") && ChartBridgeBranches.IsProp("prop-2") && !ChartBridgeBranches.IsProp("MINE-1") && !ChartBridgeBranches.IsProp("mine-1") &&
+                  !ChartBridgeBranches.IsProp("SIM-E") && !ChartBridgeBranches.IsProp("Sim101") && !ChartBridgeBranches.IsProp("Playback101") && !ChartBridgeBranches.IsProp("Backtest") &&
+                  !ChartBridgeBranches.IsProp("NOT-LISTED") && !ChartBridgeBranches.IsProp("-") && !ChartBridgeBranches.IsProp(null),
+                  "prop: with the line: every account but the personal one, Sim, Playback, Backtest, None and one NinjaTrader does not list");
+            Check(!Logged("MINE-1 is") && !NinjaTrader.Code.Output.Lines.Any(x => x.Contains("personalAccount") && x.Contains("MINE-1")), "prop: the personal account's name is never in the Output window");
+            Check(ChartBridgeAccounts.AccountsJson(Account.All.ToList(), 0).Contains("\"personalNamed\":true") && !ChartBridgeAccounts.AccountsJson(Account.All.ToList(), 0).Contains("personalAccount"), "prop: the pages learn only that one is named");
+        });
+
+        // ---- a no-setting install: exactly as 0.6.15 in every case
+        Part("prop: no setting, the reset", () =>
+        {
+            PropStart("PROP-1", false);
+            Mode("manrae", "auto");
+            Check(ModeNow() == "auto" && !AutoFileThere, "no setting: Auto on PROP-1 writes no agent-manrae-auto.txt");
+            ResetOnce(() => Check(M.Account == "-" && FileText("agent-manrae-account.txt").Contains("account\t-"), "no setting: the 17:00 reset puts the agent on None, as before"));
+        });
+        Part("prop: no setting, a restart from Auto (a file left by hand does nothing)", () =>
+        {
+            PropStart("PROP-1", false);
+            Mode("manrae", "auto");
+            File.WriteAllLines(AutoFilePath, new[] { "# made-up", "# test", "auto\tPROP-1" });
+            Restart();
+            Advance(3000);
+            Check(ModeNow() == "shadow" && Last(agentOut, "welcome").Contains("\"mode\":\"shadow\"") && !Logged("a saved Auto is there"), "no setting: every start is Shadow, the file is not even read");
+            Check(!ChartBridgeBranches.KeepThroughReset("agent:manrae", "PROP-1"), "no setting: no exception to the reset");
+            ResetOnce(() => Check(M.Account == "-", "no setting: with a file left there, the reset still goes to None"));
+            Gone(AutoFilePath);
+        });
+
+        // ---- the personal account and a Sim account, with the line: as before
+        foreach (string acct in new[] { "MINE-1", "SIM-E" })
+        {
+            string a = acct, what = acct == "MINE-1" ? "the personal account" : "a Sim account";
+            Part("prop: " + what + ", the reset and a restart", () =>
+            {
+                PropStart(a, true);
+                Mode("manrae", "auto");
+                Check(ModeNow() == "auto" && !AutoFileThere && !ChartBridgeBranches.KeepThroughReset("agent:manrae", a), what + ": Auto writes no file and has no exception to the reset");
+                Restart();
+                Advance(3000);
+                Check(ModeNow() == "shadow", what + ": a restart from Auto is Shadow");
+                File.WriteAllLines(AutoFilePath, new[] { "# made-up", "# test", "auto\t" + a });
+                Restart();
+                int s0 = N(page);
+                Advance(3000);
+                Check(ModeNow() == "shadow" && !AutoFileThere && Any(page, s0, "Auto was NOT restored after the restart (" + a + " is not prop)"), what + ": a file left there restores nothing and is removed: " + Last(page, "status"));
+                Mode("manrae", "auto");
+                ResetOnce(() => Check(M.Account == "-", what + ": the 17:00 reset puts the agent on None, as before"));
+            });
+        }
+
+        // ---- a prop account
+        Part("prop: Auto is saved, and kept through the reset", () =>
+        {
+            PropStart("PROP-1", true);
+            Check(ModeNow() == "shadow" && !AutoFileThere, "prop: a start with no saved Auto is Shadow");
+            Mode("manrae", "copilot");
+            Check(!AutoFileThere && !ChartBridgeBranches.KeepThroughReset("agent:manrae", "PROP-1"), "prop: Copilot saves nothing (it goes to None at the reset as before)");
+            ResetOnce(() => Check(M.Account == "-", "prop: an agent in Copilot on a prop account goes to None at the reset"));
+            PropStart("PROP-1", true);
+            Mode("manrae", "auto");
+            Check(FileText("agent-manrae-auto.txt").Contains("auto\tPROP-1") && ChartBridgeBranches.KeepThroughReset("agent:manrae", "PROP-1") && !ChartBridgeBranches.KeepThroughReset("agent:manrae", "PROP-2") &&
+                  !ChartBridgeBranches.KeepThroughReset("bot", "PROP-1") && !ChartBridgeBranches.KeepThroughReset("copier", "PROP-1"),
+                  "prop: Auto on PROP-1: agent-manrae-auto.txt names it; the exception is this agent on this account only");
+            ResetOnce(() => Check(M.Account == "PROP-1" && ModeNow() == "auto" && FileText("agent-manrae-account.txt").Contains("account\tPROP-1"), "prop: the 17:00 reset keeps the account and Auto"));
+            Mode("manrae", "shadow");
+            Check(!AutoFileThere && !ChartBridgeBranches.KeepThroughReset("agent:manrae", "PROP-1"), "prop: Shadow removes the saved Auto");
+            ResetOnce(() => Check(M.Account == "-", "prop: then the reset goes to None"));
+        });
+        Part("prop: one restore after a restart, flat", () =>
+        {
+            PropStart("PROP-1", true);
+            Mode("manrae", "auto");
+            Restart();
+            Check(ModeNow() == "shadow" && Last(agentOut, "welcome").Contains("\"mode\":\"shadow\""), "prop: the start itself is Shadow");
+            int s0 = N(page), a0 = N(agentOut);
+            Advance(2000);
+            Check(ModeNow() == "auto" && Any(page, s0, "Agent manrae: Auto restored after the restart on PROP-1") && Any(agentOut, a0, "\"mode\":\"auto\"") && AutoFileThere,
+                  "prop: the first pass that knows the account restores Auto, tells the pages and the agent, and keeps the file: " + Last(page, "status"));
+            Order e = PlacedOn(prop1, Good(NewId()));
+            Check(e != null, "prop: restored, a plan is placed on PROP-1: " + AgentReject());
+            Settle(prop1);
+        });
+        Part("prop: not flat at the start: no restore, ever", () =>
+        {
+            PropStart("PROP-1", true);
+            Mode("manrae", "auto");
+            SetPos(prop1, mnq, 1);
+            Restart();
+            int s0 = N(page);
+            Advance(2000);
+            Check(ModeNow() == "shadow" && !AutoFileThere && Any(page, s0, "Auto was NOT restored after the restart (PROP-1 has a position or a working order)"), "prop: a position at the start: Shadow, the file removed, the pages told: " + Last(page, "status"));
+            Settle(prop1);
+            Advance(5000);
+            Check(ModeNow() == "shadow", "prop: flat later: still Shadow (Auto is one click on the page)");
+            ResetOnce(() => Check(M.Account == "-", "prop: and the reset goes to None"));
+        });
+        Part("prop: the account not known yet: the restore waits, then decides once", () =>
+        {
+            PropStart("PROP-1", true);
+            Mode("manrae", "auto");
+            prop1.Connection.Status = ConnectionStatus.Disconnected;
+            Restart();
+            Advance(6000);
+            Check(ModeNow() == "shadow" && AutoFileThere, "prop: PROP-1 not Connected: no decision yet, the file stays");
+            prop1.Connection.Status = ConnectionStatus.Connected;
+            SteadyAll();
+            Advance(2000);
+            Check(ModeNow() == "auto", "prop: Connected and steady, flat: Auto restored");
+            // and the same wait ending with a position: no
+            prop1.Connection.Status = ConnectionStatus.Disconnected;
+            Restart();
+            Advance(2000);
+            SetPos(prop1, mnq, -1);
+            prop1.Connection.Status = ConnectionStatus.Connected;
+            SteadyAll();
+            Advance(2000);
+            Check(ModeNow() == "shadow" && !AutoFileThere, "prop: known with a position: not restored, the file removed");
+            Settle(prop1);
+        });
+        Part("prop: the kill switch", () =>
+        {
+            PropStart("PROP-1", true);
+            Mode("manrae", "auto");
+            P("{\"type\":\"agentKill\",\"cid\":\"k\",\"agent\":\"manrae\",\"on\":true}");
+            Check(M.Killed && !AutoFileThere && !ChartBridgeBranches.KeepThroughReset("agent:manrae", "PROP-1"), "prop: the kill switch on removes the saved Auto");
+            Restart();
+            Advance(3000);
+            Check(M.Killed && ModeNow() == "shadow", "prop: a restart with the kill switch on: Shadow");
+            P("{\"type\":\"agentKill\",\"cid\":\"k\",\"agent\":\"manrae\",\"on\":false}");
+            Advance(3000);
+            Check(!M.Killed && ModeNow() == "shadow" && !AutoFileThere, "prop: released after that restart: still Shadow, nothing saved");
+            // a kill file and a saved Auto both there at a start (the file written by hand): the kill switch wins
+            File.WriteAllLines(AutoFilePath, new[] { "# made-up", "# test", "auto\tPROP-1" });
+            File.WriteAllLines(Path.Combine(Dir, "agent-manrae-kill.txt"), new[] { "# made-up", "# test", "killed\t1791467200000" });
+            Restart();
+            int s0 = N(page);
+            Advance(3000);
+            Check(M.Killed && ModeNow() == "shadow" && !AutoFileThere && Any(page, s0, "Auto was NOT restored after the restart (the kill switch is on)"), "prop: both files at a start: not restored, the saved Auto removed");
+            P("{\"type\":\"agentKill\",\"cid\":\"k\",\"agent\":\"manrae\",\"on\":false}");
+            // released without a restart while still in Auto: Auto is on again, so it is saved again
+            Mode("manrae", "auto");
+            P("{\"type\":\"agentKill\",\"cid\":\"k\",\"agent\":\"manrae\",\"on\":true}");
+            Check(!AutoFileThere, "prop: on again: removed");
+            P("{\"type\":\"agentKill\",\"cid\":\"k\",\"agent\":\"manrae\",\"on\":false}");
+            Check(ModeNow() == "auto" && FileText("agent-manrae-auto.txt").Contains("auto\tPROP-1"), "prop: released with no restart, still in Auto: saved again");
+        });
+        Part("prop: an account change", () =>
+        {
+            PropStart("PROP-1", true);
+            Mode("manrae", "auto");
+            P("{\"type\":\"agentAccount\",\"cid\":\"pa\",\"agent\":\"manrae\",\"account\":\"PROP-2\",\"keepMode\":\"auto\"}");
+            Check(M.Account == "PROP-2" && ModeNow() == "auto" && FileText("agent-manrae-auto.txt").Contains("auto\tPROP-2") && !ChartBridgeBranches.KeepThroughReset("agent:manrae", "PROP-1"),
+                  "prop: to another prop account keeping Auto: the saved Auto names the new one: " + PageReject());
+            P("{\"type\":\"agentAccount\",\"cid\":\"pa\",\"agent\":\"manrae\",\"account\":\"PROP-1\"}");
+            Check(M.Account == "PROP-1" && ModeNow() == "shadow" && !AutoFileThere, "prop: a change that does not keep Auto: removed");
+            Mode("manrae", "auto");
+            P("{\"type\":\"agentAccount\",\"cid\":\"pa\",\"agent\":\"manrae\",\"account\":\"MINE-1\",\"keepMode\":\"auto\"}");
+            Check(M.Account == "MINE-1" && ModeNow() == "auto" && !AutoFileThere, "prop: to the personal account keeping Auto: removed (nothing is kept there)");
+            P("{\"type\":\"agentAccount\",\"cid\":\"pa\",\"agent\":\"manrae\",\"account\":\"PROP-1\",\"keepMode\":\"auto\"}");
+            Check(AutoFileThere, "prop: back on a prop account keeping Auto: saved");
+            P("{\"type\":\"agentAccount\",\"cid\":\"pa\",\"agent\":\"manrae\",\"account\":null,\"keepMode\":\"auto\"}");
+            Check(M.Account == "-" && !AutoFileThere, "prop: None: removed");
+            // the saved Auto names another account than the one at the start: no restore
+            File.WriteAllLines(Path.Combine(Dir, "agent-manrae-account.txt"), new[] { "# made-up", "# test", "account\tPROP-2" });
+            File.WriteAllLines(AutoFilePath, new[] { "# made-up", "# test", "auto\tPROP-1" });
+            Restart();
+            Advance(3000);
+            Check(ModeNow() == "shadow" && !AutoFileThere, "prop: a saved Auto for another account restores nothing");
+            // a file that names nothing readable: never Auto from it
+            File.WriteAllText(AutoFilePath, "garbage\n");
+            Restart();
+            Advance(3000);
+            Check(ModeNow() == "shadow" && !AutoFileThere, "prop: a file that cannot be understood restores nothing");
+        });
+        Part("prop: a group is prop only when every member is", () =>
+        {
+            string groupsWas = File.Exists(GroupsFile) ? File.ReadAllText(GroupsFile) : null;
+            try
+            {
+                WriteGroup("PROP-1", "PROP-2");
+                PropStart("group:g1", true);
+                Mode("manrae", "auto");
+                Check(ModeNow() == "auto" && FileText("agent-manrae-auto.txt").Contains("auto\tgroup:g1") && ChartBridgeBranches.KeepThroughReset("agent:manrae", "group:g1"), "prop group: Auto saved for the group: " + PageReject());
+                ResetOnce(() => Check(M.GroupId == "g1" && ModeNow() == "auto", "prop group: kept through the reset"));
+                Restart();
+                Advance(2000);
+                Check(ModeNow() == "auto", "prop group: restored after a restart, every seat flat");
+                SetPos(prop2, mnq, 1);
+                Restart();
+                Advance(2000);
+                Check(ModeNow() == "shadow" && !AutoFileThere, "prop group: one seat with a position: not restored");
+                Settle(prop2);
+                WriteGroup("PROP-1", "SIM-E");
+                PropStart("group:g1", true);
+                Mode("manrae", "auto");
+                Check(ModeNow() == "auto" && !AutoFileThere && !ChartBridgeBranches.KeepThroughReset("agent:manrae", "group:g1"), "prop group: a Sim member: nothing saved, no exception");
+            }
+            finally { if (groupsWas != null) File.WriteAllText(GroupsFile, groupsWas); else Gone(GroupsFile); ChartBridgeGroups.StartNow(); }
+        });
+        Part("prop: the harness is left as it was", () =>
+        {
+            try { Gone(AutoFilePath); } catch (Exception) { }
+            File.WriteAllLines(Path.Combine(Dir, "agent-manrae-account.txt"), new[] { "# made-up", "# test", "account\tSIM-E" });
+            Config("agents = manrae, demob");
+            ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, EVAL-A, SIM-A, SIM-B, SIM-C, SIM-D, SIM-E");
+            Restart();
+            Check(!ChartBridgeBranches.PersonalNamed, "prop: the line gone from config.txt: nothing is prop again");
         });
     }
 }

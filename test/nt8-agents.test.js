@@ -34,7 +34,7 @@ test('0.5.0 agents: the new file ships, is compile-checked and harnessed', () =>
   for (const f of ['check.sh', 'orders.sh']) assert.match(read(path.join('check', f)), /ChartBridgeBot\.cs ChartBridgeAgents\.cs ChartBridgeStrategies\.cs/);
   assert.match(read(path.join('check', 'orders.sh')), /check\/AgentHarness\.cs/);
   assert.match(read(path.join('check', 'OrdersHarness.cs')), /Section\("agents \(0\.5\.0\)", AgentHarness\.Run\);/);
-  assert.match(main, /public const string Version = "0\.(5\.[0-8]|6\.([0-9]|1[0-5]))";/);   // 0.6.15: the 1 second pull retired; 0.6.14: the tick day check rule; 0.6.13: the tick day's morning catch-up, the raw deleted once packed; 0.6.12: the bar trail follow-ups; 0.6.10: the account lifecycle (remove-only for an account NinjaTrader no longer lists, Hide leaves the group); 0.6.9: the stats suite's Phase 2 (1 second bars, the order record, decision ids; recording only); 0.6.8: the minute book (the history path only); 0.6.7: the bench, no hedging always on, a group's own rules optional; 0.6.6: the firm's limits on entries, riskAlert, firmMinimum, copierFollowerRemove; 0.6.5: each member's own rules and the risk percent; 0.6.4: no false no-trade-record alarm, the alarm cleared, Merge on an off follower; 0.6.3: the audit fixes (a missed reset caught up, closes not seen, files that survive a power cut, the kill switch kept); 0.6.2: group stand-downs and league seats; 0.6.1: a group's type and default hero; 0.6.0: group trading (seats); 0.5.8: groups and accountState; 0.5.7: the plan id, the TradeLost hold, None and the daily reset; 0.5.1: the accounts follow NinjaTrader, on top of 0.5.0; 0.5.3: the agents' MNQ cap; 0.5.4: the window while exposed; 0.5.5: the accounts line and unknown keys; 0.5.6: the time check
+  assert.match(main, /public const string Version = "0\.(5\.[0-8]|6\.([0-9]|1[0-6]))";/);   // 0.6.16: prop accounts (Auto kept through the reset and one restore after a restart, prop only); 0.6.15: the 1 second pull retired; 0.6.14: the tick day check rule; 0.6.13: the tick day's morning catch-up, the raw deleted once packed; 0.6.12: the bar trail follow-ups; 0.6.10: the account lifecycle (remove-only for an account NinjaTrader no longer lists, Hide leaves the group); 0.6.9: the stats suite's Phase 2 (1 second bars, the order record, decision ids; recording only); 0.6.8: the minute book (the history path only); 0.6.7: the bench, no hedging always on, a group's own rules optional; 0.6.6: the firm's limits on entries, riskAlert, firmMinimum, copierFollowerRemove; 0.6.5: each member's own rules and the risk percent; 0.6.4: no false no-trade-record alarm, the alarm cleared, Merge on an off follower; 0.6.3: the audit fixes (a missed reset caught up, closes not seen, files that survive a power cut, the kill switch kept); 0.6.2: group stand-downs and league seats; 0.6.1: a group's type and default hero; 0.6.0: group trading (seats); 0.5.8: groups and accountState; 0.5.7: the plan id, the TradeLost hold, None and the daily reset; 0.5.1: the accounts follow NinjaTrader, on top of 0.5.0; 0.5.3: the agents' MNQ cap; 0.5.4: the window while exposed; 0.5.5: the accounts line and unknown keys; 0.5.6: the time check
   assert.ok(!/(^|[\s(=,+:?])\$"/m.test(acode) && !/\?\.\w/.test(acode) && !/\bnameof\(/.test(acode), 'C# 5');
 });
 
@@ -186,13 +186,67 @@ test('0.5.7 None and the daily reset (DECISION 2026-10-14e): ChartBridge runs it
   assert.match(main, /ChartBridgeCopier\.Start\(\);[^\n]*\n\s*try \{ ChartBridgeBranches\.Poll\(\); \}/, '0.6.3 (audit C1): and once at start, every branch loaded');
   assert.match(acc, /public static void Poll\(\) \{ if \(!HarnessManual\) Check\(\); \}/);
   assert.match(acc, /public const string None = "-";/);
-  assert.match(acc, /public static bool KeepThroughReset\(string branch, string account\) \{ return false; \}/, 'the one place an exception would go; none yet');
+  // 0.6.16: the one place now holds its one exception: an agent whose every seat is prop and whose saved Auto names this account
+  const keep = bodies(acc, 'KeepThroughReset');
+  assert.match(keep, /if \(!PersonalNamed \|\| branch == null \|\| !branch\.StartsWith\("agent:", StringComparison\.Ordinal\)\) return false;/, 'no personalAccount line, the bot and the copier: never');
+  assert.match(keep, /return seats\.Count > 0 && seats\.All\(x => IsProp\(x\)\) && ag\.SavedAutoOn\(account\);/, 'only every seat prop, and only from the saved file');
+  assert.equal((acode.match(/KeepThroughReset\(/g) || []).length, 1, 'asked in one place, the agent\'s reset');
+  assert.ok(!/KeepThroughReset/.test(read('ChartBridgeOrders.cs') + read('ChartBridgeGroups.cs')), 'the order path and the groups never ask; the bot and the copier ask as before and get no');
   assert.match(bodies(acc, 'Check'), /string day = DueDay\(et\);[\s\S]*if \(doneDay == day\) return;\s*if \(!inBreak && \(doneDay == null \|\| string\.CompareOrdinal\(doneDay, day\) > 0\)\) return;[\s\S]*WriteDay\(day, null\);\s*Run\(day, missed, null\);/, 'in the break, or a missed break caught up; once per day, saved before it runs');
   assert.match(acc, /if \(a == null\) return name \+ " is not in NinjaTrader yet";/, '0.6.3 (review HIGH 1): an account not listed is not known, never idle');
   assert.match(read(path.join('check', 'BotHarness.cs')), /0\.6\.3 C1: the clock jumps from 16:30 to 19:00/);
   assert.match(acode, /private string account = ChartBridgeBranches\.None;/);
   assert.match(bodies(acode, 'AccountConflict'), /if \(ChartBridgeBranches\.IsNone\(acct\)\) return null;/, 'None clashes with nobody');
   for (const f of ['BotHarness.cs', 'AgentHarness.cs', 'CopierHarness.cs']) assert.match(read(path.join('check', f)), /0\.5\.7 reset/, f);
+});
+
+test('0.6.16 prop accounts: every new branch passes through IsProp, and nothing is prop without the personalAccount line', () => {
+  const acc = strip(read('ChartBridgeAccounts.cs'));
+  // the one predicate: no line, the personal account itself, Backtest or Playback, Sim, or not listed: not prop
+  const isProp = bodies(acc, 'IsProp');
+  assert.match(isProp, /string p = personal;\s*if \(p == null \|\| string\.IsNullOrEmpty\(name\) \|\| IsNone\(name\)\) return false;/, 'no personalAccount line: nothing is prop');
+  assert.match(isProp, /if \(string\.Equals\(name, p, StringComparison\.OrdinalIgnoreCase\)\) return false;/, 'the personal account is never prop');
+  assert.match(isProp, /if \(ChartBridgeOrders\.IsNeverTradable\(name\)\) return false;/, 'Backtest and Playback are never prop');
+  assert.match(isProp, /if \(same\.Count == 0\) return false;\s*return same\.All\(a => !ChartBridgeBot\.IsSim\(a\) && !ChartBridgeAccounts\.IsSim\(a\)\);/, 'not listed, or Sim by either test: not prop');
+  assert.match(acc, /public static void ResetConfig\(\) \{ personal = null; \}/);
+  assert.match(main, /ChartBridgeBranches\.ResetConfig\(\);/, 'every config load starts with no personal account');
+  assert.match(main, /else if \(ChartBridgeBranches\.ReadConfig\(key, val\)\) \{ \}/);
+  // the name is never logged and never sent
+  const rc = bodies(acc, 'ReadConfig');
+  assert.ok(/key != "personalAccount"/.test(rc) && !/Log\([^;]*\+ (personal|v|val)\b/.test(rc), 'the Output line never carries the name');
+  assert.match(acc, /"\],\\"personalNamed\\":"\)\.Append\(ChartBridgeBranches\.PersonalNamed \? "true" : "false"\)/, 'the pages learn only that one is named');
+  assert.match(acc, /b\.Append\(",\\"prop\\":"\)\.Append\(ChartBridgeBranches\.IsProp\(name\) \? "true" : "false"\);/);
+  // the agent: the file is written only behind PersonalNamed and AllSeatsProp (IsProp for every seat)
+  assert.match(bodies(acode, 'AllSeatsProp'), /return seats\.Count > 0 && seats\.All\(x => ChartBridgeBranches\.IsProp\(x\)\);/);
+  assert.equal((acode.match(/ChartBridgeFiles\.SaveAutoIntent\(/g) || []).length, 1, 'one place writes the file');
+  assert.match(bodies(acode, 'SyncAutoIntent'), /if \(m == "auto" && ChartBridgeBranches\.PersonalNamed && AllSeatsProp\(\)\)\s*\{\s*string err = ChartBridgeFiles\.SaveAutoIntent\(AutoFile, "agent " \+ Id, KeyNow\(\)\);/);
+  // the start: the file is read only with the line; the mode is still Shadow first
+  assert.match(bodies(acode, 'Start'), /mode = "shadow";[\s\S]*string intent = ChartBridgeBranches\.PersonalNamed \? ChartBridgeFiles\.AutoIntent\(AutoFile\) : null;\s*lock \(Sync\) autoRestorePending = intent != null;/);
+  // the one restore: under PlaceGate; no line, the kill switch, another account, a seat not known (waits), not prop, not flat: no Auto
+  const tr = bodies(acode, 'TryRestoreAuto');
+  assert.match(tr, /lock \(PlaceGate\)/);
+  assert.match(tr, /if \(!ChartBridgeBranches\.PersonalNamed\) no = [^\n]*\n\s*else if \(k\) no = "the kill switch is on";/);
+  assert.match(tr, /else if \(string\.IsNullOrEmpty\(intent\) \|\| intent != key\) no = /);
+  assert.match(tr, /if \(seats\.Any\(x => ChartBridgeBranches\.UnknownWhy\(FindAccount\(x\), x\) != null\)\) return;/, 'a seat not known yet: this pass does not decide');
+  assert.match(tr, /List<string> notProp = seats\.Where\(x => !ChartBridgeBranches\.IsProp\(x\)\)\.ToList\(\);/);
+  assert.match(tr, /List<string> busy = seats\.Where\(x => !ChartBridgeBranches\.Idle\(FindAccount\(x\)\)\)\.ToList\(\);/);
+  assert.match(tr, /if \(notProp\.Count > 0\) no = [^\n]*\n\s*else if \(busy\.Count > 0 \|\| Exposed\(\)\) no = [^\n]*\n\s*else \{ string why = AutoProblem\(\); if \(why != null\) no = why; \}/);
+  assert.equal((acode.match(/mode = "auto";/g) || []).length, 1, 'the restore is the only place ChartBridge itself sets Auto');
+  assert.match(tr, /if \(no != null\)\s*\{\s*DropAutoIntent\(/, 'a no removes the file: one try per start');
+  assert.match(tr, /lock \(Sync\) \{ mode = "auto"; autoRestorePending = false; \}/);
+  // saved and removed with the page's changes, and removed by the kill switch
+  assert.match(bodies(acode, 'SetModeLocked'), /SyncAutoIntent\("the mode changed to " \+ m\);/);
+  assert.match(bodies(acode, 'SetKillLocked'), /DropAutoIntent\("the kill switch is on"\);/);
+  assert.match(bodies(acode, 'SetAccountLocked'), /SyncAutoIntent\("its account changed"\);/);
+  assert.match(bodies(acode, 'SetGroupLocked'), /SyncAutoIntent\("its account changed"\);/);
+  assert.match(bodies(acode, 'GoNone'), /DropAutoIntent\("its account is None"\);/);
+  // no new order call: the saved Auto places, cancels and flattens nothing
+  for (const f of ['SyncAutoIntent', 'DropAutoIntent', 'TryRestoreAuto', 'SavedAutoOn']) assert.ok(!/\.Submit\s*\(|\.CreateOrder\s*\(|\.Cancel\s*\(|Flatten|PlaceAgentEntry|PlaceOrder/.test(bodies(acode, f)), f + ' touches no order');
+  // the harness: a no-setting install, the personal account and a Sim account get the 0.6.15 result
+  const h = read(path.join('check', 'AgentHarness.cs'));
+  for (const s of ['PropAccounts();', 'no setting: the 17:00 reset puts the agent on None, as before', 'no setting: every start is Shadow, the file is not even read', ': a restart from Auto is Shadow', ': the 17:00 reset puts the agent on None, as before', 'prop: the 17:00 reset keeps the account and Auto', 'prop: a position at the start: Shadow, the file removed, the pages told'])
+    assert.ok(h.includes(s), s);
+  assert.ok(!/[\u2013\u2014]/.test(h + read('ChartBridgeAgents.cs') + read('ChartBridgeAccounts.cs')), 'no en or em dashes');
 });
 
 test('0.6.0 group trading: one plan, each seat through PlaceAgentEntry on its own account and size, never PlaceLock across seats', () => {

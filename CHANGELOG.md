@@ -63,6 +63,43 @@
   `test/pc-updater.test.js`: the allowed git subcommands, the box job's name, useHttpPath read before the one ask, the
   token only after a 404 or 401 and then through the Actions API, one place that asks for it and one that sends it.
 
+## ChartBridge 0.6.16 and chart 1.44.2 (2026-11-11): prop accounts: an agent's Auto is kept through the 17:00 reset and comes back once after a restart
+
+In plain words: nothing changes on the chart, and nothing changes for hand trading. This is the first ChartBridge piece of the
+Prop Business (Anthony's build plan of 2026-11-10, its addendum, and the build answers of 2026-11-11). Until a trading PC's
+`config.txt` gets one new line, ChartBridge 0.6.16 behaves exactly as 0.6.15.
+
+- **One line names the personal account**: `personalAccount = <the account's exact name>` in `config.txt`, set by hand once on
+  each trading PC. With it, every other account that is not Sim, Backtest or Playback is **prop**. The name stays in that
+  file: it is never logged, sent or shown; the pages learn only that one is named (`personalNamed`) and each account's `prop`.
+- **Auto through the 17:00 ET reset.** An agent set to Auto on prop accounts keeps its account and Auto at the daily reset
+  (it used to go to None). Its own entry window and flat time are unchanged, so it still trades only inside its window.
+- **Auto after a restart, once, only when flat.** Every start is still Shadow. If the agent was in Auto on prop accounts when
+  ChartBridge stopped, Auto comes back one time, and only if the account is the same, prop, known to NinjaTrader, flat with
+  nothing working, and the kill switch is off. If any of that is not so (a position is open, for one), the agent stays in
+  Shadow, the page says why, and Auto is one click as before. A position that closes later does not bring Auto back.
+- **The kill switch wins.** Turning it on removes the saved Auto. A kill switch that was on stays on through a restart, and
+  releasing it after that restart leaves Shadow.
+- **Not changed, on any account:** the order ticket, hotkeys, groups and group entries, the copier, the bot, Order
+  Strategies, Merge, and Flatten every account. Every add-on file but `ChartBridge.cs`, `ChartBridgeAccounts.cs` and
+  `ChartBridgeAgents.cs` is the 0.6.15 file byte for byte (`test/nt8-record.test.js`), and the order, groups, copier, bot,
+  strategies, merge and integration harnesses are unchanged files that pass as they were.
+- **The personal account, a Sim account and a PC with no line** get the 0.6.15 result in every case (the reset to None,
+  Shadow at every start); the agent harness proves each (`check/AgentHarness.cs`, `PropAccounts`, 52 checks).
+- **Shadow and Copilot on a prop account** are as before: None at 17:00, Shadow at a start.
+
+The file is `agent-<id>-auto.txt` next to `config.txt` (written and removed by ChartBridge; do not edit). `nt8/PROTOCOL.md`,
+"Prop accounts: Auto kept through the reset and a restart (0.6.16)", has every rule. Going back to 0.6.15 is safe: it ignores
+the line and the file.
+
+**To install:** ChartBridge 0.6.16 is a recompile (`-InstallChartBridge`, then F5 while flat). Nothing happens until the
+`personalAccount` line is added by hand on a trading PC; do that only when Anthony says so. Still to come, each its own
+change: Kill all for the prop accounts, the day profit stop, and the rule-bot's market entry.
+
+Risks: the restore arms a live prop account with nobody at the desk. The outside brake is the runner's on-duty claim on The
+Desk (a runner without it sends no plan), which is not in this release. Until it is, leave the line out, or keep the agent's
+kill switch on overnight.
+
 ## ChartBridge 0.6.15 and chart 1.44.1 (2026-11-08): the 1 second pull retired; the NQ tick file is the one source
 
 In plain words: nothing changes on the chart. ChartBridge no longer runs its separate 1 second pull between 16:15 and 18:00 New
