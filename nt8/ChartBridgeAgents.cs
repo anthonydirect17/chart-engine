@@ -1009,14 +1009,24 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static string PageKillAllProp()
         {
             if (!ChartBridgeBranches.PersonalNamed) return "Kill all acts on prop accounts only, and no personal account is picked (the Accounts tab), so no account is prop: nothing was done";
-            List<string> did = new List<string>(), left = new List<string>();
+            List<string> did = new List<string>(), left = new List<string>(), mixed = new List<string>(), failed = new List<string>();
             foreach (ChartBridgeAgent a in All())
             {
-                string words = a.KillProp();
-                if (words != null) did.Add(words); else left.Add(a.Id);
+                // 0.6.19 (the review's N3): one agent that throws never stops the others from being killed
+                try
+                {
+                    string words = a.KillProp();
+                    if (words != null) did.Add(words); else if (a.KillMixed()) mixed.Add(a.Id); else left.Add(a.Id);
+                }
+                catch (Exception ex) { failed.Add(a.Id); ChartBridgeServer.Log("agent " + a.Id + ": Kill all threw (" + ex.Message + "): stop it on the Agent tab now"); }
             }
+            // 0.6.19 (F2, Anthony 2026-11-11): only the traders' own orders are cancelled; an order placed by hand on the same account
+            // and contract stays, and the line says it can still fill
             string text = "Kill all (prop accounts): " + (did.Count > 0 ? string.Join("; ", did) : "no agent is on prop accounts: nothing was done") +
-                          (left.Count > 0 ? ". Not touched (not on prop accounts): " + string.Join(", ", left) : "") + ". The bot, the copier and manual orders are never touched";
+                          (mixed.Count > 0 ? ". NOT STOPPED, still trading its prop accounts (it trades the personal account too; stop it on the Agent tab): " + string.Join(", ", mixed) : "") +
+                          (failed.Count > 0 ? ". FAILED, stop it on the Agent tab now: " + string.Join(", ", failed) : "") +
+                          (left.Count > 0 ? ". Not touched (not on prop accounts): " + string.Join(", ", left) : "") +
+                          ". Only the traders' own orders were cancelled: an order placed by hand, the bot's or the copier's stays and can still fill";
             ChartBridgeServer.Log("agent " + text);
             ChartBridgeV3.SendToV3Traders("{\"type\":\"status\",\"level\":\"warn\",\"text\":" + CbJson.Str(text) + "}");
             return null;
@@ -1039,9 +1049,10 @@ namespace NinjaTrader.NinjaScript.AddOns
                 string odd = ChartBridgeAgent.UnknownKey(d, keys);
                 if (odd != null) { PageReject(client, cid, id, "unknown key \"" + odd + "\" in " + type); return; }
                 if (d.ContainsKey("cid") && cid == null) { PageReject(client, cid, id, "cid must be a plain string"); return; }
+                // 0.6.19 (the review's N2): Kill all is never refused for the action rate (it was, as the 11th action inside a second)
+                if (type == "agentKillAllProp") { why = PageKillAllProp(); if (why != null) PageReject(client, cid, id, why); return; }   // 0.6.17
                 if (!RateOk(client.Actions)) { PageReject(client, cid, id, "too many order actions (more than " + MaxActionsPerSecond + " a second)"); return; }
                 if (type == "agentStandDownClear") { why = PageClear(d); if (why != null) PageReject(client, cid, id, why); return; }   // 0.6.2
-                if (type == "agentKillAllProp") { why = PageKillAllProp(); if (why != null) PageReject(client, cid, id, why); return; }   // 0.6.17
                 ChartBridgeAgent a = Get(ChartBridgeAgent.S(d, "agent") ?? "");
                 if (a == null) { PageReject(client, cid, id, "there is no agent " + (ChartBridgeAgent.S(d, "agent") ?? "(none)") + " (agents in config.txt)"); return; }
                 why = a.OnPage(type, d);
@@ -1214,6 +1225,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             public string Root, Why;
             public Instrument Inst;   // the contract (the served one, or another month the agent's own trade holds; review A5)
             public bool Owned;   // it owned the pair: close its position; else only its own orders are cancelled (checked again: review A1)
+            // 0.6.19 (the review's F2; Anthony 2026-11-11: "yes, okay"): on a pair it owns, cancel only the agent's own orders, never
+            // another order that rests there (one placed by hand stays and can still fill). Kill all and the day's profit stop set
+            // it; the flat time's flatten and the agent's own flatten are as they were (every order that may fill on its pair).
+            public bool OwnOnly;
             public bool WasMissing;   // the account left NinjaTrader's list since the job started (checked again when it is back)
             public int StartQty, LegQty;   // the position when the job started, and the agent's stop legs' contracts then (the cap without a ledger)
             public int ClosedQty;          // contracts its closes filled (taken off LegQty's cap; review A C2)
@@ -1734,7 +1749,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             // NinjaTrader confirms each one done, every fill there has come through, and both position readings agree, what it holds is
             // closed at market ("CB#<tag> ag:<id> flat"). Readings still apart after 3 s: the smaller is closed (never more than either
             // shows). Not flat 10 s after the start: a status error to the pages, every 10 s until flat. Returns how many roots started.
-            public int StartFlatten(string why, bool byRules, bool atFlatTime)
+            public int StartFlatten(string why, bool byRules, bool atFlatTime) { return StartFlatten(why, byRules, atFlatTime, false); }
+            public int StartFlatten(string why, bool byRules, bool atFlatTime, bool ownOnly)
             {
                 Account a = FindAccount(Account);   // null: not listed by NinjaTrader; a pair it still owns gets its job (and its errors)
                 string acctName = Account;
@@ -1757,7 +1773,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                         Order near = stops.Count == 0 ? null : stops.Any(o => o.OrderAction == OrderAction.Sell) ? stops.OrderByDescending(o => o.StopPrice).First() : stops.OrderBy(o => o.StopPrice).First();
                         lock (Sync)
                         {
-                            Flats[key] = new FlatJob { Root = root, Inst = inst, Why = why, StartMs = Now(), Owned = owned, StartQty = startQty, LegQty = legQty, WasMissing = a == null, AtFlatTime = byRules && atFlatTime,
+                            Flats[key] = new FlatJob { Root = root, Inst = inst, Why = why, StartMs = Now(), Owned = owned, OwnOnly = ownOnly, StartQty = startQty, LegQty = legQty, WasMissing = a == null, AtFlatTime = byRules && atFlatTime,
                                                        StopPx = near != null ? near.StopPrice : 0, Tag = near != null ? ChartBridgeAgents.TagOf(near.Name) : null };
                             if (owned) Sticky.Add(root);   // its pair until flat: cancelling its own legs never makes it someone else's
                         }
@@ -1917,7 +1933,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                     List<Order> may = ChartBridgeOrders.AgentMayFill(a, inst);
                     // not its pair: only its own orders, and never its stop placed again while the account holds a position there (review
                     // D1; flat, that stop could only open one, so it goes: lead's default)
-                    List<Order> others = may.Where(o => o != j.Close && (j.Owned || (IsMine(o) && !(IsReStop(o) && (p1 != 0 || p2 != 0))))).ToList();
+                    // 0.6.19 (F2): a job that is own orders only cancels, on its pair too, only what is the agent's
+                    List<Order> others = may.Where(o => o != j.Close && (j.Owned ? (!j.OwnOnly || IsMine(o)) : (IsMine(o) && !(IsReStop(o) && (p1 != 0 || p2 != 0))))).ToList();
                     bool closeWorks = j.Close != null && may.Contains(j.Close);
                     if (up && others.Count > 0)
                     {
@@ -4382,7 +4399,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                              ", realized plus open): flat, and no new entries for agent " + Id + " until 18:00 ET";
                 bool fresh;
                 lock (Sync) { fresh = lossStandDown == null; if (fresh) lossStandDown = say; }
-                StartFlatten("Agent " + Id + ": " + DayStopWords + " (" + money + ") is reached on " + x.Name + ": flattened by its rules", true, x.Name);
+                StartFlatten("Agent " + Id + ": " + DayStopWords + " (" + money + ") is reached on " + x.Name + ": flattened by its rules", true, x.Name, false, true);   // its own orders only (F2)
                 if (fresh) { SaveDay(); Log("agent " + Id + ": " + say); AgentLog(say); Notify(); }
             }
             return hit;
@@ -4390,10 +4407,12 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         private int StartFlatten(string why, bool byRules) { return StartFlatten(why, byRules, null, false); }
         private int StartFlatten(string why, bool byRules, string onlySeat) { return StartFlatten(why, byRules, onlySeat, false); }
-        private int StartFlatten(string why, bool byRules, string onlySeat, bool atFlatTime)
+        private int StartFlatten(string why, bool byRules, string onlySeat, bool atFlatTime) { return StartFlatten(why, byRules, onlySeat, atFlatTime, false); }
+        // ownOnly (0.6.19, F2): on a pair it owns, only the agent's own orders are cancelled (Kill all, the day's profit stop)
+        private int StartFlatten(string why, bool byRules, string onlySeat, bool atFlatTime, bool ownOnly)
         {
             int n = 0;
-            foreach (Seat x in AllSeats()) if (onlySeat == null || x.Name == onlySeat) n += x.StartFlatten(why, byRules, atFlatTime);
+            foreach (Seat x in AllSeats()) if (onlySeat == null || x.Name == onlySeat) n += x.StartFlatten(why, byRules, atFlatTime, ownOnly);
             return n;
         }
 
@@ -4487,13 +4506,34 @@ namespace NinjaTrader.NinjaScript.AddOns
         // and closes only what the agent owns), then the kill switch goes on (its unfilled entries cancelled, its saved Auto
         // removed), then the mode goes to Shadow. The flatten is started first and runs whatever the mode or the kill switch,
         // as the flat time's does. Returns the words for the pages.
+        // 0.6.19 (the review's F1): what counts as a prop account FOR KILL ALL ONLY. IsProp answers no for an account NinjaTrader
+        // does not list right now, which is the careful side for keeping Auto and the wrong side for a kill: an agent in Auto on
+        // a prop account that had dropped off the list, or was not listed yet after a restart, was skipped and could trade again.
+        // So here a seat is in scope unless it is known to be something else: the personal account, an account NinjaTrader lists
+        // as Sim, Backtest or Playback, or None. An account that is not listed is in scope.
+        internal static bool KillScope(string name)
+        {
+            if (string.IsNullOrEmpty(name) || ChartBridgeBranches.IsNone(name)) return false;
+            if (!ChartBridgeBranches.PersonalNamed || ChartBridgeBranches.IsPersonal(name)) return false;
+            if (ChartBridgeOrders.IsNeverTradable(name)) return false;   // Backtest, Playback
+            Account listed = FindAccount(name);
+            return listed == null || !(ChartBridgeBot.IsSim(listed) || ChartBridgeAccounts.IsSim(listed));   // a known Sim account: out; not listed: in
+        }
+        // Does it trade the personal account and something in scope too? Kill all leaves such an agent alone (the personal account
+        // is never touched), and says so loudly (the review's N1).
+        internal bool KillMixed()
+        {
+            List<string> seats = AllSeats().Select(x => x.Name).ToList();
+            return seats.Any(x => ChartBridgeBranches.IsPersonal(x)) && seats.Any(x => KillScope(x));
+        }
+
         internal string KillProp()
         {
             lock (PlaceGate)
             {
                 List<string> seats = AllSeats().Select(x => x.Name).ToList();
-                if (seats.Count == 0 || !seats.All(x => ChartBridgeBranches.IsProp(x))) return null;
-                int roots = StartFlatten("Kill all (prop accounts)", false);
+                if (seats.Count == 0 || !seats.All(x => KillScope(x))) return null;
+                int roots = StartFlatten("Kill all (prop accounts)", false, null, false, true);   // its own orders only (F2)
                 string err = KillLocked(true);
                 string old;
                 List<Proposal> expired = new List<Proposal>();
