@@ -305,6 +305,7 @@ test('0.6.19 the day\'s profit stop: the plan\'s dayStopDollars, the smaller of 
   assert.match(acode, /if \(dayStop > 0\) lines\.Add\(DayStopPrefix \+ dayStop\.ToString\("0\.##", CultureInfo\.InvariantCulture\)\);/, 'saved only while set');
   assert.match(acode, /internal const string DayStopPrefix = "#daystop\\t";/, 'a comment line to a ChartBridge before 0.6.19');
   assert.match(acode, /\(dayStop > 0 \? ",\\"dayStop\\":" \+ CbJson\.Num\(dayStop\) : ""\) \+ "\}";/, 'agentState carries it only when set');
+  assert.match(acode, /if \(dayStop > 0\) b\.Append\(",\\"dayStop\\":"\)\.Append\(CbJson\.Num\(dayStop\)\);/, 'and the pages\' agent message, only when set');
   const h = read('check/AgentHarness.cs');
   assert.match(h, /DayStop\(\);/);
   for (const part of ['day stop: the plan\'s dollar value', 'day stop: a plan with no value clears the one before it, and nothing is checked while it holds nothing', 'day stop: the consistency mark on an account that is not funded'])

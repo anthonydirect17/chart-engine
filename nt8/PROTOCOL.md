@@ -3680,7 +3680,8 @@ go over that") and 2026-11-11 (the runner sends the playbook's value with each p
 - **Saved**: `agent-<id>-day.txt` gains one line, `#daystop<TAB><dollars>`, only while a value is set (a comment to a
   ChartBridge before 0.6.19; a malformed one is read as a comment). Kept through a restart, cleared at the roll. The
   stand-down is the day file's `standDown` line, as for `maxLosses`.
-- **`agentState`** carries `"dayStop": <dollars>` (the session's plan value) only when one is set; left out: none. A trader
+- **`agentState`** (to the trader) and **`agent`** (to the pages) carry `"dayStop": <dollars>` (the session's plan value)
+  only when one is set; left out: none. A trader
   that sends no `dayStopDollars`, on an account with no consistency rule and target, is as in 0.6.18 in every message.
 
 Checked in `check/AgentHarness.cs` (`DayStop`).

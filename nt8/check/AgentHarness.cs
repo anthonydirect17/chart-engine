@@ -5067,6 +5067,7 @@ public static class AgentHarness
             if (e == null) return;
             Check(FileText("agent-manrae-day.txt").Contains("#daystop\t600\n") || FileText("agent-manrae-day.txt").Contains("#daystop\t600\r"), "day stop: saved in the day file: " + FileText("agent-manrae-day.txt").Replace("\n", " | "));
             Check(Last(agentOut, "agentState").Contains(",\"dayStop\":600}"), "day stop: agentState carries it: " + Last(agentOut, "agentState"));
+            Check(Regex.IsMatch(ChartBridgeAgents.Get("manrae").StripJson(), ",\"lastPlan\":(null|\\{.*\\}),\"dayStop\":600"), "day stop: and the page's agent message: " + ChartBridgeAgents.Get("manrae").StripJson());
             Check(Legs(sime, e).Count(IsLive) == 2, "day stop: the position has its stop and target");
             sime.Items[AccountItem.UnrealizedProfitLoss] = 599.99;
             Advance(2000);
@@ -5093,6 +5094,7 @@ public static class AgentHarness
             et = new DateTime(2026, 10, 9, 18, 0, 30);
             Advance(1500);
             st = Last(agentOut, "agentState");
+            Check(!ChartBridgeAgents.Get("manrae").StripJson().Contains("dayStop"), "day stop: after the roll the page's agent message has no dayStop");
             Check(!st.Contains("profit stop") && !st.Contains("dayStop") && !FileText("agent-manrae-day.txt").Contains("#daystop"), "day stop: after the roll: no profit stand-down, no dayStop in agentState or the day file: " + st);
         });
         Part("day stop: a plan with no value clears the one before it, and nothing is checked while it holds nothing", () =>

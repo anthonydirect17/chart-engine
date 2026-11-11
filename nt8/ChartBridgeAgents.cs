@@ -5385,6 +5385,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                  .Append(",\"owns\":").Append(owns ? "true" : "false")
                  .Append(",\"lastBeatMs\":").Append(client != null ? Ms(Math.Max(0, now - lastMsgMs)) : "null")
                  .Append(",\"lastPlan\":").Append(lastPlanJson ?? "null");
+                if (dayStop > 0) b.Append(",\"dayStop\":").Append(CbJson.Num(dayStop));   // 0.6.19: the session's plan value, only when set (for the pages: Fleet shows it)
                 if (gid != null) b.Append(",\"group\":").Append(GroupJson(gid)).Append(",\"seatsRev\":").Append(seatsRev.ToString(CultureInfo.InvariantCulture));   // 0.6.0
                 if (seats != null) b.Append(",\"seats\":").Append(seats);
             }
