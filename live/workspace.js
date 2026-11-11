@@ -892,6 +892,7 @@ function tmessage(m) {
       renderOrders();
       if (botDesk) botDesk.hello(m);                      // 1.16.0: the Bot tab says what an older ChartBridge lacks
       if (agentDesk) agentDesk.hello(m);                  // 1.17.0: the Agent tab too (agents need ChartBridge 0.5.0)
+      if (fleetView) fleetView.hello(m);                  // 1.45.0: the Fleet tab shows with ChartBridge 0.6.17
       return;
     case 'execs': tfills.clear(); for (const f of m.list || []) if (f && f.id) tfills.set(f.account + '|' + f.id, f); renderOrders(); return;
     case 'pcClock': pcClock = pcClockOf(m); syncStats(); return;   // 1.24.0: a new check of this PC's clock (every 5 minutes)
@@ -3420,6 +3421,7 @@ $('wsTabs').addEventListener('click', e => {
   if (b && botDesk && botDesk.shown()) botDesk.showTab(false);   // 1.16.0: from the Bot tab back to a layout
   if (b && agentDesk && agentDesk.shown()) agentDesk.showTab(false);   // 1.17.0: and from the Agent tab
   if (b && leagueView && leagueView.shown()) leagueView.showTab(false);   // 1.35.0: and from the League tab
+  if (b && fleetView && fleetView.shown()) fleetView.showTab(false);     // 1.45.0: and from the Fleet tab
   if (!b || b.dataset.tab === layout) return;
   save(); openLayout(b.dataset.tab);
 });
@@ -3544,6 +3546,7 @@ function openLayout(name) {
   if (botDesk) { botDesk.layoutChanged(layout); botDesk.chartsChanged(); }   // 1.16.0: the strip on Main only; ghost marks
   if (agentDesk) agentDesk.layoutChanged(layout);                             // 1.17.0: a layout closes the Agent tab
   if (leagueView && leagueView.shown()) leagueView.showTab(false);            // 1.35.0: and the League tab
+  if (fleetView && fleetView.shown()) fleetView.showTab(false);              // 1.45.0: and the Fleet tab
 }
 
 /* Another window changed something this page uses. Its open layouts stay its own. */
@@ -3583,6 +3586,7 @@ window.workspace = { get layout() { return layout; }, panels: () => panels.map(p
   agent: () => (agentDesk ? agentDesk.state() : null),
   /* 1.35.0: the League tab, and the charts showing the league's trades faintly (read only) */
   league: () => (leagueView ? leagueView.state() : null),
+  fleet: () => (fleetView ? fleetView.state() : null),          // 1.45.0: the Fleet tab's state (test/fleet-smoke.mjs)
   leagueGhosts: () => [...LG.overlays.keys()],
   /* 1.37.0: the Multi-Account panel's state (its tab, group, toast), for the smokes */
   multi: () => { const v = [...views.values()].find(x => x.panel.type === 'multi' && x.accountPage); return v ? { tab: v.accountPage.state.tab, gid: v.accountPage.state.gid, toast: v.accountPage.state.toast } : null; },
@@ -3605,7 +3609,7 @@ function startBot() {
     charts: () => chartViews().map(v => ({ id: v.panel.id, root: v.panel.root, chart: v.pane.chart })),
     onTab: on => {
       document.body.classList.toggle('bt-on', on);
-      if (on) { closePops(); restoreMax(); if (agentDesk && agentDesk.shown()) agentDesk.showTab(false); if (leagueView && leagueView.shown()) leagueView.showTab(false); }   // one tab at a time
+      if (on) { closePops(); restoreMax(); if (agentDesk && agentDesk.shown()) agentDesk.showTab(false); if (leagueView && leagueView.shown()) leagueView.showTab(false); if (fleetView && fleetView.shown()) fleetView.showTab(false); }   // one tab at a time
       tabUrl(on ? 'bot' : '');
       placeTabBtn();                                        // 1.35.0: its button in the top bar while open (the way back)
     } });
@@ -3613,7 +3617,7 @@ function startBot() {
 /* the tab in the URL (?tab=bot or ?tab=agent), so a reload keeps it */
 function tabUrl(t) {
   const u = new URL(location.href);
-  if (t) u.searchParams.set('tab', t); else if (!document.body.classList.contains('bt-on') && !document.body.classList.contains('ag-on') && !document.body.classList.contains('lg-on')) u.searchParams.delete('tab');
+  if (t) u.searchParams.set('tab', t); else if (!document.body.classList.contains('bt-on') && !document.body.classList.contains('ag-on') && !document.body.classList.contains('lg-on') && !document.body.classList.contains('fl-on')) u.searchParams.delete('tab');
   history.replaceState(null, '', u.pathname + '?' + u.searchParams.toString() + u.hash);
 }
 /* 1.17.0: the Agent tab (live/agent.js) on the same v3 connection (AF); the agents come with ChartBridge 0.5.0, and with an
@@ -3628,7 +3632,7 @@ function startAgent() {
     flatten: (account, root) => core.flattenAgent(account, root),   // On/Off's "Flatten and turn him off?" Yes (1.20.0)
     onTab: on => {
       document.body.classList.toggle('ag-on', on);
-      if (on) { closePops(); restoreMax(); if (botDesk && botDesk.shown()) botDesk.showTab(false); if (leagueView && leagueView.shown()) leagueView.showTab(false); }   // one tab at a time
+      if (on) { closePops(); restoreMax(); if (botDesk && botDesk.shown()) botDesk.showTab(false); if (leagueView && leagueView.shown()) leagueView.showTab(false); if (fleetView && fleetView.shown()) fleetView.showTab(false); }   // one tab at a time
       tabUrl(on ? 'agent' : '');
       placeTabBtn();                                        // 1.35.0: its button in the top bar while open (the way back)
     } });
@@ -3646,10 +3650,25 @@ function startLeague() {
     onDay: d => { const u = new URL(location.href); if (d) u.searchParams.set('day', d); else u.searchParams.delete('day'); history.replaceState(null, '', u.pathname + '?' + u.searchParams.toString() + u.hash); },
     onTab: on => {
       document.body.classList.toggle('lg-on', on);
-      if (on) { closePops(); restoreMax(); if (botDesk && botDesk.shown()) botDesk.showTab(false); if (agentDesk && agentDesk.shown()) agentDesk.showTab(false); }
+      if (on) { closePops(); restoreMax(); if (botDesk && botDesk.shown()) botDesk.showTab(false); if (agentDesk && agentDesk.shown()) agentDesk.showTab(false); if (fleetView && fleetView.shown()) fleetView.showTab(false); }
       tabUrl(on ? 'league' : '');
       placeTabBtn();                                        // the Bot button in the top bar meanwhile (one click to the Bot)
       if (!on) { if (leagueView.liveDay()) LG.day = leagueView.liveDay(); if (!LG.busy) leaguePoll(); }   // never a past day; the faint marks read on by themselves (a read under way schedules the next itself)
+    } });
+}
+/* 1.45.0 (build plan 2026-11-10, B1, first cut): the Fleet tab (live/fleet.js) on the same v3 connection (AF): the traders and
+   the prop accounts as ChartBridge says them, and Kill all for the prop accounts (ChartBridge 0.6.17's message, sent by fleet.js alone, asked
+   first). It hides the grid while it is open, as the other views do (?tab=fleet keeps it on a reload). Beside the Agent, Bot and
+   League tabs: it replaces none of them yet. */
+let fleetView = null;
+function startFleet() {
+  if (!window.FleetView) return;
+  fleetView = window.FleetView.create({ view: $('flView'), tab: $('wsFleetTab'), v3: AF,
+    onTab: on => {
+      document.body.classList.toggle('fl-on', on);
+      if (on) { closePops(); restoreMax(); if (botDesk && botDesk.shown()) botDesk.showTab(false); if (agentDesk && agentDesk.shown()) agentDesk.showTab(false); if (leagueView && leagueView.shown()) leagueView.showTab(false); }   // one tab at a time
+      tabUrl(on ? 'fleet' : '');
+      placeTabBtn();                                        // the Bot button in the top bar meanwhile (one click to the Bot)
     } });
 }
 /* the league's trades, faint, on the charts whose ⋯ switch is on (kept in this browser, off by default): one read of The Desk
@@ -3700,10 +3719,11 @@ function leaguePoll() {
 setInterval(syncLeagueGhosts, 3000);                      // a chart's instrument changed, a layout opened: the overlays follow
 window.addEventListener('storage', e => { if (e.key && e.key.endsWith(LG_GHOST_KEY)) syncLeagueGhosts(); });
 const start = () => {
-  startBot(); startAgent(); startLeague();
+  startBot(); startAgent(); startLeague(); startFleet();
   openLayout(new URLSearchParams(location.search).get('layout') || W.DEFAULT_NAME); tconnect(); autoTake();
   if (botDesk && new URLSearchParams(location.search).get('tab') === 'bot') botDesk.showTab(true);
   if (agentDesk && new URLSearchParams(location.search).get('tab') === 'agent') agentDesk.showTab(true);
+  if (fleetView && new URLSearchParams(location.search).get('tab') === 'fleet') fleetView.showTab(true);   // 1.45.0
   if (leagueView && new URLSearchParams(location.search).get('tab') === 'league') leagueView.openDay(new URLSearchParams(location.search).get('day'));   // a day checked first: a past one read only
   syncLeagueGhosts();
 };

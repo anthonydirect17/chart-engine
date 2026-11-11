@@ -37,6 +37,8 @@
     { "from": "live/trade-tags.js", "to": "trade-tags.js" },
     { "from": "live/league.js", "to": "league.js" },
     { "from": "live/league.css", "to": "league.css" },
+    { "from": "live/fleet.js", "to": "fleet.js" },
+    { "from": "live/fleet.css", "to": "fleet.css" },
     { "from": "live/agents-strip.js", "to": "agents-strip.js" },
     { "from": "live/agents-strip.css", "to": "agents-strip.css" },
     { "from": "live/agents-sky.js", "to": "agents-sky.js" },

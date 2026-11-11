@@ -80,7 +80,7 @@ test('the chart chrome in the default theme is V2 (no V1 blue-grey, purple or cr
 });
 
 /* ---------------------------------------------------------------- the page chrome */
-const CHROME = ['live/live.css', 'live/workspace.css', 'live/accounts.css', 'live/bot.css', 'live/agents-strip.css', 'live/league.css',
+const CHROME = ['live/live.css', 'live/workspace.css', 'live/accounts.css', 'live/bot.css', 'live/agents-strip.css', 'live/league.css', 'live/fleet.css',
   'live/multi-account.css', 'live/pin.css', 'live/markup.css', 'live/motion.css', 'live/agent.css'];
 const V1 = /#6D28D9|#B69CFF|#A98BFF|#1A1230|#3B2A6B|#D8CCFF|#9F1239|#E0445E|#D0314F|#7B5CFF|#2A1F4D|#C8102E|#8B7CF6|rgba\(\s*(109,\s*40,\s*217|123,\s*92,\s*255|182,\s*156,\s*255|91,\s*61,\s*255)/i;
 
