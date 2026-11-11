@@ -1111,7 +1111,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                 }
             for (int i = 0; i < unseen.Count; i++)
                 b.Append(i > 0 ? "," : "").Append("{\"name\":").Append(CbJson.Str(unseen[i][0])).Append(",\"trade\":").Append(unseen[i][1] == "trade" ? "true" : "false").Append(",\"lastConnected\":").Append(unseen[i][2]).Append('}');
-            return b.Append("]}").ToString();
+            // prop accounts: whether config.txt names a personal account (never which one); each row carries its own prop
+            return b.Append("],\"personalNamed\":").Append(ChartBridgeBranches.PersonalNamed ? "true" : "false").Append('}').ToString();
         }
 
         private static void AccountJson(StringBuilder b, string name, Account a, Claims claims)
@@ -1155,6 +1156,7 @@ namespace NinjaTrader.NinjaScript.AddOns
              .Append(",\"canHide\":").Append(hideWhy == null ? "true" : "false")
              .Append(",\"hideWhy\":").Append(hideWhy == null ? "null" : CbJson.Str(hideWhy));
             ChartBridgeGroups.AppendAccountFields(b, name, a);   // 0.5.8: group, myFloor, myDailyLoss, floor, roomFloor, roomDaily, targetLeft, src, why
+            b.Append(",\"prop\":").Append(ChartBridgeBranches.IsProp(name) ? "true" : "false");   // prop accounts (config.txt personalAccount): false with no line
             b.Append(",\"unserved\":[").Append(a != null ? UnservedJson(a) : "").Append(']');   // 0.6.6 (the review): what Flatten every account cannot cover
             b.Append('}');
         }
@@ -1526,9 +1528,50 @@ namespace NinjaTrader.NinjaScript.AddOns
             return true;
         }
 
-        // THE ONE PLACE for an exception to the reset (Anthony is still deciding whether a branch running a hero on Sim101 is left
-        // alone): true keeps that branch's account through the reset. The plain rule for now: no exception.
-        public static bool KeepThroughReset(string branch, string account) { return false; }
+        // ---------------------------------------------------------- prop accounts (Anthony's rulings: agents trade the prop accounts)
+        // config.txt's personalAccount line names the personal account (read in ChartBridgeConfig.Load). With it, an account is prop
+        // when it is not that account, not Sim and not Backtest or Playback. With no line, nothing is prop and ChartBridge behaves
+        // as before. A NEW notion: the accounts' "kind" (prop = in a group, personal = in no group) keeps its own meaning.
+        // The name is never logged and never sent (the page learns only personalNamed and each row's prop, ChartBridgeAccounts).
+        private static volatile string personal;
+        public static void ResetConfig() { personal = null; }
+        public static bool ReadConfig(string key, string val)
+        {
+            if (key != "personalAccount") return false;
+            string v = (val ?? "").Trim();
+            personal = v.Length > 0 && !IsNone(v) ? v : null;
+            ChartBridgeServer.Log(personal != null ? "config.txt: personalAccount is set: every other account that is not Sim, Backtest or Playback is prop (an agent's Auto on prop accounts is kept through the 17:00 ET reset and after a restart)"
+                                                   : "config.txt: personalAccount names no account: no account is prop");
+            return true;
+        }
+        public static bool PersonalNamed { get { return personal != null; } }
+        // Prop: a personal account is named, and this account is not it, not Backtest or Playback (ChartBridgeOrders.IsNeverTradable),
+        // and NinjaTrader lists it and does not call it Sim by either existing test (ChartBridgeBot.IsSim, ChartBridgeAccounts.IsSim).
+        // An account NinjaTrader does not list is not prop (its Sim cannot be read: the careful side).
+        public static bool IsProp(string name)
+        {
+            string p = personal;
+            if (p == null || string.IsNullOrEmpty(name) || IsNone(name)) return false;
+            if (string.Equals(name, p, StringComparison.OrdinalIgnoreCase)) return false;
+            if (ChartBridgeOrders.IsNeverTradable(name)) return false;
+            List<Account> same;
+            lock (Account.All) same = Account.All.Where(a => a.Name != null && a.Name.Equals(name, StringComparison.OrdinalIgnoreCase)).ToList();
+            if (same.Count == 0) return false;
+            return same.All(a => !ChartBridgeBot.IsSim(a) && !ChartBridgeAccounts.IsSim(a));
+        }
+
+        // THE ONE PLACE for an exception to the reset: true keeps that branch's account (and its mode) through the reset. Only an
+        // agent (agent:<id>) whose every seat is prop and whose saved Auto intent (agent-<id>-auto.txt) names this account. Decided
+        // from the file, never the live mode: the caught-up reset at start runs while every agent is still in Shadow. The bot and
+        // the copier: never. An agent in Shadow or Copilot (no intent saved) goes to None as before.
+        public static bool KeepThroughReset(string branch, string account)
+        {
+            if (!PersonalNamed || branch == null || !branch.StartsWith("agent:", StringComparison.Ordinal)) return false;
+            ChartBridgeAgent ag = ChartBridgeAgents.Get(branch.Substring(6));
+            if (ag == null) return false;
+            List<string> seats = ag.SeatsForProp();
+            return seats.Count > 0 && seats.All(IsProp) && ag.SavedAutoOn(account);
+        }
 
         // Every 2 s (ChartBridge's poll timer) and once at start: the reset once per day, in the break. 0.6.3 (audit C1): when the
         // last reset saved in daily-reset.txt is older than the latest 17:00 ET at or before now (the page's resetDay rule), that

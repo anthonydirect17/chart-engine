@@ -133,6 +133,10 @@ namespace NinjaTrader.NinjaScript.AddOns
         //   timeServer = time.windows.com  (0.5.6: the time server this PC's clock is checked against every 5 minutes, so the page
         //                                  can split its feed delay into the clock's part and the real one; off: no check. It
         //                                  only measures, never sets the clock. See ChartBridgeClock)
+        //   personalAccount = PERSONAL-1   (the personal account's exact name; with it, every other account that is not Sim and not
+        //                                  Backtest or Playback is prop: an agent in Auto on prop accounts keeps Auto through the
+        //                                  17:00 ET reset and after a restart. No line: nothing is prop, as before. The name stays
+        //                                  in this file; it is never logged. See ChartBridgeBranches.IsProp)
         // Any other key (the retired accounts and quoteHours lines included) does nothing, said once per load in the Output
         // window: "config.txt: <key> is not a ChartBridge setting; the line does nothing".
         public static void Load()
@@ -148,6 +152,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             ChartBridgeBot.ResetConfig();   // 0.4.0 bot: on by default
             ChartBridgeAgents.ResetConfig();   // 0.5.0 agents: off until config.txt names one
             ChartBridgeClock.ResetConfig();   // 0.5.6: the time check asks time.windows.com unless config.txt names another
+            ChartBridgeBranches.ResetConfig();   // prop accounts: no personal account named, so nothing is prop (exactly as before)
             string file = Path.Combine(Folder, "config.txt");
             if (!File.Exists(file)) return;
             foreach (string raw in File.ReadAllLines(file))
@@ -177,6 +182,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 else if (ChartBridgeBot.ReadConfig(key, val)) { }    // 0.4.0 bot: bot, botRoot, botLibrary (ChartBridgeBot.cs)
                 else if (ChartBridgeAgents.ReadConfig(key, val)) { }   // 0.5.0 agents: agents = manrae (ChartBridgeAgents.cs)
                 else if (ChartBridgeClock.ReadConfig(key, val)) { }   // 0.5.6: timeServer = time.windows.com, or off (ChartBridgeClock)
+                else if (ChartBridgeBranches.ReadConfig(key, val)) { }   // personalAccount = <name> (ChartBridgeAccounts.cs, ChartBridgeBranches.IsProp)
                 else if (ChartBridgeTicks.ReadConfig(key, val)) { }   // tickFile = off, tickFileMaxMB (ChartBridgeTicks.cs)
                 else if (ChartBridgeBars.ReadConfig(key, val)) { }   // bars, barsRoots, pc (ChartBridgeBars.cs)
                 else if (ChartBridgeOrders.ReadConfig(key, val)) { }   // trading, tradeAccounts, maxQty.<ROOT>, maxTicksAway, maxBracketTicks, merge, orderTypes, strategies
@@ -637,6 +643,31 @@ namespace NinjaTrader.NinjaScript.AddOns
             try { if (File.Exists(path)) File.Delete(path); string b = BackupOf(path); if (File.Exists(b)) File.Delete(b); return null; }
             catch (Exception ex) { return ex.Message; }
         }
+
+        // Prop accounts: an agent's saved Auto intent (agent-<id>-auto.txt), the same pattern as the kill file: two # lines, then
+        // auto<TAB><the account, or group:<id>, it was armed on>. Written only when the page sets Auto and every seat is prop;
+        // removed on any other mode, any account change and the kill switch on. AutoIntent: null when there is no file, "" when
+        // one is there but names nothing readable (never Auto from it), else the key. Only the file itself counts (no .bak).
+        public static string SaveAutoIntent(string path, string who, string key)
+        {
+            try { WriteLines(path, new[] { "# ChartBridge Auto intent for " + who + " (written when the page sets Auto on prop accounts; removed on any other mode, an account change or the kill switch; do not edit)", "# while this file names the agent's account, Auto is kept through the 17:00 ET reset and comes back once after a restart when flat", "auto\t" + key }); return null; }
+            catch (Exception ex) { return ex.Message; }
+        }
+        public static string AutoIntent(string path)
+        {
+            try
+            {
+                if (!File.Exists(path)) return null;
+                foreach (string raw in File.ReadAllLines(path))
+                {
+                    string[] p = raw.Trim().Split('\t');
+                    if (p.Length == 2 && p[0] == "auto" && p[1].Length > 0) return p[1];
+                }
+                return "";
+            }
+            catch (Exception) { return ""; }
+        }
+        public static string ClearAutoIntent(string path) { return ClearKill(path); }
 
         // The words the loaders use when the backup is taken.
         public static string BackupNote(string name, string why) { return name + " could not be read (" + why + "): ChartBridge uses its last good copy (" + name + ".bak), so the last change before the problem may be missing: check it on the page"; }
