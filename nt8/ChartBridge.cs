@@ -130,6 +130,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         //                                  such a line does nothing, one Output line per such config line; see ChartBridgeBars.cs)
         //   bot = off, botRoot, botLibrary (0.4.0: the bot channel, on by default, on the account chosen on the Bot tab; see ChartBridgeBot.cs)
         //   agents = manrae                (0.5.0: the agent channel, a comma list of agent ids; none: off; see ChartBridgeAgents.cs)
+        //   rosterFolder = <full path>     (0.6.20: the folder of the Lab's roster files, Bot-Lab's roster/ on this PC, served
+        //                                  read only at GET /roster; none: 404; see ChartBridgeRoster in ChartBridgeAgents.cs)
         //   timeServer = time.windows.com  (0.5.6: the time server this PC's clock is checked against every 5 minutes, so the page
         //                                  can split its feed delay into the clock's part and the real one; off: no check. It
         //                                  only measures, never sets the clock. See ChartBridgeClock)
@@ -2455,6 +2457,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (!ChartBridgeAccess.IsLoopback(remote)) { ChartBridgeAccess.NoteRefusedAddress(remote, SafePath(ctx)); Refuse(ctx); return; }
                 string path = ctx.Request.Url.AbsolutePath;
                 if (path == "/bot" || path == "/bot-library") { await ChartBridgeBot.Serve(ctx, path, token); return; }   // 0.4.0 bot: off = 404 (ChartBridgeBot.cs)
+                if (path == "/roster") { ChartBridgeRoster.Serve(ctx); return; }   // 0.6.20 (C2): the Lab's roster files, read only (ChartBridgeAgents.cs)
                 if (path == "/agent" || path.StartsWith("/agent/", StringComparison.Ordinal)) { await ChartBridgeAgents.Serve(ctx, path, token); return; }   // 0.5.0 agents: an id not in agents = 404 (ChartBridgeAgents.cs)
                 if (path == "/ws" && ctx.Request.IsWebSocketRequest)
                 {

@@ -8,6 +8,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -715,6 +716,46 @@ public static class BotHarness
             body = Get(port, "/bot-library", null, null, out s);
             Check(s == 500 && body.Contains("over 2 MB"), "/bot-library: over 2 MB is not served (" + s + ")");
             Check(ChartBridgeBot.JsonValid("{\"a\":[1,2.5e3,-0.1,true,null,\"\\u00e9\"]}") && !ChartBridgeBot.JsonValid("{\"a\":01}") && !ChartBridgeBot.JsonValid("[1] x") && !ChartBridgeBot.JsonValid(""), "the JSON check");
+            // 0.6.20 (C2): GET /roster, the Lab's roster files from the folder rosterFolder names (made-up files)
+            Get(port, "/roster", null, null, out s);
+            Check(s == 404, "/roster with no rosterFolder set: 404 (" + s + ")");
+            string rf = Path.Combine(home, "made-up-botlab", "roster");
+            ChartBridgeRoster.FolderSetting = rf;
+            body = Get(port, "/roster", null, null, out s);
+            Check(s == 500 && body.Contains("the roster folder named in config.txt is not there") && !body.Contains(rf), "/roster: the folder is not there: 500, and its path is never sent (" + s + ")");
+            Directory.CreateDirectory(Path.Combine(rf, "sub"));
+            string ro = "{\"format\": \"specrunner.roster/1\", \"bot\": \"alpha\", \"numbers\": {\"eval\": {\"profit_per_dollar\": 0.42}}}";
+            string lu = "{\"format\":\"specrunner.lineup/1\",\"lineup\":\"morning\"}";
+            File.WriteAllText(Path.Combine(rf, "alpha.json"), ro);
+            File.WriteAllText(Path.Combine(rf, "morning.json"), "\ufeff" + lu + "\n");
+            File.WriteAllText(Path.Combine(rf, "broken.json"), "{\"format\":\"specrunner.roster/1\",");
+            File.WriteAllText(Path.Combine(rf, "other.json"), "{\"format\":\"something.else/1\"}");
+            File.WriteAllText(Path.Combine(rf, "list.json"), "[\"specrunner.roster/1\"]");
+            File.WriteAllText(Path.Combine(rf, "big.json"), "{\"format\":\"specrunner.roster/1\",\"x\":\"" + new string('x', ChartBridgeRoster.MaxFileBytes) + "\"}");
+            File.WriteAllText(Path.Combine(rf, "bad name.json"), ro);
+            File.WriteAllText(Path.Combine(rf, "notes.txt"), "not json, not served");
+            File.WriteAllText(Path.Combine(rf, "sub", "deep.json"), ro);
+            body = Get(port, "/roster", null, null, out s);
+            Check(s == 200 && body.StartsWith("{\"files\":[{\"name\":\"alpha.json\",\"ok\":true,\"roster\":" + ro + "}") && body.EndsWith("],\"left\":0}") && ChartBridgeBot.JsonValid(body),
+                  "/roster: a good file is served as it is, in name order, the answer valid JSON: " + body.Substring(0, Math.Min(200, body.Length)));
+            Check(body.Contains("{\"name\":\"morning.json\",\"ok\":true,\"roster\":" + lu + "}"), "/roster: a lineup file too, its byte order mark and trailing line break taken off");
+            Check(body.Contains("{\"name\":\"broken.json\",\"ok\":false,\"why\":\"not valid JSON\"}") && body.Contains("{\"name\":\"other.json\",\"ok\":false,\"why\":\"not a roster file") &&
+                  body.Contains("{\"name\":\"list.json\",\"ok\":false,\"why\":\"not a roster file") && body.Contains("{\"name\":\"big.json\",\"ok\":false,\"why\":\"over 256 KB\"}") &&
+                  body.Contains("{\"name\":\"bad name.json\",\"ok\":false,\"why\":\"not a plain name"),
+                  "/roster: a file that is not valid JSON, not a roster file, too big or of an odd name is listed with why, never served");
+            Check(!body.Contains("deep.json") && !body.Contains("notes.txt") && !body.Contains(rf), "/roster: nothing from a subfolder, nothing but .json, and never the folder's path");
+            Get(port, "/roster", null, null, out s, "127.0.0.1:" + port);
+            Check(s == 403, "/roster asked for by another name than localhost: 403 (" + s + ")");
+            for (int i = 0; i < ChartBridgeRoster.MaxFiles + 3; i++) File.WriteAllText(Path.Combine(rf, "z" + i.ToString("000", CultureInfo.InvariantCulture) + ".json"), ro);
+            body = Get(port, "/roster", null, null, out s);
+            Check(s == 200 && body.EndsWith("],\"left\":" + (7 + ChartBridgeRoster.MaxFiles + 3 - ChartBridgeRoster.MaxFiles) + "}"), "/roster: at most 200 files, and how many are left over is said: " + body.Substring(Math.Max(0, body.Length - 40)));
+            ChartBridgeRoster.FolderSetting = "relative\\roster";
+            body = Get(port, "/roster", null, null, out s);
+            Check(s == 500 && body.Contains("not a full path"), "/roster: a rosterFolder that is not a full path is refused (" + s + ")");
+            ChartBridgeAgents.ReadConfig("rosterFolder", "  " + rf + "  ");
+            Check(ChartBridgeRoster.FolderSetting == rf, "config.txt: rosterFolder is read (trimmed)");
+            ChartBridgeRoster.FolderSetting = "";
+            try { Directory.Delete(Path.Combine(home, "made-up-botlab"), true); } catch (Exception) { }
             ChartBridgeBot.LibraryName = "../config.json";
             Check(ChartBridgeBot.LibraryPath() == null, "botLibrary: no path out of ChartBridge's folder");
             ChartBridgeBot.LibraryName = "bot-library.json";

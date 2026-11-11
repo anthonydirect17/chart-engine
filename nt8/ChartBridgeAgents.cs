@@ -218,13 +218,14 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         // ---------------------------------------------------------- settings (config.txt "agents"; read at start)
         private static readonly List<string> ConfigIds = new List<string>();
-        public static void ResetConfig() { lock (ConfigIds) ConfigIds.Clear(); }
+        public static void ResetConfig() { lock (ConfigIds) ConfigIds.Clear(); ChartBridgeRoster.FolderSetting = ""; }
 
         // Called by ChartBridgeConfig.Load for the keys it does not know itself. "agents = manrae" (a comma list); absent or empty:
         // the channel is off and /agent/... answers 404. An id is 1 to 12 characters, a-z and 0-9, starting with a letter; any
         // other is left out with one Output line (lead's default).
         public static bool ReadConfig(string key, string val)
         {
+            if (key == "rosterFolder") { ChartBridgeRoster.FolderSetting = (val ?? "").Trim(); return true; }   // 0.6.20 (C2)
             if (key != "agents") return false;
             lock (ConfigIds)
             {
@@ -5658,6 +5659,100 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             try { File.AppendAllText(LogFile, DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", CultureInfo.InvariantCulture) + "\t" + text.Replace('\n', ' ') + Environment.NewLine); }
             catch (Exception ex) { if (Interlocked.Exchange(ref logFailed, 1) == 0) Log("agent-" + Id + ".log could not be written (" + ex.Message + ")"); }
+        }
+    }
+
+    // 0.6.20 (build answers 7, part C2): the roster, served to the chart page the way the bot library is. Each bot (and each
+    // lineup) the Lab built has one small JSON file of numbers (Bot-Lab's specrunner/roster.py): the playbook it sizes with,
+    // its profit per $1 and its no-edge range. The files ride with Bot-Lab's own install on this PC (a reviewed pull request
+    // puts them under Bot-Lab's roster/ folder); config.txt's rosterFolder names that folder. ChartBridge only reads and
+    // serves them: it decides nothing from them, and nothing of a bot's rules is in them (a file names its spec by sha256).
+    //
+    // GET /roster (only by the localhost name, as /bot-library; loopback only, as every request): 404 when no rosterFolder
+    // is set; else {"files":[...],"left":n}, one entry a file in that folder, in name order: {"name":..., "ok":true,
+    // "roster":<the file's JSON as it is>} or {"name":..., "ok":false, "why":...}. Read fresh each time. Only plain *.json
+    // files of a plain name directly in the folder (no subfolder, no link, at most MaxFiles of them, each at most
+    // MaxFileBytes, valid JSON whose "format" is specrunner.roster/1 or specrunner.lineup/1). The folder itself must be a
+    // plain folder, not a link. The folder's path is never sent or logged (it can hold an account's user name).
+    public static class ChartBridgeRoster
+    {
+        public static string FolderSetting = "";
+        public const int MaxFiles = 200;
+        public const int MaxFileBytes = 256 * 1024;
+        private static readonly Regex NameRx = new Regex("^[A-Za-z0-9][A-Za-z0-9_-]{0,39}\\.json$");
+        private static readonly Regex FormatRx = new Regex("\"format\"\\s*:\\s*\"specrunner\\.(roster|lineup)/1\"");
+
+        private static void Answer(HttpListenerContext ctx, int code)
+        {
+            try { ctx.Response.StatusCode = code; ctx.Response.AddHeader("Cache-Control", "no-store"); ctx.Response.ContentLength64 = 0; ctx.Response.Close(); }
+            catch (Exception) { try { ctx.Response.Abort(); } catch (Exception) { } }
+        }
+
+        public static void Serve(HttpListenerContext ctx)
+        {
+            string method = ctx.Request.HttpMethod ?? "";
+            if (method != "GET" && method != "HEAD") { Answer(ctx, 405); return; }
+            if (ctx.Request.Headers["Host"] != "localhost:" + ChartBridgeConfig.Port) { Answer(ctx, 403); return; }
+            string why;
+            string json = Read(out why);
+            if (json == null && why == null) { Answer(ctx, 404); return; }
+            if (json == null) { ChartBridgeServer.ServeText(ctx, 500, "{\"error\":" + CbJson.Str(why) + "}", "application/json"); return; }
+            ChartBridgeServer.ServeText(ctx, 200, json, "application/json");
+        }
+
+        // The answer's JSON, or null: with why null when no rosterFolder is set, else why the folder cannot be read.
+        public static string Read(out string why)
+        {
+            why = null;
+            string folder = FolderSetting ?? "";
+            if (folder.Length == 0) return null;
+            if (!Path.IsPathRooted(folder)) { why = "rosterFolder in config.txt is not a full path"; return null; }
+            try
+            {
+                DirectoryInfo d = new DirectoryInfo(folder);
+                if (!d.Exists) { why = "the roster folder named in config.txt is not there"; return null; }
+                if ((d.Attributes & FileAttributes.ReparsePoint) != 0) { why = "the roster folder named in config.txt is a link: never followed"; return null; }
+                List<FileInfo> files = d.GetFiles("*.json", SearchOption.TopDirectoryOnly).OrderBy(f => f.Name, StringComparer.Ordinal).ToList();
+                StringBuilder b = new StringBuilder("{\"files\":[");
+                int n = 0;
+                foreach (FileInfo f in files.Take(MaxFiles))
+                {
+                    if (n++ > 0) b.Append(',');
+                    string bad, text = One(f, out bad);
+                    b.Append("{\"name\":").Append(CbJson.Str(f.Name));
+                    if (text != null) b.Append(",\"ok\":true,\"roster\":").Append(text).Append('}');
+                    else b.Append(",\"ok\":false,\"why\":").Append(CbJson.Str(bad)).Append('}');
+                }
+                b.Append("],\"left\":").Append(Math.Max(0, files.Count - MaxFiles).ToString(CultureInfo.InvariantCulture)).Append('}');
+                return b.ToString();
+            }
+            catch (Exception ex) { why = "the roster folder could not be read (" + ex.GetType().Name + ")"; return null; }
+        }
+
+        // One file's JSON text, or null with why it is not served.
+        private static string One(FileInfo f, out string why)
+        {
+            why = null;
+            if (!NameRx.IsMatch(f.Name)) { why = "not a plain name (letters, digits, - and _, 40 at most, then .json)"; return null; }
+            if ((f.Attributes & FileAttributes.ReparsePoint) != 0) { why = "a link: never followed"; return null; }
+            try
+            {
+                byte[] bytes;
+                using (FileStream fs = new FileStream(f.FullName, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                {
+                    if (fs.Length > MaxFileBytes) { why = "over 256 KB"; return null; }
+                    bytes = new byte[(int)fs.Length];
+                    int at = 0, got;
+                    while (at < bytes.Length && (got = fs.Read(bytes, at, bytes.Length - at)) > 0) at += got;
+                }
+                string text = new UTF8Encoding(false, true).GetString(bytes);
+                if (text.Length > 0 && text[0] == '\ufeff') text = text.Substring(1);
+                if (!ChartBridgeBot.JsonValid(text)) { why = "not valid JSON"; return null; }
+                string t = text.TrimStart();
+                if (t.Length == 0 || t[0] != '{' || !FormatRx.IsMatch(text)) { why = "not a roster file (its format is not specrunner.roster/1 or specrunner.lineup/1)"; return null; }
+                return text.Trim();
+            }
+            catch (Exception ex) { why = "could not be read (" + ex.GetType().Name + ")"; return null; }
         }
     }
 }
