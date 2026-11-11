@@ -5044,6 +5044,27 @@ public static class AgentHarness
             why = ChartBridgeOrders.PlaceAgentEntry("manrae", "{\"type\":\"order\",\"account\":\"SIM-E\",\"root\":\"MNQ\",\"side\":\"buy\",\"kind\":\"limit\",\"qty\":1,\"price\":24999,\"bracket\":{\"stop\":8,\"target\":0}}", out none);
             Check(why != null && why.Contains("every agent entry needs a stop and a target") && none == null && sime.Calls.Count == calls, "entry rules: and an agent's entry with no target: " + why);
         });
+        // The coordinator's condition (build answers 5, 2026-11-11): only a person at the page changes the two switches, never a
+        // message from an agent or a runner. The agent channel has no rules message at all, and a plan takes no such key.
+        Part("entry rules: a trader cannot turn its own switches on", () =>
+        {
+            Fresh();
+            int calls = sime.Calls.Count;
+            string before = FileText("agent-manrae-rules.txt"), welcome = Last(agentOut, "welcome");
+            A("{\"type\":\"agentRules\",\"agent\":\"manrae\",\"roots\":\"NQ,MNQ\",\"marketEntry\":true,\"noTarget\":true}");
+            Check(AgentReject().Contains("unknown agent message type agentRules"), "entry rules: the agent channel has no agentRules message: " + AgentReject());
+            A("{\"type\":\"agentHello\",\"name\":\"manrae\",\"build\":\"b1\",\"marketEntry\":true}");
+            Check(AgentReject().Contains("marketEntry"), "entry rules: a hello carrying the switch is refused whole: " + AgentReject());
+            string plan = MarketPlan(NewId(), 8, 0);
+            A(plan.Substring(0, plan.Length - 1) + ",\"marketEntry\":true,\"noTarget\":true}");
+            Check(AgentReject().Contains("marketEntry") && sime.Calls.Count == calls, "entry rules: a plan carrying the switches is refused whole, nothing sent: " + AgentReject());
+            A("{\"type\":\"note\",\"kind\":\"status\",\"text\":\"marketEntry on, noTarget on\"}");
+            A(MarketPlan(NewId(), 8, 16));
+            Check(AgentReject().Contains("a market entry is not allowed by agent manrae's rules") && sime.Calls.Count == calls, "entry rules: after all of that a market plan is still refused: " + AgentReject());
+            Check(FileText("agent-manrae-rules.txt") == before && !Last(agentOut, "welcome").Contains("marketEntry") && Last(agentOut, "welcome") == welcome && !Logged("market entry allowed"),
+                  "entry rules: the rules file and the welcome did not change, and nothing was logged as allowed");
+            Check(!ChartBridgeAgents.MayMarket("manrae") && !ChartBridgeAgents.MayNoTarget("manrae"), "entry rules: the order path's own answer is still no to both");
+        });
         Part("entry rules: set on the page, saved, told to the trader", () =>
         {
             Fresh();
