@@ -137,5 +137,5 @@ test('fleet: the tab is wired into the page beside the other three, sends one ki
   for (const word of ["type: 'order'", "type: 'flatten'", "type: 'agentMode'", "type: 'agentRules'", "type: 'agentKill'", 'accountPersonal'])
     assert.ok(!src.includes(word), 'no ' + word + ' in the Fleet tab');
   assert.ok(!/confirm\(|alert\(|prompt\(/.test(src), 'no browser dialog');
-  assert.ok(!/[–—]/.test(src + read('live', 'fleet.css')), 'no long dashes');
+  assert.ok(!/[\u2013\u2014]/.test(src + read('live', 'fleet.css')), 'no long dashes');
 });
