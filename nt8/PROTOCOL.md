@@ -1,4 +1,4 @@
-# ChartBridge protocol (v1 market data and fills, v2 orders, v3 accounts, strategies, copier and bot, 0.5.0 agents, 0.5.1 accounts, 0.5.8 prop groups, 0.6.0 group trading, 0.6.1 a group's Type and default hero, 0.6.3 the audit fixes, 0.6.4 the no-trade-record alarm and Merge on an off follower, 0.6.8 the minute book, 0.6.10 the account lifecycle and the NQ tick file, 0.6.11 the bar trail and the narrower 1 second request, 0.6.12 the bar trail follow-ups, 0.6.13 the tick day's morning catch-up and the raw deleted once packed, 0.6.14 the tick day check's rule: short and holes, 0.6.15 the 1 second pull retired: the NQ tick file is the one source, 0.6.16 prop accounts: Auto kept through the reset and a restart, 0.6.17 Kill all for the prop accounts, 0.6.18 entry rules per trader: market entry and no target)
+# ChartBridge protocol (v1 market data and fills, v2 orders, v3 accounts, strategies, copier and bot, 0.5.0 agents, 0.5.1 accounts, 0.5.8 prop groups, 0.6.0 group trading, 0.6.1 a group's Type and default hero, 0.6.3 the audit fixes, 0.6.4 the no-trade-record alarm and Merge on an off follower, 0.6.8 the minute book, 0.6.10 the account lifecycle and the NQ tick file, 0.6.11 the bar trail and the narrower 1 second request, 0.6.12 the bar trail follow-ups, 0.6.13 the tick day's morning catch-up and the raw deleted once packed, 0.6.14 the tick day check's rule: short and holes, 0.6.15 the 1 second pull retired: the NQ tick file is the one source, 0.6.16 prop accounts: Auto kept through the reset and a restart, 0.6.17 Kill all for the prop accounts, 0.6.18 entry rules per trader: market entry and no target, 0.6.19 the day's profit stop: a dollar mark per account)
 
 ChartBridge is a NinjaTrader 8 add-on. It serves the live chart page at `http://localhost:8765/` and
 talks to it over one WebSocket at `ws://localhost:8765/ws`. Everything stays on the local machine.
@@ -3075,7 +3075,7 @@ not even the window. A change is saved, logged and sent to the agent in a new `w
 | `agentHello` | `name` (1 to 40), `build` (1 to 40) | first message |
 | `beat` | none | |
 | `subscribe` | `root`, `days`, `tickHours`, `sub` (as the page's) | answered as for a page: `history`, `ticks`, `ready`, then live `tick` for that root (the agent gets live `tick` for every served root anyway) |
-| `plan` | `id` (1 to 40, unique per agent per trading day), `root`, `side` (`buy`/`sell`), `kind` (`limit`/`stopLimit`), `price`, `limitPrice` (stopLimit only, and then required), `qty`, `stopTicks`, `targetTicks`, `expireSec`, `riskDollars`, `setup` (1 to 40), `reason` (1 to 200), `confidence` (0 to 1); 0.6.0: `seatsRev` and `sizes` ("Group trading (0.6.0)") | one entry plan; checked, then by mode: logged, proposed or placed |
+| `plan` | `id` (1 to 40, unique per agent per trading day), `root`, `side` (`buy`/`sell`), `kind` (`limit`/`stopLimit`), `price`, `limitPrice` (stopLimit only, and then required), `qty`, `stopTicks`, `targetTicks`, `expireSec`, `riskDollars`, `setup` (1 to 40), `reason` (1 to 200), `confidence` (0 to 1); 0.6.0: `seatsRev` and `sizes` ("Group trading (0.6.0)"); 0.6.19: `dayStopDollars` (optional: "The day's profit stop (0.6.19)") | one entry plan; checked, then by mode: logged, proposed or placed |
 | `skip` | `id`, `setup` (optional), `reason` | a decision not to trade; logged and shown |
 | `withdraw` | `id`, `reason` | expires an open proposal, cancels an unfilled entry |
 | `note` | `kind` (`look`, `thinking`, `lesson`, `notebook`, `status`), `text` (1 to 1,000) | display only, never the order path; the last 200 per agent are kept for pages that sign in later |
@@ -3654,6 +3654,36 @@ no flatten) and the Board's KILL ALL AGENTS (agentKill on to every agent) are un
 
 No page sends this message yet: the button comes with the Fleet tab. Checked in `check/AgentHarness.cs` (`PropAccounts`, the
 "kill all" parts) and `test/nt8-agents.test.js`.
+
+### The day's profit stop (0.6.19)
+
+Anthony 2026-11-10 (build plan decision 8: "a hard daily target stop at the consistency rule... we would never really want to
+go over that") and 2026-11-11 (the runner sends the playbook's value with each plan; nobody types it). Built in
+`ChartBridgeAgents.cs` only: it reads an account's numbers (`ChartBridgeGroups.Read`) and starts the trader's own flatten;
+`ChartBridgeGroups.cs` and `ChartBridgeOrders.cs` are the 0.6.18 files.
+
+- **`dayStopDollars`** on a `plan` (optional): dollars above 0, at most 1,000,000 ("dayStopDollars must be dollars above 0
+  ..." otherwise). It is the day's profit stop the runner's playbook asks for on the account. When a plan is **placed** (auto,
+  or an accepted proposal), its value becomes the session's value for that trader; a placed plan without the key clears it. A
+  plan that is only logged (shadow), proposed, or refused changes nothing.
+- **The mark for an account** is the smaller of what apply: the session's `dayStopDollars`; and, when the account is **not
+  funded** (its group's Type is `eval` or not set) and its rules have both a consistency percent and a profit target, that
+  percent of the target (50% of 3,000 is 1,500). A funded account: the plan's value, or no mark. Neither: no mark.
+- **The check**, every pass (1 s), for each account the trader holds a position or a working order on: the account's
+  `pnlToday` (realized plus open, as in `accountState`) at or above the mark. Then the trader's own flatten starts on that
+  account (the flat time's job: its orders cancelled, what it owns closed at market, `CB#<tag> ag:<id> flat`), and it stands
+  down for the session: `agentState.standDown` reads "the day's profit stop is reached on <account> ($<mark>, <where the mark
+  came from>; the day is at $<pnl>, realized plus open): flat, and no new entries for agent <id> until 18:00 ET". The 18:00
+  roll clears it, as it clears a `maxLosses` stand-down; a rules change does not.
+- **Not checked** while the trader holds nothing on the account, or while `pnlToday` is not known (the stop and the flat
+  time still hold). Nothing of another trader's, the page's, the copier's or the bot's is cancelled or closed.
+- **Saved**: `agent-<id>-day.txt` gains one line, `#daystop<TAB><dollars>`, only while a value is set (a comment to a
+  ChartBridge before 0.6.19; a malformed one is read as a comment). Kept through a restart, cleared at the roll. The
+  stand-down is the day file's `standDown` line, as for `maxLosses`.
+- **`agentState`** carries `"dayStop": <dollars>` (the session's plan value) only when one is set; left out: none. A trader
+  that sends no `dayStopDollars`, on an account with no consistency rule and target, is as in 0.6.18 in every message.
+
+Checked in `check/AgentHarness.cs` (`DayStop`).
 
 ### Entry rules per trader (0.6.18)
 

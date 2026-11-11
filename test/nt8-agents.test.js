@@ -34,7 +34,7 @@ test('0.5.0 agents: the new file ships, is compile-checked and harnessed', () =>
   for (const f of ['check.sh', 'orders.sh']) assert.match(read(path.join('check', f)), /ChartBridgeBot\.cs ChartBridgeAgents\.cs ChartBridgeStrategies\.cs/);
   assert.match(read(path.join('check', 'orders.sh')), /check\/AgentHarness\.cs/);
   assert.match(read(path.join('check', 'OrdersHarness.cs')), /Section\("agents \(0\.5\.0\)", AgentHarness\.Run\);/);
-  assert.match(main, /public const string Version = "0\.(5\.[0-8]|6\.([0-9]|1[0-8]))";/);   // 0.6.18: entry rules per trader (market entry, no target); 0.6.17: Kill all for the prop accounts; 0.6.16: prop accounts (Auto kept through the reset and one restore after a restart, prop only); 0.6.15: the 1 second pull retired; 0.6.14: the tick day check rule; 0.6.13: the tick day's morning catch-up, the raw deleted once packed; 0.6.12: the bar trail follow-ups; 0.6.10: the account lifecycle (remove-only for an account NinjaTrader no longer lists, Hide leaves the group); 0.6.9: the stats suite's Phase 2 (1 second bars, the order record, decision ids; recording only); 0.6.8: the minute book (the history path only); 0.6.7: the bench, no hedging always on, a group's own rules optional; 0.6.6: the firm's limits on entries, riskAlert, firmMinimum, copierFollowerRemove; 0.6.5: each member's own rules and the risk percent; 0.6.4: no false no-trade-record alarm, the alarm cleared, Merge on an off follower; 0.6.3: the audit fixes (a missed reset caught up, closes not seen, files that survive a power cut, the kill switch kept); 0.6.2: group stand-downs and league seats; 0.6.1: a group's type and default hero; 0.6.0: group trading (seats); 0.5.8: groups and accountState; 0.5.7: the plan id, the TradeLost hold, None and the daily reset; 0.5.1: the accounts follow NinjaTrader, on top of 0.5.0; 0.5.3: the agents' MNQ cap; 0.5.4: the window while exposed; 0.5.5: the accounts line and unknown keys; 0.5.6: the time check
+  assert.match(main, /public const string Version = "0\.(5\.[0-8]|6\.([0-9]|1[0-9]))";/);   // 0.6.19: the day's profit stop; 0.6.18: entry rules per trader (market entry, no target); 0.6.17: Kill all for the prop accounts; 0.6.16: prop accounts (Auto kept through the reset and one restore after a restart, prop only); 0.6.15: the 1 second pull retired; 0.6.14: the tick day check rule; 0.6.13: the tick day's morning catch-up, the raw deleted once packed; 0.6.12: the bar trail follow-ups; 0.6.10: the account lifecycle (remove-only for an account NinjaTrader no longer lists, Hide leaves the group); 0.6.9: the stats suite's Phase 2 (1 second bars, the order record, decision ids; recording only); 0.6.8: the minute book (the history path only); 0.6.7: the bench, no hedging always on, a group's own rules optional; 0.6.6: the firm's limits on entries, riskAlert, firmMinimum, copierFollowerRemove; 0.6.5: each member's own rules and the risk percent; 0.6.4: no false no-trade-record alarm, the alarm cleared, Merge on an off follower; 0.6.3: the audit fixes (a missed reset caught up, closes not seen, files that survive a power cut, the kill switch kept); 0.6.2: group stand-downs and league seats; 0.6.1: a group's type and default hero; 0.6.0: group trading (seats); 0.5.8: groups and accountState; 0.5.7: the plan id, the TradeLost hold, None and the daily reset; 0.5.1: the accounts follow NinjaTrader, on top of 0.5.0; 0.5.3: the agents' MNQ cap; 0.5.4: the window while exposed; 0.5.5: the accounts line and unknown keys; 0.5.6: the time check
   assert.ok(!/(^|[\s(=,+:?])\$"/m.test(acode) && !/\?\.\w/.test(acode) && !/\bnameof\(/.test(acode), 'C# 5');
 });
 
@@ -284,6 +284,35 @@ test('0.6.17 Kill all for the prop accounts: only agents whose every account is 
   for (const f of fsx.readdirSync(path.join(__dirname, '..', 'live')).filter(f => f.endsWith('.js'))) assert.ok(!fsx.readFileSync(path.join(__dirname, '..', 'live', f), 'utf8').includes('agentKillAllProp'), f);
 });
 
+test('0.6.19 the day\'s profit stop: the plan\'s dayStopDollars, the smaller of it and the consistency mark off a funded account, the trader\'s own flatten, a stand-down until the roll', () => {
+  assert.match(acode, /"confidence", "seatsRev", "sizes", "dayStopDollars" \} \},/, 'a plan may carry it; no other message does');
+  assert.strictEqual((acode.match(/"dayStopDollars"/g) || []).length, 2, 'the key is named twice: the plan\'s keys and where the plan is read');
+  assert.match(acode, /if \(p\.BadDayStop \|\| \(p\.DayStopText != null && !\(p\.DayStop > 0 && p\.DayStop <= ChartBridgeAgents\.DayStopMax\)\)\)\s*return "dayStopDollars must be dollars above 0/, 'dollars above 0, bounded');
+  const note = bodies(acode, 'NoteDayStop');
+  assert.match(note, /double v = p\.DayStopText != null \? p\.DayStop : 0, was;\s*lock \(Sync\) \{ was = dayStop; dayStop = v; \}/, 'the placed plan sets it; a placed plan with none clears it');
+  assert.strictEqual((acode.match(/NoteDayStop\(/g) || []).length, 3, 'set in two places only: a plan placed in auto, and an accepted proposal placed');
+  const mark = bodies(acode, 'DayMark');
+  assert.match(mark, /if \(plan > 0\) \{ m = plan;/);
+  assert.match(mark, /if \(stage != "funded" && n != null && n\.R != null && n\.R\.Consistency > 0 && n\.R\.Target > 0\)/, 'the consistency mark only off a funded account, and only with both numbers');
+  assert.match(mark, /double c = Math\.Round\(n\.R\.Consistency \/ 100\.0 \* n\.R\.Target, 2\);\s*if \(c > 0 && \(m == 0 \|\| c < m\)\)/, 'the smaller of the two');
+  const check = bodies(acode, 'CheckDayStop');
+  assert.match(check, /if \(!roots\.Any\(y => x\.Owns\(y\)\)\) continue;/, 'only an account it holds something on');
+  assert.match(check, /if \(!\(mark > 0\) \|\| n == null \|\| !n\.Pnl\.HasValue \|\| n\.Pnl\.Value < mark - 1e-9\) continue;/, 'no mark, or a number not known: no check');
+  assert.match(check, /StartFlatten\("Agent " \+ Id \+ ": " \+ DayStopWords \+ [^\n]*, true, x\.Name\);/, 'its own flatten, on that account only');
+  assert.ok(!/PlaceOrder|Submit\(|\.Cancel\(|Flatten\(new|GroupCancel/.test(check.replace(/StartFlatten\(/g, '')), 'the check itself places and cancels nothing: the flatten job does, as at the flat time');
+  assert.match(acode, /CheckDayStop\(seats, roots\);[^\n]*\n\s*if \(flatHours\) StartFlatten\(/, 'checked every pass, before the flat time\'s own flatten');
+  assert.match(bodies(acode, 'RollDay'), /lossStandDown = null;\s*dayStop = 0;/, 'the 18:00 roll clears both');
+  assert.match(acode, /if \(dayStop > 0\) lines\.Add\(DayStopPrefix \+ dayStop\.ToString\("0\.##", CultureInfo\.InvariantCulture\)\);/, 'saved only while set');
+  assert.match(acode, /internal const string DayStopPrefix = "#daystop\\t";/, 'a comment line to a ChartBridge before 0.6.19');
+  assert.match(acode, /\(dayStop > 0 \? ",\\"dayStop\\":" \+ CbJson\.Num\(dayStop\) : ""\) \+ "\}";/, 'agentState carries it only when set');
+  const h = read('check/AgentHarness.cs');
+  assert.match(h, /DayStop\(\);/);
+  for (const part of ['day stop: the plan\'s dollar value', 'day stop: a plan with no value clears the one before it, and nothing is checked while it holds nothing', 'day stop: the consistency mark on an account that is not funded'])
+    assert.ok(h.includes('Part("' + part + '"'), part);
+  const p = read('PROTOCOL.md');
+  assert.ok(p.includes("### The day's profit stop (0.6.19)") && p.includes('`dayStopDollars`') && p.includes('#daystop<TAB><dollars>'));
+});
+
 test('0.6.18 entry rules per trader: a market entry and an entry with no target only when that trader\'s rules allow each; a stop always', () => {
   assert.match(acode, /public bool MarketEntry, NoTarget;/);
   assert.match(acode, /"maxTrades", "maxLosses", "marketEntry", "noTarget" \} \},/);
@@ -342,7 +371,7 @@ test('0.6.0 group trading: every single-account field is a seat\'s; the owner lo
 });
 
 test('0.6.0 group trading: the contract fields; the day file\'s #seat lines read before the comment skip (an older ChartBridge skips them)', () => {
-  assert.match(acode, /\{ "plan", new\[\] \{[^}]*"confidence", "seatsRev", "sizes" \} \}/);
+  assert.match(acode, /\{ "plan", new\[\] \{[^}]*"confidence", "seatsRev", "sizes", "dayStopDollars" \} \}/);
   assert.match(acode, /\{ "flatten", new\[\] \{ "type", "account" \} \}/);
   assert.match(acode, /\{ "agentAccount", new\[\] \{ "type", "cid", "agent", "account", "group", "keepMode", "league" \} \}/);
   assert.match(acode, /internal const string SeatPrefix = "#seat\\t";/);

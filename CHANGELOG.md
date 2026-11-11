@@ -63,6 +63,34 @@
   `test/pc-updater.test.js`: the allowed git subcommands, the box job's name, useHttpPath read before the one ask, the
   token only after a 404 or 401 and then through the Actions API, one place that asks for it and one that sends it.
 
+## ChartBridge 0.6.19 and chart 1.44.5 (2026-11-11): the day's profit stop, a dollar mark per account
+
+In plain words: nothing changes on the chart, and nothing changes for hand trading. A trader (a bot or an agent) now has a
+hard stop on the day's profit on the account it trades, so one big day can never break a firm's consistency rule, and a
+playbook's own day stop is kept by ChartBridge itself, not only by the runner (Anthony 2026-11-10, decision 8: "a hard daily
+target stop at the consistency rule... we would never really want to go over that"; and 2026-11-11: nothing is typed by hand).
+
+- **The mark** is in dollars, for one account, for ChartBridge's trading day (18:00 to 18:00 New York). It counts realized
+  plus open profit, the account's own number on the Accounts tab.
+- **Where it comes from.** The runner sends its playbook's day stop with each plan (`dayStopDollars`); the plan that is
+  placed sets it for the session. On an account that is not funded, ChartBridge also knows the account's consistency percent
+  of its profit target (50% of a 3,000 target is 1,500), from the account's rules or its group's. **The smaller of the two
+  is the mark.** A funded account has the plan's value, or none.
+- **When it is reached** while the trader holds a position or a working entry on that account: the trader's own flatten
+  starts (as at its flat time: it cancels the trader's orders and closes only what the trader owns), and the trader takes
+  no new entry until 18:00. The reason is on the Agent tab and in its log, with the mark and where it came from.
+- **What it never does.** It never touches your own orders, another trader's, the copier's or the bot's. It does nothing
+  while the trader holds nothing. When the account's number is not known it does nothing, and the stop and the flat time
+  still hold.
+- **A trader that sends no day stop, on an account with no consistency rule,** is exactly as in 0.6.18.
+
+Only `ChartBridgeAgents.cs` changed (and `ChartBridge.cs`, its version): every other add-on file is the 0.6.18 file byte
+for byte, `ChartBridgeGroups.cs` and `ChartBridgeOrders.cs` included (`test/nt8-record.test.js`). The value is saved in the
+trader's day file (`#daystop`, a comment to an older ChartBridge), kept through a restart and cleared at the 18:00 roll.
+
+`nt8/PROTOCOL.md`, "The day's profit stop (0.6.19)". ChartBridge 0.6.19 is a recompile (`-InstallChartBridge`, then F5 while
+flat).
+
 ## ChartBridge 0.6.18 and chart 1.44.4 (2026-11-11): entry rules per trader: a market entry, and an entry with no target, when you allow them
 
 In plain words: nothing changes for hand trading, and nothing changes for any trader until you switch something on. More

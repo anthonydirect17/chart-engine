@@ -514,6 +514,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // set on the page; an unknown agent: no).
         public static bool MayMarket(string id) { ChartBridgeAgent a = Get(id); return a != null && a.RuleAllows(true); }
         public static bool MayNoTarget(string id) { ChartBridgeAgent a = Get(id); return a != null && a.RuleAllows(false); }
+        public const double DayStopMax = 1000000;   // 0.6.19: the most a plan's dayStopDollars may say
         public const int MarketMaxTicks = 20;   // a market plan's price is the last trade the trader saw: within this of ChartBridge's own
 
         // The ceiling for an agent entry in PlaceOrderLocked (gate 3's own count): the agent's maxQty for the root, never above the
@@ -1191,6 +1192,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             public long SeatsRev;
             public string[] SeatNames, Outs, Results;
             public Order[] Orders;
+            // 0.6.19: the day's profit stop its runner asks for on the account, in dollars (DayStopText null: the plan names none)
+            public double DayStop;
+            public string DayStopText;
+            public bool BadDayStop;
         }
 
         private class Proposal
@@ -2054,6 +2059,9 @@ namespace NinjaTrader.NinjaScript.AddOns
         private bool chosen;   // an account was chosen on the page (agent-<id>-account.txt); false on None
         private bool league;   // 0.6.2: a league seat (agent-<id>-account.txt league<TAB><account>): one account, entries only while it is Sim
         private string rulesBroken, accountBroken, dayBroken, lossStandDown;
+        // 0.6.19: the day's profit stop the last placed plan of this session asked for (dollars; 0: none). Under Sync; in the day file
+        // ("#daystop"), cleared at the 18:00 ET roll. Reaching the mark ends the day through lossStandDown (its words say which).
+        private double dayStop;
         private bool dayRepaired;   // 0.6.3 (audit C3): dayBroken is a damaged file kept from its lines (saves go on)
         private string secret, secretState = "missing";
         private string session;
@@ -2706,7 +2714,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             // 0.6.3 (review LOW 6): read again after it was held open: what was booked in memory meanwhile (a trade that ended, a plan
             // id, a loss stand-down) is merged in, never dropped (as the stand-downs' retry keeps a raise)
             Dictionary<string, double> memTrades = null; HashSet<string> memIds = null; string memHeld = null; string memSession = null;
-            if (IoPending("day")) lock (Sync) { memTrades = new Dictionary<string, double>(Trades); memIds = new HashSet<string>(PlanIds); memHeld = lossStandDown; memSession = session; }
+            double fileDayStop = 0, memDayStop = 0;   // 0.6.19
+            if (IoPending("day")) lock (Sync) { memTrades = new Dictionary<string, double>(Trades); memIds = new HashSet<string>(PlanIds); memHeld = lossStandDown; memSession = session; memDayStop = dayStop; }
             Dictionary<string, double> trades = new Dictionary<string, double>(), expiry = new Dictionary<string, double>();
             Dictionary<string, int[]> spans = new Dictionary<string, int[]>();
             HashSet<string> ids = new HashSet<string>(), carriedTags = new HashSet<string>();
@@ -2723,6 +2732,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                     string line = raw.Trim();
                     string seatTag, seatAcct;
                     if (ReadSeatLine(line, out seatTag, out seatAcct)) { if (first || !tagSeats.ContainsKey(seatTag)) tagSeats[seatTag] = seatAcct; continue; }   // 0.6.0: #seat<TAB><tag><TAB><account>
+                    double dsv;
+                    if (ReadDayStop(line, out dsv)) { if (first || fileDayStop == 0) fileDayStop = dsv; continue; }   // 0.6.19
                     string tagPlanId, tagOfPlan;
                     if (ReadTagPlan(line, out tagOfPlan, out tagPlanId)) { if (first || !tagPlans.ContainsKey(tagOfPlan)) tagPlans[tagOfPlan] = tagPlanId; continue; }
                     if (line.Length == 0 || line.StartsWith("#")) continue;
@@ -2785,7 +2796,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (Sync)
             {
                 session = today;
-                Trades.Clear(); PlanIds.Clear(); Expiry.Clear(); Spans.Clear(); EntrySeen.Clear(); lossStandDown = null;
+                Trades.Clear(); PlanIds.Clear(); Expiry.Clear(); Spans.Clear(); EntrySeen.Clear(); lossStandDown = null; dayStop = 0;
                 dayRepaired = false; dayBroken = null;
                 if (io != null) dayBroken = io;
                 else if (broken != null) dayBroken = broken + ": no new entries for agent " + Id + " this run (delete it to start the day over)";
@@ -2800,6 +2811,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                         foreach (KeyValuePair<string, int[]> kv in spans) if (trades.ContainsKey(kv.Key)) Spans[kv.Key] = kv.Value;
                         foreach (string id in ids) PlanIds.Add(id);
                         lossStandDown = held;
+                        dayStop = fileDayStop;   // 0.6.19
                     }
                     else stale = trades.Count(kv => double.IsNaN(kv.Value));
                 }
@@ -2834,6 +2846,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     foreach (KeyValuePair<string, double> kv in memTrades) { double v; if (!Trades.TryGetValue(kv.Key, out v) || (double.IsNaN(v) && !double.IsNaN(kv.Value))) { Trades[kv.Key] = kv.Value; n++; } }
                     foreach (string id in memIds) if (PlanIds.Add(id)) n++;
                     if (lossStandDown == null && memHeld != null) { lossStandDown = memHeld; n++; }
+                    if (dayStop == 0 && memDayStop > 0) { dayStop = memDayStop; n++; }   // 0.6.19
                 }
                 if (n > 0) { SaveDay(); Log("agent-" + Id + "-day.txt read after a wait: " + n + " record(s) made meanwhile kept and saved"); }
             }
@@ -2860,6 +2873,19 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             return id != null && id.Length >= 1 && id.Length <= 40 && id == id.Trim() && id.IndexOfAny(new[] { '\t', '\r', '\n' }) < 0;
         }
+        // 0.6.19: the day file's "#daystop<TAB><dollars>" line: the profit stop the session's last placed plan asked for. A comment
+        // to a ChartBridge before 0.6.19; a malformed one is read as a comment (no plan value: the account's own mark still applies).
+        internal const string DayStopPrefix = "#daystop\t";
+        private static bool ReadDayStop(string line, out double dollars)
+        {
+            dollars = 0;
+            if (!line.StartsWith(DayStopPrefix, StringComparison.Ordinal)) return false;
+            double v;
+            if (!Regex.IsMatch(line.Substring(DayStopPrefix.Length), "^[0-9]{1,7}(?:\\.[0-9]{1,2}){0,1}$") || !double.TryParse(line.Substring(DayStopPrefix.Length), NumberStyles.Float, CultureInfo.InvariantCulture, out v) || !(v > 0) || v > ChartBridgeAgents.DayStopMax) return false;
+            dollars = v;
+            return true;
+        }
+
         private static bool ReadTagPlan(string line, out string tag, out string planId)
         {
             tag = null; planId = null;
@@ -2946,6 +2972,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 foreach (KeyValuePair<string, double> kv in Expiry) lines.Add("entry\t" + kv.Key + "\t" + kv.Value.ToString("0", CultureInfo.InvariantCulture));
                 foreach (KeyValuePair<string, int[]> kv in Spans) if (Trades.ContainsKey(kv.Key)) lines.Add("span\t" + kv.Key + "\t" + kv.Value[0].ToString(CultureInfo.InvariantCulture) + "\t" + kv.Value[1].ToString(CultureInfo.InvariantCulture));
                 if (lossStandDown != null) lines.Add("standDown\t" + lossStandDown);
+                if (dayStop > 0) lines.Add(DayStopPrefix + dayStop.ToString("0.##", CultureInfo.InvariantCulture));   // 0.6.19: a comment to a ChartBridge before it
                 foreach (string t in Carried) lines.Add("carried\t" + t);   // 0.5.2 review: a trade of an earlier session, until flat
                 // 0.5.7: the plan of each entry still of today (its trade, its working entry, a trade carried over)
                 HashSet<string> keep = new HashSet<string>(Trades.Keys.Concat(Expiry.Keys).Concat(Carried).Select(k => k.Length > 8 ? k.Substring(0, 8) : k));
@@ -2977,6 +3004,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 PlanIds.Clear();
                 ExcessByTag.Clear();
                 lossStandDown = null;
+                dayStop = 0;   // 0.6.19: a new session: the next placed plan says its own
                 foreach (string k in Proposals.Where(kv => kv.Value.State != "open" && kv.Value.State != "accepting").Select(kv => kv.Key).ToList()) Proposals.Remove(k);   // review B: pruned at the roll
             }
             SaveDay();
@@ -3172,7 +3200,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             { "agentHello", new[] { "type", "name", "build" } },
             { "beat", new[] { "type" } },
             { "subscribe", new[] { "type", "root", "days", "tickHours", "sub" } },
-            { "plan", new[] { "type", "id", "root", "side", "kind", "price", "limitPrice", "qty", "stopTicks", "targetTicks", "expireSec", "riskDollars", "setup", "reason", "confidence", "seatsRev", "sizes" } },   // 0.6.0: seatsRev, sizes
+            { "plan", new[] { "type", "id", "root", "side", "kind", "price", "limitPrice", "qty", "stopTicks", "targetTicks", "expireSec", "riskDollars", "setup", "reason", "confidence", "seatsRev", "sizes", "dayStopDollars" } },   // 0.6.0: seatsRev, sizes
             { "skip", new[] { "type", "id", "setup", "reason" } },
             { "withdraw", new[] { "type", "id", "reason" } },
             { "note", new[] { "type", "kind", "text" } },
@@ -3412,6 +3440,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (Number(d, "limitPrice", out x, out raw) == 1) { p.Limit = x; p.LimitText = raw; }
             if (Number(d, "riskDollars", out x, out raw) == 1) { p.Risk = x; p.RiskText = raw; }
             if (Number(d, "confidence", out x, out raw) == 1) { p.Conf = x; p.ConfText = raw; }
+            int ds = Number(d, "dayStopDollars", out x, out raw);   // 0.6.19
+            if (ds == 1) { p.DayStop = x; p.DayStopText = raw; } else if (ds == -1) p.BadDayStop = true;
             if (Whole(d, "qty", out w) == 1) { p.Qty = w; p.HasQty = true; }
             if (Whole(d, "stopTicks", out w) == 1) { p.StopTicks = w; p.HasStop = true; }
             if (Whole(d, "targetTicks", out w) == 1) { p.TargetTicks = w; p.HasTarget = true; }
@@ -3446,6 +3476,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (p.Setup == null || p.Setup.Length < 1 || p.Setup.Length > 40) return "setup must be 1 to 40 characters";
             if (p.Reason == null || p.Reason.Length < 1 || p.Reason.Length > 200) return "reason must be 1 to 200 characters";
             if (p.ConfText == null || p.Conf < 0 || p.Conf > 1) return "confidence must be a number from 0 to 1";
+            if (p.BadDayStop || (p.DayStopText != null && !(p.DayStop > 0 && p.DayStop <= ChartBridgeAgents.DayStopMax)))   // 0.6.19
+                return "dayStopDollars must be dollars above 0, at most " + ChartBridgeAgents.DayStopMax.ToString("0", CultureInfo.InvariantCulture) + " (the day's profit stop for the account; leave it out for none)";
             if (p.BadSizes) return "sizes must be whole numbers in seat order, like \"5,3,4\" (0: that seat sits this trade out)";   // 0.6.0
             if (p.BadSeatsRev) return "seatsRev must be a whole number (welcome.seatsRev)";
             return null;
@@ -3480,6 +3512,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 Order placed;
                 why = Place(p, null, out placed);
                 p.Result = why == null ? "placed" : "refused: " + why;
+                if (why == null) NoteDayStop(p);   // 0.6.19
                 if (why == null && p.SeatNames != null) SeatAnswers(p);   // 0.6.0: one answer per seat, then the plan's
                 if (why == null) ToAgent(AnswerJson(p.Id, "placed", p.SeatNames != null ? PlacedWords(p) : "placed on " + Account + " as order " + ChartBridgeOrders.AgentIdFor(placed) + "; it works until " + Iso(p.ExpiresAt)));
             }
@@ -4228,6 +4261,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     Log(text); AgentLog(text); ChartBridgeOrders.AgentAlarm(text);
                 }
             }
+            CheckDayStop(seats, roots);   // 0.6.19: the day's profit stop on each account it holds something on
             if (flatHours) StartFlatten(AtFlatTime(r, etNow) ? FlatWords(r, etNow) : fromBefore && !FlatHours(r, etNow) ? Id + " held a position from an earlier session (its " + Hm(r.FlatAt) + " flatten did not finish): flattened by its rules" : Id + " held a position outside its trading hours (" + Hm(r.FlatAt) + " to " + Hm(r.EntryFrom) + (ChartBridgeCme.Closed(etNow) ? ", or the market closed" : "") + "): flattened by its rules", true, null, AtFlatTime(r, etNow));   // 0.6.3 (review MED 4): marked when it is the flat time
             foreach (Seat x in seats) x.StepFlatten(now);
             PruneSeats();   // 0.6.0: a seat that left the group, now flat with nothing of the agent's there, is dropped
@@ -4291,6 +4325,69 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         // The flatten on every seat it follows (onlySeat: that one). Returns how many (seat, contract) jobs started.
+        // ---------------------------------------------------------- 0.6.19: the day's profit stop (a dollar mark per account)
+        // Anthony 2026-11-10 (decision 8) and 2026-11-11: a hard stop on the day's profit, realized plus open, on the account the
+        // trader is in, for ChartBridge's 18:00 New York session. The mark is the smaller of what apply:
+        //   - the day stop its runner sent with the plan that was placed (dayStopDollars, from the playbook; nobody types it), and
+        //   - on an account that is not funded: the account's consistency percent of its profit target (its rules or its group's),
+        //     so one day can never be more than the consistency rule allows.
+        // A funded account has the plan's value or none. Reached while the trader holds a position or a working entry there: its
+        // own flatten starts (the flat time's job: it cancels the agent's orders and closes only what the agent owns) and the
+        // trader stands down until the 18:00 roll. It reads the account's numbers (ChartBridgeGroups.Read) and nothing else of the
+        // groups; it never touches another trader's or Anthony's own orders. A number that is not known: no check (the stop and
+        // the flat time still hold).
+        internal const string DayStopWords = "the day's profit stop";
+        private static string DayDollars(double v) { return "$" + v.ToString("0.##", CultureInfo.InvariantCulture); }
+        private void NoteDayStop(Plan p)
+        {
+            double v = p.DayStopText != null ? p.DayStop : 0, was;
+            lock (Sync) { was = dayStop; dayStop = v; }
+            if (v == was) return;
+            SaveDay();
+            AgentLog(v > 0 ? "the day's profit stop from plan " + p.Id + ": " + DayDollars(v) : "plan " + p.Id + " names no day profit stop: the account's own mark only");
+        }
+
+        // The mark for one account now (0: none) and what set it. n: the account's numbers (its rules and its group with them).
+        private double DayMark(ChartBridgeGroups.Numbers n, out string from)
+        {
+            from = null;
+            double plan, m = 0;
+            lock (Sync) plan = dayStop;
+            if (plan > 0) { m = plan; from = "the plan's day stop"; }
+            string stage = n != null && n.G != null ? n.G.AccountType : null;
+            if (stage != "funded" && n != null && n.R != null && n.R.Consistency > 0 && n.R.Target > 0)
+            {
+                double c = Math.Round(n.R.Consistency / 100.0 * n.R.Target, 2);
+                if (c > 0 && (m == 0 || c < m)) { m = c; from = n.R.Consistency.ToString("0.##", CultureInfo.InvariantCulture) + "% of the profit target (the consistency rule)"; }
+            }
+            return m;
+        }
+
+        // Every pass, for each account it holds something on. Returns how many accounts reached their mark this pass.
+        private int CheckDayStop(List<Seat> seats, List<string> roots)
+        {
+            int hit = 0;
+            foreach (Seat x in seats)
+            {
+                if (!roots.Any(y => x.Owns(y))) continue;
+                ChartBridgeGroups.Numbers n;
+                try { n = ChartBridgeGroups.Read(x.Name, FindAccount(x.Name), false); }
+                catch (Exception) { continue; }
+                string from;
+                double mark = DayMark(n, out from);
+                if (!(mark > 0) || n == null || !n.Pnl.HasValue || n.Pnl.Value < mark - 1e-9) continue;
+                hit++;
+                string money = DayDollars(mark);
+                string say = DayStopWords + " is reached on " + x.Name + " (" + money + ", " + from + "; the day is at " + DayDollars(n.Pnl.Value) +
+                             ", realized plus open): flat, and no new entries for agent " + Id + " until 18:00 ET";
+                bool fresh;
+                lock (Sync) { fresh = lossStandDown == null; if (fresh) lossStandDown = say; }
+                StartFlatten("Agent " + Id + ": " + DayStopWords + " (" + money + ") is reached on " + x.Name + ": flattened by its rules", true, x.Name);
+                if (fresh) { SaveDay(); Log("agent " + Id + ": " + say); AgentLog(say); Notify(); }
+            }
+            return hit;
+        }
+
         private int StartFlatten(string why, bool byRules) { return StartFlatten(why, byRules, null, false); }
         private int StartFlatten(string why, bool byRules, string onlySeat) { return StartFlatten(why, byRules, onlySeat, false); }
         private int StartFlatten(string why, bool byRules, string onlySeat, bool atFlatTime)
@@ -4474,6 +4571,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             ToPages(ProposalJson(p));
             if (why == null)
             {
+                NoteDayStop(p.P);   // 0.6.19
                 ToAgent(AnswerJson(id, "accepted", "accepted on the page"));
                 if (p.P.SeatNames != null && !cancelled) SeatAnswers(p.P);   // 0.6.0: one answer per seat, then the plan's
                 ToAgent(AnswerJson(id, cancelled ? "withdrawn" : "placed", cancelled ? "withdrawn during placement: its entry is cancelled" : p.P.SeatNames != null ? PlacedWords(p.P) : "placed on " + p.Account + " as order " + ChartBridgeOrders.AgentIdFor(placed) + "; it works until " + Iso(p.P.ExpiresAt)));
@@ -5251,7 +5349,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 return "{\"type\":\"agentState\",\"mode\":" + CbJson.Str(mode) + ",\"killed\":" + (killed ? "true" : "false") + ",\"standDown\":" + Str(sd) +
                        ",\"trades\":" + TradesLocked() + ",\"losses\":" + LossesLocked() + ",\"pnlToday\":" + CbJson.Num(Math.Round(Trades.Values.Where(v => !double.IsNaN(v)).Sum(), 2)) +
-                       ",\"owns\":" + (owns ? "true" : "false") + ",\"session\":" + Str(session) + ",\"groupStandDown\":" + gsd + ",\"groupType\":" + gtype + seats + "}";
+                       ",\"owns\":" + (owns ? "true" : "false") + ",\"session\":" + Str(session) + ",\"groupStandDown\":" + gsd + ",\"groupType\":" + gtype + seats +
+                       (dayStop > 0 ? ",\"dayStop\":" + CbJson.Num(dayStop) : "") + "}";   // 0.6.19: only when the session's placed plan named one (left out: none), so a trader that sends none reads as in 0.6.18
             }
         }
 

@@ -196,6 +196,7 @@ public static class AgentHarness
             GroupTrading();   // 0.6.0: one agent trades a whole prop group (seats)
             StandDownsAndLeague();   // 0.6.2 (SPEC CE-2): a hero stood down on a group (agent-standdowns.txt) and league seats (Sim only)
             EntryRules();     // 0.6.18: a trader's rules may allow a market entry and an entry with no target (both off by default)
+            DayStop();        // 0.6.19: the day's profit stop: the plan's dollar value, and the consistency mark on an account that is not funded
             PropAccounts();   // prop accounts: Auto through the 17:00 reset and one restore after a restart; the personal account, Sim and a no-setting install as before
         }
         catch (Exception ex) { Check(false, "agent harness threw: " + ex); }
@@ -5025,6 +5026,172 @@ public static class AgentHarness
 
     // ------------------------------------------------------------ 0.6.18: entry rules per trader (market entry, no target)
     static string RulesWith(string extra) { string r = Rules("NQ,MNQ", ",\"maxQtyNQ\":2,\"maxQtyMNQ\":20", "09:45", "15:00", "15:55", 1800, 0, 0); return r.Substring(0, r.Length - 1) + extra + "}"; }
+    // ------------------------------------------------------------ 0.6.19: the day's profit stop
+    static string WithDayStop(string plan, string dollars) { return plan.Substring(0, plan.Length - 1) + ",\"dayStopDollars\":" + dollars + "}"; }
+    static int dayStopFlats;   // manrae's flat closes on SIM-E before the case (earlier parts left theirs in the list)
+    static int FlatCloses(Account a) { lock (a.Orders) return a.Orders.Count(o => Regex.IsMatch(o.Name ?? "", "^CB#[0-9a-f]{8} ag:manrae flat$")); }
+    static Order FlatClose(Account a) { if (FlatCloses(a) <= dayStopFlats) return null; lock (a.Orders) return a.Orders.LastOrDefault(o => Regex.IsMatch(o.Name ?? "", "^CB#[0-9a-f]{8} ag:manrae flat$")); }
+    static void DayStopFresh() { Fresh(); sime.Items.Remove(AccountItem.UnrealizedProfitLoss); dayStopFlats = FlatCloses(sime); }
+    // An entry of manrae on SIM-E, filled, its legs working. Null when it was not placed.
+    static Order DayStopEntry(string plan)
+    {
+        Order e = PlacedOn(sime, plan);
+        if (e == null) return null;
+        Fill(e, 1, 24999);
+        Advance(500);
+        return e;
+    }
+    // The flatten runs to its end: the legs confirmed cancelled, then the market close. Returns that close (null: none).
+    static Order DayStopFlatten(Order e)
+    {
+        Advance(500);
+        foreach (Order o in Legs(sime, e)) if (IsLive(o)) { o.OrderState = OrderState.Cancelled; Update(o); }
+        Advance(1000);
+        return FlatClose(sime);
+    }
+    static void DayStop()
+    {
+        string groups = Path.Combine(Dir, "groups.txt");
+        Part("day stop: the plan's dollar value", () =>
+        {
+            DayStopFresh();   // manrae on SIM-E, auto, 10:00
+            int calls = sime.Calls.Count;
+            foreach (string bad in new[] { "0", "-5", "\"600\"", "true", "1000001" })
+            {
+                A(WithDayStop(Good(NewId()), bad));
+                Check((AgentReject().Contains("dayStopDollars must be dollars above 0") || AgentReject().Contains("dayStopDollars is not a plain value")) && sime.Calls.Count == calls, "day stop: dayStopDollars " + bad + " is refused, nothing sent: " + AgentReject());
+            }
+            Check(!Last(agentOut, "agentState").Contains("dayStop") && !FileText("agent-manrae-day.txt").Contains("#daystop"), "day stop: none yet: agentState and the day file as in 0.6.18");
+            Order e = DayStopEntry(WithDayStop(Good(NewId()), "600"));
+            Check(e != null, "day stop: a plan with dayStopDollars 600 is placed: " + AgentReject());
+            if (e == null) return;
+            Check(FileText("agent-manrae-day.txt").Contains("#daystop\t600\n") || FileText("agent-manrae-day.txt").Contains("#daystop\t600\r"), "day stop: saved in the day file: " + FileText("agent-manrae-day.txt").Replace("\n", " | "));
+            Check(Last(agentOut, "agentState").Contains(",\"dayStop\":600}"), "day stop: agentState carries it: " + Last(agentOut, "agentState"));
+            Check(Legs(sime, e).Count(IsLive) == 2, "day stop: the position has its stop and target");
+            sime.Items[AccountItem.UnrealizedProfitLoss] = 599.99;
+            Advance(2000);
+            Check(Legs(sime, e).Count(IsLive) == 2 && FlatClose(sime) == null && !Last(agentOut, "agentState").Contains("profit stop"), "day stop: one cent under the mark: nothing happens");
+            Restart(); Mode("manrae", "auto");
+            Advance(2000);
+            Check(Last(agentOut, "agentState").Contains(",\"dayStop\":600}") && Legs(sime, e).Count(IsLive) == 2 && FlatClose(sime) == null, "day stop: kept through a restart (the day file): " + Last(agentOut, "agentState"));
+            sime.Items[AccountItem.UnrealizedProfitLoss] = 600;
+            Order close = DayStopFlatten(e);
+            Check(close != null && close.OrderType == OrderType.Market && close.OrderAction == OrderAction.Sell && close.Quantity == 1 && !Legs(sime, e).Any(IsLive),
+                  "day stop: at the mark (realized plus open): its legs cancelled and the position closed at market");
+            string st = Last(agentOut, "agentState");
+            Check(st.Contains("\"standDown\":\"the day's profit stop is reached on SIM-E ($600, the plan's day stop; the day is at $600, realized plus open): flat, and no new entries for agent manrae until 18:00 ET\""), "day stop: the trader stands down for the session, and says why: " + st);
+            Check(FileText("agent-manrae-day.txt").Contains("standDown\tthe day's profit stop is reached") && Logged("the day's profit stop is reached on SIM-E"), "day stop: the stand-down is saved and logged");
+            Settle(sime);
+            sime.Items.Remove(AccountItem.UnrealizedProfitLoss);
+            calls = sime.Calls.Count;
+            A(Good(NewId()));
+            Check(AgentReject().Contains("the day's profit stop is reached") && sime.Calls.Count == calls, "day stop: a new plan the same session is refused: " + AgentReject());
+            Restart(); Mode("manrae", "auto");
+            A(Good(NewId()));
+            Check(AgentReject().Contains("the day's profit stop is reached") && sime.Calls.Count == calls, "day stop: and after a restart: " + AgentReject());
+            // the 18:00 roll: a new session starts with no stand-down and no day stop
+            et = new DateTime(2026, 10, 9, 18, 0, 30);
+            Advance(1500);
+            st = Last(agentOut, "agentState");
+            Check(!st.Contains("profit stop") && !st.Contains("dayStop") && !FileText("agent-manrae-day.txt").Contains("#daystop"), "day stop: after the roll: no profit stand-down, no dayStop in agentState or the day file: " + st);
+        });
+        Part("day stop: a plan with no value clears the one before it, and nothing is checked while it holds nothing", () =>
+        {
+            DayStopFresh();
+            Order e = PlacedOn(sime, WithDayStop(Good(NewId()), "600"));
+            Check(e != null && Last(agentOut, "agentState").Contains(",\"dayStop\":600}"), "day stop: placed with 600");
+            if (e == null) return;
+            e.OrderState = OrderState.Cancelled; Update(e); Advance(500);
+            sime.Items[AccountItem.UnrealizedProfitLoss] = 5000;   // the account is far over the mark (other trading), and manrae holds nothing
+            Advance(2000);
+            Check(FlatClose(sime) == null && !Last(agentOut, "agentState").Contains("profit stop"), "day stop: it holds nothing: no flatten, no stand-down: " + Last(agentOut, "agentState"));
+            sime.Items.Remove(AccountItem.UnrealizedProfitLoss);
+            Order e2 = PlacedOn(sime, Good(NewId()));
+            Check(e2 != null && !Last(agentOut, "agentState").Contains("dayStop") && !FileText("agent-manrae-day.txt").Contains("#daystop"), "day stop: the next placed plan names none: the value is cleared: " + Last(agentOut, "agentState"));
+            // a working entry counts as holding something: over the mark, it is cancelled and the day ends
+            Order e3 = null;
+            if (e2 != null) { e2.OrderState = OrderState.Cancelled; Update(e2); Advance(500); e3 = PlacedOn(sime, WithDayStop(Good(NewId()), "300")); }
+            Check(e3 != null, "day stop: a third plan, with 300: " + AgentReject());
+            if (e3 == null) return;
+            sime.Items[AccountItem.UnrealizedProfitLoss] = 300;
+            Advance(1500);
+            Check(sime.Calls.Any(c => c.StartsWith("Cancel") && c.Contains(e3.Name)) || e3.OrderState == OrderState.CancelPending || e3.OrderState == OrderState.Cancelled, "day stop: over the mark with only a working entry: the entry is cancelled: " + string.Join(" | ", sime.Calls.Skip(Math.Max(0, sime.Calls.Count - 3))));
+            Check(Last(agentOut, "agentState").Contains("the day's profit stop is reached on SIM-E ($300, the plan's day stop"), "day stop: and the day is over: " + Last(agentOut, "agentState"));
+            sime.Items.Remove(AccountItem.UnrealizedProfitLoss);
+            Settle(sime);
+        });
+        Part("day stop: the consistency mark on an account that is not funded", () =>
+        {
+            try
+            {
+                DayStopFresh();
+                // a group with a 3,000 target and 50% consistency, Type eval: one day may make at most 1,500
+                File.WriteAllText(groups, ChartBridgeGroups.Header + "\n#\ngroup\tg1\tLucid\ton\t-\t2000\teod\t3000\t50000\t-\t50\teval\t-\t-\nmember\tSIM-E\tg1\n");
+                ChartBridgeGroups.StartNow();
+                Tick();
+                Check(Last(agentOut, "accountState").Contains("\"accountType\":\"eval\"") && Last(agentOut, "accountState").Contains("\"consistency\":50"), "day stop: SIM-E in an eval group with 50% consistency: " + Last(agentOut, "accountState"));
+                Order e = DayStopEntry(Good(NewId()));   // the plan names no day stop
+                Check(e != null, "day stop: eval: a plan with no dayStopDollars is placed: " + AgentReject());
+                if (e == null) return;
+                sime.Items[AccountItem.UnrealizedProfitLoss] = 1499;
+                Advance(2000);
+                Check(Legs(sime, e).Count(IsLive) == 2 && FlatClose(sime) == null, "day stop: eval: under 50% of the target: nothing happens");
+                sime.Items[AccountItem.UnrealizedProfitLoss] = 1500;
+                Order close = DayStopFlatten(e);
+                Check(close != null && close.OrderType == OrderType.Market, "day stop: eval: at 50% of the 3,000 target the position is closed at market");
+                Check(Last(agentOut, "agentState").Contains("the day's profit stop is reached on SIM-E ($1500, 50% of the profit target (the consistency rule); the day is at $1500"), "day stop: eval: and it says which mark: " + Last(agentOut, "agentState"));
+                Settle(sime); sime.Items.Remove(AccountItem.UnrealizedProfitLoss);
+                // the smaller of the two: a plan's 2,000 does not lift the consistency mark; a plan's 900 is under it
+                DayStopFresh();
+                File.WriteAllText(groups, ChartBridgeGroups.Header + "\n#\ngroup\tg1\tLucid\ton\t-\t2000\teod\t3000\t50000\t-\t50\teval\t-\t-\nmember\tSIM-E\tg1\n");
+                ChartBridgeGroups.StartNow(); Tick();
+                e = DayStopEntry(WithDayStop(Good(NewId()), "2000"));
+                if (e == null) { Check(false, "day stop: eval: a plan with 2000 is placed: " + AgentReject()); return; }
+                sime.Items[AccountItem.UnrealizedProfitLoss] = 1500;
+                close = DayStopFlatten(e);
+                Check(close != null && Last(agentOut, "agentState").Contains("($1500, 50% of the profit target"), "day stop: eval: the plan's 2,000 does not lift the consistency mark: " + Last(agentOut, "agentState"));
+                Settle(sime); sime.Items.Remove(AccountItem.UnrealizedProfitLoss);
+                DayStopFresh();
+                File.WriteAllText(groups, ChartBridgeGroups.Header + "\n#\ngroup\tg1\tLucid\ton\t-\t2000\teod\t3000\t50000\t-\t50\teval\t-\t-\nmember\tSIM-E\tg1\n");
+                ChartBridgeGroups.StartNow(); Tick();
+                e = DayStopEntry(WithDayStop(Good(NewId()), "900"));
+                if (e == null) { Check(false, "day stop: eval: a plan with 900 is placed: " + AgentReject()); return; }
+                sime.Items[AccountItem.UnrealizedProfitLoss] = 900;
+                close = DayStopFlatten(e);
+                Check(close != null && Last(agentOut, "agentState").Contains("($900, the plan's day stop"), "day stop: eval: the plan's 900 is under the consistency mark and is the one kept: " + Last(agentOut, "agentState"));
+                Settle(sime); sime.Items.Remove(AccountItem.UnrealizedProfitLoss);
+                // funded: the plan's value or none; the consistency rule sets no mark
+                DayStopFresh();
+                File.WriteAllText(groups, ChartBridgeGroups.Header + "\n#\ngroup\tg1\tLucid\ton\t-\t2000\teod\t3000\t50000\t-\t50\tfunded\t-\t-\nmember\tSIM-E\tg1\n");
+                ChartBridgeGroups.StartNow(); Tick();
+                e = DayStopEntry(Good(NewId()));
+                if (e == null) { Check(false, "day stop: funded: a plan with no value is placed: " + AgentReject()); return; }
+                sime.Items[AccountItem.UnrealizedProfitLoss] = 2600;
+                Advance(2000);
+                Check(Legs(sime, e).Count(IsLive) == 2 && FlatClose(sime) == null && !Last(agentOut, "agentState").Contains("profit stop"), "day stop: funded, no plan value: no mark at all: " + Last(agentOut, "agentState"));
+                Settle(sime); sime.Items.Remove(AccountItem.UnrealizedProfitLoss);
+                DayStopFresh();
+                File.WriteAllText(groups, ChartBridgeGroups.Header + "\n#\ngroup\tg1\tLucid\ton\t-\t2000\teod\t3000\t50000\t-\t50\tfunded\t-\t-\nmember\tSIM-E\tg1\n");
+                ChartBridgeGroups.StartNow(); Tick();
+                e = DayStopEntry(WithDayStop(Good(NewId()), "2000"));
+                if (e == null) { Check(false, "day stop: funded: a plan with 2000 is placed: " + AgentReject()); return; }
+                sime.Items[AccountItem.UnrealizedProfitLoss] = 1999;
+                Advance(2000);
+                Check(Legs(sime, e).Count(IsLive) == 2 && FlatClose(sime) == null, "day stop: funded: under the plan's 2,000 (and over the consistency figure): nothing happens");
+                sime.Items[AccountItem.UnrealizedProfitLoss] = 2000;
+                close = DayStopFlatten(e);
+                Check(close != null && Last(agentOut, "agentState").Contains("($2000, the plan's day stop"), "day stop: funded: at the plan's 2,000 it is closed: " + Last(agentOut, "agentState"));
+                Settle(sime); sime.Items.Remove(AccountItem.UnrealizedProfitLoss);
+            }
+            finally
+            {
+                sime.Items.Remove(AccountItem.UnrealizedProfitLoss);
+                try { File.Delete(groups); } catch (Exception) { }
+                ChartBridgeGroups.StartNow();
+            }
+        });
+    }
+
     static string MarketPlan(string id, int stop, int target, string price = "25000") { return Plan(id, "MNQ", "buy", "market", price, 1, stop, target, 600); }
     static void EntryRules()
     {
