@@ -116,7 +116,7 @@ for the Fleet tab's Kill all button to come (Anthony 2026-11-11: Kill all acts o
 `nt8/PROTOCOL.md`, "Kill all for the prop accounts (0.6.17)". ChartBridge 0.6.17 is a recompile (`-InstallChartBridge`, then
 F5 while flat).
 
-## ChartBridge 0.6.16 and chart 1.44.2 (2026-11-11): prop accounts: pick your personal account on the page; an agent's Auto is kept through the 17:00 reset and comes back once after a restart
+## ChartBridge 0.6.16 and chart 1.44.2 (2026-11-11): prop accounts: pick your personal account on the page; an agent's Auto ends with the trading day and comes back once after a restart the same day
 
 In plain words: nothing changes for hand trading. This is the first ChartBridge piece of the Prop Business (Anthony's build
 plan of 2026-11-10, its addendum, and the build answers of 2026-11-11). Until you pick your personal account on a trading PC,
@@ -127,12 +127,14 @@ ChartBridge 0.6.16 behaves exactly as 0.6.15.
   account**, then confirm. ChartBridge remembers it on that PC (`personal-account.txt`). From then on every other live account
   is a **prop** account: the tab marks your account "personal" and the others "prop". A Sim account can never be the pick. The
   pick cannot be changed while an agent is in Auto. Its name is never written to the Output window or a log.
-- **Auto through the 17:00 ET reset.** An agent set to Auto on prop accounts keeps its account and Auto at the daily reset
-  (it used to go to None). Its own entry window and flat time are unchanged, so it still trades only inside its window.
+- **Auto ends with the trading day** (your ruling of 2026-11-11, made after this was first built: "Arm should turn off
+  when the trading day ends"). At the 17:00 ET reset an agent in Auto on prop accounts drops to Shadow, and the page says
+  so. To have it trade the next session you set Auto again. Nothing is kept through the reset.
 - **Auto after a restart, once, only when flat.** Every start is still Shadow. If the agent was in Auto on prop accounts when
   ChartBridge stopped, Auto comes back one time, and only if the account is the same, prop, known to NinjaTrader, flat with
   nothing working, and the kill switch is off. If any of that is not so (a position is open, for one), the agent stays in
   Shadow, the page says why, and Auto is one click as before. A position that closes later does not bring Auto back.
+  It comes back only inside the trading day it was set in: a restart after 17:00 never brings yesterday's Auto back.
 - **The kill switch wins.** Turning it on removes the saved Auto. A kill switch that was on stays on through a restart, and
   releasing it after that restart leaves Shadow.
 - **Not changed, on any account:** the order ticket, hotkeys, groups and group entries, the copier, the bot, Order
@@ -144,7 +146,7 @@ ChartBridge 0.6.16 behaves exactly as 0.6.15.
 - **Shadow and Copilot on a prop account** are as before: None at 17:00, Shadow at a start.
 
 The files are `personal-account.txt` and `agent-<id>-auto.txt` next to `config.txt` (written and removed by ChartBridge; do
-not edit). `nt8/PROTOCOL.md`, "Prop accounts: Auto kept through the reset and a restart (0.6.16)", has every rule. Going back
+not edit). `nt8/PROTOCOL.md`, "Prop accounts: Auto ends at the reset, and one restore after a restart (0.6.16)", has every rule. Going back
 to 0.6.15 is safe: it ignores both files.
 
 **To install:** ChartBridge 0.6.16 is a recompile (`-InstallChartBridge`, then F5 while flat); the page updates as usual.

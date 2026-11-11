@@ -5298,7 +5298,7 @@ public static class AgentHarness
         }
 
         // ---- a prop account
-        Part("prop: Auto is saved, and kept through the reset", () =>
+        Part("prop: Auto is saved, and switched off at the reset (Anthony 2026-11-11)", () =>
         {
             PropStart("PROP-1", true);
             Check(ModeNow() == "shadow" && !AutoFileThere, "prop: a start with no saved Auto is Shadow");
@@ -5307,10 +5307,47 @@ public static class AgentHarness
             ResetOnce(() => Check(M.Account == "-", "prop: an agent in Copilot on a prop account goes to None at the reset"));
             PropStart("PROP-1", true);
             Mode("manrae", "auto");
-            Check(FileText("agent-manrae-auto.txt").Contains("auto\tPROP-1") && ChartBridgeBranches.KeepThroughReset("agent:manrae", "PROP-1") && !ChartBridgeBranches.KeepThroughReset("agent:manrae", "PROP-2") &&
+            Check(FileText("agent-manrae-auto.txt").Contains("auto\tPROP-1") && FileText("agent-manrae-auto.txt").Contains("day\t2026-10-08") &&
                   !ChartBridgeBranches.KeepThroughReset("bot", "PROP-1") && !ChartBridgeBranches.KeepThroughReset("copier", "PROP-1"),
-                  "prop: Auto on PROP-1: agent-manrae-auto.txt names it; the exception is this agent on this account only");
-            ResetOnce(() => Check(M.Account == "PROP-1" && ModeNow() == "auto" && FileText("agent-manrae-account.txt").Contains("account\tPROP-1"), "prop: the 17:00 reset keeps the account and Auto"));
+                  "prop: Auto on PROP-1: agent-manrae-auto.txt names it and the trading day it was set in: " + FileText("agent-manrae-auto.txt").Replace("\n", " | "));
+            int s17 = N(page);
+            ResetOnce(() => Check(M.Account == "-" && ModeNow() == "shadow" && !AutoFileThere && !ChartBridgeBranches.KeepThroughReset("agent:manrae", "PROP-1") &&
+                                  Any(page, s17, "the trading day ended (17:00 ET): Auto is off on PROP-1"),
+                                  "prop: the 17:00 reset switches Auto off (Shadow), removes the saved Auto and takes the account to None as for every branch: " + ModeNow() + " " + M.Account));
+            Restart();
+            Advance(40000);
+            Check(ModeNow() == "shadow" && !Logged("Auto restored after the restart on None"), "prop: and a restart after it restores nothing");
+            // in a trade at 17:00 (it should never be: its flat time is earlier): the account stays, Auto still goes off
+            PropStart("PROP-1", true);
+            Mode("manrae", "auto");
+            Order held = PlacedOn(prop1, Good(NewId()));
+            Fill(held, 1, 24999);
+            Advance(500);
+            ResetOnce(() => Check(held != null && M.Account == "PROP-1" && ModeNow() == "shadow" && !AutoFileThere && Legs(prop1, held).Count(IsLive) == 2,
+                                  "prop: holding a trade at the reset: it stays on its account with its stop and target, and Auto is off all the same: " + ModeNow() + " " + M.Account));
+            Settle(prop1);
+            // a saved Auto from an earlier trading day never restores (the backstop when a reset was missed)
+            PropStart("PROP-1", true);
+            Mode("manrae", "auto");
+            File.WriteAllText(AutoFilePath, FileText("agent-manrae-auto.txt").Replace("day\t2026-10-08", "day\t2026-10-07"));
+            int sOld = N(page);
+            Restart();
+            Advance(40000);
+            Check(ModeNow() == "shadow" && !AutoFileThere && Any(page, sOld, "Auto was NOT restored after the restart (its saved Auto is from an earlier trading day"), "prop: a saved Auto from an earlier trading day is not restored and is removed: " + ModeNow());
+            PropStart("PROP-1", true);
+            Mode("manrae", "auto");
+            File.WriteAllLines(AutoFilePath, new[] { "# made-up", "# test", "auto\tPROP-1" });   // no day at all
+            Restart();
+            Advance(40000);
+            Check(ModeNow() == "shadow" && !AutoFileThere, "prop: a saved Auto with no day is not restored either");
+            PropStart("PROP-1", true);
+            Mode("manrae", "auto");
+            // an agent in Auto on the personal account: the reset never changed its mode, and still does not
+            PropStart("MINE-1", true);
+            Mode("manrae", "auto");
+            ResetOnce(() => Check(M.Account == "-" && ModeNow() == "auto", "the personal account: the reset is as before (None, its mode kept): " + ModeNow() + " " + M.Account));
+            PropStart("PROP-1", true);
+            Mode("manrae", "auto");
             Mode("manrae", "shadow");
             Check(!AutoFileThere && !ChartBridgeBranches.KeepThroughReset("agent:manrae", "PROP-1"), "prop: Shadow removes the saved Auto");
             ResetOnce(() => Check(M.Account == "-", "prop: then the reset goes to None"));
@@ -5429,8 +5466,10 @@ public static class AgentHarness
                 WriteGroup("PROP-1", "PROP-2");
                 PropStart("group:g1", true);
                 Mode("manrae", "auto");
-                Check(ModeNow() == "auto" && FileText("agent-manrae-auto.txt").Contains("auto\tgroup:g1") && ChartBridgeBranches.KeepThroughReset("agent:manrae", "group:g1"), "prop group: Auto saved for the group: " + PageReject());
-                ResetOnce(() => Check(M.GroupId == "g1" && ModeNow() == "auto", "prop group: kept through the reset"));
+                Check(ModeNow() == "auto" && FileText("agent-manrae-auto.txt").Contains("auto\tgroup:g1"), "prop group: Auto saved for the group: " + PageReject());
+                ResetOnce(() => Check(M.GroupId == null && ModeNow() == "shadow" && !AutoFileThere, "prop group: the reset switches Auto off and removes the saved Auto: " + ModeNow()));
+                PropStart("group:g1", true);
+                Mode("manrae", "auto");
                 Restart();
                 Advance(2000);
                 Check(ModeNow() == "auto", "prop group: restored after a restart, every seat flat");

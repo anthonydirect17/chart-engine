@@ -2290,8 +2290,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (m == "auto" && ChartBridgeBranches.PersonalNamed && AllSeatsProp())
             {
                 string err = ChartBridgeFiles.SaveAutoIntent(AutoFile, "agent " + Id, KeyNow());
-                if (err == null) { string t = "Auto on prop accounts (" + AccountWords() + "): kept through the 17:00 ET reset, and back once after a restart when flat with the kill switch off"; Log("agent " + Id + ": " + t); AgentLog(t); }
-                else { string w = "Agent " + Id + ": agent-" + Id + "-auto.txt could not be saved (" + err + "): Auto is on now, but it is not kept through the 17:00 ET reset or a restart"; ToPages(StatusJson("warn", w)); Log(w); AgentLog(w); }
+                // the trading day it was set in (the reset's own day rule): a restore counts only inside that day
+                if (err == null) { try { File.AppendAllText(AutoFile, AutoDayPrefix + ChartBridgeBranches.DueDay(NowEt()) + "\n"); } catch (Exception ex) { err = ex.Message; } }
+                if (err == null) { string t = "Auto on prop accounts (" + AccountWords() + "): switched off at the 17:00 ET reset; back once after a restart inside the same trading day, when flat with the kill switch off"; Log("agent " + Id + ": " + t); AgentLog(t); }
+                else { string w = "Agent " + Id + ": agent-" + Id + "-auto.txt could not be saved (" + err + "): Auto is on now, but it does not come back after a restart"; ToPages(StatusJson("warn", w)); Log(w); AgentLog(w); }
                 return;
             }
             DropAutoIntent(why);
@@ -2305,9 +2307,48 @@ namespace NinjaTrader.NinjaScript.AddOns
             try { there = File.Exists(AutoFile) || File.Exists(ChartBridgeFiles.BackupOf(AutoFile)); } catch (Exception) { there = true; }
             if (!there) return;
             string err = ChartBridgeFiles.ClearAutoIntent(AutoFile);
-            if (err == null) { string t = "its saved Auto is removed (" + why + "): Auto is no longer kept through the 17:00 ET reset or a restart"; Log("agent " + Id + ": " + t); AgentLog(t); }
+            if (err == null) { string t = "its saved Auto is removed (" + why + "): Auto does not come back after a restart"; Log("agent " + Id + ": " + t); AgentLog(t); }
             else { string w = "Agent " + Id + ": agent-" + Id + "-auto.txt could not be removed (" + err + "): delete it by hand, or Auto may come back after a restart"; ToPages(StatusJson("warn", w)); Log(w); AgentLog(w); }
         }
+        // Anthony 2026-11-11: "Arm should turn off when the trading day ends". The saved Auto carries the trading day it was set
+        // in ("day<TAB>yyyy-MM-dd", the reset's own day rule: the date of the latest 17:00 ET at or before then). SavedAutoDay:
+        // that day, or null when the file has none (never today's by a guess).
+        internal const string AutoDayPrefix = "day\t";
+        private string SavedAutoDay()
+        {
+            try
+            {
+                if (!File.Exists(AutoFile)) return null;
+                foreach (string raw in File.ReadAllLines(AutoFile))
+                    if (raw.StartsWith(AutoDayPrefix, StringComparison.Ordinal) && Regex.IsMatch(raw.Substring(AutoDayPrefix.Length).Trim(), "^[0-9]{4}-[0-9]{2}-[0-9]{2}$")) return raw.Substring(AutoDayPrefix.Length).Trim();
+            }
+            catch (Exception) { }
+            return null;
+        }
+        // The 17:00 ET reset, for an agent in Auto on prop accounts (or with a saved Auto): Auto goes off (Shadow, its unfilled
+        // entries cancelled) and the saved Auto is removed, whether or not the reset can take its account to None now (it holds
+        // a position, or an account is not known yet). An agent in Auto on the personal account or a Sim account is as before
+        // (the reset never changed its mode). Under PlaceGate. True when it switched Auto off or removed a saved Auto.
+        private bool EndAutoAtReset()
+        {
+            bool auto, fileThere;
+            lock (Sync) auto = mode == "auto";
+            try { fileThere = File.Exists(AutoFile); } catch (Exception) { fileThere = true; }
+            bool prop = ChartBridgeBranches.PersonalNamed && SeatNames().Count > 0 && SeatNames().All(x => KillScope(x));
+            if (!fileThere && !(auto && prop)) return false;
+            if (auto && (prop || fileThere))
+            {
+                lock (Sync) mode = "shadow";
+                CancelUnfilled("the trading day ended (17:00 ET): Auto is off");
+                string t = "Agent " + Id + ": the trading day ended (17:00 ET): Auto is off on " + AccountWords() + " (mode shadow); set Auto again when you want it to trade";
+                ToPages(StatusJson("info", t)); Log(t); AgentLog(t);
+            }
+            DropAutoIntent("the trading day ended (17:00 ET)");
+            ToAgent(WelcomeJson());
+            Notify();
+            return true;
+        }
+
         // The one restore per start (every 2 s pass until it has an answer). It waits only while a seat is not known yet (not in
         // NinjaTrader, not Connected, or Connected under 30 s: ChartBridgeBranches.UnknownWhy); the first pass that knows every
         // seat decides, yes or no, and that is final for this start. No: the intent is removed, the agent stays in Shadow.
@@ -2338,6 +2379,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                     else if (busy.Count > 0 || Exposed()) no = (busy.Count > 0 ? string.Join(", ", busy) + (busy.Count == 1 ? " has" : " have") : "it has") + " a position or a working order";
                     else { string why = AutoProblem(); if (why != null) no = why; }
                 }
+                // the last question: was it set in this trading day? (the backstop when a 17:00 reset was missed: the reset itself
+                // removes the saved Auto)
+                if (no == null && SavedAutoDay() != ChartBridgeBranches.DueDay(NowEt())) no = "its saved Auto is from an earlier trading day (Auto ends at 17:00 ET)";
                 if (no != null)
                 {
                     DropAutoIntent("not restored after the restart: " + no);
@@ -4644,6 +4688,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 if (ChartBridgeBranches.DroppedWhileRetrying("agent:" + Id)) return null;   // 0.6.3 (review round 2, MED A): chosen on the page meanwhile
                 string acct = Account;
+                EndAutoAtReset();   // Anthony 2026-11-11: Auto on prop accounts ends with the trading day; nothing is kept through the reset
                 if (NoneNow() || ChartBridgeBranches.KeepThroughReset("agent:" + Id, GroupNow() ? KeyNow() : acct)) return null;
                 if (GroupNow())   // 0.6.0: None only when no seat is exposed and every member is idle; else the words name the accounts holding something
                 {

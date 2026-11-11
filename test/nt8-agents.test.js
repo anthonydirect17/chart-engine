@@ -192,6 +192,16 @@ test('0.5.7 None and the daily reset (DECISION 2026-10-14e): ChartBridge runs it
   assert.match(keep, /if \(!PersonalNamed \|\| branch == null \|\| !branch\.StartsWith\("agent:", StringComparison\.Ordinal\)\) return false;/, 'no personalAccount line, the bot and the copier: never');
   assert.match(keep, /return seats\.Count > 0 && seats\.All\(x => IsProp\(x\)\) && ag\.SavedAutoOn\(account\);/, 'only every seat prop, and only from the saved file');
   assert.equal((acode.match(/KeepThroughReset\(/g) || []).length, 1, 'asked in one place, the agent\'s reset');
+  // Anthony 2026-11-11: Auto ends with the trading day. The reset switches it off and removes the saved Auto BEFORE it asks, so
+  // nothing is kept through the reset; and a restore counts only inside the trading day the Auto was set in
+  assert.match(bodies(acode, 'ResetToNone'), /string acct = Account;\s*EndAutoAtReset\(\);[^\n]*\n\s*if \(NoneNow\(\) \|\| ChartBridgeBranches\.KeepThroughReset\(/, 'Auto off first, then the reset every branch has');
+  const end = bodies(acode, 'EndAutoAtReset');
+  assert.match(end, /if \(!fileThere && !\(auto && prop\)\) return false;/, 'an agent in Auto on the personal account or a Sim account is as before');
+  assert.match(end, /lock \(Sync\) mode = "shadow";\s*CancelUnfilled\("the trading day ended \(17:00 ET\): Auto is off"\);/);
+  assert.match(end, /DropAutoIntent\("the trading day ended \(17:00 ET\)"\);/);
+  assert.ok(!/StartFlatten|\.Submit\s*\(|\.CreateOrder\s*\(/.test(end), 'it closes nothing: a position keeps its stop, its target and its flat time');
+  assert.match(bodies(acode, 'TryRestoreAuto'), /if \(no == null && SavedAutoDay\(\) != ChartBridgeBranches\.DueDay\(NowEt\(\)\)\) no = "its saved Auto is from an earlier trading day/, 'a restore only inside the same trading day');
+  assert.match(bodies(acode, 'SyncAutoIntent'), /File\.AppendAllText\(AutoFile, AutoDayPrefix \+ ChartBridgeBranches\.DueDay\(NowEt\(\)\) \+ "\\n"\);/, 'the day is saved with the Auto');
   assert.ok(!/KeepThroughReset/.test(read('ChartBridgeOrders.cs') + read('ChartBridgeGroups.cs')), 'the order path and the groups never ask; the bot and the copier ask as before and get no');
   assert.match(bodies(acc, 'Check'), /string day = DueDay\(et\);[\s\S]*if \(doneDay == day\) return;\s*if \(!inBreak && \(doneDay == null \|\| string\.CompareOrdinal\(doneDay, day\) > 0\)\) return;[\s\S]*WriteDay\(day, null\);\s*Run\(day, missed, null\);/, 'in the break, or a missed break caught up; once per day, saved before it runs');
   assert.match(acc, /if \(a == null\) return name \+ " is not in NinjaTrader yet";/, '0.6.3 (review HIGH 1): an account not listed is not known, never idle');
@@ -258,7 +268,7 @@ test('0.6.16 prop accounts: every new branch passes through IsProp; nothing is p
   for (const f of ['SyncAutoIntent', 'DropAutoIntent', 'TryRestoreAuto', 'SavedAutoOn']) assert.ok(!/\.Submit\s*\(|\.CreateOrder\s*\(|\.Cancel\s*\(|Flatten|PlaceAgentEntry|PlaceOrder/.test(bodies(acode, f)), f + ' touches no order');
   // the harness: a no-setting install, the personal account and a Sim account get the 0.6.15 result
   const h = read(path.join('check', 'AgentHarness.cs'));
-  for (const s of ['PropAccounts();', 'no setting: the 17:00 reset puts the agent on None, as before', 'no setting: every start is Shadow, the file is not even read', ': a restart from Auto is Shadow', ': the 17:00 reset puts the agent on None, as before', 'prop: the 17:00 reset keeps the account and Auto', 'prop: a position at the start: Shadow, the file removed, the pages told'])
+  for (const s of ['PropAccounts();', 'no setting: the 17:00 reset puts the agent on None, as before', 'no setting: every start is Shadow, the file is not even read', ': a restart from Auto is Shadow', ': the 17:00 reset puts the agent on None, as before', 'prop: the 17:00 reset switches Auto off (Shadow), removes the saved Auto and takes the account to None as for every branch', 'prop: holding a trade at the reset: it stays on its account with its stop and target, and Auto is off all the same', 'prop: a saved Auto from an earlier trading day is not restored and is removed', 'prop: a position at the start: Shadow, the file removed, the pages told'])
     assert.ok(h.includes(s), s);
   assert.ok(!/[\u2013\u2014]/.test(h + read('ChartBridgeAgents.cs') + read('ChartBridgeAccounts.cs')), 'no en or em dashes');
 });
