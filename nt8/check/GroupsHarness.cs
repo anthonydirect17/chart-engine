@@ -758,7 +758,12 @@ public static class GroupsHarness
         string st = State("SIM-B");
         Check(st.Contains("\"pnlToday\":-450,\"realizedToday\":-400,") && st.Contains("\"realizedToday\":\"ninjatrader\"") && st.Contains("\"pnlToday\":\"ninjatrader\""),
               "review item 3: a day start read mid-session: the smaller of the computed (-100) and NinjaTrader's (-400): " + st);
+        ChartBridgeGroups.Numbers pn = ChartBridgeGroups.Read("SIM-B", simB, false);
+        Check(pn.Realized == -400 && pn.ProfitPnl == -150 && pn.ProfitWhy == null,
+              "0.6.19 (the review of 88, F6): for a PROFIT stop the larger of the two (-100), plus open (-50): " + pn.ProfitPnl + "; the loss side keeps the smaller: " + pn.Realized);
         simB.Items[AccountItem.RealizedProfitLoss] = double.NaN;
+        pn = ChartBridgeGroups.Read("SIM-B", simB, false);
+        Check(!pn.ProfitPnl.HasValue && (pn.ProfitWhy ?? "").Contains("started mid-session"), "F6: no NinjaTrader realized after a late start: the profit side is not known, with why: " + pn.ProfitWhy);
         st = State("SIM-B");
         Check(st.Contains("\"pnlToday\":null") && st.Contains("\"roomDaily\":null") && st.Contains("started mid-session"), "review item 3: no NinjaTrader realized to compare: today's P&L and the daily room null, with why: " + st);
         simB.Items[AccountItem.RealizedProfitLoss] = 0;

@@ -16,7 +16,7 @@
 # 0.6.6: the stop record to The Desk: every stop's price at send and each modify, the switch, the queue and the post (check/StopsHarness.cs).
 # 0.6.9: the order record to The Desk: every order type and change, the quotes at submission, the queue and the post (check/RecordHarness.cs);
 # the decision id of a group entry, the orders sent unchanged (check/GroupsHarness.cs). 0.6.15: the 1 second pull retired (check/BarsHarness.cs Retired1s).
-# 0.6.16: prop accounts: Auto kept through the 17:00 reset and one restore after a restart, prop only; a no-setting install, the personal account and Sim as before (check/AgentHarness.cs PropAccounts).
+# 0.6.16: prop accounts: one Auto restore after a restart, prop only, inside the same trading day; since 0.6.18 Auto ends at 17:00 ET for every agent, also when the reset did not run (check/AgentHarness.cs PropAccounts).
 # 0.6.17: Kill all for the prop accounts: flatten, the kill switch, Shadow; agents not on prop accounts, the personal account and other accounts untouched (check/AgentHarness.cs PropAccounts, kill all).
 # 0.6.19: the day's profit stop: a plan's dayStopDollars and the consistency mark on an account that is not funded; reached, the trader's own flatten and a stand-down until the roll; nothing while it holds nothing (check/AgentHarness.cs DayStop).
 # 0.6.18: entry rules per trader: a market entry and an entry with no target only when the trader's rules allow each; a stop always (check/AgentHarness.cs EntryRules).

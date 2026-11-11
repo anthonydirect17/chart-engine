@@ -268,6 +268,22 @@ namespace NinjaTrader.NinjaScript.AddOns
         public static Func<double> ClockMs;
         public static Func<DateTime> ClockEt;
         internal static double Now() { Func<double> f = ClockMs; return f != null ? f() : ChartBridgeTime.NowUtcMs(); }
+        // The review of 88 (F5): the accounts whose day reached its profit stop this session, for EVERY trader (the account's day
+        // counts every trader on it), keyed by session and account. Filled the first time any agent sees the day at or over the mark
+        // (any pass, flat or not, and at a refusal) and from each agent's day file at a start. Never cleared by a plan: only a new
+        // session's key leaves it behind.
+        private static readonly Dictionary<string, string> DayReached = new Dictionary<string, string>();
+        private static string ReachedKey(string session, string account) { return session + "|" + (account ?? "").ToLowerInvariant(); }
+        internal static bool NoteDayReached(string session, string account, string words)
+        {
+            lock (DayReached) { string k = ReachedKey(session, account); if (DayReached.ContainsKey(k)) return false; DayReached[k] = words; return true; }
+        }
+        // The harness only (nt8/check): a fresh made-up start forgets what earlier parts reached (a real start has an empty list).
+        internal static void ForgetDayReachedForCheck() { lock (DayReached) DayReached.Clear(); }
+        internal static string DayReachedWords(string session, string account)
+        {
+            lock (DayReached) { string w; return DayReached.TryGetValue(ReachedKey(session, account), out w) ? w : null; }
+        }
         internal static DateTime NowEt() { Func<DateTime> f = ClockEt; return f != null ? f() : ChartBridgeTime.NowEastern(); }
 
         public static void Start() { Start(true); }
@@ -2083,6 +2099,10 @@ namespace NinjaTrader.NinjaScript.AddOns
         // 0.6.19: the day's profit stop the last placed plan of this session asked for (dollars; 0: none). Under Sync; in the day file
         // ("#daystop"), cleared at the 18:00 ET roll. Reaching the mark ends the day through lossStandDown (its words say which).
         private double dayStop;
+        // The review of 88 (F5): the accounts this agent saw at or over their mark this session (account -> the mark's dollars), in
+        // the day file ("#dayreached"), so a restart keeps them; cleared at the 18:00 ET roll. Under Sync.
+        private readonly Dictionary<string, double> DayReachedHere = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+        private readonly HashSet<string> DayUnknownSaid = new HashSet<string>(StringComparer.OrdinalIgnoreCase);   // F6/N7: said once a session
         private bool dayRepaired;   // 0.6.3 (audit C3): dayBroken is a damaged file kept from its lines (saves go on)
         private string secret, secretState = "missing";
         private string session;
@@ -2272,8 +2292,8 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         // ---------------------------------------------------------- prop accounts: the saved Auto intent (agent-<id>-auto.txt)
         // Anthony's rulings of 2026-11-10 and 2026-11-11: an agent in Auto on prop accounts (ChartBridgeBranches.IsProp: a personal
-        // account is picked, and this is another account that is not Sim, Backtest or Playback) keeps Auto through the
-        // 17:00 ET reset and gets it back ONCE after a restart, only when every seat is prop, known to NinjaTrader, flat and idle,
+        // account is picked, and this is another account that is not Sim, Backtest or Playback) gets Auto back ONCE after a
+        // restart inside the same trading day (Auto ends at 17:00 ET for every agent), only when every seat is prop, known, flat and idle,
         // and the kill switch is off. The file is the intent: it names the account or group Auto was set on. It is written when the
         // page sets Auto (or changes the account keeping Auto, or releases the kill switch while in Auto) and every seat is prop;
         // it is removed on any other mode, on an account change that does not keep Auto on prop seats, and when the kill switch
@@ -2281,6 +2301,22 @@ namespace NinjaTrader.NinjaScript.AddOns
         // file is ever written and none is read: every start is Shadow and the reset goes to None, exactly as 0.6.15.
         private string AutoFile { get { return Path.Combine(Folder, "agent-" + Id + "-auto.txt"); } }
         private bool autoRestorePending;   // set at a start that finds the intent; one try, ended by the first answer or any page change
+        // The review of 90 (F4): the trading day Auto was set in (DueDay), in memory, under Sync. Every pass and every plan check
+        // compare it with the trading day now and end Auto on a mismatch, so Auto never outlives 17:00 ET even when the PC slept
+        // through the whole break and the reset never ran (no daily-reset.txt, or a plan in the seconds after a wake).
+        private string autoDay;
+        private bool AutoDayEnded() { string now = ChartBridgeBranches.DueDay(NowEt()); lock (Sync) return mode == "auto" && autoDay != now; }
+        // Ends Auto when its trading day is over (the same words and steps as the 17:00 reset). True when it did.
+        private bool EndAutoIfDayEnded()
+        {
+            if (!AutoDayEnded()) return false;
+            lock (PlaceGate)
+            {
+                if (!AutoDayEnded()) return false;
+                EndAutoAtReset();
+                return true;
+            }
+        }
         internal List<string> SeatsForProp() { return SeatNames(); }
         internal bool ModeIs(string m) { lock (Sync) return mode == m; }
         internal bool RuleAllows(bool market) { lock (Sync) return rulesBroken == null && (market ? rules.MarketEntry : rules.NoTarget); }
@@ -2337,18 +2373,18 @@ namespace NinjaTrader.NinjaScript.AddOns
             catch (Exception) { }
             return null;
         }
-        // The 17:00 ET reset, for an agent in Auto on prop accounts (or with a saved Auto): Auto goes off (Shadow, its unfilled
-        // entries cancelled) and the saved Auto is removed, whether or not the reset can take its account to None now (it holds
-        // a position, or an account is not known yet). An agent in Auto on the personal account or a Sim account is as before
-        // (the reset never changed its mode). Under PlaceGate. True when it switched Auto off or removed a saved Auto.
+        // The 17:00 ET reset, and the end of Auto's own trading day (F4): Auto goes off (Shadow, its unfilled entries cancelled,
+        // nothing closed: a position keeps its stop and target) and the saved Auto is removed, whether or not the reset can take
+        // its account to None now (it holds a position, or an account is not known yet). The review of 90 (N4), the coordinator's
+        // ruling: Anthony's rule has no exception, so this is every agent in Auto on every kind of account (prop, the personal
+        // account, Sim, a mixed group), flat or not. Under PlaceGate. True when it switched Auto off or removed a saved Auto.
         private bool EndAutoAtReset()
         {
             bool auto, fileThere;
-            lock (Sync) auto = mode == "auto";
+            lock (Sync) { auto = mode == "auto"; autoDay = null; }
             try { fileThere = File.Exists(AutoFile); } catch (Exception) { fileThere = true; }
-            bool prop = ChartBridgeBranches.PersonalNamed && SeatNames().Count > 0 && SeatNames().All(x => KillScope(x));
-            if (!fileThere && !(auto && prop)) return false;
-            if (auto && (prop || fileThere))
+            if (!fileThere && !auto) return false;
+            if (auto)
             {
                 lock (Sync) mode = "shadow";
                 CancelUnfilled("the trading day ended (17:00 ET): Auto is off");
@@ -2402,7 +2438,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     Notify();
                     return;
                 }
-                lock (Sync) { mode = "auto"; autoRestorePending = false; }
+                lock (Sync) { mode = "auto"; autoRestorePending = false; autoDay = ChartBridgeBranches.DueDay(NowEt()); }   // F4
                 string text = "Agent " + Id + ": Auto restored after the restart on " + AccountWords() + " (prop, flat, nothing working, the kill switch off)";
                 ToPages(StatusJson("warn", text)); Log(text); AgentLog(text);
                 ToAgent(WelcomeJson());
@@ -2780,6 +2816,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             // id, a loss stand-down) is merged in, never dropped (as the stand-downs' retry keeps a raise)
             Dictionary<string, double> memTrades = null; HashSet<string> memIds = null; string memHeld = null; string memSession = null;
             double fileDayStop = 0, memDayStop = 0;   // 0.6.19
+            Dictionary<string, double> fileReached = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);   // F5
             if (IoPending("day")) lock (Sync) { memTrades = new Dictionary<string, double>(Trades); memIds = new HashSet<string>(PlanIds); memHeld = lossStandDown; memSession = session; memDayStop = dayStop; }
             Dictionary<string, double> trades = new Dictionary<string, double>(), expiry = new Dictionary<string, double>();
             Dictionary<string, int[]> spans = new Dictionary<string, int[]>();
@@ -2799,6 +2836,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if (ReadSeatLine(line, out seatTag, out seatAcct)) { if (first || !tagSeats.ContainsKey(seatTag)) tagSeats[seatTag] = seatAcct; continue; }   // 0.6.0: #seat<TAB><tag><TAB><account>
                     double dsv;
                     if (ReadDayStop(line, out dsv)) { if (first || fileDayStop == 0) fileDayStop = dsv; continue; }   // 0.6.19
+                    string rAcct; double rMark;
+                    if (ReadDayReached(line, out rAcct, out rMark)) { if (!fileReached.ContainsKey(rAcct)) fileReached[rAcct] = rMark; continue; }   // F5
                     string tagPlanId, tagOfPlan;
                     if (ReadTagPlan(line, out tagOfPlan, out tagPlanId)) { if (first || !tagPlans.ContainsKey(tagOfPlan)) tagPlans[tagOfPlan] = tagPlanId; continue; }
                     if (line.Length == 0 || line.StartsWith("#")) continue;
@@ -2862,6 +2901,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 session = today;
                 Trades.Clear(); PlanIds.Clear(); Expiry.Clear(); Spans.Clear(); EntrySeen.Clear(); lossStandDown = null; dayStop = 0;
+                if (fileSession != today) DayReachedHere.Clear();   // F5: a latch of this session is never forgotten by a read again
                 dayRepaired = false; dayBroken = null;
                 if (io != null) dayBroken = io;
                 else if (broken != null) dayBroken = broken + ": no new entries for agent " + Id + " this run (delete it to start the day over)";
@@ -2877,6 +2917,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                         foreach (string id in ids) PlanIds.Add(id);
                         lossStandDown = held;
                         dayStop = fileDayStop;   // 0.6.19
+                        foreach (KeyValuePair<string, double> kv in fileReached) if (!DayReachedHere.ContainsKey(kv.Key)) DayReachedHere[kv.Key] = kv.Value;   // F5
                     }
                     else stale = trades.Count(kv => double.IsNaN(kv.Value));
                 }
@@ -2941,6 +2982,18 @@ namespace NinjaTrader.NinjaScript.AddOns
         // 0.6.19: the day file's "#daystop<TAB><dollars>" line: the profit stop the session's last placed plan asked for. A comment
         // to a ChartBridge before 0.6.19; a malformed one is read as a comment (no plan value: the account's own mark still applies).
         internal const string DayStopPrefix = "#daystop\t";
+        // The review of 88 (F5): "#dayreached<TAB><account><TAB><dollars>": an account whose day reached its mark this session.
+        internal const string DayReachedPrefix = "#dayreached\t";
+        private static bool ReadDayReached(string line, out string account, out double dollars)
+        {
+            account = null; dollars = 0;
+            if (!line.StartsWith(DayReachedPrefix, StringComparison.Ordinal)) return false;
+            string[] p = line.Substring(DayReachedPrefix.Length).Split('\t');
+            double v;
+            if (p.Length != 2 || !PlainName(p[0]) || !Regex.IsMatch(p[1], "^[0-9]{1,7}(?:\\.[0-9]{1,2}){0,1}$") || !double.TryParse(p[1], NumberStyles.Float, CultureInfo.InvariantCulture, out v) || !(v > 0)) return false;
+            account = p[0]; dollars = v;
+            return true;
+        }
         private static bool ReadDayStop(string line, out double dollars)
         {
             dollars = 0;
@@ -3038,6 +3091,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 foreach (KeyValuePair<string, int[]> kv in Spans) if (Trades.ContainsKey(kv.Key)) lines.Add("span\t" + kv.Key + "\t" + kv.Value[0].ToString(CultureInfo.InvariantCulture) + "\t" + kv.Value[1].ToString(CultureInfo.InvariantCulture));
                 if (lossStandDown != null) lines.Add("standDown\t" + lossStandDown);
                 if (dayStop > 0) lines.Add(DayStopPrefix + dayStop.ToString("0.##", CultureInfo.InvariantCulture));   // 0.6.19: a comment to a ChartBridge before it
+                foreach (KeyValuePair<string, double> kv in DayReachedHere) if (PlainName(kv.Key)) lines.Add(DayReachedPrefix + kv.Key + "\t" + kv.Value.ToString("0.##", CultureInfo.InvariantCulture));   // F5
                 foreach (string t in Carried) lines.Add("carried\t" + t);   // 0.5.2 review: a trade of an earlier session, until flat
                 // 0.5.7: the plan of each entry still of today (its trade, its working entry, a trade carried over)
                 HashSet<string> keep = new HashSet<string>(Trades.Keys.Concat(Expiry.Keys).Concat(Carried).Select(k => k.Length > 8 ? k.Substring(0, 8) : k));
@@ -3070,6 +3124,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 ExcessByTag.Clear();
                 lossStandDown = null;
                 dayStop = 0;   // 0.6.19: a new session: the next placed plan says its own
+                DayReachedHere.Clear(); DayUnknownSaid.Clear();   // F5, F6: a new session
                 foreach (string k in Proposals.Where(kv => kv.Value.State != "open" && kv.Value.State != "accepting").Select(kv => kv.Key).ToList()) Proposals.Remove(k);   // review B: pruned at the roll
             }
             SaveDay();
@@ -3648,6 +3703,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             p.SeatNames = null; p.Outs = null; p.Results = null; p.Orders = null;
             // 2. not killed, not stood down, the files readable, the account tradable now
             if (k) return "the kill switch is on (release it on the Agent tab)";
+            // the review of 90 (F4): Auto set in an earlier trading day ends here too, before anything is placed (a plan in the
+            // seconds after a wake, before the pass has run)
+            if (EndAutoIfDayEnded()) return "the trading day ended (17:00 ET): Auto is off for agent " + Id + "; set Auto again on the Agent tab";
             if (sd != null) return sd;
             string wait = PendingWords();   // 0.6.3 (review round 2, LOW C)
             if (wait != null) return wait;
@@ -4240,6 +4298,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             RollDay();
             RefreshSeats();   // 0.6.0: a group's membership (and a deleted group: None)
             TryRestoreAuto();   // prop accounts: the one Auto restore of this start (nothing to do without a saved intent)
+            EndAutoIfDayEnded();   // the review of 90 (F4): Auto ends with its trading day, whether or not the 17:00 reset ran
             ChartBridgeClient silent = null, mute = null;
             bool none, strip = false;
             lock (Sync)
@@ -4442,35 +4501,79 @@ namespace NinjaTrader.NinjaScript.AddOns
             double plan;
             lock (Sync) plan = dayStop;
             if (p != null && p.DayStopText != null) plan = p.DayStop;
+            string today = SessionOf(NowEt());
             foreach (string name in seatNames)
             {
+                // F5: once reached this session, by any trader, no later plan raises the mark or clears it
+                string was = ChartBridgeAgents.DayReachedWords(today, name);
+                if (was != null) return was;
                 ChartBridgeGroups.Numbers n;
                 try { n = ChartBridgeGroups.Read(name, FindAccount(name), false); }
                 catch (Exception) { continue; }
                 string from;
                 double mark = DayMark(n, plan, out from);
-                if (mark > 0 && n != null && n.Pnl.HasValue && n.Pnl.Value >= mark - 1e-9)
-                    return DayStopWords + " is reached on " + name + " (" + DayDollars(mark) + ", " + from + "; the day is at " + DayDollars(n.Pnl.Value) + ", realized plus open): no new entry there until 18:00 ET";
+                double? day = DayNumber(n, name, mark);
+                if (mark > 0 && day.HasValue && day.Value >= mark - 1e-9)
+                {
+                    Latch(name, mark, from, day.Value);
+                    return ChartBridgeAgents.DayReachedWords(today, name);
+                }
             }
             return null;
         }
 
-        // Every pass, for each account it holds something on. Returns how many accounts reached their mark this pass.
+        // The review of 88 (F6): the day's number for the profit stop (realized plus open). After a late start the larger of
+        // ChartBridge's and NinjaTrader's realized figure (the smaller is right for a loss limit and wrong here); not known: null,
+        // and said once a session on that account, to the pages and the trader (N7). mark: said only when there is a mark.
+        private double? DayNumber(ChartBridgeGroups.Numbers n, string name, double mark)
+        {
+            if (n == null) return null;
+            if (n.ProfitPnl.HasValue) return n.ProfitPnl;
+            if (mark > 0)
+            {
+                bool fresh;
+                lock (Sync) fresh = DayUnknownSaid.Add(name);
+                if (fresh)
+                {
+                    string w = "Agent " + Id + ": " + DayStopWords + " (" + DayDollars(mark) + ") is NOT checked on " + name + ": the day's number is not known (" + (n.ProfitWhy ?? "not known") + ")";
+                    ToPages(StatusJson("warn", w)); Log(w); AgentLog(w);
+                }
+            }
+            return null;
+        }
+
+        // F5: the first time an account's day is seen at or over its mark this session: remembered for every trader, saved in the
+        // day file, said once. True when it was new.
+        private bool Latch(string name, double mark, string from, double day)
+        {
+            string today = SessionOf(NowEt());
+            string words = DayStopWords + " is reached on " + name + " this session (" + DayDollars(mark) + ", " + from + "; the day was at " + DayDollars(day) + ", realized plus open): no new entry there until 18:00 ET";
+            bool fresh = ChartBridgeAgents.NoteDayReached(today, name, words), mine;
+            lock (Sync) { mine = !DayReachedHere.ContainsKey(name); if (mine) DayReachedHere[name] = mark; }
+            if (mine) SaveDay();
+            if (fresh) { Log("agent " + Id + ": " + words); AgentLog(words); }
+            return fresh;
+        }
+
+        // Every pass, for EVERY account it follows (F5: flat or not, the mark is remembered); the flatten and the stand-down only
+        // where it holds something. Returns how many accounts reached their mark this pass.
         private int CheckDayStop(List<Seat> seats, List<string> roots)
         {
             int hit = 0;
             foreach (Seat x in seats)
             {
-                if (!roots.Any(y => x.Owns(y))) continue;
                 ChartBridgeGroups.Numbers n;
                 try { n = ChartBridgeGroups.Read(x.Name, FindAccount(x.Name), false); }
                 catch (Exception) { continue; }
                 string from;
                 double mark = DayMark(n, out from);
-                if (!(mark > 0) || n == null || !n.Pnl.HasValue || n.Pnl.Value < mark - 1e-9) continue;
+                double? day = DayNumber(n, x.Name, mark);
+                if (!(mark > 0) || !day.HasValue || day.Value < mark - 1e-9) continue;
+                Latch(x.Name, mark, from, day.Value);
+                if (!roots.Any(y => x.Owns(y))) continue;
                 hit++;
                 string money = DayDollars(mark);
-                string say = DayStopWords + " is reached on " + x.Name + " (" + money + ", " + from + "; the day is at " + DayDollars(n.Pnl.Value) +
+                string say = DayStopWords + " is reached on " + x.Name + " (" + money + ", " + from + "; the day is at " + DayDollars(day.Value) +
                              ", realized plus open): flat, and no new entries for agent " + Id + " until 18:00 ET";
                 bool fresh;
                 lock (Sync) { fresh = lossStandDown == null; if (fresh) lossStandDown = say; }
@@ -4516,6 +4619,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (Sync)
             {
                 old = mode; mode = m;
+                if (m == "auto" && old != "auto") autoDay = ChartBridgeBranches.DueDay(NowEt());   // F4: the trading day it was set in
+                if (m != "auto") autoDay = null;
                 if (old == "copilot" && m != "copilot") expired = ExpireOpenLocked("not answered");
             }
             foreach (Proposal p in expired) { ToPages(ProposalJson(p)); ToAgent(AnswerJson(p.P.Id, "not answered", "the mode changed to " + m)); AgentLog("proposal " + p.P.Id + " not answered (the mode changed to " + m + ")"); }
@@ -4602,25 +4707,51 @@ namespace NinjaTrader.NinjaScript.AddOns
             return seats.Any(x => ChartBridgeBranches.IsPersonal(x)) && seats.Any(x => KillScope(x));
         }
 
+        // The harness only (nt8/check): makes this agent's flatten throw inside Kill all, to show the kill switch is already on (N1).
+        // Always null in NinjaTrader.
+        internal static string FlattenFaultForCheck;
         internal string KillProp()
         {
             lock (PlaceGate)
             {
                 List<string> seats = AllSeats().Select(x => x.Name).ToList();
-                if (seats.Count == 0 || !seats.All(x => KillScope(x))) return null;
-                int roots = StartFlatten("Kill all (prop accounts)", false, null, false, true);   // its own orders only (F2)
+                bool inScope = seats.Count > 0 && seats.All(x => KillScope(x));
+                // the review of 90 (F3): a saved Auto waiting (a restart while groups.txt could not be read: no seats yet, the restore
+                // pending) is stopped too, whatever the seats, or Auto would come back and place a plan after Kill all said "nothing".
+                // Never an agent on the personal account (it is never touched).
+                bool saved;
+                lock (Sync) saved = autoRestorePending;
+                try { saved = saved || File.Exists(AutoFile) || File.Exists(ChartBridgeFiles.BackupOf(AutoFile)); } catch (Exception) { saved = true; }
+                bool personal = seats.Any(x => ChartBridgeBranches.IsPersonal(x)) || ChartBridgeBranches.IsPersonal(Account);
+                if (!inScope && !(saved && !personal)) return null;
+                // the review of 90 (N1): the kill switch and Shadow go on FIRST, so nothing here can leave it trading; the flatten
+                // comes after, in its own try
                 string err = KillLocked(true);
                 string old;
                 List<Proposal> expired = new List<Proposal>();
-                lock (Sync) { old = mode; mode = "shadow"; autoRestorePending = false; if (old == "copilot") expired = ExpireOpenLocked("not answered"); }
+                lock (Sync) { old = mode; mode = "shadow"; autoDay = null; autoRestorePending = false; if (old == "copilot") expired = ExpireOpenLocked("not answered"); }
                 foreach (Proposal p in expired) { ToPages(ProposalJson(p)); ToAgent(AnswerJson(p.P.Id, "not answered", "Kill all (prop accounts)")); }
                 DropAutoIntent("Kill all (prop accounts)");
-                string say = "Kill all (prop accounts): " + (roots > 0 ? "flattening what it owns on " + AccountWords() : "nothing of its own to flatten on " + AccountWords()) +
-                             "; the kill switch is on; mode shadow" + (old != "shadow" ? " (was " + old + ")" : "") + (err != null ? "; " + err : "");
+                int roots = 0;
+                string flatErr = null;
+                if (inScope)
+                {
+                    try
+                    {
+                        if (FlattenFaultForCheck == Id) throw new InvalidOperationException("a fault made by the harness");
+                        roots = StartFlatten("Kill all (prop accounts)", false, null, false, true);   // its own orders only (F2)
+                    }
+                    catch (Exception ex) { flatErr = ex.Message; }
+                }
+                string where = inScope ? AccountWords() : AccountWords() + " (no prop account known now; its saved Auto was waiting)";
+                string flatWords = flatErr != null ? "its flatten could NOT be started (" + flatErr + "): act in NinjaTrader now" :
+                                   roots > 0 ? "flattening what it owns" : "nothing of its own to flatten";
+                string say = "Kill all (prop accounts): " + flatWords + " on " + where + "; the kill switch is on; mode shadow" + (old != "shadow" ? " (was " + old + ")" : "") + (err != null ? "; " + err : "");
                 Log("agent " + Id + ": " + say); AgentLog(say);
+                if (flatErr != null) ChartBridgeOrders.AgentAlarm("Agent " + Id + ": " + say);
                 ToAgent(WelcomeJson());
                 Notify();
-                return "agent " + Id + " on " + AccountWords() + ": " + (roots > 0 ? "flattening what it owns" : "nothing of its own to flatten") + ", the kill switch on, mode shadow";
+                return "agent " + Id + " on " + where + ": " + flatWords + ", the kill switch on, mode shadow";
             }
         }
 
@@ -4817,7 +4948,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 if (ChartBridgeBranches.DroppedWhileRetrying("agent:" + Id)) return null;   // 0.6.3 (review round 2, MED A): chosen on the page meanwhile
                 string acct = Account;
-                EndAutoAtReset();   // Anthony 2026-11-11: Auto on prop accounts ends with the trading day; nothing is kept through the reset
+                EndAutoAtReset();   // Anthony 2026-11-11: Auto ends with the trading day, on every kind of account (N4); nothing is kept through the reset
                 if (NoneNow() || ChartBridgeBranches.KeepThroughReset("agent:" + Id, GroupNow() ? KeyNow() : acct)) return null;
                 if (GroupNow())   // 0.6.0: None only when no seat is exposed and every member is idle; else the words name the accounts holding something
                 {

@@ -1764,7 +1764,7 @@ function mount(v, host) {
           stale ? 'Not connected to ChartBridge since ' + hms(S.lostAt) + ' ET: this account\'s connection is not known' : up ? '' : (CONN[a.connection] || a.connection)].filter(Boolean).join('\n');
         const nameCell = `<span role="cell" class="apg-name">` + ci('', stale ? 'apg-dot unk' : up ? 'apg-dot' : 'apg-dot down', stale ? 'Connection not known' : up ? '' : (CONN[a.connection] || a.connection) + ': not connected') +
           ci((lab || a.name) + (hero ? ' · ' + hero + '\'s seat' : ''), 'b', nameTip) + (lab ? ci(a.name, 'mut apg-raw', a.name) : '') +
-          (a.personal === true ? ci('personal', 'apg-ptag apg-pmine', 'Your personal account: traded by hand. Agents and bots never keep Auto here through the daily reset') : a.prop === true ? ci('prop', 'apg-ptag', 'A prop account: every live account that is not your personal one') : '') + ci(flags.length ? '!' : '', flags.length ? 'apg-flag' : 'apg-flag off', flags.join('\n')) + '</span>';
+          (a.personal === true ? ci('personal', 'apg-ptag apg-pmine', 'Your personal account: traded by hand. Agents and bots never get Auto back here after a restart') : a.prop === true ? ci('prop', 'apg-ptag', 'A prop account: every live account that is not your personal one') : '') + ci(flags.length ? '!' : '', flags.length ? 'apg-flag' : 'apg-flag off', flags.join('\n')) + '</span>';
         /* 1.40.0 (Anthony 2026-10-29): both limits on one line, "DD $1,800 · D $647", the tighter in amber; the bar shows the drawdown room;
            every figure's source stays in the hover (roomTip) */
         const rp = AC.roomParts(s);
@@ -1788,7 +1788,7 @@ function mount(v, host) {
           : `<button type="button" class="ac-btn apg-pbtn" data-act="personal" data-id="${esc(a.name)}" title="Pick ${esc(a.name)} as your one personal account. Every other live account is then a prop account">This is my personal account</button>`;
         const askPersonal = !pq ? '' : row('pask|' + a.name, `<span role="cell" class="apg-confirm">` + (pq.clear
           ? `Take the personal account pick away from ${esc(a.name)}? Then no account is prop, and agents go to None at the daily reset as before.`
-          : `Make ${esc(a.name)} your personal account? Every other live account becomes a prop account: an agent in Auto there keeps Auto through the daily reset and after a restart.`) +
+          : `Make ${esc(a.name)} your personal account? Every other live account becomes a prop account: an agent in Auto there gets Auto back once after a restart inside the same trading day; Auto ends at 17:00 ET.`) +
           ` <button type="button" class="ac-btn apg-yes" data-act="personal-yes" data-id="${esc(a.name)}">${pq.clear ? 'Take it away' : 'Yes, it is mine'}</button><button type="button" class="ac-btn" data-act="personal-no" data-id="${esc(a.name)}">Cancel</button></span>`, 'apg-ask');
         const hideBtn = canAct && a.canHide === true ? `<button type="button" class="ac-btn apg-hide" data-act="archive" data-id="${esc(a.name)}" title="Hide ${esc(a.name)}: it leaves every list until you Show it; its fills and history stay">Hide</button>` : '';
         const drawer = row('dr|' + a.name, `<span role="cell" class="apg-drawer">` + fld('Group', unrole(grp)) + fld('Account type', unrole(typeCell(a))) + fld('Limits', unrole(lims)) +

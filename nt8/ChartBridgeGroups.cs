@@ -1682,6 +1682,11 @@ namespace NinjaTrader.NinjaScript.AddOns
             public bool MySet;   // a personal line was ever saved (My floor or My daily, 0 included): rules are Anthony's, else null
             public double? MyFloor, MyDaily, Balance, Unrealized, Realized, Pnl, Floor, RoomFloor, RoomDaily, TargetLeft;
             public double? NtRoomFloor;   // 0.6.6: NinjaTrader's own trailing figure, shown beside the computed room (never in place of it)
+            // 0.6.19 (the review of 88, F6): the day's number for a PROFIT stop (realized plus open). After a late start (ChartBridge
+            // started after 18:02 ET) the realized part is the LARGER of ChartBridge's own figure and NinjaTrader's (Realized keeps the
+            // smaller, right for a loss limit); null, with ProfitWhy, when it is not known. Read by the agents' day stop only.
+            public double? ProfitPnl;
+            public string ProfitWhy;
             public readonly Dictionary<string, string> Src = new Dictionary<string, string>(), Why = new Dictionary<string, string>();
             public void Set(string key, double? v, string src, string why) { if (v.HasValue) Src[key] = src; else Why[key] = why ?? "not known"; }
         }
@@ -1729,18 +1734,21 @@ namespace NinjaTrader.NinjaScript.AddOns
             n.Set("balance", n.Balance, "ninjatrader", up ? "NinjaTrader gives no balance for this account" : down);
             n.Set("unrealized", n.Unrealized, "ninjatrader", up ? "NinjaTrader gives no open P&L for this account" : down);
             string realSrc = null, realWhy = null;
+            double? profitReal = null;   // F6
             if (n.Balance.HasValue && marksErr == null && mark != null && mark.DayStart.HasValue && mark.Session == n.Session)
             {
                 double comp = n.Balance.Value - mark.DayStart.Value;
                 // review of #48 (item 3): a day start read more than 2 minutes after the session's 18:00 ET start (ChartBridge started
                 // mid-session) can miss losses before it: the smaller of it and NinjaTrader's realized, which only understates the room
                 bool late = !mark.DayStartAt.HasValue || mark.DayStartAt.Value - SessionStartMs(n.Session) > LateDayStartMs;
-                if (!late) { n.Realized = comp; realSrc = "computed"; }
-                else if (ntReal.HasValue) { n.Realized = Math.Min(comp, ntReal.Value); realSrc = ntReal.Value < comp ? "ninjatrader" : "computed"; }
+                if (!late) { n.Realized = comp; realSrc = "computed"; profitReal = comp; }
+                else if (ntReal.HasValue) { n.Realized = Math.Min(comp, ntReal.Value); realSrc = ntReal.Value < comp ? "ninjatrader" : "computed"; profitReal = Math.Max(comp, ntReal.Value); }
                 else realWhy = "ChartBridge started mid-session (its first reading came after 18:02 ET) and NinjaTrader gives no realized P&L: today's P&L is not known";
             }
-            else if (ntReal.HasValue) { n.Realized = ntReal; realSrc = "ninjatrader"; realWhy = null; }
+            else if (ntReal.HasValue) { n.Realized = ntReal; realSrc = "ninjatrader"; realWhy = null; profitReal = ntReal; }
             else realWhy = up ? "NinjaTrader gives no realized P&L for this account" : down;
+            n.ProfitPnl = profitReal.HasValue && n.Unrealized.HasValue ? profitReal.Value + n.Unrealized.Value : (double?)null;
+            n.ProfitWhy = n.ProfitPnl.HasValue ? null : profitReal.HasValue ? "NinjaTrader gives no open P&L for this account" : realWhy;
             n.Set("realizedToday", n.Realized, realSrc, realWhy);
             n.Pnl = n.Realized.HasValue && n.Unrealized.HasValue ? n.Realized.Value + n.Unrealized.Value : (double?)null;
             n.Set("pnlToday", n.Pnl, realSrc, n.Realized.HasValue ? "NinjaTrader gives no open P&L for this account" : realWhy);

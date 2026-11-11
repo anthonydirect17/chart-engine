@@ -65,6 +65,28 @@
 
 ## ChartBridge 0.6.19 and chart 1.44.5 (2026-11-11): the day's profit stop, a dollar mark per account
 
+**The fix round of the review of 90 and 88 (2026-11-11), in this release.** Each with a harness check that fails when the
+fix is taken out.
+
+- **S1:** an order resting by hand (or the bot's, or the copier's) on the account and contract no longer holds back the
+  agent's own market close in a flatten that cancels only its own orders. Before, Kill all and the day's profit stop
+  cancelled the agent's stop and target and never closed its position. The harness now counts the close from the calls
+  made inside each part (the old check found an earlier part's close: a false pass), with two more cases: the hand order
+  fills first (no close, never short), and it fills after the close (the hand's own position, nothing sent).
+- **F3:** Kill all also stops an agent whose saved Auto waits with no seats (a restart while `groups.txt` cannot be read).
+- **N1:** Kill all puts the kill switch and Shadow on first, then starts the flatten in its own try; a flatten that cannot
+  be started is said loudly.
+- **F4:** Auto keeps its trading day in memory and ends on every pass and every plan check once that day is over, so it
+  never outlives 17:00 ET when the PC slept through the break and the reset never ran.
+- **N4** (the coordinator's ruling): at 17:00 ET Auto ends for every agent on every kind of account (prop, personal, Sim,
+  mixed group), flat or not.
+- **F5:** once an account's day is seen at or over its mark (any pass, flat or not, or at a refusal) it is reached for the
+  rest of the session, for every trader, saved in the day file (`#dayreached`); no later plan raises or clears it.
+- **F6:** after a late start the profit stop counts the larger realized figure (the loss side keeps the smaller); a day's
+  number not known is said once a session (N7). `ChartBridgeGroups.cs` gains only the two fields for this.
+- **N6:** the stale words (the page's confirm row, the saved Auto file's header, comments, `orders.sh`, PROTOCOL).
+- Not in this round: F7 (a contract added by hand on the bot's own contract is closed with the bot's), waiting for Anthony.
+
 In plain words: nothing changes on the chart, and nothing changes for hand trading. A trader (a bot or an agent) now has a
 hard stop on the day's profit on the account it trades, so one big day can never break a firm's consistency rule, and a
 playbook's own day stop is kept by ChartBridge itself, not only by the runner (Anthony 2026-11-10, decision 8: "a hard daily

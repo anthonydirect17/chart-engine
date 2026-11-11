@@ -321,7 +321,6 @@ test('0.6.19: the day\'s profit stop: only ChartBridgeAgents.cs changed; every o
     'ChartBridgeBars.cs': '7a9de59769499d804767461f67f8442c7a44a04b8b8bfae8cf6f4879b5186664',
     'ChartBridgeBot.cs': '33ca2af1f1867f14ab188f659ad63210933801b62c951234255972111fef84b1',
     'ChartBridgeCopier.cs': 'bb90a637610b3b56236c6cfba014c1a1db40110f2b821bbeecf7778f2f4e6e49',
-    'ChartBridgeGroups.cs': '95baae61b5c8d135d0a1b84e5a0c7fd13e63ff936d22da76170259bc2e4610ff',
     'ChartBridgeMerge.cs': '7aa31e37d38c1875eb236e1575d20f49ed31c1e2c08fc9d265d5aa7e0a32952c',
     'ChartBridgeOrderRecord.cs': 'de33b77a1d774d2ce8d11a5f3a8e927f1ff085c7d8f47259ff6a542d18ccc1f1',
     'ChartBridgeOrders.cs': '8e15e56a06b1f2597b5ff1ecebccba724b27a019819fa691b9f0a30c16bfaffd',
@@ -333,16 +332,28 @@ test('0.6.19: the day\'s profit stop: only ChartBridgeAgents.cs changed; every o
     'ChartBridgeV3.cs': '4ea9774ee3d30e619d1b849965b68565c24eed8f276194deaf93ee23242261dc',
   };
   const addons = JSON.parse(read('install-files.json')).addons.map(f => f.replace(/^nt8\//, ''));
-  assert.deepStrictEqual(addons.filter(f => !want[f]).sort(), ['ChartBridge.cs', 'ChartBridgeAgents.cs'], 'every add-on file is checked or named as changed');
+  assert.deepStrictEqual(addons.filter(f => !want[f]).sort(), ['ChartBridge.cs', 'ChartBridgeAgents.cs', 'ChartBridgeGroups.cs'], 'every add-on file is checked or named as changed');
   for (const [f, h] of Object.entries(want)) assert.strictEqual(sha(read(f).replace(/\r/g, '')), h, f + ' is the 0.6.18 file');
+  // the review of 88 (F6): ChartBridgeGroups.cs gains only the profit side of the day's number (two fields, worked out beside
+  // Realized, which is unchanged); with those lines taken out it is the 0.6.18 file byte for byte
+  const groups18 = read('ChartBridgeGroups.cs').replace(/\r/g, '')
+    .replace(/\n\s*\/\/ 0\.6\.19 \(the review of 88, F6\)[^\n]*\n(?:\s*\/\/[^\n]*\n)*\s*public double\? ProfitPnl;\n\s*public string ProfitWhy;/, '')
+    .replace(/\n\s*double\? profitReal = null;[^\n]*/, '')
+    .replace(/ profitReal = [^;]+; \}/g, ' }')
+    .replace(/\n\s*n\.ProfitPnl = [^\n]*\n\s*n\.ProfitWhy = [^\n]*/, '');
+  assert.strictEqual(sha(groups18), '95baae61b5c8d135d0a1b84e5a0c7fd13e63ff936d22da76170259bc2e4610ff', 'ChartBridgeGroups.cs: the 0.6.18 file but for the F6 lines');
+  assert.strictEqual((read('ChartBridgeGroups.cs').match(/profitReal = /g) || []).length, 4, 'F6: set once for each realized source, nowhere else');
   const codeOnly = src => src.replace(/\r/g, '').split('\n').map(l => l.replace(/^\s*\/\/.*$/, '').replace(/([;{})])\s*\/\/.*$/, '$1').replace(/\s+$/, '')).filter(l => l.length > 0).join('\n')
     .replace(/public const string Version = "[0-9.]+";/, 'public const string Version = "";');
-  assert.strictEqual(sha(codeOnly(read('ChartBridge.cs'))), '23d9603f53f0e3dd79af59b20560b2a361230ee2c3f147528a762413481311ba', 'ChartBridge.cs: the 0.6.17 code still (the version and its comment only changed)');
+  // the review of 90 (N6): the saved Auto file's second header line now says Auto ends at 17:00 ET (words only)
+  const headerNow = '"# while this file names the agent\'s account and its trading day, Auto comes back once after a restart when flat; Auto ends at 17:00 ET and this file goes with it"';
+  const header18 = '"# while this file names the agent\'s account, Auto is kept through the 17:00 ET reset and comes back once after a restart when flat"';
+  assert.ok(read('ChartBridge.cs').includes(headerNow));
+  assert.strictEqual(sha(codeOnly(read('ChartBridge.cs').replace(headerNow, header18))), '23d9603f53f0e3dd79af59b20560b2a361230ee2c3f147528a762413481311ba', 'ChartBridge.cs: the 0.6.17 code still (the version and its comment only changed)');
   // the flatten is the trader's own (ChartBridgeAgents.cs): the groups file has no word of the day stop
   assert.ok(!/dayStop|DayStop|daystop/.test(read('ChartBridgeGroups.cs')) && !/dayStop|DayStop|daystop/.test(read('ChartBridgeOrders.cs')), 'nothing of the day stop in the groups or the order path');
   const harness = {
     'check/OrdersHarness.cs': '9467dda85c9cf43848d34ccc9c7d8482df41eaabe38b75e1e2511651c032c807',
-    'check/GroupsHarness.cs': 'c9b37698b0c2643a28545b0631d2f820558f06bd8994056d8a10cce08c97a27a',
     'check/CopierHarness.cs': 'a14a4b5d06029af0932b53bc5e288c23d38ede2ba2e38577955b19435d1b74da',
     'check/BotHarness.cs': '3c386b128226e817f8c88e17174c6ff64a8826e86878cb4b07908cf78872487d',
     'check/StrategiesHarness.cs': '735be80f3fe11fba6ad72bab5efc115ef1b78bca13025374990c3c3f5fd428cf',
@@ -351,6 +362,9 @@ test('0.6.19: the day\'s profit stop: only ChartBridgeAgents.cs changed; every o
     'check/Nt8Stubs.cs': 'e5aa806364ceb7470d845238e6ee3adc552525f4171784be5caeaa46569777c1',
   };
   for (const [f, h] of Object.entries(harness)) assert.strictEqual(sha(read(f).replace(/\r/g, '')), h, f + ' is the 0.6.18 file');
+  // the review of 88 (F6): GroupsHarness.cs gains only the two checks of the profit side; without them it is the 0.6.18 file
+  const gh18 = read('check/GroupsHarness.cs').replace(/\r/g, '').replace(/\n\s*ChartBridgeGroups\.Numbers pn = [^\n]*\n[^\n]*\n[^\n]*/, '').replace(/\n\s*pn = ChartBridgeGroups\.Read[^\n]*\n[^\n]*/, '');
+  assert.strictEqual(sha(gh18), 'c9b37698b0c2643a28545b0631d2f820558f06bd8994056d8a10cce08c97a27a', 'check/GroupsHarness.cs: the 0.6.18 file but for the F6 checks');
 });
 
 test('0.6.9: the decision id: the group entry\'s PlaceOrder call unchanged, set and cleared around it, noted before Submit', () => {
