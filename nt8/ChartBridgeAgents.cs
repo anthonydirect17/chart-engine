@@ -2046,7 +2046,11 @@ namespace NinjaTrader.NinjaScript.AddOns
                 lock (ChartBridgeOrders.AgentPlaceLock)
                 {
                     int p1 = ChartBridgeOrders.AgentListed(a, inst), p2 = ChartBridgeOrders.AgentEffective(a, inst);
-                    bool other = ChartBridgeOrders.AgentMayFill(a, inst).Any(o => o != j.Close);
+                    // the review's S1 (2026-11-11): a job that is own orders only leaves a hand order, the bot's or the copier's resting, so
+                    // such an order must not hold the close back: only the agent's OWN orders still working do. (Before: any order
+                    // resting there blocked the close, so the agent's stop was cancelled and its position never closed.) The size
+                    // guard stays: never more than the position holds now, and never against its side.
+                    bool other = ChartBridgeOrders.AgentMayFill(a, inst).Any(o => o != j.Close && (!j.OwnOnly || IsMine(o)));
                     if (other || Math.Sign(p1) != dir || Math.Sign(p2) != dir || qty > Math.Min(Math.Abs(p1), Math.Abs(p2))) return null;   // changed meanwhile: the next pass looks again
                     x = a.CreateOrder(inst, dir > 0 ? OrderAction.Sell : OrderAction.Buy, OrderType.Market, OrderEntry.Manual, TimeInForce.Day, qty, 0, 0, "",
                         "CB#" + tag + " ag:" + Id + " flat", NinjaTrader.Core.Globals.MaxDate, null);

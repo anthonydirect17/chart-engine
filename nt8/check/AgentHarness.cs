@@ -5777,12 +5777,66 @@ public static class AgentHarness
             List<string> since = prop1.Calls.Skip(calls).ToList();
             Check(since.Any(c => c.StartsWith("cancel") && c.Contains(" stop ")) && since.Any(c => c.StartsWith("cancel") && c.Contains(" target ")), "kill all F2: the agent's own stop and target are cancelled: " + string.Join(" | ", since));
             Check(!since.Any(c => c.Contains("Exit")) && hand.OrderState == OrderState.Working, "kill all F2: the hand order is not cancelled and still works: " + string.Join(" | ", since));
-            Order close;
-            lock (prop1.Orders) close = prop1.Orders.LastOrDefault(o => Regex.IsMatch(o.Name ?? "", "^CB#[0-9a-f]{8} ag:manrae flat$"));
-            Check(close != null && close.OrderType == OrderType.Market && close.OrderAction == OrderAction.Sell && close.Quantity == 1, "kill all F2: the agent's own 1 contract is closed at market with the hand order still resting");
+            // the review's S1: counted from the calls made inside THIS part (the last close in the whole list is an earlier part's)
+            List<string> closes = since.Where(c => c.Contains(" ag:manrae flat ")).ToList();
+            Check(closes.Count == 1 && closes[0].Contains(" ag:manrae flat Sell Market 1 ") && hand.OrderState == OrderState.Working,
+                  "kill all S1: the agent's own 1 contract is closed at market, once, with the hand order still resting: " + string.Join(" | ", since));
+            { Order cl = FlatOn(prop1); if (cl != null) Fill(cl, 1, 25001); }       // the stand-in broker fills nothing by itself
+            Advance(2000);
+            Check(PosOf(prop1, mnq) == 0 && prop1.Calls.Skip(calls).Count(c => c.Contains(" ag:manrae flat ")) == 1 && hand.OrderState == OrderState.Working && !prop1.Calls.Skip(calls).Any(c => c.Contains("Exit")),
+                  "kill all S1: then it is flat, one close only, the hand order never touched: position " + PosOf(prop1, mnq));
             Check(Any(page, s0, "Only the traders' own orders were cancelled: an order placed by hand, the bot's or the copier's stays and can still fill") && M.Killed && ModeNow() == "shadow",
                   "kill all F2: the status line says a hand order stays and can still fill; the kill switch is on, Shadow");
             lock (prop1.Orders) prop1.Orders.Remove(hand);
+            Settle(prop1);
+            P("{\"type\":\"agentKill\",\"cid\":\"k\",\"agent\":\"manrae\",\"on\":false}");
+        });
+        Part("kill all: a hand order that fills during the flatten (S1)", () =>
+        {
+            // the hand order takes the position flat before the close can go: no close is sent, nothing is sold short
+            PropStart("PROP-1", true);
+            Mode("manrae", "auto");
+            Order e = PlacedOn(prop1, Good(NewId()));
+            Fill(e, 1, 24999);
+            Advance(500);
+            Order hand = prop1.CreateOrder(mnq, OrderAction.Sell, OrderType.Limit, OrderEntry.Manual, TimeInForce.Day, 1, 25050, 0, "", "Exit", NinjaTrader.Core.Globals.MaxDate, null);
+            hand.OrderState = OrderState.Working; lock (prop1.Orders) prop1.Orders.Add(hand);
+            int calls = prop1.Calls.Count;
+            P("{\"type\":\"agentKillAllProp\",\"cid\":\"ks1\"}");
+            Advance(500);
+            Fill(hand, 1, 25050);                                   // the hand order fills while the agent's legs are being cancelled
+            foreach (Order o in Legs(prop1, e)) if (IsLive(o)) { o.OrderState = OrderState.Cancelled; Update(o); }
+            Advance(4000);
+            List<string> since = prop1.Calls.Skip(calls).ToList();
+            Check(e != null && PosOf(prop1, mnq) == 0 && !since.Any(c => c.Contains(" ag:manrae flat ")) && M.Killed && ModeNow() == "shadow",
+                  "kill all S1: the hand order filled first: flat by it, no close sent, never short: position " + PosOf(prop1, mnq) + ": " + string.Join(" | ", since));
+            Settle(prop1);
+            P("{\"type\":\"agentKill\",\"cid\":\"k\",\"agent\":\"manrae\",\"on\":false}");
+        });
+        Part("kill all: a hand order that fills after the close was sent (S1)", () =>
+        {
+            // the agent's close goes with the hand order resting; the hand order fills later, as the status line said it can
+            PropStart("PROP-1", true);
+            Mode("manrae", "auto");
+            Order e = PlacedOn(prop1, Good(NewId()));
+            Fill(e, 1, 24999);
+            Advance(500);
+            Order hand = prop1.CreateOrder(mnq, OrderAction.Sell, OrderType.Limit, OrderEntry.Manual, TimeInForce.Day, 1, 25050, 0, "", "Exit", NinjaTrader.Core.Globals.MaxDate, null);
+            hand.OrderState = OrderState.Working; lock (prop1.Orders) prop1.Orders.Add(hand);
+            int calls = prop1.Calls.Count;
+            P("{\"type\":\"agentKillAllProp\",\"cid\":\"ks2\"}");
+            Advance(500);
+            foreach (Order o in Legs(prop1, e)) if (IsLive(o)) { o.OrderState = OrderState.Cancelled; Update(o); }
+            Advance(1500);
+            { Order cl = FlatOn(prop1); if (cl != null) Fill(cl, 1, 25001); }       // the stand-in broker fills nothing by itself
+            Advance(2000);
+            Check(e != null && PosOf(prop1, mnq) == 0 && prop1.Calls.Skip(calls).Count(c => c.Contains(" ag:manrae flat Sell Market 1 ")) == 1, "kill all S1: closed, once, with the hand order resting: position " + PosOf(prop1, mnq));
+            int after = prop1.Calls.Count;
+            Fill(hand, 1, 25050);                                   // the hand order's own fill: the account is short 1 by Anthony's order
+            Advance(6000);
+            Check(PosOf(prop1, mnq) == -1 && !prop1.Calls.Skip(after).Any(c => c.Contains(" ag:manrae ")), "kill all S1: a hand order that fills afterwards is the hand's own position: ChartBridge sends nothing for it: position " + PosOf(prop1, mnq) + ": " + string.Join(" | ", prop1.Calls.Skip(after)));
+            Deliver(prop1.Name, mnq, MarketPosition.Long, 1, 25000, "HANDBACK" + Guid.NewGuid().ToString("N").Substring(0, 6));   // Anthony buys his 1 back
+            SetPos(prop1, mnq, 0);
             Settle(prop1);
             P("{\"type\":\"agentKill\",\"cid\":\"k\",\"agent\":\"manrae\",\"on\":false}");
         });
@@ -5799,10 +5853,16 @@ public static class AgentHarness
             prop1.Items[AccountItem.UnrealizedProfitLoss] = 400;
             Advance(1500);
             foreach (Order o in Legs(prop1, e)) if (IsLive(o)) { o.OrderState = OrderState.Cancelled; Update(o); }
-            Advance(1500);
+            Advance(4000);
             List<string> since = prop1.Calls.Skip(calls).ToList();
             Check(e != null && since.Any(c => c.StartsWith("cancel") && c.Contains(" stop ")) && !since.Any(c => c.Contains("Exit")) && hand.OrderState == OrderState.Working,
                   "day stop F2: reached: its own legs cancelled, the hand order left alone: " + string.Join(" | ", since));
+            List<string> closes = since.Where(c => c.Contains(" ag:manrae flat ")).ToList();
+            Check(closes.Count == 1 && closes[0].Contains(" ag:manrae flat Sell Market 1 "), "day stop S1: and its 1 contract is closed at market, once, with the hand order still resting: " + string.Join(" | ", since));
+            { Order cl = FlatOn(prop1); if (cl != null) Fill(cl, 1, 25001); }       // the stand-in broker fills nothing by itself
+            Advance(2000);
+            Check(PosOf(prop1, mnq) == 0 && prop1.Calls.Skip(calls).Count(c => c.Contains(" ag:manrae flat ")) == 1 && hand.OrderState == OrderState.Working,
+                  "day stop S1: then it is flat, one close only, the hand order still works: position " + PosOf(prop1, mnq));
             prop1.Items.Remove(AccountItem.UnrealizedProfitLoss);
             lock (prop1.Orders) prop1.Orders.Remove(hand);
             Settle(prop1);
