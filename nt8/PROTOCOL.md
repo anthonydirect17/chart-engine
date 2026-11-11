@@ -3540,7 +3540,7 @@ sign-in snapshot of orders and positions is whole, never on a timer): a pick mad
 (`live-account-at-v1`, the time of the last pick) goes to None when that account is flat with no working order, else it is
 kept with a note naming it; either way once.
 
-### Prop accounts: Auto kept through the reset and a restart (0.6.16)
+### Prop accounts: Auto ends at the reset, and one restore after a restart (0.6.16)
 
 Anthony's rulings of 2026-11-10 (the Prop Business build plan and its addendum) and 2026-11-11 (the build answers): agents and
 bots trade the prop accounts, with no Accept; "Auto stays armed through the 17:00 reset"; after a ChartBridge or PC restart the
@@ -3587,20 +3587,29 @@ message gains `personalNamed` (true or false, last) and each entry gains `person
   may come back after a restart").
 - Shadow and Copilot save nothing: an agent in either on a prop account goes to None at 17:00 as before.
 
-**Through the 17:00 ET reset.** `KeepThroughReset("agent:<id>", <account or group:<id>>)` is true only when a personal account
-is picked, every seat is prop now, and the saved Auto names that account or group. Then the reset leaves the agent alone: its
-account and its mode stay. It is decided from the file, never the live mode, so the reset caught up at a start (every agent
-still in Shadow) keeps the account too. The agent's own window still governs every entry (`entryFrom`, `entryUntil`, `flatAt`,
-unchanged), so nothing trades in the break.
+**At the 17:00 ET reset: Auto ends with the trading day** (Anthony 2026-11-11, after the review of this section: "Arm should
+turn off when the trading day ends, if I want to re-arm the bot, I either start it up at home for the overnight session, or
+remote into work and turn it back on"). This replaces "Auto stays armed through the 17:00 reset". At the reset, for an agent
+in Auto on prop accounts (every seat in Kill all's scope), or with a saved Auto: its mode goes to `shadow`, its unfilled
+entries are cancelled, the saved Auto is removed, and the pages get `status` `info` "Agent <id>: the trading day ended (17:00
+ET): Auto is off on <account> (mode shadow); set Auto again when you want it to trade". This happens whether or not the
+reset can take its account to None at that moment (it holds a position, or an account is not known yet). Then the reset is
+the reset every branch has: the account goes to None when it is flat and idle, and stays while it holds something. Nothing
+is kept through the reset: `KeepThroughReset` reads the saved Auto, which is gone by then, so it answers no for every branch.
+An agent in Auto on the personal account or a Sim account is as before 0.6.16 (None, its mode untouched).
 
 **After a restart: one restore.** Every start is still Shadow. A start that finds the saved Auto (only looked for when a
-personal account is picked) tries ONE restore, on the 2 s pass, under the placement gate:
+personal account is picked) tries ONE restore, on the 2 s pass, under the placement gate, and only inside the trading day
+the Auto was set in:
 
 1. It waits only while a seat is not known yet (not in NinjaTrader, not Connected, or Connected under 30 s: the reset's
    `UnknownWhy` rule). The first pass that knows every seat decides, and that answer is final for this start.
 2. Auto comes back only if all of these hold: the kill switch is off; the saved Auto names the agent's account or group as it
    is now; every seat is prop; every seat is flat with no working order (the reset's `Idle` rule) and the agent holds
-   nothing (no trade, entry or proposal); and Auto's own check passes (the account tradable now, no clash).
+   nothing (no trade, entry or proposal); Auto's own check passes (the account tradable now, no clash); and the saved Auto
+   is of this trading day. The file carries the day it was set in (`day<TAB>yyyy-MM-dd`, the reset's own day rule: the date
+   of the latest 17:00 ET at or before then); another day, or no day, is "its saved Auto is from an earlier trading day
+   (Auto ends at 17:00 ET)". That is the backstop for a reset that was missed; the reset itself removes the file.
 3. Yes: the mode is `auto`, the pages get `status` `warn` "Agent <id>: Auto restored after the restart on <account> (prop,
    flat, nothing working, the kill switch off)", the agent gets `welcome` again, the file stays.
 4. No: the agent stays in Shadow, the file is removed, and the pages get `status` `warn` "Agent <id>: Auto was NOT restored
@@ -3630,30 +3639,42 @@ only"). One page message, no agent key:
 {"type": "agentKillAllProp", "cid": "k1"}
 ```
 
-Guarded as every agent page message (a signed-in v3 page from an allowed origin, trading on, the action rate). For every
-agent whose accounts are ALL prop (every account it follows: its account or every member of its group, and a seat that left
-while it holds the agent's trade; `ChartBridgeBranches.IsProp`, "Prop accounts" above), under its placement gate and in this
-order:
+Guarded as every agent page message (a signed-in v3 page from an allowed origin, trading on), except the action rate: Kill
+all is never refused as "too many order actions" (the review of 0.6.17, N2). For every agent whose accounts are ALL in
+scope (every account it follows: its account or every member of its group, and a seat that left while it holds the agent's
+trade), under its placement gate and in this order:
 
-1. **Its own flatten starts** on every seat: the flat time's job (`CB#<tag> ag:<id> flat`). It cancels the agent's working
-   orders there, waits for NinjaTrader to confirm them, and closes at market only what the agent owns. It never touches a
-   manual order, a copier order, or a position that is not the agent's, on any account. It runs whatever the mode and with
-   the kill switch on, as the flat time's flatten does, and is loud until flat ("NOT FLAT?", every 10 s).
+1. **Its own flatten starts** on every seat (`CB#<tag> ag:<id> flat`). It cancels **only the agent's own working orders**
+   there, waits for NinjaTrader to confirm them, and closes at market only what the agent owns. An order placed by hand, by
+   the bot or by the copier on the same account and contract is **not cancelled: it stays and can still fill** (the review's
+   F2; Anthony 2026-11-11: "yes, okay"). The flat time's flatten and the agent's own `flatten` are unchanged: on a pair the
+   agent owns they cancel every order that may fill there. It runs whatever the mode and with the kill switch on, and is
+   loud until flat ("NOT FLAT?", every 10 s).
 2. **Its kill switch goes on** (`agentKill` on: saved in `agent-<id>-kill.txt`, so a restart keeps it; its unfilled entries
    cancelled; its saved Auto removed).
 3. **Its mode goes to Shadow**, so releasing the kill switch later leaves Auto off until it is set on the page again.
 
-The pages get one `status` `warn`: "Kill all (prop accounts): agent <id> on <account>: flattening what it owns, the kill
-switch on, mode shadow; ... . Not touched (not on prop accounts): <ids>. The bot, the copier and manual orders are never
-touched". The agent gets `welcome` again.
+**In scope, for Kill all only** (the review's F1, `ChartBridgeAgent.KillScope`): every account except the personal account,
+an account NinjaTrader lists as Sim, Backtest, Playback and None. **An account NinjaTrader does not list right now is in
+scope**: `IsProp` answers no for it (the careful side for keeping Auto), which would be the wrong side for a kill. So an
+agent in Auto on a prop account that dropped off NinjaTrader's list, or is not listed yet after a restart, gets the kill
+switch and Shadow and loses its saved Auto; nothing can be flattened on an account that is not listed, and the kill switch
+then refuses every plan when it is back.
 
-**Never touched:** an agent on the personal account, a Sim account, None, or a group with a member that is not prop; the
-bot; the copier; the order ticket and every manual order. With no personal account picked nothing is prop: the message is
-refused ("no personal account is picked ... nothing was done") and nothing changes. The older `agentKill` (one agent,
-no flatten) and the Board's KILL ALL AGENTS (agentKill on to every agent) are unchanged.
+The pages get one `status` `warn`: "Kill all (prop accounts): agent <id> on <account>: flattening what it owns, the kill
+switch on, mode shadow; ... . NOT STOPPED, still trading its prop accounts (it trades the personal account too; stop it on
+the Agent tab): <ids>. FAILED, stop it on the Agent tab now: <ids>. Not touched (not on prop accounts): <ids>. Only the
+traders' own orders were cancelled: an order placed by hand, the bot's or the copier's stays and can still fill" (each of
+the three lists only when it has a name). One agent that throws never stops the others (N3). The agent gets `welcome` again.
+
+**Never touched:** an agent on the personal account, a Sim account, None, or a group with a member that is out of scope (a
+group that holds the personal account and prop accounts is left alone and named loudly as NOT STOPPED, N1); the bot; the
+copier; the order ticket and every manual order. With no personal account picked nothing is prop: the message is refused
+("no personal account is picked ... nothing was done") and nothing changes. The older `agentKill` (one agent, no flatten)
+and the Board's KILL ALL AGENTS (agentKill on to every agent) are unchanged.
 
 No page sends this message yet: the button comes with the Fleet tab. Checked in `check/AgentHarness.cs` (`PropAccounts`, the
-"kill all" parts) and `test/nt8-agents.test.js`.
+"kill all" parts, the review's three scenarios among them) and `test/nt8-agents.test.js`.
 
 ### The day's profit stop (0.6.19)
 
