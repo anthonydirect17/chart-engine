@@ -200,7 +200,7 @@ try {
   check((await text('.fl-market')).includes('Not built yet.'), 'Market now says it is not built yet, not faked');
   // nothing on the tab can be pressed, typed in or switched but Kill all with its two answers, the Armed switch with its two, Read again and the Details
   const pressable = await page.evaluate(() => [...document.querySelectorAll('#flView button, #flView input, #flView select, #flView textarea, #flView a, #flView [tabindex], #flView [contenteditable], #flView [role="switch"], #flView [role="checkbox"], #flView [role="slider"], #flView label, #flView summary')].map(e => e.tagName + ':' + (e.dataset.do || '?')).sort());
-  check(pressable.join() === 'BUTTON:arm,BUTTON:armno,BUTTON:armyes,BUTTON:ask,BUTTON:fam,BUTTON:fam,BUTTON:filter,BUTTON:filter,BUTTON:filter,BUTTON:filter,BUTTON:more,BUTTON:more,BUTTON:more,BUTTON:more,BUTTON:no,BUTTON:others,BUTTON:roster,BUTTON:sub,BUTTON:sub,BUTTON:yes,INPUT:find,LABEL:?', 'the tab has Kill all, the Armed switch, their Yes and Cancel, Read again and a Details on each card, and no other control: ' + pressable.join());
+  check(pressable.join() === 'BUTTON:arm,BUTTON:armno,BUTTON:armyes,BUTTON:ask,BUTTON:desk,BUTTON:fam,BUTTON:fam,BUTTON:filter,BUTTON:filter,BUTTON:filter,BUTTON:filter,BUTTON:more,BUTTON:more,BUTTON:more,BUTTON:more,BUTTON:no,BUTTON:others,BUTTON:roster,BUTTON:sub,BUTTON:sub,BUTTON:yes,INPUT:find,LABEL:?', 'the tab has Kill all, the Armed switch, their Yes and Cancel, Read again and a Details on each card, the Traders fold\'s Show, and no other control: ' + pressable.join());
   await page.screenshot({ path: path.join(SHOTS, 'fleet-desktop.png') });
 
   // the head is pinned: scrolled to the bottom of the tab, Kill all is still in sight
@@ -354,7 +354,13 @@ try {
   const offered = await page.evaluate(() => [...document.querySelectorAll('#flPick-eval option')].map(o => o.value + (o.selected ? '*' : '')));
   check(offered.join() === ',sample-alpha.json*', 'the pick list offers None and only the files that run live, with ChartBridge\'s pick chosen: ' + offered.join());
   const order = await page.evaluate(() => [...document.querySelectorAll('#flView [data-k="setup"] > section')].map(e => e.getAttribute('aria-label')));
-  check(order.join() === 'Market now,Today,Roster,Other connections', 'Setup, top to bottom: Market now, Today (the lanes), the Roster, Other connections: ' + order.join());
+  check(order.join() === 'Market now,Today,Traders,Roster,Other connections', 'Setup, top to bottom: Market now, Today (the lanes), Traders (folded), the Roster, Other connections: ' + order.join());
+  // the Traders fold (builder 4's Legion trader desk): closed by default; with no desk on the page it says where it will show
+  check(await page.locator('#flDesk').isHidden() && (await page.locator('[data-do="desk"]').getAttribute('aria-expanded')) === 'false', 'the Traders fold is closed by default');
+  await page.click('[data-do="desk"]');
+  check((await page.locator('#flDesk').innerText()).includes('The trader desk shows here when the page has it') && (await page.locator('[data-do="desk"]').getAttribute('aria-expanded')) === 'true', 'opened with no desk on the page: it says where the desk will show');
+  await page.click('[data-do="desk"]');
+  check(await page.locator('#flDesk').isHidden(), 'and shuts again');
   check((await text('[data-do="arm"]')) === 'Armed: off' && await page.locator('#flView [role="switch"]').count() === 1 && await page.locator('[data-do="arm"]').getAttribute('aria-checked') === 'false', 'one Armed switch, off');
   await page.evaluate(() => { document.getElementById('flView').scrollTop = 0; });
   await page.screenshot({ path: path.join(SHOTS, 'fleet-lanes.png') });

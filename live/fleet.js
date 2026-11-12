@@ -765,7 +765,7 @@ function create(o) {
   const S = { shown: false, built: false, version: '', connected: false, signedIn: false, accounts: null, groups: null, agents: new Map(), firstAgentAt: null, signInAt: null, replayDone: false, settleTimer: 0,
     ask: 0, askTimer: 0, hint: '', hintBad: false, hintState: false, answer: '', answerBad: false, cidSeq: 0, pending: '', pendingAt: 0, waitTimer: 0, sent: 0,
     armAsk: 0, armTimer: 0, armSaid: '', armBad: false, modeSent: new Map(), pickSent: new Map(),
-    sub: 'setup', filter: 'all', find: '', famShut: new Set(), othersOpen: false, lanePanels: {},
+    sub: 'setup', filter: 'all', find: '', famShut: new Set(), othersOpen: false, lanePanels: {}, desk: null, deskOpen: false,
     roster: { state: 'idle', text: '', cards: null, seq: 0, asked: 0, at: 0, version: '' }, rosterDirty: true, rosterTimer: 0, open: new Set(), drawn: {}, draws: { head: 0, roster: 0, traders: 0, accounts: 0, lanes: 0, 'lane-eval': 0, 'lane-funded': 0 } };
   const el = {};
   const agentList = () => [...S.agents.values()];
@@ -1067,6 +1067,9 @@ function create(o) {
           <p class="fl-empty">Not built yet. The zone (the trend's direction and the volatility, in words) comes from Bot-Lab's plain-code labeler on this PC once it exists. It will suggest; you choose.</p></section>
         <section class="fl-box fl-today" aria-label="Today"><div class="fl-btitle"><h3 class="fl-h">Today</h3><span class="fl-sub2">Drop an account into a lane. Pick the bot for the lane. Flip Armed.</span></div>
           <div class="fl-lanegrid"><div data-k="lane-eval"></div><div data-k="lane-funded"></div></div><div data-k="lanes"></div></section>
+        <section class="fl-box fl-desk" aria-label="Traders"><div class="fl-btitle"><h3 class="fl-h">Traders</h3><span class="fl-sub2">Set up a prop trader: its account or group, its rules, its proposals. Closed until you open it.</span>
+          <span class="fl-fill"></span><button type="button" class="fl-pill" data-do="desk" data-k="deskbtn" aria-expanded="false" aria-controls="flDesk">Show</button></div>
+          <div id="flDesk" class="fl-deskbody" data-k="desk" hidden></div></section>
         <section class="fl-box fl-roster" aria-label="Roster"><div class="fl-btitle"><h3 class="fl-h">Roster</h3><span class="fl-sub2">The bots the Lab built. One line a family; open it for its settings.</span></div>
           <div class="fl-filters" role="group" aria-label="Roster filters">
             <button type="button" class="fl-pill" data-do="filter" data-filter="fits" aria-pressed="false" aria-disabled="true" title="Market now is not built yet, so nothing can be matched to the market">Fits now</button>
@@ -1084,8 +1087,10 @@ function create(o) {
         <p class="fl-later">Legion Live (the tiles, one chart with each lane's marks, each trader's day, the accounts by group) is the next change. Until then this page shows the prop accounts as before.</p>
       </div>
     </div>`;
-    for (const k of ['autoline', 'ask', 'kill', 'yes', 'no', 'hint', 'answer', 'roster', 'traders', 'accounts', 'lanes', 'lane-eval', 'lane-funded', 'arm', 'armyes', 'armno', 'armsaid', 'armask', 'setup', 'live', 'allbtn']) el[k] = view.querySelector('[data-k="' + k + '"]');
+    for (const k of ['autoline', 'ask', 'kill', 'yes', 'no', 'hint', 'answer', 'roster', 'traders', 'accounts', 'lanes', 'lane-eval', 'lane-funded', 'desk', 'deskbtn', 'arm', 'armyes', 'armno', 'armsaid', 'armask', 'setup', 'live', 'allbtn']) el[k] = view.querySelector('[data-k="' + k + '"]');
     el.cancel = view.querySelector('[data-do="no"]');
+    if (el.desk) el.desk.hidden = !S.deskOpen;           // the Traders fold: shut until opened (the desk is mounted only then)
+    deskButton();
     S.built = true; S.drawn = {}; S.rosterDirty = true;
   }
   const setText = (e, t) => { if (e && e.textContent !== t) e.textContent = t; };
@@ -1117,6 +1122,26 @@ function create(o) {
     S.lanePanels[stage] = { groupId: l.groupId, host, mount };
     return S.lanePanels[stage];
   }
+  /* ---------------- the Traders fold (build answers B4-1, section 3; builder 4's Legion trader desk, chart-engine 103): ONE mount,
+     o.traderDesk(el), handed by the page (it calls LegionDesk.mount with the page's feed; the desk puts Legion's gate round it).
+     Closed by default; mounted when opened and taken down when shut, when the tab closes and on destroy, so a shut fold holds
+     no listener and sends nothing (not even a "seen"). Nothing else of the desk is here. */
+  function openDesk() {
+    S.deskOpen = true;
+    if (el.desk) {
+      el.desk.hidden = false;
+      if (!S.desk && typeof o.traderDesk === 'function') { try { S.desk = o.traderDesk(el.desk) || null; } catch (e) { S.desk = null; } }
+      if (!S.desk) el.desk.innerHTML = '<p class="fl-empty">The trader desk shows here when the page has it (live/legion-desk.js).</p>';
+    }
+    deskButton();
+  }
+  function closeDesk() {
+    S.deskOpen = false;
+    if (S.desk) { try { if (typeof S.desk.destroy === 'function') S.desk.destroy(); } catch (e) { /* gone */ } S.desk = null; }
+    if (el.desk) { el.desk.hidden = true; el.desk.innerHTML = ''; }
+    deskButton();
+  }
+  function deskButton() { if (el.deskbtn) { el.deskbtn.setAttribute('aria-expanded', String(S.deskOpen)); el.deskbtn.textContent = S.deskOpen ? 'Hide' : 'Show'; } }
   function dropLanePanels() { for (const k of Object.keys(S.lanePanels)) { try { S.lanePanels[k].mount.destroy(); } catch (e) { /* gone */ } } S.lanePanels = {}; }
   function placeLanePanels() {
     for (const stage of C.STAGES) {
@@ -1221,6 +1246,7 @@ function create(o) {
     if (what === 'filter') { const f = String(b.dataset.filter || ''); if (C.FILTERS.includes(f) && f !== S.filter) { S.filter = f; S.rosterDirty = true; render(); } return; }
     if (what === 'fam') { const k = String(b.dataset.fam || ''); if (S.famShut.has(k)) S.famShut.delete(k); else S.famShut.add(k); S.rosterDirty = true; render(); return; }
     if (what === 'others') { S.othersOpen = !S.othersOpen; S.drawn.traders = null; render(); return; }
+    if (what === 'desk') { if (S.deskOpen) closeDesk(); else openDesk(); return; }
     if (what === 'more') {                                                  // display only: a card's detail open or shut
       const k = String(b.dataset.card || '');
       if (S.open.has(k)) S.open.delete(k); else S.open.add(k);
@@ -1283,7 +1309,7 @@ function create(o) {
     if (on === S.shown) return;
     S.shown = on;
     if (tabBtn) { tabBtn.setAttribute('aria-pressed', String(on)); if (on) tabBtn.hidden = false; }
-    if (!on) { endAsk(); endArmAsk(); dropLanePanels(); S.built = false; if (view) view.innerHTML = ''; offer(); }
+    if (!on) { endAsk(); endArmAsk(); dropLanePanels(); closeDesk(); S.built = false; if (view) view.innerHTML = ''; offer(); }
     /* Escape cancels a question wherever the focus is while the tab is open (build answers 15, section 3) */
     if (DOC) { if (on) DOC.addEventListener('keydown', onKey, true); else DOC.removeEventListener('keydown', onKey, true); }
     if (typeof o.onTab === 'function') o.onTab(on);
@@ -1324,7 +1350,7 @@ function create(o) {
       traders: C.traders(agentList(), S.accounts, S.version), accounts: C.propAccounts(S.accounts, S.groups, agentList()),
       roster: { state: S.roster.state, text: S.roster.text, asked: S.roster.asked, bots: S.roster.cards ? S.roster.cards.bots.map(c => c.name) : [], lineups: S.roster.cards ? S.roster.cards.lineups.map(c => c.name) : [], notShown: S.roster.cards ? S.roster.cards.notShown.length : 0 } }),
     reloadRoster: loadRoster,
-    destroy: () => { dropLanePanels(); S.roster.seq++; clearTimeout(S.settleTimer); clearTimeout(S.rosterTimer); clearTimeout(S.waitTimer); unlisten(); endAsk(); endArmAsk(); if (DOC) DOC.removeEventListener('keydown', onKey, true); if (view) { view.removeEventListener('click', onClick); view.removeEventListener('change', onChange); view.removeEventListener('input', onInput); view.removeEventListener('keydown', onKey); } },
+    destroy: () => { dropLanePanels(); closeDesk(); S.roster.seq++; clearTimeout(S.settleTimer); clearTimeout(S.rosterTimer); clearTimeout(S.waitTimer); unlisten(); endAsk(); endArmAsk(); if (DOC) DOC.removeEventListener('keydown', onKey, true); if (view) { view.removeEventListener('click', onClick); view.removeEventListener('change', onChange); view.removeEventListener('input', onInput); view.removeEventListener('keydown', onKey); } },
   };
 }
 window.FleetView = { create };

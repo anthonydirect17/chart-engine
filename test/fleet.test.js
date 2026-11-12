@@ -596,7 +596,7 @@ test('what the tab draws: one line a card with its detail behind Details; its bu
   // Kill all with its Yes and Cancel, the Armed switch with its Yes and Cancel, one pick list a lane that has a trader, Read
   // again and a Details on each card: nothing else can be pressed, typed in or switched
   const pressable = html.match(/<(button|input|select|textarea|a|details|summary)\b[^>]*>/g) || [];
-  assert.deepStrictEqual(pressable.map(x => (/data-do="([a-z]+)"/.exec(x) || [])[1]).sort(), ['arm', 'armno', 'armyes', 'ask', 'fam', 'fam', 'filter', 'filter', 'filter', 'filter', 'find', 'more', 'more', 'no', 'others', 'pick', 'roster', 'sub', 'sub', 'yes'], pressable.join(' '));
+  assert.deepStrictEqual(pressable.map(x => (/data-do="([a-z]+)"/.exec(x) || [])[1]).sort(), ['arm', 'armno', 'armyes', 'ask', 'desk', 'fam', 'fam', 'filter', 'filter', 'filter', 'filter', 'find', 'more', 'more', 'no', 'others', 'pick', 'roster', 'sub', 'sub', 'yes'], pressable.join(' '));
   assert.ok(pressable.every(x => x.startsWith('<button type="button"') || x.startsWith('<select class="fl-pick"') || x.startsWith('<input type="text" class="ws-in" data-do="find"')));
   assert.strictEqual((html.match(/role="switch"/g) || []).length, 1, 'one Armed switch, for both lanes');
   assert.ok(!/contenteditable|tabindex|onclick|role="(checkbox|slider)"|draggable/i.test(html));
@@ -1134,6 +1134,37 @@ test('answers 25, S2: FleetCore.groupLock on its own', () => {
   assert.match(F.groupLock('g1', [tr('a', 'g1', { mode: 'copilot' })], true), /a trades that group in Copilot/);
   assert.match(F.groupLock('g1', [tr('a', 'g1', { mode: undefined })], true), /a mode not known/);
   assert.match(F.groupLock('g1', [tr('a', 'g1', { owns: true })], true), /holds a position/);
+});
+
+test('the Traders fold (builder 4\'s Legion trader desk): closed by default, mounted once when opened, taken down when shut, on a closed tab and on destroy; it posts nothing itself', t => {
+  timers(t);
+  const mounts = [];
+  const traderDesk = el => { const m = { el, destroyed: 0, destroy() { this.destroyed++; } }; mounts.push(m); return m; };
+  const P = page(t, { traderDesk });
+  P.fv.showTab(true); P.ready();
+  assert.deepStrictEqual(mounts, [], 'closed by default: nothing mounted');
+  assert.strictEqual(P.part('desk').hidden, true);
+  P.click('desk');
+  assert.strictEqual(mounts.length, 1, 'opened: one mount');
+  assert.strictEqual(mounts[0].el, P.part('desk'), 'into the fold');
+  assert.strictEqual(P.part('desk').hidden, false);
+  assert.strictEqual(P.part('deskbtn').attrs['aria-expanded'], 'true');
+  P.feed(agent('germanicus', { owns: true })); P.feed(accounts);
+  assert.strictEqual(mounts.length, 1, 'messages never mount again');
+  P.click('desk');
+  assert.deepStrictEqual([mounts[0].destroyed, P.part('desk').hidden, P.part('deskbtn').attrs['aria-expanded']], [1, true, 'false'], 'shut: taken down');
+  P.click('desk'); assert.strictEqual(mounts.length, 2, 'opened again: a new mount');
+  P.fv.showTab(false); assert.strictEqual(mounts[1].destroyed, 1, 'the tab closed: taken down');
+  P.fv.showTab(true); P.click('desk'); P.fv.destroy(); assert.strictEqual(mounts[2].destroyed, 1, 'destroy: taken down');
+  assert.deepStrictEqual(P.posts, [], 'the fold itself posts nothing');
+  // no desk on the page: it says where the desk will show, and nothing throws
+  const Q = page(t); Q.fv.showTab(true); Q.ready(); Q.click('desk');
+  assert.match(Q.part('desk').innerHTML, /The trader desk shows here when the page has it/);
+  const R = page(t, { traderDesk: () => { throw new Error('made up'); } }); R.fv.showTab(true); R.ready(); R.click('desk');
+  assert.match(R.part('desk').innerHTML, /The trader desk shows here/, 'a desk that throws is no desk');
+  // the page hands the desk its own feed (AF), never Legion's link: the desk puts Legion's gate round it itself (builder 4)
+  const ws = read('live', 'workspace.js');
+  assert.match(ws, /traderDesk: el => \(window\.LegionDesk && typeof window\.LegionDesk\.mount === 'function' && el\n\s+\? window\.LegionDesk\.mount\(el, \{ v3: AF, feed: hub,/);
 });
 
 test('Legion Setup\'s roster by family (1.48.0): readable names, the family from the run, the two "good for" filters on the file\'s own word and their order, Find, and where a file is picked', () => {

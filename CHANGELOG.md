@@ -95,6 +95,11 @@ holding the real Multi-Account panel in the page and a move from it sending `mem
   are not known while signed out (S1). Another group's lock covers every trader heard on that group, not only one
   lane's own: a doubled lane's second group and a group of no Type are locked while a trader on them is not in Shadow
   or holds something (`FleetCore.groupLock`, S2).
+- **Legion Setup's Traders fold (build answers B4-1, section 3):** one mount of builder 4's Legion trader desk
+  (chart-engine 103, `live/legion-desk.js`) in a folded section under the lanes, closed by default, handed the page's
+  own feed (the desk puts Legion's gate round it). Mounted when opened, taken down when shut, when the tab closes and on
+  destroy, so a shut fold holds no listener and sends nothing. Until the desk is on the page, the fold says where it
+  will show. It merges together with 102 and 103 (the page's script line and the install line come with 103).
 
 ## chart 1.47.0 (2026-11-12): three shared panels made ready for Legion (page only, no F5)
 
