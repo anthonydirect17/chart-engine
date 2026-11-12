@@ -26,6 +26,10 @@
   --ws-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
   /* 1.44.0 (Anthony 2026-11-06): Cinzel for titles and headers only (fonts/cinzel.css), never for a live value */
   --ws-title-font: "Cinzel", "Trajan Pro", Georgia, serif;
+  /* 1.47.0 (Anthony 2026-11-11, look B for Legion, the Colosseum and Praetorian): the raised box's corner and its shadow, one name
+     each; a box is .ws-panel's own colours with these two (no second set of components) */
+  --ws-box-radius: 18px;
+  --ws-box-shadow: 0 16px 36px rgba(0, 0, 0, .6), inset 0 1px 0 rgba(255, 255, 255, .035);
 }
 html, body { height: 100%; margin: 0; }
 body { background: radial-gradient(1200px 600px at 70% -200px, rgba(201, 165, 92, .06), transparent 60%) no-repeat, var(--ws-bg); background-color: var(--ws-bg); color: var(--ws-text); font: 12px var(--ws-sans); display: flex; flex-direction: column; overflow: hidden; }

@@ -296,7 +296,16 @@ function attach(pane, host, get, root, faint) {
     ctx.clearRect(0, 0, w, h);
     const day = get();
     if (!day) return;
-    const m = C.marksFor(day, root());
+    /* 1.47.0 (the reuse map: Legion Live marks each lane's trades as this tab marks its traders): get() may instead return
+       { kind: 'marks', marks: [{ kind 'entry'|'exit', t (chart seconds), price, color, letter }], lines: [{ kind 'stop'|'target',
+       t0, t1 (or null: to the right edge), price, color }] }. Each is checked here: a colour is a #hex or rgb()/rgba() value, a
+       letter one or two letters or digits, times and prices finite numbers; anything else is left out, never drawn. A league
+       day is drawn exactly as before. */
+    const COL = /^(#[0-9a-fA-F]{3,8}|rgba?\([0-9., ]{5,40}\))$/, LET = /^[A-Za-z0-9]{1,2}$/, fin = v => typeof v === 'number' && isFinite(v);
+    const m = day.kind === 'marks' ? {
+      marks: (Array.isArray(day.marks) ? day.marks : []).filter(k => k && (k.kind === 'entry' || k.kind === 'exit') && fin(k.t) && fin(k.price) && COL.test(String(k.color)) && LET.test(String(k.letter))).slice(0, 2000),
+      lines: (Array.isArray(day.lines) ? day.lines : []).filter(l => l && (l.kind === 'stop' || l.kind === 'target') && fin(l.t0) && (l.t1 === null || fin(l.t1)) && fin(l.price) && COL.test(String(l.color))).slice(0, 2000),
+    } : C.marksFor(day, root());
     if (!m.marks.length && !m.lines.length) return;
     const bars = chart.bars();
     if (!bars || !bars.length) return;

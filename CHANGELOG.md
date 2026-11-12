@@ -63,6 +63,30 @@
   `test/pc-updater.test.js`: the allowed git subcommands, the box job's name, useHttpPath read before the one ask, the
   token only after a 404 or 401 and then through the Actions API, one place that asks for it and one that sends it.
 
+## chart 1.47.0 (2026-11-12): three shared panels made ready for Legion (page only, no F5)
+
+In plain words: nothing on screen changes. Three panels the page already has learn to be shown a second time, so Legion
+can be assembled from them instead of drawing its own copies (build answers 17 and 18; `docs/LEGION_reuse_map.md`).
+
+- **The Multi-Account panel, more than once.** The page can mount it outside the grid (`mountLanePanel`), in the same
+  redraw loop as the grid's panel. Proven in a browser: three mounts, two on one group and one on another, each keeps
+  its own group, one move redraws both mounts of that group and leaves the other alone.
+- **One fixed group, a narrow feed and a lock (rule 12).** Mounted with `group`, the panel shows that one group and
+  nothing that changes a group: no group list, no Copier, no Group settings, no New group, the risk read only. It is
+  handed `FleetCore.laneFeed` in place of the page's feed: it can send `memberBench` and `accountGroup` and nothing
+  else, and every other send is refused by name. `FleetCore.laneLock` keeps every account where it is while the lane's
+  trader is in Auto, is not in Shadow, holds a position or a working entry, or the lane has two traders; the feed
+  checks it again at each send. ChartBridge itself does not refuse these moves by the trader's state today, so this is
+  the page's rule until ChartBridge has it (a design note for its next change).
+- **The Account page's rows, for a filter.** `AccountsPage.mount` takes `rows: { filter }`: the Accounts tab's own rows
+  and sections for the accounts the filter passes, read only. One path still draws a row.
+- **The League overlay, for any trader.** `LeagueOverlay.attach` also draws a list of entries, exits, stops and targets
+  handed to it, each with a colour and a letter, checked before it is drawn. A league day is drawn exactly as before.
+- **Two tokens** for the chosen look's raised box: `--ws-box-radius` (18px) and `--ws-box-shadow`.
+
+Checked: `npm run smoke:lanes` (23 checks in a browser), `test/fleet.test.js` (30 tests; 9 breaks of the feed and the
+lock, all caught), `npm run smoke:multi-account` (51), the accounts smoke (106) and the League smoke unchanged.
+
 ## chart 1.46.0 (2026-11-12): Legion: the two lanes, the pick and the one Armed switch (page only, no F5)
 
 In plain words: the Legion tab can now choose which bot each lane runs and switch the lanes on and off. It needs

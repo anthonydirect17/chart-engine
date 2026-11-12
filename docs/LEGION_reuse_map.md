@@ -63,7 +63,15 @@ shared state. That is from reading; it has not been run twice at once.
 
 **"Not in a lane"** is the panel's own Bench: it already lists the firm's accounts that are in no group.
 
-**A question for the coordinator, before code.** Pull request 94's gate lets the Legion tab send three messages and no
+**What ChartBridge itself does with a move today** (read from `nt8/ChartBridgeGroups.cs`, `AccountGroup` and
+`MemberBench`, and `ChartBridgeAgents.JoinRefusal`; the fourth "not determined", build answers 18 point 3): a join is
+refused when the account is the bot's, the copier's or another agent's, or would hedge the group; a bench is refused while
+that one account is not flat; a leave keeps the agent's trade on that account its own until flat. Nothing looks at the
+lane trader's mode or at what the trader holds on the group's other accounts. So the page refuses a move while the lane
+is in Auto, is not in Shadow, or its trader holds anything (`FleetCore.laneLock`, built in 1.47.0), and the gap is in the
+design note for ChartBridge's next change.
+
+**Answered (build answers 18, point 1): (b), the narrow feed, built in 1.47.0 as `FleetCore.laneFeed`.** The question was: Pull request 94's gate lets the Legion tab send three messages and no
 other. The Multi-Account panel sends four more through the page's feed: `accountGroup`, `memberBench`, `groupSave`
 and `groupDelete`. Mounted inside Legion, those are sent from the Legion tab. Two ways:
 

@@ -151,6 +151,30 @@ try {
   await p.click('#rowsBox .gr-row.apg-acc', { force: true }); await wait(500);
   check((await groupMsgs()).length === n5 && await p.evaluate(() => !document.querySelector('#rowsBox .apg-open')), 'a click on a row opens nothing and sends nothing');
   await p.screenshot({ path: path.join(out, 'lane-account-rows.png') });
+
+  // ---- the League tab's overlay, handed any trader's marks (Legion Live's marks of each lane), on a real chart panel
+  await p.evaluate(() => { document.getElementById('laneHost').remove(); });
+  const ov = await p.evaluate(async () => {
+    const chart = window.workspace.chart('c1'), body = document.querySelector('.ws-panel[data-id="c1"] .ws-body');
+    const bars = chart.bars(), last = bars[bars.length - 1], mid = bars[Math.max(0, bars.length - 20)];
+    const marks = { kind: 'marks', marks: [{ kind: 'entry', t: mid.t, price: mid.c, color: '#8FB4E0', letter: 'E' }, { kind: 'exit', t: last.t, price: last.c, color: '#8FB4E0', letter: 'E' },
+      { kind: 'entry', t: mid.t, price: mid.c, color: 'javascript:alert(1)', letter: 'X' }, { kind: 'entry', t: NaN, price: 1, color: '#fff', letter: 'Y' }, { kind: 'entry', t: mid.t, price: mid.c, color: '#fff', letter: '<b>' }],
+      lines: [{ kind: 'stop', t0: mid.t, t1: null, price: mid.l, color: '#C9A55C' }] };
+    let get = () => marks;
+    const o = window.LeagueOverlay.attach({ chart }, body, () => get(), () => 'MNQ', true);
+    const cv = body.querySelector('canvas.lg-overlay');
+    const ink = () => { const d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data; let n = 0; for (let i = 3; i < d.length; i += 4) if (d[i]) n++; return n; };
+    o.redraw(); await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const a = ink();
+    get = () => ({ kind: 'marks', marks: [{ kind: 'entry', t: 'x', price: 1, color: '#fff', letter: 'A' }], lines: [{ kind: 'stop', t0: mid.t, t1: null, price: 'x', color: '#fff' }] });
+    o.redraw(); await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const b = ink();
+    get = () => null; o.redraw(); await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const c = ink();
+    o.destroy();
+    return { a, b, c, gone: !body.querySelector('canvas.lg-overlay') };
+  });
+  check(ov.a > 50 && ov.b === 0 && ov.c === 0 && ov.gone, 'the overlay draws handed marks on a real chart panel (' + ov.a + ' px), draws nothing for marks that are not numbers or for none, and goes when destroyed');
   check(errors.filter(e => e.startsWith('pageerror')).length === 0, 'no page error');
 } finally {
   await browser.close();
