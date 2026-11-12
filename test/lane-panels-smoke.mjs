@@ -26,7 +26,7 @@ const check = (ok, m) => { checks++; if (!ok) fail(m); else console.log('  ok   
 const wait = ms => new Promise(r => setTimeout(r, ms));
 const until = async (fn, what, ms) => { const end = Date.now() + (ms || 10000); for (;;) { let v = null; try { v = await fn(); } catch (e) { v = null; } if (v) return v; if (Date.now() > end) { fail('timed out: ' + what); return null; } await wait(100); } };
 const bridge = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(PORT), '--v3', '--trading', '--test-controls', '--bench', '--bench-groups', '--max-qty=MNQ:9,NQ:9',
-  '--trade-accounts=SIM-A,SIM-B,SIM-C,SIM-D,SIM-E,SIM-F,SIM-G,SIM-H', '--version=0.6.7', '--test-pin=' + TEST_PIN], { stdio: ['ignore', 'pipe', 'inherit'] });
+  '--trade-accounts=SIM-A,SIM-B,SIM-C,SIM-D,SIM-E,SIM-F,SIM-G,SIM-H', '--version=0.6.21', '--agents=demo', '--test-pin=' + TEST_PIN], { stdio: ['ignore', 'pipe', 'inherit'] });
 await new Promise(r => bridge.stdout.once('data', r));
 const control = async (what, q) => (await fetch(`http://127.0.0.1:${PORT}/test/${what}?` + new URLSearchParams(q || {}), { method: 'POST' })).json();
 const groupMsgs = async () => ((await control('received')).groupMsgs || []);
@@ -186,6 +186,20 @@ try {
     return { a, b, c, gone: !body.querySelector('canvas.lg-overlay') };
   });
   check(ov.a > 50 && ov.b === 0 && ov.c === 0 && ov.gone, 'the overlay draws handed marks on a real chart panel (' + ov.a + ' px), draws nothing for marks that are not numbers or for none, and goes when destroyed');
+
+  // ---- Legion Setup in the real page: a sample trader on the eval group (Lucid, Type eval) is the eval lane, and its lane holds
+  // the page's own Multi-Account panel on that group (one fixed group, the narrow feed)
+  await control('agent-group', { agent: 'demo', name: 'Lucid', members: 'SIM-A,SIM-B,SIM-C,SIM-D', sizes: '1,1,1,1' });
+  await p.click('#wsFleetTab');
+  await until(() => p.evaluate(() => !!document.querySelector('#flView .fl-lane[data-stage="eval"] .fl-lanepanels .ma')), 'the eval lane holds a Multi-Account panel');
+  const lp = await p.evaluate(() => { const q = x => document.querySelector('#flView .fl-lane[data-stage="eval"] ' + x); return { name: (q('.ma-bar .ma-lname') || {}).textContent, select: !!q('[data-ma="group"]'), settings: !!q('[data-ma="settings"]'),
+    chips: [...document.querySelectorAll('#flView .fl-lane[data-stage="eval"] [data-chip]')].map(e => e.dataset.chip) }; });
+  check(lp.name === 'Lucid' && !lp.select && !lp.settings && ['SIM-A', 'SIM-B', 'SIM-C'].every(n => lp.chips.includes(n)), 'Legion\'s eval lane holds the Multi-Account panel on Lucid, fixed, with its chips: ' + JSON.stringify(lp));
+  const n6 = (await groupMsgs()).length;
+  await p.click('#flView .fl-lane[data-stage="eval"] [data-chip="SIM-D"]');
+  await until(async () => ((await groupMsgs()).slice(n6)).some(m => m.type === 'memberBench' && m.account === 'SIM-D'), 'a move from inside Legion');
+  check(((await groupMsgs()).slice(n6)).every(m => m.type === 'memberBench'), 'a click inside Legion\'s lane sends memberBench and nothing else');
+  await p.screenshot({ path: path.join(out, 'legion-setup-lane.png') });
   check(errors.filter(e => e.startsWith('pageerror')).length === 0, 'no page error');
 } finally {
   await browser.close();

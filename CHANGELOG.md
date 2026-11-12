@@ -63,6 +63,50 @@
   `test/pc-updater.test.js`: the allowed git subcommands, the box job's name, useHttpPath read before the one ask, the
   token only after a 404 or 401 and then through the Actions API, one place that asks for it and one that sends it.
 
+## chart 1.48.0 (2026-11-12): Legion Setup, assembled from the page's own panels (page only, no F5)
+
+In plain words: the Legion tab gets two pages, Setup and Live, and Setup is laid out as the approved picture, built from what
+the page already has. Kill all and Armed keep their place and their rules.
+
+- **Setup and Live.** A two-way switch under the title (`.ws-seg`, the page's own). Kill all and Armed are in the same head
+  on both pages. Live keeps the prop accounts table until Legion Live replaces it.
+- **Market now** says it is not built yet: the zone comes from Bot-Lab's plain-code labeler once it exists.
+- **Today: the two lanes.** Each lane holds the Multi-Account panel itself, mounted by the page on the lane's group (one
+  fixed group, the narrow feed of 1.47.0, the lane's lock): its chips, its bench, a drag or a click in or out, and its join
+  question. Nothing here is a copy. Beside it: the lane's trader, its mode, Ready or why not, the pick list, and the picked
+  bot's card (its readable name, BOT or LINEUP, its risk a trade, what it is doing, today on the lane's accounts). One file
+  a lane; a second bot on a lane comes as a lineup file.
+- **The roster, one line a family.** A bot's family is its run's family; a lineup is a family of its own. Each setting is
+  one row: its readable name (the whole file name, the family capitalised), its risk, ONE profit per $1 with its range and
+  the file's word against no edge, its eval pass, its standing, in-sample and its try, and Details as before. Filters:
+  "Good for evals" and "Good for funded" show what runs live and the file itself marks above no edge for that stage,
+  sorted by eval pass or by dollars paid per funded account; no threshold is set on the page. "Fits now" waits for
+  Market now and says so. All, and Find.
+- **Other connections**, folded: the traders on no lane. A trader on a lane shows on its lane.
+- **The look:** raised boxes on the two box tokens, titles in Cinzel and gold with a short gold rule, pills; eval steel blue,
+  funded gold, BOT grey, AGENT cyan, the word always with the colour. The Setup and Live switch sits on its own row so the
+  head row holds only the title and Kill all's buttons: Yes is never drawn where Kill all was, at any width.
+
+Checked: `test/fleet.test.js` (31), `npm run smoke:fleet` (152), `npm run smoke:lanes` (25, with Legion's eval lane
+holding the real Multi-Account panel in the page and a move from it sending `memberBench` only).
+- **94's re-review in Legion Setup:** each lane's lock, and the other lane's, is "not known" until the traders have
+  settled after sign-in, the same wait as Armed, so a second trader on a lane not heard yet never reads as a free lane.
+- **Answers 25 for Legion Setup:** the lane locks wait for ChartBridge's end of the sign-in replay as Armed does, and
+  are not known while signed out (S1). Another group's lock covers every trader heard on that group, not only one
+  lane's own: a doubled lane's second group and a group of no Type are locked while a trader on them is not in Shadow
+  or holds something (`FleetCore.groupLock`, S2).
+- **Answers 26 for Legion Setup:** a group's lock also counts a trader seated directly on one of its accounts (its
+  account, its group's seats or a seat left over, `FleetCore.traderAccounts`, which now counts all of them), and a group
+  ChartBridge does not list with its members is "not known", locked (R3-4). Tests that the settle counts from the first
+  trader and that the tab redraws by itself when it runs out (R3-1, R3-2).
+- **Answers 28 for Legion Setup:** any heard trader whose accounts the page cannot read makes every group's lock "not
+  known" (`FleetCore.accountsReadable`, R4-1); a trader seated on one of a group's accounts locks it in any mode,
+  Shadow and flat included (R4-2); the narrow feed finds an account's group ignoring letter case, as ChartBridge does
+  (R4-4).
+- **Answers 33 for Legion Setup:** a heard trader the page cannot read makes the lane's own lock "not known" too, not only
+  the other groups' (A28-1); when two groups list a name in different letter case, the account's group is not known and
+  the move is refused (A28-2).
+
 ## chart 1.47.0 (2026-11-12): three shared panels made ready for Legion (page only, no F5)
 
 In plain words: nothing on screen changes. Three panels the page already has learn to be shown a second time, so Legion
