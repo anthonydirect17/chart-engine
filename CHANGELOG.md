@@ -251,6 +251,10 @@ holding the real Multi-Account panel in the page and a move from it sending `mem
   known" (`FleetCore.accountsReadable`, R4-1); a trader seated on one of a group's accounts locks it in any mode,
   Shadow and flat included (R4-2); the narrow feed finds an account's group ignoring letter case, as ChartBridge does
   (R4-4).
+- **Answers 33 for Legion Setup:** a heard trader the page cannot read makes the lane's own lock "not known" too, not only
+  the other groups' (A28-1); when two groups list a name in different letter case, the account's group is not known and
+  the move is refused (A28-2).
+
 ## chart 1.47.0 (2026-11-12): three shared panels made ready for Legion (page only, no F5)
 
 In plain words: nothing on screen changes. Three panels the page already has learn to be shown a second time, so Legion

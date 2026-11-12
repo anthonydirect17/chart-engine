@@ -725,8 +725,9 @@ function laneFeed(feed, locked, groupId, otherLocked) {
     if (!gs) return undefined;
     if (typeof name !== 'string' || !name) return undefined;
     const lc = name.toLowerCase();                       // ChartBridge matches names ignoring case (answers 28, R4-4)
-    const g = gs.find(x => plainObj(x) && Array.isArray(x.members) && x.members.some(m => typeof m === 'string' && m.toLowerCase() === lc));
-    return g ? String(g.id) : null;
+    const hits = gs.filter(x => plainObj(x) && Array.isArray(x.members) && x.members.some(m => typeof m === 'string' && m.toLowerCase() === lc));
+    if (hits.length > 1) return undefined;               // answers 33, A28-2: two groups match ignoring case: not known, refused
+    return hits.length ? String(hits[0].id) : null;
   };
   const joinOk = name => {
     const cur = groupOf(name);
@@ -1138,7 +1139,8 @@ function create(o) {
     const host = document.createElement('div'); host.className = 'fl-lanepanel';
     const stage = l.stage;
     /* not known is locked (the review of 97, F1): heard once ChartBridge's groups and its traders have come on this connection */
-    const locked = () => { const now = laneList().find(x => x.stage === stage); return C.laneLock(now, heard()) || (!S.connected ? 'ChartBridge is not connected' : ''); };
+    // answers 33, A28-1: every group's lock includes the lane's own: a heard trader the page cannot read makes it not known too
+    const locked = () => { if (agentList().some(x => !C.accountsReadable(x))) return C.NOT_KNOWN; const now = laneList().find(x => x.stage === stage); return C.laneLock(now, heard()) || (!S.connected ? 'ChartBridge is not connected' : ''); };
     /* taking an account from another group asks that group's lane too (F2); a group no lane trades is free once heard */
     // answers 25, S2: any group's lock covers every trader heard on it, not only a lane's own (a doubled lane's second group, a group of no Type)
     const otherLocked = gid => { if (!heard()) return C.NOT_KNOWN; return C.groupLock(gid, agentList(), true, S.groups) || (!S.connected ? 'ChartBridge is not connected' : ''); };
