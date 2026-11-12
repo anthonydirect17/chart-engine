@@ -63,6 +63,20 @@
   `test/pc-updater.test.js`: the allowed git subcommands, the box job's name, useHttpPath read before the one ask, the
   token only after a 404 or 401 and then through the Actions API, one place that asks for it and one that sends it.
 
+## chart 1.48.1 (2026-11-12): each Legion lane says what the PC helper says of its runner (page only, no F5)
+
+In plain words: Bot-Lab's PC helper now keeps each lane's runner going by itself (Bot-Lab B4), and each lane on Legion says
+whether it runs, why not, and how often it stopped today.
+
+- **One line a lane** (`FleetCore.laneRunner`): "Its runner runs.", "Its runner is not running: <the helper's reason>.", and
+  "It stopped n times this session (last: <reason>)." when it has. Not known is said as not known: the helper not
+  answering, the page not unlocked with the PIN, or the helper keeping no runner for that trader ("lanes" in its
+  helper.json); a helper that runs the trader as the other lane says so.
+- **A read only.** The page hands Legion the helper client's status call (`helperStatus`), never the client, so On and
+  Off cannot be reached from the tab (the helper refuses both for a lane's trader anyway). It is read every 3 s while the
+  tab is open and not at all while it is shut.
+- Armed is unchanged: it changes the traders' modes on ChartBridge; it does not start or stop a program.
+
 ## chart 1.48.0 (2026-11-12): Legion Setup, assembled from the page's own panels (page only, no F5)
 
 In plain words: the Legion tab gets two pages, Setup and Live, and Setup is laid out as the approved picture, built from what
