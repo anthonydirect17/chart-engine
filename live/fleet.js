@@ -655,6 +655,23 @@ function laneLock(l, heard) {
   if (l.mode !== 'shadow') return 'The lane\'s trader is not in Shadow (' + (l.modeText || 'not known') + '): an account moves only while it is.';
   return '';
 }
+/**
+ * ANY GROUP'S LOCK (answers 25, S2): may an account be taken out of group gid now? Every trader heard on that group counts,
+ * not only one lane's: '' only when no trader is on it, or its one trader is in Shadow and holds nothing; else why not,
+ * with the trader named. Not heard yet is NOT_KNOWN, which is locked.
+ */
+function groupLock(gid, list, heard) {
+  if (heard !== true || !Array.isArray(list)) return NOT_KNOWN;
+  if (typeof gid !== 'string' || !gid) return NOT_KNOWN;
+  const on = list.filter(a => plainObj(a) && plainObj(a.group) && a.group.id === gid);
+  if (!on.length) return '';
+  const name = a => str(a.agent, 40) || 'a trader';
+  if (on.length > 1) return 'Two traders are on that group (' + on.map(name).join(', ') + '): no account moves out of it until one is taken off (the Agent tab).';
+  const a = on[0];
+  if (a.mode !== 'shadow') return name(a) + ' trades that group in ' + (own(MODE_NAME, a.mode) ? MODE_NAME[a.mode] : 'a mode not known') + ': an account moves out of it only while it is in Shadow.';
+  if (a.owns === true) return name(a) + ' holds a position or a working entry on that group: an account moves out of it once it is flat.';
+  return '';
+}
 /** The one message a lane's panel may post itself: memberBench with exactly its keys. (Its join goes through accountGroup.) */
 function laneMaySend(m) {
   if (!plainObj(m) || m.type !== 'memberBench') return false;
@@ -820,7 +837,7 @@ const badAnswer = text => /NOT STOPPED|FAILED|could NOT/.test(String(text || '')
 /** "09:41:07" of a Date (the PC's own clock), for the time in front of a Kill all answer. */
 const clock = d => [d.getHours(), d.getMinutes(), d.getSeconds()].map(x => String(x).padStart(2, '0')).join(':');
 
-return Object.freeze({ modeRulesLoaded, NOT_KNOWN, MAX_FILLS, LANE_COLOR, LANE_LETTER, propRows, todayOf, liveTiles, cleanFill, laneMarks, traderDays, laneRunner, readableName, rosterFamilies, FILTERS, laneLock, laneMaySend, laneFeed, PICK_MIN, STAGES, lanes, outsideAuto, armState, armMsgs, armWords, pickChoices, pickMsg, maySend, KILL_MIN, SWITCH_MIN, DAYSTOP_MIN, ROSTER_MIN, ROSTER_FORMAT, LINEUP_FORMAT, CONFIRM_MS, ARM_MS, ANSWER_WAIT_MS, ROSTER_WAIT_MS, MAX_CARDS, MAX_MEMBERS, MAX_NOT_SHOWN, MODE_NAME, atLeast, usd, signed, stageCard, rosterCards, rosterProblem,
+return Object.freeze({ modeRulesLoaded, NOT_KNOWN, groupLock, MAX_FILLS, LANE_COLOR, LANE_LETTER, propRows, todayOf, liveTiles, cleanFill, laneMarks, traderDays, laneRunner, readableName, rosterFamilies, FILTERS, laneLock, laneMaySend, laneFeed, PICK_MIN, STAGES, lanes, outsideAuto, armState, armMsgs, armWords, pickChoices, pickMsg, maySend, KILL_MIN, SWITCH_MIN, DAYSTOP_MIN, ROSTER_MIN, ROSTER_FORMAT, LINEUP_FORMAT, CONFIRM_MS, ARM_MS, ANSWER_WAIT_MS, ROSTER_WAIT_MS, MAX_CARDS, MAX_MEMBERS, MAX_NOT_SHOWN, MODE_NAME, atLeast, usd, signed, stageCard, rosterCards, rosterProblem,
   kindOf, seatsKind, dayMark, traderAccounts, statusText, traders, propAccounts, killAllState, killAllMsg, autoLine, badAnswer, clock });
 });
 
@@ -855,7 +872,7 @@ function create(o) {
   const view = o.view || null, tabBtn = o.tab || null, V3 = o.v3 || null;
   const now = typeof o.now === 'function' ? o.now : () => Date.now();
   const realClick = typeof o.realClick === 'function' ? o.realClick : () => false;      // none handed in: Yes is never taken
-  const S = { shown: false, built: false, version: '', connected: false, signedIn: false, accounts: null, groups: null, agents: new Map(), firstAgentAt: 0, settleTimer: 0,
+  const S = { shown: false, built: false, version: '', connected: false, signedIn: false, accounts: null, groups: null, agents: new Map(), firstAgentAt: null, signInAt: null, replayDone: false, settleTimer: 0,
     ask: 0, askTimer: 0, hint: '', hintBad: false, hintState: false, answer: '', answerBad: false, cidSeq: 0, pending: '', pendingAt: 0, waitTimer: 0, sent: 0,
     armAsk: 0, armTimer: 0, armSaid: '', armBad: false, modeSent: new Map(), pickSent: new Map(),
     helper: null, helperTimer: 0, helperSeq: 0, sub: 'setup', filter: 'all', find: '', famShut: new Set(), othersOpen: false, lanePanels: {},
@@ -867,11 +884,30 @@ function create(o) {
   const killState = () => C.killAllState(S.version, S.accounts, S.signedIn, S.connected);
   const laneList = () => C.lanes(agentList(), S.groups, S.accounts, S.version, S.roster.cards);
   const outside = ls => C.outsideAuto(ls, agentList(), S.accounts, S.version);
-  /* the re-review of 94, N1: ChartBridge sends every trader at sign-in, one after another; "heard" waits SETTLE_MS from the first
-     one, so a trader not heard yet is never read as no trader (o.settleMs: the tests' clock) */
+  /* "Heard" (the re-review of 94, N1, and its S1; answers 25). At sign-in ChartBridge replays every trader, one after another,
+     and then sends agentStandDowns (ChartBridgeAgents.AfterAuth, 0.6.21). Every trader is heard only when that message has
+     come for the LATEST sign-in AND SETTLE_MS have passed since the first trader of that sign-in (or since the sign-in, when
+     none came): a stand-down list broadcast in the middle of a replay is rare but possible, the floor covers it. Until both,
+     "not known", which is locked. A sign-in or a sign-out (a change of trading.enabled; ChartBridge sends trading again on
+     every checkmark change, which is not a new sign-in) and a dropped connection forget the traders and start again; nothing
+     is heard while signed out. o.settleMs: the tests' clock. */
   const SETTLE_MS = typeof o.settleMs === 'number' && o.settleMs >= 0 ? o.settleMs : 1500;
-  const heardAll = () => S.agents.size > 0 && S.firstAgentAt > 0 && now() - S.firstAgentAt >= SETTLE_MS;
-  // ChartBridge's groups heard, and the traders settled after sign-in (the re-review of 94, N1, for the lane locks too)
+  const settleFrom = () => (S.firstAgentAt !== null ? S.firstAgentAt : S.signInAt);
+  const heardAll = () => S.connected && S.signedIn && S.replayDone && settleFrom() !== null && now() - settleFrom() >= SETTLE_MS;
+  /* a render at the moment "heard" can turn true (the message came before the floor ran out) */
+  function settleSoon() {
+    clearTimeout(S.settleTimer); S.settleTimer = 0;
+    if (!S.replayDone || settleFrom() === null) return;
+    const left = SETTLE_MS - (now() - settleFrom());
+    if (left > 0) S.settleTimer = setTimeout(() => { if (S.shown) render(); }, left + 10);
+  }
+  /* a sign-in or a sign-out: what was heard of the traders is forgotten; ChartBridge replays them after a sign-in */
+  function newSignIn() {
+    S.agents.clear(); S.firstAgentAt = null; S.replayDone = false; S.signInAt = S.signedIn ? now() : null;
+    clearTimeout(S.settleTimer); S.settleTimer = 0;
+  }
+  // ChartBridge's groups heard, and the traders settled after sign-in (the re-review of 94, N1, and answers 25, S1:
+  // ChartBridge's end of the sign-in replay plus the floor, never while signed out), for the lane locks too
   const heard = () => !!S.groups && heardAll();
   const armNow = ls => C.armState(ls, S.version, S.signedIn, S.connected, S.accounts, S.groups, heardAll(), outside(ls));
 
@@ -902,13 +938,14 @@ function create(o) {
   function onMessage(m) {
     switch (m && m.type) {
       case 'hello': S.version = typeof m.version === 'string' ? m.version : ''; S.connected = true; offer(); if (S.shown) helloRoster(); break;
-      case 'trading': S.signedIn = !!m.enabled; break;
+      case 'trading': { const was = S.signedIn; S.signedIn = !!m.enabled; if (S.signedIn !== was) newSignIn(); break; }
+      case 'agentStandDowns': if (S.signedIn) { S.replayDone = true; settleSoon(); } break;   // after the sign-in replay (S1)
       case 'accounts': S.accounts = m; break;
       case 'groups': S.groups = m; break;
       case 'agent':
         if (m && typeof m.agent === 'string') {
           S.agents.set(m.agent, m);
-          if (!S.firstAgentAt) { S.firstAgentAt = now(); clearTimeout(S.settleTimer); S.settleTimer = setTimeout(() => { if (S.shown) render(); }, SETTLE_MS + 10); }
+          if (S.firstAgentAt === null) { S.firstAgentAt = now(); settleSoon(); }
         }
         break;
       case 'exec': takeFill(m); break;                                 // Legion Live: each lane's fills on the one chart
@@ -928,7 +965,8 @@ function create(o) {
   /* the connection dropped: what ChartBridge said is forgotten; a Kill all sent and not answered is NOT (PROP 2) */
   function lost() {
     S.roster = { state: 'idle', text: '', cards: null, seq: S.roster.seq + 1, asked: S.roster.asked, at: 0, version: '' }; S.rosterDirty = true; clearTimeout(S.rosterTimer);
-    S.connected = false; S.signedIn = false; S.agents.clear(); S.firstAgentAt = 0; S.accounts = null; S.groups = null;
+    S.connected = false; S.signedIn = false; S.agents.clear(); S.firstAgentAt = null; S.signInAt = null; S.replayDone = false; S.accounts = null; S.groups = null;
+    clearTimeout(S.settleTimer); S.settleTimer = 0;
     endArmAsk(); S.modeSent.clear(); S.pickSent.clear(); S.armSaid = ''; S.armBad = false;
     if (S.pending) answered('Kill all was sent and ChartBridge\'s answer never came (the connection dropped): look in NinjaTrader now', true);
     hint('', false); endAsk();
@@ -1212,7 +1250,8 @@ function create(o) {
     /* not known is locked (the review of 97, F1): heard once ChartBridge's groups and its traders have come on this connection */
     const locked = () => { const now = laneList().find(x => x.stage === stage); return C.laneLock(now, heard()) || (!S.connected ? 'ChartBridge is not connected' : ''); };
     /* taking an account from another group asks that group's lane too (F2); a group no lane trades is free once heard */
-    const otherLocked = gid => { if (!heard()) return C.NOT_KNOWN; const l = laneList().find(x => x.groupId === gid); return l ? C.laneLock(l, true) || (!S.connected ? 'ChartBridge is not connected' : '') : ''; };
+    // answers 25, S2: any group's lock covers every trader heard on it, not only a lane's own (a doubled lane's second group, a group of no Type)
+    const otherLocked = gid => { if (!heard()) return C.NOT_KNOWN; return C.groupLock(gid, agentList(), true) || (!S.connected ? 'ChartBridge is not connected' : ''); };
     let mount = null;
     try { mount = o.lanePanel(host, 'legion-' + stage, { group: l.groupId, locked, otherLocked }); } catch (e) { mount = null; }
     if (!mount) return null;

@@ -355,7 +355,8 @@ function page(t, over, opt) {
   P.clickSub = sub => listeners.click({ target: { closest: () => ({ dataset: { do: 'sub', sub } }) }, detail: 1 });
   P.html = () => view.innerHTML + ['lanes', 'lane-eval', 'lane-funded', 'roster', 'traders', 'accounts'].map(k => P.part(k).innerHTML).join('');
   P.change = (agentId, value) => listeners.change({ target: { dataset: { do: 'pick', agent: agentId }, value } });
-  P.ready = v => { P.feed({ type: 'hello', version: v || '0.6.20' }); P.feed({ type: 'trading', enabled: true }); P.feed(accounts); P.feed(groups); P.feed(agent('germanicus')); };
+  P.ready = v => { P.feed({ type: 'hello', version: v || '0.6.20' }); P.feed({ type: 'trading', enabled: true }); P.feed(accounts); P.feed(groups); P.feed(agent('germanicus')); P.replayDone(); };
+  P.replayDone = () => P.feed({ type: 'agentStandDowns', list: [] });   // ChartBridge sends it after the sign-in replay (S1)
   P.tick = () => new Promise(r => setImmediate(r));
   t.after(() => P.fv.destroy());
   return P;
@@ -848,6 +849,7 @@ async function lanePage(t, list) {
   const P = page(t); P.fv.showTab(true);
   P.feed({ type: 'hello', version: '0.6.21' }); P.feed({ type: 'trading', enabled: true }); P.feed(accounts); P.feed(groups);
   for (const a of list) P.feed(a);
+  P.replayDone();
   await P.tick();
   P.answers[0].res({ status: 200, json: () => Promise.resolve({ left: 0, files: [served('germ.json', botFile('germ')), served('duo.json', lineupFile('duo', [member('a'), member('b')]))] }) });
   await P.tick(); await P.tick();
@@ -899,7 +901,11 @@ test('Armed on: it asks, takes a real click on Yes after the first moment, and s
   assert.deepStrictEqual([arm().asking, P.posts, P.part('arm').attrs['aria-disabled']], [false, [], 'true']);
   assert.match(P.part('armsaid').textContent, /Sign in to trading first/);
   // closing the tab takes the question down with it (the review of 94, note 10)
-  P.feed({ type: 'trading', enabled: true }); P.click('arm'); assert.strictEqual(arm().asking, true);
+  P.feed({ type: 'trading', enabled: true });
+  assert.strictEqual(arm().state, 'unknown', 'a new sign-in: not known until its replay has ended (S1)');
+  P.feed(evalTrader()); P.feed(fundTrader()); assert.strictEqual(arm().state, 'unknown', 'traders heard, the replay not ended yet');
+  P.replayDone();
+  P.click('arm'); assert.strictEqual(arm().asking, true);
   P.fv.showTab(false); P.fv.showTab(true); assert.strictEqual(arm().asking, false, 'closed and opened again inside the 8 seconds: no question up');
   // a lost connection ends the question, and the switch reads "not known", not "off" (FIX 1)
   P.click('arm'); assert.strictEqual(arm().asking, true);
@@ -1065,7 +1071,7 @@ test('Legion Setup: each lane mounts the page\'s own Multi-Account panel on its 
   const P = page(t, { lanePanel });
   P.fv.showTab(true);
   P.feed({ type: 'hello', version: '0.6.21' }); P.feed({ type: 'trading', enabled: true }); P.feed(accounts); P.feed(groups);
-  P.feed(evalTrader()); P.feed(fundTrader());
+  P.feed(evalTrader()); P.feed(fundTrader()); P.replayDone();
   assert.deepStrictEqual(mounts.map(m => [m.key, m.opts.group]), [['legion-eval', 'g1'], ['legion-funded', 'g2']], 'one mount a lane, on its own group, keyed by its stage');
   assert.strictEqual(mounts[0].opts.locked(), '', 'in Shadow and flat: moves are free');
   P.feed(evalTrader({ mode: 'auto' }));
@@ -1076,7 +1082,7 @@ test('Legion Setup: each lane mounts the page\'s own Multi-Account panel on its 
   // the review of 97 (F2): taking an account from the other lane's group asks THAT lane's lock; a group no lane trades is free
   P.feed(evalTrader()); P.feed(fundTrader({ mode: 'auto' }));
   assert.strictEqual(typeof mounts[0].opts.otherLocked, 'function');
-  assert.match(mounts[0].opts.otherLocked('g2'), /in Auto: switch Armed off/, 'the funded lane in Auto: nothing taken from it');
+  assert.match(mounts[0].opts.otherLocked('g2'), /legion2 trades that group in Auto/, 'the funded lane in Auto: nothing taken from it');
   assert.strictEqual(mounts[0].opts.otherLocked('g-none'), '', 'a group no lane trades');
   P.feed(fundTrader());
   assert.strictEqual(mounts[0].opts.otherLocked('g2'), '');
@@ -1227,6 +1233,44 @@ test('T-6 of the third look at 92: the head row (Kill all, its Yes and Cancel) n
   assert.doesNotMatch(css, /@media[^{]*\{[^@]*\.fl-head \{[^}]*flex-wrap:\s*wrap/, 'no width puts the wrap back');
 });
 
+test('answers 25, S2: another group\'s lock covers every trader heard on it (a doubled lane\'s second group, a group of no Type); and no lock is free while signed out', t => {
+  timers(t);
+  const mounts = [];
+  const lanePanel = (el, key, opts) => { const m = { key, opts, el, destroy() {} }; mounts.push(m); return m; };
+  const P = page(t, { lanePanel });
+  P.fv.showTab(true);
+  P.feed({ type: 'hello', version: '0.6.21' }); P.feed({ type: 'trading', enabled: true }); P.feed(accounts); P.feed(groups);
+  // the reviewer's case: the eval lane doubled (legion3 on g3, Type eval, in Auto) and loose9 in Auto on g9 (no Type)
+  P.feed(evalTrader()); P.feed(fundTrader());
+  P.feed(agent('legion3', { mode: 'auto', account: null, group: { id: 'g3', name: 'Evals 2' }, seats: [{ account: 'EVAL-C' }] }));
+  P.feed(agent('loose9', { mode: 'auto', account: null, group: { id: 'g9', name: 'Loose' }, seats: [{ account: 'OTHER-1' }] }));
+  P.replayDone();
+  const funded = mounts.find(m => m.key === 'legion-funded');
+  assert.match(funded.opts.otherLocked('g3'), /legion3 trades that group in Auto/, 'the doubled lane\'s second group');
+  assert.match(funded.opts.otherLocked('g9'), /loose9 trades that group in Auto/, 'a group of no Type');
+  assert.strictEqual(funded.opts.otherLocked('g-empty'), '', 'a group no trader is on');
+  P.feed(agent('loose9', { mode: 'shadow', account: null, group: { id: 'g9', name: 'Loose' }, seats: [{ account: 'OTHER-1' }], owns: true }));
+  assert.match(funded.opts.otherLocked('g9'), /loose9 holds a position or a working entry/);
+  P.feed(agent('loose9', { mode: 'shadow', account: null, group: { id: 'g9', name: 'Loose' }, seats: [{ account: 'OTHER-1' }], owns: false }));
+  assert.strictEqual(funded.opts.otherLocked('g9'), '', 'its one trader in Shadow and flat');
+  // B1: signed out, nothing is heard, so every lock is not known
+  P.feed({ type: 'trading', enabled: false });
+  assert.strictEqual(funded.opts.otherLocked('g-empty'), F.NOT_KNOWN);
+  assert.strictEqual(funded.opts.locked(), F.NOT_KNOWN);
+});
+
+test('answers 25, S2: FleetCore.groupLock on its own', () => {
+  const tr = (id, gid, more) => Object.assign({ agent: id, mode: 'shadow', owns: false, group: { id: gid, name: 'G' } }, more || {});
+  assert.strictEqual(F.groupLock('g1', [], false), F.NOT_KNOWN);
+  assert.strictEqual(F.groupLock('g1', null, true), F.NOT_KNOWN);
+  assert.strictEqual(F.groupLock('', [], true), F.NOT_KNOWN);
+  assert.strictEqual(F.groupLock('g1', [tr('a', 'g2', { mode: 'auto' })], true), '', 'a trader on another group');
+  assert.strictEqual(F.groupLock('g1', [tr('a', 'g1')], true), '');
+  assert.match(F.groupLock('g1', [tr('a', 'g1'), tr('b', 'g1')], true), /Two traders are on that group \(a, b\)/);
+  assert.match(F.groupLock('g1', [tr('a', 'g1', { mode: 'copilot' })], true), /a trades that group in Copilot/);
+  assert.match(F.groupLock('g1', [tr('a', 'g1', { mode: undefined })], true), /a mode not known/);
+  assert.match(F.groupLock('g1', [tr('a', 'g1', { owns: true })], true), /holds a position/);
+});
 
 test('Legion Setup\'s roster by family (1.48.0): readable names, the family from the run, the two "good for" filters on the file\'s own word and their order, Find, and where a file is picked', () => {
   assert.strictEqual(F.readableName('germanicus_r75_cap_off_v1.json'), 'Germanicus r75 cap off v1', 'the whole file name, the family capitalised (Anthony 2026-11-12)');
@@ -1313,12 +1357,61 @@ test('the re-review of 94, N1, in Legion Setup: a lane\'s lock is not known unti
   const P = page(t, { lanePanel, settleMs: 1500 });
   P.fv.showTab(true);
   P.feed({ type: 'hello', version: '0.6.21' }); P.feed({ type: 'trading', enabled: true }); P.feed(accounts); P.feed(groups);
-  P.feed(evalTrader()); P.feed(fundTrader());
+  P.feed(evalTrader()); P.feed(fundTrader()); P.replayDone();
   assert.strictEqual(mounts[0].opts.locked(), F.NOT_KNOWN, 'a second trader on this lane may not be heard yet');
   assert.strictEqual(mounts[0].opts.otherLocked('g2'), F.NOT_KNOWN);
   P.T += 1500;
   assert.strictEqual(mounts[0].opts.locked(), '', 'settled: in Shadow and flat, moves are free');
   assert.strictEqual(mounts[0].opts.otherLocked('g2'), '');
+});
+
+test('answers 25, S1: "heard" waits for ChartBridge\'s end of the sign-in replay (agentStandDowns) and the floor; a late trader, a new sign-in and a drop', t => {
+  timers(t);
+  const P = page(t, { settleMs: 1500 });
+  const arm = () => P.fv.state().arm.state;
+  const twin = agent('legion3', { mode: 'auto', account: null, group: { id: 'g1', name: 'Evals' }, seats: [], owns: false, runner: false });
+  P.fv.showTab(true);
+  P.feed({ type: 'hello', version: '0.6.21' }); P.feed({ type: 'trading', enabled: true }); P.feed(accounts); P.feed(groups);
+  // the reviewer's case A: two lane traders heard, the floor passes, a third trader (Auto, on the eval group) 1.6 s later
+  P.feed(evalTrader()); P.feed(fundTrader());
+  P.T += 1600;
+  assert.strictEqual(arm(), 'unknown', 'the floor alone is not "heard": the replay has not ended');
+  P.feed(twin);
+  P.replayDone();
+  assert.strictEqual(arm(), 'partly', 'the late trader counts: the eval lane is doubled with a trader in Auto');
+  // a checkmark change: ChartBridge sends trading true again, which is not a new sign-in
+  P.feed({ type: 'trading', enabled: true });
+  assert.strictEqual(arm(), 'partly');
+  // case B: a sign-out and a sign-in on the same connection start again, and nothing is heard while signed out
+  P.feed({ type: 'trading', enabled: false });
+  assert.strictEqual(arm(), 'unknown');
+  P.feed({ type: 'trading', enabled: true });
+  assert.strictEqual(arm(), 'unknown', 'a new sign-in: the old replay does not count');
+  P.feed(evalTrader()); P.feed(fundTrader());
+  P.T += 2000;
+  assert.strictEqual(arm(), 'unknown', 'its replay has not ended');
+  P.replayDone();
+  assert.strictEqual(arm(), 'off', 'the new replay has ended and has no third trader');
+  // the floor: the end of the replay before 1.5 s from its first trader still waits for the floor
+  P.subs.closed();
+  assert.strictEqual(arm(), 'unknown', 'a drop forgets (K14)');
+  P.feed({ type: 'hello', version: '0.6.21' }); P.feed({ type: 'trading', enabled: true }); P.feed(accounts); P.feed(groups);
+  P.feed(evalTrader()); P.feed(fundTrader()); P.replayDone();
+  assert.strictEqual(arm(), 'unknown', 'the end of the replay came 0 s after the first trader: the floor still runs');
+  P.T += 1500;
+  assert.strictEqual(arm(), 'off');
+});
+
+test('answers 25, N-b (K14): a drop resets the wait, even with the traders heard again at once', t => {
+  timers(t);
+  const P = page(t, { settleMs: 1500 });
+  P.fv.showTab(true); P.ready(); P.T += 1500;
+  assert.notStrictEqual(P.fv.state().arm.state, 'unknown');
+  P.subs.closed();
+  P.feed({ type: 'hello', version: '0.6.21' }); P.feed({ type: 'trading', enabled: true }); P.feed(accounts); P.feed(groups);
+  P.feed(agent('germanicus'));
+  P.T += 5000;
+  assert.strictEqual(P.fv.state().arm.state, 'unknown', 'no end of the replay since the drop');
 });
 
 test('the re-review of 94, N2: a lane reads its bench through the Multi-Account panel\'s own rule when that file is loaded', () => {
@@ -1344,7 +1437,7 @@ test('the re-review of 94, N5: without the page\'s mode rules, Armed says it can
   const P = page(t, {}, { noAgentCore: true });
   P.fv.showTab(true);
   P.feed({ type: 'hello', version: '0.6.21' }); P.feed({ type: 'trading', enabled: true }); P.feed(accounts); P.feed(groups);
-  P.feed(evalTrader({ mode: 'auto' })); P.feed(fundTrader());
+  P.feed(evalTrader({ mode: 'auto' })); P.feed(fundTrader()); P.replayDone();
   assert.strictEqual(P.fv.state().arm.state, 'partly', 'a lane in Auto: something to switch off');
   P.click('arm');
   assert.deepStrictEqual(P.posts, []);

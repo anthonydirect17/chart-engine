@@ -127,6 +127,10 @@ Checked: `test/fleet.test.js` (31), `npm run smoke:fleet` (152), `npm run smoke:
 holding the real Multi-Account panel in the page and a move from it sending `memberBench` only).
 - **94's re-review in Legion Setup:** each lane's lock, and the other lane's, is "not known" until the traders have
   settled after sign-in, the same wait as Armed, so a second trader on a lane not heard yet never reads as a free lane.
+- **Answers 25 for Legion Setup:** the lane locks wait for ChartBridge's end of the sign-in replay as Armed does, and
+  are not known while signed out (S1). Another group's lock covers every trader heard on that group, not only one
+  lane's own: a doubled lane's second group and a group of no Type are locked while a trader on them is not in Shadow
+  or holds something (`FleetCore.groupLock`, S2).
 
 ## chart 1.47.0 (2026-11-12): three shared panels made ready for Legion (page only, no F5)
 
@@ -160,6 +164,8 @@ lock, all caught), `npm run smoke:multi-account` (51), the accounts smoke (106) 
   with a group and a lock (the whole-feed mount is the two-mounts proof's alone); the panel shows the feed it holds (a test
   checks it is the narrow one by identity); the rows-only mount gets a feed that reads and sends nothing; the ChartBridge gap
   is on the backlog beside N12.
+- **Answers 25, N-b (K16):** a unit test holds that the Account page's rows-only feed passes only the reading functions
+  F8 names and answers false for every other one without calling the page's feed (`test/readonly-feed.test.js`).
 
 ## chart 1.46.0 (2026-11-12): Legion: the two lanes, the pick and the one Armed switch (page only, no F5)
 
@@ -216,6 +222,11 @@ Agent tab and the Bot tab and whether Legion carries it (for Anthony; nothing is
   rule when that file is loaded; a Sim-only lane says Kill all does not reach it and a mixed lane how many are Sim; the
   gate refuses a bare Auto (Legion arms only a lane with a pick); without the page's mode rules Armed says it cannot
   switch from here.
+- **The review of 94's fixes (answers 25):** the traders count as heard only when ChartBridge's end of the sign-in
+  replay (agentStandDowns, sent right after it) has come for the latest sign-in AND 1.5 s have passed since its first
+  trader, so a trader replayed late never reads as no trader; a sign-in or sign-out (not ChartBridge's trading message
+  sent again on a checkmark change) and a dropped connection start again, and nothing is heard while signed out (S1).
+  Armed has one width in every state, so neither edge moves (N-c).
 
 ## ChartBridge 0.6.21 and chart 1.45.1 (2026-11-12): the pick, the day's profit side for the runner, the roster reader tightened
 
