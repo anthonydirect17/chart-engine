@@ -118,6 +118,11 @@ Agent tab and the Bot tab and whether Legion carries it (for Anthony; nothing is
   rule when that file is loaded; a Sim-only lane says Kill all does not reach it and a mixed lane how many are Sim; the
   gate refuses a bare Auto (Legion arms only a lane with a pick); without the page's mode rules Armed says it cannot
   switch from here.
+- **The review of 94's fixes (answers 25):** the traders count as heard only when ChartBridge's end of the sign-in
+  replay (agentStandDowns, sent right after it) has come for the latest sign-in AND 1.5 s have passed since its first
+  trader, so a trader replayed late never reads as no trader; a sign-in or sign-out (not ChartBridge's trading message
+  sent again on a checkmark change) and a dropped connection start again, and nothing is heard while signed out (S1).
+  Armed has one width in every state, so neither edge moves (N-c).
 
 ## ChartBridge 0.6.21 and chart 1.45.1 (2026-11-12): the pick, the day's profit side for the runner, the roster reader tightened
 
