@@ -54,10 +54,13 @@ try {
     host.id = 'laneHost'; host.style.cssText = 'position:fixed;left:8px;right:8px;top:60px;bottom:8px;z-index:50;display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;background:#050506';
     document.body.appendChild(host);
     window.lanes = {};
-    for (const k of ['laneA', 'laneB', 'laneC']) { const el = document.createElement('div'); el.id = k; el.style.cssText = 'min-width:0;overflow:auto;border:1px solid #2A2824'; host.appendChild(el); window.lanes[k] = window.workspace.lanePanel(el, k); }
-    return { all: Object.values(window.lanes).every(x => x && x.panel && typeof x.destroy === 'function'), again: window.workspace.lanePanel(document.getElementById('laneA'), 'laneA') };
+    for (const k of ['laneA', 'laneB', 'laneC']) { const el = document.createElement('div'); el.id = k; el.style.cssText = 'min-width:0;overflow:auto;border:1px solid #2A2824'; host.appendChild(el); window.lanes[k] = window.workspace.lanePanel(el, k, { twoMountsProof: true }); }
+    return { all: Object.values(window.lanes).every(x => x && x.panel && typeof x.destroy === 'function'), again: window.workspace.lanePanel(document.getElementById('laneA'), 'laneA', { twoMountsProof: true }),
+      /* the review of 97, F7 and F1: no group and no proof flag, or a group with no lock: no panel at all */
+      bare: window.workspace.lanePanel(document.createElement('div'), 'laneX'), nolock: window.workspace.lanePanel(document.createElement('div'), 'laneY', { group: 'g1' }) };
   });
   check(made.all && made.again === null, 'three Multi-Account panels are mounted beside each other; the same key twice is refused');
+  check(made.bare === null && made.nolock === null, 'no group without the proof flag, and a group with no lock: no panel (the review of 97, F7 and F1)');
   const lane = k => p.evaluate(key => { const s = '#' + key; return { group: (document.querySelector(s + ' [data-ma="group"]') || {}).value, in: [...document.querySelectorAll(s + ' .ma-lane.in [data-chip]')].map(e => e.dataset.chip), bench: [...document.querySelectorAll(s + ' .ma-lane.bench [data-chip]')].map(e => e.dataset.chip) }; }, k);
   await until(async () => (await lane('laneC')).in.length === 3, 'the mounts drawn');
   // laneA and laneC on Lucid (g1), laneB on Apex (g2)
@@ -108,9 +111,12 @@ try {
   await until(async () => (await p.$$('#laneC .ma-lane.in [data-chip]')).length >= 3, 'the fixed panel drawn');
   const fx = await p.evaluate(() => { const q = x => document.querySelector('#laneC ' + x); return {
     tabs: q('.ma-tabs') ? q('.ma-tabs').hidden : null, select: !!q('[data-ma="group"]'), settings: !!q('[data-ma="settings"]'), create: !!q('[data-ma="new"]'), risk: !!q('[data-ma="risk"]'),
-    name: (q('.ma-bar .ma-lname') || {}).textContent, narrow: !!window.fixed.feed && typeof window.fixed.feed.send === 'undefined' && typeof window.fixed.feed.sendOrder === 'undefined' }; });
+    name: (q('.ma-bar .ma-lname') || {}).textContent, narrow: !!window.fixed.feed && typeof window.fixed.feed.send === 'undefined' && typeof window.fixed.feed.sendOrder === 'undefined',
+      /* the review of 97, F3: the panel itself holds exactly the narrow feed (by identity), never the page's */
+      held: window.fixed.panel.feed === window.fixed.feed && typeof window.fixed.panel.feed.send === 'undefined' }; });
   check(fx.tabs === true && !fx.select && !fx.settings && !fx.create && !fx.risk && fx.name === 'Lucid', 'one fixed group: its name, no group list, no Copier, no Group settings, no New group, no risk box: ' + JSON.stringify(fx));
   check(fx.narrow, 'it holds the narrow feed: no send and no sendOrder');
+  check(fx.held, 'and the panel itself holds that very feed, never the page\'s (the review of 97, F3)');
   const n2 = (await groupMsgs()).length;
   await p.click('#laneC [data-chip="SIM-D"]');
   await until(async () => ((await groupMsgs()).slice(n2)).length === 1, 'a move from the fixed panel');
@@ -133,6 +139,11 @@ try {
   check(locked && (await groupMsgs()).length === n4, 'locked: every chip locked and not draggable; a click and a drag sent nothing');
   check(/in Auto: switch Armed off/.test(await p.evaluate(() => (document.querySelector('#laneC .ma-toast:last-child') || {}).textContent)), 'and the panel\'s line says why');
   await p.screenshot({ path: path.join(out, 'lane-panel-fixed-locked.png') });
+  // a lock that answers something other than text is not known: the panel shows every chip locked too (the review of 97, F9)
+  await p.evaluate(() => { window.lockWhy = null; });
+  await until(async () => p.evaluate(() => /not known yet/.test((document.querySelector('#laneC [data-ma="lockwhy"]') || {}).textContent || '')), 'not known shown');
+  check(await p.evaluate(() => [...document.querySelectorAll('#laneC [data-chip]')].every(c => c.classList.contains('locked'))), 'a lock that answers null: the panel says not known and locks every chip, as the feed does');
+  await p.evaluate(() => { window.lockWhy = 'The lane is in Auto: switch Armed off before an account moves.'; });
 
   // ---- the Account page's own rows, read only, for the accounts a filter passes (Legion Live's accounts by group)
   await p.evaluate(() => {
