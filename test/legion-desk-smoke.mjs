@@ -83,7 +83,12 @@ try {
   check(!(await posted()).some(x => /^agentSeen/.test(x)), 'shown, but the fold still closed (nothing on screen): no agentSeen');
   check(await page.evaluate(() => { const b = [...document.querySelectorAll('.bt-props')].find(x => x.parentElement === document.body); return !!b && !b.classList.contains('ag-hide'); }), 'Legion\'s copy shown never hides the page\'s own Bot card (Praetorian\'s Agent desk is closed)');
   check(await page.evaluate(() => !document.querySelector('#lgd .ag-notes, #lgd .bt-notes')), 'nor moves the page\'s notes into itself');
-  await page.evaluate(() => { document.getElementById('fold').open = true; window.legion.show(true); }); await sleep(400);
+  /* round 2, F3: open, but the desk's box is visibility:hidden, then opacity 0: still nothing seen */
+  await page.evaluate(() => { const f = document.getElementById('fold'); f.style.visibility = 'hidden'; f.open = true; window.legion.show(true); }); await sleep(400);
+  check(!(await posted()).some(x => /^agentSeen/.test(x)), 'round 2, F3: the fold open but visibility:hidden: no agentSeen');
+  await page.evaluate(() => { const f = document.getElementById('fold'); f.style.visibility = ''; f.style.opacity = '0'; window.legion.show(true); }); await sleep(400);
+  check(!(await posted()).some(x => /^agentSeen/.test(x)), 'round 2, F3: the fold open but opacity 0: no agentSeen');
+  await page.evaluate(() => { document.getElementById('fold').style.opacity = ''; window.legion.show(true); }); await sleep(400);
   check((await posted()).filter(x => /^agentSeen:demo/.test(x)).length === 1, 'the fold opens: agentSeen once: ' + JSON.stringify(await posted()));
   await feed({ type: 'agentProposal', agent: 'demo', id: 'q1', at: Date.now(), account: 'PROP-1', sim: false, root: 'MNQ', side: 'buy', kind: 'limit', price: 25000, qty: 1, stopTicks: 12, targetTicks: 24, expireSec: 60, setup: 'Sample', reason: 'Sample', expiresAt: Date.now() + 60000, state: 'ended', end: 'withdrawn', seenAt: Date.now(), answeredAt: null });
   await feed(agent());

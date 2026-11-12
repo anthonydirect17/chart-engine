@@ -224,9 +224,12 @@ test('the shapes: a leftover seat counts, and a shape the page cannot read lets 
   const nonStop = [{ type: 'agentMode', agent: 'demo', mode: 'auto' }, { type: 'agentRules', agent: 'demo', maxTrades: 2 }, { type: 'agentAnswer', agent: 'demo', id: 'p1', answer: 'accept' }];
   const stops = [{ type: 'agentKill', agent: 'demo', on: true }, { type: 'agentMode', agent: 'demo', mode: 'shadow' }, { type: 'agentSeen', agent: 'demo', id: 'p1' }];
   const refused = [
-    [agent({ account: null, seats: [{ account: 'PROP-1' }] }), /PROP-1 is a prop account/, 'None with a leftover seat on a prop account'],
+    [agent({ account: null, seats: [{ account: 'PROP-1' }] }), /a leftover position on a prop account: stop and flatten it first/, 'None with a leftover seat on a prop account'],
+    [agent({ account: null, seats: [{ account: 'MINE-1' }] }), /a leftover position on your personal account: stop and flatten it first/, 'None with a leftover seat on your personal account (answers B4-3, item 3)'],
+    [agent({ account: null, seats: [{ account: 'SIM-A' }, { account: 'MINE-1' }] }), /a leftover position on more than one kind of account/, 'None with leftover seats of two kinds'],
     [agent({ account: 'MINE-1', seats: [{ account: 'PROP-1' }] }), /no home: its account mixes kinds/, 'personal with a leftover prop seat'],
-    [agent({ account: null, seats: [{ account: 'LIVE-X' }] }), /no home: the page cannot tell its account/, 'None with a seat the page cannot tell'],
+    [agent({ account: null, seats: [{ account: 'LIVE-X' }] }), /a leftover position on an account the page cannot tell/, 'None with a seat the page cannot tell'],
+    [(() => { const x = agent(); delete x.account; return x; })(), /cannot tell its accounts/, 'no account key at all (round 2, F2)'],
     [agent({ account: 123 }), /cannot tell its accounts \(ChartBridge sent a shape/, 'a number'],
     [agent({ account: { name: 'MINE-1' } }), /cannot tell its accounts/, 'an object'],
     [agent({ account: '' }), /cannot tell its accounts/, 'an empty string'],
@@ -243,9 +246,39 @@ test('the shapes: a leftover seat counts, and a shape the page cannot read lets 
     for (const m of stops) assert.equal(g.check(m), '', what + ': ' + m.type + ' is a stop');
   }
   /* what still goes: None with no seat, None with a leftover seat on your personal account, null group and seats, Sim seats */
-  for (const a of [agent({ account: null }), agent({ account: null, seats: [{ account: 'MINE-1' }] }), agent({ account: null, group: null, seats: null }),
+  for (const a of [agent({ account: null }), agent({ account: null, seats: [] }), agent({ account: null, group: null, seats: null }),
     agent({ account: 'MINE-1', seats: [] }), agent({ account: 'SIM-A', seats: [{ account: 'SIM-A' }] })])
     for (const m of nonStop) assert.equal(gateWith(accounts(), a).check(m), '', JSON.stringify(a) + ' ' + m.type);
   assert.deepEqual(AC.gateAccounts(agent({ account: 'MINE-1', seats: [{ account: 'MINE-1' }, { account: 'PROP-1' }] })), ['MINE-1', 'PROP-1']);
   assert.equal(AC.gateAccounts(null), null);
+});
+
+/* answers B4-3 (round 2, F2): only null is None for the bot too; any other shape lets only its kill switch ON and Shadow through */
+test('the bot\'s account: null is None, a name is read, anything else is "the page cannot tell"', () => {
+  const nonStop = [{ type: 'botMode', mode: 'auto' }, { type: 'botMode', mode: 'copilot' }, { type: 'botKill', on: false }, { type: 'botRails', maxTrades: 1 },
+    { type: 'botAnswer', id: 'p1', answer: 'accept' }, { type: 'botAccount', account: null }, { type: 'botAccount', account: 'MINE-1' }];
+  const stops = [{ type: 'botKill', on: true }, { type: 'botMode', mode: 'shadow' }, { type: 'botSeen', id: 'p1' }];
+  const shapes = [{ account: 123 }, { account: { name: 'MINE-1' } }, { account: '' }, { account: true }, { account: ['MINE-1'] }, {}];
+  for (const sh of shapes) {
+    const bot = Object.assign({ type: 'bot', mode: 'shadow' }, sh);
+    const g = gateWith(accounts(), bot);
+    for (const m of nonStop) assert.match(g.check(m), /The bot: the page cannot tell its account/, JSON.stringify(sh) + ' ' + JSON.stringify(m));
+    for (const m of stops) assert.equal(g.check(m), '', JSON.stringify(sh) + ' ' + m.type + ' is a stop');
+    assert.match(g.botWhy(), /cannot tell its account/);
+  }
+  assert.equal(AC.botAccountOf({ type: 'bot', account: null }), ''); assert.equal(AC.botAccountOf({ type: 'bot', account: 'MINE-1' }), 'MINE-1');
+  assert.equal(AC.botAccountOf({ type: 'bot' }), null); assert.equal(AC.botAccountOf({ type: 'bot', account: 0 }), null);
+  for (const m of nonStop.slice(0, 5)) assert.equal(gateWith(accounts(), { type: 'bot', mode: 'shadow', account: null }).check(m), '', 'None: ' + m.type);
+});
+
+test('answers B4-3, item 3: a None trader with a leftover seat is not a personal trader: only the stops, on Praetorian', () => {
+  const g = gateWith(accounts(), agent({ account: null, mode: 'auto', seats: [{ account: 'MINE-1', owns: true, position: { root: 'MNQ', qty: 1 } }] }));
+  for (const m of [{ type: 'agentMode', agent: 'demo', mode: 'auto' }, { type: 'agentMode', agent: 'demo', mode: 'copilot' }, { type: 'agentRules', agent: 'demo', maxTrades: 1 },
+    { type: 'agentAccount', agent: 'demo', account: 'MINE-1', keepMode: 'shadow' }, { type: 'agentAccount', agent: 'demo', account: null, keepMode: 'shadow' }, { type: 'agentKill', agent: 'demo', on: false }])
+    assert.match(g.check(m), /a leftover position on your personal account: stop and flatten it first/, JSON.stringify(m));
+  for (const m of [{ type: 'agentKill', agent: 'demo', on: true }, { type: 'agentMode', agent: 'demo', mode: 'shadow' }, { type: 'agentSeen', agent: 'demo', id: 'p1' }]) assert.equal(g.check(m), '', m.type);
+  assert.match(g.traderWhy('demo'), /leftover position/);
+  assert.equal(AC.leftoverWhy(agent({ account: 'MINE-1', seats: [{ account: 'MINE-1' }] }), accounts()), '', 'a trader on an account is not this case');
+  assert.equal(AC.leftoverWhy(agent({ account: null, group: { id: 'g1' }, seats: [{ account: 'PROP-1' }] }), accounts()), '', 'nor a group trader');
+  assert.match(AC.leftoverWhy(agent({ account: null, seats: [{ account: 'PROP-1' }] }), accounts({ personalNamed: false })), /an account the page cannot tell/, 'no pick: not told');
 });

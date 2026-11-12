@@ -104,6 +104,13 @@ gate, everything they did for prop traders, groups and the bot on a prop account
   stop), and the change, with keepMode Shadow, only once ChartBridge's own message shows Shadow (forgotten after 10 s or
   on a drop). The LIVE question names Shadow; Auto or Copilot is set again on the desk the trader now belongs to. This
   holds on Praetorian too.
+- **Round 2 of the review:** a move the link kept until Shadow and then could not make (refused once Shadow shows, or
+  Shadow not shown within 10 s) is said on the desk ("The move was not made: <why>; <trader> stays in Shadow"), never
+  silent; every move the link posts keeps Shadow; a seat must say it owns nothing for a trader to count as flat; a group
+  trader whose group the page cannot tell yet says "no home yet", never "set up from Praetorian"; the bot's account and a
+  trader's missing account key follow "only null is None" on Legion too; a leftover position is stops only on both desks;
+  "on screen" counts visibility and opacity, and the agent card must be in view like the bot's; the desks' live charts
+  keep their view under Legion's own prefix.
 - **The board on Legion:** Assign hero, a group trader's Start in Shadow and a group's Clear stand-down work there; for a
   group Legion refuses, Assign hero and Clear stand-down are held back up front with the reason. The words no longer say
   Legion's trader desk is "being built".
@@ -141,7 +148,9 @@ accounts". The name is his: "Praetorian is good". Rule 12: this changes what the
 - **Every account a trader is on counts** (`AgentCore.gateAccounts`, the review of 103): its account and every seat it
   has, a group's or a leftover one (ChartBridge keeps a seat that still holds its trade when a trader goes to None). A
   shape the page cannot read (an account that is not null or a name, a group that is not an object, a seat without an
-  account) is "the page cannot tell": only the stops go.
+  account) is "the page cannot tell": only the stops go. Only null is None: a missing account key, for a trader or the
+  bot, is "the page cannot tell" too. A trader on None that still has a seat (a leftover position) is no one's: only the
+  stops go, with "a leftover position on <kind>: stop and flatten it first".
 - **Held back on screen, said in one line:** a trader on a prop account, a group or an account the page cannot tell shows
   all its readings; its modes, Change account, Change the rules, the helper's On and Auto-On time, and its kill switch's
   release are off, with "On Praetorian this trader can only be stopped (Kill switch, Off)" and why: "it is set up from

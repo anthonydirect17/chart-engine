@@ -66,7 +66,7 @@ function create(o) {
      when its owner says so, and botSeen only while its card is really on screen (keyPrefix: its own chart key) */
   const embedded = !popout && !!o.embedded;
   const chartKey = (embedded && typeof o.keyPrefix === 'string' ? o.keyPrefix : '') + CHART_KEY;
-  const onScreen = el => !!el && el.isConnected && el.getClientRects().length > 0 && (typeof el.checkVisibility !== 'function' || el.checkVisibility());
+  const onScreen = el => !!el && el.isConnected && el.getClientRects().length > 0 && (typeof el.checkVisibility !== 'function' || el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true, opacityProperty: true, visibilityProperty: true }));   // round 2, F3: visibility and opacity too
 
   /* ---------------- state */
   const S = {
@@ -206,6 +206,7 @@ function create(o) {
       case 'execs': for (const x of m.list || []) onExec(x, true); renderTrips(); return;
       case 'reject': onReject(m); return;
       case 'status': if (S.on && m.level === 'warn' && typeof m.text === 'string' && /^Bot\b/.test(m.text)) notice({ kind: 'status', level: 'amber', text: m.text }); return;
+      case 'linkMove': if (m.bot === true && typeof m.text === 'string') notice({ kind: 'account', level: 'amber', text: m.text }); return;   // 1.49.0 (round 2, F7): a kept move not made, said
     }
   }
 
@@ -974,7 +975,7 @@ function create(o) {
     const body = q('[data-k="chart"]');
     S.chartRoot = botRoot();
     S.chart = window.ChartLive.mount(body, {
-      feed: o.feed, paneId: 'bot', storagePrefix: o.storagePrefix || '', toolbar: false, compact: true, trade: chartHost,
+      feed: o.feed, paneId: 'bot', storagePrefix: (o.storagePrefix || '') + (embedded && typeof o.keyPrefix === 'string' ? o.keyPrefix : ''), toolbar: false, compact: true, trade: chartHost,
       view: { root: S.chartRoot, tf: S.chartTf },
       onStatus: s => { if (s.state === 'live') { S.contract = typeof s.contract === 'string' ? s.contract : ''; renderChartHead(); } },
     });

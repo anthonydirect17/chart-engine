@@ -70,7 +70,9 @@ function create(o) {
   const embedded = !popout && !!o.embedded;
   const KP = embedded && typeof o.keyPrefix === 'string' ? o.keyPrefix : '';
   const K = { board: KP + KEYS.board, chosen: KP + KEYS.chosen, chart: KP + KEYS.chart, fills: KEYS.fills, feed: KP + KEYS.feed, risk: KEYS.risk };
-  const onScreen = el => !!el && el.isConnected && el.getClientRects().length > 0 && (typeof el.checkVisibility !== 'function' || el.checkVisibility());
+  /* the card whole in the window, under the top bar (the Bot desk's own test, bot.js inView) */
+  const inView = el => { const r = el.getBoundingClientRect(), bar = document.querySelector('.ws-top'), top = bar ? bar.getBoundingClientRect().bottom : 0; return r.height > 0 && r.top >= top - 1 && r.bottom <= innerHeight + 1 && r.left >= -1 && r.right <= innerWidth + 1; };
+  const onScreen = el => !!el && el.isConnected && el.getClientRects().length > 0 && (typeof el.checkVisibility !== 'function' || el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true, opacityProperty: true, visibilityProperty: true }));   // round 2, F3: visibility and opacity too
   const agents = AC.createAgents(), props = AC.createProposals(), feed = AC.createFeed();
   const readJson = k => { try { return JSON.parse(storage.getItem(k)); } catch (e) { return null; } };
   const writeJson = (k, v) => { try { storage.setItem(k, JSON.stringify(v)); } catch (e) { /* blocked */ } };
@@ -328,6 +330,9 @@ function create(o) {
       case 'execs': for (const x of m.list || []) onExec(x, true); renderTrips(); renderFeed(); renderLive(); return;
       case 'reject': onReject(m); return;
       case 'status': onStatus(m); return;
+      case 'linkMove':   // 1.49.0 (round 2, F7): the page's own link: a move kept until Shadow was not made, said, never silent
+        if (typeof m.agent === 'string' && typeof m.text === 'string') { notice({ kind: 'account', level: 'amber', text: m.text }); if (m.agent === S.chosen) put(q('[data-k="acctWhy"]'), 'textContent', m.text); }
+        return;
     }
   }
 
@@ -621,7 +626,7 @@ function create(o) {
     const at = Date.now();
     for (const x of cards.values()) {
       if (x.ended || x.p.agent !== S.chosen) continue;
-      if (embedded && !onScreen(x.inline)) continue;
+      if (embedded && (!onScreen(x.inline) || !inView(x.inline))) continue;   // round 2, F3: a card scrolled off screen is not seen
       const seen = props.shown(x.p.agent, x.p.id, at);
       if (seen) { x.shownAt = at; sendRaw(seen); }
     }
@@ -1707,7 +1712,7 @@ function create(o) {
     const body = q('[data-k="chart"]');
     S.chartRoot = rootFor(cur());
     S.chart = window.ChartLive.mount(body, {
-      feed: o.feed, paneId: 'agent', storagePrefix: o.storagePrefix || '', toolbar: false, compact: true, trade: chartHost,
+      feed: o.feed, paneId: 'agent', storagePrefix: (o.storagePrefix || '') + KP, toolbar: false, compact: true, trade: chartHost,
       view: { root: S.chartRoot, tf: S.chartTf },
       onStatus: s => { if (s.state === 'live') { S.contract = typeof s.contract === 'string' ? s.contract : ''; renderChartHead(); } },
     });
