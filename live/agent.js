@@ -275,6 +275,11 @@ function create(o) {
   const refusal = m => (V3 && typeof V3.why === 'function' ? V3.why(m) || '' : '');
   const heldWhy = id => (V3 && typeof V3.traderWhy === 'function' ? V3.traderWhy(id) || '' : '');
   const praetorian = !!(V3 && V3.personal === true);
+  /* 1.49.0 (Legion's trader desk): the same desk behind the gate turned round (AgentCore.legionLink): its name in every line,
+     groups offered where its gate allows them, Assign hero and Clear stand-down there. o.keys false: the copilot keys never
+     reach this copy (the page's Praetorian desk answers them where its tab is shown) */
+  const gated = praetorian || !!(V3 && typeof V3.accountOk === 'function');
+  const tabName = gated && V3 && typeof V3.name === 'string' && V3.name ? V3.name : 'Praetorian';
   const cid = () => 'ag' + (++S.cidSeq).toString(36) + Math.random().toString(36).slice(2, 6);
   function lost() {
     S.signedIn = false; S.trading = null; S.orders.clear(); ledger.clear(); unclaimed.clear(); riskKeys.clear();
@@ -671,7 +676,7 @@ function create(o) {
      the keys answer the bot's alone, as 1.16.0), every proposal not ended (an answered one waiting for ChartBridge stays the
      key's target), and the agent shown: the keys then answer its proposals only, never the bot's or another agent's (not
      shown on the tab); open on its "no agents" card (true), none at all */
-  const unroute = ROUTER.add('agents', { kind: 'agents',
+  const unroute = o.keys === false ? () => {} : ROUTER.add('agents', { kind: 'agents',
     open: () => (S.shown && view ? [...cards.values()] : []).filter(x => !x.ended).map(x => ({ id: x.p.agent + ':' + x.p.id, agent: x.p.agent, shownAt: x.shownAt, answered: !!props.answered(x.p.agent, x.p.id),
       expiresAt: x.p.expiresAt, answer: ans => answer(x.p.agent, x.p.id, ans) })),
     focus: () => (S.shown && view ? (cur() ? S.chosen : true) : '') });
@@ -783,8 +788,8 @@ function create(o) {
     /* 1.48.0 (Praetorian): a trader on a prop account, a group or an account the page cannot tell is shown here and can only be
        stopped (its kill switch on, and Off); everything else about it is held back, said in one line (the gate refuses it too) */
     const held = heldWhy(a.agent);
-    if (held) for (const m of AC.MODES) allowed[m] = { ok: false, why: 'Held back on Praetorian: ' + held };
-    const pw = q('[data-k="prWhy"]'); put(pw, 'hidden', !held); put(pw, 'textContent', held ? 'On Praetorian this trader can only be stopped (Kill switch, Off): ' + held + '.' : '');
+    if (held) for (const m of AC.MODES) allowed[m] = { ok: false, why: 'Held back on ' + tabName + ': ' + held };
+    const pw = q('[data-k="prWhy"]'); put(pw, 'hidden', !held); put(pw, 'textContent', held ? 'On ' + tabName + ' this trader can only be stopped (Kill switch, Off): ' + held + '.' : '');
     const now = Date.now();
     for (const btn of q('[data-k="modes"]').children) {
       const m = btn.dataset.mode, x = allowed[m];
@@ -905,7 +910,7 @@ function create(o) {
   async function helperOn(a) {
     const build = q('[data-k="hPick"]').value;
     if (!build) return;
-    const held = heldWhy(a.agent); if (held) { helperSay('Not started from Praetorian: ' + held + '.'); renderPanel(); return; }   // 1.48.0
+    const held = heldWhy(a.agent); if (held) { helperSay('Not started from ' + tabName + ': ' + held + '.'); renderPanel(); return; }   // 1.48.0
     if (H.slow) { helperSay(SLOW_SENT); renderPanel(); return; }   // 1.29.1: never on an old answer; the press is told why
     delete H.lines[a.agent];
     H.busy = true; helperSay('Asking the PC helper to start him...'); renderPanel();
@@ -974,7 +979,7 @@ function create(o) {
     renderPanel();
   }
   async function helperSave(a) {
-    const held = heldWhy(a.agent); if (held) { put(q('[data-k="hSetWhy"]'), 'textContent', 'Not set from Praetorian: ' + held + '.'); return; }   // 1.48.0: an Auto-On time starts him
+    const held = heldWhy(a.agent); if (held) { put(q('[data-k="hSetWhy"]'), 'textContent', 'Not set from ' + tabName + ': ' + held + '.'); return; }   // 1.48.0: an Auto-On time starts him
     const r = AH.settingsBody(a.agent, q('[data-k="hAuto"]').value, q('[data-k="hCap"]').value);
     if (r.error) { put(q('[data-k="hSetWhy"]'), 'textContent', r.error); return; }
     const x = await HC.settings(r.body);
@@ -1093,7 +1098,7 @@ function create(o) {
   function boardStart(id, build) {
     const a = agents.get(id);
     if (!a || !build || !HC) { boardSay('Nothing was sent: no build known for agent ' + id + '. Pick one on his desk, or set None there to free the slot.'); return; }
-    const held = heldWhy(id); if (held) { boardSay('Nothing was started from Praetorian: ' + held + '.'); return; }   // 1.48.0
+    const held = heldWhy(id); if (held) { boardSay('Nothing was started from ' + tabName + ': ' + held + '.'); return; }   // 1.48.0
     if (B.start) return;
     if (H.slow) { boardSay(SLOW_SENT); return; }   // 1.29.1: never on an old answer
     const st = AH.startBegin(a, build, Date.now());
@@ -1116,7 +1121,7 @@ function create(o) {
     startTimer = setTimeout(startTick, 1000);
   }
   async function startOn(j) {
-    const held = heldWhy(j.agent); if (held) { B.starting = false; boardSay('Nothing was started from Praetorian: ' + held + '.'); return; }   // 1.48.0 (the review of 102, F3): checked again after the Shadow wait
+    const held = heldWhy(j.agent); if (held) { B.starting = false; boardSay('Nothing was started from ' + tabName + ': ' + held + '.'); return; }   // 1.48.0 (the review of 102, F3): checked again after the Shadow wait
     const a = agents.get(j.agent), gate = AH.onGate(a);
     if (gate) { B.starting = false; boardSay(gate); return; }
     const r = await HC.on(a.agent, j.build, a.mode, a.sim);   // the desk's own On (helperOn): his mode, Shadow here, and his sim
@@ -1126,7 +1131,7 @@ function create(o) {
     await pollHelper();
   }
   async function assignOn(j) {
-    const held = heldWhy(j.agent); if (held) { boardSay('Nothing was started from Praetorian: ' + held + '.'); return; }   // 1.48.0 (F3), as startOn
+    const held = heldWhy(j.agent); if (held) { boardSay('Nothing was started from ' + tabName + ': ' + held + '.'); return; }   // 1.48.0 (F3), as startOn
     const a = agents.get(j.agent), gate = AH.onGate(a);   // round 3: as startOn: only in Shadow, his own mode and sim
     if (gate) { boardSay('Agent ' + j.agent + ' is on ' + j.groupName + ', but ' + gate.charAt(0).toLowerCase() + gate.slice(1)); return; }
     const r = await HC.on(a.agent, j.build, a.mode, a.sim);
@@ -1480,7 +1485,7 @@ function create(o) {
   }
   function others() { return { bot: S.bot, copier: S.copier, agents: agents.list() }; }
   /* 1.27.0: the one picker's choices: None, the groups, single accounts (AC.pickerChoices) */
-  function choicesFor(a) { const c = AC.pickerChoices(S.accounts, S.groups, a, others()); return praetorian ? AC.prChoices(c, n => V3.accountOk(n)) : c; }   // 1.48.0: Praetorian offers your personal account, Sim and None only
+  function choicesFor(a) { const c = AC.pickerChoices(S.accounts, S.groups, a, others()); return praetorian ? AC.prChoices(c, n => V3.accountOk(n)) : gated ? AC.prChoices(c, n => V3.accountOk(n), { name: tabName, groupOk: id => V3.groupOk(id), notHere: V3.notHere }) : c; }   // 1.48.0: Praetorian offers your personal account, Sim and None only
   function ctxNow(a) { return { workingEntry: AC.workingEntries(S.orders.values(), a).length > 0, openProposals: props.open(a.agent).length, roots: servedRoots(), version: S.version, askedMode: S.acctAsk ? S.acctAskMode : a.mode }; }
   /* DECISION w: while a build that is not a hero runs, no LIVE account (it fails closed: his hello says so without the helper) */
   function liveBlocked(a, name) {

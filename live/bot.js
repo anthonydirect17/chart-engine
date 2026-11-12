@@ -79,7 +79,7 @@ function create(o) {
   /* ---------------- the DOM: built once, then written only where it changed */
   const view = els.view, strip = els.strip, tabBtn = els.tab;
   const notes = els.notes || (() => { const d = document.createElement('div'); d.className = 'bt-notes'; d.setAttribute('aria-live', 'polite'); document.body.appendChild(d); return d; })();
-  const propBox = (() => { const d = document.createElement('div'); d.className = 'bt-props'; d.setAttribute('data-no-motion', ''); d.setAttribute('role', 'region'); d.setAttribute('aria-label', 'Copilot proposals'); document.body.appendChild(d); return d; })();
+  const propBox = (() => { const d = document.createElement('div'); d.className = 'bt-props'; d.setAttribute('data-no-motion', ''); d.setAttribute('role', 'region'); d.setAttribute('aria-label', 'Copilot proposals'); if (o.floating !== false) document.body.appendChild(d); return d; })();   // 1.49.0: o.floating false (Legion's trader desk): placed in this desk's own view (placeCorner), never over the page
   const q = sel => view ? view.querySelector(sel) : null;
   if (view) build();
 
@@ -159,8 +159,11 @@ function create(o) {
      prop account, or one the page cannot tell); the Bot window's connection (bot.html) has neither, and there nothing changes */
   const refusal = m => (V3 && typeof V3.why === 'function' ? V3.why(m) || '' : '');
   const praetorian = !!(V3 && V3.personal === true);
-  const heldBot = () => (praetorian && typeof V3.botWhy === 'function' && S.bot ? V3.botWhy() || '' : '');
-  const botChoices = () => { const l = BC.accountChoices(S.accounts, S.bot); return praetorian && window.AgentCore && typeof window.AgentCore.prBotChoices === 'function' ? window.AgentCore.prBotChoices(l, n => V3.accountOk(n)) : l; };
+  /* 1.49.0 (Legion's trader desk): the same desk behind the gate turned round (AgentCore.legionLink), its name in its lines */
+  const gated = praetorian || !!(V3 && typeof V3.accountOk === 'function');
+  const tabName = gated && V3 && typeof V3.name === 'string' && V3.name ? V3.name : 'Praetorian';
+  const heldBot = () => (gated && typeof V3.botWhy === 'function' && S.bot ? V3.botWhy() || '' : '');
+  const botChoices = () => { const l = BC.accountChoices(S.accounts, S.bot); return gated && window.AgentCore && typeof window.AgentCore.prBotChoices === 'function' ? window.AgentCore.prBotChoices(l, n => V3.accountOk(n), praetorian ? undefined : { name: tabName, notHere: V3.notHere }) : l; };
   const cid = () => 'bt' + (++S.cidSeq).toString(36) + Math.random().toString(36).slice(2, 6);
   function lost() {
     S.signedIn = false; S.trading = null; S.orders.clear(); simFills.clear(); ledger.clear();
@@ -329,6 +332,7 @@ function create(o) {
       }
     }
     const want = x ? [x.el, moreEl] : [];
+    if (o.floating === false && view && propBox.parentElement !== view) view.appendChild(propBox);   // 1.49.0: after the view is drawn (its build replaces its contents)
     if (propBox.children.length !== want.length || want.some((e, i) => propBox.children[i] !== e)) propBox.replaceChildren(...want);
     const more = [...propEls.values()].filter(y => !y.ended && y !== x).length;
     put(moreEl, 'textContent', more ? '+' + more + ' more bot proposal' + (more === 1 ? '' : 's') : '');
@@ -433,8 +437,8 @@ function create(o) {
     if (armed(open) && inView(open.el)) answer(open.p.id, ans);
   }
   const ROUTER = window.AgentCore && window.AgentCore.copilotRouter ? window.AgentCore.copilotRouter(document) : null;
-  const unroute = ROUTER ? ROUTER.add('bot', { open: () => { const x = keyTarget(); return x ? [{ id: x.p.id, shownAt: x.shownAt, ready: armed(x) && inView(x.el), answer: ans => answer(x.p.id, ans) }] : []; } }) : null;
-  if (!ROUTER) document.addEventListener('chart-copilot-key', onCopilotKey);
+  const unroute = ROUTER && o.keys !== false ? ROUTER.add('bot', { open: () => { const x = keyTarget(); return x ? [{ id: x.p.id, shownAt: x.shownAt, ready: armed(x) && inView(x.el), answer: ans => answer(x.p.id, ans) }] : []; } }) : null;
+  if (!ROUTER && o.keys !== false) document.addEventListener('chart-copilot-key', onCopilotKey);   // 1.49.0: o.keys false: no key reaches this copy
   /** the keys shown on the buttons and in Options: what the workspace has (o.copilotKeys), checked as before */
   function loadKeys() {
     if (typeof o.copilotKeys !== 'function') { S.keys = { accept: '', reject: '', notes: [], from: 'window' }; return; }
@@ -726,7 +730,7 @@ function create(o) {
     if (e) { put(ev, 'textContent', e.shelf === 'research' ? 'Research' : e.evidence); put(ev, 'className', 'bt-badge ' + (e.shelf === 'research' ? 'rs' : BC.evidenceLevel(e.evidence) >= 2 ? 'l2' : '')); }
     /* 1.48.0 (Praetorian): the bot on a prop account, or one the page cannot tell, can only be stopped here (its kill switch on) */
     const held = heldBot();
-    const pw = q('[data-k="prWhy"]'); put(pw, 'hidden', !held); put(pw, 'textContent', held ? 'On Praetorian the bot can only be stopped (Kill switch): ' + held + '.' : '');
+    const pw = q('[data-k="prWhy"]'); put(pw, 'hidden', !held); put(pw, 'textContent', held ? 'On ' + tabName + ' the bot can only be stopped (Kill switch): ' + held + '.' : '');
     for (const btn of q('[data-k="modes"]').children) {
       const m = btn.dataset.mode, a = allowed[m];
       attr(btn, 'aria-pressed', String(b.mode === m));

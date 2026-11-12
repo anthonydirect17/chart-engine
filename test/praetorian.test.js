@@ -170,7 +170,7 @@ test('every send path in the two desks says the gate\'s reason, never "not conne
   assert.match(ag, /const no = refusal\(m\);\n    if \(no\) \{ notice\(\{ kind: 'refused', level: 'amber', text: no \}\); return false; \}/, 'sendAgent');
   assert.match(ag, /const no = refusal\(r\.msg\);\n    if \(no\) \{ props\.refused\(agent, id\); setMsg\(x, no\); return false; \}/, 'an answer');
   assert.match(ag, /const no = refusal\(m\); if \(no\) \{ boardSay\(no\); return; \}/, 'the board\'s assign');
-  assert.match(ag, /const held = heldWhy\(id\); if \(held\) \{ boardSay\('Nothing was started from Praetorian: '/, 'the board\'s Start in Shadow (the helper)');
+  assert.match(ag, /const held = heldWhy\(id\); if \(held\) \{ boardSay\('Nothing was started from ' \+ tabName \+ ': '/, 'the board\'s Start in Shadow (the helper)');
   assert.match(ag, /async function helperOn\(a\) \{\n    const build = q\('\[data-k="hPick"\]'\)\.value;\n    if \(!build\) return;\n    const held = heldWhy\(a\.agent\); if \(held\)/, 'On (the helper), in its own body (the review of 102, F4; the behaviour is test/praetorian-smoke.mjs)');
   assert.match(ag, /async function startOn\(j\) \{\n    const held = heldWhy\(j\.agent\); if \(held\)/, 'Start in Shadow checks again before the helper\'s On (F3)');
   assert.match(ag, /async function assignOn\(j\) \{\n    const held = heldWhy\(j\.agent\); if \(held\)/, 'and Assign hero\'s On');

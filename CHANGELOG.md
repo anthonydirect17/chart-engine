@@ -63,6 +63,32 @@
   `test/pc-updater.test.js`: the allowed git subcommands, the box job's name, useHttpPath read before the one ask, the
   token only after a 404 or 401 and then through the Actions API, one place that asks for it and one that sends it.
 
+## chart 1.49.0 (2026-11-12): Legion's trader desk, the Agent and Bot desks behind Praetorian's gate turned round (page only, no F5)
+
+Rule 12. The review of Praetorian (chart-engine 102, F5) found that, once the Agent and Bot desks are behind Praetorian's
+gate, everything they did for prop traders, groups and the bot on a prop account had no home on the page. The decision
+(reuse first): the same two desks, mounted a second time for Legion. No control is written again.
+
+- **Legion's trader desk** (`live/legion-desk.js`, `LegionDesk.mount(el, o)`): the Agent desk and the Bot desk with a
+  two-way switch (Agents, Bot) and one line on what it reaches. Builder 1 places it once, folded, in Legion Setup; this
+  release adds the file and its tests only, nothing on the page loads it yet.
+- **The gate turned round** (`AgentCore.legionGate`, `legionLink`, `live/agent-core.js`): kill switch ON, a trader's
+  Shadow and the two acknowledgements for anyone ChartBridge has described; any other agent or bot message only for a
+  trader on a prop account, on a group whose seats are prop (or prop and Sim), or on None, and the bot on a prop account
+  or None; an account change only to a prop account, such a group, or None; a group's Clear stand-down only for such a
+  group. Refused by name: your personal account, Sim alone, a league seat, a group that holds your personal account, an
+  account the page cannot tell, an undescribed trader, every other type. Prop needs ChartBridge 0.6.16's pick: with
+  none, no account is prop. It hears `groups` too, and forgets everything on a drop. Praetorian and Legion never both
+  pass the same message for a described trader except the stops and a trader on None (a test proves it).
+- **A second copy on one page** (`live/agent.js`, `live/bot.js`): `keys: false` (the copilot keys never reach it) and,
+  for the bot, `floating: false` (its proposal card stays inside the desk, placed after the desk is drawn). The desks'
+  words name the tab they are on; their pickers offer groups only where the gate allows them
+  (`AgentCore.prChoices` and `prBotChoices` take a name, a group test and the words; Praetorian passes none and is
+  unchanged).
+- **Tests:** `test/legion-desk.test.js` (the gate as Praetorian's is tested; ten deliberate breaks, each caught, three of them only after a test was added for it);
+  `test/legion-desk-smoke.mjs` (`npm run smoke:legion-desk`: both copies on one page, a prop and a personal trader each
+  way, forced controls, the picker, the bot's card, the copilot key).
+
 ## chart 1.48.0 (2026-11-12): Praetorian, the Agent tab and the Bot tab as one tab for the personal account (page only, no F5)
 
 Anthony's direction of 2026-11-11: "The bot and agent tabs ... should be rolled into ... a way to trade any of these bots
