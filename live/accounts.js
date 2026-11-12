@@ -1167,9 +1167,15 @@ function mount(v, host) {
   const F = host.feed, S = F.S;
   /* 1.37.0: host.only 'cop': the copier alone (the Multi-Account panel's Copier tab), with no tab strip */
   const only = host.only === 'cop';
+  /* 1.47.0 (the reuse map: Legion Live's accounts by group): host.rows { filter(account) }: the Accounts tab's own rows and
+     nothing else. Only the accounts the filter passes, in the same sections (one a group, then the rest), the same cells (today,
+     position, Room from limitState, the group), read only: no tab strip, no Trade checkmark control, no settings drawer, no
+     buttons above or below, no Gone or hidden lists, and no click, change or drag acted on. One path draws a row. */
+  const ROWS = !only && host.rows && typeof host.rows.filter === 'function' ? host.rows : null;
+  const passes = a => { try { return ROWS.filter(a) === true; } catch (e) { return false; } };
   const TABS = only ? [COPIER_TAB] : TABS_PAGE;
   v.body.innerHTML = '<div class="apg' + (only ? ' apg-only' : '') + '" data-ap>' +
-    '<div class="ac-tabs apg-tabs" role="tablist" aria-label="Account page"' + (only ? ' hidden' : '') + '>' + TABS.map((t, i) => `<button type="button" role="tab" class="ac-tab" data-tab="${t.id}" aria-selected="${i === 0}"${t.when ? ' hidden' : ''}><span class="lb-full">${esc(t.name)}</span><span class="lb-short">${esc(t.short)}</span><span class="ac-ct" data-ct="${t.id}"></span></button>`).join('') + '</div>' +
+    '<div class="ac-tabs apg-tabs" role="tablist" aria-label="Account page"' + (only || ROWS ? ' hidden' : '') + '>' + TABS.map((t, i) => `<button type="button" role="tab" class="ac-tab" data-tab="${t.id}" aria-selected="${i === 0}"${t.when ? ' hidden' : ''}><span class="lb-full">${esc(t.name)}</span><span class="lb-short">${esc(t.short)}</span><span class="ac-ct" data-ct="${t.id}"></span></button>`).join('') + '</div>' +
     '<div class="ac-list apg-list" data-list role="tabpanel"></div>' +
     '<p class="ac-foot apg-foot" data-foot></p></div>';
   const q = sel => v.body.querySelector(sel);
@@ -1202,6 +1208,7 @@ function mount(v, host) {
   });
   /* clicks: a button acts at once, as the order ticket's (by mouse only: a key press on a focused button does nothing) */
   listEl.addEventListener('click', e => {
+    if (ROWS) return;                                            // rows only: read only
     const b = e.target.closest('button[data-act], [data-review]');
     if (!b || !listEl.contains(b)) return;
     if (b.dataset.review) { window.open(AC.reviewUrl(S.deskUrl, b.dataset.review), '_blank', 'noopener'); return; }
@@ -1340,6 +1347,7 @@ function mount(v, host) {
   /* 1.34.0: a column's width dragged at its header's right edge (the Accounts tab); kept in this browser; a double-click on the
      edge gives that column its default share back */
   listEl.addEventListener('pointerdown', e => {
+    if (ROWS) return;
     const hnd = e.target.closest && e.target.closest('.apg-rs');
     if (!hnd || !listEl.contains(hnd) || e.button !== 0) return;
     e.preventDefault(); e.stopPropagation();
@@ -1368,6 +1376,7 @@ function mount(v, host) {
     window.addEventListener('pointermove', move); window.addEventListener('pointerup', up); window.addEventListener('pointercancel', up);
   });
   listEl.addEventListener('change', e => {
+    if (ROWS) return;
     const el = e.target, a = el.dataset.act;
     if (!a) return;
     if (a === 'trade') { const on = el.checked; el.checked = !on; F.accountTrade(el.dataset.id, on); return; }   // shown as ChartBridge says, not as clicked
@@ -1506,7 +1515,7 @@ function mount(v, host) {
       if (b.hidden === show) b.hidden = !show;
     }
     if (P.tab === 'cop' && !sw.copier && !only) { P.tab = 'acc'; for (const t of v.body.querySelectorAll('.ac-tab[data-tab]')) t.setAttribute('aria-selected', String(t.dataset.tab === 'acc')); }
-    const accounts = S.accounts, active = accounts.filter(a => a.state !== 'gone'), gone = accounts.filter(a => a.state === 'gone');
+    const accounts = ROWS ? S.accounts.filter(passes) : S.accounts, active = accounts.filter(a => a.state !== 'gone'), gone = ROWS ? [] : accounts.filter(a => a.state === 'gone');
     const instr = r => S.instruments[r] || {};
     const pv = r => +instr(r).pointValue || 0;
     const orders = [...S.orders.values()].filter(AC.isWorking);
@@ -1528,8 +1537,8 @@ function mount(v, host) {
     else if (!S.got) html = `<p class="ac-empty">${esc(S.open ? 'Waiting for ChartBridge\'s accounts.' : S.reason || 'Connecting to ChartBridge.')}</p>`;
     else if (P.tab === 'acc') {
       const lim = a => AC.limitState(a, S.desk.get(a.name), F.rulesOf(a));   // 1.33.0: the member's own rules
-      const canAct = sw.accountChecks && S.enabled;
-      const grpKnown = !!S.groups, grpOn = grpKnown || S.hadGroups, canGroup = grpKnown && S.enabled && !S.groupsError;   // 1.26.0: ChartBridge 0.5.8 sends groups; 1.31.0: the columns stay while not known
+      const canAct = !ROWS && sw.accountChecks && S.enabled;
+      const grpKnown = !!S.groups, grpOn = grpKnown || S.hadGroups, canGroup = !ROWS && grpKnown && S.enabled && !S.groupsError;   // 1.26.0: ChartBridge 0.5.8 sends groups; 1.31.0: the columns stay while not known
       const gName = id => { const g = (S.groups || []).find(x => x.id === id); return g ? g.name : id; };
       /* 1.30.0: the Account type column (The Desk's ledger), once its list is known (read now, or this browser's copy) */
       const typesOn = grpOn && !!S.types, canType = typesOn && S.typesState === 'ok' && S.deskState === 'ok';
@@ -1739,7 +1748,7 @@ function mount(v, host) {
           s.tg ? 'Profit target: ' + (s.tg.left <= 0 ? 'reached' : AC.fmtUsdPlain(s.tg.left) + ' left') + (s.tg.target ? ' of ' + AC.fmtUsdPlain(s.tg.target) : '') : '',
           s.level ? (s.level === 'red' ? 'RED: ' : 'AMBER: ') + Math.round(s.pct * 100) + '% of the room used to the closer limit' : '', ntTip].filter(Boolean).join('\n');
         /* the checkmark: a control only with accountChecks on; else what gate 2 says, read only */
-        const canCheck = sw.accountChecks && S.enabled;
+        const canCheck = !ROWS && sw.accountChecks && S.enabled;
         /* Hide (ChartBridge 0.5.1): on any account ChartBridge says may be hidden now (flat, not the bot's, the copier's or an agent's) */
         const hide = !canAct ? '' : a.canHide === true
           ? `<span role="cell" class="r"><button type="button" class="ac-btn apg-hide" data-act="archive" data-id="${esc(a.name)}" title="Hide ${esc(a.name)}: it leaves every list until you Show it; its fills and history stay">Hide</button></span>`
@@ -1759,7 +1768,7 @@ function mount(v, host) {
           ? c(typeof a.floor === 'number' ? 'floor ' + AC.fmtUsdPlain(a.floor) : 'floor ?', 'r mut', typeof a.floor === 'number' ? 'The floor by its group\'s rules' : (why.floor || ''))
           : `<span role="cell" class="apg-my"><input type="text" inputmode="decimal" class="oin apg-ll-in" data-act="my-floor" data-id="${esc(a.name)}" ${pr({ value: GroupsCore.moneyBox(a.myFloor), disabled: !canGroup })} placeholder="${a.myLimitsSet === false ? 'not set' : 'floor $'}" maxlength="12" aria-label="My floor for ${esc(a.name)}" title="My floor: the balance this account must stay above (empty: none)"><input type="text" inputmode="decimal" class="oin apg-ll-in" data-act="my-daily" data-id="${esc(a.name)}" ${pr({ value: GroupsCore.moneyBox(a.myDailyLoss), disabled: !canGroup })} placeholder="${a.myLimitsSet === false ? 'not set' : 'daily $'}" maxlength="12" aria-label="My daily limit for ${esc(a.name)}" title="My daily limit: the most this account may lose today, open P&amp;L counted (empty: none)"></span>`;
         const hero = AC.heroOf(S.heroes, a.name);   // 1.27.0: a seat shows its hero's name
-        const lab = labelOf(a.name), flags = flagsOf(a), up = a.connection === 'connected', open = P.allOpen || P.drawer === a.name;
+        const lab = labelOf(a.name), flags = flagsOf(a), up = a.connection === 'connected', open = !ROWS && (P.allOpen || P.drawer === a.name);
         const nameTip = [a.name, a.sim ? 'NinjaTrader Sim account' : '', hero ? 'A seat of ' + hero + ' (the Agent tab): the copier and the bot never trade it' : '',
           stale ? 'Not connected to ChartBridge since ' + hms(S.lostAt) + ' ET: this account\'s connection is not known' : up ? '' : (CONN[a.connection] || a.connection)].filter(Boolean).join('\n');
         const nameCell = `<span role="cell" class="apg-name">` + ci('', stale ? 'apg-dot unk' : up ? 'apg-dot' : 'apg-dot down', stale ? 'Connection not known' : up ? '' : (CONN[a.connection] || a.connection) + ': not connected') +
@@ -1772,9 +1781,10 @@ function mount(v, host) {
           (rp.parts.length ? rp.parts.map((p, i) => (i ? ci(' · ', 'apg-rsep', roomTip) : '') + ci(p.text, 'apg-rpart' + (p.tight ? ' apg-tight' : ''), roomTip)).join('') : ci('-', 'apg-rpart', roomTip)) +
           `</span><span class="apg-track">` + ci('', 'apg-bar apg-b' + rp.bar + lvl, roomTip) + '</span></span>';
         const grpText = !grpOn ? '' : !grpKnown ? 'not known' : a.group ? gName(a.group) : 'None';
-        const more = `<span role="cell" class="r"><button type="button" class="ac-btn apg-more" data-act="drawer" data-id="${esc(a.name)}" aria-expanded="${open}" aria-label="Settings for ${esc(a.name)}" title="Settings: group, type, limits, the firm's minimum, a label, Hide">⋯</button></span>`;
+        const more = ROWS ? '<span role="cell" class="r"></span>' : `<span role="cell" class="r"><button type="button" class="ac-btn apg-more" data-act="drawer" data-id="${esc(a.name)}" aria-expanded="${open}" aria-label="Settings for ${esc(a.name)}" title="Settings: group, type, limits, the firm's minimum, a label, Hide">⋯</button></span>`;
         const main = row(a.name, nameCell + `${c(AC.fmtUsdPlain(a.balance), 'r')}${c(AC.fmtUsd(a.pnlToday), 'r ' + (a.pnlToday > 0.004 ? 'up' : a.pnlToday < -0.004 ? 'dn' : ''))}${c(pos, 'r')}` +
           roomCell + c(grpText, a.group ? '' : 'mut', a.group ? GroupsCore.summary(F.groupOf(a)) : 'In no group') + mark + more, 'apg-acc' + lvl + (open ? ' apg-open' : ''));
+        if (ROWS) return main;
         if (!open) return main + ask(a) + askJoin(a) + askRules(a) + typeRow(a) + askApply(a);
         const unrole = x => String(x || '').replace(/role="cell" ?/g, '');
         const fld = (label, html2) => html2 ? `<span class="apg-dfield"><span class="apg-dlbl">${label}</span>${html2}</span>` : '';
@@ -1808,11 +1818,15 @@ function mount(v, host) {
       }
       const rest = active.filter(a => !inGroup.has(a.name)), real = rest.filter(a => !a.sim), sims = rest.filter(a => a.sim);
       if (real.length) sections.push(secRow('none', S.groups && S.groups.length ? 'Not in a group' : 'Accounts', totText(real)) + real.map(accRow).join(''));
-      if (sims.length) sections.push(secRow('sim', 'Sim', totText(sims), `<button type="button" class="ac-btn apg-simtg" data-act="sim-toggle" aria-expanded="${P.simOpen}" title="${P.simOpen ? 'Fold' : 'Show'} the Sim accounts">${P.simOpen ? 'Hide' : 'Show'}</button>`) + (P.simOpen ? sims.map(accRow).join('') : ''));
+      if (sims.length && ROWS) sections.push(secRow('sim', 'Sim', totText(sims)) + sims.map(accRow).join(''));
+      else if (sims.length) sections.push(secRow('sim', 'Sim', totText(sims), `<button type="button" class="ac-btn apg-simtg" data-act="sim-toggle" aria-expanded="${P.simOpen}" title="${P.simOpen ? 'Fold' : 'Show'} the Sim accounts">${P.simOpen ? 'Hide' : 'Show'}</button>`) + (P.simOpen ? sims.map(accRow).join('') : ''));
       const widths = colWidths();
       if (P.colDrag) widths[P.colDrag.col] = P.colDrag.px;   // a drag going on
       const headRow = row('h', ACC_COLS.map((cdef, i) => h(cdef[0] + (i < ACC_COLS.length - 1 ? `<span class="apg-rs" data-col="${i}" title="Drag to make this column wider or narrower; double-click for its default"></span>` : ''), i >= 1 && i <= 4 || i >= 6 ? 'r' : '')).join(''), 'gr-h');
-      html = !accounts.length ? '<p class="ac-empty">ChartBridge watches no account.</p>' :
+      html = ROWS ? (!accounts.length ? '<p class="ac-empty">No account to show here.</p>' : (stale ? `<p class="apg-stalenote" role="status">${esc(staleWords)}</p>` : '') +
+          `<div class="gr apg-g apg-acc-g apg-acc2 apg-rowsonly${stale ? ' apg-stale' : ''}" style="--apg-cols: ${colsCss(colWidths())}" role="table" aria-label="Accounts">` +
+          row('h', ACC_COLS.map((cdef, i) => h(cdef[0], i >= 1 && i <= 4 || i >= 6 ? 'r' : '')).join(''), 'gr-h') + sections.join('') + '</div>') :
+        !accounts.length ? '<p class="ac-empty">ChartBridge watches no account.</p>' :
         (stale ? `<p class="apg-stalenote" role="status">${esc(staleWords)}</p>` : '') +
         `<div class="apg-acc-top"><button type="button" class="ac-btn apg-alltg" data-act="drawers-all" aria-pressed="${P.allOpen}" title="${P.allOpen ? 'Fold every account\'s settings' : 'Show every account\'s settings (group, type, limits, the firm\'s minimum, a label, Hide) at once'}">${P.allOpen ? 'Fold settings' : 'Settings for every account'}</button>` +
           (firmOn() && canGroup ? `<button type="button" class="ac-btn apg-floorsbtn" data-act="floors-desk" aria-expanded="${!!P.floors}" title="Show every prop account's floor as The Desk has it (its seed from the firm dashboard plus the tracked fills); you confirm once, then each goes to ChartBridge as the firm's minimum">Update floors from The Desk</button>` : '') + '</div>' +
@@ -1950,6 +1964,7 @@ function mount(v, host) {
       if (act && act !== document.body && !(listEl.contains(act) && act.dataset && act.dataset.act === 'type-edit')) P.typeFocus = '';
       else { const e = findAct('type-edit', P.typeFocus); if (e) { e.focus(); P.typeFocus = ''; } else if (!P.typePending.has(P.typeFocus)) P.typeFocus = ''; }
     }
+    if (ROWS) foot = '';
     if (footEl.textContent !== foot) { footEl.textContent = foot; footEl.title = foot; }
   }
   const fmtClock = t => { const s = ((Math.floor(t) % 86400) + 86400) % 86400; return p2(Math.floor(s / 3600)) + ':' + p2(Math.floor(s / 60) % 60) + ':' + p2(s % 60); };

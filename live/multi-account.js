@@ -186,6 +186,12 @@ const DEFAULT_TOAST = 'Only this firm\'s accounts show here. A chip moves only w
  *   feed        the window's createFeed (live/accounts.js): S (accounts, desk, groups, orders, version, rejects), post(msg)
  *   panelId     this panel's id (its group pick is kept per panel)
  *   copier(el)  mounts the copier (the Account page's Copier tab, unchanged) in el; returns { render, destroy }
+ *   group       1.47.0, optional: a group id. The panel then shows THAT ONE GROUP and nothing that changes a group: no group
+ *               list, no Copier tab, no Group settings, no New group, the risk read only. What is left is the two lanes, the
+ *               chips, a click or a drag (memberBench), the join step (accountGroup) and Remove. A Legion lane is the panel
+ *               mounted this way (docs/LEGION_reuse_map.md). Nothing is kept in this browser for it.
+ *   locked()    1.47.0, optional: why no account may move now ('' or nothing: moves are free). With a reason every chip is
+ *               locked, and a click, a drag, Put in and Remove send nothing and say the reason.
  *   working()   the working orders now (live/accounts.js AccountsCore.isWorking over S.orders)
  *   note(text, warn)
  * Returns { render, destroy, state }.
@@ -196,7 +202,10 @@ function mount(el, host) {
   const store = (() => { try { return window.localStorage; } catch (e) { return null; } })();
   const readPick = () => { try { const j = JSON.parse(store ? store.getItem(PICK_KEY) : 'null'); return j && typeof j === 'object' && typeof j[host.panelId] === 'string' ? j[host.panelId] : ''; } catch (e) { return ''; } };
   const savePick = id => { try { if (!store) return; const j = JSON.parse(store.getItem(PICK_KEY) || '{}') || {}; j[host.panelId] = id; store.setItem(PICK_KEY, JSON.stringify(j)); } catch (e) { /* blocked: this window only */ } };
-  P.gid = readPick();
+  /* 1.47.0: one fixed group (host.group), and why moves are refused now (host.locked) */
+  const FIXED = typeof host.group === 'string' && host.group ? host.group : '';
+  const lockWhy = () => { if (typeof host.locked !== 'function') return ''; try { const w = host.locked(); return typeof w === 'string' ? w : 'the lane\'s state is not known yet'; } catch (e) { return 'the lane\'s state could not be read'; } };   // the review of 97, F9: a non-string is not known, as the feed reads it
+  P.gid = FIXED || readPick();
   el.innerHTML = '<div class="ma" data-ma>' +
     '<div class="ac-tabs ma-tabs" role="tablist" aria-label="Multi-Account"><button type="button" role="tab" class="ac-tab" data-tab="groups" aria-selected="true">Groups</button>' +
     '<button type="button" role="tab" class="ac-tab" data-tab="copier" aria-selected="false">Copier</button></div>' +
@@ -204,6 +213,7 @@ function mount(el, host) {
     '<div class="ma-cop" data-pane="copier" role="tabpanel" aria-label="Copier" hidden></div></div>';
   const q = s => el.querySelector(s);
   const body = q('[data-pane="groups"]'), copEl = q('[data-pane="copier"]');
+  if (FIXED) { q('.ma-tabs').hidden = true; q('[data-ma]').classList.add('ma-fixedgroup'); }
   let cop = null;
   const cid = () => 'ma' + Date.now().toString(36) + '-' + (++P.seq);
   const say = (text, warn) => { P.toast = { text, warn: !!warn }; };
@@ -257,7 +267,7 @@ function mount(el, host) {
   function chipHtml(c, g) {
     const pend = [...P.pending.values()].some(p => p.chip === c.name);
     const why = P.chipWhy.get(c.name) || '';
-    const locked = c.missing || (!c.member && c.notype) || (c.member && !!c.busy) || (c.notype && c.benched) || pend || !!(P.join && P.join.plan.account === c.name);   // a benched chip with no type cannot go in; one trading may still go out
+    const locked = !!lockWhy() || c.missing || (!c.member && c.notype) || (c.member && !!c.busy) || (c.notype && c.benched) || pend || !!(P.join && P.join.plan.account === c.name);   // a benched chip with no type cannot go in; one trading may still go out
     const tags = MC.chipTags(c);
     if (pend) tags.push('moving...');
     if (why && !pend) tags.push(why);
@@ -280,32 +290,37 @@ function mount(el, host) {
     settle();
     if (P.tab === 'copier') { if (cop) cop.render(); return; }
     const list = groups();
-    if (!P.gid || !list.some(g => g.id === P.gid)) { const first = list[0]; if (first && P.gid !== first.id && !P.creating) { P.gid = first.id; } }
+    if (FIXED) P.gid = FIXED;
+    else if (!P.gid || !list.some(g => g.id === P.gid)) { const first = list[0]; if (first && P.gid !== first.id && !P.creating) { P.gid = first.id; } }
     const g = group(), orders = typeof host.working === 'function' ? host.working() : [];
     const bench = benchNow(g), version = S.version || 'an older one';
     let html;
     if (!S.v3 || !S.got) html = `<p class="ac-empty">${esc(S.reason || 'Waiting for ChartBridge\'s accounts.')}</p>`;
     else if (!S.groups) html = '<p class="ac-empty">ChartBridge sends no groups: the Multi-Account panel needs ChartBridge 0.5.8 or newer (0.6.7 for the bench).</p>';
+    else if (FIXED && !g) html = '<p class="ac-empty">This group is not in ChartBridge now.</p>';
     else {
       const L = g ? MC.lanes(g, S, orders) : null;
       /* a reason about a trade or working orders goes once that account is flat with nothing working */
       if (L) for (const c of L.active.concat(L.bench)) { const w = P.chipWhy.get(c.name); if (w && !c.busy && /in a trade|working order/.test(w)) P.chipWhy.delete(c.name); }
       const opts = list.map(x => `<option value="${esc(x.id)}"${x.id === P.gid ? ' selected' : ''}>${esc(x.name)}</option>`).join('');
       const flat = L ? L.flat : true;
-      const bar = `<div class="ma-bar">` +
+      const lw = lockWhy();
+      /* one fixed group: its name and its risk, read only; nothing here changes a group */
+      const bar = FIXED ? `<div class="ma-bar"><span class="ma-lname">${esc(g.name)}</span><span class="ma-rules">Risk ${isFinite(g.riskPct) && g.riskPct > 0 ? esc(String(g.riskPct)) + '% of each account\'s max loss' : 'not set'} · One direction, always</span></div>` +
+        (lw ? `<p class="ma-toast warn" role="status" data-ma="lockwhy">${esc(lw)}</p>` : '') : `<div class="ma-bar">` +
         (list.length ? `<label class="ma-lbl" for="ma-grp-${esc(host.panelId)}">Group</label><select class="ws-sel ma-sel" id="ma-grp-${esc(host.panelId)}" data-ma="group">${opts}</select>` : '<span class="ma-rules">No groups yet.</span>') +
         (g ? `<span class="ma-risk"><label class="ma-lbl" for="ma-risk-${esc(host.panelId)}">Risk</label><input class="ws-num ma-rin" id="ma-risk-${esc(host.panelId)}" data-ma="risk" inputmode="decimal" autocomplete="off" value="${isFinite(g.riskPct) && g.riskPct > 0 ? g.riskPct : ''}"${flat && can() ? '' : ' disabled'} title="${esc(flat ? 'Of each account\'s own max loss (its drawdown on its type); changed only while the group is flat' : 'The group is not flat: the risk changes once it is')}" aria-label="Risk percent"><span class="ma-rules">% of each account's max loss</span></span>` : '') +
         (g ? '<span class="ma-rules">One direction, always (no hedging inside a group)</span>' : '') +
         '<span class="ma-fill"></span>' +
         (g ? `<button type="button" class="ws-btn" data-ma="settings" aria-expanded="${P.settings}">Group settings</button>` : '') +
         `<button type="button" class="ws-btn primary" data-ma="new" aria-expanded="${P.creating}">New group</button></div>`;
-      const settings = g && P.settings ? `<div class="ma-set" role="group" aria-label="Group settings"><div class="ma-srow">` +
+      const settings = !FIXED && g && P.settings ? `<div class="ma-set" role="group" aria-label="Group settings"><div class="ma-srow">` +
         `<div class="ma-field"><label for="ma-name-${esc(host.panelId)}">Group name</label><input class="ws-in ma-in" id="ma-name-${esc(host.panelId)}" data-ma="name" maxlength="30" autocomplete="off" spellcheck="false" value="${esc(g.name)}"></div>` +
         `<div class="ma-field"><label for="ma-type-${esc(host.panelId)}">Type</label><select class="ws-sel ma-in" id="ma-type-${esc(host.panelId)}" data-ma="type"><option value="eval"${g.accountType === 'eval' ? ' selected' : ''}>Evals</option><option value="funded"${g.accountType === 'funded' ? ' selected' : ''}>Funded</option>${g.accountType ? '' : '<option value="" selected>Not set</option>'}</select></div>` +
         `<button type="button" class="ws-btn primary" data-ma="save">Save</button><span class="ma-fill"></span>` +
         `<button type="button" class="ws-btn ma-danger" data-ma="delete">${P.delAsk ? 'Delete ' + esc(g.name) + '? Click again' : 'Delete group'}</button></div>` +
         `<p class="ma-fixed">Each account keeps its own rules from its type on The Desk (size, drawdown, daily limit, floor). An account with no type set on The Desk cannot trade with a group until it has one. Risk changes and moves only while the group is flat.</p></div>` : '';
-      const creating = P.creating ? `<div class="ma-set" role="group" aria-label="New group"><div class="ma-srow">` +
+      const creating = !FIXED && P.creating ? `<div class="ma-set" role="group" aria-label="New group"><div class="ma-srow">` +
         `<div class="ma-field"><label for="ma-nname-${esc(host.panelId)}">Group name</label><input class="ws-in ma-in" id="ma-nname-${esc(host.panelId)}" data-ma="nname" maxlength="30" autocomplete="off" spellcheck="false" placeholder="the firm's name"></div>` +
         `<div class="ma-field"><label for="ma-ntype-${esc(host.panelId)}">Type</label><select class="ws-sel ma-in" id="ma-ntype-${esc(host.panelId)}" data-ma="ntype"><option value="eval">Evals</option><option value="funded">Funded</option></select></div>` +
         `<div class="ma-field"><label for="ma-nrisk-${esc(host.panelId)}">Risk %</label><input class="ws-num ma-in ma-rin" id="ma-nrisk-${esc(host.panelId)}" data-ma="nrisk" inputmode="decimal" autocomplete="off" value="5"></div>` +
@@ -338,6 +353,7 @@ function mount(el, host) {
 
   function move(name, toActive) {
     const g = group(); if (!g) return;
+    const lw = lockWhy(); if (lw) { say(lw, true); render(); return; }
     const L = MC.lanes(g, S, typeof host.working === 'function' ? host.working() : []), c = L.active.concat(L.bench).find(x => x.name === name);
     if (!c) return;
     if (c.member && c.benched === !toActive) return;   // already there
@@ -364,6 +380,7 @@ function mount(el, host) {
 
   el.addEventListener('click', e => {
     const tab = e.target.closest('.ma-tabs [data-tab]');
+    if (tab && FIXED) return;
     if (tab) {
       P.tab = tab.dataset.tab;
       for (const t of el.querySelectorAll('.ma-tabs [data-tab]')) t.setAttribute('aria-selected', String(t === tab));
@@ -375,6 +392,8 @@ function mount(el, host) {
     if (chip && body.contains(chip)) { const g = group(), name = chip.dataset.chip, L = g ? MC.lanes(g, S, host.working ? host.working() : []) : null, c = L ? L.active.concat(L.bench).find(x => x.name === name) : null; if (c) move(name, !(c.member && !c.benched)); return; }
     const b = e.target.closest('button[data-ma]'); if (!b || !body.contains(b)) return;
     const g = group(), act = b.dataset.ma;
+    if (FIXED && !['remove', 'join-yes', 'join-no'].includes(act)) return;          // one fixed group: nothing that changes a group
+    if ((act === 'remove' || act === 'join-yes') && lockWhy()) { P.join = null; P.removeAsk = ''; say(lockWhy(), true); render(); return; }
     if (act !== 'remove') P.removeAsk = '';
     if (act === 'remove' && g) {   // 1.40.0 (audit 6): a member NinjaTrader does not list now, out of the group (a second click sends it)
       const name = b.dataset.name;
@@ -420,6 +439,7 @@ function mount(el, host) {
   });
   el.addEventListener('change', e => {
     const t = e.target, act = t.dataset && t.dataset.ma;
+    if (FIXED) return;
     if (act === 'group') { P.gid = t.value; savePick(P.gid); P.settings = false; P.delAsk = false; P.join = null; P.chipWhy.clear(); say(DEFAULT_TOAST); render(); }
     else if (act === 'risk') {
       const g = group(); if (!g) return;
@@ -451,10 +471,10 @@ function mount(el, host) {
     if (name) move(name, l.dataset.lane === 'in');
   });
   /* a new group made here is chosen once ChartBridge sends it */
-  const pickNew = () => { if (!P.wantName) return; const g = groups().find(x => x.name.toLowerCase() === P.wantName); if (g) { P.gid = g.id; savePick(g.id); P.wantName = ''; } };
+  const pickNew = () => { if (FIXED || !P.wantName) return; const g = groups().find(x => x.name.toLowerCase() === P.wantName); if (g) { P.gid = g.id; savePick(g.id); P.wantName = ''; } };
   const renderAll = () => { pickNew(); render(); };
   renderAll();
-  return { render: renderAll, destroy: () => { if (cop) cop.destroy(); }, state: P };
+  return { render: renderAll, destroy: () => { if (cop) cop.destroy(); }, state: P, get feed() { return F; } };   // the review of 97, F3: what it was handed, read only
 }
 
 return { mount, PICK_KEY, DEFAULT_TOAST };
