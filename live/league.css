@@ -8,6 +8,12 @@ body:not(.lg-on) .lg-view.lg-in-ws { display: none !important; }
 
 .lg-view { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; color: var(--ws-text); font-family: var(--ws-sans); }
 .lg-wrap { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 6px; padding: 6px 10px 10px; }
+/* 1.47.0: the Colosseum's head: its name in the title font (a title, never a live value), gold, with the short gold rule of the
+   chosen look, and what the tab is in one line */
+.lg-top { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; min-width: 0; padding: 4px 0 2px; }
+.lg-word { margin: 0; font: 700 20px var(--ws-title-font); letter-spacing: .12em; text-transform: uppercase; color: var(--ws-gold); }
+.lg-word::after { content: ""; display: block; width: 32px; height: 2px; margin-top: 4px; border-radius: 2px; background: var(--ws-gold); }
+.lg-sub { font-size: 12px; color: var(--ws-text2); }
 .lg-head { display: flex; align-items: center; gap: 12px; min-width: 0; flex-wrap: wrap; }
 .lg-title { font: 600 14px var(--ws-sans); }
 .lg-shadow { font: 600 11px var(--ws-mono); letter-spacing: .08em; color: var(--ws-soft); border: 1px dashed var(--ws-tint-line); border-radius: 6px; padding: 2px 8px; }
@@ -28,6 +34,14 @@ body:not(.lg-on) .lg-view.lg-in-ws { display: none !important; }
 .lg-cnote { font-size: 11px; color: var(--ws-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .lg-chart { flex: 1 1 auto; min-height: 0; position: relative; }
 .lg-side { min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 8px; overflow: auto; }
+/* 1.47.0: the watch: ChartBridge's traders in Shadow, read only, in the chosen look's raised box (the radius and shadow tokens
+   are builder 1's, used with their fallbacks) */
+.lg-watch { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; background: var(--ws-row); border: 1px solid var(--ws-line2); border-radius: var(--ws-box-radius, 18px); box-shadow: var(--ws-box-shadow, 0 16px 36px rgba(0, 0, 0, .6), inset 0 1px 0 rgba(255, 255, 255, .035)); }
+.lg-watch .lg-loghead { color: var(--ws-gold-text); }
+.lg-watch p { margin: 0; font-size: 12px; }
+.lg-wlist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.lg-wrow { padding: 6px 8px; border-radius: 12px; background: var(--ws-panel); font-size: 12px; display: flex; flex-direction: column; gap: 2px; }
+.lg-later { font-size: 11px; }
 .lg-seats { display: flex; flex-direction: column; gap: 6px; }
 .lg-seat { display: flex; gap: 8px; align-items: flex-start; padding: 6px 8px; border: 1px solid var(--ws-line); border-left: 3px solid var(--seat); border-radius: 6px; background: var(--ws-panel); }
 .lg-sbody { min-width: 0; display: flex; flex-direction: column; gap: 2px; font-size: 12px; }

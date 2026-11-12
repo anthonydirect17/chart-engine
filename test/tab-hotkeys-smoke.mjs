@@ -81,7 +81,7 @@ try {
     { name: 'Legion', cls: 'fl-on', toggle: () => page.click('#wsFleetTab') },
     { name: 'Agent', cls: 'ag-on', toggle: () => page.click('#wsAgentTab') },
     { name: 'Bot', cls: 'bt-on', toggle: () => toggleTab(page, 'bot') },
-    { name: 'League', cls: 'lg-on', toggle: () => page.click('#wsLeagueTab') },
+    { name: 'Colosseum', cls: 'lg-on', toggle: () => page.click('#wsLeagueTab') },   // 1.47.0: the League tab is the Colosseum
   ];
   await page.waitForFunction(() => !document.getElementById('wsFleetTab').hidden && !document.getElementById('wsAgentTab').hidden && !document.getElementById('wsLeagueTab').hidden, null, { timeout: 20000 }).catch(() => {});
   for (const t of tabs) {
