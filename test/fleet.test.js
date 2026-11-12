@@ -974,6 +974,90 @@ test('the pick: one list a lane, sent as agentPick; locked in Auto and while the
   assert.ok(P.fv.state().draws['lane-eval'] > draws && P.fv.state().draws['lane-funded'] === fdraws, 'the other lane (and an open list in it) is left alone');
 });
 
+
+/* ---------------------------------------------------------------- a lane's own Multi-Account panel (1.47.0, the reuse map) */
+test('the narrow feed: what the panel reads, memberBench and accountGroup, and every other send refused by name', () => {
+  const posted = [], AF = { S: { accounts: [], groups: [{ id: 'g1', name: 'Lucid', members: ['SIM-A', 'SIM-B'] }, { id: 'g2', name: 'Other', members: ['SIM-H'] }] },
+    post: m => { posted.push(m); return true; }, accountGroup: (...a) => { posted.push(['accountGroup'].concat(a)); return true; },
+    joinRefusal: () => 'r', joinPlan: () => ({ mode: 'auto' }), joinWords: () => 'w',
+    send: () => { throw new Error('send reached'); }, sendOrder: () => { throw new Error('sendOrder reached'); }, memberRules: () => { throw new Error('memberRules reached'); }, limit: () => { throw new Error('limit reached'); } };
+  let lock = '';
+  const other = { g2: '' };
+  const f = F.laneFeed(AF, () => lock, 'g1', gid => other[gid]);
+  assert.deepStrictEqual(Object.keys(f).sort(), ['S', 'accountGroup', 'joinPlan', 'joinRefusal', 'joinWords', 'post', 'refused'], 'nothing else of the page\'s feed is there');
+  assert.ok(Object.isFrozen(f), 'and nothing can be added to it');
+  assert.strictEqual(f.S, AF.S); assert.strictEqual(f.joinRefusal('A', {}), 'r'); assert.deepStrictEqual(f.joinPlan('A', {}, null), { mode: 'auto' }); assert.strictEqual(f.joinWords({}), 'w');
+  // the sends of this lane: a bench move of its member, a join into its group, a removal of its member
+  assert.strictEqual(f.post({ type: 'memberBench', cid: 'c1', account: 'SIM-A', benched: true }), true);
+  assert.strictEqual(f.accountGroup('SIM-E', 'g1', '50000', { size: 50000 }, 'c2'), true, 'an account in no group joins');
+  assert.strictEqual(f.accountGroup('SIM-B', null, '', null, 'c3'), true, 'a member leaves');
+  assert.strictEqual(posted.length, 3);
+  // every other send the panel has, and a few it does not, refused by name
+  const others = [{ type: 'groupSave', cid: 'c', name: 'X', accountType: 'funded' }, { type: 'groupDelete', cid: 'c', group: 'g1' }, { type: 'accountGroup', cid: 'c', account: 'SIM-E', group: 'g1' },
+    { type: 'memberRules', account: 'SIM-A' }, { type: 'accountLimits', account: 'SIM-A' }, { type: 'order' }, { type: 'agentMode', agent: 'a', mode: 'auto' }, { type: 'agentKillAllProp' },
+    { type: 'memberBench', account: 'SIM-A', benched: 'yes' }, { type: 'memberBench', account: 'SIM-A', benched: true, group: 'g2' }, { type: 'memberBench', benched: true }, null, 'memberBench'];
+  for (const m of others) assert.strictEqual(f.post(m), false, JSON.stringify(m));
+  assert.deepStrictEqual(f.refused.slice(0, 8), ['groupSave', 'groupDelete', 'accountGroup', 'memberRules', 'accountLimits', 'order', 'agentMode', 'agentKillAllProp']);
+  assert.strictEqual(f.accountGroup(7, 'g1'), false); assert.strictEqual(f.accountGroup('SIM-E', 7), false);
+  // BOUND TO ITS LANE (the review of 97, F2, the reviewer's probes): nothing into another group, nothing out of another group,
+  // no bench move there; taking an account from another group asks that group's lock too
+  assert.strictEqual(f.accountGroup('SIM-H', 'g2'), false, 'into another group');
+  assert.strictEqual(f.accountGroup('SIM-A', 'g2'), false, 'this lane\'s member sent to another group');
+  assert.strictEqual(f.accountGroup('SIM-H', null), false, 'another group\'s member taken out');
+  assert.strictEqual(f.accountGroup('SIM-E', null), false, 'an account in no group "taken out"');
+  assert.strictEqual(f.post({ type: 'memberBench', account: 'SIM-H', benched: true }), false, 'a bench move in another group');
+  assert.strictEqual(f.post({ type: 'memberBench', account: 'SIM-E', benched: true }), false, 'a bench move for an account in no group');
+  other.g2 = 'The lane is in Auto: switch Armed off before an account moves.';
+  assert.strictEqual(f.accountGroup('SIM-H', 'g1'), false, 'pulled from the other lane while it is in Auto');
+  other.g2 = '';
+  assert.strictEqual(f.accountGroup('SIM-H', 'g1'), true, 'and allowed once that lane is free');
+  assert.strictEqual(posted.length, 4);
+  for (const bad of [F.laneFeed(AF, () => '', 'g1', () => { throw new Error('x'); }), F.laneFeed(AF, () => '', 'g1'), F.laneFeed(AF, () => '', 'g1', () => null)])
+    assert.strictEqual(bad.accountGroup('SIM-H', 'g1'), false, 'the other lock not known: refused');
+  // no lock function, no group id, or the groups not known: everything refused
+  for (const bad of [F.laneFeed(AF), F.laneFeed(AF, () => ''), F.laneFeed(AF, () => '', ''), F.laneFeed({ S: {}, post: AF.post, accountGroup: AF.accountGroup }, () => '', 'g1', () => '')]) {
+    assert.strictEqual(bad.post({ type: 'memberBench', account: 'SIM-A', benched: true }), false);
+    assert.strictEqual(bad.accountGroup('SIM-E', 'g1', '', null, 'c9'), false);
+    assert.strictEqual(bad.accountGroup('SIM-A', null, '', null, 'c9'), false);
+  }
+  for (const gid of ['', undefined, null]) assert.strictEqual(F.laneFeed(AF, () => '', gid, () => '').accountGroup('SIM-E', gid), false, 'no lane group: nothing joins, even "into" the same nothing');
+  assert.strictEqual(posted.length, 4, 'only the good sends reached the page\'s feed');
+  // the lock: with a reason both sends are refused here too, whatever the panel shows
+  lock = 'The lane is in Auto: switch Armed off before an account moves.';
+  assert.strictEqual(f.post({ type: 'memberBench', account: 'SIM-A', benched: false }), false);
+  assert.strictEqual(f.accountGroup('SIM-E', 'g1', '', null, 'c4'), false);
+  const g = F.laneFeed(AF, () => { throw new Error('broken'); }, 'g1', () => '');
+  assert.strictEqual(g.post({ type: 'memberBench', account: 'SIM-A', benched: true }), false, 'a lock that cannot be read refuses');
+  // a lock that answers anything but text (null, a number, an object) is "not known", so both sends are refused
+  for (const odd of [null, undefined, 0, 1, {}, true]) {
+    const h = F.laneFeed(AF, () => odd, 'g1', () => '');
+    assert.strictEqual(h.post({ type: 'memberBench', account: 'SIM-A', benched: true }), false, 'lock ' + String(odd));
+    assert.strictEqual(h.accountGroup('SIM-E', 'g1', '', null, 'c5'), false, 'lock ' + String(odd));
+  }
+  assert.strictEqual(posted.length, 4);
+  // the bench move's shape under another type is not a bench move: only memberBench passes
+  for (const type of ['groupDelete', 'accountGroup', 'memberRules', 'order', 'MemberBench', undefined])
+    assert.strictEqual(F.laneMaySend({ type, account: 'SIM-A', benched: true }), false, String(type));
+  assert.strictEqual(F.laneMaySend({ type: 'memberBench', account: 'SIM-A', benched: true }), true);
+});
+
+test('a lane\'s lock: moves are free only while its one trader is in Shadow and holds nothing; not known is locked', () => {
+  const V = '0.6.21', L = list => F.lanes(list, groups, accounts, V, liveCards())[0];
+  assert.strictEqual(F.laneLock(L([evalTrader()]), true), '');
+  assert.match(F.laneLock(L([evalTrader({ mode: 'auto' })]), true), /in Auto: switch Armed off/);
+  assert.match(F.laneLock(L([evalTrader({ mode: 'copilot' })]), true), /not in Shadow \(Copilot\)/);
+  assert.match(F.laneLock(L([evalTrader({ mode: 'copilot', owns: false, proposal: true })]), true), /not in Shadow/, 'a proposal is open only in Copilot: refused (the review of 97, F5)');
+  assert.match(F.laneLock(L([evalTrader({ owns: true })]), true), /holds a position or a working entry/);
+  assert.match(F.laneLock(L([evalTrader(), agent('twin', { mode: 'shadow', account: null, group: { id: 'g1', name: 'Evals' }, seats: [] })]), true), /Two traders are on this lane/);
+  assert.strictEqual(F.laneLock(L([]), true), '', 'heard, and a lane with no trader: nothing trades it, moves are free');
+  // NOT KNOWN IS LOCKED (the review of 97, F1): no lane, a lane not heard yet, before the groups message, before the first agent message
+  for (const [why, l, heard] of [['null', null, true], ['undefined', undefined, true], ['not a lane', { traders: 'x' }, true],
+    ['before the groups message', F.lanes([], null, null, V, null)[0], false], ['groups heard, no agent message yet', F.lanes([], groups, accounts, V, null)[0], false],
+    ['a free lane, heard not said', L([evalTrader()]), undefined], ['heard as text', L([evalTrader()]), 'yes']])
+    assert.strictEqual(F.laneLock(l, heard), F.NOT_KNOWN, why);
+  assert.match(F.NOT_KNOWN, /^Not known yet/);
+});
+
 /* ---------------------------------------------------------------- the re-review of 94 (answers 22) */
 test('the re-review of 94, R2: a doubled lane with a trader in Copilot (or not said) is never "off"; one click only switches off', () => {
   const V = '0.6.21', cards = liveCards();

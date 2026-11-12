@@ -82,7 +82,7 @@ test('the Colosseum\'s look: the title font for its name only, the chosen box wi
   const css = read('live/league.css').replace(/\/\*[\s\S]*?\*\//g, '');
   assert.match(css, /\.lg-word \{[^}]*font: 700 20px var\(--ws-title-font\)/);
   assert.match(css, /\.lg-watch \{[^}]*border-radius: var\(--ws-box-radius, 18px\);[^}]*box-shadow: var\(--ws-box-shadow, [^;]+\);/);
-  assert.doesNotMatch(read('live/workspace.css'), /--ws-box-radius:|--ws-box-shadow:/, 'the two tokens are defined by builder 1, not here');
+  assert.match(read('live/workspace.css'), /--ws-box-radius:[^;]+;[\s\S]*--ws-box-shadow:/, 'the two tokens come from builder 1 (chart 1.47.0, on main); the Colosseum only reads them');
   assert.doesNotMatch(css, /--ws-buy|--ws-sell/, 'no green or red: nothing on the watch is P&L or a side');
 });
 
