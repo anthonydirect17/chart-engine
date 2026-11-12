@@ -1339,7 +1339,7 @@ function copilotRouter(doc) {
   return r;
 }
 
-/* ======================================================================== Praetorian (chart 1.48.0)
+/* ======================================================================== Praetorian (chart 1.51.0)
  * Anthony 2026-11-11: the Agent tab and the Bot tab as one tab, Praetorian, "focused on the personal (not prop business)
  * accounts"; "They already have all the rules and safety's built in". The two desks are mounted as they are; this is the one
  * thing neither had: a gate on the connection they are handed (live/workspace.js praetorianLink), so that from Praetorian
@@ -1559,7 +1559,7 @@ function prCheck(m, st) {
  * the reason. Never adds a choice and never offers one pickerChoices did not.
  */
 function prChoices(list, ok, opts) {
-  /* opts (1.49.0, Legion's trader desk): { name ('Praetorian' by default), groupOk (a group id's test; none: no group is
+  /* opts (1.52.0, Legion's trader desk): { name ('Praetorian' by default), groupOk (a group id's test; none: no group is
      offered), notHere (the reason words for a single account) }. Praetorian passes none of them and is unchanged. */
   const x = opts || {}, name = typeof x.name === 'string' && x.name ? x.name : 'Praetorian';
   const notHere = typeof x.notHere === 'string' && x.notHere ? x.notHere : 'a prop account or one the page cannot tell';
@@ -1593,7 +1593,7 @@ function praetorianLink(feed, onHear, opts) {
     noHome: L.noHome, botWhy: L.botWhy, accountOk: L.accountOk, named: L.named });
 }
 /**
- * What both links share (chart 1.49.0): the gate hears `feed` first; post(m) sends only what the gate passes. An account or
+ * What both links share (chart 1.52.0): the gate hears `feed` first; post(m) sends only what the gate passes. An account or
  * group change (agentAccount, botAccount) for a trader or the bot not in Shadow is never sent as it is (the coordinator's
  * decision, answers B4-2 item 6: None is shared by both desks, and a mode must not travel with a move): the link sends
  * Shadow first (a stop), keeps the change, and posts it with keepMode 'shadow' only once ChartBridge's own message shows
@@ -1657,7 +1657,7 @@ function praetorianGate() {
     hear(m) {
       if (!plainObj(m)) return;
       if (m.type === 'accounts') S.accounts = m;
-      else if (m.type === 'groups') S.groups = m;   // 1.49.0: only to say when a group trader has no home
+      else if (m.type === 'groups') S.groups = m;   // 1.52.0: only to say when a group trader has no home
       else if (m.type === 'agent' && typeof m.agent === 'string') S.agents.set(m.agent, m);
       else if (m.type === 'bot') S.bot = m;
     },
@@ -1671,7 +1671,7 @@ function praetorianGate() {
   };
 }
 
-/* ======================================================================== Legion's trader desk (chart 1.49.0)
+/* ======================================================================== Legion's trader desk (chart 1.52.0)
  * The review of 102 (F5) and the coordinator's decision (answers B4-1, section 2): what the Agent and Bot tabs did for prop
  * traders, groups and the bot on a prop account goes to Legion, as the SAME two desks behind Praetorian's gate turned round.
  * It passes, for anyone ChartBridge has described: a kill switch ON, a trader's Shadow (exactly 'shadow'), and the two

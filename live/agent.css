@@ -739,7 +739,7 @@ body.ag-agents .bt-props { --bt-corner-bottom: 56px; }
 .ag-view .ag-bsdclear:disabled { opacity: .5; cursor: not-allowed; }
 .ag-view .ag-tier.tier-league { color: var(--ag-warn); border-color: rgba(255, 194, 102, .55); border-style: dashed; }
 
-/* 1.48.0 Praetorian (Anthony 2026-11-11): the Agent tab and the Bot tab as one tab. In the top tabs, its name and its two
+/* 1.51.0 Praetorian (Anthony 2026-11-11): the Agent tab and the Bot tab as one tab. In the top tabs, its name and its two
    sides (the two desks' own buttons, the Bot's alert kept) in one pill group. No head row: Layout 5's column needs the height;
    a held-back trader says why in its own Mode card. */
 /* Its name is a small gold caption over its two sides, so the group is no wider than the two buttons were (the top bar's
@@ -751,7 +751,7 @@ body.ag-agents .bt-props { --bt-corner-bottom: 56px; }
 #wsTopTabs .pr-tabs .ag-tabbtn, #wsTopTabs .pr-tabs .bt-tabbtn { grid-row: 2; height: 22px; font-weight: 500; padding: 0 9px; }
 .ag-prwhy:not([hidden]), .bt-prwhy:not([hidden]) { color: var(--ws-warn); }
 
-/* 1.49.0 Legion's trader desk (live/legion-desk.js): the same Agent and Bot desks, mounted once in Legion Setup by builder 1;
+/* 1.52.0 Legion's trader desk (live/legion-desk.js): the same Agent and Bot desks, mounted once in Legion Setup by builder 1;
    its head is the page's two-way switch and one line on what it reaches. The desks keep their own look. */
 .lgd { display: flex; flex-direction: column; gap: 6px; min-height: 640px; }
 .lgd-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; min-width: 0; }

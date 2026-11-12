@@ -1,4 +1,4 @@
-// Legion's trader desk (chart 1.49.0, live/legion-desk.js) in a browser, beside Praetorian, as the page will have them: the real
+// Legion's trader desk (chart 1.52.0, live/legion-desk.js) in a browser, beside Praetorian, as the page will have them: the real
 // Agent and Bot desks twice on one stand-in feed, Praetorian's on AgentCore.praetorianLink and Legion's mounted by
 // LegionDesk.mount on AgentCore.legionLink. Made-up messages only: MINE-1 is the personal account, PROP-1 and PROP-2 prop,
 // SIM-A Sim, group g1 two prop accounts.

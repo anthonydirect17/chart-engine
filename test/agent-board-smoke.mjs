@@ -13,7 +13,7 @@
 //   npm run smoke:agent-board   (CHROMIUM_PATH=/path/to/chrome; AGENT_BOARD_PORT, else the first free port from 9011; SHOTS=dir)
 //   - 1.29.0 (SPEC CE-2): a league seat in the picker (Sim only, a LIVE one listed with the reason) and its PROVING n of 100; an
 //     amber stand-down row with its why, kind and time, and Clear stand-down (agentStandDownClear, one click).
-//   - 1.49.0 (answers B4-2 item 7): Assign hero, a group trader's Start in Shadow and a group's Clear stand-down run end to end
+//   - 1.52.0 (answers B4-2 item 7): Assign hero, a group trader's Start in Shadow and a group's Clear stand-down run end to end
 //     on Legion's trader desk (test/legion-desk-page.html; --personal=EVAL-A makes SIM-D prop, so Group B is Legion's), and a
 //     group Legion refuses (Group A, Sim only) is held back there with the reason; on Praetorian they are held back.
 // Screenshots: agent-board, agent-board-legion-assigned, agent-board-assign-ask, agent-board-assigned, agent-board-off, agent-board-standdown, agent-board-killed, agent-board-picker (.png in test/out).
@@ -72,13 +72,13 @@ try {
     function Spy(url, p) { const s = p === undefined ? new Real(url) : new Real(url, p); const rec = { msgs: [] }; const send = s.send.bind(s); s.send = d => { let m = null; try { m = JSON.parse(d); if (/^agent/.test(m.type)) rec.msgs.push(m); } catch (e) { /* not JSON */ } if (m && m.type === 'agentMode' && window.__dropMode) return; return send(d); }; socks.push(rec); return s; }
     Spy.prototype = Real.prototype; for (const k of ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED']) Spy[k] = Real[k];
     window.WebSocket = Spy;
-    /* 1.48.0: the desk's state on the page (window.workspace) or in the Agent window (window.agentDesk) */
+    /* 1.51.0: the desk's state on the page (window.workspace) or in the Agent window (window.agentDesk) */
     window.__st = () => (window.workspace ? window.workspace.agent() : window.agentDesk.state());
   });
   const page = await ctx.newPage();
   page.on('pageerror', e => fail('page error: ' + e.message));
   page.on('dialog', d => { fail('a browser dialog: ' + d.message()); d.dismiss(); });
-  /* 1.48.0 (Praetorian): Assign hero and a group's Clear stand-down are the prop business: on the page they are not on
+  /* 1.51.0 (Praetorian): Assign hero and a group's Clear stand-down are the prop business: on the page they are not on
      Praetorian (the end of this smoke checks that), and the Agent window (Pop out, agent.html, the page's full feed as before)
      keeps them. So the board runs there: the same desk, the same code */
   await page.goto(`http://localhost:${port}/live/agent.html`);
@@ -123,16 +123,16 @@ try {
   check(wide, 'no sideways scroll at 1440 px');
   await page.screenshot({ path: path.join(SHOTS, 'agent-board.png') });
 
-  /* 1.48.0 (the review of 102, F1 and F5): the Agent window is Praetorian too. Assign hero, a group trader's Start in Shadow
+  /* 1.51.0 (the review of 102, F1 and F5): the Agent window is Praetorian too. Assign hero, a group trader's Start in Shadow
      and a group's Clear stand-down are the prop business: held back here, with the reason; this smoke runs them end to end
-     on Legion's trader desk further down (1.49.0). Their checks here are the hold-backs. */
+     on Legion's trader desk further down (1.52.0). Their checks here are the hold-backs. */
   console.log('  Assign hero and a group trader\'s Start in Shadow run on Legion\'s trader desk (below); here they are held back');
   const asg = await page.$eval('#agView [data-act="bAssign"][data-gid="g2"]', b => ({ d: b.disabled, t: b.title }));
-  check(asg.d && /Not on Praetorian: a group is the prop business/.test(asg.t), '1.48.0: in the Agent window too (F1), Assign hero is held back with the reason: ' + JSON.stringify(asg));
+  check(asg.d && /Not on Praetorian: a group is the prop business/.test(asg.t), '1.51.0: in the Agent window too (F1), Assign hero is held back with the reason: ' + JSON.stringify(asg));
   const before = (await sent()).length;
   await page.evaluate(() => { const b = document.querySelector('#agView [data-act="bAssign"][data-gid="g2"]'); b.disabled = false; b.click(); });
   await sleep(300);
-  check((await sent()).length === before && /Not on Praetorian/.test(await page.textContent('#agView [data-k="bLine"]')), '1.48.0: Assign hero forced in the Agent window: nothing sent, the reason said');
+  check((await sent()).length === before && /Not on Praetorian/.test(await page.textContent('#agView [data-k="bLine"]')), '1.51.0: Assign hero forced in the Agent window: nothing sent, the reason said');
   /* ---------------- ChartBridge's line on the board (Anthony 2026-10-22): it lay over Desk and Kill all agents (a "no heartbeat"
      warning, now and then, made the Desk click below time out); in the band above the board it covers neither and moves neither */
   console.log('ChartBridge\'s line on the board: in the band above it, over no Desk or Kill all agents, moving neither');
@@ -159,9 +159,9 @@ try {
     check(inTray && b0.length === 2 && JSON.stringify(b1) === JSON.stringify(b0) && !b1.some(s => s.endsWith('covered')), 'at ' + w + ' x ' + h + ' ChartBridge\'s line on the board sits in the band above it, over no Desk or Kill all agents, moving neither: ' + JSON.stringify({ inTray, b0, b1 }));
     await mp.click('#wsAlertClose');
   }
-  /* 1.48.0 Praetorian on the page: Assign hero held back with the reason; a group's Clear stand-down refused by the gate */
+  /* 1.51.0 Praetorian on the page: Assign hero held back with the reason; a group's Clear stand-down refused by the gate */
   const assign = await mp.$('#agView [data-act="bAssign"]');
-  if (assign) check(await assign.evaluate(b => b.disabled && /Not on Praetorian: a group is the prop business/.test(b.title)), '1.48.0: on the page, Assign hero is held back with the reason');
+  if (assign) check(await assign.evaluate(b => b.disabled && /Not on Praetorian: a group is the prop business/.test(b.title)), '1.51.0: on the page, Assign hero is held back with the reason');
   await mp.close();
   await page.setViewportSize({ width: 1440, height: 900 }); await sleep(400);
 
@@ -197,11 +197,11 @@ try {
   check(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'no sideways scroll with the stand-down row');
   await page.screenshot({ path: path.join(SHOTS, 'agent-board-standdown.png') });
   const sd = await page.$eval('#agView [data-act="bSdClear"][data-gid="' + gidA + '"]', b => ({ d: b.disabled, t: b.title }));
-  check(sd.d && /Not on Praetorian: a stand-down is on a group/.test(sd.t), '1.48.0 (F6): a group\'s Clear stand-down held back with the reason (it runs on Legion\'s trader desk, below): ' + JSON.stringify(sd));
+  check(sd.d && /Not on Praetorian: a stand-down is on a group/.test(sd.t), '1.51.0 (F6): a group\'s Clear stand-down held back with the reason (it runs on Legion\'s trader desk, below): ' + JSON.stringify(sd));
   const c0 = (await sent()).length;
   await page.evaluate(g => { const b = document.querySelector('#agView [data-act="bSdClear"][data-gid="' + g + '"]'); b.disabled = false; b.click(); }, gidA);
   await sleep(300);
-  check(!(await sent()).slice(c0).some(m => m.type === 'agentStandDownClear'), '1.48.0: Clear stand-down forced: refused by the gate, nothing sent');
+  check(!(await sent()).slice(c0).some(m => m.type === 'agentStandDownClear'), '1.51.0: Clear stand-down forced: refused by the gate, nothing sent');
 
   /* ---------------- answers B4-2 item 7 (the review of 103, a F-B2): the flows held back on Praetorian run end to end on
      Legion's trader desk: test/legion-desk-page.html mounts LegionDesk on the window's own connection, as Legion Setup will

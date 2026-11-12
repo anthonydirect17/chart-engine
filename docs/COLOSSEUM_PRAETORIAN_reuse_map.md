@@ -38,7 +38,7 @@ Colosseum, Praetorian. No button is rewritten.
   laptop tabs' click already makes). It is never hidden, so the row never jumps.
 - **Legion:** `#wsFleetTab` as it is. Builder 1 owns what it opens and when it is offered.
 - **Colosseum:** `#wsLeagueTab`, its word changed from League to Colosseum, offered as today (The Desk answers).
-- **Praetorian (as built, 1.48.0):** one group in the row: a Praetorian button (opens the side used last, closes it when
+- **Praetorian (as built, 1.51.0):** one group in the row: a Praetorian button (opens the side used last, closes it when
   open) and its two sides, which are the Agent desk's and the Bot desk's own buttons, moved into the group with their
   listeners, their offered state and the Bot's red alert (`bt-alert`). So an alert is never hidden behind a closed tab,
   and every link and smoke that clicks `#wsAgentTab` or `#wsBotTab` keeps working. (The first draft of this map had the

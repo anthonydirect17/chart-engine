@@ -1,4 +1,4 @@
-// Praetorian (chart 1.48.0; Anthony 2026-11-11: the Agent and Bot tabs as one tab, "focused on the personal (not prop
+// Praetorian (chart 1.51.0; Anthony 2026-11-11: the Agent and Bot tabs as one tab, "focused on the personal (not prop
 // business) accounts") in a browser: the real Agent desk (live/agent.js) and Bot desk (live/bot.js), each handed the very
 // connection the page and both pop-out windows build for them (AgentCore.praetorianLink) over a
 // stand-in for the window's feed. Made-up messages only: MINE-1 is the personal account, PROP-1 a prop account, SIM-A Sim.

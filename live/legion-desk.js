@@ -1,5 +1,5 @@
 /*
- * LegionDesk: Legion's trader desk (chart 1.49.0). The review of Praetorian (chart-engine 102, F5) found that once the Agent
+ * LegionDesk: Legion's trader desk (chart 1.52.0). The review of Praetorian (chart-engine 102, F5) found that once the Agent
  * and Bot desks are behind Praetorian's gate, everything they did for prop traders, groups and the bot on a prop account has
  * no home on the page. The coordinator's decision (reuse first): the SAME two desks, mounted a second time behind Praetorian's
  * gate turned round (AgentCore.legionLink): kill switch ON, a trader's Shadow and the acknowledgements for anyone; anything

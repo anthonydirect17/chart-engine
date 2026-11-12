@@ -63,7 +63,7 @@
   `test/pc-updater.test.js`: the allowed git subcommands, the box job's name, useHttpPath read before the one ask, the
   token only after a 404 or 401 and then through the Actions API, one place that asks for it and one that sends it.
 
-## chart 1.49.0 (2026-11-12): Legion's trader desk, the Agent and Bot desks behind Praetorian's gate turned round (page only, no F5)
+## chart 1.52.0 (2026-11-12): Legion's trader desk, the Agent and Bot desks behind Praetorian's gate turned round (page only, no F5)
 
 Rule 12. The review of Praetorian (chart-engine 102, F5) found that, once the Agent and Bot desks are behind Praetorian's
 gate, everything they did for prop traders, groups and the bot on a prop account had no home on the page. The decision
@@ -121,7 +121,7 @@ gate, everything they did for prop traders, groups and the bot on a prop account
   bot's Shadow and hold-back on each desk, a move in Shadow); `test/agent-board-smoke.mjs` runs the board's flows on
   Legion's desk (`test/legion-desk-page.html`, a test page until builder 1's mount is in).
 
-## chart 1.48.0 (2026-11-12): Praetorian, the Agent tab and the Bot tab as one tab for the personal account (page only, no F5)
+## chart 1.51.0 (2026-11-12): Praetorian, the Agent tab and the Bot tab as one tab for the personal account (page only, no F5)
 
 Anthony's direction of 2026-11-11: "The bot and agent tabs ... should be rolled into ... a way to trade any of these bots
 or agents we are training, on the personal account ... They already have all the rules and safety's built in, so there's
@@ -170,7 +170,7 @@ accounts". The name is his: "Praetorian is good". Rule 12: this changes what the
 - **To confirm with Anthony:** Sim accounts are offered on Praetorian (they never reach a prop account, and the Agent and
   Bot tabs are where a trader is tried on Sim); a trader on a group of Sim accounts is held back like any group.
 
-## chart 1.47.0 (2026-11-12): the top tabs and the Colosseum (page only, no F5)
+## chart 1.50.0 (2026-11-12): the top tabs and the Colosseum (page only, no F5)
 
 Anthony's direction of 2026-11-11 (the loop, amendment 1, section 5): four top tabs, Chart, Legion, Colosseum and
 Praetorian, and the League tab becomes the Colosseum, research on the live market. The map of what each part reuses is

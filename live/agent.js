@@ -63,7 +63,7 @@ function create(o) {
   const els = o.els || {};
   const storage = o.storage || { getItem: () => null, setItem: () => {} };
   const popout = !!o.popout;
-  /* 1.49.0 (the review of 103, a F-B1 and b F3): a second copy inside the page (Legion's trader desk): no Pop out, nothing of
+  /* 1.52.0 (the review of 103, a F-B1 and b F3): a second copy inside the page (Legion's trader desk): no Pop out, nothing of
      the page's own (its top bar's parity tags, the Bot tab's card, the corner line, the alert band), shown only when its
      owner says so (showTab, from LegionDesk.show), and a proposal acknowledged only while its card is really on screen.
      keyPrefix: this copy's own names for what it keeps in the browser (the trader chosen, the board, the chart, the filter). */
@@ -185,7 +185,7 @@ function create(o) {
         '<div class="ag-sec ag-card" data-no-motion><div class="ag-sechead"><span class="ag-ttl">Mode</span><span class="ag-lbl" data-k="modeAcct" data-parity="LM01"></span></div>' +
           '<div class="ag-modes" role="group" aria-label="Agent mode" data-k="modes">' + AC.MODES.map(m => '<button type="button" data-mode="' + m + '" data-parity="LM02 LM02-' + m + (m === 'shadow' ? '' : ' OH11') + ' OH09" aria-pressed="false">' + AC.MODE_NAME[m] + '</button>').join('') + '</div>' +
           '<p class="ag-why" data-k="modeWhy" data-parity="LM03" hidden></p>' +
-          '<p class="ag-why ag-prwhy" data-k="prWhy" role="note" hidden></p>' +   // 1.48.0 Praetorian: why this trader is held back here
+          '<p class="ag-why ag-prwhy" data-k="prWhy" role="note" hidden></p>' +   // 1.51.0 Praetorian: why this trader is held back here
           '<button type="button" class="ag-kill" data-act="kill" data-k="kill" data-parity="LM04">Kill switch</button>' +
           '<div class="ag-pgrid"><span>Status</span><span data-k="status" data-parity="LM05">-</span><span>Heartbeat</span><span class="mono" data-k="beat" data-parity="LM06">-</span><span>Last plan</span><span data-k="last" data-parity="LM07">-</span><span>Build</span><span class="mono" data-k="buildRow" data-parity="LM08" title="The build id and stamp, as his hello says them">-</span></div>' +
         '</div>' +
@@ -279,19 +279,19 @@ function create(o) {
   /* ---------------- the window's v3 connection */
   const V3 = o.v3 || null;
   const sendRaw = m => !!V3 && V3.post(m);
-  /* 1.48.0 (Praetorian): the connection the workspace hands this desk says why a message would not go (a trader on a prop
+  /* 1.51.0 (Praetorian): the connection the workspace hands this desk says why a message would not go (a trader on a prop
      account, a group, an account the page cannot tell) and what to hold back; the pop-out window's connection has neither,
      and there nothing changes */
   const refusal = m => (V3 && typeof V3.why === 'function' ? V3.why(m) || '' : '');
   const heldWhy = id => (V3 && typeof V3.traderWhy === 'function' ? V3.traderWhy(id) || '' : '');
-  /* 1.49.0 (answers B4-2, item 5): a trader with no home (its accounts fit neither Praetorian nor Legion): held back like any
+  /* 1.52.0 (answers B4-2, item 5): a trader with no home (its accounts fit neither Praetorian nor Legion): held back like any
      other, but Change account stays offered with None only; the gate lets None go only while ChartBridge says he is flat */
-  /* 1.49.0 (the review of 103, a F-B7): on Legion a group it refuses (not all prop, or prop and Sim) is held back up front on
+  /* 1.52.0 (the review of 103, a F-B7): on Legion a group it refuses (not all prop, or prop and Sim) is held back up front on
      the board too, with the reason, as F6 on Praetorian: '' when Legion may reach it (or on any other desk) */
   const lgNoGroup = gid => (gated && !praetorian && V3 && typeof V3.groupOk === 'function' && !V3.groupOk(gid) ? 'Not on Legion: a group that is not all prop accounts (or prop and Sim); stop its hero here, set it up in Settings, Account groups' : '');
   const noHome = id => (V3 && typeof V3.noHome === 'function' ? V3.noHome(id) || '' : '');
   const praetorian = !!(V3 && V3.personal === true);
-  /* 1.49.0 (Legion's trader desk): the same desk behind the gate turned round (AgentCore.legionLink): its name in every line,
+  /* 1.52.0 (Legion's trader desk): the same desk behind the gate turned round (AgentCore.legionLink): its name in every line,
      groups offered where its gate allows them, Assign hero and Clear stand-down there. o.keys false: the copilot keys never
      reach this copy (the page's Praetorian desk answers them where its tab is shown) */
   const gated = praetorian || !!(V3 && typeof V3.accountOk === 'function');
@@ -330,7 +330,7 @@ function create(o) {
       case 'execs': for (const x of m.list || []) onExec(x, true); renderTrips(); renderFeed(); renderLive(); return;
       case 'reject': onReject(m); return;
       case 'status': onStatus(m); return;
-      case 'linkMove':   // 1.49.0 (round 2, F7): the page's own link: a move kept until Shadow was not made, said, never silent
+      case 'linkMove':   // 1.52.0 (round 2, F7): the page's own link: a move kept until Shadow was not made, said, never silent
         if (typeof m.agent === 'string' && typeof m.text === 'string') { notice({ kind: 'account', level: 'amber', text: m.text }); if (m.agent === S.chosen) put(q('[data-k="acctWhy"]'), 'textContent', m.text); }
         return;
     }
@@ -622,7 +622,7 @@ function create(o) {
      shown (elsewhere it is only counted); the keys count its time on screen from then */
   function seenNow() {
     if (document.visibilityState === 'hidden' || !S.shown || !view) return;
-    if (embedded && !onScreen(view)) return;   // 1.49.0: a folded or hidden copy acknowledges nothing
+    if (embedded && !onScreen(view)) return;   // 1.52.0: a folded or hidden copy acknowledges nothing
     const at = Date.now();
     for (const x of cards.values()) {
       if (x.ended || x.p.agent !== S.chosen) continue;
@@ -664,7 +664,7 @@ function create(o) {
     const c = cid(), r = props.answer(agent, id, ans, Date.now(), c);
     if (r.error) { setMsg(x, r.error); return false; }
     const no = refusal(r.msg);
-    if (no) { props.refused(agent, id); setMsg(x, no); return false; }   // 1.48.0: said as it is, never as "not connected"
+    if (no) { props.refused(agent, id); setMsg(x, no); return false; }   // 1.51.0: said as it is, never as "not connected"
     if (!sendRaw(r.msg)) { props.refused(agent, id); setMsg(x, 'Not sent: not connected to ChartBridge.'); return false; }
     S.pending.set(c, { kind: 'answer', agent, id });
     both(x, el => { for (const btn of el.querySelectorAll('button')) btn.disabled = true; });
@@ -806,7 +806,7 @@ function create(o) {
     const hb = AH ? AH.modeBlock(helperOf(a.agent), a) : {};    // DECISION w: a build that is not a hero stays in Shadow on Sim (fails closed)
     if (H.job && H.job.agent === a.agent) for (const m of AC.MODES) allowed[m] = { ok: false, why: 'Turning him off (Shadow, Flatten, Off): the mode waits until that ends.' };
     for (const m of ['copilot', 'auto']) if (hb[m] && allowed[m].ok && a.mode !== m) allowed[m] = { ok: false, why: hb[m] };
-    /* 1.48.0 (Praetorian): a trader on a prop account, a group or an account the page cannot tell is shown here and can only be
+    /* 1.51.0 (Praetorian): a trader on a prop account, a group or an account the page cannot tell is shown here and can only be
        stopped (its kill switch on, and Off); everything else about it is held back, said in one line (the gate refuses it too) */
     const held = heldWhy(a.agent);
     if (held) for (const m of AC.MODES) allowed[m] = { ok: false, why: 'Held back on ' + tabName + ': ' + held };
@@ -824,7 +824,7 @@ function create(o) {
     if (!why.dataset.refused) { put(why, 'hidden', !(S.autoConfirm > now)); put(why, 'textContent', S.autoConfirm > now ? 'Click Confirm within 4 s: Auto on ' + accWord + (acc.mark === 'LIVE' ? ', a LIVE account.' : '.') : ''); tog(why, 'live', acc.mark === 'LIVE'); }
     const kill = q('[data-k="kill"]');
     put(kill, 'textContent', a.killed ? (S.killConfirm > now ? 'Release: click again' : 'Kill switch on · Release') : 'Kill switch');
-    tog(kill, 'on', !!a.killed); put(kill, 'disabled', !S.signedIn || (!!a.killed && !!held)); attr(kill, 'aria-pressed', String(!!a.killed));   // 1.48.0: on always; the release held back
+    tog(kill, 'on', !!a.killed); put(kill, 'disabled', !S.signedIn || (!!a.killed && !!held)); attr(kill, 'aria-pressed', String(!!a.killed));   // 1.51.0: on always; the release held back
     put(q('[data-k="status"]'), 'textContent', AC.statusText(a)); attr(q('[data-k="status"]'), 'title', AC.statusText(a));   // one line in the column, the whole of it here
     const beat = q('[data-k="beat"]'); put(beat, 'textContent', AC.beatText(a)); put(beat, 'className', 'mono ' + (!a.connected ? 'neg' : a.lastBeatMs > 2500 ? 'warn' : 'pos'));
     put(q('[data-k="account"]'), 'textContent', acc.label);
@@ -832,14 +832,14 @@ function create(o) {
     renderHelper(a);
     const work = AC.workingEntries(S.orders.values(), a).length > 0, open = props.open(a.agent).length;
     const can = AC.rulesChangeable(a, { workingEntry: work, openProposals: open });
-    put(q('[data-k="acctOpen"]'), 'disabled', !S.signedIn || !can.ok || (!!held && !noHome(a.agent)));   // 1.49.0: no home: None only
+    put(q('[data-k="acctOpen"]'), 'disabled', !S.signedIn || !can.ok || (!!held && !noHome(a.agent)));   // 1.52.0: no home: None only
     attr(q('[data-k="acctOpen"]'), 'title', can.ok ? 'Any account ChartBridge says is tradable, except the bot\'s, the copier\'s and another agent\'s; only while the agent is flat' : can.why.replace('change its rules', 'choose its account'));
     /* the 0.5.2 re-review: the question names the mode the agent had when it opened, and is never redrawn with another one; the
        mode changed meanwhile (another page): it closes with a note, nothing sent, and Set asks again */
     if (S.acctAsk) { const stale = AC.askStale(S.acctAskMode, a); if (stale) { S.acctAsk = ''; S.acctAskMode = ''; put(q('[data-k="acctWhy"]'), 'textContent', stale); } }
     put(q('[data-k="acctEdit"]'), 'hidden', !S.acctEdit || !!S.acctAsk);
     put(q('[data-k="acctAsk"]'), 'hidden', !S.acctAsk);
-    if (S.acctAsk) put(q('[data-k="acctAskText"]'), 'textContent', AC.liveQuestion(Object.assign({}, a, { mode: gated ? 'shadow' : S.acctAskMode }), S.acctAsk, choicesFor(a).find(x => x.value === S.acctAsk)));   // 1.49.0: gated, a move goes in Shadow   // keepMode: the mode this question names; 1.27.0: a group names its LIVE members
+    if (S.acctAsk) put(q('[data-k="acctAskText"]'), 'textContent', AC.liveQuestion(Object.assign({}, a, { mode: gated ? 'shadow' : S.acctAskMode }), S.acctAsk, choicesFor(a).find(x => x.value === S.acctAsk)));   // 1.52.0: gated, a move goes in Shadow   // keepMode: the mode this question names; 1.27.0: a group names its LIVE members
     setHtml(q('[data-k="rules"]'), AC.rulesLines(a.rules).map(([k, v]) => '<span>' + esc(k) + '</span><span class="mono">' + esc(v) + '</span>').join('') || '<span>Rules</span><span>not known yet</span>');
     /* ChartBridge 0.5.4 (DECISION 2026-10-10 ag): in a trade, or with an entry or a proposal open, the window alone may change */
     const ce = AC.rulesEditable(a, { workingEntry: work, openProposals: open, version: S.version });
@@ -910,7 +910,7 @@ function create(o) {
       attr(b, 'aria-pressed', String(isOn === on && !!h));
       /* 1.29.1: in the missed-poll grace On waits for a fresh answer (nothing starts on an old one); Off stays as the last good
          answer allows (it ends only the agent shown, and the helper itself answers it) */
-      put(b, 'disabled', !h || H.busy || mine || asking || (isOn ? on || !sel.value || H.slow : !on) || (isOn && !!heldWhy(a.agent)));   // 1.48.0: On held back on Praetorian; Off never
+      put(b, 'disabled', !h || H.busy || mine || asking || (isOn ? on || !sel.value || H.slow : !on) || (isOn && !!heldWhy(a.agent)));   // 1.51.0: On held back on Praetorian; Off never
     }
     const sp = AH.spendText(h && h.spend);
     put(q('[data-k="hSess"]'), 'textContent', sp.session); put(q('[data-k="hAll"]'), 'textContent', sp.overall);
@@ -931,7 +931,7 @@ function create(o) {
   async function helperOn(a) {
     const build = q('[data-k="hPick"]').value;
     if (!build) return;
-    const held = heldWhy(a.agent); if (held) { helperSay('Not started from ' + tabName + ': ' + held + '.'); renderPanel(); return; }   // 1.48.0
+    const held = heldWhy(a.agent); if (held) { helperSay('Not started from ' + tabName + ': ' + held + '.'); renderPanel(); return; }   // 1.51.0
     if (H.slow) { helperSay(SLOW_SENT); renderPanel(); return; }   // 1.29.1: never on an old answer; the press is told why
     delete H.lines[a.agent];
     H.busy = true; helperSay('Asking the PC helper to start him...'); renderPanel();
@@ -966,7 +966,7 @@ function create(o) {
     if (st.action === 'off') { helperOff(a.agent); return; }
     H.job = st.job; H.flatSent = false;
     if (st.action === 'shadow') {
-      const sm = AC.modeMsg(a.agent, 'shadow'), no = refusal(sm);   // 1.48.0 (the review of 102, F2): the gate's own words, never "not signed in"
+      const sm = AC.modeMsg(a.agent, 'shadow'), no = refusal(sm);   // 1.51.0 (the review of 102, F2): the gate's own words, never "not signed in"
       if (!sendAgent(sm, 'mode')) { H.job = null; H.lines[a.agent] = no ? no + ' Nothing was flattened and he stays on.' : 'Shadow could not be sent (not signed in to ChartBridge): nothing was flattened and he stays on.'; renderPanel(); return; }
     } else jobFlatten(st.job);                       // in Shadow already: the Flatten at once
     if (H.job) { jobStep(); flatLoop(); } else renderPanel();
@@ -1000,7 +1000,7 @@ function create(o) {
     renderPanel();
   }
   async function helperSave(a) {
-    const held = heldWhy(a.agent); if (held) { put(q('[data-k="hSetWhy"]'), 'textContent', 'Not set from ' + tabName + ': ' + held + '.'); return; }   // 1.48.0: an Auto-On time starts him
+    const held = heldWhy(a.agent); if (held) { put(q('[data-k="hSetWhy"]'), 'textContent', 'Not set from ' + tabName + ': ' + held + '.'); return; }   // 1.51.0: an Auto-On time starts him
     const r = AH.settingsBody(a.agent, q('[data-k="hAuto"]').value, q('[data-k="hCap"]').value);
     if (r.error) { put(q('[data-k="hSetWhy"]'), 'textContent', r.error); return; }
     const x = await HC.settings(r.body);
@@ -1095,7 +1095,7 @@ function create(o) {
     B.pick = null; B.ask = null;
     const raw = S.groups.list.find(x => x && x.id === gid), c = cid();
     const m = Object.assign({ type: msg.type, cid: c }, msg);
-    const no = refusal(m); if (no) { boardSay(no); return; }   // 1.48.0
+    const no = refusal(m); if (no) { boardSay(no); return; }   // 1.51.0
     if (!S.signedIn || !sendRaw(m)) { boardSay('Not sent: not signed in to ChartBridge.'); return; }
     S.pending.set(c, { kind: 'assign' }); setTimeout(() => S.pending.delete(c), 15000);
     B.job = { agent: id, group: gid, groupName: raw ? raw.name : gid, build, until: Date.now() + AH.ASSIGN_WAIT_MS, cid: c, killed: !!killed };
@@ -1119,7 +1119,7 @@ function create(o) {
   function boardStart(id, build) {
     const a = agents.get(id);
     if (!a || !build || !HC) { boardSay('Nothing was sent: no build known for agent ' + id + '. Pick one on his desk, or set None there to free the slot.'); return; }
-    const held = heldWhy(id); if (held) { boardSay('Nothing was started from ' + tabName + ': ' + held + '.'); return; }   // 1.48.0
+    const held = heldWhy(id); if (held) { boardSay('Nothing was started from ' + tabName + ': ' + held + '.'); return; }   // 1.51.0
     if (B.start) return;
     if (H.slow) { boardSay(SLOW_SENT); return; }   // 1.29.1: never on an old answer
     const st = AH.startBegin(a, build, Date.now());
@@ -1142,7 +1142,7 @@ function create(o) {
     startTimer = setTimeout(startTick, 1000);
   }
   async function startOn(j) {
-    const held = heldWhy(j.agent); if (held) { B.starting = false; boardSay('Nothing was started from ' + tabName + ': ' + held + '.'); return; }   // 1.48.0 (the review of 102, F3): checked again after the Shadow wait
+    const held = heldWhy(j.agent); if (held) { B.starting = false; boardSay('Nothing was started from ' + tabName + ': ' + held + '.'); return; }   // 1.51.0 (the review of 102, F3): checked again after the Shadow wait
     const a = agents.get(j.agent), gate = AH.onGate(a);
     if (gate) { B.starting = false; boardSay(gate); return; }
     const r = await HC.on(a.agent, j.build, a.mode, a.sim);   // the desk's own On (helperOn): his mode, Shadow here, and his sim
@@ -1152,7 +1152,7 @@ function create(o) {
     await pollHelper();
   }
   async function assignOn(j) {
-    const held = heldWhy(j.agent); if (held) { boardSay('Nothing was started from ' + tabName + ': ' + held + '.'); return; }   // 1.48.0 (F3), as startOn
+    const held = heldWhy(j.agent); if (held) { boardSay('Nothing was started from ' + tabName + ': ' + held + '.'); return; }   // 1.51.0 (F3), as startOn
     const a = agents.get(j.agent), gate = AH.onGate(a);   // round 3: as startOn: only in Shadow, his own mode and sim
     if (gate) { boardSay('Agent ' + j.agent + ' is on ' + j.groupName + ', but ' + gate.charAt(0).toLowerCase() + gate.slice(1)); return; }
     const r = await HC.on(a.agent, j.build, a.mode, a.sim);
@@ -1285,7 +1285,7 @@ function create(o) {
      width (Anthony 2026-10-22: the band above the board). */
   const NARROW = typeof matchMedia === 'function' ? matchMedia('(max-width: 1100px)') : null;
   function placeNotes() {
-    if (embedded) return;   // 1.49.0: the page's notes and alert band are placed by the page's own Agent desk, never by a second copy
+    if (embedded) return;   // 1.52.0: the page's notes and alert band are placed by the page's own Agent desk, never by a second copy
     const board = view ? q('[data-k="board"]') : null, onBoard = !!(board && !board.hidden);
     const over = view ? q((NARROW && NARROW.matches) || onBoard ? '[data-k="tray"]' : '[data-k="over"]') : null, main = view ? q('[data-k="main"]') : null;
     const inTab = !!(S.shown && over && ((main && !main.hidden) || onBoard));
@@ -1493,7 +1493,7 @@ function create(o) {
     const c = cid();
     m = Object.assign({ type: m.type, cid: c }, m);            // the contract's order: type, cid, then the message's own keys
     const no = refusal(m);
-    if (no) { notice({ kind: 'refused', level: 'amber', text: no }); return false; }   // 1.48.0: Praetorian's gate, said as it is
+    if (no) { notice({ kind: 'refused', level: 'amber', text: no }); return false; }   // 1.51.0: Praetorian's gate, said as it is
     if (!S.signedIn || !sendRaw(m)) { notice({ kind: 'refused', level: 'amber', text: 'Not sent: not signed in to ChartBridge.' }); return false; }
     S.pending.set(c, { kind });
     setTimeout(() => S.pending.delete(c), 15000);
@@ -1509,8 +1509,8 @@ function create(o) {
   /* 1.27.0: the one picker's choices: None, the groups, single accounts (AC.pickerChoices) */
   function choicesFor(a) {
     const c = AC.pickerChoices(S.accounts, S.groups, a, others());
-    if (gated && a && noHome(a.agent)) return c.map(x => (!x || x.kind === 'none' || x.current ? x : Object.assign({}, x, { ok: false, text: (x.text || x.label || x.name || x.value) + ': not while it has no home (None only)' })));   // 1.49.0, item 5
-    return praetorian ? AC.prChoices(c, n => V3.accountOk(n)) : gated ? AC.prChoices(c, n => V3.accountOk(n), { name: tabName, groupOk: id => V3.groupOk(id), notHere: V3.notHere }) : c;   // 1.48.0: Praetorian offers your personal account, Sim and None only
+    if (gated && a && noHome(a.agent)) return c.map(x => (!x || x.kind === 'none' || x.current ? x : Object.assign({}, x, { ok: false, text: (x.text || x.label || x.name || x.value) + ': not while it has no home (None only)' })));   // 1.52.0, item 5
+    return praetorian ? AC.prChoices(c, n => V3.accountOk(n)) : gated ? AC.prChoices(c, n => V3.accountOk(n), { name: tabName, groupOk: id => V3.groupOk(id), notHere: V3.notHere }) : c;   // 1.51.0: Praetorian offers your personal account, Sim and None only
   }
   function ctxNow(a) { return { workingEntry: AC.workingEntries(S.orders.values(), a).length > 0, openProposals: props.open(a.agent).length, roots: servedRoots(), version: S.version, askedMode: S.acctAsk ? S.acctAskMode : a.mode }; }
   /* DECISION w: while a build that is not a hero runs, no LIVE account (it fails closed: his hello says so without the helper) */
@@ -1525,7 +1525,7 @@ function create(o) {
     if (blocked) { S.acctAsk = ''; put(q('[data-k="acctWhy"]'), 'textContent', blocked); renderPanel(); return; }
     const r = AC.accountChange(a, name, choicesFor(a), ctxNow(a));
     if (r.error) { put(q('[data-k="acctWhy"]'), 'textContent', r.error); return; }
-    /* 1.49.0 (answers B4-2, item 6): on Praetorian and Legion a move goes only in Shadow: the link sends Shadow first */
+    /* 1.52.0 (answers B4-2, item 6): on Praetorian and Legion a move goes only in Shadow: the link sends Shadow first */
     const viaShadow = gated && a.mode !== 'shadow';
     if (sendAgent(r.msg, 'account')) { S.acctEdit = false; S.acctAsk = ''; sentLine('acctWhy', viaShadow ? 'Sent: Shadow first, then the change once ChartBridge shows Shadow; set its mode again after.' : 'Sent: its mode (' + AC.MODE_NAME[r.msg.keepMode] + ') is kept.'); }
     renderPanel();
@@ -1586,7 +1586,7 @@ function create(o) {
       else if (k === 'killAll') killAll();
       else if (k === 'bOpen') { S.board = false; writeJson(K.board, false); choose(act.dataset.agent, true); unmountChart(); render(); }
       else if (k === 'bKill') { const x = agents.get(act.dataset.agent); if (x && !x.killed) { if (sendAgent(AC.killMsg(x.agent, true), 'kill')) boardSay('Kill switch on sent for ' + AC.agentName(x) + '.'); } }
-      else if (k === 'bAssign') { if (praetorian) boardSay('Not on Praetorian: a group is the prop business, set up from Legion\'s trader desk.'); else if (lgNoGroup(act.dataset.gid)) boardSay(lgNoGroup(act.dataset.gid)); else assignPressed(act.dataset.gid); }   // 1.48.0
+      else if (k === 'bAssign') { if (praetorian) boardSay('Not on Praetorian: a group is the prop business, set up from Legion\'s trader desk.'); else if (lgNoGroup(act.dataset.gid)) boardSay(lgNoGroup(act.dataset.gid)); else assignPressed(act.dataset.gid); }   // 1.51.0
       else if (k === 'bPickGo') { const sel = q('[data-k="bPickSel"]'); if (B.pick && sel) assignGo(B.pick.gid, B.pick.agent, sel.value, B.pick.killed); }
       else if (k === 'bYes') { if (B.ask && H.slow) boardSay(SLOW_SENT); else if (B.ask) { const x = B.ask; const ag = agents.get(x.agent); const why = AH.slotFree(ag || { agent: x.agent }, H.status, helperReach()); if (!ag || why) { B.ask = null; boardSay('Nothing was sent: ' + (why || 'that agent is gone') + '. Press Assign hero again.'); } else assignSend(x.gid, x.agent, x.build, x.msg, x.killed); } }   // fix round 1: the free slot asked again at Continue
       else if (k === 'bCancel') { B.pick = null; B.ask = null; boardSay('Nothing was sent.'); }
@@ -1629,7 +1629,7 @@ function create(o) {
       const sel = q('[data-k="acctSel"]'), list = choicesFor(a);
       sel.replaceChildren(...list.map(c => { const op = new Option(c.text, c.value); op.disabled = !c.ok && !c.current; return op; }));
       sel.value = AC.agentAccount(a).value;
-      if (gated && noHome(a.agent)) put(q('[data-k="acctWhy"]'), 'textContent', 'It has no home: only None is offered here, and it goes only while ChartBridge says it is flat.');   // 1.49.0, item 5
+      if (gated && noHome(a.agent)) put(q('[data-k="acctWhy"]'), 'textContent', 'It has no home: only None is offered here, and it goes only while ChartBridge says it is flat.');   // 1.52.0, item 5
       else if (!list.some(c => c.ok && c.kind !== 'none')) put(q('[data-k="acctWhy"]'), 'textContent', 'No other account or group is free and tradable: check one on the Accounts tab.');
       renderPanel(); sel.focus();
     } else if (k === 'acctCancel' || k === 'acctNo') { S.acctEdit = false; S.acctAsk = ''; put(q('[data-k="acctWhy"]'), 'textContent', ''); renderPanel(); }
@@ -1793,7 +1793,7 @@ function create(o) {
       });
       tick();
     },
-    showTab, shown: () => S.shown, seenCheck: () => seenNow(),   // 1.49.0: Legion's desk asks again when its fold opens
+    showTab, shown: () => S.shown, seenCheck: () => seenNow(),   // 1.52.0: Legion's desk asks again when its fold opens
     /** agents are known: the copilot keys work for them too */
     on: () => agents.size() > 0,
     layoutChanged(name) { S.layout = String(name || ''); if (S.shown && !popout) showTab(false); },

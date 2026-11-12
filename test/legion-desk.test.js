@@ -1,5 +1,5 @@
 'use strict';
-// Chart 1.49.0: Legion's trader desk (live/legion-desk.js): the Agent and Bot desks behind Praetorian's gate turned round
+// Chart 1.52.0: Legion's trader desk (live/legion-desk.js): the Agent and Bot desks behind Praetorian's gate turned round
 // (AgentCore.legionLink, live/agent-core.js). The same tests and breaks as Praetorian's gate (test/praetorian.test.js).
 // Made-up traders and accounts only: MINE-1 personal, PROP-1 and PROP-2 prop, SIM-A Sim, LIVE-X a live account not told.
 const test = require('node:test');
