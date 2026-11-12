@@ -1,4 +1,4 @@
-# ChartBridge protocol (v1 market data and fills, v2 orders, v3 accounts, strategies, copier and bot, 0.5.0 agents, 0.5.1 accounts, 0.5.8 prop groups, 0.6.0 group trading, 0.6.1 a group's Type and default hero, 0.6.3 the audit fixes, 0.6.4 the no-trade-record alarm and Merge on an off follower, 0.6.8 the minute book, 0.6.10 the account lifecycle and the NQ tick file, 0.6.11 the bar trail and the narrower 1 second request, 0.6.12 the bar trail follow-ups, 0.6.13 the tick day's morning catch-up and the raw deleted once packed, 0.6.14 the tick day check's rule: short and holes, 0.6.15 the 1 second pull retired: the NQ tick file is the one source, 0.6.16 prop accounts: one Auto restore after a restart (Auto ends at 17:00 ET since 0.6.18), 0.6.17 Kill all for the prop accounts, 0.6.18 entry rules per trader: market entry and no target, 0.6.19 the day's profit stop: a dollar mark per account, 0.6.20 the roster served)
+# ChartBridge protocol (v1 market data and fills, v2 orders, v3 accounts, strategies, copier and bot, 0.5.0 agents, 0.5.1 accounts, 0.5.8 prop groups, 0.6.0 group trading, 0.6.1 a group's Type and default hero, 0.6.3 the audit fixes, 0.6.4 the no-trade-record alarm and Merge on an off follower, 0.6.8 the minute book, 0.6.10 the account lifecycle and the NQ tick file, 0.6.11 the bar trail and the narrower 1 second request, 0.6.12 the bar trail follow-ups, 0.6.13 the tick day's morning catch-up and the raw deleted once packed, 0.6.14 the tick day check's rule: short and holes, 0.6.15 the 1 second pull retired: the NQ tick file is the one source, 0.6.16 prop accounts: one Auto restore after a restart (Auto ends at 17:00 ET since 0.6.18), 0.6.17 Kill all for the prop accounts, 0.6.18 entry rules per trader: market entry and no target, 0.6.19 the day's profit stop: a dollar mark per account, 0.6.20 the roster served, 0.6.21 the pick and the day's profit side)
 
 ChartBridge is a NinjaTrader 8 add-on. It serves the live chart page at `http://localhost:8765/` and
 talks to it over one WebSocket at `ws://localhost:8765/ws`. Everything stays on the local machine.
@@ -3655,7 +3655,8 @@ trade), under its placement gate and in this order:
 1. **Its kill switch goes on** (`agentKill` on: saved in `agent-<id>-kill.txt`, so a restart keeps it; its unfilled entries
    cancelled; its saved Auto removed) and **its mode goes to Shadow**, so releasing the kill switch later leaves Auto off
    until it is set on the page again. These come FIRST (the review of 90, N1), so nothing after them can leave it trading.
-2. **Its own flatten starts** on every seat (`CB#<tag> ag:<id> flat`), in its own try. It cancels **only the agent's own
+2. **Its own flatten starts** on every seat in scope, its prop accounts (a Sim seat of the same group is not flattened;
+   `CB#<tag> ag:<id> flat`), in its own try. It cancels **only the agent's own
    working orders** there, waits for NinjaTrader to confirm them, and closes at market only what the agent owns. An order
    placed by hand, by the bot or by the copier on the same account and contract is **not cancelled: it stays and can still
    fill** (the review's F2; Anthony 2026-11-11: "yes, okay"), and it does **not hold back the agent's own close** (the review
@@ -3703,6 +3704,51 @@ and the Board's KILL ALL AGENTS (agentKill on to every agent) are unchanged.
 The page's Legion tab sends this message (chart 1.45.0, `live/fleet.js`: asked first on the page; the tab's connection can post nothing else); no other page file names it. Checked in `check/AgentHarness.cs` (`PropAccounts`, the
 "kill all" parts, the review's three scenarios among them) and `test/nt8-agents.test.js`.
 
+### The pick, and the day's profit side in accountState (0.6.21)
+
+Build answers 7, part D2 (the ChartBridge half). Built in `ChartBridgeAgents.cs`; `ChartBridgeGroups.cs` gains two lines,
+both in `AccountStateJson`. No order path file changes.
+
+- **`agentPick`** (page to ChartBridge; a signed-in v3 page, gate 7's rate; `reject` with `cid` when refused): `cid`
+  (optional), `agent`, `file`. `file` is the name of a roster file `GET /roster` serves now (a bot's or a lineup's), or
+  `null` for none. Refused: a name that is not plain (letters, digits, `-` and `_`, 40 at most, then `.json`); a file
+  that is not in the roster folder or is not served (with the roster's own reason); no roster folder set; **the trader
+  in Auto** ("agent <id> is in Auto: the pick changes only while it is not"); **the trader exposed** (a position, a
+  working entry or a proposal). The same pick again changes nothing and sends nothing.
+- **Saved** in `agent-<id>-pick.txt` (two lines: a comment, then `pick<TAB><name>`, written whole through a temp file).
+  `null` ALWAYS removes the file, also when it could not be read or understood at the start, so a cleared pick never
+  comes back at a restart. Read at a start; a file that cannot be opened is tried four times, 250 ms apart, and then the
+  trader starts with NO pick and the pages get `pickProblem` (never the old pick). A file that is not one pick line is no
+  pick, with `pickProblem`. It stays until it is changed: a restart, the 17:00 reset and the 18:00 roll keep it.
+  ChartBridge keeps the NAME; the roster file's bytes are checked when Auto is set and at a restore (below).
+- **The roster file is read outside the trader's placement gate, with a 2 s limit** ("the roster folder did not answer in
+  2 s"), so a file that will not open never holds the kill switch, Kill all or a placement.
+- **`GET /roster`** gives each file it serves its `sha256` (of the file's bytes), after `roster`.
+- **Auto is bound to the pick it was armed with.** `agentMode` takes `pick` and `pickSha` (with `mode` `auto` only). A
+  trader WITH a pick goes to Auto only when `pick` names that pick and `pickSha` is the sha256 of its roster file as it is
+  now (what `GET /roster` gave the page); else refused ("Auto must name it and its file's sha256", "the page showed the
+  pick ...", "... changed since the page read the roster"). A trader with NO pick goes to Auto as before (the Agent tab
+  sends neither key), and may not name one. The saved Auto (`agent-<id>-auto.txt`) gains `pick<TAB><name or ->` and
+  `sha<TAB><sha256 or ->`. After a restart Auto comes back only when the pick then is the same name (or still none), was
+  read cleanly, and its file has the same sha256; otherwise the trader stays in Shadow and the pages are told ("Auto was
+  NOT restored after the restart (its pick is ..., and it was armed with ...)", "(its pick file could not be read)", "(the
+  picked file ... cannot be used now ...)", "(the picked file ... changed since it was armed)", "(its saved Auto does not
+  name the pick it was armed with)").
+- **`welcome`** (to the runner) and **`agent`** (to the pages) carry `"pick": "<name>"` only when a file is picked;
+  left out: none. A change sends a fresh `welcome`. A trader with no pick is as in 0.6.20 in every message.
+- The agent channel has no `agentPick` message: a trader can never pick for itself.
+- ChartBridge decides nothing from the pick and reads no rule from the file.
+- **`accountState.profitToday`** and **`profitWhy`**: the day's number for a PROFIT stop, realized plus open, exactly
+  the figure "The day's profit stop (0.6.19)" reads: after a late start (ChartBridge started after 18:02 ET) the
+  realized part is the LARGER of ChartBridge's own figure and NinjaTrader's, where `pnlToday` and `realizedToday` keep
+  the smaller. `null` with `profitWhy` when it is not known (no NinjaTrader realized after a late start, no open P&L, or
+  the second after 18:00 before the day start rolls). They follow the eight numbers, before `src`, in EVERY `accountState`
+  (picked or not): a runner that checks the message's keys in order must know the two (test/fake-agent.mjs does). A runner reads the
+  day's start (for a funded account's size limit) and its day profit stop from this side and its loss limits from
+  `pnlToday`; with `profitToday` null it does not size.
+
+Checked in `check/AgentHarness.cs` (`Pick`).
+
 ### The roster: the Lab's files, served read only (0.6.20)
 
 Build answers 7, part C2. Each bot (and each lineup) the Lab built has one small JSON file of numbers, made by Bot-Lab's
@@ -3724,7 +3770,14 @@ Bot-Lab's own install (a reviewed pull request puts them under Bot-Lab's `roster
   One entry a file, in name order: the file's JSON as it is (`roster`), or why it is not served (`why`). Only plain
   `*.json` files directly in the folder whose name is letters, digits, `-` and `_` (40 at most) before `.json`; never a
   subfolder, never a link (the folder itself must not be one either); at most 200 files (`left` says how many more),
-  each at most 256 KB, valid JSON, an object whose `format` is `specrunner.roster/1` or `specrunner.lineup/1`. A
+  each at most 256 KB, valid JSON, an object whose TOP-LEVEL `format` is `specrunner.roster/1` or
+  `specrunner.lineup/1` (0.6.21: the words in a nested object, a list or a string do not count); the whole answer at
+  most 2 MB (0.6.21: a file that would pass it is listed with "not served: the answer would pass 2 MB"). 0.6.21:
+  `rosterFolder` is a full path on a drive letter (`C:\...`) and nothing else: a path with no drive and a network
+  share (`\\server\share\...`) are refused. Links: a file or a folder that is a link (a reparse point) is never
+  followed; a HARD link in the folder is served like any file, a PARENT folder that is a link is followed, and a file
+  swapped for a link between the listing and the read is read: each needs write access to the folder, which only
+  Bot-Lab's install has. A
   folder that is not there, is a link, or is not a full path: 500 with `{"error": "<why>"}`. The folder's path is never
   sent or logged (it can hold an account's user name).
 - ChartBridge decides nothing from these files. The Bots tab shows them; the spec runner reads its own copy with

@@ -142,6 +142,12 @@ public static class AgentHarness
         return a;
     }
 
+    // 0.6.21 (the review of 93, FIX 2): Auto that names the pick and its file's sha256, as Legion sends it
+    static void ModeAuto(string agent, string pickName, string sha)
+    {
+        P("{\"type\":\"agentMode\",\"cid\":\"m\",\"agent\":\"" + agent + "\",\"mode\":\"auto\",\"pick\":" + (pickName == null ? "null" : "\"" + pickName + "\"") + (sha == null ? "" : ",\"pickSha\":\"" + sha + "\"") + "}");
+    }
+    static string ShaOf(string path) { using (System.Security.Cryptography.SHA256 h = System.Security.Cryptography.SHA256.Create()) return string.Concat(h.ComputeHash(File.ReadAllBytes(path)).Select(x => x.ToString("x2"))); }
     static void Mode(string agent, string mode)
     {
         P("{\"type\":\"agentMode\",\"cid\":\"m\",\"agent\":\"" + agent + "\",\"mode\":\"" + mode + "\"}");
@@ -197,6 +203,7 @@ public static class AgentHarness
             GroupTrading();   // 0.6.0: one agent trades a whole prop group (seats)
             StandDownsAndLeague();   // 0.6.2 (SPEC CE-2): a hero stood down on a group (agent-standdowns.txt) and league seats (Sim only)
             EntryRules();     // 0.6.18: a trader's rules may allow a market entry and an entry with no target (both off by default)
+            Pick();           // 0.6.21: the roster file a trader's runner runs, picked on the page; accountState's profit side
             DayStop();        // 0.6.19: the day's profit stop: the plan's dollar value, and the consistency mark on an account that is not funded
             PropAccounts();   // prop accounts: Auto through the 17:00 reset and one restore after a restart; the personal account, Sim and a no-setting install as before
         }
@@ -5070,6 +5077,113 @@ public static class AgentHarness
         Advance(1000);
         return FlatClose(sime);
     }
+    // 0.6.21 (build answers 7 part D2): the pick, and accountState's profitToday. Made-up roster files.
+    static void Pick()
+    {
+        string rf = Path.Combine(home, "made-up-botlab-pick", "roster");
+        Part("pick: a roster file is picked on the page, saved, and sent to the runner and the pages", () =>
+        {
+            Fresh();
+            Mode("manrae", "shadow");
+            Last2();
+            try { Gone(Path.Combine(Dir, "agent-manrae-pick.txt")); } catch (Exception) { }
+            Restart();
+            Check(!Last(agentOut, "welcome").Contains("\"pick\"") && !ChartBridgeAgents.Get("manrae").StripJson().Contains("\"pick\""), "pick: none picked: welcome and the pages' agent message carry no pick key, as in 0.6.20");
+            ChartBridgeRoster.FolderSetting = "";
+            P("{\"type\":\"agentPick\",\"cid\":\"pk0\",\"agent\":\"manrae\",\"file\":\"alpha.json\"}");
+            Check(PageReject().Contains("alpha.json cannot be picked: no roster folder is set on this PC"), "pick: with no roster folder set nothing can be picked: " + PageReject());
+            Directory.CreateDirectory(rf);
+            ChartBridgeRoster.FolderSetting = rf;
+            File.WriteAllText(Path.Combine(rf, "alpha.json"), "{\"format\":\"specrunner.roster/1\",\"bot\":\"alpha\"}");
+            File.WriteAllText(Path.Combine(rf, "pair.json"), "{\"format\":\"specrunner.lineup/1\",\"lineup\":\"pair\"}");
+            File.WriteAllText(Path.Combine(rf, "broken.json"), "{\"format\":");
+            foreach (string bad in new[] { "\"missing.json\"", "\"broken.json\"", "\"../alpha.json\"", "\"alpha\"", "\"\"", "7", "true", "\"a b.json\"" })
+            {
+                int w0 = Count(agentOut, "welcome");
+                P("{\"type\":\"agentPick\",\"cid\":\"pk1\",\"agent\":\"manrae\",\"file\":" + bad + "}");
+                Check(PageReject().Contains("\"cid\":\"pk1\"") && ChartBridgeAgents.Get("manrae").PickNow() == null && !File.Exists(Path.Combine(Dir, "agent-manrae-pick.txt")) && Count(agentOut, "welcome") == w0,
+                      "pick: " + bad + " is refused, nothing saved, nothing sent: " + PageReject());
+            }
+            P("{\"type\":\"agentPick\",\"cid\":\"pk2\",\"agent\":\"manrae\"}");
+            Check(PageReject().Contains("agentPick needs file"), "pick: a message with no file key is refused: " + PageReject());
+            P("{\"type\":\"agentPick\",\"cid\":\"pk2\",\"agent\":\"manrae\",\"file\":\"alpha.json\",\"sha256\":\"x\"}");
+            Check(PageReject().Contains("unknown key \\\"sha256\\\""), "pick: no other key is taken: " + PageReject());
+            P("{\"type\":\"agentPick\",\"cid\":\"pk2\",\"agent\":\"nobody\",\"file\":\"alpha.json\"}");
+            Check(PageReject().Contains("there is no agent nobody"), "pick: an agent that is not there: " + PageReject());
+            int rj = Count(page, "reject"), wl = Count(agentOut, "welcome");
+            P("{\"type\":\"agentPick\",\"cid\":\"pk3\",\"agent\":\"manrae\",\"file\":\"alpha.json\"}");
+            string saved = FileText("agent-manrae-pick.txt");
+            Check(Count(page, "reject") == rj && ChartBridgeAgents.Get("manrae").PickNow() == "alpha.json" && saved.Contains("pick\talpha.json") && saved.StartsWith("#") && !saved.Contains(rf),
+                  "pick: a served file is picked and saved as one line, the folder's path never in it: " + saved.Replace("\n", " | "));
+            Check(Count(agentOut, "welcome") == wl + 1 && Last(agentOut, "welcome").Contains("\"pick\":\"alpha.json\"") && ChartBridgeAgents.Get("manrae").StripJson().Contains("\"pick\":\"alpha.json\""),
+                  "pick: the runner gets a fresh welcome with the pick, and the pages' agent message carries it");
+            wl = Count(agentOut, "welcome");
+            P("{\"type\":\"agentPick\",\"cid\":\"pk3\",\"agent\":\"manrae\",\"file\":\"alpha.json\"}");
+            Check(Count(page, "reject") == rj && Count(agentOut, "welcome") == wl, "pick: the same pick again changes nothing and sends nothing");
+            P("{\"type\":\"agentPick\",\"cid\":\"pk4\",\"agent\":\"manrae\",\"file\":\"pair.json\"}");
+            Check(ChartBridgeAgents.Get("manrae").PickNow() == "pair.json" && FileText("agent-manrae-pick.txt").Contains("pick\tpair.json") && !FileText("agent-manrae-pick.txt").Contains("alpha"), "pick: a lineup's file replaces it");
+        });
+        Part("pick: it survives a restart and the 17:00 reset, and never changes under a trader that is trading", () =>
+        {
+            Restart();
+            Check(ChartBridgeAgents.Get("manrae").PickNow() == "pair.json" && Last(agentOut, "welcome").Contains("\"pick\":\"pair.json\""), "pick: kept through a restart of ChartBridge");
+            // Auto: refused; the pick as it was (Auto names the pick and its sha256: the review of 93, FIX 2)
+            ModeAuto("manrae", "pair.json", ShaOf(Path.Combine(ChartBridgeRoster.FolderSetting, "pair.json")));
+            P("{\"type\":\"agentPick\",\"cid\":\"pk5\",\"agent\":\"manrae\",\"file\":\"alpha.json\"}");
+            Check(PageReject().Contains("agent manrae is in Auto: the pick changes only while it is not") && ChartBridgeAgents.Get("manrae").PickNow() == "pair.json", "pick: refused while the trader is in Auto: " + PageReject());
+            P("{\"type\":\"agentPick\",\"cid\":\"pk5\",\"agent\":\"manrae\",\"file\":null}");
+            Check(PageReject().Contains("is in Auto") && ChartBridgeAgents.Get("manrae").PickNow() == "pair.json", "pick: and clearing it is refused in Auto too");
+            // a position (in Auto, then back to Shadow with the position still open): refused until flat
+            Order en = PlacedOn(sime, Plan(NewId(), "MNQ", "buy", "limit", "24999", 1, 8, 16, 600));
+            Check(en != null, "pick: (an entry placed for the next check)");
+            Mode("manrae", "copilot");
+            Fill(en, 1, 24999);
+            P("{\"type\":\"agentPick\",\"cid\":\"pk6\",\"agent\":\"manrae\",\"file\":\"alpha.json\"}");
+            Check(PageReject().Contains("has a position, a working entry or a proposal: the pick changes when it is flat") && ChartBridgeAgents.Get("manrae").PickNow() == "pair.json", "pick: refused while the trader holds a position: " + PageReject());
+            // the trader itself can never send it
+            A("{\"type\":\"agentPick\",\"agent\":\"manrae\",\"file\":\"alpha.json\"}");
+            Check(AgentReject().Contains("unknown agent message type agentPick") && ChartBridgeAgents.Get("manrae").PickNow() == "pair.json", "pick: the agent channel has no agentPick message: " + AgentReject());
+            A("{\"type\":\"agentHello\",\"name\":\"manrae\",\"build\":\"b1\",\"pick\":\"alpha.json\"}");
+            Check(AgentReject().Contains("pick") && ChartBridgeAgents.Get("manrae").PickNow() == "pair.json", "pick: a hello carrying a pick is refused whole: " + AgentReject());
+        });
+        Part("pick: cleared with null; a pick file that cannot be understood is no pick, and said", () =>
+        {
+            Fresh();
+            Mode("manrae", "shadow");
+            Check(ChartBridgeAgents.Get("manrae").PickNow() == "pair.json", "pick: (still the lineup after a fresh day)");
+            P("{\"type\":\"agentPick\",\"cid\":\"pk7\",\"agent\":\"manrae\",\"file\":null}");
+            Check(ChartBridgeAgents.Get("manrae").PickNow() == null && !File.Exists(Path.Combine(Dir, "agent-manrae-pick.txt")) && !Last(agentOut, "welcome").Contains("\"pick\""), "pick: null clears it: the file is gone and the welcome carries no pick");
+            foreach (string junk in new[] { "pick\t../../config.txt", "pick\talpha.json\npick\tpair.json", "alpha.json", "pick alpha.json", "pick\t" })
+            {
+                File.WriteAllText(Path.Combine(Dir, "agent-manrae-pick.txt"), "# made-up\n" + junk + "\n");
+                Restart();
+                Check(ChartBridgeAgents.Get("manrae").PickNow() == null && ChartBridgeAgents.Get("manrae").StripJson().Contains("\"pickProblem\":\"agent-manrae-pick.txt is not one pick line"),
+                      "pick: a file holding [" + junk.Replace("\n", " | ").Replace("\t", "<TAB>") + "] is no pick, and the pages are told");
+            }
+            File.WriteAllText(Path.Combine(Dir, "agent-manrae-pick.txt"), "# made-up\n\npick\talpha.json\n");
+            Restart();
+            Check(ChartBridgeAgents.Get("manrae").PickNow() == "alpha.json" && !ChartBridgeAgents.Get("manrae").StripJson().Contains("pickProblem"), "pick: a good file is read (comment and empty lines passed over)");
+            // a picked file that is later gone from the folder stays the pick's NAME (ChartBridge keeps a name, never a file): the runner's own reader refuses it
+            File.Delete(Path.Combine(rf, "alpha.json"));
+            Restart();
+            Check(ChartBridgeAgents.Get("manrae").PickNow() == "alpha.json", "pick: the name is kept when the file leaves the folder (the runner's own reader then refuses to start)");
+            P("{\"type\":\"agentPick\",\"cid\":\"pk8\",\"agent\":\"manrae\",\"file\":null}");
+            ChartBridgeRoster.FolderSetting = "";
+            try { Directory.Delete(Path.Combine(home, "made-up-botlab-pick"), true); } catch (Exception) { }
+        });
+        Part("accountState: the day's profit side (profitToday), beside the loss side", () =>
+        {
+            Fresh();
+            string st = Last(agentOut, "accountState");
+            Check(Regex.IsMatch(st, "\"targetLeft\":[^,]+,\"profitToday\":(-?[0-9.]+|null),\"profitWhy\":(null|\"[^\"]*\"),\"src\":"), "accountState: profitToday and profitWhy follow the eight numbers: " + st.Substring(0, Math.Min(400, st.Length)));
+            ChartBridgeGroups.Numbers n = ChartBridgeGroups.Read("SIM-E", sime, false);
+            string want = n.ProfitPnl.HasValue ? "\"profitToday\":" + CbJson.Num(Math.Round(n.ProfitPnl.Value, 2)) : "\"profitToday\":null";
+            Check(st.Contains(want.Replace(".00", "")) || st.Contains(want), "accountState: profitToday is the number the day's profit stop reads (ChartBridgeGroups.Read's ProfitPnl): " + want);
+            string none = ChartBridgeGroups.AccountStateJson(null, out want);
+            Check(none.Contains("\"profitToday\":null,\"profitWhy\":\"the agent's account is None\""), "accountState on None: profitToday null with why");
+        });
+    }
+
     static void DayStop()
     {
         string groups = Path.Combine(Dir, "groups.txt");
@@ -5568,6 +5682,150 @@ public static class AgentHarness
             Order e = PlacedOn(prop1, Good(NewId()));
             Check(e != null, "prop: restored, a plan is placed on PROP-1: " + AgentReject());
             Settle(prop1);
+        });
+        Part("pick (the review of 93): Auto names the pick; a restart restores Auto only for the same pick and the same file", () =>
+        {
+            string rfd = Path.Combine(home, "made-up-botlab-pick2");
+            Directory.CreateDirectory(rfd);
+            ChartBridgeRoster.FolderSetting = rfd;
+            File.WriteAllText(Path.Combine(rfd, "alpha.json"), "{\"format\":\"specrunner.roster/1\",\"bot\":\"alpha\"}");
+            File.WriteAllText(Path.Combine(rfd, "pair.json"), "{\"format\":\"specrunner.lineup/1\",\"lineup\":\"pair\"}");
+            string shaA = ShaOf(Path.Combine(rfd, "alpha.json")), pf = Path.Combine(Dir, "agent-manrae-pick.txt");
+            Func<string> arm = () => { PropStart("PROP-1", true, false); ChartBridgeRoster.FolderSetting = rfd; Mode("manrae", "shadow"); P("{\"type\":\"agentPick\",\"cid\":\"q1\",\"agent\":\"manrae\",\"file\":\"alpha.json\"}"); ModeAuto("manrae", "alpha.json", ShaOf(Path.Combine(rfd, "alpha.json"))); return ModeNow(); };
+            PropStart("PROP-1", true);
+            ChartBridgeRoster.FolderSetting = rfd;
+            P("{\"type\":\"agentPick\",\"cid\":\"q1\",\"agent\":\"manrae\",\"file\":\"alpha.json\"}");
+            Check(M.PickNow() == "alpha.json", "pick93: (alpha picked)");
+            Mode("manrae", "auto");
+            Check(ModeNow() == "shadow" && PageReject().Contains("has a pick (alpha.json): Auto must name it and its file's sha256"), "pick93: Auto without the pick named is refused: " + PageReject());
+            ModeAuto("manrae", "pair.json", shaA);
+            Check(ModeNow() == "shadow" && PageReject().Contains("the page showed the pick pair.json and agent manrae's pick is alpha.json"), "pick93: Auto naming another pick is refused: " + PageReject());
+            ModeAuto("manrae", "alpha.json", new string('0', 64));
+            Check(ModeNow() == "shadow" && PageReject().Contains("alpha.json changed since the page read the roster"), "pick93: Auto with another file's sha256 is refused: " + PageReject());
+            ModeAuto("manrae", "alpha.json", "ABC");
+            Check(ModeNow() == "shadow" && PageReject().Contains("pickSha must be the picked file's sha256"), "pick93: a sha256 that is not one is refused");
+            P("{\"type\":\"agentMode\",\"cid\":\"m\",\"agent\":\"manrae\",\"mode\":\"shadow\",\"pick\":\"alpha.json\"}");
+            Check(PageReject().Contains("pick and pickSha go with mode auto only"), "pick93: pick goes with Auto only");
+            ModeAuto("manrae", "alpha.json", shaA);
+            string af = File.Exists(AutoFilePath) ? File.ReadAllText(AutoFilePath) : "";
+            Check(ModeNow() == "auto" && af.Contains("pick\talpha.json") && af.Contains("sha\t" + shaA), "pick93: Auto naming the pick and its sha256 is taken, and the saved Auto carries both: " + af.Replace("\n", " | ").Replace("\t", "<TAB>"));
+            // the roster answer carries each file's sha256, the one a page names
+            string why, json = ChartBridgeRoster.Read(out why);
+            Check(json != null && json.Contains("\"name\":\"alpha.json\",\"ok\":true,\"roster\":") && json.Contains("\"sha256\":\"" + shaA + "\""), "pick93: GET /roster names each file's sha256");
+            // the unchanged case: restored
+            Restart(); int s0 = N(page); Advance(2000);
+            Check(ModeNow() == "auto" && Any(page, s0, "Auto restored after the restart on PROP-1"), "pick93: the same pick and the same file: Auto comes back: " + Last(page, "status"));
+            // b. the pick file names another file at the restart
+            File.WriteAllText(pf, "# made-up\npick\tpair.json\n");
+            Restart(); s0 = N(page); Advance(2000);
+            Check(ModeNow() == "shadow" && Any(page, s0, "Auto was NOT restored after the restart (its pick is pair.json, and it was armed with alpha.json)"), "pick93 b: another pick at the restart: Shadow, said: " + Last(page, "status"));
+            // a. the pick file held open at the restart: no pick (after its tries), Shadow
+            Check(arm() == "auto", "pick93: (armed again with alpha)");
+            ChartBridgeAccounts.ReadFault = n => n == "agent-manrae-pick.txt" ? "The process cannot access the file because it is being used by another process" : null;
+            try { Restart(); s0 = N(page); Advance(2000); }
+            finally { ChartBridgeAccounts.ReadFault = null; }
+            Check(ModeNow() == "shadow" && M.PickNow() == null && Any(page, s0, "Auto was NOT restored after the restart (its pick file could not be read)") && M.StripJson().Contains("tries): no roster file is picked"), "pick93 a: a pick file that cannot be read at the restart: no pick, Shadow, said: " + Last(page, "status"));
+            // FIX 1: a pick file held open only for a moment at the start is read on a later try (the retries), never lost
+            File.WriteAllText(pf, "# made-up\npick\talpha.json\n");
+            int heldReads = 0;
+            ChartBridgeAccounts.ReadFault = n => n == "agent-manrae-pick.txt" && ++heldReads <= 2 ? "The process cannot access the file because it is being used by another process" : null;
+            try { Restart(); }
+            finally { ChartBridgeAccounts.ReadFault = null; }
+            Check(M.PickNow() == "alpha.json" && heldReads >= 3 && !M.StripJson().Contains("pickProblem"), "pick93: a pick file held open for the first two reads is read on the third (" + heldReads + " reads)");
+            ChartBridgeAccounts.ReadFault = n => n == "agent-manrae-pick.txt" ? "held" : null;
+            try { Restart(); }
+            finally { ChartBridgeAccounts.ReadFault = null; }
+            // FIX 1: None removes the file that could not be read, so the old pick never comes back
+            P("{\"type\":\"agentPick\",\"cid\":\"q2\",\"agent\":\"manrae\",\"file\":null}");
+            Check(!File.Exists(pf) && !M.StripJson().Contains("pickProblem"), "pick93: None after an unreadable pick file removes the file and the problem");
+            Restart();
+            Check(M.PickNow() == null, "pick93: and the next restart has no pick (the cleared pick never comes back)");
+            // FIX 1, the broken file: None removes it too
+            File.WriteAllText(pf, "# made-up\nnonsense\n");
+            Restart();
+            Check(M.PickNow() == null && M.StripJson().Contains("pickProblem"), "pick93: (a broken pick file is no pick, and said)");
+            P("{\"type\":\"agentPick\",\"cid\":\"q3\",\"agent\":\"manrae\",\"file\":null}");
+            Restart();
+            Check(!File.Exists(pf) && M.PickNow() == null && !M.StripJson().Contains("pickProblem"), "pick93: None removes a broken pick file, for good");
+            // c. the picked file left the roster folder while down
+            Check(arm() == "auto", "pick93: (armed again with alpha)");
+            File.Move(Path.Combine(rfd, "alpha.json"), Path.Combine(rfd, "alpha.away"));
+            Restart(); s0 = N(page); Advance(2000);
+            Check(ModeNow() == "shadow" && Any(page, s0, "Auto was NOT restored after the restart (the picked file alpha.json cannot be used now (there is no such file in the roster folder))"), "pick93 c: the picked file is gone at the restart: Shadow, said: " + Last(page, "status"));
+            File.Move(Path.Combine(rfd, "alpha.away"), Path.Combine(rfd, "alpha.json"));
+            // d. the picked file changed while down (the same name, other bytes)
+            Check(arm() == "auto", "pick93: (armed again with alpha)");
+            File.WriteAllText(Path.Combine(rfd, "alpha.json"), "{\"format\":\"specrunner.roster/1\",\"bot\":\"alpha\",\"x\":1}");
+            Restart(); s0 = N(page); Advance(2000);
+            Check(ModeNow() == "shadow" && Any(page, s0, "Auto was NOT restored after the restart (the picked file alpha.json changed since it was armed)"), "pick93 d: the same name, other bytes: Shadow, said: " + Last(page, "status"));
+            // a saved Auto with no pick line (saved before 0.6.21) is never restored
+            Check(arm() == "auto", "pick93: (armed again)");
+            File.WriteAllLines(AutoFilePath, File.ReadAllLines(AutoFilePath).Where(x => !x.StartsWith("pick\t") && !x.StartsWith("sha\t")));
+            Restart(); s0 = N(page); Advance(2000);
+            Check(ModeNow() == "shadow" && Any(page, s0, "its saved Auto does not name the pick it was armed with"), "pick93: a saved Auto that names no pick is not restored");
+            // a trader with no pick arms as before, and a restart restores it only while it still has no pick
+            PropStart("PROP-1", true); ChartBridgeRoster.FolderSetting = rfd; P("{\"type\":\"agentPick\",\"cid\":\"q4\",\"agent\":\"manrae\",\"file\":null}");
+            Mode("manrae", "auto");
+            Check(ModeNow() == "auto" && File.ReadAllText(AutoFilePath).Contains("pick\t-"), "pick93: a trader with no pick goes to Auto as before (the Agent tab), and the saved Auto says none");
+            ModeAuto("manrae", "alpha.json", shaA);
+            Check(PageReject().Contains("the page names the pick alpha.json and agent manrae has none"), "pick93: naming a pick the trader does not have is refused");
+            File.WriteAllText(pf, "# made-up\npick\talpha.json\n");
+            Restart(); s0 = N(page); Advance(2000);
+            Check(ModeNow() == "shadow" && Any(page, s0, "its pick is alpha.json, and it was armed with none"), "pick93: armed with none, a pick at the restart: Shadow");
+            // the 17:00 reset keeps the pick and ends Auto (the review's break M14)
+            Check(arm() == "auto", "pick93: (armed again)");
+            ResetOnce(() => Check(ModeNow() == "shadow" && M.PickNow() == "alpha.json" && File.Exists(pf), "pick93: the 17:00 reset ends Auto and keeps the pick (its file too)"));
+            // M13: agentPick from a page that is not signed in, or not ChartBridge's own origin, is refused
+            ChartBridgeClient other = new ChartBridgeClient(null, 602) { Origin = "http://localhost:8765" };
+            List<string> otherOut = new List<string>();
+            other.Tap = x => { lock (otherOut) otherOut.Add(x); };
+            Clients()[602] = other;
+            OnClient(other, "{\"type\":\"client\",\"v\":3}");
+            Mode("manrae", "shadow");
+            OnClient(other, "{\"type\":\"agentPick\",\"cid\":\"z1\",\"agent\":\"manrae\",\"file\":null}");
+            Check(M.PickNow() == "alpha.json" && otherOut.Any(x => x.Contains("\"cid\":\"z1\"") && x.Contains("this connection may not trade")), "pick93: agentPick from a page that is not signed in is refused, the pick unchanged");
+            ChartBridgeClient foreign = new ChartBridgeClient(null, 603) { Origin = "http://example.com" };
+            List<string> fOut = new List<string>();
+            foreign.Tap = x => { lock (fOut) fOut.Add(x); };
+            Clients()[603] = foreign;
+            OnClient(foreign, "{\"type\":\"client\",\"v\":3}");
+            OnClient(foreign, "{\"type\":\"auth\",\"token\":\"" + token + "\"}");
+            OnClient(foreign, "{\"type\":\"agentPick\",\"cid\":\"z2\",\"agent\":\"manrae\",\"file\":null}");
+            Check(M.PickNow() == "alpha.json" && !fOut.Any(x => x.Contains("\"cid\":\"z2\"") && !x.Contains("reject")), "pick93: agentPick from another origin changes nothing");
+            { ChartBridgeClient x; Clients().TryRemove(602, out x); Clients().TryRemove(603, out x); }
+            // FIX 3: a roster file that will not open never holds the kill switch (a named pipe here: it opens only when written)
+            string fifo = Path.Combine(rfd, "slow.json");
+            bool piped = false;
+            try { System.Diagnostics.Process mk = System.Diagnostics.Process.Start("mkfifo", fifo); mk.WaitForExit(); piped = mk.ExitCode == 0 && File.Exists(fifo); } catch (Exception) { piped = false; }
+            if (!piped) Check(true, "pick93 FIX 3: skipped: mkfifo is not on this machine");
+            else
+            {
+                ChartBridgeClient p2 = new ChartBridgeClient(null, 604) { Origin = "http://localhost:8765" };
+                List<string> p2Out = new List<string>();
+                p2.Tap = x => { lock (p2Out) p2Out.Add(x); };
+                Clients()[604] = p2;
+                OnClient(p2, "{\"type\":\"client\",\"v\":3}");
+                OnClient(p2, "{\"type\":\"auth\",\"token\":\"" + token + "\"}");
+                System.Diagnostics.Stopwatch w = System.Diagnostics.Stopwatch.StartNew();
+                System.Threading.Thread slow = new System.Threading.Thread(() => OnClient(p2, "{\"type\":\"agentPick\",\"cid\":\"z3\",\"agent\":\"manrae\",\"file\":\"slow.json\"}"));
+                slow.Start();
+                System.Threading.Thread.Sleep(300);
+                System.Diagnostics.Stopwatch k = System.Diagnostics.Stopwatch.StartNew();
+                P("{\"type\":\"agentKill\",\"cid\":\"k1\",\"agent\":\"manrae\",\"on\":true}");
+                long killMs = k.ElapsedMilliseconds;
+                Check(M.Killed && killMs < 1000, "pick93 FIX 3: the kill switch answers while agentPick waits on a roster file that will not open (" + killMs + " ms)");
+                slow.Join(5000);
+                Check(!slow.IsAlive && w.ElapsedMilliseconds < 4000 && p2Out.Any(x => x.Contains("\"cid\":\"z3\"") && x.Contains("did not answer in 2 s")) && M.PickNow() == "alpha.json",
+                      "pick93 FIX 3: and agentPick itself gives up after 2 s, the pick unchanged (" + w.ElapsedMilliseconds + " ms)");
+                // open the pipe for writing once so the waiting read ends, then remove it
+                try { using (FileStream fw = new FileStream(fifo, FileMode.Open, FileAccess.Write)) { } } catch (Exception) { }
+                try { File.Delete(fifo); } catch (Exception) { }
+                { ChartBridgeClient x; Clients().TryRemove(604, out x); }
+                P("{\"type\":\"agentKill\",\"cid\":\"k2\",\"agent\":\"manrae\",\"on\":false}");
+            }
+            P("{\"type\":\"agentPick\",\"cid\":\"q9\",\"agent\":\"manrae\",\"file\":null}");
+            ChartBridgeRoster.FolderSetting = "";
+            try { Directory.Delete(rfd, true); } catch (Exception) { }
         });
         Part("prop: not flat at the start: no restore, ever", () =>
         {

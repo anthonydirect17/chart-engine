@@ -7,28 +7,16 @@ this file when a change closes it; the change says which. This file states no ru
 
 Each with a check that fails when the fix is taken out.
 
-The roster (`GET /roster`, `ChartBridgeRoster` in `nt8/ChartBridgeAgents.cs`):
+The roster (`GET /roster`): D1, D3, D4, D2 and the harness gaps are closed by ChartBridge 0.6.21 (the top-level format key,
+a drive-letter full path only, one 2 MB cap for an answer, the links said in PROTOCOL; `check/BotHarness.cs`).
 
-- D1. A roster file is "an object whose `format` is": check the top-level key. Today the text may sit anywhere in the
-  file, so a settings file holding it in a nested object is served whole. (The Legion tab already refuses such a
-  file: it reads the top-level key.)
-- D3. `rosterFolder` takes a drive-letter full path only. Refuse `C:roster`, `\roster` and `\\server\share\...` (the
-  last would make the process that holds the order door open a network share on every request).
-- D4. One total cap for an answer, about 2 MB, as the bot library has (200 files of 256 KB is a 40 MB answer today).
-- D2. A hard link in the folder is served; a parent folder that is a link is followed; a file swapped for a link after
-  the listing is followed. Each needs write access to the folder. Say it in PROTOCOL, or open the file and check what
-  was opened.
-- Harness gaps: a method other than GET and HEAD; a file error must send the exception's type only; a top-level list
-  holding the format text; bad UTF-8 bytes; a file that is a link.
-
-The day's profit stop and Kill all:
+The day's profit stop and Kill all (C4, the stale words, is closed by 0.6.21: the comment over the agent's part of Kill all
+and PROTOCOL's step 2 now say what the code does):
 
 - C2. A day start that never rolls makes the profit stop silent. Say it once when the wait lasts longer than a few
   seconds.
 - C3. Two damaged day-file edges: an earlier day's file whose session line is the damaged one latches today; a line cut
   off after the account name loses the latch without a word.
-- C4. Stale words: PROTOCOL's Kill all section and the comments at `ChartBridgeAgents.cs` 1018 to 1022 and 4702 still
-  say "ALL in scope" and "on every seat".
 - Uncaught breaks: a read of the day file forgets the latch kept in memory; the second at 18:00 said as "NOT checked";
   the SHORT line said whenever a job is dropped with a position left, flipped or not.
 
@@ -51,6 +39,24 @@ NinjaTrader at 17:59, 18:01 and 18:10 New York.
 - The roster's line shows the number without its range (the range is in Details). While "Reading the roster again..."
   shows, the cards sit one line lower: a click aimed at one Details can land on the next card's.
 - Under Legion and League the Reject key declines a bot proposal that is not shown on that tab (it can only decline).
+
+From the third look at 92 (REVIEW_2026-11-11_chartengine_92_third.md, APPROVE WITH NOTES):
+
+- T-1. A very tall alert banner in a short window is cut to 40% of the height, and its newest line and Dismiss are below
+  the cut (three lines of about 700 characters at 700 x 400). The box scrolls, so nothing is lost. Kill all's own answer
+  is a line of that length. Idea: under Legion the newest line first and Dismiss at the banner's top.
+- T-2. The tab keeps 120 px at its foot but the banner may be 40% of the window: under the tallest banner in a short
+  window the last rows cannot be scrolled clear until Dismiss. Rows and text only. Neither the height limit nor the foot
+  room is held by a test.
+- T-3. Under about 300 px wide the head row is wider than the window: Yes lies over a few pixels of the old button's box
+  and Cancel runs off the right edge. A double click still sends nothing (the 600 ms rule). No real window is that
+  narrow.
+- T-4. In a short window the pinned head with a full Kill all answer leaves little for the rest (273 of 360 px at
+  700 x 400; 224 of 728 px at 1024 x 768). Kill all stays at the top.
+- T-5. At 700 px wide and under, the Legion button is off the right end of the page's top bar (the top bar does not
+  wrap: the page's own layout from before 92). The address `?tab=legion` opens the tab.
+- T-6. `flex-wrap: nowrap` on the head row is held by no test. It changes nothing at real widths, since the line that
+  used to grow has its own row, and putting that line back in the head row does fail a test.
 
 ## Ruled, not open
 

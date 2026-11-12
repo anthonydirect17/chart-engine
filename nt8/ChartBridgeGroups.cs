@@ -1911,6 +1911,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 foreach (string k in NumberKeys) none.Why[k] = "the agent's account is None";
                 b.Append(",\"account\":null,\"sim\":false,\"kind\":\"none\",\"group\":null,\"groupId\":null,\"groupSide\":null,\"noHedge\":null,\"accountType\":null,\"rules\":null");   // 0.6.2: accountType null when not prop
                 foreach (string k in NumberKeys) b.Append(",\"").Append(k).Append("\":null");
+                b.Append(",\"profitToday\":null,\"profitWhy\":").Append(CbJson.Str("the agent's account is None"));   // 0.6.21
                 SrcWhy(b, none, NumberKeys);
                 b.Append(",\"session\":").Append(CbJson.Str(none.Session));
             }
@@ -1933,6 +1934,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 else if (!n.MySet) b.Append("null");   // no limits ever set by Anthony: the agent keeps its model numbers
                 else b.Append("{\"floor\":").Append(Zero0(n.MyFloor ?? 0)).Append(",\"dailyLoss\":").Append(Zero0(n.MyDaily ?? 0)).Append('}');   // rules: 0 is none (the firm or the account has no such rule), never null
                 foreach (string k in NumberKeys) b.Append(",\"").Append(k).Append("\":").Append(Num(Get(n, k)));
+                b.Append(",\"profitToday\":").Append(Num(n.ProfitPnl)).Append(",\"profitWhy\":").Append(n.ProfitWhy == null ? "null" : CbJson.Str(n.ProfitWhy));   // 0.6.21: the day's number for a PROFIT stop and for the day's start (the larger realized figure after a late start), as the agents' day stop reads it; null with why when it is not known
                 SrcWhy(b, n, NumberKeys);
                 b.Append(",\"session\":").Append(CbJson.Str(n.Session));
             }

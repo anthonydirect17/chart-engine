@@ -1006,13 +1006,14 @@ namespace NinjaTrader.NinjaScript.AddOns
         // ---------------------------------------------------------- messages from the page
         private static readonly Dictionary<string, string[]> PageKeys = new Dictionary<string, string[]>
         {
-            { "agentMode", new[] { "type", "cid", "agent", "mode" } },
+            { "agentMode", new[] { "type", "cid", "agent", "mode", "pick", "pickSha" } },   // 0.6.21 (the review of 93, FIX 2): Auto names the pick it arms
             { "agentKill", new[] { "type", "cid", "agent", "on" } },
             { "agentSeen", new[] { "type", "agent", "id", "at" } },
             { "agentAnswer", new[] { "type", "cid", "agent", "id", "answer", "at" } },
             { "agentAccount", new[] { "type", "cid", "agent", "account", "group", "keepMode", "league" } },   // 0.5.2: keepMode, the mode the page's question named; 0.6.0: group (a group id) in place of account
             { "agentRules", new[] { "type", "cid", "agent", "roots", "maxQtyNQ", "maxQtyMNQ", "maxQtyES", "maxQtyMES", "entryFrom", "entryUntil", "flatAt", "maxExpireSec", "maxTrades", "maxLosses", "marketEntry", "noTarget" } },   // 0.6.18: marketEntry, noTarget (true or false; left out: false)
             { "agentStandDownClear", new[] { "type", "cid", "build", "group" } },   // 0.6.2: Anthony's Clear stand-down (the Board); no agent key: a stand-down is the build's on the group
+            { "agentPick", new[] { "type", "cid", "agent", "file" } },   // 0.6.21: the roster file a runner's slot runs (a file name GET /roster serves, or null for none)
             { "agentKillAllProp", new[] { "type", "cid" } },   // 0.6.17: Kill all for the prop accounts: flatten, the kill switch on, Shadow; no agent key: every agent on prop accounts
         };
 
@@ -2285,6 +2286,90 @@ namespace NinjaTrader.NinjaScript.AddOns
         private string RulesFile { get { return Path.Combine(Folder, "agent-" + Id + "-rules.txt"); } }
         private string DayFile { get { return Path.Combine(Folder, "agent-" + Id + "-day.txt"); } }
         private string KillFile { get { return Path.Combine(Folder, "agent-" + Id + "-kill.txt"); } }   // 0.6.3 (audit C5)
+
+        // ---------------------------------------------------------- 0.6.21: the pick (build answers 7 part D2; Anthony 2026-11-11)
+        // The roster file this trader's runner runs: the NAME of a file GET /roster serves (a bot's or a lineup's), or none. Set
+        // on the page's Legion tab (agentPick), saved in agent-<id>-pick.txt (one line, pick<TAB><name>), sent to the runner in
+        // `welcome` and to the pages in `agent` (the key only when a file is picked: a trader with none is as in 0.6.20 in every
+        // message). It stays until it is changed: nothing clears it at 17:00 or at a restart.
+        // ChartBridge decides NOTHING from it and reads no rule from the file: the name is all it keeps. It is refused while the
+        // trader is in Auto, or has a position, a working entry or a proposal, so what a runner trades never changes under it.
+        private string PickFile { get { return Path.Combine(Folder, "agent-" + Id + "-pick.txt"); } }
+        private string pick;        // the roster file's name, or null: none
+        private string pickBroken;  // why agent-<id>-pick.txt could not be read (then pick is none and the page is told)
+        internal string PickNow() { lock (Sync) return pick; }
+        private string PickWelcomeField() { string p; lock (Sync) p = pick; return p == null ? "" : ",\"pick\":" + CbJson.Str(p); }
+
+        // The review of 93, FIX 1: a pick file that cannot be opened (held open by another program) is read again a few times; still
+        // not readable, the trader starts with NO pick and says why (never the old one, never "not read yet" for good).
+        internal const int PickReadTries = 4, PickReadWaitMs = 250;
+        private void LoadPick()
+        {
+            string got = null, broken = null;
+            for (int attempt = 1; attempt <= PickReadTries; attempt++)
+            {
+                got = null; broken = null;
+                try
+                {
+                    if (File.Exists(PickFile))
+                    {
+                        List<string> lines = ReadAll(PickFile).Select(x => x.TrimEnd('\r')).Where(x => x.Length > 0 && !x.StartsWith("#")).ToList();
+                        if (lines.Count == 1 && lines[0].StartsWith("pick\t") && ChartBridgeRoster.PlainName(lines[0].Substring(5))) got = lines[0].Substring(5);
+                        else if (lines.Count != 0) broken = "agent-" + Id + "-pick.txt is not one pick line: no roster file is picked; pick it again on the Legion tab";
+                    }
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    broken = "agent-" + Id + "-pick.txt could not be read (" + ex.GetType().Name + ", " + attempt + " tries): no roster file is picked; pick it again, or None, on the Legion tab";
+                    if (attempt < PickReadTries) Thread.Sleep(PickReadWaitMs);
+                }
+            }
+            lock (Sync) { pick = got; pickBroken = broken; }
+            if (broken != null) Log("agent " + Id + ": " + broken);
+        }
+
+        // The review of 93, FIX 3: the roster file is read OUTSIDE the trader's placement gate and with a time limit, so a file that
+        // will not open (a network drive, an online-only cloud file, a virus scanner) never holds the kill switch, Kill all or a
+        // placement. The gate is taken only to check the trader and swap the pick.
+        private string SetPick(Dictionary<string, Val> d)
+        {
+            Val fv;
+            if (!d.TryGetValue("file", out fv)) return "agentPick needs file: a roster file's name, or null for none";
+            string name = fv.K == 'z' ? null : S(d, "file");
+            if (fv.K != 'z' && (name == null || !ChartBridgeRoster.PlainName(name))) return "file must be a roster file's plain name (letters, digits, - and _, 40 at most, then .json), or null for none";
+            string bad = null;
+            if (name != null) { string sha; bad = ChartBridgeRoster.PickCheckTimed(name, out sha); }
+            lock (PlaceGate) return SetPickLocked(name, bad);   // never between a placement's checks and its order
+        }
+
+        private string SetPickLocked(string name, string bad)
+        {
+            string m;
+            lock (Sync) m = mode;
+            if (m == "auto") return "agent " + Id + " is in Auto: the pick changes only while it is not (turn Armed off first)";
+            if (Exposed()) return "agent " + Id + " has a position, a working entry or a proposal: the pick changes when it is flat";
+            if (bad != null) return name + " cannot be picked: " + bad;
+            string was, brokenWas;
+            lock (Sync) { was = pick; brokenWas = pickBroken; }
+            // FIX 1: None always removes the file, also when it could not be read or understood at the start (memory said none
+            // then), so a cleared pick can never come back at the next restart
+            bool fileThere;
+            try { fileThere = File.Exists(PickFile); } catch (Exception) { fileThere = true; }
+            if (was == name && brokenWas == null && (name != null || !fileThere)) return null;   // the same pick again: nothing to do
+            try
+            {
+                if (name == null) { if (fileThere) File.Delete(PickFile); }
+                else WriteWhole(PickFile, new List<string> { "# ChartBridge roster pick for agent " + Id + " (written by ChartBridge from the page's Legion tab; do not edit)", "pick\t" + name });
+            }
+            catch (Exception ex) { return "agent-" + Id + "-pick.txt could not be " + (name == null ? "removed" : "saved") + " (" + ex.GetType().Name + "): the pick is unchanged"; }
+            lock (Sync) { pick = name; pickBroken = null; }
+            Log("agent " + Id + " pick " + (name ?? "none") + " (was " + (was ?? "none") + "), set by the page");
+            AgentLog("pick " + (name ?? "none") + " (was " + (was ?? "none") + "), set by the page");
+            ToAgent(WelcomeJson());
+            Notify();
+            return null;
+        }
         private double killedAt;   // the UTC ms the kill switch went on (0: not known), while killed
         public bool Killed { get { lock (Sync) return killed; } }
         private bool killReadPending;   // review (C5): the kill file was held open at the start: on meanwhile, read again on the check
@@ -2350,7 +2435,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 string err = ChartBridgeFiles.SaveAutoIntent(AutoFile, "agent " + Id, KeyNow());
                 // the trading day it was set in (the reset's own day rule): a restore counts only inside that day
-                if (err == null) { try { File.AppendAllText(AutoFile, AutoDayPrefix + ChartBridgeBranches.DueDay(NowEt()) + "\n"); } catch (Exception ex) { err = ex.Message; } }
+                string ap, asha;
+                lock (Sync) { ap = autoPick; asha = autoPickSha; }
+                // FIX 2: the pick it was armed with and its file's sha256 ("-": none), read back by the restore
+                if (err == null) { try { File.AppendAllText(AutoFile, AutoDayPrefix + ChartBridgeBranches.DueDay(NowEt()) + "\n" + AutoPickPrefix + (string.IsNullOrEmpty(ap) ? "-" : ap) + "\n" + AutoShaPrefix + (string.IsNullOrEmpty(asha) ? "-" : asha) + "\n"); } catch (Exception ex) { err = ex.Message; } }
                 if (err == null) { string t = "Auto on prop accounts (" + AccountWords() + "): switched off at the 17:00 ET reset; back once after a restart inside the same trading day, when flat with the kill switch off"; Log("agent " + Id + ": " + t); AgentLog(t); }
                 else { string w = "Agent " + Id + ": agent-" + Id + "-auto.txt could not be saved (" + err + "): Auto is on now, but it does not come back after a restart"; ToPages(StatusJson("warn", w)); Log(w); AgentLog(w); }
                 return;
@@ -2373,6 +2461,25 @@ namespace NinjaTrader.NinjaScript.AddOns
         // in ("day<TAB>yyyy-MM-dd", the reset's own day rule: the date of the latest 17:00 ET at or before then). SavedAutoDay:
         // that day, or null when the file has none (never today's by a guess).
         internal const string AutoDayPrefix = "day\t";
+        internal const string AutoPickPrefix = "pick\t", AutoShaPrefix = "sha\t";
+        // FIX 2: the pick ("" : none) and the sha ("" : none) a saved Auto was armed with; false when the file names neither (saved
+        // before 0.6.21, or cut short): such a saved Auto is never restored
+        private bool SavedAutoPick(out string savedPick, out string savedSha)
+        {
+            savedPick = null; savedSha = null;
+            try
+            {
+                if (!File.Exists(AutoFile)) return false;
+                foreach (string raw in File.ReadAllLines(AutoFile))
+                {
+                    string r = raw.TrimEnd('\r');
+                    if (r.StartsWith(AutoPickPrefix, StringComparison.Ordinal)) { string v = r.Substring(AutoPickPrefix.Length).Trim(); savedPick = v == "-" ? "" : ChartBridgeRoster.PlainName(v) ? v : null; }
+                    else if (r.StartsWith(AutoShaPrefix, StringComparison.Ordinal)) { string v = r.Substring(AutoShaPrefix.Length).Trim(); savedSha = v == "-" ? "" : Sha256Text(v) ? v : null; }
+                }
+            }
+            catch (Exception) { savedPick = null; savedSha = null; }
+            return savedPick != null && savedSha != null && (savedPick == "") == (savedSha == "");
+        }
         private string SavedAutoDay()
         {
             try
@@ -2416,6 +2523,17 @@ namespace NinjaTrader.NinjaScript.AddOns
             bool pend;
             lock (Sync) pend = autoRestorePending;
             if (!pend) return;
+            // FIX 2: the pick it was armed with must be the pick now, read cleanly, and its file the same bytes (worked out outside the
+            // placement gate, with a time limit: FIX 3)
+            string savedPick, savedSha, livePick = PickNow(), liveSha = null, liveBad = null, pickNo = null, broken;
+            lock (Sync) broken = pickBroken;
+            bool recorded = SavedAutoPick(out savedPick, out savedSha);
+            if (livePick != null) liveBad = ChartBridgeRoster.PickCheckTimed(livePick, out liveSha);
+            if (!recorded) pickNo = "its saved Auto does not name the pick it was armed with";
+            else if (broken != null) pickNo = "its pick file could not be read";
+            else if ((livePick ?? "") != savedPick) pickNo = "its pick is " + (livePick ?? "none") + ", and it was armed with " + (savedPick == "" ? "none" : savedPick);
+            else if (livePick != null && liveBad != null) pickNo = "the picked file " + livePick + " cannot be used now (" + liveBad + ")";
+            else if (livePick != null && liveSha != savedSha) pickNo = "the picked file " + livePick + " changed since it was armed";
             lock (PlaceGate)
             {
                 bool k;
@@ -2438,6 +2556,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                     else if (busy.Count > 0 || Exposed()) no = (busy.Count > 0 ? string.Join(", ", busy) + (busy.Count == 1 ? " has" : " have") : "it has") + " a position or a working order";
                     else { string why = AutoProblem(); if (why != null) no = why; }
                 }
+                if (no == null && pickNo != null) no = pickNo;
+                if (no == null && PickNow() != livePick) no = "its pick changed during the restore";
                 // the last question: was it set in this trading day? (the backstop when a 17:00 reset was missed: the reset itself
                 // removes the saved Auto)
                 if (no == null && SavedAutoDay() != ChartBridgeBranches.DueDay(NowEt())) no = "its saved Auto is from an earlier trading day (Auto ends at 17:00 ET)";
@@ -2449,7 +2569,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     Notify();
                     return;
                 }
-                lock (Sync) { mode = "auto"; autoRestorePending = false; autoDay = ChartBridgeBranches.DueDay(NowEt()); }   // F4
+                lock (Sync) { mode = "auto"; autoRestorePending = false; autoDay = ChartBridgeBranches.DueDay(NowEt()); autoPick = savedPick; autoPickSha = savedSha; }   // F4; FIX 2
                 string text = "Agent " + Id + ": Auto restored after the restart on " + AccountWords() + " (prop, flat, nothing working, the kill switch off)";
                 ToPages(StatusJson("warn", text)); Log(text); AgentLog(text);
                 ToAgent(WelcomeJson());
@@ -2466,6 +2586,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             LoadSecret();
             LoadRules();
             LoadAccount();
+            LoadPick();            // 0.6.21: the roster file its runner runs (agent-<id>-pick.txt), or none
             RefreshSeats(false);   // 0.6.0: its seats (a group's members, or its one account)
             LoadDay();
             double? kill = ChartBridgeFiles.KillSince(KillFile);   // 0.6.3 (audit C5): a kill switch survives a restart until the page releases it
@@ -4622,15 +4743,53 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (type == "agentAnswer") return AnswerProposal(d);
             if (type == "agentAccount") return SetAccount(d);
             if (type == "agentRules") return SetRules(d);
+            if (type == "agentPick") return SetPick(d);   // 0.6.21
             return "unknown message type " + type;
         }
 
-        private string SetMode(Dictionary<string, Val> d) { lock (PlaceGate) return SetModeLocked(d); }   // never between a placement's checks and its order
+        // The review of 93, FIX 2 (the coordinator's decision): Auto is bound to the pick it was armed with. A trader with a pick goes
+        // to Auto only when the page names that pick and the sha256 of its roster file as the page showed them (GET /roster), and
+        // both still hold; the two are kept with the saved Auto, and a restart restores Auto only when both still hold. A trader
+        // with no pick (an agent armed on the Agent tab) goes to Auto as before, and its saved Auto then requires that it still has
+        // no pick. The file's sha256 is worked out OUTSIDE the placement gate, with a time limit (FIX 3).
+        private string SetMode(Dictionary<string, Val> d)
+        {
+            string want = S(d, "mode"), held = null, sha = null, shaBad = null;
+            if (want == "auto") { held = PickNow(); if (held != null) shaBad = ChartBridgeRoster.PickCheckTimed(held, out sha); }
+            lock (PlaceGate) return SetModeLocked(d, held, sha, shaBad);   // never between a placement's checks and its order
+        }
+        private string autoPick, autoPickSha;   // the pick and its file's sha256 Auto was armed with ("" : no pick; null: not in Auto)
+        internal static bool Sha256Text(string x) { return x != null && Regex.IsMatch(x, "^[0-9a-f]{64}$"); }
 
-        private string SetModeLocked(Dictionary<string, Val> d)
+        private string SetModeLocked(Dictionary<string, Val> d, string held, string sha, string shaBad)
         {
             string m = S(d, "mode");
             if (m != "shadow" && m != "copilot" && m != "auto") return "mode must be shadow, copilot or auto";
+            if (m != "auto" && (d.ContainsKey("pick") || d.ContainsKey("pickSha"))) return "pick and pickSha go with mode auto only";
+            if (m == "auto")
+            {
+                string now, broken;
+                lock (Sync) { now = pick; broken = pickBroken; }
+                Val pv;
+                bool named = d.TryGetValue("pick", out pv);
+                string sentPick = named && pv.K != 'z' ? S(d, "pick") : null, sentSha = S(d, "pickSha");
+                if (named && pv.K != 'z' && !ChartBridgeRoster.PlainName(sentPick)) return "auto refused: pick must be a roster file's plain name, or null";
+                if (broken != null) return "auto refused: " + broken;
+                if (now != held) return "auto refused: the pick changed while Auto was asked for; look again and arm";
+                if (now != null)
+                {
+                    if (!named || sentPick == null) return "auto refused: agent " + Id + " has a pick (" + now + "): Auto must name it and its file's sha256 as the page shows them (the Legion tab)";
+                    if (sentPick != now) return "auto refused: the page showed the pick " + sentPick + " and agent " + Id + "'s pick is " + now + "; look again and arm";
+                    if (shaBad != null) return "auto refused: the picked file " + now + " cannot be read now: " + shaBad;
+                    if (!Sha256Text(sentSha)) return "auto refused: pickSha must be the picked file's sha256 (64 small hex digits)";
+                    if (sentSha != sha) return "auto refused: " + now + " changed since the page read the roster; read it again and arm";
+                }
+                else
+                {
+                    if (named && sentPick != null) return "auto refused: the page names the pick " + sentPick + " and agent " + Id + " has none";
+                    if (d.ContainsKey("pickSha")) return "auto refused: pickSha goes with a pick";
+                }
+            }
             if (m == "auto" && NoneNow()) return "auto refused: agent " + Id + "'s account is None: no new entries until an account is chosen on the Agent tab";   // 0.5.7
             if (m == "auto") { string why = AutoProblem(); if (why != null) return "auto refused: " + why; }   // auto: its account must be tradable
             string old;
@@ -4640,6 +4799,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 old = mode; mode = m;
                 if (m == "auto" && old != "auto") autoDay = ChartBridgeBranches.DueDay(NowEt());   // F4: the trading day it was set in
                 if (m != "auto") autoDay = null;
+                if (m == "auto") { autoPick = held ?? ""; autoPickSha = held != null ? sha : ""; } else { autoPick = null; autoPickSha = null; }   // FIX 2
                 if (old == "copilot" && m != "copilot") expired = ExpireOpenLocked("not answered");
             }
             foreach (Proposal p in expired) { ToPages(ProposalJson(p)); ToAgent(AnswerJson(p.P.Id, "not answered", "the mode changed to " + m)); AgentLog("proposal " + p.P.Id + " not answered (the mode changed to " + m + ")"); }
@@ -4699,12 +4859,14 @@ namespace NinjaTrader.NinjaScript.AddOns
             return null;
         }
 
-        // 0.6.17: Kill all for the prop accounts, this agent's part (ChartBridgeAgents.PageKillAllProp). Null when it is not on
-        // prop accounts (untouched): every account it follows, a seat that left while it holds its trade included, must be prop.
-        // Else, under the placement gate: its own flatten starts on every seat (the flat time's job: it cancels the agent's orders
-        // and closes only what the agent owns), then the kill switch goes on (its unfilled entries cancelled, its saved Auto
-        // removed), then the mode goes to Shadow. The flatten is started first and runs whatever the mode or the kill switch,
-        // as the flat time's does. Returns the words for the pages.
+        // 0.6.17: Kill all for the prop accounts, this agent's part (ChartBridgeAgents.PageKillAllProp). As it stands since the
+        // reviews of 90 and 88 (the words here were stale: the review of 88 round 3, C4). Null (untouched) when no account it
+        // follows is in scope for Kill all (KillScope: not the personal account, not a known Sim account, not None), or when one
+        // of them is the personal account (KillMixed says that one loudly). Else, under the placement gate: FIRST the kill
+        // switch goes on (its unfilled entries cancelled, its saved Auto removed) and the mode goes to Shadow, so nothing after
+        // can leave it trading (N1); THEN its own flatten starts, in its own try, on the seats in scope only (a Sim seat of the
+        // same group is not flattened): it cancels only the agent's own orders there and closes the position on that account
+        // and contract whole (F7, Anthony 2026-11-11). Returns the words for the pages.
         // The review of 0.6.17 (F1): what counts as a prop account FOR KILL ALL ONLY. IsProp answers no for an account NinjaTrader
         // does not list right now, which is the careful side for keeping Auto and the wrong side for a kill: an agent in Auto on
         // a prop account that had dropped off the list, or was not listed yet after a restart, was skipped and could trade again.
@@ -5465,7 +5627,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             ins.Append(']');
             return "{\"type\":\"welcome\",\"version\":" + CbJson.Str(ChartBridgeServer.Version) + ",\"agent\":" + CbJson.Str(Id) + ",\"mode\":" + CbJson.Str(m) + ",\"account\":" + ChartBridgeBranches.Json(Account) +
-                   ",\"sim\":" + (SimNow() ? "true" : "false") + ",\"league\":" + (League ? "true" : "false") + ",\"killed\":" + (Killed ? "true" : "false") + ",\"rules\":" + NoteWelcomeRules(EnforcedRulesJson(r)) + ",\"instruments\":" + ins + SeatsWelcomeFields() + "}";
+                   ",\"sim\":" + (SimNow() ? "true" : "false") + ",\"league\":" + (League ? "true" : "false") + ",\"killed\":" + (Killed ? "true" : "false") + ",\"rules\":" + NoteWelcomeRules(EnforcedRulesJson(r)) + ",\"instruments\":" + ins + SeatsWelcomeFields() + PickWelcomeField() + "}";   // 0.6.21: pick, only when one is picked
         }
 
         // 0.6.0: welcome's group ({id, name} or null), seats (the member accounts in seat order, null for one account) and seatsRev.
@@ -5655,6 +5817,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                  .Append(",\"owns\":").Append(owns ? "true" : "false")
                  .Append(",\"lastBeatMs\":").Append(client != null ? Ms(Math.Max(0, now - lastMsgMs)) : "null")
                  .Append(",\"lastPlan\":").Append(lastPlanJson ?? "null");
+                if (pick != null) b.Append(",\"pick\":").Append(CbJson.Str(pick));   // 0.6.21: the roster file its runner runs, only when one is picked
+                if (pickBroken != null) b.Append(",\"pickProblem\":").Append(CbJson.Str(pickBroken));
                 if (dayStop > 0) b.Append(",\"dayStop\":").Append(CbJson.Num(dayStop));   // 0.6.19: the session's plan value, only when set (for the pages: Fleet shows it)
                 if (gid != null) b.Append(",\"group\":").Append(GroupJson(gid)).Append(",\"seatsRev\":").Append(seatsRev.ToString(CultureInfo.InvariantCulture));   // 0.6.0
                 if (seats != null) b.Append(",\"seats\":").Append(seats);
@@ -5701,8 +5865,10 @@ namespace NinjaTrader.NinjaScript.AddOns
         public static string FolderSetting = "";
         public const int MaxFiles = 200;
         public const int MaxFileBytes = 256 * 1024;
+        public const int MaxAnswerBytes = 2 * 1024 * 1024;   // 0.6.21 (the review of 91, D4): one cap for the whole answer, as the bot library has
         private static readonly Regex NameRx = new Regex("^[A-Za-z0-9][A-Za-z0-9_-]{0,39}\\.json$");
-        private static readonly Regex FormatRx = new Regex("\"format\"\\s*:\\s*\"specrunner\\.(roster|lineup)/1\"");
+        public const string FormatBot = "specrunner.roster/1", FormatLineup = "specrunner.lineup/1";
+        internal static bool PlainName(string name) { return name != null && NameRx.IsMatch(name); }
 
         private static void Answer(HttpListenerContext ctx, int code)
         {
@@ -5722,13 +5888,27 @@ namespace NinjaTrader.NinjaScript.AddOns
             ChartBridgeServer.ServeText(ctx, 200, json, "application/json");
         }
 
+        // 0.6.21 (the review of 91, D3): on Windows rosterFolder is a full path on a drive letter and nothing else. "C:roster" and
+        // "\roster" depend on the process's current folder or drive, and "\\server\share\..." would make the process that holds the
+        // order door open a network share on every request: all refused. (Off Windows, the harness: a rooted path.)
+        internal static bool DrivePath(string folder)
+        {
+            return folder != null && folder.Length >= 3 && ((folder[0] >= 'A' && folder[0] <= 'Z') || (folder[0] >= 'a' && folder[0] <= 'z')) && folder[1] == ':' && (folder[2] == '\\' || folder[2] == '/');
+        }
+        private static string FolderProblem(string folder)
+        {
+            bool ok = Path.DirectorySeparatorChar == '\\' ? DrivePath(folder) : Path.IsPathRooted(folder);
+            return ok ? null : "rosterFolder in config.txt is not a full path on a drive letter (C:\\...): a network share or a path with no drive is refused";
+        }
+
         // The answer's JSON, or null: with why null when no rosterFolder is set, else why the folder cannot be read.
         public static string Read(out string why)
         {
             why = null;
             string folder = FolderSetting ?? "";
             if (folder.Length == 0) return null;
-            if (!Path.IsPathRooted(folder)) { why = "rosterFolder in config.txt is not a full path"; return null; }
+            why = FolderProblem(folder);
+            if (why != null) return null;
             try
             {
                 DirectoryInfo d = new DirectoryInfo(folder);
@@ -5736,13 +5916,16 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if ((d.Attributes & FileAttributes.ReparsePoint) != 0) { why = "the roster folder named in config.txt is a link: never followed"; return null; }
                 List<FileInfo> files = d.GetFiles("*.json", SearchOption.TopDirectoryOnly).OrderBy(f => f.Name, StringComparer.Ordinal).ToList();
                 StringBuilder b = new StringBuilder("{\"files\":[");
-                int n = 0;
+                int n = 0, total = 0;
                 foreach (FileInfo f in files.Take(MaxFiles))
                 {
                     if (n++ > 0) b.Append(',');
-                    string bad, text = One(f, out bad);
+                    string bad, sha, text = One(f, out bad, out sha);
+                    // D4: a file that would take the whole answer past the cap is listed with why, not served
+                    if (text != null && total + Encoding.UTF8.GetByteCount(text) > MaxAnswerBytes) { text = null; bad = "not served: the answer would pass 2 MB (fewer or smaller roster files)"; }
                     b.Append("{\"name\":").Append(CbJson.Str(f.Name));
-                    if (text != null) b.Append(",\"ok\":true,\"roster\":").Append(text).Append('}');
+                    // 0.6.21 (the review of 93, FIX 2): the file's sha256, which a page names when it arms the pick
+                    if (text != null) { total += Encoding.UTF8.GetByteCount(text); b.Append(",\"ok\":true,\"roster\":").Append(text).Append(",\"sha256\":\"").Append(sha).Append("\"}"); }
                     else b.Append(",\"ok\":false,\"why\":").Append(CbJson.Str(bad)).Append('}');
                 }
                 b.Append("],\"left\":").Append(Math.Max(0, files.Count - MaxFiles).ToString(CultureInfo.InvariantCulture)).Append('}');
@@ -5751,10 +5934,87 @@ namespace NinjaTrader.NinjaScript.AddOns
             catch (Exception ex) { why = "the roster folder could not be read (" + ex.GetType().Name + ")"; return null; }
         }
 
-        // One file's JSON text, or null with why it is not served.
-        private static string One(FileInfo f, out string why)
+        // 0.6.21: may this name be a trader's pick? Null when it is a file this folder serves now; else why not.
+        public static string PickProblem(string name) { string sha; return PickCheck(name, out sha); }
+        // The review of 93, FIX 3: the same, with a time limit, for a caller that must never wait on the folder long (a read that
+        // has not answered by then is "did not answer"; its thread ends by itself when the file opens). sha: the file's sha256.
+        public const int PickWaitMs = 2000;
+        public static string PickCheckTimed(string name, out string sha)
         {
-            why = null;
+            sha = null;
+            string[] box = new string[2];
+            Task t = Task.Run(() => { string s; box[0] = PickCheck(name, out s); box[1] = s; });
+            try { if (!t.Wait(PickWaitMs)) return "the roster folder did not answer in " + (PickWaitMs / 1000) + " s"; }
+            catch (AggregateException ex) { return "the roster folder could not be read (" + (ex.InnerException ?? ex).GetType().Name + ")"; }
+            sha = box[0] == null ? box[1] : null;
+            return box[0];
+        }
+        public static string PickCheck(string name, out string sha)
+        {
+            sha = null;
+            if (!PlainName(name)) return "not a plain name";
+            string folder = FolderSetting ?? "";
+            if (folder.Length == 0) return "no roster folder is set on this PC (rosterFolder in config.txt)";
+            string why = FolderProblem(folder);
+            if (why != null) return why;
+            try
+            {
+                DirectoryInfo d = new DirectoryInfo(folder);
+                if (!d.Exists) return "the roster folder named in config.txt is not there";
+                if ((d.Attributes & FileAttributes.ReparsePoint) != 0) return "the roster folder named in config.txt is a link: never followed";
+                // the review of 93, NOTE 2: only a file GET /roster serves (the first MaxFiles by name)
+                FileInfo f = d.GetFiles("*.json", SearchOption.TopDirectoryOnly).OrderBy(x => x.Name, StringComparer.Ordinal).Take(MaxFiles).FirstOrDefault(x => string.Equals(x.Name, name, StringComparison.Ordinal));
+                if (f == null) return "there is no such file in the roster folder";
+                string bad;
+                return One(f, out bad, out sha) != null ? null : bad;
+            }
+            catch (Exception ex) { return "the roster folder could not be read (" + ex.GetType().Name + ")"; }
+        }
+
+        // 0.6.21 (the review of 91, D1): the value of the TOP-LEVEL "format" key of a JSON object, or null. The text is valid JSON
+        // (checked before). A "format" inside a nested object or a list, or the words inside a string, is never it.
+        internal static string TopLevelFormat(string text)
+        {
+            int i = 0, n = text.Length, depth = 0;
+            Func<int, int> skipString = at => { int k = at + 1; while (k < n && text[k] != '"') { if (text[k] == '\\') k++; k++; } return k + 1; };
+            while (i < n && char.IsWhiteSpace(text[i])) i++;
+            if (i >= n || text[i] != '{') return null;
+            depth = 1; i++;
+            bool key = true;   // at depth 1: the next string is a key
+            while (i < n && depth > 0)
+            {
+                char c = text[i];
+                if (c == '"')
+                {
+                    int end = skipString(i);
+                    if (depth == 1 && key)
+                    {
+                        string k = text.Substring(i + 1, Math.Max(0, end - i - 2));
+                        int j = end;
+                        while (j < n && char.IsWhiteSpace(text[j])) j++;
+                        if (k == "format" && j < n && text[j] == ':')
+                        {
+                            j++;
+                            while (j < n && char.IsWhiteSpace(text[j])) j++;
+                            if (j >= n || text[j] != '"') return null;
+                            int ve = skipString(j);
+                            return text.Substring(j + 1, Math.Max(0, ve - j - 2));
+                        }
+                    }
+                    i = end; key = false; continue;
+                }
+                if (c == '{' || c == '[') depth++;
+                else if (c == '}' || c == ']') depth--;
+                else if (c == ',' && depth == 1) key = true;
+                i++;
+            }
+            return null;
+        }
+
+        // One file's JSON text, or null with why it is not served.
+        private static string One(FileInfo f, out string why, out string sha)
+        {
+            why = null; sha = null;
             if (!NameRx.IsMatch(f.Name)) { why = "not a plain name (letters, digits, - and _, 40 at most, then .json)"; return null; }
             if ((f.Attributes & FileAttributes.ReparsePoint) != 0) { why = "a link: never followed"; return null; }
             try
@@ -5767,11 +6027,12 @@ namespace NinjaTrader.NinjaScript.AddOns
                     int at = 0, got;
                     while (at < bytes.Length && (got = fs.Read(bytes, at, bytes.Length - at)) > 0) at += got;
                 }
+                using (SHA256 h = SHA256.Create()) sha = string.Concat(h.ComputeHash(bytes).Select(x => x.ToString("x2")));
                 string text = new UTF8Encoding(false, true).GetString(bytes);
                 if (text.Length > 0 && text[0] == '\ufeff') text = text.Substring(1);
                 if (!ChartBridgeBot.JsonValid(text)) { why = "not valid JSON"; return null; }
-                string t = text.TrimStart();
-                if (t.Length == 0 || t[0] != '{' || !FormatRx.IsMatch(text)) { why = "not a roster file (its format is not specrunner.roster/1 or specrunner.lineup/1)"; return null; }
+                string fmt = TopLevelFormat(text);
+                if (fmt != FormatBot && fmt != FormatLineup) { why = "not a roster file (its format is not specrunner.roster/1 or specrunner.lineup/1)"; return null; }
                 return text.Trim();
             }
             catch (Exception ex) { why = "could not be read (" + ex.GetType().Name + ")"; return null; }
