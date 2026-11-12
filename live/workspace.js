@@ -3680,11 +3680,12 @@ function startLeague() {
    roster (one GET /roster, ChartBridge 0.6.20, read only), the traders and the prop accounts as ChartBridge says them, and Kill
    all for the prop accounts (ChartBridge 0.6.17's message, sent by fleet.js alone, asked first). It hides the grid while it is
    open, as the other views do (?tab=legion keeps it on a reload). Beside the Agent, Bot and League tabs: it replaces none of them yet.
-   The tab is handed a connection that can do two things only: listen, and post agentKillAllProp (the review of 92, N5). The
-   feed's send and sendOrder never reach it, so "one message" is true by how it is built, not by reading its source. With no
-   feed at all (accounts.js not served: AF is null, as the page has allowed since 1.16.0) the tab gets no connection and the
-   page starts exactly as before (the second look at 92, FIX A). */
-const legionLink = AF ? { listen: part => AF.listen(part), post: m => !!m && m.type === 'agentKillAllProp' && Object.keys(m).every(k => k === 'type' || k === 'cid') && AF.post(m) === true } : null;
+   The tab is handed a connection that can do two things only: listen, and post what FleetCore.maySend passes (the review of
+   92, N5): agentKillAllProp and, since 1.46.0 (D2), the pick and a trader's mode to Auto or to Shadow, each with exactly its
+   keys. The feed's send and sendOrder never reach it, so "these messages and no other" is true by how it is built. With no
+   feed at all (accounts.js not served: AF is null, as the page has allowed since 1.16.0), or with fleet.js not served, the
+   tab gets no connection and the page starts exactly as before (the second look at 92, FIX A). */
+const legionLink = AF && window.FleetCore ? { listen: part => AF.listen(part), post: m => window.FleetCore.maySend(m) === true && AF.post(m) === true } : null;
 let fleetView = null;
 function startFleet() {
   if (!window.FleetView) return;

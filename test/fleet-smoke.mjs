@@ -164,10 +164,10 @@ try {
   check(r4[0].includes('In no group: the runner sizes it 0'), 'an account in no group says why it would be sized 0');
   const pnl = await page.evaluate(() => ['SAMPLE-EVAL-1', 'SAMPLE-FUNDED-1'].map(n => getComputedStyle(document.querySelector('.fl-table tbody tr[data-name="' + n + '"] .fl-pnl')).color));
   check(pnl[0] === colours.buy && pnl[1] === colours.sell, 'Today is green when up and red when down (the only green and red on the tab): ' + pnl.join(' '));
-  check((await text('.fl-later')).includes('Not built yet, so not shown') && (await text('.fl-later')).includes('the one Armed slider'), 'what is not built (the pick, the Armed slider) is said, not faked');
-  // nothing on the tab can be pressed, typed in or switched but its four buttons (no Armed control until D2 adds the real one)
+  check((await text('.fl-later')).includes('Not built yet, so not here') && (await text('.fl-later')).includes('drag and drop') && (await text('.fl-later')).includes("starting the runner's program"), 'what is not built (drag and drop, the runner\'s start) is said, not faked');
+  // nothing on the tab can be pressed, typed in or switched but Kill all with its two answers, the Armed switch with its two, Read again and the Details
   const pressable = await page.evaluate(() => [...document.querySelectorAll('#flView button, #flView input, #flView select, #flView textarea, #flView a, #flView [tabindex], #flView [contenteditable], #flView [role="switch"], #flView [role="checkbox"], #flView [role="slider"], #flView label, #flView summary')].map(e => e.tagName + ':' + (e.dataset.do || '?')).sort());
-  check(pressable.join() === 'BUTTON:ask,BUTTON:more,BUTTON:more,BUTTON:more,BUTTON:more,BUTTON:no,BUTTON:roster,BUTTON:yes', 'the tab has Kill all, Yes, Cancel, Read again and a Details on each card, and no other control: ' + pressable.join());
+  check(pressable.join() === 'BUTTON:arm,BUTTON:armno,BUTTON:armyes,BUTTON:ask,BUTTON:more,BUTTON:more,BUTTON:more,BUTTON:more,BUTTON:no,BUTTON:roster,BUTTON:yes', 'the tab has Kill all, the Armed switch, their Yes and Cancel, Read again and a Details on each card, and no other control: ' + pressable.join());
   await page.screenshot({ path: path.join(SHOTS, 'fleet-desktop.png') });
 
   // the head is pinned: scrolled to the bottom of the tab, Kill all is still in sight
@@ -299,6 +299,100 @@ try {
   check((await text('.fl-answer')).includes('ChartBridge refused Kill all: this connection may not trade') && await page.locator('.fl-answer.bad').count() === 1, 'a refusal from ChartBridge is shown as one');
   check(await page.evaluate(() => window.sent.every(m => m.type === 'agentKillAllProp' && Object.keys(m).sort().join() === 'cid,type')), 'nothing but Kill all was ever sent');
   check(await page.evaluate(() => window.asked.every(u => u === '/roster')), 'and nothing but GET /roster was ever asked for');
+
+  // ---- D2: the lanes, the pick and the one Armed switch (ChartBridge 0.6.21). Sample traders, sample accounts, sample files
+  const d2from = await sentN();
+  const sentD2 = () => page.evaluate(n => window.sent.slice(n), d2from);
+  const laneRules = { roots: ['NQ', 'MNQ'], entryFrom: '09:40', entryUntil: '15:55', flatAt: '15:55', marketEntry: true, noTarget: true };
+  const lane1 = more => agent('legion1', Object.assign({ mode: 'shadow', account: null, group: { id: 'g1', name: 'Sample evals' }, seats: [{ account: 'SAMPLE-EVAL-1' }, { account: 'SAMPLE-EVAL-2' }], rules: laneRules, pick: 'sample-alpha.json' }, more || {}));
+  const lane2 = more => agent('legion2', Object.assign({ mode: 'shadow', account: null, group: { id: 'g2', name: 'Sample funded' }, seats: [{ account: 'SAMPLE-FUNDED-1' }], rules: laneRules }, more || {}));
+  const armAsking = () => page.evaluate(() => window.fleet.state().arm.asking);
+  await page.evaluate(b => { window.rosterAnswer = { status: 200, body: b }; }, rosterBody);
+  await feed({ type: 'hello', version: '0.6.21' }); await feed({ type: 'trading', enabled: true }); await feed(accounts); await feed(groups);
+  await feed(lane1()); await feed(lane2());
+  await page.waitForFunction(() => window.fleet.state().roster.state === 'ok' && window.fleet.state().lanes[0].armable === true);
+  const laneText = await page.evaluate(() => [...document.querySelectorAll('.fl-lane')].map(e => e.innerText.replace(/\s+/g, ' ')));
+  check(laneText.length === 2 && /^Eval lane legion1, group Sample evals SHADOW READY/i.test(laneText[0]) && laneText[0].includes('SAMPLE-EVAL-1') && laneText[0].includes('SAMPLE-EVAL-2'), 'the eval lane: its trader, its group, its mode, its accounts, Ready: ' + laneText[0]);
+  check(/^Funded lane legion2, group Sample funded SHADOW NOT READY/i.test(laneText[1]) && laneText[1].includes('No bot is picked for it'), 'the funded lane: not ready, and why: ' + laneText[1]);
+  const offered = await page.evaluate(() => [...document.querySelectorAll('#flPick-eval option')].map(o => o.value + (o.selected ? '*' : '')));
+  check(offered.join() === ',sample-alpha.json*', 'the pick list offers None and only the files that run live, with ChartBridge\'s pick chosen: ' + offered.join());
+  const order = await page.evaluate(() => [...document.querySelectorAll('#flView section')].map(e => e.getAttribute('aria-label')));
+  check(order.join() === 'Lanes,Traders,Prop accounts,Roster', 'the lanes, the traders and the prop accounts are above the roster (PROP 4): ' + order.join());
+  check((await text('[data-do="arm"]')) === 'Armed: off' && await page.locator('#flView [role="switch"]').count() === 1 && await page.locator('[data-do="arm"]').getAttribute('aria-checked') === 'false', 'one Armed switch, off');
+  await page.evaluate(() => { document.getElementById('flView').scrollTop = 0; });
+  await page.screenshot({ path: path.join(SHOTS, 'fleet-lanes.png') });
+  // a double click anywhere on the switch arms nothing, at every width; where the switch was, the question has Cancel, never Yes
+  for (const width of [1440, 1024, 700, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    let stayed = 0;
+    for (let i = 0; i < 10; i++) {
+      const b = await page.locator('[data-do="arm"]').boundingBox();
+      const pt = [b.x + 2 + (b.width - 4) * i / 9, b.y + b.height / 2];
+      await page.mouse.dblclick(pt[0], pt[1]);
+      if (await armAsking()) stayed++;
+      const under = await page.evaluate(([x, y]) => { const e = document.elementFromPoint(x, y); const btn = e && e.closest('button'); return btn ? btn.dataset.do : ''; }, pt);
+      if (under !== 'armno') errors.push('at ' + width + ' px, point ' + i + ': under the switch\'s place the question has ' + (under || 'nothing') + ', not Cancel');
+      await sleep(ARM); await page.click('[data-do="armno"]');
+    }
+    check((await sentD2()).length === 0 && stayed === 10, 'at ' + width + ' px: a double click at 10 points across the Armed switch sent nothing, and the question stayed up (' + stayed + ' of 10)');
+  }
+  await page.setViewportSize({ width: 1440, height: 900 });
+  // a press, messages, a release: the click is not lost, on the switch and on its Yes; the switch is never rebuilt
+  await page.evaluate(() => { window.armNode = document.querySelector('[data-do="arm"]'); });
+  let [ax, ay] = await centre('[data-do="arm"]');
+  await page.mouse.move(ax, ay); await page.mouse.down();
+  await feed(lane1({ pnlToday: 5 })); await feed(Object.assign({}, accounts, { tickle: 5 })); await feed(lane2({ pnlToday: 6 }));
+  await page.mouse.up();
+  check(await armAsking() && (await sentD2()).length === 0 && await page.evaluate(() => document.activeElement && document.activeElement.dataset.do === 'armno'), 'a press on the switch, three messages, a release: the question opens, nothing sent, the focus on Cancel');
+  check((await text('.fl-armask')).startsWith('Arm? Eval lane: legion1 goes to Auto and trades sample-alpha on 2 accounts. Funded lane: stays off (No bot is picked for it).'), 'the question says what each lane will do: ' + await text('.fl-armask'));
+  await page.screenshot({ path: path.join(SHOTS, 'fleet-arm-ask.png') });
+  await page.click('[data-do="armyes"]');
+  check((await sentD2()).length === 0 && await armAsking() && (await text('.fl-armsaid')).endsWith('Too soon: read the question, then click Yes.'), 'Yes at once: nothing sent, and the tab says why');
+  await page.focus('[data-do="armyes"]'); await sleep(ARM); await page.keyboard.press('Enter'); await page.keyboard.press('Space');
+  check((await sentD2()).length === 0 && (await text('.fl-armsaid')).includes('confirmed by a click on Yes only, not by keyboard'), 'Enter and Space on Yes arm nothing');
+  await page.evaluate(() => document.querySelector('[data-do="armyes"]').click());
+  check((await sentD2()).length === 0, 'a click on Yes made by script arms nothing');
+  let [yx2, yy2] = await centre('[data-do="armyes"]');
+  await page.mouse.move(yx2, yy2); await page.mouse.down();
+  await feed(lane1({ pnlToday: 7 })); await feed(Object.assign({}, accounts, { tickle: 6 }));
+  await page.mouse.up();
+  let d2 = await sentD2();
+  check(d2.length === 1 && d2[0].type === 'agentMode' && d2[0].agent === 'legion1' && d2[0].mode === 'auto' && Object.keys(d2[0]).sort().join() === 'agent,cid,mode,type', 'a press on Yes, two messages, a release: exactly one message, Auto for the one ready lane: ' + JSON.stringify(d2));
+  check((await text('[data-do="arm"]')) === 'Armed: off', 'the switch does not move by itself: it waits for ChartBridge');
+  await feed(lane1({ mode: 'auto' }));
+  const onLook = await page.evaluate(() => { const b = document.querySelector('[data-do="arm"]'); return { text: b.textContent, checked: b.getAttribute('aria-checked'), same: b === window.armNode, colour: getComputedStyle(b).color, sel: document.querySelector('#flPick-eval').disabled }; });
+  check(onLook.text === 'Armed: ON' && onLook.checked === 'true' && onLook.same && onLook.sel === true, 'ChartBridge says Auto: the switch reads ON, it is the same element, and the lane\'s pick list is locked');
+  check(onLook.colour !== colours.buy && onLook.colour !== colours.sell, 'the switch is never a P&L colour: ' + onLook.colour);
+  await page.screenshot({ path: path.join(SHOTS, 'fleet-armed.png') });
+  // a mode changed somewhere else (the Agent tab, Kill all, 17:00) shows here: the other lane in Auto while not ready is "partly"
+  await feed(lane2({ mode: 'auto' }));
+  check((await text('[data-do="arm"]')) === 'Armed: PARTLY' && (await text('.fl-armsaid')).includes('A click switches every lane off'), 'a lane in Auto that is not ready reads as partly, and says what a click does');
+  // off: one click, no question, Shadow for both
+  await page.click('[data-do="arm"]');
+  d2 = await sentD2();
+  check(d2.length === 3 && d2.slice(1).map(m => m.agent + ':' + m.mode).join() === 'legion1:shadow,legion2:shadow' && !(await armAsking()), 'one click on the switch sends Shadow for both lanes, with no question: ' + JSON.stringify(d2.slice(1)));
+  await feed(lane1()); await feed(lane2());
+  check((await text('[data-do="arm"]')) === 'Armed: off', 'and ChartBridge\'s Shadow reads as off');
+  // the pick: chosen in the list, sent as agentPick; a refusal is said and the list shows ChartBridge's pick again
+  await page.selectOption('#flPick-funded', 'sample-alpha.json');
+  d2 = await sentD2();
+  check(d2.length === 4 && d2[3].type === 'agentPick' && d2[3].agent === 'legion2' && d2[3].file === 'sample-alpha.json' && Object.keys(d2[3]).sort().join() === 'agent,cid,file,type', 'choosing a file in the funded lane sends one agentPick: ' + JSON.stringify(d2[3]));
+  check(await page.evaluate(() => document.querySelector('#flPick-funded').value === ''), 'the list goes back to ChartBridge\'s pick until ChartBridge says otherwise');
+  await feed({ type: 'reject', cid: d2[3].cid, reason: 'sample refusal' });
+  check((await text('.fl-armsaid')).includes('ChartBridge refused the pick for legion2: sample refusal') && await page.locator('.fl-armsaid.bad').count() === 1, 'a refused pick is said, marked');
+  await feed(lane2({ pick: 'sample-alpha.json' }));
+  check(await page.evaluate(() => document.querySelector('#flPick-funded').value === 'sample-alpha.json' && window.fleet.state().lanes[1].armable === true), 'ChartBridge\'s own word moves the list, and the lane is ready');
+  // Escape anywhere on the page cancels a question while the tab is open
+  await page.click('[data-do="arm"]'); await page.evaluate(() => document.activeElement.blur()); await page.keyboard.press('Escape');
+  check(!(await armAsking()), 'Escape with the focus nowhere in the tab cancels the Armed question');
+  await page.click('[data-do="ask"]'); await page.evaluate(() => document.activeElement.blur()); await page.keyboard.press('Escape');
+  check(!(await asking()), 'and the Kill all question');
+  check(await page.evaluate(n => window.sent.slice(n).every(m => window.FleetCore.maySend(m) && (m.type === 'agentMode' || m.type === 'agentPick')), d2from) && (await sentD2()).length === 4, 'the lanes sent four messages in all, each one the gate passes: one Auto, two Shadow, one pick');
+  // the lanes at a phone's width: one column, the switch and its answers in sight
+  await page.setViewportSize({ width: 390, height: 844 });
+  const narrow = await page.evaluate(() => { const g = getComputedStyle(document.querySelector('.fl-lanegrid')).gridTemplateColumns.split(' ').length, b = document.querySelector('[data-do="arm"]').getBoundingClientRect(); return { cols: g, right: b.right, w: document.documentElement.clientWidth }; });
+  check(narrow.cols === 1 && narrow.right <= narrow.w, 'at 390 px the lanes are one column and the switch is inside the window');
+  await page.setViewportSize({ width: 1440, height: 900 });
 
   // ---- hostile strings in every field of the roster and of ChartBridge's own messages: nothing runs, nothing is injected
   await page.evaluate(({ X, body }) => {

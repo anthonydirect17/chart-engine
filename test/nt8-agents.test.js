@@ -319,10 +319,12 @@ test('0.6.17 Kill all for the prop accounts: only agents whose every account is 
   // until chart 1.44.6 no page sent it; the Board's KILL ALL AGENTS is as it was
   const fsx = require('node:fs');
   // chart 1.45.0: the Legion tab (live/fleet.js) is the one page file that sends it (asked first; test/fleet.test.js), through the
-  // one-message connection workspace.js builds for it (the only other file that names it, once, in that gate); no other page file does
+  // connection workspace.js builds for it; since 1.46.0 the gate on that connection is FleetCore.maySend (fleet.js), so
+  // workspace.js names the message once, in its comment, and builds nothing; no other page file names it
   for (const f of fsx.readdirSync(path.join(__dirname, '..', 'live')).filter(f => f.endsWith('.js')))
     assert.strictEqual(fsx.readFileSync(path.join(__dirname, '..', 'live', f), 'utf8').includes('agentKillAllProp'), f === 'fleet.js' || f === 'workspace.js', f);
-  assert.strictEqual((fsx.readFileSync(path.join(__dirname, '..', 'live', 'workspace.js'), 'utf8').match(/agentKillAllProp/g) || []).length, 2, 'workspace.js: one comment and the gate, nothing that builds the message');
+  assert.strictEqual((fsx.readFileSync(path.join(__dirname, '..', 'live', 'workspace.js'), 'utf8').match(/agentKillAllProp/g) || []).length, 1, 'workspace.js: one comment, nothing that builds the message');
+  assert.match(fsx.readFileSync(path.join(__dirname, '..', 'live', 'workspace.js'), 'utf8'), /post: m => window\.FleetCore\.maySend\(m\) === true && AF\.post\(m\) === true \}/, 'and the gate is in front of every post');
 });
 
 test('0.6.19 the day\'s profit stop: the plan\'s dayStopDollars, the smaller of it and the consistency mark off a funded account, the trader\'s own flatten, a stand-down until the roll', () => {

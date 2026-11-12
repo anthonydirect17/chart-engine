@@ -140,7 +140,10 @@ test('fleet: Kill all is offered only to a ChartBridge that knows it, signed in,
   assert.match(F.killAllState('0.6.16', accounts, true, true).why, /needs ChartBridge 0\.6\.17 or later \(this one is 0\.6\.16\)/);
   assert.match(F.killAllState('0.6.19', accounts, false, true).why, /Sign in to trading first/);
   assert.match(F.killAllState('0.6.19', Object.assign({}, accounts, { personalNamed: false }), true, true).why, /No personal account is picked yet, so no account is prop/);
-  assert.match(F.killAllState('0.6.19', null, true, true).why, /No personal account is picked yet/);
+  // PROP 5: before the first accounts message the tab does not know; that alone never holds Kill all back (ChartBridge answers)
+  assert.deepStrictEqual(F.killAllState('0.6.19', null, true, true), { ok: true, why: '' });
+  assert.strictEqual(F.autoLine([], false), 'Not heard from ChartBridge yet which accounts are prop');
+  assert.strictEqual(F.autoLine([], true), 'No traders yet');
   assert.match(F.killAllState('0.6.19', accounts, true, false).why, /not connected/);
   assert.deepStrictEqual(F.killAllMsg('c1'), { type: 'agentKillAllProp', cid: 'c1' });
   assert.deepStrictEqual(F.killAllMsg(), { type: 'agentKillAllProp' });
@@ -151,7 +154,7 @@ test('fleet: dollars', () => {
   assert.deepStrictEqual([F.usd(1200), F.usd(-310), F.usd(310, true), F.usd(0, true), F.usd(155.5), F.usd(null), F.usd(NaN)], ['$1,200', '-$310', '+$310', '$0', '$155.50', '', '']);
 });
 
-test('legion: the tab is wired into the page beside the other three, with a connection that can post one message only', () => {
+test('legion: the tab is wired into the page beside the other three, with a connection that can post its three messages only', () => {
   const src = read('live', 'fleet.js'), html = read('live', 'index.html'), ws = read('live', 'workspace.js');
   assert.match(html, /<button type="button" class="ws-btn fl-tabbtn" id="wsFleetTab" aria-pressed="false"[^>]* hidden>Legion<\/button>/, 'hidden until ChartBridge says it knows Kill all');
   assert.match(html, /<section class="fl-view fl-in-ws" id="flView" aria-label="Legion tab"><\/section>/);
@@ -162,23 +165,32 @@ test('legion: the tab is wired into the page beside the other three, with a conn
   assert.match(ws, /startBot\(\); startAgent\(\); startLeague\(\); startFleet\(\);/);
   assert.strictEqual((ws.match(/fleetView && fleetView\.shown\(\)\) fleetView\.showTab\(false\);/g) || []).length, 5, 'closed by each other tab, a layout tab and a layout change: one view at a time');
   assert.match(ws, /tabUrl\(on \? 'legion' : ''\);/); assert.match(ws, /\.get\('tab'\) === 'legion'\) fleetView\.showTab\(true\);/);
-  // N5: the tab is not handed the feed. Its connection is built here and run: it passes agentKillAllProp with a cid and nothing else
-  const m = /const legionLink = AF \? (\{[^\n]*\}) : null;\n/.exec(ws);
+  // N5: the tab is not handed the feed. Its connection is built here and run: it passes what FleetCore.maySend passes and nothing else
+  const m = /const legionLink = AF && window\.FleetCore \? (\{[^\n]*\}) : null;\n/.exec(ws);
   assert.ok(m, 'the tab\'s own connection is one line in workspace.js');
   assert.match(ws, /tab: \$\('wsFleetTab'\), v3: legionLink, realClick: OT\.realClick, headers:/, 'and it is what the tab gets, not AF');
   const posted = [], heard = [];
   const AF = { listen: part => { heard.push(part); return () => {}; }, post: x => { posted.push(x); return true; }, send: () => { throw new Error('send reached'); }, sendOrder: () => { throw new Error('sendOrder reached'); } };
-  const link = new Function('AF', 'return ' + m[1])(AF);
+  const link = new Function('AF', 'window', 'return ' + m[1])(AF, { FleetCore: F });
   assert.deepStrictEqual(Object.keys(link).sort(), ['listen', 'post'], 'two things only: no send, no sendOrder');
   assert.strictEqual(link.post({ type: 'agentKillAllProp', cid: 'c1' }), true);
   assert.strictEqual(link.post({ type: 'agentKillAllProp' }), true);
-  for (const bad of [{ type: 'agentMode', agent: 'x', mode: 'auto' }, { type: 'order' }, { type: 'flatten' }, { type: 'agentKill', agent: 'x', on: false }, { type: 'agentKillAllProp', cid: 'c', account: 'A' }, { type: 'accountPersonal' }, { cid: 'c' }, null, 'agentKillAllProp', []])
+  const good = [{ type: 'agentMode', cid: 'c2', agent: 'legion1', mode: 'auto' }, { type: 'agentMode', agent: 'legion1', mode: 'shadow' }, { type: 'agentPick', cid: 'c3', agent: 'legion1', file: 'germanicus_r115.json' }, { type: 'agentPick', agent: 'legion1', file: null }];
+  for (const ok of good) assert.strictEqual(link.post(ok), true, JSON.stringify(ok));
+  for (const bad of [{ type: 'agentMode', agent: 'x', mode: 'copilot' }, { type: 'agentMode', agent: 'x', mode: 'auto', account: 'A' }, { type: 'agentMode', agent: 'Not An Id', mode: 'auto' }, { type: 'agentMode', mode: 'auto' },
+    { type: 'agentPick', agent: 'x' }, { type: 'agentPick', agent: 'x', file: '../x.json' }, { type: 'agentPick', agent: 'x', file: 'x.txt' }, { type: 'agentPick', agent: 'x', file: 7 }, { type: 'agentPick', agent: 'x', file: null, group: 'g1' },
+    { type: 'order' }, { type: 'flatten' }, { type: 'agentKill', agent: 'x', on: false }, { type: 'agentKillAllProp', cid: 'c', account: 'A' }, { type: 'agentKillAllProp', cid: 7 }, { type: 'agentKillAllProp', cid: '' }, { type: 'accountPersonal' },
+    { type: 'agentAccount', agent: 'x', group: 'g1' }, { type: 'agentRules', agent: 'x' }, { type: 'accountGroup', account: 'A', group: 'g1' }, { cid: 'c' }, null, 'agentKillAllProp', []])
     assert.strictEqual(link.post(bad), false, JSON.stringify(bad) + ' is not passed on');
-  assert.deepStrictEqual(posted, [{ type: 'agentKillAllProp', cid: 'c1' }, { type: 'agentKillAllProp' }]);
+  assert.deepStrictEqual(posted, [{ type: 'agentKillAllProp', cid: 'c1' }, { type: 'agentKillAllProp' }].concat(good));
+  const cs = read('nt8', 'ChartBridgeAgents.cs');
+  assert.match(cs, /\{ "agentPick", new\[\] \{ "type", "cid", "agent", "file" \} \},/, 'ChartBridge takes exactly these keys for the pick');
+  assert.match(cs, /\{ "agentMode", new\[\] \{ "type", "cid", "agent", "mode" \} \},/, 'and these for the mode');
   link.listen('part'); assert.deepStrictEqual(heard, ['part']);
   assert.strictEqual(link.post.call({ post: () => true }, { type: 'order' }), false);
   // with no feed at all (accounts.js not served) the tab gets no connection and nothing is called on a null (the second look, FIX A)
-  assert.strictEqual(new Function('AF', 'return AF ? ' + m[1] + ' : null')(null), null);
+  assert.strictEqual(new Function('AF', 'window', 'return AF && window.FleetCore ? ' + m[1] + ' : null')(null, { FleetCore: F }), null);
+  assert.strictEqual(new Function('AF', 'window', 'return AF && window.FleetCore ? ' + m[1] + ' : null')(AF, {}), null, 'and with fleet.js not served');
   // the tab's own file: no browser dialog, nothing stored, no other connection, no long dashes
   const viewSrc = src.slice(src.indexOf('the tab (browser only)'));
   assert.ok(!/confirm\(|alert\(|prompt\(/.test(src), 'no browser dialog');
@@ -336,7 +348,8 @@ function page(t, over) {
   P.fv = win.FleetView.create(Object.assign({ view, tab, v3: V3, realClick: require('../live/order-ticket.js').realClick, now: () => P.T, fetch: (u, o) => { P.asks.push([u, o]); return new Promise((res, rej) => P.answers.push({ res, rej })); } }, over || {}));
   P.feed = m => P.subs.message(m);
   P.click = (what, detail, card) => listeners.click({ target: { closest: () => ({ dataset: { do: what, card } }) }, detail: detail === undefined ? 1 : detail });
-  P.html = () => view.innerHTML + ['roster', 'traders', 'accounts'].map(k => P.part(k).innerHTML).join('');
+  P.html = () => view.innerHTML + ['lanes', 'roster', 'traders', 'accounts'].map(k => P.part(k).innerHTML).join('');
+  P.change = (agentId, value) => listeners.change({ target: { dataset: { do: 'pick', agent: agentId }, value } });
   P.ready = v => { P.feed({ type: 'hello', version: v || '0.6.20' }); P.feed({ type: 'trading', enabled: true }); P.feed(accounts); P.feed(groups); P.feed(agent('germanicus')); };
   P.tick = () => new Promise(r => setImmediate(r));
   t.after(() => P.fv.destroy());
@@ -545,11 +558,11 @@ test('what the tab draws: one line a card with its detail behind Details; its bu
   timers(t);
   const X = '<img src=x onerror=1>"\'&';
   const P = page(t); P.fv.showTab(true);
-  P.feed({ type: 'hello', version: '0.6.20' }); P.feed({ type: 'trading', enabled: true });
+  P.feed({ type: 'hello', version: '0.6.21' }); P.feed({ type: 'trading', enabled: true });
   P.feed({ type: 'accounts', personalNamed: true, list: [{ name: 'A' + X, connection: X, prop: true, group: 'g1', pnlToday: 1, roomFloor: null, why: { roomFloor: X }, rules: { target: 3000, consistency: 40 }, positions: [{ root: X, qty: 1 }] }] });
   P.feed({ type: 'groups', list: [{ id: 'g1', name: X, accountType: 'eval' }] });
   P.feed(agent('t1', { name: X, build: X, account: 'A' + X, standDown: X, rules: { entryFrom: X, entryUntil: X, flatAt: X } }));
-  P.feed(agent('t2', { name: 'n', account: null, group: { id: X, name: X }, seats: [{ account: X }] }));
+  P.feed(agent('t2', { name: X, account: null, group: { id: 'g1', name: X }, seats: [{ account: X }], standDown: X, pick: 'gone.json' }));
   const hostile = botFile('ok', { why_not: X, runs_live: false, record: { run_id: X, sessions: 1, trades: 1, try: 1, instrument: X, verdict: X }, plan: { size: X, dll: true } });
   const lu = lineupFile('lu', [member('a', { runs_live: false, why_not: X, record: { run_id: X, instrument: X } }), member('b')], { runs_live: false });
   await P.tick();
@@ -575,13 +588,18 @@ test('what the tab draws: one line a card with its detail behind Details; its bu
   // ChartBridge's own lines go in as text (textContent), never through innerHTML
   assert.ok(P.part('answer').textContent.includes(X) && !P.part('answer').innerHTML);
   assert.ok(!P.part('hint').innerHTML && !P.part('autoline').innerHTML);
-  // Kill all, Yes, Cancel, Read again and a Details on each card: nothing else can be pressed, typed in or switched (no Armed
-  // control until D2 adds the real one)
-  const pressable = html.match(/<(button|input|select|textarea|a|details|summary|label)\b[^>]*>/g) || [];
-  assert.deepStrictEqual(pressable.map(x => (/data-do="([a-z]+)"/.exec(x) || [])[1]).sort(), ['ask', 'more', 'more', 'no', 'roster', 'yes'], 'exactly Kill all, Yes, Cancel, Read again and two Details: ' + pressable.join(' '));
-  assert.ok(pressable.every(x => x.startsWith('<button type="button"')));
-  assert.ok(!/contenteditable|tabindex|onclick|role="(switch|checkbox|slider)"/i.test(html));
-  assert.match(html, /Not built yet, so not shown: .*the one Armed slider/);
+  // Kill all with its Yes and Cancel, the Armed switch with its Yes and Cancel, one pick list a lane that has a trader, Read
+  // again and a Details on each card: nothing else can be pressed, typed in or switched
+  const pressable = html.match(/<(button|input|select|textarea|a|details|summary)\b[^>]*>/g) || [];
+  assert.deepStrictEqual(pressable.map(x => (/data-do="([a-z]+)"/.exec(x) || [])[1]).sort(), ['arm', 'armno', 'armyes', 'ask', 'more', 'more', 'no', 'pick', 'roster', 'yes'], pressable.join(' '));
+  assert.ok(pressable.every(x => x.startsWith('<button type="button"') || x.startsWith('<select class="fl-pick"')));
+  assert.strictEqual((html.match(/role="switch"/g) || []).length, 1, 'one Armed switch, for both lanes');
+  assert.ok(!/contenteditable|tabindex|onclick|role="(checkbox|slider)"|draggable/i.test(html));
+  assert.match(html, /Not built yet, so not here: moving an account into or out of a lane by drag and drop/);
+  // the lane's hostile strings (the trader's name, its group, its seat, why it is stood down, a pick that is gone) are text
+  const lanesHtml = P.part('lanes').innerHTML;
+  assert.ok(lanesHtml.includes('It is stood down: &lt;img src=x onerror=1&gt;') && lanesHtml.includes('gone.json (not offered now)'));
+  assert.ok(!P.part('armsaid').innerHTML && !P.part('armask').innerHTML && !P.part('arm').innerHTML, 'the switch and its lines are set as text');
 });
 
 test('an older ChartBridge with the tab open by its address keeps the button (N9); a lineup draws 12 bots at most and says how many more', async t => {
@@ -694,4 +712,198 @@ test('the head: the line under the title has its own row, and each number on a c
   P.answers[0].res({ status: 200, json: () => Promise.resolve({ files: [served('z.json', botFile('zeta'))] }) }); await P.tick(); await P.tick();
   const line = P.part('roster').innerHTML.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
   assert.match(line, /Eval \+0\.62 per \$1 Above no edge Funded -0\.10 per \$1 Not above no edge/, 'each number on the line is named: ' + line);
+});
+
+
+/* ---------------------------------------------------------------- the lanes, the pick and the Armed switch (D2) */
+const laneRules = { roots: ['NQ', 'MNQ'], entryFrom: '09:40', entryUntil: '15:55', flatAt: '15:55', marketEntry: true, noTarget: true };
+const evalTrader = more => agent('legion1', Object.assign({ mode: 'shadow', account: null, group: { id: 'g1', name: 'Evals' }, seats: [{ account: 'EVAL-A' }, { account: 'EVAL-B' }], rules: laneRules, pick: 'germ.json' }, more || {}));
+const fundTrader = more => agent('legion2', Object.assign({ mode: 'shadow', account: null, group: { id: 'g2', name: 'Funded' }, seats: [{ account: 'FUND-A' }], rules: laneRules }, more || {}));
+const cardsOf = files => F.rosterCards({ files, left: 0 });
+const liveCards = () => cardsOf([served('germ.json', botFile('germ')), served('duo.json', lineupFile('duo', [member('a'), member('b')])), served('slow.json', botFile('slow', { runs_live: false, why_not: 'two trades a session' }))]);
+
+test('lanes: a lane is the trader on a group of that Type; each reason a lane cannot be armed, in ChartBridge\'s own facts', () => {
+  const V = '0.6.21', cards = liveCards();
+  let [ev, fu] = F.lanes([evalTrader(), fundTrader()], groups, accounts, V, cards);
+  assert.deepStrictEqual([ev.stage, ev.title, ev.id, ev.groupName, ev.seats, ev.pick, ev.pickText, ev.modeText, ev.auto, ev.why, ev.armable], ['eval', 'Eval lane', 'legion1', 'Evals', ['EVAL-A', 'EVAL-B'], 'germ.json', 'germ', 'Shadow', false, '', true]);
+  assert.deepStrictEqual([fu.stage, fu.id, fu.seats, fu.pick, fu.pickText, fu.armable, fu.why], ['funded', 'legion2', ['FUND-A'], '', 'None', false, 'No bot is picked for it']);
+  const why = (more, o) => F.lanes([evalTrader(more)], (o && o.groups) || groups, (o && o.accounts) || accounts, (o && o.v) || V, o && 'cards' in o ? o.cards : cards)[0];
+  assert.match(why({}, { v: '0.6.20' }).why, /^The pick needs ChartBridge 0\.6\.21 or later \(this one is 0\.6\.20\)$/);
+  assert.match(why({ enabled: false }).why, /off in ChartBridge/);
+  assert.match(why({ killed: true }).why, /kill switch is on \(it is released on the Agent tab, by you\)/);
+  assert.match(why({ standDown: 'the day stop' }).why, /^It is stood down: the day stop$/);
+  assert.match(why({ pickProblem: 'not one pick line' }).why, /saved pick could not be read: not one pick line/);
+  assert.match(why({ pick: undefined }).why, /No bot is picked/);
+  assert.match(why({ pick: '../x.json' }).why, /No bot is picked/, 'a name ChartBridge would not take is no pick');
+  assert.match(why({}, { cards: null }).why, /roster is not read/);
+  assert.match(why({ pick: 'gone.json' }).why, /gone\.json is not a roster file this PC serves now/);
+  assert.match(why({ pick: 'slow.json' }).why, /^slow does not run live: two trades a session$/);
+  assert.match(why({ seats: [] }).why, /No account is in its group/);
+  assert.match(why({ seats: [{ account: 'EVAL-A' }, { account: 'MINE-1' }] }).why, /holds your personal account/);
+  assert.match(why({ rules: Object.assign({}, laneRules, { marketEntry: false }) }).why, /Market entry is off in its rules/);
+  assert.strictEqual(why({ pick: 'duo.json' }).pickText, 'duo (lineup of 2)');
+  assert.strictEqual(why({ connected: false }).runnerNote, 'Its runner is not connected: nothing trades in this lane until it is.');
+  assert.strictEqual(why({ connected: false }).armable, true, 'a runner that is not connected does not hold the switch: ChartBridge holds the mode');
+  // no trader on a group of that Type, two of them, a trader on one account, a group with no Type: no lane
+  [ev, fu] = F.lanes([agent('solo', { account: 'EVAL-A' }), agent('g3er', { account: null, group: { id: 'g3', name: 'New' }, seats: [{ account: 'NOTYPE-1' }] })], groups, accounts, V, cards);
+  assert.match(ev.why, /^No trader is on a group of Type eval\. Set it up once/); assert.match(fu.why, /^No trader is on a group of Type funded/);
+  assert.deepStrictEqual([ev.id, ev.armable, ev.traders], ['', false, []]);
+  [ev] = F.lanes([evalTrader(), agent('twin', { mode: 'auto', account: null, group: { id: 'g1', name: 'Evals' }, seats: [] })], groups, accounts, V, cards);
+  assert.match(ev.why, /^2 traders are on eval groups \(legion1, twin\): Legion runs one lane a stage/);
+  assert.deepStrictEqual([ev.armable, ev.auto, ev.traders], [false, true, ['legion1', 'twin']], 'and it still says one of them is in Auto');
+  assert.strictEqual(F.lanes([evalTrader()], null, accounts, V, cards)[0].why, 'Not heard from ChartBridge yet');
+  assert.doesNotThrow(() => F.lanes([null, 7, {}, { agent: 'x', group: 7 }], { list: [null, 7] }, { list: [7] }, null, { ok: false }));
+});
+
+test('the Armed switch: read from the traders\' own modes; on sends Auto to each ready lane only; off sends Shadow to every lane trader not in Shadow', () => {
+  const V = '0.6.21', cards = liveCards(), L = list => F.lanes(list, groups, accounts, V, cards), cidFn = () => 'c';
+  const both = [evalTrader(), fundTrader({ pick: 'duo.json' })], one = [evalTrader(), fundTrader()];
+  assert.deepStrictEqual(F.armState(L(both), V, true, true), { state: 'off', text: 'Armed: off', can: true, why: '' });
+  assert.deepStrictEqual(F.armMsgs(L(both), true, both, cidFn), [{ type: 'agentMode', cid: 'c', agent: 'legion1', mode: 'auto' }, { type: 'agentMode', cid: 'c', agent: 'legion2', mode: 'auto' }]);
+  assert.deepStrictEqual(F.armMsgs(L(one), true, one, cidFn).map(m => m.agent), ['legion1'], 'a lane that is not ready is never sent to Auto');
+  assert.match(F.armWords(L(one)), /^Eval lane: legion1 goes to Auto and trades germ on 2 accounts\. Funded lane: stays off \(No bot is picked for it\)\.$/);
+  assert.match(F.armWords(L([evalTrader({ connected: false })])), /its runner is not connected: nothing trades there until it is/);
+  // the state, from the modes
+  const st = list => F.armState(L(list), V, true, true).state;
+  assert.strictEqual(st([evalTrader({ mode: 'auto' }), fundTrader({ pick: 'duo.json', mode: 'auto' })]), 'on');
+  assert.strictEqual(st([evalTrader({ mode: 'auto' }), fundTrader()]), 'on', 'the one ready lane is in Auto and the other cannot be');
+  assert.strictEqual(st([evalTrader({ mode: 'auto' }), fundTrader({ pick: 'duo.json' })]), 'partly');
+  assert.strictEqual(st([evalTrader(), fundTrader({ mode: 'auto' })]), 'partly', 'a lane in Auto that is not ready (set on the Agent tab) never reads as on');
+  assert.strictEqual(st([evalTrader({ mode: 'auto' }), fundTrader({ mode: 'auto' })]), 'partly', 'every ready lane in Auto, and one more that is not ready: not on');
+  assert.strictEqual(st([evalTrader({ mode: 'copilot' }), fundTrader()]), 'off');
+  // off: every trader of every lane that is not in Shadow, the second trader of a doubled lane included
+  const mixed = [evalTrader({ mode: 'auto' }), fundTrader({ mode: 'copilot' }), agent('twin', { mode: 'auto', account: null, group: { id: 'g1', name: 'Evals' }, seats: [] }), agent('solo', { mode: 'auto', account: 'EVAL-A' })];
+  assert.deepStrictEqual(F.armMsgs(L(mixed), false, mixed, null), [{ type: 'agentMode', agent: 'legion1', mode: 'shadow' }, { type: 'agentMode', agent: 'twin', mode: 'shadow' }, { type: 'agentMode', agent: 'legion2', mode: 'shadow' }]);
+  assert.deepStrictEqual(F.armMsgs(L(both), false, both, null), [], 'nothing to switch off');
+  // why it cannot be switched on
+  assert.match(F.armState(L(both), V, true, false).why, /not connected/);
+  assert.match(F.armState(L(both), '0.6.20', true, true).why, /Armed needs ChartBridge 0\.6\.21 or later/);
+  assert.match(F.armState(L(both), V, false, true).why, /Sign in to trading first/);
+  assert.match(F.armState(L([fundTrader()]), V, true, true).why, /^No lane is ready: Eval lane: No trader is on a group of Type eval.* Funded lane: No bot is picked for it$/);
+  // every message it makes passes the gate, and the pick's too
+  for (const m of F.armMsgs(L(mixed), false, mixed, cidFn).concat(F.armMsgs(L(both), true, both, cidFn))) assert.strictEqual(F.maySend(m), true);
+  assert.deepStrictEqual(F.pickMsg('legion1', 'germ.json', 'c9'), { type: 'agentPick', cid: 'c9', agent: 'legion1', file: 'germ.json' });
+  assert.deepStrictEqual(F.pickMsg('legion1', null), { type: 'agentPick', agent: 'legion1', file: null });
+  assert.deepStrictEqual([F.pickMsg('Legion 1', 'germ.json'), F.pickMsg('legion1', 'germ.txt'), F.pickMsg('legion1', ''), F.pickMsg('legion1', undefined)], [null, null, null, null]);
+  assert.deepStrictEqual(F.pickChoices(cards), [{ file: 'duo.json', text: 'duo (lineup of 2)' }, { file: 'germ.json', text: 'germ' }], 'only files that run live are offered');
+  assert.deepStrictEqual(F.pickChoices(null), []);
+});
+
+async function lanePage(t, list) {
+  timers(t);
+  const P = page(t); P.fv.showTab(true);
+  P.feed({ type: 'hello', version: '0.6.21' }); P.feed({ type: 'trading', enabled: true }); P.feed(accounts); P.feed(groups);
+  for (const a of list) P.feed(a);
+  await P.tick();
+  P.answers[0].res({ status: 200, json: () => Promise.resolve({ left: 0, files: [served('germ.json', botFile('germ')), served('duo.json', lineupFile('duo', [member('a'), member('b')]))] }) });
+  await P.tick(); await P.tick();
+  return P;
+}
+
+test('Armed on: it asks, takes a real click on Yes after the first moment, and sends Auto for the ready lanes; everything is checked again at the Yes', async t => {
+  const P = await lanePage(t, [evalTrader(), fundTrader()]);
+  const arm = () => P.fv.state().arm;
+  assert.deepStrictEqual([arm().state, P.part('arm').textContent, P.part('arm').attrs['aria-checked'], P.part('arm').attrs['data-state']], ['off', 'Armed: off', 'false', 'off']);
+  P.click('armyes');
+  assert.deepStrictEqual([P.posts, arm().asking], [[], false], 'Yes with no question up sends nothing');
+  P.click('arm');
+  assert.deepStrictEqual([arm().asking, P.posts, P.part('arm').hidden, P.part('armno').hidden, P.part('armyes').hidden, P.part('armask').hidden], [true, [], true, false, false, false], 'the first click asks and sends nothing');
+  assert.strictEqual(P.part('armno').style.minWidth, '157px', 'Cancel takes the switch\'s own place');
+  assert.strictEqual(P.part('armno').focused, 1, 'and the focus');
+  assert.match(P.part('armask').textContent, /^Arm\? Eval lane: legion1 goes to Auto and trades germ on 2 accounts\. Funded lane: stays off \(No bot is picked for it\)\. Yes, or Cancel, beside this\.$/);
+  P.T += 100; P.click('armyes', 2);
+  assert.deepStrictEqual([P.posts, arm().asking], [[], true], 'the second click of a double click: nothing');
+  assert.match(P.part('armsaid').textContent, /Too soon: read the question, then click Yes\.$/);
+  P.T += 600; P.click('armyes', 0);
+  assert.deepStrictEqual(P.posts, [], 'a click made by a key is never a Yes');
+  assert.match(P.part('armsaid').textContent, /confirmed by a click on Yes only, not by keyboard/);
+  P.click('armyes');
+  assert.strictEqual(P.posts.length, 1);
+  assert.deepStrictEqual([Object.keys(P.posts[0]).sort(), P.posts[0].type, P.posts[0].agent, P.posts[0].mode, arm().asking], [['agent', 'cid', 'mode', 'type'], 'agentMode', 'legion1', 'auto', false]);
+  assert.match(P.part('armsaid').textContent, /Sent Auto for legion1: the switch shows what ChartBridge says next$/);
+  assert.strictEqual(arm().state, 'off', 'the switch does not move by itself: it waits for ChartBridge');
+  // ChartBridge refuses: said, marked bad
+  P.feed({ type: 'reject', cid: P.posts[0].cid, reason: 'the account is not tradable' });
+  assert.match(P.part('armsaid').textContent, /ChartBridge refused Auto for legion1: the account is not tradable$/);
+  assert.ok(P.part('armsaid').cls.has('bad'));
+  // ChartBridge says Auto: the switch is on
+  P.feed(evalTrader({ mode: 'auto' }));
+  assert.deepStrictEqual([arm().state, P.part('arm').textContent, P.part('arm').attrs['aria-checked']], ['on', 'Armed: ON', 'true']);
+  // the 8 seconds by the clock, the timer, Cancel and Escape
+  P.feed(evalTrader()); P.posts.length = 0;
+  P.click('arm'); P.T += F.CONFIRM_MS + 1; P.click('armyes');
+  assert.deepStrictEqual([P.posts, arm().asking], [[], false], 'Yes after 8 seconds by the clock: nothing');
+  P.click('arm'); t.mock.timers.tick(F.CONFIRM_MS + 1); assert.strictEqual(arm().asking, false, 'the question times out by itself');
+  P.click('arm'); P.T += 700; P.click('armno', 0); assert.strictEqual(arm().asking, false, 'Cancel by the keyboard');
+  P.click('arm'); P.key('Escape'); assert.strictEqual(arm().asking, false, 'Escape');
+  // checked again at the Yes: the lane stopped being ready while the question was up
+  P.click('arm'); P.T += 700; P.feed(evalTrader({ killed: true })); P.click('armyes');
+  assert.deepStrictEqual(P.posts, [], 'nothing is sent for a lane that is no longer ready');
+  assert.match(P.part('armsaid').textContent, /No lane is ready: Eval lane: Its kill switch is on/);
+  // not signed in: the switch says why and asks nothing
+  P.feed(evalTrader()); P.feed({ type: 'trading', enabled: false }); P.click('arm');
+  assert.deepStrictEqual([arm().asking, P.posts, P.part('arm').attrs['aria-disabled']], [false, [], 'true']);
+  assert.match(P.part('armsaid').textContent, /Sign in to trading first/);
+  // a lost connection ends the question
+  P.feed({ type: 'trading', enabled: true }); P.click('arm'); assert.strictEqual(arm().asking, true);
+  P.subs.closed(); assert.strictEqual(arm().asking, false);
+  assert.deepStrictEqual(P.posts, []);
+});
+
+test('Armed off: one click or key, no question, Shadow for every lane trader not in Shadow; partly is said and a click switches all off', async t => {
+  const P = await lanePage(t, [evalTrader({ mode: 'auto' }), fundTrader({ pick: 'duo.json' })]);
+  const arm = () => P.fv.state().arm;
+  assert.deepStrictEqual([arm().state, P.part('arm').textContent, P.part('arm').attrs['aria-checked']], ['partly', 'Armed: PARTLY', 'mixed']);
+  assert.match(P.part('armsaid').textContent, /^The lanes differ: Eval lane in Auto, Funded lane not in Auto\. A click switches every lane off\.$/);
+  P.click('arm', 0);                                       // by the keyboard: off is never held up
+  assert.deepStrictEqual(P.posts.map(m => [m.type, m.agent, m.mode]), [['agentMode', 'legion1', 'shadow']]);
+  assert.strictEqual(arm().asking, false, 'no question');
+  P.feed(evalTrader({ mode: 'auto' })); P.feed(fundTrader({ pick: 'duo.json', mode: 'auto' }));
+  assert.strictEqual(arm().state, 'on');
+  P.posts.length = 0; P.click('arm');
+  assert.deepStrictEqual(P.posts.map(m => [m.agent, m.mode]), [['legion1', 'shadow'], ['legion2', 'shadow']]);
+  // a send that fails is said, marked bad
+  P.posts.length = 0; P.postOk = false; P.click('arm');
+  assert.match(P.part('armsaid').textContent, /Shadow could NOT be sent for 2 of 2: ChartBridge is not connected\. Use Kill all, or NinjaTrader$/);
+  assert.ok(P.part('armsaid').cls.has('bad'));
+  // Kill all and the 17:00 reset show here because the switch reads ChartBridge: both traders back in Shadow, the switch is off
+  P.postOk = true; P.feed(evalTrader()); P.feed(fundTrader({ pick: 'duo.json' }));
+  assert.deepStrictEqual([arm().state, P.part('arm').textContent], ['off', 'Armed: off']);
+  // the question of Kill all and the Armed question are apart: Escape ends both
+  P.click('ask'); P.click('arm'); assert.deepStrictEqual([P.fv.state().asking, arm().asking], [true, true]);
+  P.key('Escape'); assert.deepStrictEqual([P.fv.state().asking, arm().asking], [false, false]);
+});
+
+test('the pick: one list a lane, sent as agentPick; locked in Auto and while the trader holds something; a refusal is said and the list goes back', async t => {
+  const P = await lanePage(t, [evalTrader(), fundTrader()]);
+  let html = P.part('lanes').innerHTML;
+  assert.match(html, /<select class="fl-pick" id="flPick-eval" data-do="pick" data-agent="legion1"><option value="">None<\/option><option value="duo\.json">duo \(lineup of 2\)<\/option><option value="germ\.json" selected>germ<\/option><\/select>/);
+  assert.match(html, /<select class="fl-pick" id="flPick-funded" data-do="pick" data-agent="legion2"><option value="" selected>None<\/option>/);
+  assert.match(html, /data-stage="eval" data-armable="true"/); assert.match(html, /data-stage="funded" data-armable="false"/);
+  assert.match(html, /<span class="fl-seat">EVAL-A<\/span><span class="fl-seat">EVAL-B<\/span>/);
+  P.change('legion2', 'duo.json');
+  assert.deepStrictEqual(P.posts.map(m => [m.type, m.agent, m.file, typeof m.cid]), [['agentPick', 'legion2', 'duo.json', 'string']]);
+  assert.match(P.part('armsaid').textContent, /Sent the pick for funded lane: duo\.json$/);
+  assert.match(P.part('lanes').innerHTML, /id="flPick-funded"[^>]*><option value="" selected>None/, 'the list shows ChartBridge\'s pick until ChartBridge says otherwise');
+  P.feed({ type: 'reject', cid: P.posts[0].cid, reason: 'agent legion2 is in Auto: the pick changes only while it is not' });
+  assert.match(P.part('armsaid').textContent, /ChartBridge refused the pick for legion2: agent legion2 is in Auto/);
+  P.feed(fundTrader({ pick: 'duo.json' }));
+  assert.match(P.part('lanes').innerHTML, /<option value="duo\.json" selected>duo \(lineup of 2\)<\/option>/);
+  P.change('legion1', '');
+  assert.deepStrictEqual([P.posts[1].agent, P.posts[1].file], ['legion1', null], 'None is sent as null');
+  // locked: in Auto, and while it holds something
+  P.posts.length = 0;
+  P.feed(evalTrader({ mode: 'auto' }));
+  assert.match(P.part('lanes').innerHTML, /id="flPick-eval" data-do="pick" data-agent="legion1" disabled title="Switch Armed off first: the pick changes only while the lane is not in Auto"/);
+  P.change('legion1', 'duo.json');
+  assert.deepStrictEqual(P.posts, [], 'and a change that arrives anyway is not sent');
+  P.feed(evalTrader({ owns: true }));
+  assert.match(P.part('lanes').innerHTML, /id="flPick-eval"[^>]* disabled title="The trader holds something: the pick changes once it is flat"/);
+  // a trader that is not a lane's, a name that is not a file: nothing
+  P.change('nobody', 'duo.json'); P.change('legion2', '../x.json');
+  assert.deepStrictEqual(P.posts, []);
+  // the lanes are not drawn again while nothing they show changed (a list held open is not taken away by the once-a-second message)
+  const draws = P.fv.state().draws.lanes;
+  P.feed(evalTrader({ owns: true, pnlToday: 55, lastBeatMs: 900 })); P.feed(evalTrader({ owns: true, pnlToday: 60, lastBeatMs: 7000 }));
+  assert.strictEqual(P.fv.state().draws.lanes, draws);
 });

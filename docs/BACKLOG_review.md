@@ -25,12 +25,18 @@ NinjaTrader at 17:59, 18:01 and 18:10 New York.
 
 ## With D2, the lanes and the Armed slider (the reviews of 92, build answers 13 and 15)
 
-- PROP 4, what is left: the traders and the prop accounts above the roster (the head is pinned since the fix round).
-- PROP 5. "Not heard yet" told apart from "no": when that is the only reason Kill all is not offered, Yes sends and
-  ChartBridge answers. Also: before the first `accounts` message the line under the title says "No trader is in Auto on
-  a prop account" (not known yet, not no).
-- N12. The page works out the day stop mark and "reached" itself; ChartBridge owns both. Show ChartBridge's.
-- Escape cancels the question wherever the focus is while the tab is open (today: only with the focus inside the tab).
+Closed by chart 1.46.0 (D2, the first half: the lanes, the pick, the Armed switch), each with a check: PROP 4 (the
+lanes, the traders and the prop accounts are above the roster), PROP 5 ("not heard yet" is not "no": Kill all is offered
+before the first `accounts` message and the line under the title says so), and Escape (it cancels a question wherever
+the focus is while the tab is open).
+
+- N12. The page works out the day stop mark and "reached" itself; ChartBridge owns both. Show ChartBridge's. Not done
+  in 1.46.0: ChartBridge does not send either to a page (only the plan's `dayStop` on `agent`), so this needs a
+  ChartBridge change first (the mark and "reached" on each row of `accounts`).
+- D2, the second half: an account moved into or out of a lane by drag and drop (`accountGroup`, with the Accounts
+  tab's own join question: the highest close and the account's rules from its type).
+- The Armed switch's question and Kill all's question can both be up at once (each has its own buttons and its own
+  line). Harmless; one at a time would be tidier.
 - The three sections are set again on every message when their HTML is unchanged only by comparison of the whole
   string (harmless to Kill all: the head is kept; wasteful with a long roster).
 - A real tablet tap, a pen and a remote desktop click on Kill all and Yes: to be tried by hand once, on Sim.
