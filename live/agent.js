@@ -284,6 +284,9 @@ function create(o) {
   const heldWhy = id => (V3 && typeof V3.traderWhy === 'function' ? V3.traderWhy(id) || '' : '');
   /* 1.49.0 (answers B4-2, item 5): a trader with no home (its accounts fit neither Praetorian nor Legion): held back like any
      other, but Change account stays offered with None only; the gate lets None go only while ChartBridge says he is flat */
+  /* 1.49.0 (the review of 103, a F-B7): on Legion a group it refuses (not all prop, or prop and Sim) is held back up front on
+     the board too, with the reason, as F6 on Praetorian: '' when Legion may reach it (or on any other desk) */
+  const lgNoGroup = gid => (gated && !praetorian && V3 && typeof V3.groupOk === 'function' && !V3.groupOk(gid) ? 'Not on Legion: a group that is not all prop accounts (or prop and Sim); stop its hero here, set it up in Settings, Account groups' : '');
   const noHome = id => (V3 && typeof V3.noHome === 'function' ? V3.noHome(id) || '' : '');
   const praetorian = !!(V3 && V3.personal === true);
   /* 1.49.0 (Legion's trader desk): the same desk behind the gate turned round (AgentCore.legionLink): its name in every line,
@@ -1028,7 +1031,7 @@ function create(o) {
     const sdHtml = (s, who) => '<div class="ag-brow ag-bsd" role="listitem" data-brow="standdown" data-build="' + esc(s.build) + '" data-gid="' + esc(s.group) + '">' +
       '<span class="ag-bsdtag">Stood down</span><div class="ag-bsdtext"><span class="ag-bsdwhat">' + esc((who || 'Build ' + s.build) + ' on ' + s.name) + '</span>' + (who ? '<span class="ag-bsub mono">build ' + esc(s.build) + '</span>' : '') +
       '<span class="ag-bsdwhy">' + esc(s.kind + ': ' + s.why) + '</span><span class="ag-bsub">' + esc((s.when ? 'Since ' + s.when + '. ' : '') + 'No new trades from this hero on ' + s.name + ' until you clear it; exits, stops and targets always work.') + '</span></div>' +
-      '<button type="button" class="ag-btn ag-bsdclear" data-act="bSdClear" data-build="' + esc(s.build) + '" data-gid="' + esc(s.group) + '"' + (!can || praetorian ? ' disabled' : '') + ' title="' + (praetorian ? 'Not on Praetorian: a stand-down is on a group, the prop business, set up from Legion\'s trader desk (being built)' : 'Clear it: new trades from this hero on ' + esc(s.name) + ' may go again (a later re-rating may stand him down again)') + '">Clear stand-down</button></div>';
+      '<button type="button" class="ag-btn ag-bsdclear" data-act="bSdClear" data-build="' + esc(s.build) + '" data-gid="' + esc(s.group) + '"' + (!can || praetorian || lgNoGroup(s.group) ? ' disabled' : '') + ' title="' + (praetorian ? 'Not on Praetorian: a stand-down is on a group, the prop business, set up from Legion\'s trader desk' : lgNoGroup(s.group) ? esc(lgNoGroup(s.group)) : 'Clear it: new trades from this hero on ' + esc(s.name) + ' may go again (a later re-rating may stand him down again)') + '">Clear stand-down</button></div>';
     const pickHtml = g => {
       const rows = assignRows(g);
       return '<div class="ag-bpick"><select class="ag-sel" data-k="bPickSel" aria-label="The hero for ' + esc(g.name) + '">' + rows.map(r => '<option value="' + esc(r.build) + '">' + esc(r.label) + '</option>').join('') + '</select>' +
@@ -1039,7 +1042,7 @@ function create(o) {
       '<div class="ag-bcell"><span class="ag-bwhere">' + esc(g.name) + '</span><span class="ag-bsub">' + esc(g.members.length + (g.members.length === 1 ? ' account' : ' accounts') + (g.members.length ? ': ' + g.members.join(', ') : '')) + ' · ' + (g.accountType === 'eval' ? 'Evals' : g.accountType === 'funded' ? 'Funded' : 'type not set') + '</span></div>' +
       '<div class="ag-bcell ag-bspan">' + (B.pick && B.pick.gid === g.id ? pickHtml(g) : B.ask && B.ask.gid === g.id ? '<div class="ag-ask" role="alertdialog" aria-label="Trade a LIVE account"><span>' + esc(B.ask.text) + '</span><button type="button" class="ag-btn ag-live-go" data-act="bYes">Continue</button><button type="button" class="ag-btn" data-act="bCancel">Cancel</button></div>'
         : '<span class="ag-bsub">Pick a hero for this group, or leave it to you and the ticket. Default hero: ' + esc(g.hero ? (g.heroName ? g.heroName + ' (' + g.hero + ')' : g.hero) : 'none (Settings, Account groups)') + '.</span>') + '</div>' +
-      '<div class="ag-bcell ag-bctl"><button type="button" class="ag-btn ag-bassign" data-act="bAssign" data-gid="' + esc(g.id) + '"' + (!can || B.job || praetorian ? ' disabled' : '') + (praetorian ? ' title="Not on Praetorian: a group is the prop business, set up from Legion\'s trader desk (being built)."' : '') + '>Assign hero</button></div></div>';
+      '<div class="ag-bcell ag-bctl"><button type="button" class="ag-btn ag-bassign" data-act="bAssign" data-gid="' + esc(g.id) + '"' + (!can || B.job || praetorian || lgNoGroup(g.id) ? ' disabled' : '') + (praetorian ? ' title="Not on Praetorian: a group is the prop business, set up from Legion\'s trader desk."' : lgNoGroup(g.id) ? ' title="' + esc(lgNoGroup(g.id)) + '"' : '') + '>Assign hero</button></div></div>';
     const sdErr = M.sdError ? '<div class="ag-brow ag-bsd" role="listitem" data-brow="sderror"><span class="ag-bsdtag">Stand-downs</span><div class="ag-bsdtext"><span class="ag-bsdwhy">' + esc(M.sdError) + '</span></div></div>' : '';
     const html = sdErr + M.heroes.map(heroHtml).join('') + M.standDowns.map(s => sdHtml(s, '')).join('') + M.noHero.map(noHeroHtml).join('') || '<p class="ag-empty">No agent is on and no group is made: turn an agent On on his desk, or make a group in Settings.</p>';
     const box = q('[data-k="bRows"]');
@@ -1578,7 +1581,7 @@ function create(o) {
       else if (k === 'killAll') killAll();
       else if (k === 'bOpen') { S.board = false; writeJson(K.board, false); choose(act.dataset.agent, true); unmountChart(); render(); }
       else if (k === 'bKill') { const x = agents.get(act.dataset.agent); if (x && !x.killed) { if (sendAgent(AC.killMsg(x.agent, true), 'kill')) boardSay('Kill switch on sent for ' + AC.agentName(x) + '.'); } }
-      else if (k === 'bAssign') { if (praetorian) boardSay('Not on Praetorian: a group is the prop business, set up from Legion\'s trader desk (being built).'); else assignPressed(act.dataset.gid); }   // 1.48.0
+      else if (k === 'bAssign') { if (praetorian) boardSay('Not on Praetorian: a group is the prop business, set up from Legion\'s trader desk.'); else if (lgNoGroup(act.dataset.gid)) boardSay(lgNoGroup(act.dataset.gid)); else assignPressed(act.dataset.gid); }   // 1.48.0
       else if (k === 'bPickGo') { const sel = q('[data-k="bPickSel"]'); if (B.pick && sel) assignGo(B.pick.gid, B.pick.agent, sel.value, B.pick.killed); }
       else if (k === 'bYes') { if (B.ask && H.slow) boardSay(SLOW_SENT); else if (B.ask) { const x = B.ask; const ag = agents.get(x.agent); const why = AH.slotFree(ag || { agent: x.agent }, H.status, helperReach()); if (!ag || why) { B.ask = null; boardSay('Nothing was sent: ' + (why || 'that agent is gone') + '. Press Assign hero again.'); } else assignSend(x.gid, x.agent, x.build, x.msg, x.killed); } }   // fix round 1: the free slot asked again at Continue
       else if (k === 'bCancel') { B.pick = null; B.ask = null; boardSay('Nothing was sent.'); }

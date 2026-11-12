@@ -27,7 +27,7 @@ test('a trader on None: it may be given your personal account or a Sim account, 
   const g = gateWith(accounts(), agent({ account: null }));
   assert.equal(g.check({ type: 'agentMode', agent: 'demo', mode: 'auto' }), '', 'on None nothing trades');
   assert.equal(g.check({ type: 'agentAccount', agent: 'demo', account: 'MINE-1', keepMode: 'shadow' }), '');
-  assert.match(g.check({ type: 'agentAccount', agent: 'demo', account: 'PROP-1', keepMode: 'shadow' }), /PROP-1 is a prop account: it is set up from Legion's trader desk \(being built\); from here you can only stop it/);
+  assert.match(g.check({ type: 'agentAccount', agent: 'demo', account: 'PROP-1', keepMode: 'shadow' }), /PROP-1 is a prop account: it is set up from Legion's trader desk; from here you can only stop it/);
   assert.equal(g.check({ type: 'agentAccount', agent: 'demo', account: 'SIM-A', keepMode: 'shadow' }), '', 'a Sim account (to confirm)');
   assert.equal(g.check({ type: 'agentAccount', agent: 'demo', account: 'SIM-A', league: true, keepMode: 'shadow' }), '', 'a league seat is a Sim account');
   assert.match(g.check({ type: 'agentAccount', agent: 'demo', account: 'PROP-1', league: true, keepMode: 'shadow' }), /PROP-1 is a prop account/);
@@ -38,7 +38,7 @@ test('a trader on None: it may be given your personal account or a Sim account, 
 
 test('a trader on a prop account, a group (even of Sim accounts), or an account the page cannot tell: only its kill switch ON gets through', () => {
   const cases = [
-    [agent({ account: 'PROP-1' }), /PROP-1 is a prop account: it is set up from Legion's trader desk \(being built\); from here you can only stop it/],
+    [agent({ account: 'PROP-1' }), /PROP-1 is a prop account: it is set up from Legion's trader desk; from here you can only stop it/],
     [agent({ account: null, group: { id: 'g1', name: 'Evals' }, seats: [{ account: 'PROP-1' }, { account: 'PROP-2' }] }), /trades a group: groups are the prop business/],
     [agent({ account: null, group: { id: 'g2', name: 'Mine' }, seats: [{ account: 'MINE-1' }] }), /trades a group/],
     [agent({ account: null, group: { id: 'g3', name: 'Sims' }, seats: [{ account: 'SIM-A' }] }), /trades a group/],
@@ -177,7 +177,11 @@ test('every send path in the two desks says the gate\'s reason, never "not conne
   assert.match(ag, /async function helperOn\(a\) \{\n    const build = q\('\[data-k="hPick"\]'\)\.value;\n    if \(!build\) return;\n    const held = heldWhy\(a\.agent\); if \(held\)/, 'On (the helper), in its own body (the review of 102, F4; the behaviour is test/praetorian-smoke.mjs)');
   assert.match(ag, /async function startOn\(j\) \{\n    const held = heldWhy\(j\.agent\); if \(held\)/, 'Start in Shadow checks again before the helper\'s On (F3)');
   assert.match(ag, /async function assignOn\(j\) \{\n    const held = heldWhy\(j\.agent\); if \(held\)/, 'and Assign hero\'s On');
-  assert.match(ag, /data-act="bSdClear"[^\n]*\(!can \|\| praetorian \? ' disabled' : ''\)/, 'Clear stand-down held back on Praetorian (F6)');
+  assert.match(ag, /data-act="bSdClear"[^\n]*\(!can \|\| praetorian \|\| lgNoGroup\(s\.group\) \? ' disabled' : ''\)/, 'Clear stand-down held back on Praetorian (F6), and on Legion for a group it refuses (a F-B7)');
+  assert.match(ag, /data-act="bAssign"[^\n]*\(!can \|\| B\.job \|\| praetorian \|\| lgNoGroup\(g\.id\) \? ' disabled' : ''\)/, 'Assign hero the same');
+  /* the review of 103 (b F7, B18): a desk handed a link with accountOk is gated (Praetorian's or Legion's), whatever its name */
+  assert.match(ag, /const gated = praetorian \|\| !!\(V3 && typeof V3\.accountOk === 'function'\);/);
+  assert.match(bt, /const gated = praetorian \|\| !!\(V3 && typeof V3\.accountOk === 'function'\);/);
   assert.match(ag, /async function helperSave\(a\) \{\n    const held = heldWhy\(a\.agent\); if \(held\)/, 'Auto-On time (the helper)');
   assert.equal((ag.match(/sendRaw\(/g) || []).length, 5, 'sendRaw: its use in the seen ack, the answer, the assign, the board start and sendAgent; each refused one is said');
   assert.match(bt, /const no = refusal\(m\);\n    if \(no\) \{ notice\(\{ kind: 'refused', level: 'amber', text: no \}\); return false; \}/, 'sendBot');

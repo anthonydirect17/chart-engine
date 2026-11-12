@@ -1365,7 +1365,7 @@ const fleetCore = () => {
 const PR_AGENT_TYPES = new Set(['agentMode', 'agentKill', 'agentRules', 'agentAnswer', 'agentAccount', 'agentSeen']);
 const PR_BOT_TYPES = new Set(['botMode', 'botKill', 'botRails', 'botAnswer', 'botAccount', 'botSeen']);
 const PR_ACKS = new Set(['agentSeen', 'botSeen']);
-const PR_WHERE = 'it is set up from Legion\'s trader desk (being built); from here you can only stop it';   // the review of 102 (F5): the words say the truth until Legion's trader desk is in
+const PR_WHERE = 'it is set up from Legion\'s trader desk; from here you can only stop it';   // the review of 102 (F5): the words say the truth until Legion's trader desk is in
 
 /**
  * Every account one trader (its `agent` message) is on, for both gates (the review of 103, b F2): its `account` (a non-empty

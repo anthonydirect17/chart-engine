@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Legion's trader desk (test page)</title>
+<!-- A test page only (test/agent-board-smoke.mjs), served by the fake bridge: Legion's trader desk (live/legion-desk.js) on
+     the window's one v3 connection, as builder 1's Legion Setup will mount it, until that mount is on the page. SAMPLE DATA:
+     the fake bridge's made-up accounts and traders only. -->
+<link rel="stylesheet" href="../live/fonts/plex.css">
+<link rel="stylesheet" href="../live/fonts/agent-fonts.css">
+<link rel="stylesheet" href="../live/live.css">
+<link rel="stylesheet" href="../live/pin.css">
+<link rel="stylesheet" href="../live/workspace.css">
+<link rel="stylesheet" href="../live/motion.css">
+<link rel="stylesheet" href="../live/bot.css">
+<link rel="stylesheet" href="../live/agent.css">
+</head>
+<body>
+<header class="ws-top">
+  <span class="ws-title">LEGION (TEST PAGE)</span>
+  <span class="ws-fill"></span>
+  <span class="ws-note">Sample data: made-up accounts and traders from the fake bridge.</span>
+</header>
+<div id="lgd"></div>
+
+<script src="../src/chart-engine.js"></script>
+<script src="../live/bar-builder.js"></script>
+<script src="../live/order-ticket.js"></script>
+<script src="../live/pin.js"></script>
+<script src="../live/live.js"></script>
+<script src="../live/feed.js"></script>
+<script src="../live/motion.js"></script>
+<script src="../live/accounts.js"></script>
+<script src="../live/bot-core.js"></script>
+<script src="../live/agent-core.js"></script>
+<script src="../live/fleet.js"></script>
+<script src="../live/agent-helper.js"></script>
+<script src="../live/agent-grid.js"></script>
+<script src="../live/bot.js"></script>
+<script src="../live/agent.js"></script>
+<script src="../live/legion-desk.js"></script>
+<script>
+(function () {
+  'use strict';
+  const PIN = window.ChartBridgePin || null;
+  const LS = (() => { try { return window.localStorage; } catch (e) { return null; } })();
+  const store = { getItem: k => { try { return LS ? LS.getItem(k) : null; } catch (e) { return null; } }, setItem: (k, v) => { try { if (LS) LS.setItem(k, v); } catch (e) { /* blocked */ } } };
+  const BASE_WS = 'ws://' + location.host + '/ws';
+  const wsUrl = () => (PIN ? PIN.wsUrl(BASE_WS) : BASE_WS);
+  const start = () => {
+    const hub = window.ChartFeed.create({ wsUrl });
+    const v3 = window.AccountsPage.createFeed({ wsUrl, pin: PIN, framed: false, desk: false, fetch: (u, o) => fetch(u, o), note: () => {}, changed: () => {} });
+    window.legion = window.LegionDesk.mount(document.getElementById('lgd'), { v3, feed: hub, headers: () => (PIN ? PIN.headers() : {}), storage: store, shown: true, side: 'agent' });
+    window.agentDesk = window.legion.agent;   // the smoke's window.__st reads it
+    v3.startAny();
+  };
+  if (PIN) PIN.gate().then(start); else start();
+})();
+</script>
+</body>
+</html>
