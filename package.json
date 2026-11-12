@@ -1,6 +1,6 @@
 {
   "name": "chart-engine",
-  "version": "1.44.6",
+  "version": "1.45.0",
   "private": true,
   "description": "Anthony's trading chart: a Canvas 2D candlestick engine with eased zoom, a smooth price axis, live-growing candles, levels, VWAP, trade marks and a cumulative delta pane.",
   "main": "src/chart-engine.js",
@@ -61,6 +61,8 @@
     "smoke:flatten-every": "node test/flatten-every-smoke.mjs",
     "smoke:trade-tags": "node test/trade-tags-smoke.mjs",
     "smoke:league": "node test/league-smoke.mjs",
+    "smoke:fleet": "node test/fleet-smoke.mjs",
+    "smoke:tabkeys": "node test/tab-hotkeys-smoke.mjs",
     "smoke:agents-strip": "node test/agents-strip-smoke.mjs",
     "smoke:multi-account": "node test/multi-account-smoke.mjs",
     "smoke:blur": "node test/blur-smoke.mjs",

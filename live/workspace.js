@@ -839,11 +839,11 @@ function askGroup(m, onSend, onCancel) {
     <p class="ws-help">${n} account${n === 1 ? '' : 's'}, ${usd(Math.round(total * 100) / 100)} at risk in all. Each account gets its own entry with the bracket's stop and target. ChartBridge refuses the whole entry if a size changed since this was worked out.</p>
     <div class="ws-dlg-btns"><span class="sg-fill"></span><button type="button" class="ws-btn" data-act="cancel">Cancel</button><button type="button" class="ws-btn primary" id="gqSend" title="Sends every account entry (a click only, as every order button)">Send to ${n} account${n === 1 ? '' : 's'}</button></div>
   </form>`;
-  /* Send works by a real click only (e.detail 0 is a key), as the ticket's order buttons; Enter never sends */
+  /* Send works by a real click only (OT.realClick, the one rule Kill all's Yes uses too), as the ticket's order buttons; Enter never sends */
   let sent = false;
   showDialog(d, () => false, () => { if (!sent && onCancel) onCancel(); });
   d.querySelector('#gqSend').addEventListener('click', e => {
-    if (e.detail === 0) { tnote('The group entry is sent by a click on Send only, not by keyboard.', 'warn'); return; }
+    if (!OT.realClick(e)) { tnote('The group entry is sent by a click on Send only, not by keyboard.', 'warn'); return; }
     sent = true; d.close(); onSend();
   });
   d.querySelector('[data-act="cancel"]').focus();
@@ -892,6 +892,7 @@ function tmessage(m) {
       renderOrders();
       if (botDesk) botDesk.hello(m);                      // 1.16.0: the Bot tab says what an older ChartBridge lacks
       if (agentDesk) agentDesk.hello(m);                  // 1.17.0: the Agent tab too (agents need ChartBridge 0.5.0)
+      if (fleetView) fleetView.hello(m);                  // 1.45.0: the Legion tab shows with ChartBridge 0.6.17
       return;
     case 'execs': tfills.clear(); for (const f of m.list || []) if (f && f.id) tfills.set(f.account + '|' + f.id, f); renderOrders(); return;
     case 'pcClock': pcClock = pcClockOf(m); syncStats(); return;   // 1.24.0: a new check of this PC's clock (every 5 minutes)
@@ -1443,11 +1444,31 @@ setInterval(() => { if (holds() && TK.bar) { core.groupProjectTick(); TK.bar.ren
    this one, on the ticket's account (Anthony 2026-10-01). */
 let HK = OT.cleanHotkeys(prefs.raw.get(LP.KEYS.hotkeys));
 const busy = () => !!pop || $('wsDialog').open || !!document.querySelector('.ws-panel .ind-panel:not([hidden]), .ce-theme-panel:not([hidden]), .ind-chip-list:not([hidden]), .chip-pop:not([hidden]), .cb-pin') || !$('wsSettings').hidden;
+/* 1.45.0 (Anthony 2026-11-11, build answers 14, the review of 92's N11): while a tab covers the chart grid (Legion, Agent, Bot,
+   League; a later tab adds its body class here), a hotkey that can open or add to a position does nothing and says so. A
+   hotkey that can only reduce, close or cancel works as on the bare chart: Close, Flatten all, and Reject (it can only decline
+   a proposal). Off under a tab: Buy, Sell, and Buy and Sell with an entry-type modifier.
+   Accept (Anthony 2026-11-12: "On where shown"): it places a proposal's entry, so it works only under a tab that shows the
+   proposal it would answer, the Agent tab and the Bot tab (as before this release), and is off under Legion and League.
+   Not clearly one or the other, so off under a tab until Anthony rules (the careful side): B/E, Merge, and a strategy's key.
+   With no tab open nothing here changes anything. ONE place: both hotkey handlers below go through underTab. */
+const COVERING_TABS = { 'fl-on': 'Legion', 'ag-on': 'Agent', 'bt-on': 'Bot', 'lg-on': 'League' };
+const coveringTab = () => { for (const c of Object.keys(COVERING_TABS)) if (document.body.classList.contains(c)) return COVERING_TABS[c]; return ''; };
+const LIVE_UNDER_TAB = new Set(['close', 'flattenAll', 'reject']);
+const ACCEPT_SHOWN_ON = new Set(['Agent', 'Bot']);         // the tabs that show the proposal the Accept key answers
+const underTab = (id, fn) => () => {
+  const t = coveringTab();
+  if (t && !LIVE_UNDER_TAB.has(id) && !(id === 'accept' && ACCEPT_SHOWN_ON.has(t))) {
+    note('Hotkey ignored: the ' + t + ' tab covers the chart. Only Close, Flatten all and Reject work under ' + (ACCEPT_SHOWN_ON.has(t) ? 'it, and Accept for a proposal shown on it.' : 'a tab.'), true);
+    return;
+  }
+  fn();
+};
 /* a Buy or Sell key forwarded names the instrument this window knows the ticket is on (F2 review) */
 const keyAct = kind => { if (holds()) { actHere({ kind }); renderOrders(); } else { const hd = holder(); forward(kind === 'be' || !hd || !hd.root ? { kind } : { kind, root: hd.root }); } };
 document.addEventListener('keydown', window.ChartLive.hotkeyHandler({
   keys: () => HK, root: document.body, busy,
-  actions: { buy: () => keyAct('buy'), sell: () => keyAct('sell'), be: () => keyAct('be'), close: () => core.flattenHere(), flattenAll: () => core.flattenAll() },
+  actions: { buy: underTab('buy', () => keyAct('buy')), sell: underTab('sell', () => keyAct('sell')), be: underTab('be', () => keyAct('be')), close: underTab('close', () => core.flattenHere()), flattenAll: underTab('flattenAll', () => core.flattenAll()) },
   ignored: () => note(window.ChartLive.HOTKEY_IN_BOX, true),
 }));
 /* 1.16.0: the workspace's own hotkeys (Maximize panel), kept apart from the trading ones (live-ws-keys-v1) and never one
@@ -1725,7 +1746,7 @@ grid.addEventListener('pointerleave', () => { pointerAt = null; });
 document.addEventListener('keydown', window.ChartLive.hotkeyHandler({
   root: document.body, busy,
   resolve: combo => (DS.on && DS.hk ? OS.resolveKey(combo, Object.assign(keyCtx(), { on: { merge: core.switchOn('merge'), accept: copilotOn(), strategies: core.switchOn('strategies'), types: core.switchOn('orderTypes') } })) : ''),
-  run: id => runExtraKey(id),
+  run: id => underTab(id, () => runExtraKey(id))(),
 }));
 function runExtraKey(id) {
   if (id === 'merge') { keyAct('merge'); return; }
@@ -3420,6 +3441,7 @@ $('wsTabs').addEventListener('click', e => {
   if (b && botDesk && botDesk.shown()) botDesk.showTab(false);   // 1.16.0: from the Bot tab back to a layout
   if (b && agentDesk && agentDesk.shown()) agentDesk.showTab(false);   // 1.17.0: and from the Agent tab
   if (b && leagueView && leagueView.shown()) leagueView.showTab(false);   // 1.35.0: and from the League tab
+  if (b && fleetView && fleetView.shown()) fleetView.showTab(false);     // 1.45.0: and from the Legion tab
   if (!b || b.dataset.tab === layout) return;
   save(); openLayout(b.dataset.tab);
 });
@@ -3544,6 +3566,7 @@ function openLayout(name) {
   if (botDesk) { botDesk.layoutChanged(layout); botDesk.chartsChanged(); }   // 1.16.0: the strip on Main only; ghost marks
   if (agentDesk) agentDesk.layoutChanged(layout);                             // 1.17.0: a layout closes the Agent tab
   if (leagueView && leagueView.shown()) leagueView.showTab(false);            // 1.35.0: and the League tab
+  if (fleetView && fleetView.shown()) fleetView.showTab(false);              // 1.45.0: and the Legion tab
 }
 
 /* Another window changed something this page uses. Its open layouts stay its own. */
@@ -3583,6 +3606,7 @@ window.workspace = { get layout() { return layout; }, panels: () => panels.map(p
   agent: () => (agentDesk ? agentDesk.state() : null),
   /* 1.35.0: the League tab, and the charts showing the league's trades faintly (read only) */
   league: () => (leagueView ? leagueView.state() : null),
+  fleet: () => (fleetView ? fleetView.state() : null),          // 1.45.0: the Legion tab's state (test/fleet-smoke.mjs)
   leagueGhosts: () => [...LG.overlays.keys()],
   /* 1.37.0: the Multi-Account panel's state (its tab, group, toast), for the smokes */
   multi: () => { const v = [...views.values()].find(x => x.panel.type === 'multi' && x.accountPage); return v ? { tab: v.accountPage.state.tab, gid: v.accountPage.state.gid, toast: v.accountPage.state.toast } : null; },
@@ -3605,7 +3629,7 @@ function startBot() {
     charts: () => chartViews().map(v => ({ id: v.panel.id, root: v.panel.root, chart: v.pane.chart })),
     onTab: on => {
       document.body.classList.toggle('bt-on', on);
-      if (on) { closePops(); restoreMax(); if (agentDesk && agentDesk.shown()) agentDesk.showTab(false); if (leagueView && leagueView.shown()) leagueView.showTab(false); }   // one tab at a time
+      if (on) { closePops(); restoreMax(); if (agentDesk && agentDesk.shown()) agentDesk.showTab(false); if (leagueView && leagueView.shown()) leagueView.showTab(false); if (fleetView && fleetView.shown()) fleetView.showTab(false); }   // one tab at a time
       tabUrl(on ? 'bot' : '');
       placeTabBtn();                                        // 1.35.0: its button in the top bar while open (the way back)
     } });
@@ -3613,7 +3637,7 @@ function startBot() {
 /* the tab in the URL (?tab=bot or ?tab=agent), so a reload keeps it */
 function tabUrl(t) {
   const u = new URL(location.href);
-  if (t) u.searchParams.set('tab', t); else if (!document.body.classList.contains('bt-on') && !document.body.classList.contains('ag-on') && !document.body.classList.contains('lg-on')) u.searchParams.delete('tab');
+  if (t) u.searchParams.set('tab', t); else if (!document.body.classList.contains('bt-on') && !document.body.classList.contains('ag-on') && !document.body.classList.contains('lg-on') && !document.body.classList.contains('fl-on')) u.searchParams.delete('tab');
   history.replaceState(null, '', u.pathname + '?' + u.searchParams.toString() + u.hash);
 }
 /* 1.17.0: the Agent tab (live/agent.js) on the same v3 connection (AF); the agents come with ChartBridge 0.5.0, and with an
@@ -3628,7 +3652,7 @@ function startAgent() {
     flatten: (account, root) => core.flattenAgent(account, root),   // On/Off's "Flatten and turn him off?" Yes (1.20.0)
     onTab: on => {
       document.body.classList.toggle('ag-on', on);
-      if (on) { closePops(); restoreMax(); if (botDesk && botDesk.shown()) botDesk.showTab(false); if (leagueView && leagueView.shown()) leagueView.showTab(false); }   // one tab at a time
+      if (on) { closePops(); restoreMax(); if (botDesk && botDesk.shown()) botDesk.showTab(false); if (leagueView && leagueView.shown()) leagueView.showTab(false); if (fleetView && fleetView.shown()) fleetView.showTab(false); }   // one tab at a time
       tabUrl(on ? 'agent' : '');
       placeTabBtn();                                        // 1.35.0: its button in the top bar while open (the way back)
     } });
@@ -3646,10 +3670,30 @@ function startLeague() {
     onDay: d => { const u = new URL(location.href); if (d) u.searchParams.set('day', d); else u.searchParams.delete('day'); history.replaceState(null, '', u.pathname + '?' + u.searchParams.toString() + u.hash); },
     onTab: on => {
       document.body.classList.toggle('lg-on', on);
-      if (on) { closePops(); restoreMax(); if (botDesk && botDesk.shown()) botDesk.showTab(false); if (agentDesk && agentDesk.shown()) agentDesk.showTab(false); }
+      if (on) { closePops(); restoreMax(); if (botDesk && botDesk.shown()) botDesk.showTab(false); if (agentDesk && agentDesk.shown()) agentDesk.showTab(false); if (fleetView && fleetView.shown()) fleetView.showTab(false); }
       tabUrl(on ? 'league' : '');
       placeTabBtn();                                        // the Bot button in the top bar meanwhile (one click to the Bot)
       if (!on) { if (leagueView.liveDay()) LG.day = leagueView.liveDay(); if (!LG.busy) leaguePoll(); }   // never a past day; the faint marks read on by themselves (a read under way schedules the next itself)
+    } });
+}
+/* 1.45.0 (build answers 7, part D1): the Legion tab (live/fleet.js, drafted as Fleet) on the same v3 connection (AF): the Lab's
+   roster (one GET /roster, ChartBridge 0.6.20, read only), the traders and the prop accounts as ChartBridge says them, and Kill
+   all for the prop accounts (ChartBridge 0.6.17's message, sent by fleet.js alone, asked first). It hides the grid while it is
+   open, as the other views do (?tab=legion keeps it on a reload). Beside the Agent, Bot and League tabs: it replaces none of them yet.
+   The tab is handed a connection that can do two things only: listen, and post agentKillAllProp (the review of 92, N5). The
+   feed's send and sendOrder never reach it, so "one message" is true by how it is built, not by reading its source. With no
+   feed at all (accounts.js not served: AF is null, as the page has allowed since 1.16.0) the tab gets no connection and the
+   page starts exactly as before (the second look at 92, FIX A). */
+const legionLink = AF ? { listen: part => AF.listen(part), post: m => !!m && m.type === 'agentKillAllProp' && Object.keys(m).every(k => k === 'type' || k === 'cid') && AF.post(m) === true } : null;
+let fleetView = null;
+function startFleet() {
+  if (!window.FleetView) return;
+  fleetView = window.FleetView.create({ view: $('flView'), tab: $('wsFleetTab'), v3: legionLink, realClick: OT.realClick, headers: () => (PIN ? PIN.headers() : {}),
+    onTab: on => {
+      document.body.classList.toggle('fl-on', on);
+      if (on) { closePops(); restoreMax(); if (botDesk && botDesk.shown()) botDesk.showTab(false); if (agentDesk && agentDesk.shown()) agentDesk.showTab(false); if (leagueView && leagueView.shown()) leagueView.showTab(false); }   // one tab at a time
+      tabUrl(on ? 'legion' : '');
+      placeTabBtn();                                        // the Bot button in the top bar meanwhile (one click to the Bot)
     } });
 }
 /* the league's trades, faint, on the charts whose ⋯ switch is on (kept in this browser, off by default): one read of The Desk
@@ -3700,10 +3744,11 @@ function leaguePoll() {
 setInterval(syncLeagueGhosts, 3000);                      // a chart's instrument changed, a layout opened: the overlays follow
 window.addEventListener('storage', e => { if (e.key && e.key.endsWith(LG_GHOST_KEY)) syncLeagueGhosts(); });
 const start = () => {
-  startBot(); startAgent(); startLeague();
+  startBot(); startAgent(); startLeague(); startFleet();
   openLayout(new URLSearchParams(location.search).get('layout') || W.DEFAULT_NAME); tconnect(); autoTake();
   if (botDesk && new URLSearchParams(location.search).get('tab') === 'bot') botDesk.showTab(true);
   if (agentDesk && new URLSearchParams(location.search).get('tab') === 'agent') agentDesk.showTab(true);
+  if (fleetView && new URLSearchParams(location.search).get('tab') === 'legion') fleetView.showTab(true);   // 1.45.0
   if (leagueView && new URLSearchParams(location.search).get('tab') === 'league') leagueView.openDay(new URLSearchParams(location.search).get('day'));   // a day checked first: a past one read only
   syncLeagueGhosts();
 };
