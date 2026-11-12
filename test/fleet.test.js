@@ -1079,8 +1079,9 @@ test('Legion Setup: each lane mounts the page\'s own Multi-Account panel on its 
   // the review of 97 (F2): taking an account from the other lane's group asks THAT lane's lock; a group no lane trades is free
   P.feed(evalTrader()); P.feed(fundTrader({ mode: 'auto' }));
   assert.strictEqual(typeof mounts[0].opts.otherLocked, 'function');
-  assert.match(mounts[0].opts.otherLocked('g2'), /legion2 trades that group in Auto/, 'the funded lane in Auto: nothing taken from it');
-  assert.strictEqual(mounts[0].opts.otherLocked('g-none'), '', 'a group no lane trades');
+  assert.match(mounts[0].opts.otherLocked('g2'), /legion2 trades that group or one of its accounts in Auto/, 'the funded lane in Auto: nothing taken from it');
+  assert.strictEqual(mounts[0].opts.otherLocked('g3'), '', 'a listed group no trader is on');
+  assert.strictEqual(mounts[0].opts.otherLocked('g-none'), F.NOT_KNOWN, 'a group ChartBridge does not list: not known (answers 26, R3-4)');
   P.feed(fundTrader());
   assert.strictEqual(mounts[0].opts.otherLocked('g2'), '');
   // and not known is locked: after a drop, before the traders are heard again, both locks say not known
@@ -1153,37 +1154,53 @@ test('answers 25, S2: another group\'s lock covers every trader heard on it (a d
   const lanePanel = (el, key, opts) => { const m = { key, opts, el, destroy() {} }; mounts.push(m); return m; };
   const P = page(t, { lanePanel });
   P.fv.showTab(true);
-  P.feed({ type: 'hello', version: '0.6.21' }); P.feed({ type: 'trading', enabled: true }); P.feed(accounts); P.feed(groups);
-  // the reviewer's case: the eval lane doubled (legion3 on g3, Type eval, in Auto) and loose9 in Auto on g9 (no Type)
+  const more = { type: 'groups', list: groups.list.concat([{ id: 'g4', name: 'Evals 2', accountType: 'eval', members: ['EVAL-C'] },
+    { id: 'g9', name: 'Loose', accountType: null, members: ['OTHER-1', 'OTHER-2'] }, { id: 'g-empty', name: 'Empty', accountType: null, members: [] }]) };
+  P.feed({ type: 'hello', version: '0.6.21' }); P.feed({ type: 'trading', enabled: true }); P.feed(accounts); P.feed(more);
+  // the reviewer's case: the eval lane doubled (legion3 on g4, Type eval, in Auto) and loose9 in Auto on g9 (no Type)
   P.feed(evalTrader()); P.feed(fundTrader());
-  P.feed(agent('legion3', { mode: 'auto', account: null, group: { id: 'g3', name: 'Evals 2' }, seats: [{ account: 'EVAL-C' }] }));
+  P.feed(agent('legion3', { mode: 'auto', account: null, group: { id: 'g4', name: 'Evals 2' }, seats: [{ account: 'EVAL-C' }] }));
   P.feed(agent('loose9', { mode: 'auto', account: null, group: { id: 'g9', name: 'Loose' }, seats: [{ account: 'OTHER-1' }] }));
   P.replayDone();
   const funded = mounts.find(m => m.key === 'legion-funded');
-  assert.match(funded.opts.otherLocked('g3'), /legion3 trades that group in Auto/, 'the doubled lane\'s second group');
-  assert.match(funded.opts.otherLocked('g9'), /loose9 trades that group in Auto/, 'a group of no Type');
+  assert.match(funded.opts.otherLocked('g4'), /legion3 trades that group or one of its accounts in Auto/, 'the doubled lane\'s second group');
+  assert.match(funded.opts.otherLocked('g9'), /loose9 trades that group or one of its accounts in Auto/, 'a group of no Type');
   assert.strictEqual(funded.opts.otherLocked('g-empty'), '', 'a group no trader is on');
   P.feed(agent('loose9', { mode: 'shadow', account: null, group: { id: 'g9', name: 'Loose' }, seats: [{ account: 'OTHER-1' }], owns: true }));
   assert.match(funded.opts.otherLocked('g9'), /loose9 holds a position or a working entry/);
   P.feed(agent('loose9', { mode: 'shadow', account: null, group: { id: 'g9', name: 'Loose' }, seats: [{ account: 'OTHER-1' }], owns: false }));
   assert.strictEqual(funded.opts.otherLocked('g9'), '', 'its one trader in Shadow and flat');
+  // answers 26, R3-4, the reviewer's probe: a trader in Auto seated directly on OTHER-2, a member of g9, with no group
+  P.feed(agent('direct', { mode: 'auto', account: 'OTHER-2', group: null }));
+  assert.match(funded.opts.otherLocked('g9'), /Two traders are on that group or its accounts \(loose9, direct\)/);
+  P.feed(agent('loose9', { mode: 'shadow', account: null, group: { id: 'g5', name: 'Elsewhere' }, seats: [] }));
+  assert.match(funded.opts.otherLocked('g9'), /direct trades that group or one of its accounts in Auto/, 'seated on a member: locked');
+  P.feed(agent('direct', { mode: 'auto', account: 'MINE', group: null, seats: [{ account: 'OTHER-1' }] }));
+  assert.match(funded.opts.otherLocked('g9'), /direct trades that group or one of its accounts in Auto/, 'a seat left over on a member: locked');
   // B1: signed out, nothing is heard, so every lock is not known
   P.feed({ type: 'trading', enabled: false });
   assert.strictEqual(funded.opts.otherLocked('g-empty'), F.NOT_KNOWN);
   assert.strictEqual(funded.opts.locked(), F.NOT_KNOWN);
 });
 
-test('answers 25, S2: FleetCore.groupLock on its own', () => {
-  const tr = (id, gid, more) => Object.assign({ agent: id, mode: 'shadow', owns: false, group: { id: gid, name: 'G' } }, more || {});
-  assert.strictEqual(F.groupLock('g1', [], false), F.NOT_KNOWN);
-  assert.strictEqual(F.groupLock('g1', null, true), F.NOT_KNOWN);
-  assert.strictEqual(F.groupLock('', [], true), F.NOT_KNOWN);
-  assert.strictEqual(F.groupLock('g1', [tr('a', 'g2', { mode: 'auto' })], true), '', 'a trader on another group');
-  assert.strictEqual(F.groupLock('g1', [tr('a', 'g1')], true), '');
-  assert.match(F.groupLock('g1', [tr('a', 'g1'), tr('b', 'g1')], true), /Two traders are on that group \(a, b\)/);
-  assert.match(F.groupLock('g1', [tr('a', 'g1', { mode: 'copilot' })], true), /a trades that group in Copilot/);
-  assert.match(F.groupLock('g1', [tr('a', 'g1', { mode: undefined })], true), /a mode not known/);
-  assert.match(F.groupLock('g1', [tr('a', 'g1', { owns: true })], true), /holds a position/);
+test('answers 25, S2, and answers 26, R3-4: FleetCore.groupLock on its own', () => {
+  const tr = (id, gid, more) => Object.assign({ agent: id, mode: 'shadow', owns: false, account: null, group: gid ? { id: gid, name: 'G' } : null }, more || {});
+  const gm = { type: 'groups', list: [{ id: 'g1', members: ['ACC-1', 'ACC-2'] }, { id: 'g2', members: ['ACC-3'] }, { id: 'g-odd' }] };
+  assert.strictEqual(F.groupLock('g1', [], false, gm), F.NOT_KNOWN);
+  assert.strictEqual(F.groupLock('g1', null, true, gm), F.NOT_KNOWN);
+  assert.strictEqual(F.groupLock('', [], true, gm), F.NOT_KNOWN);
+  assert.strictEqual(F.groupLock('g1', [], true, null), F.NOT_KNOWN, 'groups not heard: not known');
+  assert.strictEqual(F.groupLock('g-none', [], true, gm), F.NOT_KNOWN, 'a group not listed');
+  assert.strictEqual(F.groupLock('g-odd', [], true, gm), F.NOT_KNOWN, 'a group with no member list');
+  assert.strictEqual(F.groupLock('g1', [tr('a', 'g2', { mode: 'auto' })], true, gm), '', 'a trader on another group');
+  assert.strictEqual(F.groupLock('g1', [tr('a', 'g1')], true, gm), '');
+  assert.match(F.groupLock('g1', [tr('a', 'g1'), tr('b', 'g1')], true, gm), /Two traders are on that group or its accounts \(a, b\)/);
+  assert.match(F.groupLock('g1', [tr('a', 'g1', { mode: 'copilot' })], true, gm), /a trades that group or one of its accounts in Copilot/);
+  assert.match(F.groupLock('g1', [tr('a', 'g1', { mode: undefined })], true, gm), /a mode not known/);
+  assert.match(F.groupLock('g1', [tr('a', 'g1', { owns: true })], true, gm), /holds a position/);
+  assert.match(F.groupLock('g1', [tr('a', null, { mode: 'auto', account: 'acc-2' })], true, gm), /a trades that group or one of its accounts in Auto/, 'seated on a member, any letter case');
+  assert.match(F.groupLock('g1', [tr('a', 'g2', { mode: 'auto', account: null, seats: [{ account: 'ACC-3' }, { account: 'ACC-1' }] })], true, gm), /in Auto/, 'a seat on a member');
+  assert.strictEqual(F.groupLock('g1', [tr('a', null, { mode: 'auto', account: 'ACC-3' })], true, gm), '', 'seated on another group\'s account only');
 });
 
 test('Legion Setup\'s roster by family (1.48.0): readable names, the family from the run, the two "good for" filters on the file\'s own word and their order, Find, and where a file is picked', () => {
@@ -1314,6 +1331,22 @@ test('answers 25, S1: "heard" waits for ChartBridge\'s end of the sign-in replay
   assert.strictEqual(arm(), 'unknown', 'the end of the replay came 0 s after the first trader: the floor still runs');
   P.T += 1500;
   assert.strictEqual(arm(), 'off');
+});
+
+test('answers 26, R3-1 and R3-2: the 1.5 s counts from the first trader, not the sign-in; and the tab redraws by itself when it runs out', t => {
+  timers(t);
+  const P = page(t, { settleMs: 1500 });
+  P.fv.showTab(true);
+  P.feed({ type: 'hello', version: '0.6.21' }); P.feed({ type: 'trading', enabled: true }); P.feed(accounts); P.feed(groups);
+  P.T += 1000;                                     // the first trader comes 1 s after the sign-in
+  P.feed(agent('germanicus')); P.replayDone();
+  P.T += 600; t.mock.timers.tick(600);            // 1.6 s after the sign-in, 0.6 s after the first trader
+  assert.strictEqual(P.fv.state().arm.state, 'unknown', 'R3-1: counted from the first trader');
+  assert.strictEqual(P.part('arm').textContent, 'Armed: not known');
+  P.T += 910;
+  t.mock.timers.tick(910);                         // no message: only the wait's own timer
+  assert.notStrictEqual(P.fv.state().arm.state, 'unknown');
+  assert.notStrictEqual(P.part('arm').textContent, 'Armed: not known', 'R3-2: redrawn when the wait ran out');
 });
 
 test('answers 25, N-b (K14): a drop resets the wait, even with the traders heard again at once', t => {
