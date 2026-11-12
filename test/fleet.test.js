@@ -343,7 +343,7 @@ function page(t, over, opt) {
   };
   const view = Object.assign(mk('view'), { addEventListener: (k, f) => { listeners[k] = f; }, removeEventListener() {}, querySelector: sel => { if (!parts.has(sel)) parts.set(sel, mk(sel)); return parts.get(sel); } });
   const tab = Object.assign(mk('tab'), { hidden: true, addEventListener() {} });
-  const win = { document: {} };
+  const win = { document: { createElement: tag => ({ tagName: String(tag).toUpperCase(), className: '', parentNode: null }) } };
   if (!(opt && opt.noAgentCore)) new Function('window', 'document', 'self', read('live', 'agent-core.js'))(win, win.document, win);   // the page's mode rules (Legion reuses them)
   new Function('window', 'document', 'self', read('live', 'fleet.js'))(win, win.document, win);
   const P = { T: 1_800_000_000_000, posts: [], asks: [], answers: [], subs: null, view, tab, part: k => view.querySelector('[data-k="' + k + '"]') };
@@ -352,6 +352,7 @@ function page(t, over, opt) {
   P.fv = win.FleetView.create(Object.assign({ view, tab, v3: V3, settleMs: 0, realClick: require('../live/order-ticket.js').realClick, now: () => P.T, fetch: (u, o) => { P.asks.push([u, o]); return new Promise((res, rej) => P.answers.push({ res, rej })); } }, over || {}));
   P.feed = m => P.subs.message(m);
   P.click = (what, detail, card) => listeners.click({ target: { closest: () => ({ dataset: { do: what, card } }) }, detail: detail === undefined ? 1 : detail });
+  P.clickSub = sub => listeners.click({ target: { closest: () => ({ dataset: { do: 'sub', sub } }) }, detail: 1 });
   P.html = () => view.innerHTML + ['lanes', 'lane-eval', 'lane-funded', 'roster', 'traders', 'accounts'].map(k => P.part(k).innerHTML).join('');
   P.change = (agentId, value) => listeners.change({ target: { dataset: { do: 'pick', agent: agentId }, value } });
   P.ready = v => { P.feed({ type: 'hello', version: v || '0.6.20' }); P.feed({ type: 'trading', enabled: true }); P.feed(accounts); P.feed(groups); P.feed(agent('germanicus')); P.replayDone(); };
@@ -535,7 +536,7 @@ test('the roster is asked for when the tab opens, on a hello while it is open an
   for (let i = 0; i < 40; i++) { P.feed(agent('germanicus', { owns: i % 2 === 0 })); P.feed(Object.assign({}, accounts, { n: i })); P.feed(groups); P.feed({ type: 'status', level: 'info', text: 's' + i }); P.feed({ type: 'trading', enabled: true }); }
   P.T += 120_000; t.mock.timers.tick(120_000);
   assert.deepStrictEqual([P.asks.length, P.fv.state().draws.roster], [2, drawn], 'no polling, and a trader\'s message never redraws the roster');
-  assert.ok(P.fv.state().draws.traders > 30, 'while the traders are redrawn as they change');
+  assert.ok(P.fv.state().draws.traders >= 1, 'the other connections are drawn (folded: their count only)');
   // a lost connection forgets the roster; the hello after it asks again
   P.subs.closed();
   assert.deepStrictEqual([P.fv.state().roster.state, P.fv.state().roster.bots], ['idle', []]);
@@ -596,11 +597,14 @@ test('what the tab draws: one line a card with its detail behind Details; its bu
   // Kill all with its Yes and Cancel, the Armed switch with its Yes and Cancel, one pick list a lane that has a trader, Read
   // again and a Details on each card: nothing else can be pressed, typed in or switched
   const pressable = html.match(/<(button|input|select|textarea|a|details|summary)\b[^>]*>/g) || [];
-  assert.deepStrictEqual(pressable.map(x => (/data-do="([a-z]+)"/.exec(x) || [])[1]).sort(), ['arm', 'armno', 'armyes', 'ask', 'more', 'more', 'no', 'pick', 'roster', 'yes'], pressable.join(' '));
-  assert.ok(pressable.every(x => x.startsWith('<button type="button"') || x.startsWith('<select class="fl-pick"')));
+  assert.deepStrictEqual(pressable.map(x => (/data-do="([a-z]+)"/.exec(x) || [])[1]).sort(), ['arm', 'armno', 'armyes', 'ask', 'fam', 'fam', 'filter', 'filter', 'filter', 'filter', 'find', 'more', 'more', 'no', 'others', 'pick', 'roster', 'sub', 'sub', 'yes'], pressable.join(' '));
+  assert.ok(pressable.every(x => x.startsWith('<button type="button"') || x.startsWith('<select class="fl-pick"') || x.startsWith('<input type="text" class="ws-in" data-do="find"')));
   assert.strictEqual((html.match(/role="switch"/g) || []).length, 1, 'one Armed switch, for both lanes');
   assert.ok(!/contenteditable|tabindex|onclick|role="(checkbox|slider)"|draggable/i.test(html));
-  assert.match(html, /Not built yet, so not here: moving an account into or out of a lane by drag and drop/);
+  assert.match(html, /Market now<\/h3><\/div>\s*<p class="fl-empty">Not built yet\./, 'what is not built is said, not faked');
+  /* 1.49.0: Live is built: its four sections, and what it cannot know says so instead of a number */
+  for (const label of ['Today', 'Today on one chart', 'By trader', 'Accounts live']) assert.match(html, new RegExp('<section class="fl-box[^"]*" aria-label="' + label + '">'));
+  assert.doesNotMatch(html, /is the next change/);
   // the lane's hostile strings (the trader's name, its group, its seat, why it is stood down, a pick that is gone) are text
   const lanesHtml = P.part('lane-eval').innerHTML + P.part('lane-funded').innerHTML;
   assert.ok(lanesHtml.includes('It is stood down: &lt;img src=x onerror=1&gt;') && lanesHtml.includes('gone.json (not offered now)'));
@@ -620,7 +624,7 @@ test('an older ChartBridge with the tab open by its address keeps the button (N9
   P.answers[0].res({ status: 200, json: () => Promise.resolve({ files: [served('big.json', many)] }) }); await P.tick(); await P.tick();
   P.click('more', 1, 'lineup:big');
   const h = P.part('roster').innerHTML;
-  assert.match(h, /Lineup of 40/);
+  assert.match(h, /Big<\/span> <span class="fl-who" data-who="bot">LINEUP<\/span>/, 'a lineup is a family line of its own');
   assert.strictEqual((h.match(/class="fl-mname"/g) || []).length, F.MAX_MEMBERS);
   assert.match(h, /And 28 more bots in this lineup, not drawn\./);
   assert.match(h, /b11 2, and 28 more/);
@@ -717,7 +721,9 @@ test('the head: the line under the title has its own row, and each number on a c
   assert.ok(head[1].indexOf('data-do="yes"') < head[1].indexOf('data-do="no"') && head[1].indexOf('data-do="no"') < head[1].indexOf('data-do="ask"') && !/<(span|p)[^>]*fl-ask/.test(head[1]), 'Yes, then Cancel, then Kill all at the right end; the question\'s words are not in the row');
   P.answers[0].res({ status: 200, json: () => Promise.resolve({ files: [served('z.json', botFile('zeta'))] }) }); await P.tick(); await P.tick();
   const line = P.part('roster').innerHTML.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
-  assert.match(line, /Eval \+0\.62 per \$1 Above no edge Funded -0\.10 per \$1 Not above no edge/, 'each number on the line is named: ' + line);
+  assert.match(line, /^ ?Family and setting Profit per \$1 Eval pass In this zone Standing /, 'the columns are named once, above the lines: ' + line);
+  assert.match(line, /Zeta risk \$400 eval, \$250 funded \+0\.62 \(\+0\.32 to \+0\.92\) Above no edge 58% not built yet 198 trades, 240 sessions; In-sample, not confirmed; try \d Details/, 'one number a setting with its range and the file\'s own word: ' + line);
+  assert.ok(!/-0\.10/.test(line), 'never the second stage\'s number beside it');
 });
 
 
@@ -941,7 +947,7 @@ test('the pick: one list a lane, sent as agentPick; locked in Auto and while the
   assert.match(html, /<select class="fl-pick" id="flPick-eval" data-do="pick" data-agent="legion1"><option value="">None<\/option><option value="duo\.json">duo \(lineup of 2\)<\/option><option value="germ\.json" selected>germ<\/option><\/select>/);
   assert.match(html, /<select class="fl-pick" id="flPick-funded" data-do="pick" data-agent="legion2"><option value="" selected>None<\/option>/);
   assert.match(html, /data-stage="eval" data-armable="true"/); assert.match(html, /data-stage="funded" data-armable="false"/);
-  assert.match(html, /<span class="fl-seat">EVAL-A<\/span><span class="fl-seat">EVAL-B<\/span>/);
+  assert.match(html, /<div class="fl-lanepanels" data-panel="eval">/, 'the lane keeps a place for its own Multi-Account panel (mounted by the page)');
   P.change('legion2', 'gone.json');
   assert.deepStrictEqual(P.posts, [], 'a file the list does not offer is not sent (the review of 94, note 7)');
   P.change('legion2', 'duo.json');
@@ -1058,6 +1064,317 @@ test('a lane\'s lock: moves are free only while its one trader is in Shadow and 
   assert.match(F.NOT_KNOWN, /^Not known yet/);
 });
 
+test('Legion Setup: each lane mounts the page\'s own Multi-Account panel on its group, with the lane\'s lock; a new group or a closed tab takes it down', async t => {
+  timers(t);
+  const mounts = [];
+  const lanePanel = (el, key, opts) => { const m = { key, opts, el, destroyed: 0, destroy() { this.destroyed++; } }; mounts.push(m); return m; };
+  const P = page(t, { lanePanel });
+  P.fv.showTab(true);
+  P.feed({ type: 'hello', version: '0.6.21' }); P.feed({ type: 'trading', enabled: true }); P.feed(accounts); P.feed(groups);
+  P.feed(evalTrader()); P.feed(fundTrader()); P.replayDone();
+  assert.deepStrictEqual(mounts.map(m => [m.key, m.opts.group]), [['legion-eval', 'g1'], ['legion-funded', 'g2']], 'one mount a lane, on its own group, keyed by its stage');
+  assert.strictEqual(mounts[0].opts.locked(), '', 'in Shadow and flat: moves are free');
+  P.feed(evalTrader({ mode: 'auto' }));
+  assert.match(mounts[0].opts.locked(), /in Auto: switch Armed off/, 'the lock reads the lane as it is now, not as it was when mounted');
+  P.feed(evalTrader({ owns: true }));
+  assert.match(mounts[0].opts.locked(), /holds a position/);
+  assert.strictEqual(mounts.length, 2, 'messages never mount again');
+  // the review of 97 (F2): taking an account from the other lane's group asks THAT lane's lock; a group no lane trades is free
+  P.feed(evalTrader()); P.feed(fundTrader({ mode: 'auto' }));
+  assert.strictEqual(typeof mounts[0].opts.otherLocked, 'function');
+  assert.match(mounts[0].opts.otherLocked('g2'), /legion2 trades that group in Auto/, 'the funded lane in Auto: nothing taken from it');
+  assert.strictEqual(mounts[0].opts.otherLocked('g3'), '', 'a listed group no trader is on');
+  assert.strictEqual(mounts[0].opts.otherLocked('g-none'), F.NOT_KNOWN, 'a group ChartBridge does not list: not known (answers 26, R3-4)');
+  P.feed(fundTrader());
+  assert.strictEqual(mounts[0].opts.otherLocked('g2'), '');
+  // and not known is locked: after a drop, before the traders are heard again, both locks say not known
+  const lockedNow = mounts[0].opts.locked, otherNow = mounts[0].opts.otherLocked;
+  P.subs.closed();
+  assert.notStrictEqual(lockedNow(), ''); assert.strictEqual(otherNow('g2'), F.NOT_KNOWN);
+  P.feed({ type: 'hello', version: '0.6.21' }); P.feed({ type: 'trading', enabled: true }); P.feed(accounts); P.feed(groups);
+  P.feed(evalTrader({ group: { id: 'g3', name: 'New' } }));
+  assert.ok(mounts[0].destroyed >= 1, 'the lane\'s group changed: the old mount is taken down');
+  P.fv.showTab(false);
+  assert.ok(mounts.every(m => m.destroyed >= 1), 'closing the tab takes every mount down');
+  // without the page's mount (the tab alone) a lane says where its accounts would show, and nothing throws
+  const Q = page(t); Q.fv.showTab(true); Q.feed({ type: 'hello', version: '0.6.21' }); Q.feed(accounts); Q.feed(groups); Q.feed(evalTrader());
+  assert.match(Q.part('lane-eval').innerHTML, /The accounts of this lane show here when the page is open with its accounts part\./);
+});
+
+test('B4 (1.48.1): a lane says what the PC helper says of its runner, and not known is never "runs"', () => {
+  const L = { id: 'legion1', stage: 'eval' };
+  const ok = agents => ({ reach: 'ok', body: { agents } });
+  const say = (l, h) => F.laneRunner(l, h);
+  assert.deepStrictEqual(say({ id: '' , stage: 'eval' }, ok({})), { text: '', tone: 'mut', stops: 0 }, 'no trader: nothing to say');
+  assert.match(say(L, null).text, /has not answered yet/);
+  assert.match(say(L, { reach: 'locked', body: null }).text, /unlocked with the PIN/);
+  for (const h of [{ reach: 'down', body: null }, { reach: 'refused', body: {} }, { reach: 'ok', body: null }, { reach: 'ok', body: { agents: [] } },
+    { reach: 'down', body: { agents: { legion1: { lane: 'eval', running: true } } } }]) {   // a body with a failed answer is never read
+    const r = say(L, h);
+    assert.match(r.text, /is not known: the PC helper is not answering/); assert.strictEqual(r.tone, 'bad');
+  }
+  assert.match(say(L, ok({ legion1: { running: true } })).text, /keeps no runner for legion1/, 'a row with no lane is the live agent, not a lane runner');
+  assert.match(say(L, ok({ legion2: { lane: 'eval', running: true } })).text, /keeps no runner for legion1/);
+  assert.match(say(L, ok({ legion1: { lane: 'funded', running: true } })).text, /runs legion1 as the funded lane, but its group is of Type eval/);
+  assert.deepStrictEqual(say(L, ok({ legion1: { lane: 'eval', running: true, stops: 0 } })), { text: 'Its runner runs.', tone: 'ok', stops: 0 });
+  assert.deepStrictEqual(say(L, ok({ legion1: { lane: 'eval', running: true, stops: 1, lastStop: { why: 'the runner ended with code 2 after 3 s' } } })),
+    { text: 'Its runner runs. It stopped once this session (last: the runner ended with code 2 after 3 s).', tone: 'warn', stops: 1 });
+  const off = say(L, ok({ legion1: { lane: 'eval', running: false, why: 'the runner ended with code 2 after 3 s (tries again in 5 min)', stops: 3, lastStop: { why: 'x' } } }));
+  assert.deepStrictEqual(off, { text: 'Its runner is not running: the runner ended with code 2 after 3 s (tries again in 5 min). It stopped 3 times this session (last: x).', tone: 'bad', stops: 3 });
+  assert.match(say(L, ok({ legion1: { lane: 'eval', running: 'yes' } })).text, /^Its runner is not running: no reason given\./, 'only true is running');
+  assert.strictEqual(say(L, ok({ legion1: { lane: 'eval', running: true, stops: -4 } })).stops, 0);
+  assert.ok(Object.isFrozen(F) && typeof F.laneRunner === 'function');
+});
+
+test('B4 (1.48.1): the tab reads the helper every 3 s while open, draws each lane\'s line, stops on close, and can only read', async t => {
+  timers(t);
+  const calls = [];
+  let answer = { reach: 'ok', body: { agents: { legion1: { lane: 'eval', running: true, stops: 0 }, legion2: { lane: 'funded', running: false, why: 'waiting for NinjaTrader to connect', stops: 0 } } } };
+  const P = page(t, { helperStatus: () => { calls.push(1); return Promise.resolve(answer); } });
+  P.fv.showTab(true);
+  P.feed({ type: 'hello', version: '0.6.21' }); P.feed({ type: 'trading', enabled: true }); P.feed(accounts); P.feed(groups);
+  P.feed(evalTrader()); P.feed(fundTrader());
+  await P.tick(); await P.tick();
+  assert.strictEqual(calls.length, 1, 'read once at open');
+  assert.match(P.part('lane-eval').innerHTML, /<p class="fl-line fl-runner" data-tone="ok">Its runner runs\.<\/p>/);
+  assert.match(P.part('lane-funded').innerHTML, /data-tone="bad">Its runner is not running: waiting for NinjaTrader to connect\.<\/p>/);
+  answer = { reach: 'down', body: null };
+  t.mock.timers.tick(3000); await P.tick(); await P.tick();
+  assert.strictEqual(calls.length, 2, 'again after 3 s');
+  assert.match(P.part('lane-eval').innerHTML, /Its runner is not known: the PC helper is not answering/);
+  P.fv.showTab(false);
+  t.mock.timers.tick(30000); await P.tick();
+  assert.strictEqual(calls.length, 2, 'no read while the tab is shut');
+  const src = read('live', 'fleet.js'), ws = read('live', 'workspace.js');
+  assert.doesNotMatch(src, /\/on\b|\/off\b|\.on\(|\.off\(|helperClient|createClient/, 'the tab has no way to On or Off');
+  assert.match(ws, /return \(\) => client\.status\(\);\n\}\)\(\);/, 'the page hands the status call only, never the client');
+  assert.match(ws, /helperStatus: legionHelperStatus,/);
+});
+
+test('Legion Live (1.49.0): the four tiles sum ChartBridge\'s today of the prop accounts, and one not known makes the sum not known', () => {
+  const acc = { type: 'accounts', list: [
+    { name: 'EVAL-A', prop: true, pnlToday: 120.5 }, { name: 'EVAL-B', prop: true, pnlToday: -20 }, { name: 'FUND-A', prop: true, pnlToday: 300 },
+    { name: 'MINE', prop: false, pnlToday: 9999 }, { name: 'ODD', prop: true }] };
+  const ls = [{ stage: 'eval', id: 'legion1', seats: ['EVAL-A', 'eval-b'], benched: [] }, { stage: 'funded', id: '', seats: [], benched: [] }];
+  const t = F.liveTiles(ls, acc);
+  assert.deepStrictEqual(t.map(x => [x.key, x.value]), [['all', null], ['eval', 100.5], ['funded', null], ['business', null]]);
+  assert.match(t[0].text, /^not known: 3 of 4 accounts say today$/, 'the personal account is never counted; one with no number makes the sum not known');
+  assert.match(t[1].text, /^2 accounts, realized plus open$/, 'names match in any letter case');
+  assert.match(t[2].text, /no trader on this lane/);
+  assert.match(t[3].text, /^not built yet: it needs The Desk/);
+  assert.deepStrictEqual(F.todayOf(['EVAL-A', 'FUND-A'], acc), { value: 420.5, known: 2, of: 2 });
+  assert.deepStrictEqual(F.todayOf(['MINE'], acc), { value: null, known: 0, of: 1 }, 'a row not marked prop is not counted');
+  assert.match(F.liveTiles(ls, null)[0].text, /the accounts are not known yet/);
+  assert.match(F.liveTiles([{ stage: 'eval', id: 'x', seats: [], benched: [] }], acc)[1].text, /no account trades with its group/);
+});
+
+test('Legion Live (1.49.0): each lane\'s fills become entry and exit marks in its colour and letter, today only, and nothing else', () => {
+  const ls = [{ stage: 'eval', id: 'legion1', seats: ['EVAL-A'], benched: ['EVAL-B'] }, { stage: 'funded', id: 'legion2', seats: ['FUND-A'], benched: [] }, { stage: 'eval', id: '', seats: ['LOST'], benched: [] }];
+  const f = (id, account, side, qty, p, t, root) => ({ type: 'exec', id, account, side, qty, p, t, root: root || 'MNQ', name: 'MNQ 12-26' });
+  const fills = [
+    f('1', 'EVAL-A', 'buy', 2, 20000, 1000), f('2', 'EVAL-A', 'buy', 1, 20001, 1010), f('3', 'EVAL-A', 'sell', 1, 20005, 1020), f('4', 'EVAL-A', 'sell', 4, 20006, 1030),
+    f('5', 'FUND-A', 'sell', 1, 19990, 1005), f('6', 'FUND-A', 'buy', 1, 19980, 1040),
+    f('7', 'EVAL-B', 'buy', 1, 20010, 1050),
+    f('8', 'MINE', 'buy', 9, 20000, 1060),                                   // not a lane's account
+    f('9', 'EVAL-A', 'buy', 1, 20000, 500),                                  // before the trading day
+    f('10', 'EVAL-A', 'buy', 1, 4800, 1070, 'ES'),                          // another market: kept for the position, not drawn
+    { id: 'x', account: 'EVAL-A', side: 'buy', qty: 1.5, p: 1, t: 1080 }, { id: 'y', account: 'EVAL-A', side: 'hold', qty: 1, p: 1, t: 1090 }, null];
+  const m = F.laneMarks(ls, fills, 900, ['MNQ', 'NQ']);
+  assert.strictEqual(m.kind, 'marks'); assert.deepStrictEqual(m.lines, []);
+  assert.deepStrictEqual(m.marks.map(x => [x.t, x.kind, x.letter, x.color, x.price]), [
+    [1000, 'entry', 'E', '#8FB4E0', 20000], [1005, 'entry', 'F', '#C9A55C', 19990], [1010, 'entry', 'E', '#8FB4E0', 20001],
+    [1020, 'exit', 'E', '#8FB4E0', 20005], [1030, 'exit', 'E', '#8FB4E0', 20006], [1040, 'exit', 'F', '#C9A55C', 19980], [1050, 'entry', 'E', '#8FB4E0', 20010]]);
+  assert.strictEqual(F.laneMarks(ls, fills, null, ['MNQ']).marks.length, 8, 'with no day start, every fill of a lane');
+  assert.strictEqual(F.laneMarks([], fills, null, []).marks.length, 0, 'no lane, no mark');
+  assert.strictEqual(F.cleanFill({ id: 'a', account: 'B', side: 'buy', qty: 0, p: 1, t: 1 }), null);
+});
+
+test('Legion Live (1.49.0): by trader, from ChartBridge\'s agent message and the lane\'s accounts; the live record says it is not read', () => {
+  const acc = { list: [{ name: 'EVAL-A', prop: true, pnlToday: 50 }] };
+  const ls = [{ stage: 'eval', id: 'legion1', name: 'Legion one', modeText: 'Shadow', seats: ['EVAL-A'] }, { stage: 'funded', id: '', seats: [] }];
+  const rows = F.traderDays(ls, [{ agent: 'legion1', trades: 2, owns: true }], acc);
+  assert.deepStrictEqual(rows.map(r => [r.stage, r.id, r.mode, r.today, r.trades, r.inTrade]), [['eval', 'legion1', 'Shadow', 50, 2, true]]);
+  assert.match(rows[0].record, /^not enough data yet/);
+  const unknown = F.traderDays(ls, [{ agent: 'legion1' }], { list: [] })[0];
+  assert.deepStrictEqual([unknown.today, unknown.trades, unknown.inTrade], [null, null, null], 'not said is not known, never 0 or flat');
+});
+
+test('Legion Live (1.49.0): the tab keeps each fill once, draws the tiles and the traders on Live, and mounts the chart and the rows only there', async t => {
+  timers(t);
+  const mounted = [];
+  const P = page(t, {
+    liveChart: el => { mounted.push('chart'); return { chart: null, destroy: () => mounted.push('chart down') }; },
+    accountRows: (el, key, filter) => { mounted.push('rows ' + key + ' ' + [filter({ name: 'EVAL-A' }), filter({ name: 'MINE' }), filter(null)].join(',')); return { destroy: () => mounted.push('rows down') }; },
+    sessionStart: () => 900 });
+  P.fv.showTab(true);
+  P.feed({ type: 'hello', version: '0.6.21' }); P.feed({ type: 'trading', enabled: true });
+  P.feed({ type: 'accounts', personalNamed: true, list: [{ name: 'EVAL-A', prop: true, pnlToday: 75 }, { name: 'MINE', prop: false }] }); P.feed(groups);
+  P.feed(evalTrader());
+  await P.tick();
+  assert.deepStrictEqual(mounted, [], 'nothing of Live is mounted on Setup');
+  listenersClick(P, 'live');
+  assert.deepStrictEqual(mounted, ['chart', 'rows legion-live true,false,false']);
+  assert.match(P.part('tiles').innerHTML, /data-tile="all"/);
+  assert.match(P.part('bytrader').innerHTML, /role="table" aria-label="By trader"/);
+  P.feed({ type: 'execs', list: [{ id: '1', account: 'EVAL-A', side: 'buy', qty: 1, p: 1, t: 1000, root: 'MNQ' }] });
+  P.feed({ type: 'exec', id: '1', account: 'EVAL-A', side: 'buy', qty: 1, p: 1, t: 1000, root: 'MNQ' });
+  assert.strictEqual(P.fv.state().fills, 1, 'execs then exec of the same fill: one');
+  listenersClick(P, 'setup');
+  assert.deepStrictEqual(mounted.slice(2), ['chart down', 'rows down']);
+  listenersClick(P, 'live'); P.fv.showTab(false);
+  assert.deepStrictEqual(mounted.slice(-2), ['chart down', 'rows down'], 'closing the tab takes them down too');
+});
+function listenersClick(P, sub) { P.clickSub(sub); }
+
+test('T-6 of the third look at 92: the head row (Kill all, its Yes and Cancel) never wraps; the last word on it in fleet.css says nowrap', () => {
+  const css = read('live', 'fleet.css').replace(/\/\*[\s\S]*?\*\//g, '');
+  const said = [...css.matchAll(/(^|\n)\.fl-head \{([^}]*)\}/g)].map(m => (/flex-wrap:\s*([a-z]+)/.exec(m[2]) || [])[1]).filter(Boolean);
+  assert.ok(said.length >= 1, 'a flex-wrap is set on .fl-head');
+  assert.strictEqual(said[said.length - 1], 'nowrap', 'the rule that wins is nowrap: ' + said.join(', '));
+  assert.doesNotMatch(css, /@media[^{]*\{[^@]*\.fl-head \{[^}]*flex-wrap:\s*wrap/, 'no width puts the wrap back');
+});
+
+test('answers 25, S2: another group\'s lock covers every trader heard on it (a doubled lane\'s second group, a group of no Type); and no lock is free while signed out', t => {
+  timers(t);
+  const mounts = [];
+  const lanePanel = (el, key, opts) => { const m = { key, opts, el, destroy() {} }; mounts.push(m); return m; };
+  const P = page(t, { lanePanel });
+  P.fv.showTab(true);
+  const more = { type: 'groups', list: groups.list.concat([{ id: 'g4', name: 'Evals 2', accountType: 'eval', members: ['EVAL-C'] },
+    { id: 'g9', name: 'Loose', accountType: null, members: ['OTHER-1', 'OTHER-2'] }, { id: 'g-empty', name: 'Empty', accountType: null, members: [] }]) };
+  P.feed({ type: 'hello', version: '0.6.21' }); P.feed({ type: 'trading', enabled: true }); P.feed(accounts); P.feed(more);
+  // the reviewer's case: the eval lane doubled (legion3 on g4, Type eval, in Auto) and loose9 in Auto on g9 (no Type)
+  P.feed(evalTrader()); P.feed(fundTrader());
+  P.feed(agent('legion3', { mode: 'auto', account: null, group: { id: 'g4', name: 'Evals 2' }, seats: [{ account: 'EVAL-C' }] }));
+  P.feed(agent('loose9', { mode: 'auto', account: null, group: { id: 'g9', name: 'Loose' }, seats: [{ account: 'OTHER-1' }] }));
+  P.replayDone();
+  const funded = mounts.find(m => m.key === 'legion-funded');
+  assert.match(funded.opts.otherLocked('g4'), /legion3 trades that group in Auto/, 'the doubled lane\'s second group');
+  assert.match(funded.opts.otherLocked('g9'), /loose9 trades that group in Auto/, 'a group of no Type');
+  assert.strictEqual(funded.opts.otherLocked('g-empty'), '', 'a group no trader is on');
+  P.feed(agent('loose9', { mode: 'shadow', account: null, group: { id: 'g9', name: 'Loose' }, seats: [{ account: 'OTHER-1' }], owns: true }));
+  assert.match(funded.opts.otherLocked('g9'), /loose9 holds a position or a working entry/);
+  P.feed(agent('loose9', { mode: 'shadow', account: null, group: { id: 'g9', name: 'Loose' }, seats: [{ account: 'OTHER-1' }], owns: false }));
+  assert.strictEqual(funded.opts.otherLocked('g9'), '', 'its one trader in Shadow and flat');
+  // answers 26, R3-4, the reviewer's probe: a trader in Auto seated directly on OTHER-2, a member of g9, with no group
+  P.feed(agent('direct', { mode: 'auto', account: 'OTHER-2', group: null }));
+  assert.match(funded.opts.otherLocked('g9'), /^direct is seated on an account of that group/);
+  P.feed(agent('loose9', { mode: 'shadow', account: null, group: { id: 'g5', name: 'Elsewhere' }, seats: [] }));
+  assert.match(funded.opts.otherLocked('g9'), /^direct is seated on an account of that group/, 'seated on a member: locked');
+  P.feed(agent('direct', { mode: 'auto', account: 'MINE', group: null, seats: [{ account: 'OTHER-1' }] }));
+  assert.match(funded.opts.otherLocked('g9'), /^direct is seated on an account of that group/, 'a seat left over on a member: locked');
+  // answers 28, R4-4: the narrow feed matches an account's group ignoring case, as ChartBridge does
+  P.feed(agent('direct', { mode: 'auto', account: 'OTHER-2', group: null }));
+  const posted = [];
+  const AF = { S: { groups: more.list }, accountGroup: (...x) => { posted.push(x); return true; }, post: () => true };
+  const nf = F.laneFeed(AF, () => '', 'g2', funded.opts.otherLocked);
+  assert.strictEqual(nf.accountGroup('other-1', 'g2'), false, 'the probe in lower case: refused, g9 is locked');
+  assert.strictEqual(nf.accountGroup('OTHER-1', 'g2'), false);
+  assert.deepStrictEqual(posted, []);
+  // B1: signed out, nothing is heard, so every lock is not known
+  P.feed({ type: 'trading', enabled: false });
+  assert.strictEqual(funded.opts.otherLocked('g-empty'), F.NOT_KNOWN);
+  assert.strictEqual(funded.opts.locked(), F.NOT_KNOWN);
+});
+
+test('answers 33, A28-1: a heard trader the page cannot read makes the lane\'s OWN lock not known too; A28-2: two groups matching a name ignoring case is refused', t => {
+  timers(t);
+  const mounts = [];
+  const lanePanel = (el, key, opts) => { const m = { key, opts, el, destroy() {} }; mounts.push(m); return m; };
+  const P = page(t, { lanePanel });
+  P.fv.showTab(true);
+  P.feed({ type: 'hello', version: '0.6.21' }); P.feed({ type: 'trading', enabled: true }); P.feed(accounts); P.feed(groups);
+  P.feed(evalTrader()); P.feed(fundTrader()); P.replayDone();
+  const funded = mounts.find(m => m.key === 'legion-funded');
+  assert.strictEqual(funded.opts.locked(), '', 'both lanes in Shadow and flat: free');
+  for (const [why, bad] of [['group a string', { group: 'g2' }], ['group id a number', { group: { id: 2 } }], ['account a number', { account: 42 }]]) {
+    P.feed(agent('odd', Object.assign({ mode: 'auto', account: null }, bad)));
+    assert.strictEqual(funded.opts.locked(), F.NOT_KNOWN, why);
+    assert.strictEqual(funded.opts.otherLocked('g1'), F.NOT_KNOWN, why + ': the other lane\'s group too (break B1 at page level)');
+    const sent = [];
+    const AF = { S: { groups: groups.list }, accountGroup: (...x) => { sent.push(x); return true; }, post: m => { sent.push(m); return true; } };
+    const nf = F.laneFeed(AF, funded.opts.locked, 'g2', funded.opts.otherLocked);
+    assert.strictEqual(nf.accountGroup('FUND-A', null), false, why + ': out of the lane refused');
+    assert.strictEqual(nf.post({ type: 'memberBench', account: 'FUND-A', benched: true }), false, why + ': bench refused');
+    assert.deepStrictEqual(sent, [], why + ': 0 sent');
+  }
+  P.feed(agent('odd', { mode: 'shadow', account: null, group: null }));
+  assert.strictEqual(funded.opts.locked(), '', 'readable again: free');
+  // A28-2: two groups list the same name in different case: the account\'s group is not known, so the move is refused
+  const sent = [];
+  const twice = { S: { groups: [{ id: 'g2', members: ['FUND-A'] }, { id: 'g7', members: ['fund-a'] }] }, accountGroup: (...x) => { sent.push(x); return true; } };
+  const nf = F.laneFeed(twice, () => '', 'g2', () => '');
+  assert.strictEqual(nf.accountGroup('FUND-A', null), false);
+  assert.strictEqual(nf.accountGroup('Fund-A', 'g2'), false);
+  assert.deepStrictEqual(sent, []);
+});
+
+test('answers 25, S2, answers 26, R3-4, and answers 28, R4-1 to R4-3: FleetCore.groupLock on its own', () => {
+  const tr = (id, gid, more) => Object.assign({ agent: id, mode: 'shadow', owns: false, account: null, group: gid ? { id: gid, name: 'G' } : null }, more || {});
+  const gm = { type: 'groups', list: [{ id: 'g1', members: ['ACC-1', 'ACC-2'] }, { id: 'g2', members: ['ACC-3'] }, { id: 'g-odd' }] };
+  assert.strictEqual(F.groupLock('g1', [], false, gm), F.NOT_KNOWN);
+  assert.strictEqual(F.groupLock('g1', null, true, gm), F.NOT_KNOWN);
+  assert.strictEqual(F.groupLock('', [], true, gm), F.NOT_KNOWN);
+  assert.strictEqual(F.groupLock('g1', [], true, null), F.NOT_KNOWN, 'groups not heard: not known');
+  assert.strictEqual(F.groupLock('g-none', [], true, gm), F.NOT_KNOWN, 'a group not listed');
+  assert.strictEqual(F.groupLock('g-odd', [], true, gm), F.NOT_KNOWN, 'a group with no member list');
+  assert.strictEqual(F.groupLock('g1', [tr('a', 'g2', { mode: 'auto' })], true, gm), '', 'a trader on another group');
+  assert.strictEqual(F.groupLock('g1', [tr('a', 'g1')], true, gm), '');
+  assert.match(F.groupLock('g1', [tr('a', 'g1'), tr('b', 'g1')], true, gm), /Two traders are on that group \(a, b\)/);
+  assert.match(F.groupLock('g1', [tr('a', 'g1', { mode: 'copilot' })], true, gm), /a trades that group in Copilot/);
+  assert.match(F.groupLock('g1', [tr('a', 'g1', { mode: undefined })], true, gm), /a mode not known/);
+  assert.match(F.groupLock('g1', [tr('a', 'g1', { owns: true })], true, gm), /holds a position/);
+  assert.strictEqual(F.groupLock('g1', [tr('a', null, { mode: 'auto', account: 'ACC-3' })], true, gm), '', 'seated on another group\'s account only');
+  // R3-4 and R4-2, R4-3: seated directly on a member (its account or a seat left over), in ANY mode, any letter case
+  for (const [why, t] of [['Auto', tr('a', null, { mode: 'auto', account: 'acc-2' })], ['Copilot', tr('a', null, { mode: 'copilot', account: 'ACC-1' })],
+    ['Shadow holding something', tr('a', null, { account: 'ACC-1', owns: true })], ['Shadow and flat', tr('a', null, { account: 'ACC-1' })],
+    ['a seat left over', tr('a', 'g2', { mode: 'shadow', seats: [{ account: 'ACC-3' }, { account: 'ACC-1' }] })]])
+    assert.match(F.groupLock('g1', [t], true, gm), /^a is seated on an account of that group: no account moves out of it while another trader is on one of its accounts, in any mode\.$/, why);
+  assert.match(F.groupLock('g1', [tr('a', 'g1'), tr('b', null, { account: 'ACC-2' })], true, gm), /^b is seated on an account of that group/, 'its own trader in Shadow and flat, another seated on a member');
+  // R4-1: any heard trader the page cannot read makes every group's lock not known
+  for (const [why, bad] of [['account a number', { account: 42 }], ['group a string', { group: 'g9' }], ['seats a string', { seats: 'OTHER-1' }],
+    ['a seat with a number', { seats: [{ account: 7 }] }], ['group id a number', { group: { id: 9 } }], ['account empty', { account: '' }], ['account an object', { account: { n: 1 } }]])
+    assert.strictEqual(F.groupLock('g2', [tr('a', 'g1'), Object.assign(tr('odd', null), bad)], true, gm), F.NOT_KNOWN, why);
+  assert.strictEqual(F.accountsReadable(null), false);
+  assert.strictEqual(F.accountsReadable(tr('a', 'g1', { seats: [{ account: 'ACC-1' }] })), true);
+});
+
+test('Legion Setup\'s roster by family (1.48.0): readable names, the family from the run, the two "good for" filters on the file\'s own word and their order, Find, and where a file is picked', () => {
+  assert.strictEqual(F.readableName('germanicus_r75_cap_off_v1.json'), 'Germanicus r75 cap off v1', 'the whole file name, the family capitalised (Anthony 2026-11-12)');
+  assert.strictEqual(F.readableName('a-b_c'), 'A b c'); assert.strictEqual(F.readableName(''), ''); assert.strictEqual(F.readableName(null), '');
+  const nums = (ppd, pass, aboveE, paid, aboveF) => { const s = scored(); return { numbers: { eval: Object.assign({}, s.numbers.eval, { profit_per_dollar: ppd, eval_pass: pass, above_no_edge: aboveE }), funded: Object.assign({}, s.numbers.funded, { paid_per_funded: paid, above_no_edge: aboveF }) } }; };
+  const bot = (name, family, n, over) => served(name + '.json', botFile(name, Object.assign({ record: { run_id: 'run-' + name, family, try: 1, sessions: 100, trades: 50, instrument: 'MNQ', verdict: 'v' } }, n, over || {})));
+  const cards = F.rosterCards({ left: 0, files: [
+    bot('germ_a', 'germanicus', nums(0.2, 0.30, true, 2500, true)),
+    bot('germ_b', 'germanicus', nums(0.9, 0.70, true, 400, false)),
+    bot('germ_c', 'germanicus', nums(0.5, 0.90, false, 2000, true)),
+    bot('germ_d', 'germanicus', nums(0.7, 0.95, true, 3000, true), { runs_live: false, why_not: 'two trades a session' }),
+    bot('zz_other', '', nums(0.1, 0.5, true, 100, true)),
+    bot('duo_solo', '', nums(0.3, 0.5, false, 100, false)),
+    served('duo.json', lineupFile('duo', [member('germ_a'), member('germ_b')]))] });
+  assert.ok(cards.ok, cards.why);
+  const ls = [{ stage: 'eval', title: 'Eval lane', pick: 'germ_b.json' }, { stage: 'funded', title: 'Funded lane', pick: 'germ_b.json' }];
+  const fam = (f, q) => F.rosterFamilies(cards, ls, f, q);
+  const all = fam('all', '');
+  const byName = (x, y) => (x[0] + x[1] < y[0] + y[1] ? -1 : 1);
+  assert.deepStrictEqual(all.families.map(x => [x.kind, x.name, x.settings.map(r => r.name)]).sort(byName), [
+    ['bot', 'Duo', ['duo_solo']], ['bot', 'Germanicus', ['germ_b', 'germ_d', 'germ_c', 'germ_a']], ['bot', 'Zz', ['zz_other']], ['lineup', 'Duo', ['duo']]],
+    'one family a run family (a file with none: the first word of its name), a lineup its own; settings by profit per $1');
+  assert.deepStrictEqual([all.total, all.shown], [7, 7]);
+  const g = all.families.find(x => x.name === 'Germanicus');
+  assert.deepStrictEqual(g.settings.map(r => r.readable), ['Germ b', 'Germ d', 'Germ c', 'Germ a']);
+  assert.strictEqual(g.settings[0].where, 'Eval lane and Funded lane', 'where a file is picked is said');
+  assert.strictEqual(g.settings[1].where, '');
+  const ev = fam('evals', '').families.find(x => x.name === 'Germanicus');
+  assert.deepStrictEqual(ev.settings.map(r => r.name), ['germ_b', 'germ_a'], 'good for evals: runs live AND the file says above no edge for the eval; best eval pass first (germ_d does not run live, germ_c is not above)');
+  const fu = fam('funded', '').families.find(x => x.name === 'Germanicus');
+  assert.deepStrictEqual(fu.settings.map(r => r.name), ['germ_a', 'germ_c'], 'good for funded: the funded word; most paid per funded account first (not the eval pass order)');
+  assert.deepStrictEqual(fam('all', 'germ_c.json').families.map(x => x.settings.map(r => r.name)), [['germ_c']], 'Find reads the file name too');
+  assert.deepStrictEqual(fam('all', 'zz').families.map(x => x.name), ['Zz']);
+  assert.deepStrictEqual(fam('nonsense', '').shown, 7, 'an unknown filter is All');
+  assert.deepStrictEqual(F.rosterFamilies(null, ls, 'all', ''), { families: [], total: 0, shown: 0 });
+});
+
 /* ---------------------------------------------------------------- the re-review of 94 (answers 22) */
 test('the re-review of 94, R2: a doubled lane with a trader in Copilot (or not said) is never "off"; one click only switches off', () => {
   const V = '0.6.21', cards = liveCards();
@@ -1100,6 +1417,21 @@ test('the re-review of 94, N1: "not known" until the traders have settled, not a
   assert.notStrictEqual(P.fv.state().arm.state, 'unknown', 'settled');
 });
 
+test('the re-review of 94, N1, in Legion Setup: a lane\'s lock is not known until the traders have settled', t => {
+  timers(t);
+  const mounts = [];
+  const lanePanel = (el, key, opts) => { const m = { key, opts, destroy() {} }; mounts.push(m); return m; };
+  const P = page(t, { lanePanel, settleMs: 1500 });
+  P.fv.showTab(true);
+  P.feed({ type: 'hello', version: '0.6.21' }); P.feed({ type: 'trading', enabled: true }); P.feed(accounts); P.feed(groups);
+  P.feed(evalTrader()); P.feed(fundTrader()); P.replayDone();
+  assert.strictEqual(mounts[0].opts.locked(), F.NOT_KNOWN, 'a second trader on this lane may not be heard yet');
+  assert.strictEqual(mounts[0].opts.otherLocked('g2'), F.NOT_KNOWN);
+  P.T += 1500;
+  assert.strictEqual(mounts[0].opts.locked(), '', 'settled: in Shadow and flat, moves are free');
+  assert.strictEqual(mounts[0].opts.otherLocked('g2'), '');
+});
+
 test('answers 25, S1: "heard" waits for ChartBridge\'s end of the sign-in replay (agentStandDowns) and the floor; a late trader, a new sign-in and a drop', t => {
   timers(t);
   const P = page(t, { settleMs: 1500 });
@@ -1135,6 +1467,22 @@ test('answers 25, S1: "heard" waits for ChartBridge\'s end of the sign-in replay
   assert.strictEqual(arm(), 'unknown', 'the end of the replay came 0 s after the first trader: the floor still runs');
   P.T += 1500;
   assert.strictEqual(arm(), 'off');
+});
+
+test('answers 26, R3-1 and R3-2: the 1.5 s counts from the first trader, not the sign-in; and the tab redraws by itself when it runs out', t => {
+  timers(t);
+  const P = page(t, { settleMs: 1500 });
+  P.fv.showTab(true);
+  P.feed({ type: 'hello', version: '0.6.21' }); P.feed({ type: 'trading', enabled: true }); P.feed(accounts); P.feed(groups);
+  P.T += 1000;                                     // the first trader comes 1 s after the sign-in
+  P.feed(agent('germanicus')); P.replayDone();
+  P.T += 600; t.mock.timers.tick(600);            // 1.6 s after the sign-in, 0.6 s after the first trader
+  assert.strictEqual(P.fv.state().arm.state, 'unknown', 'R3-1: counted from the first trader');
+  assert.strictEqual(P.part('arm').textContent, 'Armed: not known');
+  P.T += 910;
+  t.mock.timers.tick(910);                         // no message: only the wait's own timer
+  assert.notStrictEqual(P.fv.state().arm.state, 'unknown');
+  assert.notStrictEqual(P.part('arm').textContent, 'Armed: not known', 'R3-2: redrawn when the wait ran out');
 });
 
 test('answers 25, N-b (K14): a drop resets the wait, even with the traders heard again at once', t => {
