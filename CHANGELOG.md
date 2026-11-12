@@ -95,6 +95,14 @@ holding the real Multi-Account panel in the page and a move from it sending `mem
   are not known while signed out (S1). Another group's lock covers every trader heard on that group, not only one
   lane's own: a doubled lane's second group and a group of no Type are locked while a trader on them is not in Shadow
   or holds something (`FleetCore.groupLock`, S2).
+- **Answers 26 for Legion Setup:** a group's lock also counts a trader seated directly on one of its accounts (its
+  account, its group's seats or a seat left over, `FleetCore.traderAccounts`, which now counts all of them), and a group
+  ChartBridge does not list with its members is "not known", locked (R3-4). Tests that the settle counts from the first
+  trader and that the tab redraws by itself when it runs out (R3-1, R3-2).
+- **Answers 28 for Legion Setup:** any heard trader whose accounts the page cannot read makes every group's lock "not
+  known" (`FleetCore.accountsReadable`, R4-1); a trader seated on one of a group's accounts locks it in any mode,
+  Shadow and flat included (R4-2); the narrow feed finds an account's group ignoring letter case, as ChartBridge does
+  (R4-4).
 - **Legion Setup's Traders fold (build answers B4-1, section 3):** one mount of builder 4's Legion trader desk
   (chart-engine 103, `live/legion-desk.js`) in a folded section under the lanes, closed by default, handed the page's
   own feed (the desk puts Legion's gate round it). Mounted the first time it is opened, then told it is shown or hidden

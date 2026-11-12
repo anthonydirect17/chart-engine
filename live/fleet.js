@@ -124,8 +124,7 @@ function dayMark(rules, stage, planValue) {
 }
 
 /** The accounts one trader is on, from its `agent` message: its account AND every seat it has (a group's, or one left over
- *  after a move), each once, so a seat still holding something is never left out of what Kill all and Armed say (builder 4's
- *  note on answers B4-2: the gates count them the same way, AgentCore.gateAccounts). */
+ *  after a move), each once (answers 26, R3-4, and builder 4's note on answers B4-2: the gates count them the same way). */
 function traderAccounts(agent) {
   const a = plainObj(agent) ? agent : {};
   const out = [];
@@ -134,11 +133,11 @@ function traderAccounts(agent) {
   return out;
 }
 /** Can the page read this trader's accounts at all? account null or a name, group null or an object, seats absent or a list of
- *  { account: name }. Anything else is "the page cannot tell" (kind '', and a lane of it is never armable). */
+ *  { account: name }. Anything else is "the page cannot tell" (answers 28, R4-1; the same reader as 104's). */
 function accountsReadable(a) {
   if (!plainObj(a)) return false;
   const acct = a.account === undefined || a.account === null || (typeof a.account === 'string' && a.account.length > 0);
-  const grp = a.group === undefined || a.group === null || plainObj(a.group);
+  const grp = a.group === undefined || a.group === null || (plainObj(a.group) && typeof a.group.id === 'string' && a.group.id.length > 0);
   const seats = a.seats === undefined || a.seats === null || (Array.isArray(a.seats) && a.seats.every(x => plainObj(x) && typeof x.account === 'string' && x.account.length > 0));
   return acct && grp && seats;
 }
@@ -670,16 +669,27 @@ function laneLock(l, heard) {
   return '';
 }
 /**
- * ANY GROUP'S LOCK (answers 25, S2): may an account be taken out of group gid now? Every trader heard on that group counts,
- * not only one lane's: '' only when no trader is on it, or its one trader is in Shadow and holds nothing; else why not,
- * with the trader named. Not heard yet is NOT_KNOWN, which is locked.
+ * ANY GROUP'S LOCK (answers 25, S2; answers 26, R3-4; answers 28, R4-1 and R4-2): may an account be taken out of group gid now?
+ * - Not heard yet, a group ChartBridge does not list with its members (groupsMsg), or ANY heard trader whose accounts the page
+ *   cannot read (accountsReadable): NOT_KNOWN, which is locked.
+ * - A trader seated directly on one of the group's accounts (its account, or a seat left over, not as that group's own trader):
+ *   locked in ANY mode, Shadow and flat included (two drivers on one account are never one click away).
+ * - The group's own traders keep S2's rule: free only with none, or its one trader in Shadow holding nothing.
+ * Every reason names the trader.
  */
-function groupLock(gid, list, heard) {
+function groupLock(gid, list, heard, groupsMsg) {
   if (heard !== true || !Array.isArray(list)) return NOT_KNOWN;
   if (typeof gid !== 'string' || !gid) return NOT_KNOWN;
-  const on = list.filter(a => plainObj(a) && plainObj(a.group) && a.group.id === gid);
-  if (!on.length) return '';
+  const g = plainObj(groupsMsg) && Array.isArray(groupsMsg.list) ? groupsMsg.list.find(x => plainObj(x) && x.id === gid) : null;
+  if (!g || !Array.isArray(g.members)) return NOT_KNOWN;
+  if (list.some(a => !accountsReadable(a))) return NOT_KNOWN;
+  const members = new Set(g.members.filter(m => typeof m === 'string').map(m => m.toLowerCase()));
   const name = a => str(a.agent, 40) || 'a trader';
+  const onIt = a => plainObj(a.group) && a.group.id === gid;
+  const direct = list.filter(a => !onIt(a) && traderAccounts(a).some(n => members.has(n.toLowerCase())));
+  if (direct.length) return direct.map(name).join(', ') + (direct.length > 1 ? ' are' : ' is') + ' seated on an account of that group: no account moves out of it while another trader is on one of its accounts, in any mode.';
+  const on = list.filter(onIt);
+  if (!on.length) return '';
   if (on.length > 1) return 'Two traders are on that group (' + on.map(name).join(', ') + '): no account moves out of it until one is taken off (the Agent tab).';
   const a = on[0];
   if (a.mode !== 'shadow') return name(a) + ' trades that group in ' + (own(MODE_NAME, a.mode) ? MODE_NAME[a.mode] : 'a mode not known') + ': an account moves out of it only while it is in Shadow.';
@@ -713,7 +723,9 @@ function laneFeed(feed, locked, groupId, otherLocked) {
   const groupOf = name => {
     const gs = feed && feed.S && Array.isArray(feed.S.groups) ? feed.S.groups : null;
     if (!gs) return undefined;
-    const g = gs.find(x => plainObj(x) && Array.isArray(x.members) && x.members.includes(name));
+    if (typeof name !== 'string' || !name) return undefined;
+    const lc = name.toLowerCase();                       // ChartBridge matches names ignoring case (answers 28, R4-4)
+    const g = gs.find(x => plainObj(x) && Array.isArray(x.members) && x.members.some(m => typeof m === 'string' && m.toLowerCase() === lc));
     return g ? String(g.id) : null;
   };
   const joinOk = name => {
@@ -1129,7 +1141,7 @@ function create(o) {
     const locked = () => { const now = laneList().find(x => x.stage === stage); return C.laneLock(now, heard()) || (!S.connected ? 'ChartBridge is not connected' : ''); };
     /* taking an account from another group asks that group's lane too (F2); a group no lane trades is free once heard */
     // answers 25, S2: any group's lock covers every trader heard on it, not only a lane's own (a doubled lane's second group, a group of no Type)
-    const otherLocked = gid => { if (!heard()) return C.NOT_KNOWN; return C.groupLock(gid, agentList(), true) || (!S.connected ? 'ChartBridge is not connected' : ''); };
+    const otherLocked = gid => { if (!heard()) return C.NOT_KNOWN; return C.groupLock(gid, agentList(), true, S.groups) || (!S.connected ? 'ChartBridge is not connected' : ''); };
     let mount = null;
     try { mount = o.lanePanel(host, 'legion-' + stage, { group: l.groupId, locked, otherLocked }); } catch (e) { mount = null; }
     if (!mount) return null;
