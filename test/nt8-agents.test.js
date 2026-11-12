@@ -34,7 +34,7 @@ test('0.5.0 agents: the new file ships, is compile-checked and harnessed', () =>
   for (const f of ['check.sh', 'orders.sh']) assert.match(read(path.join('check', f)), /ChartBridgeBot\.cs ChartBridgeAgents\.cs ChartBridgeStrategies\.cs/);
   assert.match(read(path.join('check', 'orders.sh')), /check\/AgentHarness\.cs/);
   assert.match(read(path.join('check', 'OrdersHarness.cs')), /Section\("agents \(0\.5\.0\)", AgentHarness\.Run\);/);
-  assert.match(main, /public const string Version = "0\.(5\.[0-8]|6\.([0-9]|1[0-9]|20))";/);   // 0.6.20: the roster served; 0.6.19: the day's profit stop; 0.6.18: entry rules per trader (market entry, no target); 0.6.17: Kill all for the prop accounts; 0.6.16: prop accounts (Auto kept through the reset and one restore after a restart, prop only); 0.6.15: the 1 second pull retired; 0.6.14: the tick day check rule; 0.6.13: the tick day's morning catch-up, the raw deleted once packed; 0.6.12: the bar trail follow-ups; 0.6.10: the account lifecycle (remove-only for an account NinjaTrader no longer lists, Hide leaves the group); 0.6.9: the stats suite's Phase 2 (1 second bars, the order record, decision ids; recording only); 0.6.8: the minute book (the history path only); 0.6.7: the bench, no hedging always on, a group's own rules optional; 0.6.6: the firm's limits on entries, riskAlert, firmMinimum, copierFollowerRemove; 0.6.5: each member's own rules and the risk percent; 0.6.4: no false no-trade-record alarm, the alarm cleared, Merge on an off follower; 0.6.3: the audit fixes (a missed reset caught up, closes not seen, files that survive a power cut, the kill switch kept); 0.6.2: group stand-downs and league seats; 0.6.1: a group's type and default hero; 0.6.0: group trading (seats); 0.5.8: groups and accountState; 0.5.7: the plan id, the TradeLost hold, None and the daily reset; 0.5.1: the accounts follow NinjaTrader, on top of 0.5.0; 0.5.3: the agents' MNQ cap; 0.5.4: the window while exposed; 0.5.5: the accounts line and unknown keys; 0.5.6: the time check
+  assert.match(main, /public const string Version = "0\.(5\.[0-8]|6\.([0-9]|1[0-9]|2[01]))";/);   // 0.6.21: the pick, profitToday, the roster reader tightened; 0.6.20: the roster served; 0.6.19: the day's profit stop; 0.6.18: entry rules per trader (market entry, no target); 0.6.17: Kill all for the prop accounts; 0.6.16: prop accounts (Auto kept through the reset and one restore after a restart, prop only); 0.6.15: the 1 second pull retired; 0.6.14: the tick day check rule; 0.6.13: the tick day's morning catch-up, the raw deleted once packed; 0.6.12: the bar trail follow-ups; 0.6.10: the account lifecycle (remove-only for an account NinjaTrader no longer lists, Hide leaves the group); 0.6.9: the stats suite's Phase 2 (1 second bars, the order record, decision ids; recording only); 0.6.8: the minute book (the history path only); 0.6.7: the bench, no hedging always on, a group's own rules optional; 0.6.6: the firm's limits on entries, riskAlert, firmMinimum, copierFollowerRemove; 0.6.5: each member's own rules and the risk percent; 0.6.4: no false no-trade-record alarm, the alarm cleared, Merge on an off follower; 0.6.3: the audit fixes (a missed reset caught up, closes not seen, files that survive a power cut, the kill switch kept); 0.6.2: group stand-downs and league seats; 0.6.1: a group's type and default hero; 0.6.0: group trading (seats); 0.5.8: groups and accountState; 0.5.7: the plan id, the TradeLost hold, None and the daily reset; 0.5.1: the accounts follow NinjaTrader, on top of 0.5.0; 0.5.3: the agents' MNQ cap; 0.5.4: the window while exposed; 0.5.5: the accounts line and unknown keys; 0.5.6: the time check
   assert.ok(!/(^|[\s(=,+:?])\$"/m.test(acode) && !/\?\.\w/.test(acode) && !/\bnameof\(/.test(acode), 'C# 5');
 });
 
@@ -380,7 +380,39 @@ test('0.6.20 the roster: GET /roster serves the Lab\'s files read only, each che
   assert.match(ro, /new FileStream\(f\.FullName, FileMode\.Open, FileAccess\.Read, FileShare\.ReadWrite \| FileShare\.Delete\)/, 'read only, never holding the file');
   assert.ok(!/Submit|CreateOrder|Cancel\(|Flatten|PlaceOrder/.test(ro), 'it touches no order');
   assert.ok(!/Log\(|AgentLog\(/.test(ro), 'it logs nothing (never the folder\'s path)');
-  assert.ok(!/FolderSetting\)|folder\)/.test(ro.replace(/new DirectoryInfo\(folder\)/, '').replace(/Path\.IsPathRooted\(folder\)/, '')), 'the path goes nowhere but the read');
+  // the path goes to the folder read and to the two pure checks of its own shape (0.6.21), and nowhere else
+  assert.ok(!/FolderSetting\)|folder\)/.test(ro.replace(/new DirectoryInfo\(folder\)/g, '').replace(/Path\.IsPathRooted\(folder\)/g, '').replace(/DrivePath\(folder\)/g, '').replace(/FolderProblem\(folder\)/g, '').replace(/static (bool|string) (DrivePath|FolderProblem)\(string folder\)/g, '')), 'the path goes nowhere but the read');
+});
+
+test('0.6.21: the pick (a name, saved, sent, refused in Auto and while exposed), accountState\'s profit side, the roster reader tightened', () => {
+  assert.match(acode, /\{ "agentPick", new\[\] \{ "type", "cid", "agent", "file" \} \},/, 'the page message takes exactly these keys');
+  assert.match(acode, /if \(type == "agentPick"\) return SetPick\(d\);/);
+  const set = acode.slice(acode.indexOf('private string SetPickLocked'), acode.indexOf('// ---------------------------------------------------------- start and stop') > acode.indexOf('private string SetPickLocked') ? acode.indexOf('// ---------------------------------------------------------- start and stop') : acode.indexOf('private string SetPickLocked') + 3000);
+  const order = ['if (m == "auto") return "agent " + Id + " is in Auto', 'if (Exposed()) return "agent " + Id + " has a position, a working entry or a proposal: the pick changes when it is flat"', 'ChartBridgeRoster.PickProblem(name)', 'WriteWhole(PickFile'].map(x => set.indexOf(x));
+  assert.ok(order.every(i => i >= 0) && order.join() === order.slice().sort((x, y) => x - y).join(), 'Auto, exposed and the roster\'s own check all come before the save: ' + order.join());
+  assert.match(acode, /private string SetPick\(Dictionary<string, Val> d\) \{ lock \(PlaceGate\) return SetPickLocked\(d\); \}/, 'under the placement gate: never between a placement\'s checks and its order');
+  assert.ok(!/Submit|CreateOrder|PlaceAgentEntry|StartFlatten|mode = /.test(set), 'setting the pick places, flattens and changes no mode');
+  // the agent channel cannot send it: its own key table has no such message
+  const agentKeys = acode.slice(acode.indexOf('{ "agentHello", new[]'), acode.indexOf('{ "agentHello", new[]') + 2500);
+  assert.ok(!agentKeys.includes('agentPick'), 'no agentPick on the agent channel');
+  assert.match(acode, /if \(pick != null\) b\.Append\(",\\"pick\\":"\)\.Append\(CbJson\.Str\(pick\)\);/, 'the pages get the pick only when one is set');
+  assert.match(acode, /private string PickWelcomeField\(\) \{ string p; lock \(Sync\) p = pick; return p == null \? "" : ",\\"pick\\":" \+ CbJson\.Str\(p\); \}/, 'and so does the runner');
+  // ChartBridge keeps the name only: the pick's code never opens the roster file itself
+  const pickCode = acode.slice(acode.indexOf('// ---------------------------------------------------------- 0.6.21: the pick'), acode.indexOf('private string SetPickLocked') + 3000);
+  assert.ok(!/FolderSetting|new FileStream|ReadAllText/.test(pickCode), 'the pick\'s code reads no roster file (it asks ChartBridgeRoster.PickProblem only)');
+  // accountState: the two lines in the groups file
+  const g = read('ChartBridgeGroups.cs');
+  assert.strictEqual((g.match(/profitToday/g) || []).length, 2, 'profitToday is named twice in the groups file: None, and an account');
+  assert.match(g, /b\.Append\(",\\"profitToday\\":"\)\.Append\(Num\(n\.ProfitPnl\)\)\.Append\(",\\"profitWhy\\":"\)\.Append\(n\.ProfitWhy == null \? "null" : CbJson\.Str\(n\.ProfitWhy\)\);/, 'the very number the day\'s profit stop reads');
+  // the roster reader
+  const ro = acode.slice(acode.indexOf('public static class ChartBridgeRoster'));
+  assert.match(ro, /public const int MaxAnswerBytes = 2 \* 1024 \* 1024;/);
+  assert.match(ro, /string fmt = TopLevelFormat\(text\);\s*if \(fmt != FormatBot && fmt != FormatLineup\)/, 'the top-level format key decides (D1)');
+  assert.ok(!/FormatRx|Regex\.IsMatch\(text|\.IsMatch\(text\)/.test(ro), 'no search of the whole text for the format any more');
+  assert.match(ro, /bool ok = Path\.DirectorySeparatorChar == '\\\\' \? DrivePath\(folder\) : Path\.IsPathRooted\(folder\);/, 'on Windows a drive-letter full path only (D3)');
+  assert.match(ro, /if \(text != null && total \+ Encoding\.UTF8\.GetByteCount\(text\) > MaxAnswerBytes\)/, 'one cap for the whole answer (D4)');
+  const proto = read('PROTOCOL.md');
+  for (const w of ['### The pick, and the day\'s profit side in accountState (0.6.21)', '**`agentPick`**', '`agent-<id>-pick.txt`', '**`accountState.profitToday`**', 'a HARD link in the folder is served', 'TOP-LEVEL `format`']) assert.ok(proto.includes(w), 'PROTOCOL: ' + w);
 });
 
 test('0.6.18 entry rules per trader: a market entry and an entry with no target only when that trader\'s rules allow each; a stop always', () => {

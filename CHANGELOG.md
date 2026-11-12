@@ -63,6 +63,36 @@
   `test/pc-updater.test.js`: the allowed git subcommands, the box job's name, useHttpPath read before the one ask, the
   token only after a 404 or 401 and then through the Actions API, one place that asks for it and one that sends it.
 
+## ChartBridge 0.6.21 and chart 1.45.1 (2026-11-12): the pick, the day's profit side for the runner, the roster reader tightened
+
+In plain words: nothing changes on the chart, for hand trading or for any trader that runs today. ChartBridge learns three
+things the lanes on the Legion tab and the spec runner need. No page sends the new message yet. Build answers 7 part D2
+(the ChartBridge half) and the review backlog of build answers 11.
+
+- **The pick.** Each trader slot can hold the name of one roster file: the bot or the lineup its runner runs. It is set
+  from the page (`agentPick`, a file name `GET /roster` serves, or `null` for none), saved in `agent-<id>-pick.txt`, and
+  sent to the runner in `welcome` and to the pages in `agent`. It stays until it is changed (a restart and the 17:00
+  reset keep it). It is **refused while the trader is in Auto, or holds a position, a working entry or a proposal**, so
+  what a runner trades never changes under it. A trader can never send it itself. ChartBridge keeps the name and
+  nothing else: it reads no rule from the file and decides nothing from it.
+- **The day's profit side reaches the runner.** `accountState` gains `profitToday` and `profitWhy`: the day's number as
+  the day's profit stop already reads it (after a late start, the LARGER realized figure; `pnlToday` keeps the smaller,
+  right for a loss limit). The runner sizes a funded account from the day's start and stops an eval at its day mark
+  from this side, so a ChartBridge started mid-session can no longer make it size too large (Bot-Lab's review of 144,
+  S1; the same root as F6 here).
+- **The roster reader, tightened** (the review of 91):
+  - D1: a roster file is an object whose **top-level** `format` is one of the two. The words in a nested object, a
+    list or a string no longer make one.
+  - D3: `rosterFolder` is a full path on a drive letter and nothing else: `C:roster`, `\roster` and a network share
+    are refused.
+  - D4: one cap of 2 MB for a whole answer; a file that would pass it is listed with why, not served.
+  - D2, said in PROTOCOL: a hard link in the folder is served and a parent folder that is a link is followed; each
+    needs write access to the folder.
+- No order path file changes. `ChartBridgeGroups.cs` gains two lines, both in the `accountState` message.
+
+Checked in `check/AgentHarness.cs` (`Pick`) and `check/BotHarness.cs` (`Http`). ChartBridge 0.6.21 is a recompile
+(`-InstallChartBridge`, then F5 while flat). The page is unchanged.
+
 ## chart 1.45.0 (2026-11-11): the Legion tab: the roster, the traders, the prop accounts and Kill all (page only, no F5)
 
 In plain words: a new Legion button in the top bar opens one screen for the Prop Business (the name is Anthony's,

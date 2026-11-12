@@ -749,9 +749,69 @@ public static class BotHarness
             for (int i = 0; i < ChartBridgeRoster.MaxFiles + 3; i++) File.WriteAllText(Path.Combine(rf, "z" + i.ToString("000", CultureInfo.InvariantCulture) + ".json"), ro);
             body = Get(port, "/roster", null, null, out s);
             Check(s == 200 && Regex.Matches(body, "\\{\"name\":").Count == ChartBridgeRoster.MaxFiles && body.EndsWith("],\"left\":" + (7 + ChartBridgeRoster.MaxFiles + 3 - ChartBridgeRoster.MaxFiles) + "}"), "/roster: at most 200 files, and how many are left over is said: " + body.Substring(Math.Max(0, body.Length - 40)));
+            // 0.6.21, the review of 91. D1: the format is the TOP-LEVEL key, wherever it stands; never a nested one, one in a list, or
+            // the words inside a string
+            foreach (string f in Directory.GetFiles(rf, "z*.json")) File.Delete(f);
+            File.WriteAllText(Path.Combine(rf, "nested.json"), "{\"settings\":{\"format\":\"specrunner.roster/1\"},\"x\":1}");
+            File.WriteAllText(Path.Combine(rf, "inlist.json"), "{\"a\":[{\"format\":\"specrunner.roster/1\"}],\"format\":\"other/1\"}");
+            File.WriteAllText(Path.Combine(rf, "instring.json"), "{\"note\":\"\\\"format\\\":\\\"specrunner.roster/1\\\"\",\"format\":\"other/1\"}");
+            File.WriteAllText(Path.Combine(rf, "later.json"), "{\"bot\":\"b\",\"t\":\"a\\\"b\",\"deep\":{\"format\":\"x\"},\"format\" : \"specrunner.lineup/1\"}");
+            File.WriteAllBytes(Path.Combine(rf, "badutf.json"), new byte[] { 0x7b, 0x22, 0xff, 0xfe, 0x22, 0x7d });
+            body = Get(port, "/roster", null, null, out s);
+            Check(s == 200 && body.Contains("{\"name\":\"nested.json\",\"ok\":false,\"why\":\"not a roster file") && body.Contains("{\"name\":\"inlist.json\",\"ok\":false,\"why\":\"not a roster file") &&
+                  body.Contains("{\"name\":\"instring.json\",\"ok\":false,\"why\":\"not a roster file"), "/roster (D1): the format text in a nested object, in a list or inside a string does not make a roster file");
+            Check(body.Contains("{\"name\":\"later.json\",\"ok\":true,\"roster\":{\"bot\":\"b\""), "/roster (D1): the top-level format key is found wherever it stands in the object");
+            Check(body.Contains("{\"name\":\"badutf.json\",\"ok\":false,\"why\":\"could not be read (DecoderFallbackException)\"}"), "/roster: bytes that are not UTF-8: not served, and only the error's type is said");
+            Check(ChartBridgeRoster.TopLevelFormat("{\"format\":\"specrunner.roster/1\"}") == "specrunner.roster/1" && ChartBridgeRoster.TopLevelFormat(" { \"a\" : 1 , \"format\" : \"f\" } ") == "f" &&
+                  ChartBridgeRoster.TopLevelFormat("{\"a\":{\"format\":\"f\"}}") == null && ChartBridgeRoster.TopLevelFormat("[\"format\",\"f\"]") == null && ChartBridgeRoster.TopLevelFormat("{\"format\":7}") == null &&
+                  ChartBridgeRoster.TopLevelFormat("{\"x\":\"format\",\"y\":\"f\"}") == null && ChartBridgeRoster.TopLevelFormat("{\"a\":\"}\",\"format\":\"f\"}") == "f" && ChartBridgeRoster.TopLevelFormat("") == null,
+                  "/roster (D1): the top-level format reader, case by case");
+            // a file held open by another writer with no sharing: not served, the error's type only, never its path or message
+            using (FileStream held = new FileStream(Path.Combine(rf, "alpha.json"), FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            {
+                body = Get(port, "/roster", null, null, out s);
+                Check(s == 200 && Regex.IsMatch(body, "\\{\"name\":\"alpha\\.json\",\"ok\":false,\"why\":\"could not be read \\([A-Za-z]+\\)\"\\}") && !body.Contains(rf), "/roster: a file that cannot be opened: listed with the error's type only: " + body.Substring(0, Math.Min(120, body.Length)));
+            }
+            // a file that is a link is never followed
+            bool linked = false;
+            try
+            {
+                System.Diagnostics.Process ln = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("ln", "-s \"" + Path.Combine(rf, "alpha.json") + "\" \"" + Path.Combine(rf, "linked.json") + "\"") { UseShellExecute = false });
+                ln.WaitForExit(5000); linked = ln.ExitCode == 0;
+            }
+            catch (Exception) { }
+            if (linked)
+            {
+                body = Get(port, "/roster", null, null, out s);
+                Check(body.Contains("{\"name\":\"linked.json\",\"ok\":false,\"why\":\"a link: never followed\"}"), "/roster: a file that is a link is listed, never followed");
+                Check(ChartBridgeRoster.PickProblem("linked.json") == "a link: never followed", "the pick: a link cannot be picked");
+                File.Delete(Path.Combine(rf, "linked.json"));
+            }
+            // a method other than GET and HEAD
+            Check(Send(port, "POST", "/roster") == 405 && Send(port, "PUT", "/roster") == 405 && Send(port, "DELETE", "/roster") == 405 && Send(port, "HEAD", "/roster") == 200, "/roster: POST, PUT and DELETE are refused (405); HEAD is answered");
+            // D4: one cap for the whole answer (2 MB): what would pass it is listed with why, not served
+            string fat = "{\"format\":\"specrunner.roster/1\",\"x\":\"" + new string('x', 250 * 1024) + "\"}";
+            for (int i = 0; i < 12; i++) File.WriteAllText(Path.Combine(rf, "y" + i.ToString("00", CultureInfo.InvariantCulture) + ".json"), fat);
+            body = Get(port, "/roster", null, null, out s);
+            int servedFat = Regex.Matches(body, "\\{\"name\":\"y[0-9]+\\.json\",\"ok\":true").Count, cutFat = Regex.Matches(body, "\\{\"name\":\"y[0-9]+\\.json\",\"ok\":false,\"why\":\"not served: the answer would pass 2 MB").Count;
+            Check(s == 200 && servedFat >= 7 && servedFat <= 8 && servedFat + cutFat == 12 && body.Length < ChartBridgeRoster.MaxAnswerBytes + 64 * 1024 && ChartBridgeBot.JsonValid(body),
+                  "/roster (D4): twelve files of 250 KB: " + servedFat + " served, " + cutFat + " listed as over the 2 MB answer, the answer " + body.Length + " bytes");
+            foreach (string f in Directory.GetFiles(rf, "y*.json")) File.Delete(f);
+            // the pick's own question: may this name be picked?
+            Check(ChartBridgeRoster.PickProblem("alpha.json") == null && ChartBridgeRoster.PickProblem("morning.json") == null, "the pick: a served bot file and a served lineup file can be picked");
+            Check(ChartBridgeRoster.PickProblem("broken.json") == "not valid JSON" && ChartBridgeRoster.PickProblem("nested.json").StartsWith("not a roster file") && ChartBridgeRoster.PickProblem("missing.json") == "there is no such file in the roster folder" &&
+                  ChartBridgeRoster.PickProblem("../alpha.json") == "not a plain name" && ChartBridgeRoster.PickProblem("sub/deep.json") == "not a plain name" && ChartBridgeRoster.PickProblem("ALPHA.json") == "there is no such file in the roster folder" &&
+                  ChartBridgeRoster.PickProblem(null) == "not a plain name", "the pick: a file that is not served, not there, in a subfolder or of another spelling cannot be picked");
+            // D3: on Windows a full path on a drive letter and nothing else
+            Check(ChartBridgeRoster.DrivePath("C:\\Apps\\BotLab\\roster") && ChartBridgeRoster.DrivePath("d:/x") && !ChartBridgeRoster.DrivePath("C:roster") && !ChartBridgeRoster.DrivePath("\\roster") &&
+                  !ChartBridgeRoster.DrivePath("\\\\server\\share\\roster") && !ChartBridgeRoster.DrivePath("//server/share") && !ChartBridgeRoster.DrivePath("relative\\roster") && !ChartBridgeRoster.DrivePath("/tmp/x") &&
+                  !ChartBridgeRoster.DrivePath("1:\\x") && !ChartBridgeRoster.DrivePath("") && !ChartBridgeRoster.DrivePath(null), "/roster (D3): a drive-letter full path only: no path without a drive, no network share");
             ChartBridgeRoster.FolderSetting = "relative\\roster";
             body = Get(port, "/roster", null, null, out s);
-            Check(s == 500 && body.Contains("not a full path"), "/roster: a rosterFolder that is not a full path is refused (" + s + ")");
+            Check(s == 500 && body.Contains("not a full path on a drive letter"), "/roster: a rosterFolder that is not a full path is refused (" + s + ")");
+            Check(ChartBridgeRoster.PickProblem("alpha.json").Contains("not a full path on a drive letter"), "the pick: nothing can be picked from a folder that is refused");
+            ChartBridgeRoster.FolderSetting = "";
+            Check(ChartBridgeRoster.PickProblem("alpha.json").StartsWith("no roster folder is set"), "the pick: nothing can be picked with no roster folder set");
             ChartBridgeAgents.ReadConfig("rosterFolder", "  " + rf + "  ");
             Check(ChartBridgeRoster.FolderSetting == rf, "config.txt: rosterFolder is read (trimmed)");
             ChartBridgeRoster.FolderSetting = "";
@@ -1075,6 +1135,16 @@ public static class BotHarness
     }
 
     static string Get(int port, string path, string origin, string secret, out int status) { return Get(port, path, origin, secret, out status, null); }
+
+    // the status of a request with another method (0.6.21: /roster takes GET and HEAD only)
+    static int Send(int port, string method, string path)
+    {
+        HttpWebRequest req = (HttpWebRequest)WebRequest.Create("http://127.0.0.1:" + port + path);
+        req.Proxy = null; req.Host = "localhost:" + port; req.Method = method; req.Timeout = 5000;
+        if (method == "POST" || method == "PUT") req.ContentLength = 0;
+        try { using (HttpWebResponse res = (HttpWebResponse)req.GetResponse()) return (int)res.StatusCode; }
+        catch (WebException ex) { HttpWebResponse res = ex.Response as HttpWebResponse; return res != null ? (int)res.StatusCode : -1; }
+    }
 
     static string Get(int port, string path, string origin, string secret, out int status, string host)
     {
