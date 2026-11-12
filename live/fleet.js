@@ -689,7 +689,7 @@ function create(o) {
   const view = o.view || null, tabBtn = o.tab || null, V3 = o.v3 || null;
   const now = typeof o.now === 'function' ? o.now : () => Date.now();
   const realClick = typeof o.realClick === 'function' ? o.realClick : () => false;      // none handed in: Yes is never taken
-  const S = { shown: false, built: false, version: '', connected: false, signedIn: false, accounts: null, groups: null, agents: new Map(), firstAgentAt: 0, settleTimer: 0,
+  const S = { shown: false, built: false, version: '', connected: false, signedIn: false, accounts: null, groups: null, agents: new Map(), firstAgentAt: null, signInAt: null, replayDone: false, settleTimer: 0,
     ask: 0, askTimer: 0, hint: '', hintBad: false, hintState: false, answer: '', answerBad: false, cidSeq: 0, pending: '', pendingAt: 0, waitTimer: 0, sent: 0,
     armAsk: 0, armTimer: 0, armSaid: '', armBad: false, modeSent: new Map(), pickSent: new Map(),
     roster: { state: 'idle', text: '', cards: null, seq: 0, asked: 0, at: 0, version: '' }, rosterDirty: true, rosterTimer: 0, open: new Set(), drawn: {}, draws: { head: 0, roster: 0, traders: 0, accounts: 0, lanes: 0, 'lane-eval': 0, 'lane-funded': 0 } };
@@ -699,22 +699,41 @@ function create(o) {
   const killState = () => C.killAllState(S.version, S.accounts, S.signedIn, S.connected);
   const laneList = () => C.lanes(agentList(), S.groups, S.accounts, S.version, S.roster.cards);
   const outside = ls => C.outsideAuto(ls, agentList(), S.accounts, S.version);
-  /* the re-review of 94, N1: ChartBridge sends every trader at sign-in, one after another; "heard" waits SETTLE_MS from the first
-     one, so a trader not heard yet is never read as no trader (o.settleMs: the tests' clock) */
+  /* "Heard" (the re-review of 94, N1, and its S1; answers 25). At sign-in ChartBridge replays every trader, one after another,
+     and then sends agentStandDowns (ChartBridgeAgents.AfterAuth, 0.6.21). Every trader is heard only when that message has
+     come for the LATEST sign-in AND SETTLE_MS have passed since the first trader of that sign-in (or since the sign-in, when
+     none came): a stand-down list broadcast in the middle of a replay is rare but possible, the floor covers it. Until both,
+     "not known", which is locked. A sign-in or a sign-out (a change of trading.enabled; ChartBridge sends trading again on
+     every checkmark change, which is not a new sign-in) and a dropped connection forget the traders and start again; nothing
+     is heard while signed out. o.settleMs: the tests' clock. */
   const SETTLE_MS = typeof o.settleMs === 'number' && o.settleMs >= 0 ? o.settleMs : 1500;
-  const heardAll = () => S.agents.size > 0 && S.firstAgentAt > 0 && now() - S.firstAgentAt >= SETTLE_MS;
+  const settleFrom = () => (S.firstAgentAt !== null ? S.firstAgentAt : S.signInAt);
+  const heardAll = () => S.connected && S.signedIn && S.replayDone && settleFrom() !== null && now() - settleFrom() >= SETTLE_MS;
+  /* a render at the moment "heard" can turn true (the message came before the floor ran out) */
+  function settleSoon() {
+    clearTimeout(S.settleTimer); S.settleTimer = 0;
+    if (!S.replayDone || settleFrom() === null) return;
+    const left = SETTLE_MS - (now() - settleFrom());
+    if (left > 0) S.settleTimer = setTimeout(() => { if (S.shown) render(); }, left + 10);
+  }
+  /* a sign-in or a sign-out: what was heard of the traders is forgotten; ChartBridge replays them after a sign-in */
+  function newSignIn() {
+    S.agents.clear(); S.firstAgentAt = null; S.replayDone = false; S.signInAt = S.signedIn ? now() : null;
+    clearTimeout(S.settleTimer); S.settleTimer = 0;
+  }
   const armNow = ls => C.armState(ls, S.version, S.signedIn, S.connected, S.accounts, S.groups, heardAll(), outside(ls));
 
   function onMessage(m) {
     switch (m && m.type) {
       case 'hello': S.version = typeof m.version === 'string' ? m.version : ''; S.connected = true; offer(); if (S.shown) helloRoster(); break;
-      case 'trading': S.signedIn = !!m.enabled; break;
+      case 'trading': { const was = S.signedIn; S.signedIn = !!m.enabled; if (S.signedIn !== was) newSignIn(); break; }
+      case 'agentStandDowns': if (S.signedIn) { S.replayDone = true; settleSoon(); } break;   // after the sign-in replay (S1)
       case 'accounts': S.accounts = m; break;
       case 'groups': S.groups = m; break;
       case 'agent':
         if (m && typeof m.agent === 'string') {
           S.agents.set(m.agent, m);
-          if (!S.firstAgentAt) { S.firstAgentAt = now(); clearTimeout(S.settleTimer); S.settleTimer = setTimeout(() => { if (S.shown) render(); }, SETTLE_MS + 10); }
+          if (S.firstAgentAt === null) { S.firstAgentAt = now(); settleSoon(); }
         }
         break;
       case 'reject':
@@ -732,7 +751,8 @@ function create(o) {
   /* the connection dropped: what ChartBridge said is forgotten; a Kill all sent and not answered is NOT (PROP 2) */
   function lost() {
     S.roster = { state: 'idle', text: '', cards: null, seq: S.roster.seq + 1, asked: S.roster.asked, at: 0, version: '' }; S.rosterDirty = true; clearTimeout(S.rosterTimer);
-    S.connected = false; S.signedIn = false; S.agents.clear(); S.firstAgentAt = 0; S.accounts = null; S.groups = null;
+    S.connected = false; S.signedIn = false; S.agents.clear(); S.firstAgentAt = null; S.signInAt = null; S.replayDone = false; S.accounts = null; S.groups = null;
+    clearTimeout(S.settleTimer); S.settleTimer = 0;
     endArmAsk(); S.modeSent.clear(); S.pickSent.clear(); S.armSaid = ''; S.armBad = false;
     if (S.pending) answered('Kill all was sent and ChartBridge\'s answer never came (the connection dropped): look in NinjaTrader now', true);
     hint('', false); endAsk();

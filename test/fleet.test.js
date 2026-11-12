@@ -354,7 +354,8 @@ function page(t, over, opt) {
   P.click = (what, detail, card) => listeners.click({ target: { closest: () => ({ dataset: { do: what, card } }) }, detail: detail === undefined ? 1 : detail });
   P.html = () => view.innerHTML + ['lanes', 'lane-eval', 'lane-funded', 'roster', 'traders', 'accounts'].map(k => P.part(k).innerHTML).join('');
   P.change = (agentId, value) => listeners.change({ target: { dataset: { do: 'pick', agent: agentId }, value } });
-  P.ready = v => { P.feed({ type: 'hello', version: v || '0.6.20' }); P.feed({ type: 'trading', enabled: true }); P.feed(accounts); P.feed(groups); P.feed(agent('germanicus')); };
+  P.ready = v => { P.feed({ type: 'hello', version: v || '0.6.20' }); P.feed({ type: 'trading', enabled: true }); P.feed(accounts); P.feed(groups); P.feed(agent('germanicus')); P.replayDone(); };
+  P.replayDone = () => P.feed({ type: 'agentStandDowns', list: [] });   // ChartBridge sends it after the sign-in replay (S1)
   P.tick = () => new Promise(r => setImmediate(r));
   t.after(() => P.fv.destroy());
   return P;
@@ -842,6 +843,7 @@ async function lanePage(t, list) {
   const P = page(t); P.fv.showTab(true);
   P.feed({ type: 'hello', version: '0.6.21' }); P.feed({ type: 'trading', enabled: true }); P.feed(accounts); P.feed(groups);
   for (const a of list) P.feed(a);
+  P.replayDone();
   await P.tick();
   P.answers[0].res({ status: 200, json: () => Promise.resolve({ left: 0, files: [served('germ.json', botFile('germ')), served('duo.json', lineupFile('duo', [member('a'), member('b')]))] }) });
   await P.tick(); await P.tick();
@@ -893,7 +895,11 @@ test('Armed on: it asks, takes a real click on Yes after the first moment, and s
   assert.deepStrictEqual([arm().asking, P.posts, P.part('arm').attrs['aria-disabled']], [false, [], 'true']);
   assert.match(P.part('armsaid').textContent, /Sign in to trading first/);
   // closing the tab takes the question down with it (the review of 94, note 10)
-  P.feed({ type: 'trading', enabled: true }); P.click('arm'); assert.strictEqual(arm().asking, true);
+  P.feed({ type: 'trading', enabled: true });
+  assert.strictEqual(arm().state, 'unknown', 'a new sign-in: not known until its replay has ended (S1)');
+  P.feed(evalTrader()); P.feed(fundTrader()); assert.strictEqual(arm().state, 'unknown', 'traders heard, the replay not ended yet');
+  P.replayDone();
+  P.click('arm'); assert.strictEqual(arm().asking, true);
   P.fv.showTab(false); P.fv.showTab(true); assert.strictEqual(arm().asking, false, 'closed and opened again inside the 8 seconds: no question up');
   // a lost connection ends the question, and the switch reads "not known", not "off" (FIX 1)
   P.click('arm'); assert.strictEqual(arm().asking, true);
@@ -1094,6 +1100,55 @@ test('the re-review of 94, N1: "not known" until the traders have settled, not a
   assert.notStrictEqual(P.fv.state().arm.state, 'unknown', 'settled');
 });
 
+test('answers 25, S1: "heard" waits for ChartBridge\'s end of the sign-in replay (agentStandDowns) and the floor; a late trader, a new sign-in and a drop', t => {
+  timers(t);
+  const P = page(t, { settleMs: 1500 });
+  const arm = () => P.fv.state().arm.state;
+  const twin = agent('legion3', { mode: 'auto', account: null, group: { id: 'g1', name: 'Evals' }, seats: [], owns: false, runner: false });
+  P.fv.showTab(true);
+  P.feed({ type: 'hello', version: '0.6.21' }); P.feed({ type: 'trading', enabled: true }); P.feed(accounts); P.feed(groups);
+  // the reviewer's case A: two lane traders heard, the floor passes, a third trader (Auto, on the eval group) 1.6 s later
+  P.feed(evalTrader()); P.feed(fundTrader());
+  P.T += 1600;
+  assert.strictEqual(arm(), 'unknown', 'the floor alone is not "heard": the replay has not ended');
+  P.feed(twin);
+  P.replayDone();
+  assert.strictEqual(arm(), 'partly', 'the late trader counts: the eval lane is doubled with a trader in Auto');
+  // a checkmark change: ChartBridge sends trading true again, which is not a new sign-in
+  P.feed({ type: 'trading', enabled: true });
+  assert.strictEqual(arm(), 'partly');
+  // case B: a sign-out and a sign-in on the same connection start again, and nothing is heard while signed out
+  P.feed({ type: 'trading', enabled: false });
+  assert.strictEqual(arm(), 'unknown');
+  P.feed({ type: 'trading', enabled: true });
+  assert.strictEqual(arm(), 'unknown', 'a new sign-in: the old replay does not count');
+  P.feed(evalTrader()); P.feed(fundTrader());
+  P.T += 2000;
+  assert.strictEqual(arm(), 'unknown', 'its replay has not ended');
+  P.replayDone();
+  assert.strictEqual(arm(), 'off', 'the new replay has ended and has no third trader');
+  // the floor: the end of the replay before 1.5 s from its first trader still waits for the floor
+  P.subs.closed();
+  assert.strictEqual(arm(), 'unknown', 'a drop forgets (K14)');
+  P.feed({ type: 'hello', version: '0.6.21' }); P.feed({ type: 'trading', enabled: true }); P.feed(accounts); P.feed(groups);
+  P.feed(evalTrader()); P.feed(fundTrader()); P.replayDone();
+  assert.strictEqual(arm(), 'unknown', 'the end of the replay came 0 s after the first trader: the floor still runs');
+  P.T += 1500;
+  assert.strictEqual(arm(), 'off');
+});
+
+test('answers 25, N-b (K14): a drop resets the wait, even with the traders heard again at once', t => {
+  timers(t);
+  const P = page(t, { settleMs: 1500 });
+  P.fv.showTab(true); P.ready(); P.T += 1500;
+  assert.notStrictEqual(P.fv.state().arm.state, 'unknown');
+  P.subs.closed();
+  P.feed({ type: 'hello', version: '0.6.21' }); P.feed({ type: 'trading', enabled: true }); P.feed(accounts); P.feed(groups);
+  P.feed(agent('germanicus'));
+  P.T += 5000;
+  assert.strictEqual(P.fv.state().arm.state, 'unknown', 'no end of the replay since the drop');
+});
+
 test('the re-review of 94, N2: a lane reads its bench through the Multi-Account panel\'s own rule when that file is loaded', () => {
   const win = { document: {} };
   new Function('window', 'document', 'self', read('live', 'agent-core.js'))(win, win.document, win);
@@ -1117,7 +1172,7 @@ test('the re-review of 94, N5: without the page\'s mode rules, Armed says it can
   const P = page(t, {}, { noAgentCore: true });
   P.fv.showTab(true);
   P.feed({ type: 'hello', version: '0.6.21' }); P.feed({ type: 'trading', enabled: true }); P.feed(accounts); P.feed(groups);
-  P.feed(evalTrader({ mode: 'auto' })); P.feed(fundTrader());
+  P.feed(evalTrader({ mode: 'auto' })); P.feed(fundTrader()); P.replayDone();
   assert.strictEqual(P.fv.state().arm.state, 'partly', 'a lane in Auto: something to switch off');
   P.click('arm');
   assert.deepStrictEqual(P.posts, []);
