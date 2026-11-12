@@ -166,6 +166,7 @@ try {
   await feed(agent('germanicus', { rules: { entryFrom: '09:40', entryUntil: '15:00', flatAt: '15:55', marketEntry: true, noTarget: true }, dayStop: 900, owns: true }));
   await feed(agent('manrae', { account: 'SAMPLE-MINE', mode: 'copilot' }));
   await feed(agent('resting', { account: 'SAMPLE-EVAL-2', standDown: "the day's profit stop is reached on SAMPLE-EVAL-2 ($1200, 40% of the profit target (the consistency rule); the day is at $1200, realized plus open): flat, and no new entries for agent resting until 18:00 ET" }));
+  await feed({ type: 'agentStandDowns', list: [] });   // ChartBridge's end of the sign-in replay (answers 25, S1)
 
   check(!(await text('.fl-said')).includes('Sign in') && (await text('.fl-said')).includes('Kill all stops every trader on a prop account and closes its position there whole'), 'signed in: the reason it was not offered is gone, and the line says what Kill all touches');
   check((await text('.fl-autoline')) === 'In Auto on prop accounts: germanicus', 'the head line names the one trader in Auto on a prop account: ' + await text('.fl-autoline'));
@@ -341,7 +342,7 @@ try {
   const armAsking = () => page.evaluate(() => window.fleet.state().arm.asking);
   await page.evaluate(b => { window.rosterAnswer = { status: 200, body: b }; }, rosterBody);
   await feed({ type: 'hello', version: '0.6.21' }); await feed({ type: 'trading', enabled: true }); await feed(accounts); await feed(groups);
-  await feed(lane1()); await feed(lane2());
+  await feed(lane1()); await feed(lane2()); await feed({ type: 'agentStandDowns', list: [] });   // ChartBridge's end of the sign-in replay (answers 25, S1)
   await page.waitForFunction(() => window.fleet.state().roster.state === 'ok' && window.fleet.state().lanes[0].armable === true);
   // the review of 94, FIX 2: a trader in Auto on a prop account outside the lanes (germanicus, from above) is named at the switch
   check((await text('[data-do="arm"]')) === 'Armed: PARTLY' && /Not a lane, so not armed from here: germanicus on a prop account; resting on a prop account in Auto/.test(await text('.fl-armsaid')), 'a trader in Auto outside the lanes: Armed reads PARTLY and names it: ' + await text('.fl-armsaid'));
@@ -447,9 +448,12 @@ try {
   await feed(agent('hostile2', { account: null, group: { id: X, name: X }, seats: [{ account: X }] }));
   await page.click('[data-do="ask"]'); await sleep(ARM); await page.click('[data-do="yes"]');
   await feed({ type: 'status', level: 'warn', text: 'Kill all (prop accounts): ' + X });
-  await feed({ type: 'trading', enabled: false });
+  await feed({ type: 'agentStandDowns', list: [] });   // the end of the replay: the hostile traders are heard and shown (answers 25, S1)
+  const seenSignedIn = await page.evaluate(() => (document.getElementById('flView').innerText.match(/<img src=x/g) || []).length);
+  check(seenSignedIn >= 12, 'signed in, the hostile strings show as text ' + seenSignedIn + ' times');
+  await feed({ type: 'trading', enabled: false });   // a sign-out forgets the traders (S1); what is left is still text only
   const hostile = await page.evaluate(() => ({ ran: window.ranScript || 0, imgs: document.querySelectorAll('#flView img, #flView script, #flView iframe, #flView [onerror]').length, seen: (document.getElementById('flView').innerText.match(/<img src=x/g) || []).length }));
-  check(hostile.ran === 0 && hostile.imgs === 0 && hostile.seen >= 12, 'hostile strings in every roster field, account, group, trader and answer: 0 scripts ran, 0 elements injected, shown as text ' + hostile.seen + ' times');
+  check(hostile.ran === 0 && hostile.imgs === 0 && hostile.seen >= 1, 'hostile strings in every roster field, account, group, trader and answer: 0 scripts ran, 0 elements injected, shown as text ' + hostile.seen + ' times');
   await page.evaluate(b => { window.rosterAnswer = { status: 500, body: { error: 'the roster folder named in config.txt is not there' } }; }, null);
   await page.click('.fl-roster [data-do="roster"]');
   await page.waitForFunction(() => window.fleet.state().roster.state === 'error');
@@ -466,6 +470,7 @@ try {
   await page.waitForFunction(() => window.fleet.state().roster.state === 'ok');
   await feed({ type: 'trading', enabled: true }); await feed(accounts); await feed(groups);
   await feed(agent('germanicus', { rules: { entryFrom: '09:40', entryUntil: '15:00', flatAt: '15:55', marketEntry: true, noTarget: true }, dayStop: 900, owns: true }));
+  await feed({ type: 'agentStandDowns', list: [] });   // ChartBridge's end of the sign-in replay (answers 25, S1)
 
   // the re-review of 94, R1: Armed never moves when the words beside it grow (the longest PARTLY reason), at four widths
   for (const width of [1440, 700, 390, 320]) {
@@ -477,6 +482,11 @@ try {
     const after = await box();
     await page.evaluate(() => { document.querySelector('[data-k="armsaid"]').textContent = ''; });
     check(JSON.stringify(before) === JSON.stringify(after), 'Armed stays where it is at ' + width + ' px when the words beside it grow: ' + JSON.stringify(before) + ' and ' + JSON.stringify(after));
+    // answers 25, N-c: the same width whatever it says, so its right edge does not move either
+    const widths = await page.evaluate(() => { const b = document.querySelector('[data-do="arm"]'); const was = b.textContent; const out = [];
+      for (const words of ['Armed: off', 'Armed: ON', 'Armed: PARTLY', 'Armed: not known']) { b.textContent = words; out.push(Math.round(b.getBoundingClientRect().width)); }
+      b.textContent = was; return out; });
+    check(new Set(widths).size === 1, 'Armed keeps one width in every state at ' + width + ' px: ' + widths.join(', '));
   }
   // phone width: one column, no sideways scroll of the page, the buttons big enough to touch
   await page.setViewportSize({ width: 390, height: 844 });
