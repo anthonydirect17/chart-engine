@@ -1041,3 +1041,52 @@ test('Legion Setup: each lane mounts the page\'s own Multi-Account panel on its 
   const Q = page(t); Q.fv.showTab(true); Q.feed({ type: 'hello', version: '0.6.21' }); Q.feed(accounts); Q.feed(groups); Q.feed(evalTrader());
   assert.match(Q.part('lane-eval').innerHTML, /The accounts of this lane show here when the page is open with its accounts part\./);
 });
+
+test('B4 (1.48.1): a lane says what the PC helper says of its runner, and not known is never "runs"', () => {
+  const L = { id: 'legion1', stage: 'eval' };
+  const ok = agents => ({ reach: 'ok', body: { agents } });
+  const say = (l, h) => F.laneRunner(l, h);
+  assert.deepStrictEqual(say({ id: '' , stage: 'eval' }, ok({})), { text: '', tone: 'mut', stops: 0 }, 'no trader: nothing to say');
+  assert.match(say(L, null).text, /has not answered yet/);
+  assert.match(say(L, { reach: 'locked', body: null }).text, /unlocked with the PIN/);
+  for (const h of [{ reach: 'down', body: null }, { reach: 'refused', body: {} }, { reach: 'ok', body: null }, { reach: 'ok', body: { agents: [] } }]) {
+    const r = say(L, h);
+    assert.match(r.text, /is not known: the PC helper is not answering/); assert.strictEqual(r.tone, 'bad');
+  }
+  assert.match(say(L, ok({ legion1: { running: true } })).text, /keeps no runner for legion1/, 'a row with no lane is the live agent, not a lane runner');
+  assert.match(say(L, ok({ legion2: { lane: 'eval', running: true } })).text, /keeps no runner for legion1/);
+  assert.match(say(L, ok({ legion1: { lane: 'funded', running: true } })).text, /runs legion1 as the funded lane, but its group is of Type eval/);
+  assert.deepStrictEqual(say(L, ok({ legion1: { lane: 'eval', running: true, stops: 0 } })), { text: 'Its runner runs.', tone: 'ok', stops: 0 });
+  assert.deepStrictEqual(say(L, ok({ legion1: { lane: 'eval', running: true, stops: 1, lastStop: { why: 'the runner ended with code 2 after 3 s' } } })),
+    { text: 'Its runner runs. It stopped once this session (last: the runner ended with code 2 after 3 s).', tone: 'warn', stops: 1 });
+  const off = say(L, ok({ legion1: { lane: 'eval', running: false, why: 'the runner ended with code 2 after 3 s (tries again in 5 min)', stops: 3, lastStop: { why: 'x' } } }));
+  assert.deepStrictEqual(off, { text: 'Its runner is not running: the runner ended with code 2 after 3 s (tries again in 5 min). It stopped 3 times this session (last: x).', tone: 'bad', stops: 3 });
+  assert.match(say(L, ok({ legion1: { lane: 'eval', running: 'yes' } })).text, /^Its runner is not running: no reason given\./, 'only true is running');
+  assert.strictEqual(say(L, ok({ legion1: { lane: 'eval', running: true, stops: -4 } })).stops, 0);
+  assert.ok(Object.isFrozen(F) && typeof F.laneRunner === 'function');
+});
+
+test('B4 (1.48.1): the tab reads the helper every 3 s while open, draws each lane\'s line, stops on close, and can only read', async t => {
+  timers(t);
+  const calls = [];
+  let answer = { reach: 'ok', body: { agents: { legion1: { lane: 'eval', running: true, stops: 0 }, legion2: { lane: 'funded', running: false, why: 'waiting for NinjaTrader to connect', stops: 0 } } } };
+  const P = page(t, { helperStatus: () => { calls.push(1); return Promise.resolve(answer); } });
+  P.fv.showTab(true);
+  P.feed({ type: 'hello', version: '0.6.21' }); P.feed({ type: 'trading', enabled: true }); P.feed(accounts); P.feed(groups);
+  P.feed(evalTrader()); P.feed(fundTrader());
+  await P.tick(); await P.tick();
+  assert.strictEqual(calls.length, 1, 'read once at open');
+  assert.match(P.part('lane-eval').innerHTML, /<p class="fl-line fl-runner" data-tone="ok">Its runner runs\.<\/p>/);
+  assert.match(P.part('lane-funded').innerHTML, /data-tone="bad">Its runner is not running: waiting for NinjaTrader to connect\.<\/p>/);
+  answer = { reach: 'down', body: null };
+  t.mock.timers.tick(3000); await P.tick(); await P.tick();
+  assert.strictEqual(calls.length, 2, 'again after 3 s');
+  assert.match(P.part('lane-eval').innerHTML, /Its runner is not known: the PC helper is not answering/);
+  P.fv.showTab(false);
+  t.mock.timers.tick(30000); await P.tick();
+  assert.strictEqual(calls.length, 2, 'no read while the tab is shut');
+  const src = read('live', 'fleet.js'), ws = read('live', 'workspace.js');
+  assert.doesNotMatch(src, /\/on\b|\/off\b|\.on\(|\.off\(|helperClient|createClient/, 'the tab has no way to On or Off');
+  assert.match(ws, /return \(\) => client\.status\(\);\n\}\)\(\);/, 'the page hands the status call only, never the client');
+  assert.match(ws, /helperStatus: legionHelperStatus,/);
+});

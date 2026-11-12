@@ -30,8 +30,8 @@
  *     is one click. The switch holds no state of its own: it reads each trader's mode from ChartBridge, so a mode changed
  *     on the Agent tab, by Kill all or at 17:00 New York shows here at once, and "partly" is said when the lanes differ.
  * Not in this cut, and said plainly on the tab: moving an account into or out of a lane by drag and drop (today: the
- * Accounts tab, the account's group), starting the runner's program with Armed (the helper, B4), and each bot's own state
- * from the spec runner.
+ * Accounts tab, the account's group), and each bot's own state from the spec runner. The lanes' runners are kept running by
+ * Bot-Lab's PC helper (B4), not by Armed; each lane says what the helper says of its runner (laneRunner, 1.48.1).
  *
  * "Prop" is ChartBridge's word (`prop` on each row of the `accounts` message, 0.6.16): every live account that is not the
  * personal account Anthony picked. With no pick nothing is prop, and the tab says how to pick.
@@ -658,12 +658,35 @@ function laneFeed(feed, locked) {
   return Object.freeze(out);
 }
 
+/**
+ * A LANE'S RUNNER (B4, chart 1.48.1). Bot-Lab's PC helper (manrae/helper.py, "lanes" in its helper.json) keeps each lane's
+ * spec runner running; Legion only READS its GET /status (o.helperStatus: the AgentHelper client's status call and nothing
+ * else, so no On or Off can leave this tab; the helper refuses both for a lane's id anyway). help: { reach, body } as
+ * AgentHelper's client answers, or null before the first answer. -> { text, tone: 'ok' | 'warn' | 'bad' | 'mut', stops }.
+ * Not known is said as not known, never as running.
+ */
+function laneRunner(l, help) {
+  if (!plainObj(l) || !l.id) return { text: '', tone: 'mut', stops: 0 };
+  if (!plainObj(help)) return { text: 'Its runner: the PC helper has not answered yet.', tone: 'mut', stops: 0 };
+  if (help.reach === 'locked') return { text: 'Its runner: the PC helper needs this page unlocked with the PIN to say.', tone: 'warn', stops: 0 };
+  if (help.reach !== 'ok' || !plainObj(help.body) || !plainObj(help.body.agents)) return { text: 'Its runner is not known: the PC helper is not answering (it starts with Windows; Bot-Lab\'s helper keeps the lanes\' runners).', tone: 'bad', stops: 0 };
+  const row = help.body.agents[l.id];
+  if (!plainObj(row) || !STAGES.includes(row.lane)) return { text: 'Its runner: the PC helper keeps no runner for ' + l.id + ' (helper.json "lanes" does not name it). Nothing trades in this lane until it does.', tone: 'bad', stops: 0 };
+  if (row.lane !== l.stage) return { text: 'Its runner: the PC helper runs ' + l.id + ' as the ' + row.lane + ' lane, but its group is of Type ' + l.stage + '. The sizes would follow the wrong lane: put them in step (helper.json "lanes", or the group\'s Type).', tone: 'bad', stops: 0 };
+  const n = typeof row.stops === 'number' && isFinite(row.stops) && row.stops >= 0 ? Math.floor(row.stops) : 0;
+  const last = plainObj(row.lastStop) && typeof row.lastStop.why === 'string' ? str(row.lastStop.why, 160) : '';
+  const stopped = n ? ' It stopped ' + (n === 1 ? 'once' : n + ' times') + ' this session' + (last ? ' (last: ' + last + ')' : '') + '.' : '';
+  if (row.running === true) return { text: 'Its runner runs.' + stopped, tone: n ? 'warn' : 'ok', stops: n };
+  const why = typeof row.why === 'string' && row.why ? str(row.why, 200) : 'no reason given';
+  return { text: 'Its runner is not running: ' + why + '.' + stopped, tone: 'bad', stops: n };
+}
+
 /** Does ChartBridge's own answer to Kill all say something was not stopped? (PROP 1: then the tab marks it bad.) */
 const badAnswer = text => /NOT STOPPED|FAILED|could NOT/.test(String(text || ''));
 /** "09:41:07" of a Date (the PC's own clock), for the time in front of a Kill all answer. */
 const clock = d => [d.getHours(), d.getMinutes(), d.getSeconds()].map(x => String(x).padStart(2, '0')).join(':');
 
-return Object.freeze({ readableName, rosterFamilies, FILTERS, laneLock, laneMaySend, laneFeed, PICK_MIN, STAGES, lanes, outsideAuto, armState, armMsgs, armWords, pickChoices, pickMsg, maySend, KILL_MIN, SWITCH_MIN, DAYSTOP_MIN, ROSTER_MIN, ROSTER_FORMAT, LINEUP_FORMAT, CONFIRM_MS, ARM_MS, ANSWER_WAIT_MS, ROSTER_WAIT_MS, MAX_CARDS, MAX_MEMBERS, MAX_NOT_SHOWN, MODE_NAME, atLeast, usd, signed, stageCard, rosterCards, rosterProblem,
+return Object.freeze({ laneRunner, readableName, rosterFamilies, FILTERS, laneLock, laneMaySend, laneFeed, PICK_MIN, STAGES, lanes, outsideAuto, armState, armMsgs, armWords, pickChoices, pickMsg, maySend, KILL_MIN, SWITCH_MIN, DAYSTOP_MIN, ROSTER_MIN, ROSTER_FORMAT, LINEUP_FORMAT, CONFIRM_MS, ARM_MS, ANSWER_WAIT_MS, ROSTER_WAIT_MS, MAX_CARDS, MAX_MEMBERS, MAX_NOT_SHOWN, MODE_NAME, atLeast, usd, signed, stageCard, rosterCards, rosterProblem,
   kindOf, seatsKind, dayMark, traderAccounts, statusText, traders, propAccounts, killAllState, killAllMsg, autoLine, badAnswer, clock });
 });
 
@@ -701,7 +724,7 @@ function create(o) {
   const S = { shown: false, built: false, version: '', connected: false, signedIn: false, accounts: null, groups: null, agents: new Map(),
     ask: 0, askTimer: 0, hint: '', hintBad: false, hintState: false, answer: '', answerBad: false, cidSeq: 0, pending: '', pendingAt: 0, waitTimer: 0, sent: 0,
     armAsk: 0, armTimer: 0, armSaid: '', armBad: false, modeSent: new Map(), pickSent: new Map(),
-    sub: 'setup', filter: 'all', find: '', famShut: new Set(), othersOpen: false, lanePanels: {},
+    helper: null, helperTimer: 0, helperSeq: 0, sub: 'setup', filter: 'all', find: '', famShut: new Set(), othersOpen: false, lanePanels: {},
     roster: { state: 'idle', text: '', cards: null, seq: 0, asked: 0, at: 0, version: '' }, rosterDirty: true, rosterTimer: 0, open: new Set(), drawn: {}, draws: { head: 0, roster: 0, traders: 0, accounts: 0, lanes: 0, 'lane-eval': 0, 'lane-funded': 0 } };
   const el = {};
   const agentList = () => [...S.agents.values()];
@@ -1066,6 +1089,7 @@ function create(o) {
       ${none ? '' : `<div class="fl-trow"><span class="fl-mut">${esc(l.name)}, group ${esc(l.groupName)}</span>${l.sim ? '<span class="fl-tag" data-kind="sim">Sim: no money at stake</span>' : ''}</div><div class="fl-trow">${sel}</div>${card}`}
       ${l.why ? `<p class="fl-line fl-warn fl-lanewhy">${esc(l.why)}</p>` : ''}
       ${!none && l.runnerNote && l.armable ? `<p class="fl-line fl-mutline">${esc(l.runnerNote)}</p>` : ''}
+      ${none ? '' : (r => `<p class="fl-line fl-runner" data-tone="${esc(r.tone)}">${esc(r.text)}</p>`)(C.laneRunner(l, S.helper))}
       ${none ? '' : `<div class="fl-lanepanels" data-panel="${esc(l.stage)}">${typeof o.lanePanel === 'function' ? '' : '<p class="fl-mut">The accounts of this lane show here when the page is open with its accounts part.</p>'}</div>`}
     </div>`;
   }
@@ -1177,17 +1201,32 @@ function create(o) {
     if (what === 'yes') killAll();
     else { endAsk(); hint('', false); render(); }
   }
+  /* the lanes' runners: the PC helper's GET /status, read every POLL_MS while the tab is open (o.helperStatus, a read only) */
+  const HELPER_POLL_MS = 3000;
+  function pollHelper() {
+    clearTimeout(S.helperTimer);
+    if (!S.shown || typeof o.helperStatus !== 'function') return;
+    const seq = ++S.helperSeq;
+    let p;
+    try { p = Promise.resolve(o.helperStatus()); } catch (e) { p = Promise.resolve({ reach: 'down', body: null }); }
+    p.then(r => r, () => ({ reach: 'down', body: null })).then(r => {
+      if (seq !== S.helperSeq || !S.shown) return;
+      S.helper = r && typeof r === 'object' ? { reach: r.reach, body: r.body } : { reach: 'down', body: null };
+      render();
+      S.helperTimer = setTimeout(pollHelper, HELPER_POLL_MS);
+    });
+  }
   function showTab(on) {
     on = !!on;
     if (on === S.shown) return;
     S.shown = on;
     if (tabBtn) { tabBtn.setAttribute('aria-pressed', String(on)); if (on) tabBtn.hidden = false; }
-    if (!on) { endAsk(); endArmAsk(); dropLanePanels(); S.built = false; if (view) view.innerHTML = ''; offer(); }
+    if (!on) { endAsk(); endArmAsk(); dropLanePanels(); clearTimeout(S.helperTimer); S.helperSeq++; S.built = false; if (view) view.innerHTML = ''; offer(); }
     /* Escape cancels a question wherever the focus is while the tab is open (build answers 15, section 3) */
     if (DOC) { if (on) DOC.addEventListener('keydown', onKey, true); else DOC.removeEventListener('keydown', onKey, true); }
     if (typeof o.onTab === 'function') o.onTab(on);
     render();
-    if (on) loadRoster();
+    if (on) { loadRoster(); pollHelper(); }
   }
   function onKey(e) {
     if (!e || e.key !== 'Escape' || !(S.ask || S.armAsk) || e.flSeen) return;

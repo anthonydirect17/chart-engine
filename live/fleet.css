@@ -162,3 +162,8 @@ body.fl-on .fl-wrap { padding-bottom: 120px; }
 /* the Setup and Live switch sits on its own row under the head: the head row holds the title and Kill all's buttons only, so
    Yes is never drawn where Kill all was, at any width (the review of 92, STOP 1) */
 .fl-subrow { display: flex; align-items: center; gap: 8px; }
+/* 1.48.1 (B4): a lane's runner, as the PC helper says it; the word carries the meaning, the tone only underlines it */
+.fl-runner { font-size: 12px; color: var(--ws-muted); }
+.fl-runner[data-tone="ok"] { color: var(--ws-text); }
+.fl-runner[data-tone="warn"] { color: var(--ws-gold-text); }
+.fl-runner[data-tone="bad"] { color: var(--ws-warn); }
