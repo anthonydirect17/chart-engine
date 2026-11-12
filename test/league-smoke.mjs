@@ -263,6 +263,16 @@ try {
   await p.click('#wsChartTab');
   check(await p.getAttribute('#wsChartTab', 'aria-pressed') === 'true', '1.47.0: Chart with no tab open changes nothing');
   check((await p.evaluate(() => window.__sent.length)) === 0, 'nothing here sent an order message');
+  /* (at the end: a drop disturbs what follows) */
+  if (!(await p.evaluate(() => document.body.classList.contains('lg-on')))) await p.click('#wsLeagueTab');
+  await until(() => p.evaluate(() => document.body.classList.contains('lg-on')), 'the Colosseum open for the last checks');
+  await post('/test/agent-mode', { agent: 'demo', mode: 'shadow' });
+  /* a deliberate break of 98 that no test caught at first (2026-11-12): a dropped connection forgets the traders at once */
+  await post('/test/drop');
+  const dropped = await until(() => p.evaluate(() => { const w = window.workspace.league().watch; return !w.connected ? w : null; }), 'the drop seen by the watch', 8000);
+  check(!!dropped && dropped.traders === 0 && dropped.rows.length === 0, 'a dropped connection empties the watch at once (nothing shown on an old word): ' + JSON.stringify(dropped));
+  await until(() => p.evaluate(() => window.workspace.league().watch.connected && window.workspace.league().watch.rows.join() === 'demo'), 'reconnected: the watch back', 20000);
+
 
   /* a reload with ?tab=league keeps the League tab */
   await p.goto(`http://localhost:${PORT}/live/?layout=Lg&tab=league`);
