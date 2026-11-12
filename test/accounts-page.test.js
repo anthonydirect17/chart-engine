@@ -399,7 +399,7 @@ test('ChartBridge 0.5.1: Show only when ChartBridge has it (its accounts carry c
 test('1.26.0: the Accounts tab gets Group and Limits only once ChartBridge sends groups; the page sends exactly the contract\'s messages', () => {
   const src = read('live/accounts.js'), html = read('live/index.html'), files = JSON.parse(read('nt8/install-files.json'));
   assert.match(src, /case 'groups': \{/);
-  assert.match(src, /const grpKnown = !!S\.groups, grpOn = grpKnown \|\| S\.hadGroups, canGroup = grpKnown && S\.enabled && !S\.groupsError;/);   // 1.31.0: kept while not known after groups came once
+  assert.match(src, /const grpKnown = !!S\.groups, grpOn = grpKnown \|\| S\.hadGroups, canGroup = !ROWS && grpKnown && S\.enabled && !S\.groupsError;/);   // 1.31.0: kept while not known after groups came once; 1.47.0: never in the rows-only mount (read only)
   /* 1.34.0: the Group column on the row (its name); the Group dropdown, Account type and Limits in the account's drawer (⋯) */
   assert.match(src, /\['Group', 'minmax\(0, 1fr\)'\]/);
   assert.match(src, /fld\('Group', unrole\(grp\)\) \+ fld\('Account type', unrole\(typeCell\(a\)\)\) \+ fld\('Limits', unrole\(lims\)\)/, 'the drawer: group, type and limits');
