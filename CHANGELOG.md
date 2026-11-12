@@ -94,6 +94,8 @@ accounts". The name is his: "Praetorian is good". Rule 12: this changes what the
   bot, is "the page cannot tell" too. A trader on None that still has a seat (a leftover position) is no one's: only the
   stops go, with "a leftover position on <kind>: stop and flatten it first"; Off then asks, and "Flatten and turn off"
   sends Shadow and the page's Flatten for that seat only, as for a group's seats (`live/agent-helper.js`).
+  Any trader whose seats list holds his trade goes by those seats, whatever his own account says (ChartBridge fills his
+  position from that seat without naming the account), so his own account is never flattened for a trade held elsewhere.
 - **Held back on screen, said in one line:** a trader on a prop account, a group or an account the page cannot tell shows
   all its readings; its modes, Change account, Change the rules, the helper's On and Auto-On time, and its kill switch's
   release are off, with "On Praetorian this trader can only be stopped (Kill switch, Off)" and why: "it is set up from
