@@ -1345,7 +1345,8 @@ function copilotRouter(doc) {
  * thing neither had: a gate on the connection they are handed (live/workspace.js praetorianLink), so that from Praetorian
  * nothing reaches a prop account. It hears ChartBridge's own `accounts`, `agent` and `bot` messages and answers, for each
  * message a desk would post, '' (it may go) or why not. It passes:
- *   - a kill switch turned ON (agentKill or botKill with on: true): it only stops a trader, so it is never held back;
+ *   - a kill switch turned ON (agentKill or botKill with on: true): it only stops a trader, so it is never held back; and a
+ *     trader's or the bot's Shadow (agentMode or botMode to exactly 'shadow'), a stop too (the review of 102, F2; 03:30);
  *   - the two acknowledgements (agentSeen, botSeen): they change nothing;
  *   - every other agent or bot message only when the trader (or the bot) is on your personal account, a Sim account or None,
  *     and an account change only to one of those (a league seat is a Sim account, and ChartBridge checks Sim again).
@@ -1424,6 +1425,8 @@ function prCheck(m, st) {
   /* the review of 102 (F2): Shadow is a stop too (it places nothing new): agentMode to exactly 'shadow' goes for any trader
      ChartBridge has described, so "Flatten and turn off" works on a prop trader. Nothing else for one. */
   if (t === 'agentMode' && m.mode === 'shadow' && s.agents instanceof Map && typeof m.agent === 'string' && s.agents.has(m.agent)) return '';
+  /* the coordinator, 03:30: the bot's Shadow is a stop too, with the same exact check, once ChartBridge has described the bot */
+  if (t === 'botMode' && m.mode === 'shadow' && plainObj(s.bot)) return '';
   if (PR_ACKS.has(t)) return '';
   if (PR_AGENT_TYPES.has(t)) {
     const a = s.agents instanceof Map && typeof m.agent === 'string' ? s.agents.get(m.agent) || null : null;

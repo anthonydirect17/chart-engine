@@ -121,9 +121,10 @@ test('the link the page and both pop-out windows hand the desks (AgentCore.praet
   assert.equal(link.post({ type: 'agentMode', agent: 'prop', mode: 'auto' }), false, 'a prop trader: refused before the feed');
   assert.equal(link.post({ type: 'agentMode', agent: 'prop', mode: 'shadow' }), true, 'Shadow, a stop, goes for a prop trader (F2)');
   assert.equal(link.post({ type: 'agentKill', agent: 'prop', on: true }), true, 'its kill switch on goes');
-  assert.equal(link.post({ type: 'botMode', mode: 'shadow' }), false, 'the bot on a prop account: only its kill switch (the bot\'s Shadow was not ruled a stop)');
+  assert.equal(link.post({ type: 'botMode', mode: 'shadow' }), true, 'the bot on a prop account: its Shadow, a stop (03:30)');
+  assert.equal(link.post({ type: 'botMode', mode: 'auto' }), false, 'nothing else for it');
   assert.equal(link.post({ type: 'order', root: 'MNQ' }), false, 'nothing else, by name');
-  assert.deepEqual(posted.map(x => x.type + ':' + (x.agent || '') + ':' + (x.mode || '')), ['agentMode:mine:auto', 'agentMode:prop:shadow', 'agentKill:prop:']);
+  assert.deepEqual(posted.map(x => x.type + ':' + (x.agent || '') + ':' + (x.mode || '')), ['agentMode:mine:auto', 'agentMode:prop:shadow', 'agentKill:prop:', 'botMode::shadow']);
   assert.match(link.why({ type: 'agentMode', agent: 'prop', mode: 'auto' }), /PROP-1 is a prop account/);
   assert.equal(link.traderWhy('mine'), ''); assert.match(link.traderWhy('prop'), /prop account/); assert.match(link.botWhy(), /The bot: PROP-1/);
   assert.equal(link.accountOk('MINE-1'), true); assert.equal(link.accountOk('SIM-A'), true); assert.equal(link.accountOk('PROP-1'), false);
@@ -200,4 +201,14 @@ test('deliberate breaks of the gate, each one a test missed at first (2026-11-12
   }
   assert.equal(p.check({ type: 'agentAccount', agent: 'demo', account: null, keepMode: 'shadow' }), '', 'None is account: null, exactly');
   assert.equal(p.check({ type: 'botAccount', account: null }), '');
+});
+
+
+test('the bot\'s Shadow is a stop (the coordinator, 03:30): exactly \'shadow\', for a described bot, on any account', () => {
+  for (const acct of ['PROP-1', 'LIVE-X', 'GONE-9', 'MINE-1', null]) {
+    const g = gateWith(accounts(), { type: 'bot', account: acct, mode: 'auto' });
+    assert.equal(g.check({ type: 'botMode', mode: 'shadow' }), '', String(acct));
+    for (const mode of ['Shadow', 'SHADOW', ' shadow', 'shadow ', 'copilot', 'auto', '', null, undefined]) if (!['MINE-1', null].includes(acct)) assert.notEqual(g.check({ type: 'botMode', mode }), '', acct + ' ' + JSON.stringify(mode));
+  }
+  assert.match(gateWith(accounts()).check({ type: 'botMode', mode: 'shadow' }), /has not described the bot yet/, 'only once ChartBridge has described the bot');
 });
