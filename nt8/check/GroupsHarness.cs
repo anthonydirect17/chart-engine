@@ -761,6 +761,8 @@ public static class GroupsHarness
         ChartBridgeGroups.Numbers pn = ChartBridgeGroups.Read("SIM-B", simB, false);
         Check(pn.Realized == -400 && pn.ProfitPnl == -150 && pn.ProfitWhy == null,
               "0.6.19 (the review of 88, F6): for a PROFIT stop the larger of the two (-100), plus open (-50): " + pn.ProfitPnl + "; the loss side keeps the smaller: " + pn.Realized);
+        Check(st.Contains("\"pnlToday\":-450,") && st.Contains("\"profitToday\":-150,\"profitWhy\":null"),
+              "0.6.21: accountState carries the profit side (-150) beside the loss side (-450), never the same number after a late start: " + st);
         simB.Items[AccountItem.RealizedProfitLoss] = double.NaN;
         pn = ChartBridgeGroups.Read("SIM-B", simB, false);
         Check(!pn.ProfitPnl.HasValue && (pn.ProfitWhy ?? "").Contains("started mid-session"), "F6: no NinjaTrader realized after a late start: the profit side is not known, with why: " + pn.ProfitWhy);
