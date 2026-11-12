@@ -667,11 +667,11 @@ try {
   check(seats.rows.join(',') === 'SIM-F1,SIM-F2' && seats.total && seats.out === 'Not in this trade: SIM-F2 is not connected' && seats.account === 'Group Lucid: SIM-F1, SIM-F2',
     'a group: His account names it and shows a row per seat, why one sat out, and the group total: ' + JSON.stringify(seats));
   await page.screenshot({ path: path.join(SHOTS, 'agent-group.png') });
-  /* 1.48.0 Praetorian: a trader on a group (the prop business, run from Legion) is shown whole and can only be stopped here;
+  /* 1.48.0 Praetorian: a trader on a group (the prop business, set up from Legion's trader desk) is shown whole and can only be stopped here;
      the picker's order (None, the groups, single accounts) is test/agent.test.js's, and the Agent window (Pop out) keeps it */
   const held = await page.evaluate(() => ({ why: document.querySelector('#agView [data-k="prWhy"]').textContent, acct: document.querySelector('#agView [data-k="acctOpen"]').disabled,
     rules: document.querySelector('#agView [data-k="rulesOpen"]').disabled, modes: [...document.querySelectorAll('#agView [data-k="modes"] button')].every(b => b.disabled), kill: document.querySelector('#agView [data-k="kill"]').disabled }));
-  check(/trades a group: groups are the prop business, it is run from Legion/.test(held.why) && held.acct && held.rules && held.modes && !held.kill,
+  check(/trades a group: groups are the prop business, it is set up from Legion's trader desk/.test(held.why) && held.acct && held.rules && held.modes && !held.kill,
     '1.48.0 Praetorian: a trader on a group is held back (account, rules, modes off; Kill switch on): ' + JSON.stringify(held));
   await control('agent-group', { agent: 'demo', on: '0' });
   await page.close();

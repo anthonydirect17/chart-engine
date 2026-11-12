@@ -78,20 +78,28 @@ accounts". The name is his: "Praetorian is good". Rule 12: this changes what the
   (test/agent-l5-smoke.mjs). Every rule and safety of both desks is the same code:
   Auto's and a release's second click, the LIVE question, Accept sending only the proposal's id, tighten-only rails, R3.
 - **The gate** (`AgentCore.praetorianGate`, `live/agent-core.js`): both desks are handed a connection that posts only what
-  the gate passes, built in `live/workspace.js` (`praetorianLink`, frozen, no send or sendOrder). A kill switch ON always
-  goes (it only stops a trader); the two acknowledgements go; any other agent or bot message goes only for a trader (or
+  the gate passes, built in one place (`AgentCore.praetorianLink`, frozen, no send or sendOrder) for the page and for both
+  pop-out windows (`agent.html`, `bot.html`, which are Praetorian too). A kill switch ON always goes (it only stops a
+  trader), and so does a trader's Shadow (`agentMode` to exactly `shadow`: it places nothing new, so "Flatten and turn
+  off" works on a prop trader); the two acknowledgements go; any other agent or bot message goes only for a trader (or
   the bot) on your personal account (ChartBridge 0.6.16's own flag, read by `FleetCore.kindOf`), a Sim account or None,
-  and an account change only to one of those. Refused by name: a group (the prop business, run from Legion), a prop
+  and an account change only to one of those. Refused by name: a group (the prop business), a prop
   account, a live account the page cannot tell, a trader ChartBridge has not described yet, and every other message type.
   The gate hears ChartBridge before the desks and forgets everything when the connection drops.
 - **Held back on screen, said in one line:** a trader on a prop account, a group or an account the page cannot tell shows
   all its readings; its modes, Change account, Change the rules, the helper's On and Auto-On time, and its kill switch's
-  release are off, with "On Praetorian this trader can only be stopped (Kill switch, Off)" and why. The bot the same.
-  The board's Assign hero is not on Praetorian (groups are the prop business); the Agent window (Pop out) keeps it.
+  release are off, with "On Praetorian this trader can only be stopped (Kill switch, Off)" and why: "it is set up from
+  Legion's trader desk (being built)". Its Kill switch ON, Off and "Flatten and turn off" stay. The bot the same. The
+  board's Assign hero and a group's Clear stand-down are held back (groups are the prop business). The helper's On, its
+  Auto-On time and the board's Start (calls to the PC helper, not ChartBridge messages) are guarded in the desk, and Start
+  and Assign check again right before the helper's On, after the wait for Shadow.
 - **The pickers** (`AgentCore.prChoices`, `prBotChoices`): your personal account, Sim and None offered; a prop account or
   one the page cannot tell listed with "not on Praetorian"; a group never offered. Never a choice the desk did not offer.
 - **Said as it is:** a message the gate refuses is never reported as "not signed in": each desk shows the gate's reason.
-- **Unchanged:** the pop-out windows (`agent.html`, `bot.html`) keep the page's feed as before; `?tab=agent` and `?tab=bot`
+- **Where the prop controls go:** a prop trader's release, rules, account and Copilot answers, Assign hero, Clear
+  stand-down and the bot on a prop account are set up from Legion's trader desk (the next pull request: these same desks
+  behind the gate turned round). Until it is in, they are not on the page; nobody has prop accounts on it today.
+- **Unchanged:** `?tab=agent` and `?tab=bot`
   open Praetorian on that side, `?tab=praetorian` on the side used last; the hotkey note names Praetorian, and Accept
   still answers only under the tab that shows its proposal.
 - **To confirm with Anthony:** Sim accounts are offered on Praetorian (they never reach a prop account, and the Agent and

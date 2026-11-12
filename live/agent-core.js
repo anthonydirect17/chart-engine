@@ -1364,7 +1364,7 @@ const fleetCore = () => {
 const PR_AGENT_TYPES = new Set(['agentMode', 'agentKill', 'agentRules', 'agentAnswer', 'agentAccount', 'agentSeen']);
 const PR_BOT_TYPES = new Set(['botMode', 'botKill', 'botRails', 'botAnswer', 'botAccount', 'botSeen']);
 const PR_ACKS = new Set(['agentSeen', 'botSeen']);
-const PR_WHERE = 'it is run from Legion';
+const PR_WHERE = 'it is set up from Legion\'s trader desk (being built); from here you can only stop it';   // the review of 102 (F5): the words say the truth until Legion's trader desk is in
 
 /** Whether Praetorian may reach the account `name`: your personal account (ChartBridge's own flag, with a pick made) or a Sim
  *  account (ChartBridge's sim flag). Not known is no. */
@@ -1421,6 +1421,9 @@ function prCheck(m, st) {
   if (!plainObj(m) || typeof m.type !== 'string') return 'Not a message.';
   const t = m.type;
   if ((t === 'agentKill' || t === 'botKill') && m.on === true) return '';
+  /* the review of 102 (F2): Shadow is a stop too (it places nothing new): agentMode to exactly 'shadow' goes for any trader
+     ChartBridge has described, so "Flatten and turn off" works on a prop trader. Nothing else for one. */
+  if (t === 'agentMode' && m.mode === 'shadow' && s.agents instanceof Map && typeof m.agent === 'string' && s.agents.has(m.agent)) return '';
   if (PR_ACKS.has(t)) return '';
   if (PR_AGENT_TYPES.has(t)) {
     const a = s.agents instanceof Map && typeof m.agent === 'string' ? s.agents.get(m.agent) || null : null;
@@ -1451,6 +1454,7 @@ function prCheck(m, st) {
 function prChoices(list, ok) {
   return (Array.isArray(list) ? list : []).map(c => {
     if (!c || c.kind === 'none') return c;
+    if (!c.ok && !c.current) return c;   // not offered by the desk already: its own reason stands (a league seat on a LIVE account, a taken account)
     if (c.kind === 'group') return Object.assign({}, c, { ok: false, text: c.label + (c.current ? ', now' : '') + ', not on Praetorian: groups are the prop business, ' + PR_WHERE });
     if (typeof ok === 'function' && ok(c.name) === true) return c;
     return Object.assign({}, c, { ok: false, text: (c.kind === 'league' ? 'League seat: ' : '') + c.name + (c.mark ? ' (' + c.mark + ')' : '') + (c.current ? ', now' : '') + ', not on Praetorian: a prop account or one the page cannot tell' });
@@ -1459,6 +1463,21 @@ function prChoices(list, ok) {
 /** The bot's picker on Praetorian (BotCore.accountChoices' list): the same rule, for the bot slot. */
 function prBotChoices(list, ok) {
   return (Array.isArray(list) ? list : []).map(c => (!c || (typeof ok === 'function' && ok(c.name) === true) ? c : Object.assign({}, c, { tradable: false, praetorian: 'not on Praetorian: a prop account or one the page cannot tell' })));
+}
+/**
+ * The connection a desk is handed on Praetorian, built in ONE place for the page (live/workspace.js) and both pop-out windows
+ * (live/agent.html, live/bot.html; the review of 102, F1): a gate hears `feed` first (it is added to the feed's listeners
+ * before the desk exists), and the frozen object posts only what the gate passes. It has no send and no sendOrder. onHear(m)
+ * (optional) is told of each message and of a drop (null). Null with no feed: the desk then gets no connection (careful).
+ */
+function praetorianLink(feed, onHear) {
+  if (!feed || typeof feed.listen !== 'function' || typeof feed.post !== 'function') return null;
+  const gate = praetorianGate();
+  const told = m => { if (typeof onHear === 'function') { try { onHear(m); } catch (e) { /* the page's own redraw */ } } };
+  feed.listen({ message: m => { gate.hear(m); told(m); }, closed: () => { gate.lost(); told(null); } });
+  return Object.freeze({ personal: true, listen: part => feed.listen(part), post: m => gate.check(m) === '' && feed.post(m) === true,
+    limit: name => (typeof feed.limit === 'function' ? feed.limit(name) : null), why: m => gate.check(m), traderWhy: id => gate.traderWhy(id),
+    botWhy: () => gate.botWhy(), accountOk: name => gate.accountOk(name), named: () => gate.state().personalNamed });
 }
 /**
  * The gate the two desks' connection goes through: hear(m) every message ChartBridge sends, lost() when the connection drops
@@ -1496,6 +1515,6 @@ return {
   createCopilotRouter, copilotRouter, KEY_LOCK_MS, KEY_MIN_SHOWN_MS, KEY_SAY,
   boardRows, boardRoom, boardPosition, rWords, leagueChoices, standDownClearMsg, sdWhen,
   LIGHT, STEPS, PANELS, LIGHT_HOLD, LAP_MS, lightEvents, lightState, stepLines, ageText, entryRisk, tradesR, heatNow, rowTone, decisionRecord, sessionTrail, roomLines, MOTION_KEY, motionPref, setMotionPref,
-  prChoices, prBotChoices, PR_AGENT_TYPES, PR_BOT_TYPES, prIsPersonal, prNotPersonalWhy, prTraderWhy, prBotWhy, prCheck, praetorianGate
+  prChoices, prBotChoices, praetorianLink, PR_AGENT_TYPES, PR_BOT_TYPES, prIsPersonal, prNotPersonalWhy, prTraderWhy, prBotWhy, prCheck, praetorianGate
 };
 });

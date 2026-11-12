@@ -1,6 +1,6 @@
 // Praetorian (chart 1.48.0; Anthony 2026-11-11: the Agent and Bot tabs as one tab, "focused on the personal (not prop
 // business) accounts") in a browser: the real Agent desk (live/agent.js) and Bot desk (live/bot.js), each handed the very
-// connection live/workspace.js builds for them (its praetorianLink expression, read from the file and run here) over a
+// connection the page and both pop-out windows build for them (AgentCore.praetorianLink) over a
 // stand-in for the window's feed. Made-up messages only: MINE-1 is the personal account, PROP-1 a prop account, SIM-A Sim.
 //   npm run smoke:praetorian      (CHROMIUM_PATH=/path/to/chrome; SHOTS=dir)
 // Checks: a trader on a prop account shows why it is held back, its mode, account and rules controls are off and its kill
@@ -20,10 +20,8 @@ const errors = [];
 let checks = 0;
 const check = (ok, m) => { checks++; if (!ok) { errors.push(m); console.error('  FAIL ' + m); } else console.log('  ok   ' + m); };
 
-const ws = fs.readFileSync(path.join(root, 'live', 'workspace.js'), 'utf8');
-const linkExpr = /const praetorianLink = (praetorianGate \? Object\.freeze\(\{[\s\S]*?\}\) : null);/.exec(ws)[1];
 const css = ['workspace.css', 'bot.css', 'agent.css'].map(f => `<link rel="stylesheet" href="${pathToFileURL(path.join(root, 'live', f))}">`).join('');
-const js = ['bot-core.js', 'agent-core.js', 'fleet.js', 'motion.js', 'agent-grid.js', 'bot.js', 'agent.js'].map(f => `<script src="${pathToFileURL(path.join(root, 'live', f))}"></script>`).join('\n');
+const js = ['bot-core.js', 'agent-core.js', 'fleet.js', 'motion.js', 'agent-helper.js', 'agent-grid.js', 'bot.js', 'agent.js'].map(f => `<script src="${pathToFileURL(path.join(root, 'live', f))}"></script>`).join('\n');
 const html = `<!doctype html><html lang="en"><head><meta charset="utf-8">${css}
 <style>html,body{height:100%;margin:0}body{display:flex;flex-direction:column}</style></head>
 <body><div class="ws-top"><span>SAMPLE DATA: made-up accounts and traders</span>
@@ -34,13 +32,24 @@ const html = `<!doctype html><html lang="en"><head><meta charset="utf-8">${css}
 ${js}
 <script>
   window.posted = []; window.subs = [];
+  /* a stand-in PC helper (made up, as test/fake-helper.mjs answers): GET /status, POST /on, /off, /settings, each call kept */
+  window.helperCalls = []; window.flattened = [];
+  window.helperState = { demo: { on: false, running: false, why: 'off', build: 'sample-build-1', runningBuild: null, hero: null, since: null, autoOn: '', cap: null, lastExit: null, spend: { session: 0, overall: 0, date: '2026-11-12' } } };
+  const realFetch = window.fetch;
+  window.fetch = (u, o) => {
+    const url = String(u), at = url.indexOf(':8767/'), m = at > 0 && (url.startsWith('http://localhost') || url.startsWith('http://127.0.0.1')) ? [null, null, '/' + url.slice(at + 6).split(/[?#]/)[0]] : null;
+    if (!m) return realFetch(u, o);
+    const route = ((o && o.method) || 'GET') + ' ' + m[2];
+    window.helperCalls.push(route);
+    const body = route === 'GET /status' ? { v: 1, agents: window.helperState, builds: [{ build: 'sample-build-1', stamp: 'aaaaaaaaaaaa', hero: 'Demo', here: true, shadowOk: true, trades: 40, meanR: 0.2, dollars: 900, frozenAt: '2026-10-05' }],
+      buildsNote: null, bar: { min_trades: null, min_mean_r: null }, barSet: false, session: '2026-11-12' } : { ok: true };
+    return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) });
+  };
   const AF = { listen: h => { window.subs.push(h); return () => {}; }, post: m => { window.posted.push(m); return true; }, send: m => { window.posted.push(['send', m]); return true; }, sendOrder: m => { window.posted.push(['order', m]); return true; }, limit: () => null };
-  const praetorianGate = window.AgentCore.praetorianGate();
-  AF.listen({ message: m => praetorianGate.hear(m), closed: () => praetorianGate.lost() });
-  window.link = ${linkExpr};
+  window.link = window.AgentCore.praetorianLink(AF);   // the one builder the page and both pop-out windows use (the review of 102, F1)
   window.feed = m => { for (const h of window.subs) h.message(m); };
   const mem = new Map(), storage = { getItem: k => (mem.has(k) ? mem.get(k) : null), setItem: (k, v) => mem.set(k, String(v)), removeItem: k => mem.delete(k) };
-  window.agentDesk = window.AgentDesk.create({ v3: window.link, storage, els: { tab: document.getElementById('wsAgentTab'), view: document.getElementById('agView') },
+  window.agentDesk = window.AgentDesk.create({ v3: window.link, storage, flatten: (account, root) => { window.flattened.push(account + ' ' + root); return true; }, els: { tab: document.getElementById('wsAgentTab'), view: document.getElementById('agView') },
     onTab: on => document.body.classList.toggle('ag-on', on) });
   window.botDesk = window.BotDesk.create({ v3: window.link, storage, els: { tab: document.getElementById('wsBotTab'), view: document.getElementById('btView') },
     onTab: on => document.body.classList.toggle('bt-on', on) });
@@ -77,7 +86,7 @@ try {
 
   /* a trader on a prop account */
   const prWhy = await page.locator('#agView [data-k="prWhy"]').innerText().catch(() => '');
-  check(/can only be stopped/.test(prWhy) && /PROP-1 is a prop account: it is run from Legion/.test(prWhy), 'a prop trader: the desk says why it is held back: ' + prWhy);
+  check(/can only be stopped/.test(prWhy) && /PROP-1 is a prop account: it is set up from Legion's trader desk/.test(prWhy), 'a prop trader: the desk says why it is held back: ' + prWhy);
   const dis = await page.evaluate(() => ({ modes: [...document.querySelectorAll('#agView [data-k="modes"] button')].map(b => b.disabled), acct: document.querySelector('#agView [data-k="acctOpen"]').disabled, rules: document.querySelector('#agView [data-k="rulesOpen"]').disabled, kill: document.querySelector('#agView [data-k="kill"]').disabled }));
   check(dis.modes.length === 3 && dis.modes.every(Boolean) && dis.acct && dis.rules && !dis.kill, 'a prop trader: Shadow, Copilot, Auto, Change account and Change the rules off; the Kill switch on: ' + JSON.stringify(dis));
   await page.screenshot({ path: path.join(SHOTS, 'praetorian-agent-prop.png') });
@@ -139,6 +148,60 @@ try {
   if (yes) { await yes.click(); await sleep(200); }
   check(!(await posted()).some(x => /^agentAccount/.test(x)), 'the break: PROP-1 forced into the picker and Set (and the LIVE question\'s Yes) sends nothing');
 
+  /* the review of 102: the PC helper's calls (not ChartBridge messages, so the desk guards them itself) and the stops */
+  console.log('the review of 102: F2, F3, F4, F6, F7');
+  await page.evaluate(() => { window.agentDesk.showTab(false); window.agentDesk.showTab(true); });
+  await feed(agent({ account: 'PROP-1', mode: 'shadow', killed: false }));
+  await page.waitForFunction(() => window.helperCalls.includes('GET /status') && !!document.querySelector('#agView [data-k="hPick"] option[value="sample-build-1"]'), null, { timeout: 8000 }).catch(() => {});
+  await sleep(300);
+  const onBtn = '#agView [data-k="hBtns"] [data-onoff="on"]';
+  check(await page.evaluate(s => { const b = document.querySelector(s); return !!b && b.disabled; }, onBtn), 'F7: a prop trader: the helper\'s On is held back (disabled)');
+  /* F4: the On forced on and clicked: helperOn's own guard refuses it, no POST /on */
+  await page.evaluate(s => { const b = document.querySelector(s); b.disabled = false; b.click(); }, onBtn);
+  await sleep(400);
+  check(!(await page.evaluate(() => window.helperCalls.includes('POST /on'))), 'F4: On forced on a prop trader: no POST /on reaches the helper');
+  check(/Not started from Praetorian: Demo Agent: PROP-1 is a prop account/.test(await page.$eval('#agView [data-k="hWhy"]', e => e.textContent)), 'F4: and the desk says why');
+  /* the Auto-On time forced: no POST /settings */
+  await page.evaluate(() => { const h = document.querySelector('#agView [data-k="hAuto"]'); if (h) h.value = '09:30'; const b = document.querySelector('#agView [data-act="hSave"]'); b.disabled = false; b.click(); });
+  await sleep(300);
+  check(!(await page.evaluate(() => window.helperCalls.includes('POST /settings'))), 'F4: an Auto-On time forced on a prop trader: no POST /settings');
+  /* F2: a prop trader in Auto holding 1 MNQ, his program on: Off asks, "Flatten and turn off" sends Shadow, then the flatten */
+  await page.evaluate(() => { Object.assign(window.helperState.demo, { on: true, running: true, why: 'on', runningBuild: 'sample-build-1' }); });
+  await feed(agent({ account: 'PROP-1', mode: 'auto', position: { root: 'MNQ', qty: 1, avg: 25000 } }));
+  await sleep(3600);   // the helper's next poll
+  await clear();
+  await page.evaluate(() => { const b = document.querySelector('#agView [data-k="hBtns"] [data-onoff="off"]'); b.disabled = false; b.click(); });
+  await page.waitForSelector('#agView [data-act="hFlatOff"]', { state: 'visible', timeout: 5000 }).catch(() => {});
+  await page.click('#agView [data-act="hFlatOff"]').catch(() => {});
+  await sleep(300);
+  check(JSON.stringify(await posted()) === JSON.stringify(['agentMode:demo:shadow']), 'F2: "Flatten and turn off" on a prop trader in Auto sends Shadow (a stop) through the gate: ' + JSON.stringify(await posted()));
+  await feed(agent({ account: 'PROP-1', mode: 'shadow', position: { root: 'MNQ', qty: 1, avg: 25000 } }));
+  await page.waitForFunction(() => window.flattened.length > 0, null, { timeout: 5000 }).catch(() => {});
+  check(JSON.stringify(await page.evaluate(() => window.flattened)) === JSON.stringify(['PROP-1 MNQ']), 'F2: then the flatten of PROP-1 MNQ: ' + JSON.stringify(await page.evaluate(() => window.flattened)));
+  await feed(agent({ account: 'PROP-1', mode: 'shadow' }));
+  await page.waitForFunction(() => window.helperCalls.includes('POST /off'), null, { timeout: 5000 }).catch(() => {});
+  check(await page.evaluate(() => window.helperCalls.includes('POST /off')), 'F2: then Off (POST /off) once he is flat');
+  check(!(await posted()).some(x => /^agentMode:demo:(auto|copilot)/.test(x)), 'F2: nothing but Shadow was sent for him');
+  /* F3: Start in Shadow on the board: on the personal account in Auto; moved to PROP-1 while the desk waits for Shadow: no POST /on */
+  await page.evaluate(() => { Object.assign(window.helperState.demo, { on: false, running: false, why: 'off', runningBuild: null }); window.helperCalls.length = 0; });
+  await feed(agent({ account: 'MINE-1', mode: 'auto', connected: false }));   // Off: the board offers Start in Shadow
+  await sleep(3600);
+  await page.click('#agView [data-act="board"]');
+  await page.waitForSelector('#agView [data-act="bStart"][data-agent="demo"]', { state: 'visible', timeout: 8000 }).catch(() => {});
+  await clear();
+  await page.click('#agView [data-act="bStart"][data-agent="demo"]').catch(() => {});
+  await sleep(300);
+  check(JSON.stringify(await posted()) === JSON.stringify(['agentMode:demo:shadow']), 'F3: Start in Shadow sends Shadow first: ' + JSON.stringify(await posted()));
+  await feed(agent({ account: 'PROP-1', mode: 'shadow', connected: false }));   // another page moved him to a prop account; ChartBridge says Shadow
+  await sleep(1800);
+  check(!(await page.evaluate(() => window.helperCalls.includes('POST /on'))), 'F3: moved to PROP-1 during the wait: no POST /on (checked again before the start)');
+  check(/Nothing was started from Praetorian: Demo Agent: PROP-1 is a prop account/.test(await page.$eval('#agView [data-k="bLine"]', e => e.textContent)), 'F3: and the board says why');
+  /* F6: a group's Clear stand-down is held back on Praetorian, with the reason */
+  const sdBtn = await page.evaluate(() => { const b = document.querySelector('#agView [data-act="bSdClear"]'); return b ? { d: b.disabled, t: b.title } : null; });
+  if (sdBtn) check(sdBtn.d && /Not on Praetorian/.test(sdBtn.t), 'F6: Clear stand-down held back with the reason: ' + JSON.stringify(sdBtn));
+  else console.log('  (no stand-down row in this sample: F6 is checked by the source test)');
+  await page.click('#agView [data-act="boardClose"]').catch(() => {});
+
   /* the Bot desk: the bot on a prop account */
   await page.evaluate(() => { window.agentDesk.showTab(false); window.botDesk.showTab(true); });
   await feed(bot());
@@ -155,6 +218,16 @@ try {
   await page.click('#btView [data-k="kill"]');
   await sleep(200);
   check(JSON.stringify(await posted()) === JSON.stringify(['botKill:true']), 'the bot\'s Kill switch ON goes: ' + JSON.stringify(await posted()));
+  await feed(bot({ killed: true }));
+  await sleep(150);
+  check(await page.evaluate(() => document.querySelector('#btView [data-k="kill"]').disabled), 'F7: the bot killed on a prop account: its release is held back (disabled)');
+  await clear();
+  await page.evaluate(() => { const k = document.querySelector('#btView [data-k="kill"]'); k.disabled = false; k.click(); });
+  await sleep(1200);
+  await page.evaluate(() => { const k = document.querySelector('#btView [data-k="kill"]'); k.disabled = false; k.click(); });
+  await sleep(200);
+  check((await posted()).length === 0, 'the bot\'s release forced twice on a prop account sends nothing');
+  await feed(bot({ killed: false }));
   await feed(bot({ account: 'MINE-1' }));
   await sleep(150);
   check(await page.locator('#btView [data-k="prWhy"]').isHidden() && !(await page.evaluate(() => document.querySelector('#btView [data-k="acctOpen"]').disabled)), 'the bot on the personal account: whole again');

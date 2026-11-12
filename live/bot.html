@@ -35,6 +35,9 @@
 <!-- the window's v3 connection (the Account page's createFeed; no Account page here) -->
 <script src="accounts.js"></script>
 <script src="bot-core.js"></script>
+<!-- 1.48.0 (the review of 102, F1): Praetorian's gate (AgentCore.praetorianLink) and the account flags it reads (FleetCore) -->
+<script src="agent-core.js"></script>
+<script src="fleet.js"></script>
 <script src="bot.js"></script>
 <script>
 (function () {
@@ -53,7 +56,9 @@
     const hub = window.ChartFeed.create({ wsUrl });
     /* this window's one v3 connection: it connects at once and ChartBridge's hello decides (an older one: nothing more) */
     const v3 = window.AccountsPage.createFeed({ wsUrl, pin: PIN, framed, desk: false, fetch: (u, o) => fetch(u, o), note: () => {}, changed: () => {} });
-    window.botDesk = window.BotDesk.create({ popout: true, v3, headers: () => (PIN ? PIN.headers() : {}), feed: hub, storage: store, els: { view: document.getElementById('btView') } });
+    /* 1.48.0 (the review of 102, F1): this window is Praetorian too: the desk gets the same gated link as on the page */
+    const link = window.AgentCore && typeof window.AgentCore.praetorianLink === 'function' ? window.AgentCore.praetorianLink(v3) : null;
+    window.botDesk = window.BotDesk.create({ popout: true, v3: link, headers: () => (PIN ? PIN.headers() : {}), feed: hub, storage: store, els: { view: document.getElementById('btView') } });
     window.botDesk.showTab(true);
     v3.startAny();
   };

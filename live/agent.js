@@ -940,7 +940,8 @@ function create(o) {
     if (st.action === 'off') { helperOff(a.agent); return; }
     H.job = st.job; H.flatSent = false;
     if (st.action === 'shadow') {
-      if (!sendAgent(AC.modeMsg(a.agent, 'shadow'), 'mode')) { H.job = null; H.lines[a.agent] = 'Shadow could not be sent (not signed in to ChartBridge): nothing was flattened and he stays on.'; renderPanel(); return; }
+      const sm = AC.modeMsg(a.agent, 'shadow'), no = refusal(sm);   // 1.48.0 (the review of 102, F2): the gate's own words, never "not signed in"
+      if (!sendAgent(sm, 'mode')) { H.job = null; H.lines[a.agent] = no ? no + ' Nothing was flattened and he stays on.' : 'Shadow could not be sent (not signed in to ChartBridge): nothing was flattened and he stays on.'; renderPanel(); return; }
     } else jobFlatten(st.job);                       // in Shadow already: the Flatten at once
     if (H.job) { jobStep(); flatLoop(); } else renderPanel();
   }
@@ -1009,7 +1010,7 @@ function create(o) {
     const sdHtml = (s, who) => '<div class="ag-brow ag-bsd" role="listitem" data-brow="standdown" data-build="' + esc(s.build) + '" data-gid="' + esc(s.group) + '">' +
       '<span class="ag-bsdtag">Stood down</span><div class="ag-bsdtext"><span class="ag-bsdwhat">' + esc((who || 'Build ' + s.build) + ' on ' + s.name) + '</span>' + (who ? '<span class="ag-bsub mono">build ' + esc(s.build) + '</span>' : '') +
       '<span class="ag-bsdwhy">' + esc(s.kind + ': ' + s.why) + '</span><span class="ag-bsub">' + esc((s.when ? 'Since ' + s.when + '. ' : '') + 'No new trades from this hero on ' + s.name + ' until you clear it; exits, stops and targets always work.') + '</span></div>' +
-      '<button type="button" class="ag-btn ag-bsdclear" data-act="bSdClear" data-build="' + esc(s.build) + '" data-gid="' + esc(s.group) + '"' + (!can ? ' disabled' : '') + ' title="Clear it: new trades from this hero on ' + esc(s.name) + ' may go again (a later re-rating may stand him down again)">Clear stand-down</button></div>';
+      '<button type="button" class="ag-btn ag-bsdclear" data-act="bSdClear" data-build="' + esc(s.build) + '" data-gid="' + esc(s.group) + '"' + (!can || praetorian ? ' disabled' : '') + ' title="' + (praetorian ? 'Not on Praetorian: a stand-down is on a group, the prop business, set up from Legion\'s trader desk (being built)' : 'Clear it: new trades from this hero on ' + esc(s.name) + ' may go again (a later re-rating may stand him down again)') + '">Clear stand-down</button></div>';
     const pickHtml = g => {
       const rows = assignRows(g);
       return '<div class="ag-bpick"><select class="ag-sel" data-k="bPickSel" aria-label="The hero for ' + esc(g.name) + '">' + rows.map(r => '<option value="' + esc(r.build) + '">' + esc(r.label) + '</option>').join('') + '</select>' +
@@ -1020,7 +1021,7 @@ function create(o) {
       '<div class="ag-bcell"><span class="ag-bwhere">' + esc(g.name) + '</span><span class="ag-bsub">' + esc(g.members.length + (g.members.length === 1 ? ' account' : ' accounts') + (g.members.length ? ': ' + g.members.join(', ') : '')) + ' · ' + (g.accountType === 'eval' ? 'Evals' : g.accountType === 'funded' ? 'Funded' : 'type not set') + '</span></div>' +
       '<div class="ag-bcell ag-bspan">' + (B.pick && B.pick.gid === g.id ? pickHtml(g) : B.ask && B.ask.gid === g.id ? '<div class="ag-ask" role="alertdialog" aria-label="Trade a LIVE account"><span>' + esc(B.ask.text) + '</span><button type="button" class="ag-btn ag-live-go" data-act="bYes">Continue</button><button type="button" class="ag-btn" data-act="bCancel">Cancel</button></div>'
         : '<span class="ag-bsub">Pick a hero for this group, or leave it to you and the ticket. Default hero: ' + esc(g.hero ? (g.heroName ? g.heroName + ' (' + g.hero + ')' : g.hero) : 'none (Settings, Account groups)') + '.</span>') + '</div>' +
-      '<div class="ag-bcell ag-bctl"><button type="button" class="ag-btn ag-bassign" data-act="bAssign" data-gid="' + esc(g.id) + '"' + (!can || B.job || praetorian ? ' disabled' : '') + (praetorian ? ' title="Not on Praetorian: a group is the prop business, run from Legion. The Agent window (Pop out) still assigns."' : '') + '>Assign hero</button></div></div>';
+      '<div class="ag-bcell ag-bctl"><button type="button" class="ag-btn ag-bassign" data-act="bAssign" data-gid="' + esc(g.id) + '"' + (!can || B.job || praetorian ? ' disabled' : '') + (praetorian ? ' title="Not on Praetorian: a group is the prop business, set up from Legion\'s trader desk (being built)."' : '') + '>Assign hero</button></div></div>';
     const sdErr = M.sdError ? '<div class="ag-brow ag-bsd" role="listitem" data-brow="sderror"><span class="ag-bsdtag">Stand-downs</span><div class="ag-bsdtext"><span class="ag-bsdwhy">' + esc(M.sdError) + '</span></div></div>' : '';
     const html = sdErr + M.heroes.map(heroHtml).join('') + M.standDowns.map(s => sdHtml(s, '')).join('') + M.noHero.map(noHeroHtml).join('') || '<p class="ag-empty">No agent is on and no group is made: turn an agent On on his desk, or make a group in Settings.</p>';
     const box = q('[data-k="bRows"]');
@@ -1115,6 +1116,7 @@ function create(o) {
     startTimer = setTimeout(startTick, 1000);
   }
   async function startOn(j) {
+    const held = heldWhy(j.agent); if (held) { B.starting = false; boardSay('Nothing was started from Praetorian: ' + held + '.'); return; }   // 1.48.0 (the review of 102, F3): checked again after the Shadow wait
     const a = agents.get(j.agent), gate = AH.onGate(a);
     if (gate) { B.starting = false; boardSay(gate); return; }
     const r = await HC.on(a.agent, j.build, a.mode, a.sim);   // the desk's own On (helperOn): his mode, Shadow here, and his sim
@@ -1124,6 +1126,7 @@ function create(o) {
     await pollHelper();
   }
   async function assignOn(j) {
+    const held = heldWhy(j.agent); if (held) { boardSay('Nothing was started from Praetorian: ' + held + '.'); return; }   // 1.48.0 (F3), as startOn
     const a = agents.get(j.agent), gate = AH.onGate(a);   // round 3: as startOn: only in Shadow, his own mode and sim
     if (gate) { boardSay('Agent ' + j.agent + ' is on ' + j.groupName + ', but ' + gate.charAt(0).toLowerCase() + gate.slice(1)); return; }
     const r = await HC.on(a.agent, j.build, a.mode, a.sim);
@@ -1550,7 +1553,7 @@ function create(o) {
       else if (k === 'killAll') killAll();
       else if (k === 'bOpen') { S.board = false; writeJson(KEYS.board, false); choose(act.dataset.agent, true); unmountChart(); render(); }
       else if (k === 'bKill') { const x = agents.get(act.dataset.agent); if (x && !x.killed) { if (sendAgent(AC.killMsg(x.agent, true), 'kill')) boardSay('Kill switch on sent for ' + AC.agentName(x) + '.'); } }
-      else if (k === 'bAssign') { if (praetorian) boardSay('Not on Praetorian: a group is the prop business, run from Legion.'); else assignPressed(act.dataset.gid); }   // 1.48.0
+      else if (k === 'bAssign') { if (praetorian) boardSay('Not on Praetorian: a group is the prop business, set up from Legion\'s trader desk (being built).'); else assignPressed(act.dataset.gid); }   // 1.48.0
       else if (k === 'bPickGo') { const sel = q('[data-k="bPickSel"]'); if (B.pick && sel) assignGo(B.pick.gid, B.pick.agent, sel.value, B.pick.killed); }
       else if (k === 'bYes') { if (B.ask && H.slow) boardSay(SLOW_SENT); else if (B.ask) { const x = B.ask; const ag = agents.get(x.agent); const why = AH.slotFree(ag || { agent: x.agent }, H.status, helperReach()); if (!ag || why) { B.ask = null; boardSay('Nothing was sent: ' + (why || 'that agent is gone') + '. Press Assign hero again.'); } else assignSend(x.gid, x.agent, x.build, x.msg, x.killed); } }   // fix round 1: the free slot asked again at Continue
       else if (k === 'bCancel') { B.pick = null; B.ask = null; boardSay('Nothing was sent.'); }

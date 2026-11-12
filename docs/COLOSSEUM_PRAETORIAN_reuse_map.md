@@ -129,7 +129,8 @@ two sections at a time; its two sides, **Agent** and **Bot**, are the two desks'
 - Each desk's own button (`#wsAgentTab`, `#wsBotTab`) is one of Praetorian's two sides (above). Praetorian is offered when
   either is.
 - `onTab` of each desk is wired as before; the Praetorian button is pressed while either is open.
-- The pop-out windows (`agent.html`, `bot.html`) are unchanged: they keep the page's feed (to confirm).
+- The pop-out windows (`agent.html`, `bot.html`) are Praetorian too: they build the same gated link
+  (`AgentCore.praetorianLink`; the review of 102, F1).
 
 ### Personal accounts only
 
@@ -158,7 +159,7 @@ never reaches a prop account, and the Agent and Bot tabs are where a trader is t
 **A trader already on a prop account:** Praetorian must not add a way to reach a prop account, and the Agent desk's
 mode, kill, rules and Accept controls act on whatever account the trader is on. So on Praetorian a trader whose
 accounts are not all personal (`FleetCore.seatsKind` of its accounts is not 'personal' and not 'none') shows its
-readings with a line "On a prop account: it is run from Legion" and its mode, rules and account controls are not
+readings with a line saying it is set up from Legion's trader desk and its mode, rules and account controls are not
 offered there. **What only stops it stays offered:** its kill switch ON, the helper's Off and "Flatten and turn off";
 taking a stop away from a screen is the less careful choice (to confirm). The same for the bot slot when its account is
 prop (its kill switch ON).
@@ -205,8 +206,8 @@ for a trader on a prop account (above).
 | Chart: market, bar size, Maximize | Praetorian, unchanged |
 | Stream filters, a row's drawer | Praetorian, unchanged |
 | Board: Kill all agents | Praetorian, unchanged (it only turns kill switches on) |
-| Board: Start in Shadow, Open, Kill, Clear stand-down | Praetorian; Open and Kill as before; Start held back for a prop trader; Clear stand-down (a group's) refused by the gate |
-| Board: Assign hero (gives a group a trader) | **Not on Praetorian** (groups are the prop business): it stays reachable from the Agent pop-out window, unchanged, until Legion takes it (to confirm) |
+| Board: Start in Shadow, Open, Kill, Clear stand-down | Praetorian; Open and Kill as before; Start held back for a prop trader (checked again before the helper's On); Clear stand-down (a group's) held back, set up from Legion's trader desk |
+| Board: Assign hero (gives a group a trader) | **Legion's trader desk** (the next pull request: these same desks behind the gate turned round); held back on Praetorian and in the pop-outs |
 
 Every reading in that list's Agent tab table (name, build, connection, mode, account, killed and stood down, position,
 P&L, R and the curve, heat, trades against limits, rules, day stop, room, seats, last plan and steps, stream, proposal,
@@ -252,3 +253,17 @@ moved into the row in `index.html`, its id and listener unchanged; nothing in `f
 3. Praetorian, its own pull request, rule 12: the tab, the switch, the two desks moved in, the personal-only option, the
    prop hold-back, the old Agent and Bot buttons leaving the top bar, tests that click each held-back control on a prop
    trader and see nothing posted.
+
+## After the review of 102 (2026-11-12): where every prop control goes
+
+The coordinator's decision (reuse first): the old desks themselves go into Legion, behind Praetorian's gate turned round
+("the trader desk for Legion": messages only for a trader or the bot on a prop account or a group, plus kill switch ON,
+Shadow and the acknowledgements for anyone). Builder 1 mounts it once in Legion Setup.
+
+| Control on the old tabs | Praetorian (personal, Sim, None) | Legion's trader desk (prop, groups) |
+|---|---|---|
+| Kill switch ON, a trader's Shadow | yes, for any trader | yes, for any trader |
+| A kill switch's release, modes, rules, account, Copilot answers | yes | yes |
+| Helper On, Auto-On time, board Start | yes | yes |
+| Assign hero, a group's Clear stand-down | no (held back, with the reason) | yes |
+| Every control of the bot | when its account is personal, Sim or None | when its account is prop |

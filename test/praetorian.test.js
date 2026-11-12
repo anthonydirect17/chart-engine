@@ -27,7 +27,7 @@ test('a trader on None: it may be given your personal account or a Sim account, 
   const g = gateWith(accounts(), agent({ account: null }));
   assert.equal(g.check({ type: 'agentMode', agent: 'demo', mode: 'auto' }), '', 'on None nothing trades');
   assert.equal(g.check({ type: 'agentAccount', agent: 'demo', account: 'MINE-1', keepMode: 'shadow' }), '');
-  assert.match(g.check({ type: 'agentAccount', agent: 'demo', account: 'PROP-1', keepMode: 'shadow' }), /PROP-1 is a prop account: it is run from Legion/);
+  assert.match(g.check({ type: 'agentAccount', agent: 'demo', account: 'PROP-1', keepMode: 'shadow' }), /PROP-1 is a prop account: it is set up from Legion's trader desk \(being built\); from here you can only stop it/);
   assert.equal(g.check({ type: 'agentAccount', agent: 'demo', account: 'SIM-A', keepMode: 'shadow' }), '', 'a Sim account (to confirm)');
   assert.equal(g.check({ type: 'agentAccount', agent: 'demo', account: 'SIM-A', league: true, keepMode: 'shadow' }), '', 'a league seat is a Sim account');
   assert.match(g.check({ type: 'agentAccount', agent: 'demo', account: 'PROP-1', league: true, keepMode: 'shadow' }), /PROP-1 is a prop account/);
@@ -38,7 +38,7 @@ test('a trader on None: it may be given your personal account or a Sim account, 
 
 test('a trader on a prop account, a group (even of Sim accounts), or an account the page cannot tell: only its kill switch ON gets through', () => {
   const cases = [
-    [agent({ account: 'PROP-1' }), /PROP-1 is a prop account: it is run from Legion/],
+    [agent({ account: 'PROP-1' }), /PROP-1 is a prop account: it is set up from Legion's trader desk \(being built\); from here you can only stop it/],
     [agent({ account: null, group: { id: 'g1', name: 'Evals' }, seats: [{ account: 'PROP-1' }, { account: 'PROP-2' }] }), /trades a group: groups are the prop business/],
     [agent({ account: null, group: { id: 'g2', name: 'Mine' }, seats: [{ account: 'MINE-1' }] }), /trades a group/],
     [agent({ account: null, group: { id: 'g3', name: 'Sims' }, seats: [{ account: 'SIM-A' }] }), /trades a group/],
@@ -47,7 +47,10 @@ test('a trader on a prop account, a group (even of Sim accounts), or an account 
   ];
   for (const [a, rx] of cases) {
     const g = gateWith(accounts(), a);
-    for (const m of AGENT_MSGS('demo')) { const why = g.check(m); assert.match(why, /^Not sent from Praetorian: /, m.type); assert.match(why, rx, m.type); }
+    for (const m of AGENT_MSGS('demo')) {
+      if (m.type === 'agentMode' && m.mode === 'shadow') { assert.equal(g.check(m), '', 'Shadow is a stop: it goes for any described trader (the review of 102, F2)'); continue; }
+      const why = g.check(m); assert.match(why, /^Not sent from Praetorian: /, m.type); assert.match(why, rx, m.type);
+    }
     assert.match(g.check({ type: 'agentAccount', agent: 'demo', account: 'MINE-1', keepMode: 'shadow' }), rx, 'not even to your personal account: the prop trader is moved from Legion');
     assert.equal(g.check({ type: 'agentKill', agent: 'demo', on: true }), '', 'the kill switch ON always goes: it only stops a trader');
     assert.equal(g.check({ type: 'agentSeen', agent: 'demo', id: 'p1' }), '', 'an acknowledgement changes nothing');
@@ -103,34 +106,45 @@ test('the bot slot: on your personal account or None, every bot message; elsewhe
   assert.match(gateWith(accounts()).check({ type: 'botMode', mode: 'auto' }), /has not described the bot yet/);
 });
 
-test('the link the workspace hands both desks: built here and run, it posts only what the gate passes', () => {
+test('the link the page and both pop-out windows hand the desks (AgentCore.praetorianLink): it posts only what the gate passes', () => {
   const fs = require('node:fs'), path = require('node:path');
-  const ws = fs.readFileSync(path.join(__dirname, '..', 'live', 'workspace.js'), 'utf8');
-  const m = /const praetorianLink = (praetorianGate \? Object\.freeze\(\{[\s\S]*?\}\) : null);/.exec(ws);
-  assert.ok(m, 'one expression');
-  const posted = [], heard = [];
-  const AF = { listen: p => { heard.push(p); return () => {}; }, post: x => { posted.push(x); return true; }, send: x => posted.push(['send', x]), sendOrder: x => posted.push(['order', x]), limit: () => ({ level: '' }) };
-  const gate = AC.praetorianGate();
-  const link = new Function('AF', 'praetorianGate', 'return ' + m[1])(AF, gate);
+  const read = f => fs.readFileSync(path.join(__dirname, '..', 'live', f), 'utf8');
+  const posted = [], subs = [], told = [];
+  const AF = { listen: p => { subs.push(p); return () => {}; }, post: x => { posted.push(x); return true; }, send: x => posted.push(['send', x]), sendOrder: x => posted.push(['order', x]), limit: () => ({ level: '' }) };
+  const link = AC.praetorianLink(AF, m => told.push(m ? m.type : null));
   assert.deepStrictEqual(Object.keys(link).sort(), ['accountOk', 'botWhy', 'limit', 'listen', 'named', 'personal', 'post', 'traderWhy', 'why'], 'no send, no sendOrder');
   assert.ok(Object.isFrozen(link));
-  for (const x of [accounts(), agent({ agent: 'mine', account: 'MINE-1' }), agent({ agent: 'prop', account: 'PROP-1' }), { type: 'bot', account: 'PROP-1', mode: 'auto' }]) gate.hear(x);
+  assert.equal(subs.length, 1, 'the gate listens as the link is made, before any desk');
+  for (const x of [accounts(), agent({ agent: 'mine', account: 'MINE-1' }), agent({ agent: 'prop', account: 'PROP-1' }), { type: 'bot', account: 'PROP-1', mode: 'auto' }]) subs[0].message(x);
+  assert.deepEqual(told, ['accounts', 'agent', 'agent', 'bot']);
   assert.equal(link.post({ type: 'agentMode', agent: 'mine', mode: 'auto' }), true);
   assert.equal(link.post({ type: 'agentMode', agent: 'prop', mode: 'auto' }), false, 'a prop trader: refused before the feed');
+  assert.equal(link.post({ type: 'agentMode', agent: 'prop', mode: 'shadow' }), true, 'Shadow, a stop, goes for a prop trader (F2)');
   assert.equal(link.post({ type: 'agentKill', agent: 'prop', on: true }), true, 'its kill switch on goes');
-  assert.equal(link.post({ type: 'botMode', mode: 'shadow' }), false, 'the bot on a prop account: only its kill switch');
+  assert.equal(link.post({ type: 'botMode', mode: 'shadow' }), false, 'the bot on a prop account: only its kill switch (the bot\'s Shadow was not ruled a stop)');
   assert.equal(link.post({ type: 'order', root: 'MNQ' }), false, 'nothing else, by name');
-  assert.deepEqual(posted.map(x => x.type + ':' + (x.agent || '')), ['agentMode:mine', 'agentKill:prop']);
+  assert.deepEqual(posted.map(x => x.type + ':' + (x.agent || '') + ':' + (x.mode || '')), ['agentMode:mine:auto', 'agentMode:prop:shadow', 'agentKill:prop:']);
   assert.match(link.why({ type: 'agentMode', agent: 'prop', mode: 'auto' }), /PROP-1 is a prop account/);
   assert.equal(link.traderWhy('mine'), ''); assert.match(link.traderWhy('prop'), /prop account/); assert.match(link.botWhy(), /The bot: PROP-1/);
   assert.equal(link.accountOk('MINE-1'), true); assert.equal(link.accountOk('SIM-A'), true); assert.equal(link.accountOk('PROP-1'), false);
   assert.equal(link.named(), true);
-  assert.strictEqual(new Function('AF', 'praetorianGate', 'return ' + m[1])(AF, null), null, 'no gate: no connection (the careful side)');
-  /* both desks get it, the gate hears first, and it forgets on a drop */
+  subs[0].closed();
+  assert.equal(link.post({ type: 'agentMode', agent: 'mine', mode: 'auto' }), false, 'a drop forgets everything');
+  assert.equal(told[told.length - 1], null);
+  assert.strictEqual(AC.praetorianLink(null), null, 'no feed: no connection (the careful side)');
+  assert.strictEqual(AC.praetorianLink({ listen() {} }), null);
+  /* the page and both pop-out windows build it, and hand it to the desk instead of the feed (F1) */
+  const ws = read('workspace.js');
   assert.match(ws, /window\.BotDesk\.create\(\{ v3: praetorianLink,/);
   assert.match(ws, /window\.AgentDesk\.create\(\{ v3: praetorianLink,/);
-  assert.ok(ws.indexOf('AF.listen({ message: m => { praetorianGate.hear(m);') < ws.indexOf('function startBot()'), 'the gate listens before the desks are made');
-  assert.match(ws, /closed: \(\) => \{ praetorianGate\.lost\(\); syncPraetorian\(\); \}/);
+  assert.ok(ws.indexOf('window.AgentCore.praetorianLink(AF,') < ws.indexOf('function startBot()'), 'the link (and its gate) before the desks');
+  for (const [f, desk] of [['agent.html', 'AgentDesk'], ['bot.html', 'BotDesk']]) {
+    const h = read(f);
+    assert.match(h, /const link = window\.AgentCore && typeof window\.AgentCore\.praetorianLink === 'function' \? window\.AgentCore\.praetorianLink\(v3\) : null;/, f + ': the gate');
+    assert.match(h, new RegExp('window\\.' + desk + '\\.create\\(\\{ popout: true, v3: link,'), f + ': the desk gets the link, never the feed');
+    assert.ok(h.indexOf('src="agent-core.js"') > 0 && h.indexOf('src="fleet.js"') > h.indexOf('src="agent-core.js"') && h.indexOf('src="fleet.js"') < h.indexOf(f === 'agent.html' ? 'src="agent.js"' : 'src="bot.js"'), f + ': agent-core.js and fleet.js served before the desk');
+    assert.doesNotMatch(h, /create\(\{ popout: true, v3,/, f + ': no desk on the raw feed');
+  }
 });
 
 test('the pickers on Praetorian: never a choice the desk did not offer; a group never; a prop or unknown account listed, not offered', () => {
@@ -145,6 +159,7 @@ test('the pickers on Praetorian: never a choice the desk did not offer; a group 
   assert.equal(by('MINE-1').ok, list.find(c => c.value === 'MINE-1').ok, 'your personal account as the desk had it');
   assert.equal(by('SIM-A').ok, list.find(c => c.value === 'SIM-A').ok);
   for (const c of out) if (c.ok) assert.ok(list.find(x => x.value === c.value).ok, 'never offers what the desk did not');
+  for (const c of list) if (!c.ok && !c.current) assert.equal(out.find(x => x.value === c.value).text, c.text, 'a choice the desk did not offer keeps its own reason: ' + c.text);
   const bots = AC.prBotChoices([{ name: 'MINE-1', tradable: true }, { name: 'PROP-1', tradable: true }], n => n === 'MINE-1');
   assert.deepEqual(bots.map(c => c.tradable), [true, false]); assert.match(bots[1].praetorian, /not on Praetorian/);
 });
@@ -156,7 +171,10 @@ test('every send path in the two desks says the gate\'s reason, never "not conne
   assert.match(ag, /const no = refusal\(r\.msg\);\n    if \(no\) \{ props\.refused\(agent, id\); setMsg\(x, no\); return false; \}/, 'an answer');
   assert.match(ag, /const no = refusal\(m\); if \(no\) \{ boardSay\(no\); return; \}/, 'the board\'s assign');
   assert.match(ag, /const held = heldWhy\(id\); if \(held\) \{ boardSay\('Nothing was started from Praetorian: '/, 'the board\'s Start in Shadow (the helper)');
-  assert.match(ag, /async function helperOn\(a\) \{[^]*?const held = heldWhy\(a\.agent\); if \(held\)/, 'On (the helper)');
+  assert.match(ag, /async function helperOn\(a\) \{\n    const build = q\('\[data-k="hPick"\]'\)\.value;\n    if \(!build\) return;\n    const held = heldWhy\(a\.agent\); if \(held\)/, 'On (the helper), in its own body (the review of 102, F4; the behaviour is test/praetorian-smoke.mjs)');
+  assert.match(ag, /async function startOn\(j\) \{\n    const held = heldWhy\(j\.agent\); if \(held\)/, 'Start in Shadow checks again before the helper\'s On (F3)');
+  assert.match(ag, /async function assignOn\(j\) \{\n    const held = heldWhy\(j\.agent\); if \(held\)/, 'and Assign hero\'s On');
+  assert.match(ag, /data-act="bSdClear"[^\n]*\(!can \|\| praetorian \? ' disabled' : ''\)/, 'Clear stand-down held back on Praetorian (F6)');
   assert.match(ag, /async function helperSave\(a\) \{\n    const held = heldWhy\(a\.agent\); if \(held\)/, 'Auto-On time (the helper)');
   assert.equal((ag.match(/sendRaw\(/g) || []).length, 5, 'sendRaw: its use in the seen ack, the answer, the assign, the board start and sendAgent; each refused one is said');
   assert.match(bt, /const no = refusal\(m\);\n    if \(no\) \{ notice\(\{ kind: 'refused', level: 'amber', text: no \}\); return false; \}/, 'sendBot');

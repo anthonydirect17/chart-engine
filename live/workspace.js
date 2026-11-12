@@ -3628,12 +3628,9 @@ window.workspace = { get layout() { return layout; }, panels: () => panels.map(p
    also answers why a message would not go (why), and what the desks need to hold a control back (traderWhy, botWhy,
    accountOk). The gate hears ChartBridge before the desks do (it listens first) and forgets everything when the connection
    drops. With no gate (agent-core.js not served) the desks get no connection at all: the careful side. The pop-out windows
-   (agent.html, bot.html) are unchanged. test/praetorian.test.js runs this link. */
-const praetorianGate = AF && window.AgentCore && typeof window.AgentCore.praetorianGate === 'function' ? window.AgentCore.praetorianGate() : null;
-if (praetorianGate) AF.listen({ message: m => { praetorianGate.hear(m); if (m && (m.type === 'accounts' || m.type === 'hello')) syncPraetorian(); }, closed: () => { praetorianGate.lost(); syncPraetorian(); } });
-const praetorianLink = praetorianGate ? Object.freeze({ personal: true, listen: part => AF.listen(part), post: m => praetorianGate.check(m) === '' && AF.post(m) === true,
-  limit: name => (typeof AF.limit === 'function' ? AF.limit(name) : null), why: m => praetorianGate.check(m), traderWhy: id => praetorianGate.traderWhy(id), botWhy: () => praetorianGate.botWhy(),
-  accountOk: name => praetorianGate.accountOk(name), named: () => praetorianGate.state().personalNamed }) : null;
+   (agent.html, bot.html) build the same link (AgentCore.praetorianLink; the review of 102, F1). test/praetorian.test.js runs it. */
+const praetorianLink = AF && window.AgentCore && typeof window.AgentCore.praetorianLink === 'function'
+  ? window.AgentCore.praetorianLink(AF, m => { if (!m || m.type === 'accounts' || m.type === 'hello') syncPraetorian(); }) : null;   // the review of 102 (F1): one builder, also used by agent.html and bot.html
 let botDesk = null;
 function startBot() {
   if (!window.BotDesk) return;
