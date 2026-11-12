@@ -1367,6 +1367,26 @@ const PR_BOT_TYPES = new Set(['botMode', 'botKill', 'botRails', 'botAnswer', 'bo
 const PR_ACKS = new Set(['agentSeen', 'botSeen']);
 const PR_WHERE = 'it is set up from Legion\'s trader desk (being built); from here you can only stop it';   // the review of 102 (F5): the words say the truth until Legion's trader desk is in
 
+/**
+ * Every account one trader (its `agent` message) is on, for both gates (the review of 103, b F2): its `account` (a non-empty
+ * string) and the account of EVERY seat it has, a group's or a leftover one (ChartBridge keeps a seat that still holds its trade
+ * when the trader goes to None). Null when the page cannot read the shape: an `account` that is neither null nor a non-empty
+ * string, a `group` that is neither null nor a plain object, `seats` that are not a list, or a seat without a string account.
+ * Not known is refused (only the stops go). FleetCore.traderAccounts (Legion's strip) is left as it is.
+ */
+function gateAccounts(agentMsg) {
+  if (!plainObj(agentMsg)) return null;
+  const a = agentMsg, out = [];
+  if (a.account !== undefined && a.account !== null) { if (typeof a.account !== 'string' || !a.account) return null; out.push(a.account); }
+  if (a.group !== undefined && a.group !== null && !plainObj(a.group)) return null;
+  if (a.seats !== undefined && a.seats !== null) {
+    if (!Array.isArray(a.seats)) return null;
+    for (const x of a.seats) { if (!plainObj(x) || typeof x.account !== 'string' || !x.account) return null; if (!out.includes(x.account)) out.push(x.account); }
+  }
+  return out;
+}
+const GATE_SHAPE = 'the page cannot tell its accounts (ChartBridge sent a shape the page does not know)';
+
 /** Whether Praetorian may reach the account `name`: your personal account (ChartBridge's own flag, with a pick made) or a Sim
  *  account (ChartBridge's sim flag). Not known is no. */
 function prIsPersonal(name, accountsMsg) {
@@ -1393,15 +1413,16 @@ function prNotPersonalWhy(name, accountsMsg) {
 }
 
 /**
- * Where one trader (its `agent` message) may be reached from: '' when every account it is on is personal, or it is on None;
- * else why not. A group or a league seat is never personal.
+ * Where one trader (its `agent` message) may be reached from: '' when every account it is on (its account and every seat,
+ * gateAccounts) is personal or Sim (None with no seat counts as none); else why not. A group is never personal; a shape the
+ * page cannot read is refused.
  */
 function prTraderWhy(agentMsg, accountsMsg) {
   if (!plainObj(agentMsg)) return 'ChartBridge has not described this trader yet';
   const name = typeof agentMsg.name === 'string' && agentMsg.name ? agentMsg.name : String(agentMsg.agent || 'this trader');
   if (plainObj(agentMsg.group)) return name + ' trades a group: groups are the prop business, ' + PR_WHERE;
-  const FC = fleetCore();
-  const accts = FC && typeof FC.traderAccounts === 'function' ? FC.traderAccounts(agentMsg) : [];
+  const accts = gateAccounts(agentMsg);
+  if (!accts) return name + ': ' + GATE_SHAPE;
   for (const a of accts) if (!prIsPersonal(a, accountsMsg)) return name + ': ' + prNotPersonalWhy(a, accountsMsg);
   return '';
 }
@@ -1650,6 +1671,6 @@ return {
   createCopilotRouter, copilotRouter, KEY_LOCK_MS, KEY_MIN_SHOWN_MS, KEY_SAY,
   boardRows, boardRoom, boardPosition, rWords, leagueChoices, standDownClearMsg, sdWhen,
   LIGHT, STEPS, PANELS, LIGHT_HOLD, LAP_MS, lightEvents, lightState, stepLines, ageText, entryRisk, tradesR, heatNow, rowTone, decisionRecord, sessionTrail, roomLines, MOTION_KEY, motionPref, setMotionPref,
-  prChoices, prBotChoices, praetorianLink, lgAccountOk, lgGroupWhy, lgTraderWhy, lgBotWhy, lgCheck, legionGate, legionLink, PR_AGENT_TYPES, PR_BOT_TYPES, prIsPersonal, prNotPersonalWhy, prTraderWhy, prBotWhy, prCheck, praetorianGate
+  gateAccounts, prChoices, prBotChoices, praetorianLink, lgAccountOk, lgGroupWhy, lgTraderWhy, lgBotWhy, lgCheck, legionGate, legionLink, PR_AGENT_TYPES, PR_BOT_TYPES, prIsPersonal, prNotPersonalWhy, prTraderWhy, prBotWhy, prCheck, praetorianGate
 };
 });

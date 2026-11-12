@@ -113,6 +113,10 @@ accounts". The name is his: "Praetorian is good". Rule 12: this changes what the
   and an account change only to one of those. Refused by name: a group (the prop business), a prop
   account, a live account the page cannot tell, a trader ChartBridge has not described yet, and every other message type.
   The gate hears ChartBridge before the desks and forgets everything when the connection drops.
+- **Every account a trader is on counts** (`AgentCore.gateAccounts`, the review of 103): its account and every seat it
+  has, a group's or a leftover one (ChartBridge keeps a seat that still holds its trade when a trader goes to None). A
+  shape the page cannot read (an account that is not null or a name, a group that is not an object, a seat without an
+  account) is "the page cannot tell": only the stops go.
 - **Held back on screen, said in one line:** a trader on a prop account, a group or an account the page cannot tell shows
   all its readings; its modes, Change account, Change the rules, the helper's On and Auto-On time, and its kill switch's
   release are off, with "On Praetorian this trader can only be stopped (Kill switch, Off)" and why: "it is set up from

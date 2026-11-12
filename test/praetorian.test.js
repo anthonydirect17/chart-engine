@@ -212,3 +212,34 @@ test('the bot\'s Shadow is a stop (the coordinator, 03:30): exactly \'shadow\', 
   }
   assert.match(gateWith(accounts()).check({ type: 'botMode', mode: 'shadow' }), /has not described the bot yet/, 'only once ChartBridge has described the bot');
 });
+
+/* the review of 103 (b F2, answers B4-2 item 1): every seat a trader has counts, and a shape the page cannot read is refused */
+test('the shapes: a leftover seat counts, and a shape the page cannot read lets only the stops through', () => {
+  const nonStop = [{ type: 'agentMode', agent: 'demo', mode: 'auto' }, { type: 'agentRules', agent: 'demo', maxTrades: 2 }, { type: 'agentAnswer', agent: 'demo', id: 'p1', answer: 'accept' }];
+  const stops = [{ type: 'agentKill', agent: 'demo', on: true }, { type: 'agentMode', agent: 'demo', mode: 'shadow' }, { type: 'agentSeen', agent: 'demo', id: 'p1' }];
+  const refused = [
+    [agent({ account: null, seats: [{ account: 'PROP-1' }] }), /PROP-1 is a prop account/, 'None with a leftover seat on a prop account'],
+    [agent({ account: 'MINE-1', seats: [{ account: 'PROP-1' }] }), /PROP-1 is a prop account/, 'personal with a leftover prop seat'],
+    [agent({ account: null, seats: [{ account: 'LIVE-X' }] }), /LIVE-X is an account the page cannot tell/, 'None with a seat the page cannot tell'],
+    [agent({ account: 123 }), /cannot tell its accounts \(ChartBridge sent a shape/, 'a number'],
+    [agent({ account: { name: 'MINE-1' } }), /cannot tell its accounts/, 'an object'],
+    [agent({ account: '' }), /cannot tell its accounts/, 'an empty string'],
+    [agent({ account: null, group: true, seats: [{ account: 'MINE-1' }] }), /cannot tell its accounts/, 'group: true'],
+    [agent({ account: null, group: 'g1' }), /cannot tell its accounts/, 'a group named by a string'],
+    [agent({ account: null, seats: 'MINE-1' }), /cannot tell its accounts/, 'seats not a list'],
+    [agent({ account: null, seats: [{ acct: 'MINE-1' }] }), /cannot tell its accounts/, 'a seat with no account'],
+    [agent({ account: null, seats: [{ account: 'MINE-1' }, null] }), /cannot tell its accounts/, 'a seat that is not an object'],
+    [agent({ account: null, seats: [{ account: '' }] }), /cannot tell its accounts/, 'a seat with an empty account'],
+  ];
+  for (const [a, re, what] of refused) {
+    const g = gateWith(accounts(), a);
+    for (const m of nonStop) assert.match(g.check(m), re, what + ': ' + m.type);
+    for (const m of stops) assert.equal(g.check(m), '', what + ': ' + m.type + ' is a stop');
+  }
+  /* what still goes: None with no seat, None with a leftover seat on your personal account, null group and seats, Sim seats */
+  for (const a of [agent({ account: null }), agent({ account: null, seats: [{ account: 'MINE-1' }] }), agent({ account: null, group: null, seats: null }),
+    agent({ account: 'MINE-1', seats: [] }), agent({ account: 'SIM-A', seats: [{ account: 'SIM-A' }] })])
+    for (const m of nonStop) assert.equal(gateWith(accounts(), a).check(m), '', JSON.stringify(a) + ' ' + m.type);
+  assert.deepEqual(AC.gateAccounts(agent({ account: 'MINE-1', seats: [{ account: 'MINE-1' }, { account: 'PROP-1' }] })), ['MINE-1', 'PROP-1']);
+  assert.equal(AC.gateAccounts(null), null);
+});
