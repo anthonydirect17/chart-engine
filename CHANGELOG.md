@@ -103,8 +103,9 @@ Agent tab and the Bot tab and whether Legion carries it (for Anthony; nothing is
 
 ## ChartBridge 0.6.21 and chart 1.45.1 (2026-11-12): the pick, the day's profit side for the runner, the roster reader tightened
 
-In plain words: nothing changes on the chart, for hand trading or for any trader that runs today. ChartBridge learns three
-things the lanes on the Legion tab and the spec runner need. No page sends the new message yet. Build answers 7 part D2
+In plain words: nothing changes on the chart or for hand trading. On the wire one thing changes for every trader that runs
+today: each `accountState` gains two keys, `profitToday` and `profitWhy` (a runner that checks the keys in order must know
+them). ChartBridge learns three things the lanes on the Legion tab and the spec runner need. Build answers 7 part D2
 (the ChartBridge half) and the review backlog of build answers 11.
 
 - **The pick.** Each trader slot can hold the name of one roster file: the bot or the lineup its runner runs. It is set
@@ -126,6 +127,11 @@ things the lanes on the Legion tab and the spec runner need. No page sends the n
   - D4: one cap of 2 MB for a whole answer; a file that would pass it is listed with why, not served.
   - D2, said in PROTOCOL: a hard link in the folder is served and a parent folder that is a link is followed; each
     needs write access to the folder.
+- **The review of 93:** a cleared pick (None) always removes its file, also one that could not be read, and a pick file
+  that cannot be opened at a start is tried four times and then means no pick, said; Auto is bound to the pick it was armed
+  with: `agentMode` auto names the pick and its roster file's sha256 (a trader with a pick), the saved Auto keeps both, and
+  a restart restores Auto only for the same pick and the same file; the roster file is read outside the placement gate with
+  a 2 s limit, so the kill switch and Kill all never wait on it; `GET /roster` gives each file's sha256.
 - No order path file changes. `ChartBridgeGroups.cs` gains two lines, both in the `accountState` message.
 
 Checked in `check/AgentHarness.cs` (`Pick`) and `check/BotHarness.cs` (`Http`). ChartBridge 0.6.21 is a recompile

@@ -313,6 +313,13 @@ test('0.6.18: entry rules per trader: ChartBridgeOrders.cs differs from 0.6.17 i
   for (const [f, h] of Object.entries(harness)) assert.strictEqual(sha(read(f).replace(/\r/g, '')), h, f + ' is the 0.6.17 file');
 });
 
+/* the review of 93 (NOTE 10): a pin test that returns early reads "ok"; that is how 0.6.20 lost this one. A ChartBridge version
+   this file does not know now FAILS, so each release re-pins on purpose (add the version below with its listed changes). */
+test('the pin tests know this ChartBridge version (a new release re-pins on purpose)', () => {
+  const v = (/public const string Version = "([0-9.]+)";/.exec(read('ChartBridge.cs')) || [])[1];
+  assert.ok(['0.6.19', '0.6.20', '0.6.21'].includes(v), 'ChartBridge ' + v + ' is not pinned here: re-pin test/nt8-record.test.js for it');
+});
+
 test('0.6.19: the day\'s profit stop: only ChartBridgeAgents.cs changed; every other add-on file but ChartBridge.cs (its version) is the 0.6.18 file byte for byte, the groups and the order path included', () => {
   if (!/public const string Version = "0\.6\.(19|2[01])";/.test(read('ChartBridge.cs'))) return;   // 0.6.20 and 0.6.21 hold the same pins (0.6.21 adds two lines to the groups file, listed below); a later release may change them
   const sha = t => crypto.createHash('sha256').update(t).digest('hex');

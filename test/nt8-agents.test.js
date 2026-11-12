@@ -83,7 +83,9 @@ test('0.5.0 agents: order calls only where the contract allows; a market entry o
   // every entry goes through ChartBridgeOrders.PlaceAgentEntry: the page's order path with the agent as its source
   assert.match(bodies(acode, 'Place'), /ChartBridgeOrders\.PlaceAgentEntry\(Id, p\.Id, text, out placed\)/);
   assert.match(bodies(acode, 'Place'), /string why = Checks\(p, forAccount, forAccount != null, out acct\);/, 'every check again at the moment of placing, and the account they validated is the one used');
-  for (const f of ['SetMode', 'SetKill', 'SetRules']) assert.match(bodies(acode, f), /lock \(PlaceGate\) return \w+Locked\(d\);/, f + ' waits for a placement under way');
+  for (const f of ['SetKill', 'SetRules']) assert.match(bodies(acode, f), /lock \(PlaceGate\) return \w+Locked\(d\);/, f + ' waits for a placement under way');
+  // 0.6.21 (the review of 93, FIX 2 and 3): SetMode works out the picked file's sha256 before the gate, then takes it
+  assert.match(bodies(acode, 'SetMode'), /PickCheckTimed\(held, out sha\);[\s\S]*lock \(PlaceGate\) return SetModeLocked\(d, held, sha, shaBad\);/, 'SetMode waits for a placement under way (the roster read before it)');
   assert.match(bodies(acode, 'SetAccount'), /lock \(PlaceGate\)\s*\{\s*why = SetAccountLocked\(d\);\s*if \(why == null\) dropped = ChartBridgeBranches\.Chosen\("agent:" \+ Id\);/, 'SetAccount waits for a placement under way (0.6.3: and drops a pending reset under the same lock)');
   assert.match(bodies(ocode, 'PlaceOrderLocked'), /if \(agent != null\) \{ string agentWhy = ChartBridgeAgents\.PlacingProblem\(agent, account\.Name, kind, isBuy, price, limitPx, tick\);/, 'the order path asks the agent at the last moment');
   assert.match(bodies(ocode, 'PlaceOrderLocked'), /if \(agent != null && \(\(kind != "limit" && kind != "stopLimit" && !\(kind == "market" && ChartBridgeAgents\.MayMarket\(agent\)\)\) \|\| strategyBody != null \|\| bracketBody == null\)\) return/);
@@ -209,7 +211,7 @@ test('0.5.7 None and the daily reset (DECISION 2026-10-14e): ChartBridge runs it
   assert.match(end, /DropAutoIntent\("the trading day ended \(17:00 ET\)"\);/);
   assert.ok(!/StartFlatten|\.Submit\s*\(|\.CreateOrder\s*\(/.test(end), 'it closes nothing: a position keeps its stop, its target and its flat time');
   assert.match(bodies(acode, 'TryRestoreAuto'), /if \(no == null && SavedAutoDay\(\) != ChartBridgeBranches\.DueDay\(NowEt\(\)\)\) no = "its saved Auto is from an earlier trading day/, 'a restore only inside the same trading day');
-  assert.match(bodies(acode, 'SyncAutoIntent'), /File\.AppendAllText\(AutoFile, AutoDayPrefix \+ ChartBridgeBranches\.DueDay\(NowEt\(\)\) \+ "\\n"\);/, 'the day is saved with the Auto');
+  assert.match(bodies(acode, 'SyncAutoIntent'), /File\.AppendAllText\(AutoFile, AutoDayPrefix \+ ChartBridgeBranches\.DueDay\(NowEt\(\)\) \+ "\\n" \+ AutoPickPrefix/, 'the day is saved with the Auto (0.6.21: and the pick it was armed with)');
   assert.ok(!/KeepThroughReset/.test(read('ChartBridgeOrders.cs') + read('ChartBridgeGroups.cs')), 'the order path and the groups never ask; the bot and the copier ask as before and get no');
   assert.match(bodies(acc, 'Check'), /string day = DueDay\(et\);[\s\S]*if \(doneDay == day\) return;\s*if \(!inBreak && \(doneDay == null \|\| string\.CompareOrdinal\(doneDay, day\) > 0\)\) return;[\s\S]*WriteDay\(day, null\);\s*Run\(day, missed, null\);/, 'in the break, or a missed break caught up; once per day, saved before it runs');
   assert.match(acc, /if \(a == null\) return name \+ " is not in NinjaTrader yet";/, '0.6.3 (review HIGH 1): an account not listed is not known, never idle');
@@ -264,7 +266,7 @@ test('0.6.16 prop accounts: every new branch passes through IsProp; nothing is p
   assert.match(tr, /if \(notProp\.Count > 0\) no = [^\n]*\n\s*else if \(busy\.Count > 0 \|\| Exposed\(\)\) no = [^\n]*\n\s*else \{ string why = AutoProblem\(\); if \(why != null\) no = why; \}/);
   assert.equal((acode.match(/mode = "auto";/g) || []).length, 1, 'the restore is the only place ChartBridge itself sets Auto');
   assert.match(tr, /if \(no != null\)\s*\{\s*DropAutoIntent\(/, 'a no removes the file: one try per start');
-  assert.match(tr, /lock \(Sync\) \{ mode = "auto"; autoRestorePending = false; autoDay = ChartBridgeBranches\.DueDay\(NowEt\(\)\); \}/);
+  assert.match(tr, /lock \(Sync\) \{ mode = "auto"; autoRestorePending = false; autoDay = ChartBridgeBranches\.DueDay\(NowEt\(\)\); autoPick = savedPick; autoPickSha = savedSha; \}/);
   // saved and removed with the page's changes, and removed by the kill switch
   assert.match(bodies(acode, 'SetModeLocked'), /SyncAutoIntent\("the mode changed to " \+ m\);/);
   assert.match(bodies(acode, 'SetKillLocked'), /return KillLocked\(on\);/);
@@ -390,9 +392,10 @@ test('0.6.21: the pick (a name, saved, sent, refused in Auto and while exposed),
   assert.match(acode, /\{ "agentPick", new\[\] \{ "type", "cid", "agent", "file" \} \},/, 'the page message takes exactly these keys');
   assert.match(acode, /if \(type == "agentPick"\) return SetPick\(d\);/);
   const set = acode.slice(acode.indexOf('private string SetPickLocked'), acode.indexOf('// ---------------------------------------------------------- start and stop') > acode.indexOf('private string SetPickLocked') ? acode.indexOf('// ---------------------------------------------------------- start and stop') : acode.indexOf('private string SetPickLocked') + 3000);
-  const order = ['if (m == "auto") return "agent " + Id + " is in Auto', 'if (Exposed()) return "agent " + Id + " has a position, a working entry or a proposal: the pick changes when it is flat"', 'ChartBridgeRoster.PickProblem(name)', 'WriteWhole(PickFile'].map(x => set.indexOf(x));
+  const order = ['if (m == "auto") return "agent " + Id + " is in Auto', 'if (Exposed()) return "agent " + Id + " has a position, a working entry or a proposal: the pick changes when it is flat"', 'if (bad != null) return name + " cannot be picked: " + bad;', 'WriteWhole(PickFile'].map(x => set.indexOf(x));
   assert.ok(order.every(i => i >= 0) && order.join() === order.slice().sort((x, y) => x - y).join(), 'Auto, exposed and the roster\'s own check all come before the save: ' + order.join());
-  assert.match(acode, /private string SetPick\(Dictionary<string, Val> d\) \{ lock \(PlaceGate\) return SetPickLocked\(d\); \}/, 'under the placement gate: never between a placement\'s checks and its order');
+  // the review of 93, FIX 3: the roster file is read before the gate (with a time limit), the gate taken only to check and swap
+  assert.match(bodies(acode, 'SetPick'), /bad = ChartBridgeRoster\.PickCheckTimed\(name, out sha\);[\s\S]*lock \(PlaceGate\) return SetPickLocked\(name, bad\);/, 'the roster read outside the placement gate, the swap under it');
   assert.ok(!/Submit|CreateOrder|PlaceAgentEntry|StartFlatten|mode = /.test(set), 'setting the pick places, flattens and changes no mode');
   // the agent channel cannot send it: its own key table has no such message
   const agentKeys = acode.slice(acode.indexOf('{ "agentHello", new[]'), acode.indexOf('{ "agentHello", new[]') + 2500);

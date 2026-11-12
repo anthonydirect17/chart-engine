@@ -220,7 +220,8 @@ public static class RecordHarness
             // review of #71 (LOW 7): the batch grows back after the refusal (doubling on each batch taken)
             int b1 = ChartBridgeOrderRecord.BatchSize;
             for (int i = 0; i < 6; i++) { Order g = new Order { Account = sim, Instrument = mnq, OrderAction = OrderAction.Buy, OrderType = OrderType.Limit, Quantity = 1, LimitPrice = 24800 + i, OrderId = "g" + i, OrderState = OrderState.Working }; clock += 1; Update(sim, g); }
-            Check(WaitFor(() => { ChartBridgeOrderRecord.Flush(); return ChartBridgeOrderRecord.Waiting() == 0; }, 15000) && ChartBridgeOrderRecord.BatchSize >= 8 && b1 <= 2,
+            // the review of 93 (NOTE 9): the record empties its list, saves, and only then doubles the batch size: wait for the size too
+            Check(WaitFor(() => { ChartBridgeOrderRecord.Flush(); return ChartBridgeOrderRecord.Waiting() == 0 && ChartBridgeOrderRecord.BatchSize >= 8; }, 15000) && b1 <= 2,
                   "order record (review of #71): after a refusal the batch size grows back (" + b1 + " then " + ChartBridgeOrderRecord.BatchSize + ")");
             // 0.6.10 (Anthony 2026-10-30, C-B): an event The Desk rejects inside a 200 is kept in rejected_orders.jsonl with its reason
             File.Delete(aside);
