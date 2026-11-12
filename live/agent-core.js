@@ -1339,7 +1339,7 @@ function copilotRouter(doc) {
   return r;
 }
 
-/* ======================================================================== Praetorian (chart 1.48.0)
+/* ======================================================================== Praetorian (chart 1.51.0)
  * Anthony 2026-11-11: the Agent tab and the Bot tab as one tab, Praetorian, "focused on the personal (not prop business)
  * accounts"; "They already have all the rules and safety's built in". The two desks are mounted as they are; this is the one
  * thing neither had: a gate on the connection they are handed (live/workspace.js praetorianLink), so that from Praetorian

@@ -1,5 +1,5 @@
 'use strict';
-// Chart 1.48.0 (Anthony 2026-11-11: the Agent and Bot tabs as one tab, Praetorian, "focused on the personal (not prop
+// Chart 1.51.0 (Anthony 2026-11-11: the Agent and Bot tabs as one tab, Praetorian, "focused on the personal (not prop
 // business) accounts"): the gate in live/agent-core.js (praetorianGate). Made-up traders and SIM-A, PROP-1, MINE-1 style accounts only.
 const test = require('node:test');
 const assert = require('node:assert/strict');

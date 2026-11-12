@@ -91,10 +91,10 @@ try {
   await fetch(`http://127.0.0.1:${PORT}/test/bot-connect?name=Demo%20Opening%20Fade`, { method: 'POST' });
   await until(() => p.$eval('#wsBotTab', b => !b.classList.contains('bt-alert')), 'the made-up bot connected: no alert', 10000);
 
-  /* the top bar (1.47.0): the top tabs Chart, Legion, Colosseum (the League's button, renamed), then the Agent tab as it was; the
+  /* the top bar (1.50.0): the top tabs Chart, Legion, Colosseum (the League's button, renamed), then the Agent tab as it was; the
      Bot button in the top bar (1.36.0: on a layout with no Agents strip) */
-  check(await p.isVisible('#wsLeagueTab') && (await p.textContent('#wsLeagueTab')) === 'Colosseum', '1.47.0: the top bar has the Colosseum (the League tab, renamed)');
-  check(await p.evaluate(() => [...document.getElementById('wsTopTabs').children].map(b => b.id).join() === 'wsChartTab,wsFleetTab,wsLeagueTab,wsPrGroup' && [...document.getElementById('wsPrGroup').children].map(b => b.id).join() === 'wsPraetorianTab,wsAgentTab,wsTabSlot' && !!document.getElementById('wsAgentTab').closest('.ws-top')), '1.48.0: the top tabs in order Chart, Legion, Colosseum, Praetorian (its sides Agent and the Bot\'s slot)');
+  check(await p.isVisible('#wsLeagueTab') && (await p.textContent('#wsLeagueTab')) === 'Colosseum', '1.50.0: the top bar has the Colosseum (the League tab, renamed)');
+  check(await p.evaluate(() => [...document.getElementById('wsTopTabs').children].map(b => b.id).join() === 'wsChartTab,wsFleetTab,wsLeagueTab,wsPrGroup' && [...document.getElementById('wsPrGroup').children].map(b => b.id).join() === 'wsPraetorianTab,wsAgentTab,wsTabSlot' && !!document.getElementById('wsAgentTab').closest('.ws-top')), '1.51.0: the top tabs in order Chart, Legion, Colosseum, Praetorian (its sides Agent and the Bot\'s slot)');
   check(await p.isVisible('#wsBotTab') && await p.$eval('#wsTabSlot', h => h.contains(document.getElementById('wsBotTab'))), '1.36.0: no Agents strip on the layout: the Bot button is in the top bar');
   await p.click('#wsAdd');
   const menu = await p.$$eval('#wsAddMenu [data-add]', bs => bs.map(b => b.textContent));
@@ -114,21 +114,21 @@ try {
     '1.38.1: opening the League tab with an NQ 1 min chart open sends no new NQ subscribe and no MNQ minute subscribe (' + JSON.stringify(newSubs) + ')');
   check((await p.textContent('#lgView [data-k="cname"]')) === 'NQ 1 min (league trades MNQ)', '1.38.1: the League chart says NQ 1 min (league trades MNQ)');
   check(await until(() => p.evaluate(() => { const b = document.querySelector('#lgView .ch-badge [id$="bConn"]'); return !b || b.hidden || !/LOADING/.test(b.textContent); }), 'the League chart live at once', 3000), '1.38.1: the League chart is not left LOADING');
-  check(new URL(p.url()).searchParams.get('tab') === 'colosseum', '1.47.0: ?tab=colosseum in the address');
-  /* 1.47.0 the Colosseum: its name, the watch box (ChartBridge's traders in Shadow, read only, "not built yet" for the loop's own
+  check(new URL(p.url()).searchParams.get('tab') === 'colosseum', '1.50.0: ?tab=colosseum in the address');
+  /* 1.50.0 the Colosseum: its name, the watch box (ChartBridge's traders in Shadow, read only, "not built yet" for the loop's own
      list), the Chart tab; a mode change of the made-up agent moves it in and out of the box (another page's change) */
   const post = (u, q) => fetch(`http://127.0.0.1:${PORT}${u}` + (q ? '?' + new URLSearchParams(q) : ''), { method: 'POST' }).then(r => r.json());
-  check((await p.textContent('#lgView .lg-word')) === 'Colosseum' && await p.$eval('#lgView .lg-word', e => /Cinzel/.test(getComputedStyle(e).fontFamily)), '1.47.0: the tab\'s name, Colosseum, in the title font');
-  check(await p.getAttribute('#wsChartTab', 'aria-pressed') === 'false' && await p.getAttribute('#wsLeagueTab', 'aria-pressed') === 'true', '1.47.0: Colosseum pressed, Chart not');
-  check(await p.evaluate(() => window.workspace.league().watch.linked === true), '1.47.0: the watch box has its listen-only link');
+  check((await p.textContent('#lgView .lg-word')) === 'Colosseum' && await p.$eval('#lgView .lg-word', e => /Cinzel/.test(getComputedStyle(e).fontFamily)), '1.50.0: the tab\'s name, Colosseum, in the title font');
+  check(await p.getAttribute('#wsChartTab', 'aria-pressed') === 'false' && await p.getAttribute('#wsLeagueTab', 'aria-pressed') === 'true', '1.50.0: Colosseum pressed, Chart not');
+  check(await p.evaluate(() => window.workspace.league().watch.linked === true), '1.50.0: the watch box has its listen-only link');
   await post('/test/agent-mode', { agent: 'demo', mode: 'shadow' });
   await until(() => p.evaluate(() => window.workspace.league().watch.rows.join() === 'demo'), 'the made-up agent in Shadow is in the watch box', 8000);
   const wtext = await p.$eval('#lgView .lg-watch', e => e.innerText);
-  check(/Demo Agent/.test(wtext) && /not built yet/.test(wtext), '1.47.0: the watch box lists the made-up agent in Shadow and says the loop\'s own list is not built yet');
+  check(/Demo Agent/.test(wtext) && /not built yet/.test(wtext), '1.50.0: the watch box lists the made-up agent in Shadow and says the loop\'s own list is not built yet');
   await p.screenshot({ path: path.join(out, 'colosseum-1366.png') });
   await post('/test/agent-mode', { agent: 'demo', mode: 'auto' });
   await until(() => p.evaluate(() => window.workspace.league().watch.rows.length === 0), 'a trader in Auto leaves the watch box', 8000);
-  check(/No trader on the agent channel is in Shadow now/.test(await p.$eval('#lgView .lg-watch', e => e.innerText)), '1.47.0: a trader in Auto is not on the watch; the box says none is in Shadow');
+  check(/No trader on the agent channel is in Shadow now/.test(await p.$eval('#lgView .lg-watch', e => e.innerText)), '1.50.0: a trader in Auto is not on the watch; the box says none is in Shadow');
   await post('/test/agent-mode', { agent: 'demo', mode: 'shadow' });
   await until(() => p.evaluate(() => window.workspace.league().watch.rows.join() === 'demo'), 'back in Shadow: back on the watch', 8000);
   const text = await p.$eval('#lgView', e => e.innerText);
@@ -202,24 +202,24 @@ try {
   check(new URL(p.url()).searchParams.get('tab') === 'bot', '?tab=bot as before');
   await p.click('#wsBotTab');
   await until(() => p.evaluate(() => !document.body.classList.contains('bt-on')), 'closed again from its button');
-  /* 1.48.0 Praetorian: its name over its two sides; it opens the side used last (the Bot, just now), closes again, and is
+  /* 1.51.0 Praetorian: its name over its two sides; it opens the side used last (the Bot, just now), closes again, and is
      pressed while either side is open; the Chart tab closes it */
-  check(await p.isVisible('#wsPraetorianTab') && (await p.textContent('#wsPraetorianTab')) === 'Praetorian' && await p.getAttribute('#wsPraetorianTab', 'aria-pressed') === 'false', '1.48.0: Praetorian offered, not pressed');
+  check(await p.isVisible('#wsPraetorianTab') && (await p.textContent('#wsPraetorianTab')) === 'Praetorian' && await p.getAttribute('#wsPraetorianTab', 'aria-pressed') === 'false', '1.51.0: Praetorian offered, not pressed');
   await p.click('#wsPraetorianTab');
   await until(() => p.evaluate(() => document.body.classList.contains('bt-on')), 'Praetorian opens the side used last (the Bot)');
-  check(await p.getAttribute('#wsPraetorianTab', 'aria-pressed') === 'true' && await p.getAttribute('#wsChartTab', 'aria-pressed') === 'false', '1.48.0: Praetorian pressed while its Bot side is open');
+  check(await p.getAttribute('#wsPraetorianTab', 'aria-pressed') === 'true' && await p.getAttribute('#wsChartTab', 'aria-pressed') === 'false', '1.51.0: Praetorian pressed while its Bot side is open');
   await p.screenshot({ path: path.join(out, 'praetorian-topbar-1366.png'), clip: { x: 0, y: 0, width: 1366, height: 48 } });
   await p.click('#wsAgentTab');
   await until(() => p.evaluate(() => document.body.classList.contains('ag-on') && !document.body.classList.contains('bt-on')), 'its Agent side');
-  check(await p.getAttribute('#wsPraetorianTab', 'aria-pressed') === 'true', '1.48.0: still pressed on its Agent side');
+  check(await p.getAttribute('#wsPraetorianTab', 'aria-pressed') === 'true', '1.51.0: still pressed on its Agent side');
   await p.click('#wsPraetorianTab');
   await until(() => p.evaluate(() => !document.body.classList.contains('ag-on') && !document.body.classList.contains('bt-on')), 'Praetorian closes');
   await p.click('#wsPraetorianTab');
   await until(() => p.evaluate(() => document.body.classList.contains('ag-on')), 'Praetorian opens the Agent side, used last');
   await p.click('#wsChartTab');
   await until(() => p.evaluate(() => !document.body.classList.contains('ag-on')), 'Chart closes Praetorian');
-  check(await p.getAttribute('#wsPraetorianTab', 'aria-pressed') === 'false', '1.48.0: Praetorian opens the side used last, closes, and Chart closes it');
-  check(await p.evaluate(() => document.documentElement.scrollWidth <= innerWidth), '1.48.0: no sideways scroll with the four tabs at ' + (await p.evaluate(() => innerWidth)));
+  check(await p.getAttribute('#wsPraetorianTab', 'aria-pressed') === 'false', '1.51.0: Praetorian opens the side used last, closes, and Chart closes it');
+  check(await p.evaluate(() => document.documentElement.scrollWidth <= innerWidth), '1.51.0: no sideways scroll with the four tabs at ' + (await p.evaluate(() => innerWidth)));
   const socks0 = socks;
   await p.click('#wsAdd'); await p.click('#wsAddMenu [data-add="agents"]');
   /* the bot's drone: in the sky, or (a narrow panel) in the "+N more" list */
@@ -271,15 +271,15 @@ try {
   await p.click('.ws-panel.agents [data-act="close"]');
   await until(() => p.$eval('#wsTabSlot', h => h.contains(document.getElementById('wsBotTab'))), 'the strip closed: the Bot button still in the top bar');
   check(await p.isVisible('#wsBotTab'), 'with no strip on the layout the Bot is one click away in the top bar');
-  /* 1.47.0: the Chart tab closes whichever tab is open, and is pressed again */
+  /* 1.50.0: the Chart tab closes whichever tab is open, and is pressed again */
   await p.click('#wsLeagueTab');
   await until(() => p.evaluate(() => document.body.classList.contains('lg-on')), 'the Colosseum open again');
-  check(await p.getAttribute('#wsChartTab', 'aria-pressed') === 'false', '1.47.0: Chart not pressed under the Colosseum');
+  check(await p.getAttribute('#wsChartTab', 'aria-pressed') === 'false', '1.50.0: Chart not pressed under the Colosseum');
   await p.click('#wsChartTab');
   await until(() => p.evaluate(() => !document.body.classList.contains('lg-on')), 'Chart closes the Colosseum');
-  check(await p.getAttribute('#wsChartTab', 'aria-pressed') === 'true' && await p.$eval('#wsGrid', g => getComputedStyle(g).display !== 'none') && !new URL(p.url()).searchParams.has('tab'), '1.47.0: Chart closes the Colosseum: the grid back, Chart pressed, no tab in the address');
+  check(await p.getAttribute('#wsChartTab', 'aria-pressed') === 'true' && await p.$eval('#wsGrid', g => getComputedStyle(g).display !== 'none') && !new URL(p.url()).searchParams.has('tab'), '1.50.0: Chart closes the Colosseum: the grid back, Chart pressed, no tab in the address');
   await p.click('#wsChartTab');
-  check(await p.getAttribute('#wsChartTab', 'aria-pressed') === 'true', '1.47.0: Chart with no tab open changes nothing');
+  check(await p.getAttribute('#wsChartTab', 'aria-pressed') === 'true', '1.50.0: Chart with no tab open changes nothing');
   check((await p.evaluate(() => window.__sent.length)) === 0, 'nothing here sent an order message');
   /* (at the end: a drop disturbs what follows) */
   if (!(await p.evaluate(() => document.body.classList.contains('lg-on')))) await p.click('#wsLeagueTab');

@@ -79,9 +79,9 @@ try {
   // ---- under each tab
   const tabs = [
     { name: 'Legion', cls: 'fl-on', toggle: () => page.click('#wsFleetTab') },
-    { name: 'Agent', tab: 'Praetorian', cls: 'ag-on', toggle: () => page.click('#wsAgentTab') },   // 1.48.0: Praetorian's two sides
+    { name: 'Agent', tab: 'Praetorian', cls: 'ag-on', toggle: () => page.click('#wsAgentTab') },   // 1.51.0: Praetorian's two sides
     { name: 'Bot', tab: 'Praetorian', cls: 'bt-on', toggle: () => toggleTab(page, 'bot') },
-    { name: 'Colosseum', cls: 'lg-on', toggle: () => page.click('#wsLeagueTab') },   // 1.47.0: the League tab is the Colosseum
+    { name: 'Colosseum', cls: 'lg-on', toggle: () => page.click('#wsLeagueTab') },   // 1.50.0: the League tab is the Colosseum
   ];
   await page.waitForFunction(() => !document.getElementById('wsFleetTab').hidden && !document.getElementById('wsAgentTab').hidden && !document.getElementById('wsLeagueTab').hidden, null, { timeout: 20000 }).catch(() => {});
   for (const t of tabs) {

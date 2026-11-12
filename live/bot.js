@@ -155,7 +155,7 @@ function create(o) {
   /* ---------------- the window's v3 connection (o.v3): its messages in, this tab's few out */
   const V3 = o.v3 || null;
   const sendRaw = m => !!V3 && V3.post(m);
-  /* 1.48.0 (Praetorian): the workspace's connection says why a message would not go and whether the bot is held back (on a
+  /* 1.51.0 (Praetorian): the workspace's connection says why a message would not go and whether the bot is held back (on a
      prop account, or one the page cannot tell); the Bot window's connection (bot.html) has neither, and there nothing changes */
   const refusal = m => (V3 && typeof V3.why === 'function' ? V3.why(m) || '' : '');
   const praetorian = !!(V3 && V3.personal === true);
@@ -385,7 +385,7 @@ function create(o) {
     const msgEl = x.el.querySelector('[data-k="msg"]');
     if (r.error) { put(msgEl, 'textContent', r.error); return false; }
     const no = refusal(r.msg);
-    if (no) { props.refused(id); put(msgEl, 'textContent', no); return false; }   // 1.48.0: said as it is
+    if (no) { props.refused(id); put(msgEl, 'textContent', no); return false; }   // 1.51.0: said as it is
     if (!sendRaw(r.msg)) { props.refused(id); put(msgEl, 'textContent', 'Not sent: not connected to ChartBridge.'); return false; }
     S.pending.set(c, { kind: 'answer', id });
     x.waiting = true; syncButtons(x);
@@ -724,7 +724,7 @@ function create(o) {
     const ev = q('[data-k="ev"]');
     put(ev, 'hidden', !e);
     if (e) { put(ev, 'textContent', e.shelf === 'research' ? 'Research' : e.evidence); put(ev, 'className', 'bt-badge ' + (e.shelf === 'research' ? 'rs' : BC.evidenceLevel(e.evidence) >= 2 ? 'l2' : '')); }
-    /* 1.48.0 (Praetorian): the bot on a prop account, or one the page cannot tell, can only be stopped here (its kill switch on) */
+    /* 1.51.0 (Praetorian): the bot on a prop account, or one the page cannot tell, can only be stopped here (its kill switch on) */
     const held = heldBot();
     const pw = q('[data-k="prWhy"]'); put(pw, 'hidden', !held); put(pw, 'textContent', held ? 'On Praetorian the bot can only be stopped (Kill switch, Shadow): ' + held + '.' : '');
     for (const btn of q('[data-k="modes"]').children) {
@@ -770,7 +770,7 @@ function create(o) {
     const kill = q('[data-k="kill"]');
     put(kill, 'textContent', b.killed ? (S.killConfirm > Date.now() ? 'Release: click again' : 'Kill switch on · Release') : 'Kill switch');
     tog(kill, 'on', !!b.killed);
-    put(kill, 'disabled', !S.signedIn || (!!b.killed && !!held));   // 1.48.0: on always; the release held back on Praetorian
+    put(kill, 'disabled', !S.signedIn || (!!b.killed && !!held));   // 1.51.0: on always; the release held back on Praetorian
     attr(kill, 'aria-pressed', String(!!b.killed));
     const cur = days.current();
     for (const btn of q('[data-k="dtype"]').children) attr(btn, 'aria-pressed', String(btn.dataset.dt === cur));
@@ -843,7 +843,7 @@ function create(o) {
   function sendBot(m, kind) {
     const c = cid(); m.cid = c;
     const no = refusal(m);
-    if (no) { notice({ kind: 'refused', level: 'amber', text: no }); return false; }   // 1.48.0: Praetorian's gate, said as it is
+    if (no) { notice({ kind: 'refused', level: 'amber', text: no }); return false; }   // 1.51.0: Praetorian's gate, said as it is
     if (!S.signedIn || !sendRaw(m)) { notice({ kind: 'refused', level: 'amber', text: 'Not sent: not signed in to ChartBridge.' }); return false; }
     S.pending.set(c, { kind });
     setTimeout(() => S.pending.delete(c), 15000);
@@ -918,7 +918,7 @@ function create(o) {
     } else if (a === 'railsCancel') { S.railsEdit = false; railsWhy(''); renderPanel(); }
     else if (a === 'acctOpen') {
       S.acctEdit = true; S.acctAsk = ''; acctWhy('');
-      const sel = q('[data-k="acctSel"]'), cur = BC.botAccount(S.bot).name, list = botChoices();   // 1.48.0: on Praetorian, your personal account, Sim and None
+      const sel = q('[data-k="acctSel"]'), cur = BC.botAccount(S.bot).name, list = botChoices();   // 1.51.0: on Praetorian, your personal account, Sim and None
       // DECISION 2026-10-14e: None first (nothing trades on it)
       sel.replaceChildren(new Option(BC.NONE_LABEL + ' (nothing trades)' + (cur ? '' : ', now'), ''), ...list.map(c => { const op = new Option(c.name + ' (' + c.mark + ')' + (c.current ? ', now' : c.praetorian ? ', ' + c.praetorian : c.tradable ? '' : ', not tradable'), c.name); op.disabled = !c.tradable && !c.current; return op; }));
       sel.value = cur;

@@ -1,5 +1,5 @@
 'use strict';
-// Chart 1.47.0 (Anthony 2026-11-11, the loop amendment 1 section 5): the top tabs (Chart, Legion, Colosseum) and the
+// Chart 1.50.0 (Anthony 2026-11-11, the loop amendment 1 section 5): the top tabs (Chart, Legion, Colosseum) and the
 // Colosseum, the League tab renamed and widened with the watch (ChartBridge's traders in Shadow, read only). Made-up
 // traders and SIM-A style accounts only. The browser half is test/league-smoke.mjs.
 const test = require('node:test');
@@ -59,7 +59,7 @@ test('the top tabs: Chart, Legion, Colosseum in one row, each its own button; ol
   const html = read('live/index.html');
   const row = /<span class="ws-toptabs" id="wsTopTabs" role="group" aria-label="Tabs" hidden>([\s\S]*?)\n  <\/span>/.exec(html);
   assert.ok(row, 'one row in the top bar');
-  assert.deepEqual([...row[1].matchAll(/<button[^>]*id="(\w+)"[^>]*>([^<]*)<\/button>/g)].map(x => x[1] + ':' + x[2]), ['wsChartTab:Chart', 'wsFleetTab:Legion', 'wsLeagueTab:Colosseum', 'wsPraetorianTab:Praetorian', 'wsAgentTab:Agent'], '1.48.0: Praetorian and its sides last (the Bot\'s button comes into its slot)');
+  assert.deepEqual([...row[1].matchAll(/<button[^>]*id="(\w+)"[^>]*>([^<]*)<\/button>/g)].map(x => x[1] + ':' + x[2]), ['wsChartTab:Chart', 'wsFleetTab:Legion', 'wsLeagueTab:Colosseum', 'wsPraetorianTab:Praetorian', 'wsAgentTab:Agent'], '1.51.0: Praetorian and its sides last (the Bot\'s button comes into its slot)');
   assert.match(row[1], /<span class="ws-tabslot" id="wsTabSlot"><\/span>/);
   assert.match(row[1], /id="wsChartTab" aria-pressed="true"/, 'Chart pressed at the start');
   assert.doesNotMatch(row[1], /id="wsChartTab"[^>]*hidden/, 'Chart is never hidden on its own: the row shows while another tab is offered');

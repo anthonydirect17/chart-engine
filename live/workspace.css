@@ -653,7 +653,7 @@ body.ws-tight .ws-body > .chart-live { padding: 2px 3px 2px; }
 .tt-lost > span { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tt-seen { flex: none; height: 20px; padding: 0 8px; border-radius: 6px; border: 1px solid var(--ws-line2); background: var(--ws-field); color: var(--ws-text2); font: 500 11px var(--ws-sans); cursor: pointer; }
 
-/* 1.47.0 (Anthony 2026-11-11): the top tabs, Chart, Legion, Colosseum, Praetorian: each tab's own button in one row, as the
+/* 1.50.0 (Anthony 2026-11-11): the top tabs, Chart, Legion, Colosseum, Praetorian: each tab's own button in one row, as the
    chosen look's pills; the open one in gold (border and text on the tint). Nothing moves: the press changes at once. */
 .ws-toptabs[hidden] { display: none; }
 .ws-toptabs { display: inline-flex; align-items: center; gap: 1px; flex: none; padding: 1px; border: 1px solid var(--ws-line2); border-radius: 999px; background: var(--ws-panel); }

@@ -61,7 +61,7 @@
        stays here as it was -->
   <!-- 1.36.0: the Bot's own button sits here (as the top bar's tab did), except on a layout with an Agents strip, whose bot card
        opens the Bot; there it comes back here while a view is open or while it carries its red alert -->
-  <!-- 1.47.0 (Anthony 2026-11-11, the loop amendment 1 section 5): the top tabs, in his order: Chart, Legion, Colosseum, Praetorian.
+  <!-- 1.50.0 (Anthony 2026-11-11, the loop amendment 1 section 5): the top tabs, in his order: Chart, Legion, Colosseum, Praetorian.
        Each tab's own button, with its own listener, moved into one row; Chart is pressed while no tab covers the grid and closes
        whichever is open. Praetorian (the Agent and Bot tabs as one, personal accounts only) comes in its own pull request; until
        then the Agent and Bot buttons stay after the row, unchanged. -->
@@ -70,10 +70,10 @@
     <!-- 1.45.0 (build answers 7, part D1; named Legion by Anthony 2026-11-11): the Legion tab (live/fleet.js): the Lab's roster, the traders and the prop accounts, and Kill all.
          Shown with ChartBridge 0.6.17 or later -->
     <button type="button" class="ws-btn fl-tabbtn" id="wsFleetTab" aria-pressed="false" title="Legion: the roster, the traders and the prop accounts" hidden>Legion</button>
-    <!-- 1.35.0: the League tab (live/league.js); 1.47.0: the Colosseum, research on the live market: the shadow league and the
+    <!-- 1.35.0: the League tab (live/league.js); 1.50.0: the Colosseum, research on the live market: the shadow league and the
          traders in Shadow. SHADOW: no orders -->
     <button type="button" class="ws-btn lg-tabbtn" id="wsLeagueTab" aria-pressed="false" title="Colosseum: research on the live market. The shadow league on paper and the traders in Shadow. SHADOW: no orders" hidden>Colosseum</button>
-    <!-- 1.48.0 (Anthony 2026-11-11, "Praetorian is good"): Praetorian, the Agent tab and the Bot tab as one tab for the personal
+    <!-- 1.51.0 (Anthony 2026-11-11, "Praetorian is good"): Praetorian, the Agent tab and the Bot tab as one tab for the personal
          account. Its two sides are the two desks' own buttons, with their own listeners, states and the Bot's red alert, so an
          alert is never hidden behind a closed tab; Praetorian opens the side used last. Shown when either side is offered -->
     <span class="pr-tabs" id="wsPrGroup" role="group" aria-label="Praetorian: your personal account">
@@ -108,7 +108,7 @@
 <section class="bt-view bt-in-ws" id="btView" aria-label="Bot tab"></section>
 <!-- the Agent tab's own layout: the agent strip, its controls, its chart, its proposals and its notes and plans (live/agent.js builds it) -->
 <section class="ag-view ag-in-ws" id="agView" aria-label="Agent tab"></section>
-<!-- 1.35.0: the League tab's own layout; 1.47.0: the Colosseum (live/league.js builds it) -->
+<!-- 1.35.0: the League tab's own layout; 1.50.0: the Colosseum (live/league.js builds it) -->
 <section class="lg-view lg-in-ws" id="lgView" aria-label="Colosseum tab"></section>
 <!-- 1.45.0: the Legion tab's own layout (live/fleet.js builds it) -->
 <section class="fl-view fl-in-ws" id="flView" aria-label="Legion tab"></section>

@@ -530,7 +530,7 @@ const desk = V3 ? new OrderDeskV3(Object.assign(deskOpts, { now: () => Date.now(
     : flag('board-groups') ? [
     { name: 'Group A', size: 50000, drawdown: 2000, drawdownType: 'eod', dailyLoss: 1000, target: 3000, members: ['SIM-A', 'SIM-B'], accountType: 'funded', hero: 'sample-build-3' },
     { name: 'Group B', size: 50000, drawdown: 2500, drawdownType: 'intraday', target: 3000, members: ['SIM-C', 'SIM-D'], accountType: 'eval', hero: 'sample-build-1' }] : [],
-  personal: flagValue('personal'),   // 1.48.0 (ChartBridge 0.6.16's pick, made up): --personal=EVAL-A marks that account personal, every other live one prop
+  personal: flagValue('personal'),   // 1.51.0 (ChartBridge 0.6.16's pick, made up): --personal=EVAL-A marks that account personal, every other live one prop
   agentAccounts: Object.fromEntries(flagValue('agent-accounts').split(',').map(x => x.split(':').map(y => y.trim())).filter(x => x.length === 2 && x[0] && x[1])) })) : new OrderDesk(deskOpts);
 /* 1.43.0: --market-slip=SIM-B:1,SIM-C:2: a market fill on that account is that many ticks worse than the last price (made-up
    slippage), so a group MARKET entry fills each account at its own price and each bracket sits from its own fill */
