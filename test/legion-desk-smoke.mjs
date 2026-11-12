@@ -180,15 +180,15 @@ try {
   await page.click(LB + ' [data-mode="shadow"]'); await sleep(300);
   check((await posted()).includes('botMode:shadow'), 'Legion\'s Shadow goes for the bot on your personal account: ' + JSON.stringify(await posted()));
   /* a botSeen only while Legion's card is on screen: the fold closed, nothing */
-  await page.evaluate(() => { document.getElementById('fold').open = false; window.legion.show(false); });
+  await page.evaluate(() => { document.getElementById('fold').open = false; window.legion.show(true); });   // told shown, but the fold is closed: nothing on screen
   await feed(bot({ account: 'PROP-1', mode: 'copilot' }));
   await feed({ type: 'botProposal', id: 'p1', at: Date.now(), account: 'PROP-1', sim: false, root: 'MNQ', side: 'buy', kind: 'limit', price: 25000, qty: 1, stopTicks: 12, targetTicks: 24, reason: 'Sample: a made-up level', state: 'accepted', seenAt: Date.now(), answeredAt: Date.now() });
-  await sleep(300); await clear(); await page.evaluate(() => { window.fromLegion.length = 0; });
+  await sleep(1600); await clear(); await page.evaluate(() => { window.fromLegion.length = 0; });   // the ended card stays 1.2 s, then the next one shows
   await page.evaluate(() => window.prBot.showTab(false));
   await feed({ type: 'botProposal', id: 'p2', at: Date.now(), account: 'PROP-1', sim: false, root: 'MNQ', side: 'sell', kind: 'limit', price: 25010, qty: 1, stopTicks: 12, targetTicks: 24, reason: 'Sample: another made-up level', state: 'open', seenAt: null, answeredAt: null });
   await sleep(800);
   const legionSaid = () => page.evaluate(() => window.fromLegion.slice());
-  check(!(await legionSaid()).includes('botSeen'), 'a bot proposal while Legion\'s fold is closed: no botSeen from Legion\'s copy (Praetorian\'s floating card is the page\'s own): ' + JSON.stringify(await legionSaid()));
+  check(!(await legionSaid()).includes('botSeen'), 'a bot proposal while Legion\'s fold is closed (the desk told it is shown): no botSeen from Legion\'s copy (Praetorian\'s floating card is the page\'s own): ' + JSON.stringify(await legionSaid()));
   await page.evaluate(() => { document.getElementById('fold').open = true; window.legion.show(true); document.querySelector('#lgd .bt-props').scrollIntoView({ block: 'center' }); window.legion.show(true); });
   await sleep(600);
   check((await legionSaid()).filter(x => x === 'botSeen').length === 1, 'the fold opens with the card on screen: Legion\'s copy sends botSeen once: ' + JSON.stringify(await legionSaid()));

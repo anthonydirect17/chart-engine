@@ -267,3 +267,17 @@ Shadow and the acknowledgements for anyone). Builder 1 mounts it once in Legion 
 | Helper On, Auto-On time, board Start | yes | yes |
 | Assign hero, a group's Clear stand-down | no (held back, with the reason) | yes |
 | Every control of the bot | when its account is personal, Sim or None | when its account is prop |
+
+## After the reviews of 103 (2026-11-12): the second copy, no home, moves in Shadow
+
+| Case | Praetorian | Legion's trader desk |
+|---|---|---|
+| A trader or the bot on None | whole | whole; a move off None goes in Shadow first, so no mode travels |
+| A trader with no home (a group holding your personal account or Sim only, a mix of kinds, an account the page cannot tell) | the stops; None while flat; "no home: ..." | the same, in the same words |
+| A group changed under a group trader | (groups are never Praetorian's) | refused at once by the group as last heard |
+| A shape the page cannot read | the stops only | the stops only |
+| A proposal acknowledged | while its tab is shown, as before | only while the fold is open and its card is on screen |
+
+Legion's copies are `embedded` (no Pop out, nothing of the page's own touched) with their own browser keys
+(`legion-...`); `LegionDesk.show(on)` is called by the fold and by Legion's tab. Prop traders have no pop-out window
+now (agent.html and bot.html are Praetorian's); whether Legion wants one is Anthony's call.
