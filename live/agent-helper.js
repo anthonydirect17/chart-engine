@@ -220,12 +220,15 @@ const onGroup = a => !!(a && a.group && Array.isArray(a.seats));
 /* chart 1.51.0 (answers B4-4, G3): a trader on None that still has a seat (a leftover position; ChartBridge keeps the seat
    while it holds his trade) is flattened as a group's seats are: per seat, never by an account he does not have */
 const leftover = a => !!(a && a.account === null && !a.group && Array.isArray(a.seats) && a.seats.length > 0);
-const bySeats = a => onGroup(a) || leftover(a);
-/** The seats holding his trade now (a group): [{ account, root, qty }]. */
+/** The seats holding his trade now: [{ account, root, qty }] (a group's, a leftover one, or any trader's seats list). */
 function seatsHeld(a) {
-  return bySeats(a) ? a.seats.filter(x => x && typeof x.account === 'string' && x.position && isNum(x.position.qty) && x.position.qty !== 0)
+  return a && Array.isArray(a.seats) ? a.seats.filter(x => x && typeof x.account === 'string' && x.position && isNum(x.position.qty) && x.position.qty !== 0)
     .map(x => ({ account: x.account, root: str(x.position.root), qty: x.position.qty })) : [];
 }
+/* chart 1.51.0 (answers B4-6, H1): ANY trader whose seats list holds his trade goes by those seats, whatever his own account
+   says: ChartBridge fills his `position` from the first seat holding it without saying which account, so a trader on MINE-1
+   with his trade on a PROP-1 seat must flatten PROP-1, never MINE-1 (where Anthony may hold a position of his own) */
+const bySeats = a => onGroup(a) || leftover(a) || seatsHeld(a).length > 0;
 const heldText = h => (h.qty > 0 ? 'long ' : 'short ') + Math.abs(h.qty) + (h.root ? ' ' + h.root : '') + ' on ' + h.account;
 
 /** Off pressed: 'off' (send it), 'ask' (he holds a position: "Flatten and turn him off?"). a: his `agent` message. A group:

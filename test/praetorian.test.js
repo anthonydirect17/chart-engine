@@ -298,6 +298,14 @@ test('a None trader with a leftover seat: Off asks, and "Flatten and turn off" f
   assert.equal(AH.flatOffStart(left('shadow', 1), 1000).action, 'flatten');
   assert.equal(AH.offStep(left('shadow', 0)), 'off', 'a flat leftover seat: Off at once');
   assert.match(AH.flatOffStart(agent({ account: null, mode: 'auto', position: { root: 'MNQ', qty: 1 }, seats: [{ account: 'MINE-1', position: { qty: 1 } }] }), 1000).error, /A seat's instrument is not known: nothing was sent/);
-  /* a trader on an account with a leftover seat is not this case (his own account is flattened, as before) */
-  assert.equal(AH.flatOffStart(agent({ account: 'MINE-1', mode: 'shadow', position: { root: 'MNQ', qty: 1 }, seats: [{ account: 'PROP-1', position: { root: 'MNQ', qty: 1 } }] }), 1000).job.account, 'MINE-1');
+  /* answers B4-6, H1: a trader on an account whose seats list holds his trade (the reviewer's probe: MINE-1, seat PROP-1 long
+     1 MNQ, his position filled from that seat): the question names PROP-1 and the flatten is for PROP-1 only, never MINE-1 */
+  const h1 = agent({ account: 'MINE-1', mode: 'shadow', position: { root: 'MNQ', qty: 1, avgPrice: 25000 }, seats: [{ account: 'PROP-1', owns: true, position: { root: 'MNQ', qty: 1, avgPrice: 25000 } }] });
+  assert.equal(AH.offStep(h1), 'ask');
+  assert.match(AH.offQuestion(h1, 'Demo Agent'), /holds long 1 MNQ on PROP-1\./); assert.doesNotMatch(AH.offQuestion(h1, 'Demo Agent'), /MINE-1/);
+  const j1 = AH.flatOffStart(h1, 1000).job;
+  assert.deepEqual(j1.seats, [{ account: 'PROP-1', root: 'MNQ' }]); assert.equal(j1.account, '', 'nothing for MINE-1');
+  /* his own account alone (no seats list, or seats holding nothing): his own account, as before */
+  assert.equal(AH.flatOffStart(agent({ account: 'MINE-1', mode: 'shadow', position: { root: 'MNQ', qty: 1 } }), 1000).job.account, 'MINE-1');
+  assert.equal(AH.flatOffStart(agent({ account: 'MINE-1', mode: 'shadow', position: { root: 'MNQ', qty: 1 }, seats: [{ account: 'PROP-1', position: null }] }), 1000).job.account, 'MINE-1');
 });
