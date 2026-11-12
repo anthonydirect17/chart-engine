@@ -99,6 +99,10 @@ holding the real Multi-Account panel in the page and a move from it sending `mem
   account, its group's seats or a seat left over, `FleetCore.traderAccounts`, which now counts all of them), and a group
   ChartBridge does not list with its members is "not known", locked (R3-4). Tests that the settle counts from the first
   trader and that the tab redraws by itself when it runs out (R3-1, R3-2).
+- **Answers 28 for Legion Setup:** any heard trader whose accounts the page cannot read makes every group's lock "not
+  known" (`FleetCore.accountsReadable`, R4-1); a trader seated on one of a group's accounts locks it in any mode,
+  Shadow and flat included (R4-2); the narrow feed finds an account's group ignoring letter case, as ChartBridge does
+  (R4-4).
 
 ## chart 1.47.0 (2026-11-12): three shared panels made ready for Legion (page only, no F5)
 
