@@ -1136,10 +1136,10 @@ test('answers 25, S2: FleetCore.groupLock on its own', () => {
   assert.match(F.groupLock('g1', [tr('a', 'g1', { owns: true })], true), /holds a position/);
 });
 
-test('the Traders fold (builder 4\'s Legion trader desk): closed by default, mounted once when opened, taken down when shut, on a closed tab and on destroy; it posts nothing itself', t => {
+test('the Traders fold (builder 4\'s Legion trader desk): closed by default, mounted once when first opened, shown and hidden with the fold, taken down on a closed tab and on destroy; it posts nothing itself', t => {
   timers(t);
   const mounts = [];
-  const traderDesk = el => { const m = { el, destroyed: 0, destroy() { this.destroyed++; } }; mounts.push(m); return m; };
+  const traderDesk = el => { const m = { el, shows: [], destroyed: 0, show(on) { this.shows.push(on); }, destroy() { this.destroyed++; } }; mounts.push(m); return m; };
   const P = page(t, { traderDesk });
   P.fv.showTab(true); P.ready();
   assert.deepStrictEqual(mounts, [], 'closed by default: nothing mounted');
@@ -1147,15 +1147,19 @@ test('the Traders fold (builder 4\'s Legion trader desk): closed by default, mou
   P.click('desk');
   assert.strictEqual(mounts.length, 1, 'opened: one mount');
   assert.strictEqual(mounts[0].el, P.part('desk'), 'into the fold');
+  assert.deepStrictEqual(mounts[0].shows, [true], 'told it is shown');
   assert.strictEqual(P.part('desk').hidden, false);
   assert.strictEqual(P.part('deskbtn').attrs['aria-expanded'], 'true');
   P.feed(agent('germanicus', { owns: true })); P.feed(accounts);
   assert.strictEqual(mounts.length, 1, 'messages never mount again');
   P.click('desk');
-  assert.deepStrictEqual([mounts[0].destroyed, P.part('desk').hidden, P.part('deskbtn').attrs['aria-expanded']], [1, true, 'false'], 'shut: taken down');
-  P.click('desk'); assert.strictEqual(mounts.length, 2, 'opened again: a new mount');
-  P.fv.showTab(false); assert.strictEqual(mounts[1].destroyed, 1, 'the tab closed: taken down');
-  P.fv.showTab(true); P.click('desk'); P.fv.destroy(); assert.strictEqual(mounts[2].destroyed, 1, 'destroy: taken down');
+  assert.deepStrictEqual([mounts[0].shows, mounts[0].destroyed, P.part('desk').hidden, P.part('deskbtn').attrs['aria-expanded']], [[true, false], 0, true, 'false'], 'shut: told hidden, kept');
+  P.click('desk');
+  assert.deepStrictEqual([mounts.length, mounts[0].shows], [1, [true, false, true]], 'opened again: the same mount, shown');
+  P.fv.showTab(false);
+  assert.deepStrictEqual([mounts[0].shows.slice(-1), mounts[0].destroyed], [[false], 1], 'the tab closed: hidden, then taken down');
+  P.fv.showTab(true); P.click('desk'); assert.strictEqual(mounts.length, 2, 'a new tab: a new mount');
+  P.fv.destroy(); assert.strictEqual(mounts[1].destroyed, 1, 'destroy: taken down');
   assert.deepStrictEqual(P.posts, [], 'the fold itself posts nothing');
   // no desk on the page: it says where the desk will show, and nothing throws
   const Q = page(t); Q.fv.showTab(true); Q.ready(); Q.click('desk');
@@ -1165,6 +1169,32 @@ test('the Traders fold (builder 4\'s Legion trader desk): closed by default, mou
   // the page hands the desk its own feed (AF), never Legion's link: the desk puts Legion's gate round it itself (builder 4)
   const ws = read('live', 'workspace.js');
   assert.match(ws, /traderDesk: el => \(window\.LegionDesk && typeof window\.LegionDesk\.mount === 'function' && el\n\s+\? window\.LegionDesk\.mount\(el, \{ v3: AF, feed: hub,/);
+});
+
+test('a trader\'s accounts are its account and every seat it has; a shape the page cannot read is "cannot tell" (builder 4\'s note on answers B4-2)', () => {
+  assert.deepStrictEqual(F.traderAccounts({ account: null, group: { id: 'g1' }, seats: [{ account: 'EVAL-A' }, { account: 'EVAL-B' }] }), ['EVAL-A', 'EVAL-B']);
+  assert.deepStrictEqual(F.traderAccounts({ account: 'MINE', group: null, seats: [{ account: 'EVAL-A' }] }), ['MINE', 'EVAL-A'], 'a None or one-account trader with a seat left over: both');
+  assert.deepStrictEqual(F.traderAccounts({ account: 'EVAL-A', seats: [{ account: 'EVAL-A' }] }), ['EVAL-A'], 'each once');
+  assert.deepStrictEqual(F.traderAccounts(null), []);
+  for (const [why, a] of [['account a number', { account: 123 }], ['account an object', { account: { name: 'X' } }], ['account empty', { account: '' }],
+    ['group true', { account: null, group: true }], ['seats not a list', { account: null, group: { id: 'g1' }, seats: 'EVAL-A' }],
+    ['a seat with no account', { account: null, group: { id: 'g1' }, seats: [{ account: 'EVAL-A' }, {}] }], ['a seat a string', { account: null, group: { id: 'g1' }, seats: ['EVAL-A'] }]])
+    assert.strictEqual(F.accountsReadable(a), false, why);
+  for (const a of [{ account: 'EVAL-A' }, { account: null }, {}, { account: null, group: { id: 'g1' }, seats: [] }, { account: 'X', group: null, seats: null }])
+    assert.strictEqual(F.accountsReadable(a), true, JSON.stringify(a));
+  // a trader in Auto with a leftover seat on a prop account is counted as Auto on prop; one the page cannot read is "cannot tell"
+  const V = '0.6.21';
+  const left = agent('leftover', { mode: 'auto', account: 'MINE', group: null, seats: [{ account: 'EVAL-A' }] });
+  const t = F.traders([left], accounts, V).find(x => x.id === 'leftover');
+  assert.ok(t.autoProp, 'its leftover prop seat counts');
+  for (const bad of [123, '', { n: 1 }]) {
+    const u = F.traders([agent('odd', { mode: 'auto', account: bad })], accounts, V).find(x => x.id === 'odd');
+    assert.strictEqual(u.kind, '', 'cannot tell: ' + JSON.stringify(bad));
+  }
+  // a lane whose trader cannot be read is never armable
+  const ls = F.lanes([evalTrader({ seats: 'EVAL-A' })], groups, accounts, V, liveCards());
+  assert.strictEqual(ls[0].armable, false);
+  assert.match(ls[0].why, /The page cannot tell its accounts/);
 });
 
 test('Legion Setup\'s roster by family (1.48.0): readable names, the family from the run, the two "good for" filters on the file\'s own word and their order, Find, and where a file is picked', () => {

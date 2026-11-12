@@ -97,9 +97,13 @@ holding the real Multi-Account panel in the page and a move from it sending `mem
   or holds something (`FleetCore.groupLock`, S2).
 - **Legion Setup's Traders fold (build answers B4-1, section 3):** one mount of builder 4's Legion trader desk
   (chart-engine 103, `live/legion-desk.js`) in a folded section under the lanes, closed by default, handed the page's
-  own feed (the desk puts Legion's gate round it). Mounted when opened, taken down when shut, when the tab closes and on
-  destroy, so a shut fold holds no listener and sends nothing. Until the desk is on the page, the fold says where it
-  will show. It merges together with 102 and 103 (the page's script line and the install line come with 103).
+  own feed (the desk puts Legion's gate round it). Mounted the first time it is opened, then told it is shown or hidden
+  with the fold (it counts as shown only then: no "seen", no polling while shut), and taken down when the tab closes and
+  on destroy. Until the desk is on the page, the fold says where it will show. It merges together with 102 and 103 (the
+  page's script line and the install line come with 103).
+- **A trader's accounts are its account and every seat it has** (`FleetCore.traderAccounts`, builder 4's note on 103's
+  review): a seat left over after a move counts in what Kill all and Armed say; a trader whose account fields the page
+  cannot read is "cannot tell", and a lane of it is never armable (`FleetCore.accountsReadable`).
 
 ## chart 1.47.0 (2026-11-12): three shared panels made ready for Legion (page only, no F5)
 

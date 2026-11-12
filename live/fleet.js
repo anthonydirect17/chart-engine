@@ -123,11 +123,24 @@ function dayMark(rules, stage, planValue) {
   return mark > 0 ? { mark, from } : null;
 }
 
-/** The accounts one trader is on, from its `agent` message: its account, or its group's seats. */
+/** The accounts one trader is on, from its `agent` message: its account AND every seat it has (a group's, or one left over
+ *  after a move), each once, so a seat still holding something is never left out of what Kill all and Armed say (builder 4's
+ *  note on answers B4-2: the gates count them the same way, AgentCore.gateAccounts). */
 function traderAccounts(agent) {
-  const a = agent || {};
-  if (plainObj(a.group) && Array.isArray(a.seats)) return a.seats.filter(x => plainObj(x) && typeof x.account === 'string').map(x => x.account);
-  return typeof a.account === 'string' && a.account ? [a.account] : [];
+  const a = plainObj(agent) ? agent : {};
+  const out = [];
+  if (typeof a.account === 'string' && a.account) out.push(a.account);
+  if (Array.isArray(a.seats)) for (const x of a.seats) if (plainObj(x) && typeof x.account === 'string' && x.account && !out.includes(x.account)) out.push(x.account);
+  return out;
+}
+/** Can the page read this trader's accounts at all? account null or a name, group null or an object, seats absent or a list of
+ *  { account: name }. Anything else is "the page cannot tell" (kind '', and a lane of it is never armable). */
+function accountsReadable(a) {
+  if (!plainObj(a)) return false;
+  const acct = a.account === undefined || a.account === null || (typeof a.account === 'string' && a.account.length > 0);
+  const grp = a.group === undefined || a.group === null || plainObj(a.group);
+  const seats = a.seats === undefined || a.seats === null || (Array.isArray(a.seats) && a.seats.every(x => plainObj(x) && typeof x.account === 'string' && x.account.length > 0));
+  return acct && grp && seats;
 }
 
 /** What a trader is doing, in a few words (the Agent tab's own order of reasons). */
@@ -170,7 +183,7 @@ function traders(agents, accountsMsg, version) {
   for (const a of (Array.isArray(agents) ? agents : [])) {
     if (!plainObj(a) || typeof a.agent !== 'string') continue;
     const names = traderAccounts(a);
-    const kind = seatsKind(names.map(n => { const row = idx.get(n.toLowerCase()); return row ? kindOf(row) : (accountsMsg && accountsMsg.personalNamed === true ? 'unlisted' : ''); }));
+    const kind = !accountsReadable(a) ? '' : seatsKind(names.map(n => { const row = idx.get(n.toLowerCase()); return row ? kindOf(row) : (accountsMsg && accountsMsg.personalNamed === true ? 'unlisted' : ''); }));
     const r = plainObj(a.rules) ? a.rules : {};
     const mode = own(MODE_NAME, a.mode) ? a.mode : '';
     const can = a.enabled !== false && !a.killed && !a.standDown;
@@ -461,6 +474,7 @@ function lanes(agents, groupsMsg, accountsMsg, version, cards) {
       ? AGC.modesAllowed({ tradable: AGC.groupTradable(accountsMsg, null, L.seats), account: L.groupName }).auto : { ok: false, why: 'The page\'s mode rules (agent-core.js) are not loaded' };
     L.why = !L.pickKnown ? 'The pick needs ChartBridge ' + PICK_MIN + ' or later (this one is ' + (version || 'not known') + ')'
       : !ID_RX.test(a.agent) ? 'Its id is not one ChartBridge takes'
+      : !accountsReadable(a) ? 'The page cannot tell its accounts (what ChartBridge sent is not an account, a group or a list of seats)'
       : a.enabled === false ? 'The trader is off in ChartBridge'
       : a.killed ? 'Its kill switch is on (it is released on the Agent tab, by you)'
       : a.standDown ? 'It is stood down: ' + str(a.standDown, 300)
@@ -727,7 +741,7 @@ const badAnswer = text => /NOT STOPPED|FAILED|could NOT/.test(String(text || '')
 /** "09:41:07" of a Date (the PC's own clock), for the time in front of a Kill all answer. */
 const clock = d => [d.getHours(), d.getMinutes(), d.getSeconds()].map(x => String(x).padStart(2, '0')).join(':');
 
-return Object.freeze({ modeRulesLoaded, NOT_KNOWN, groupLock, readableName, rosterFamilies, FILTERS, laneLock, laneMaySend, laneFeed, PICK_MIN, STAGES, lanes, outsideAuto, armState, armMsgs, armWords, pickChoices, pickMsg, maySend, KILL_MIN, SWITCH_MIN, DAYSTOP_MIN, ROSTER_MIN, ROSTER_FORMAT, LINEUP_FORMAT, CONFIRM_MS, ARM_MS, ANSWER_WAIT_MS, ROSTER_WAIT_MS, MAX_CARDS, MAX_MEMBERS, MAX_NOT_SHOWN, MODE_NAME, atLeast, usd, signed, stageCard, rosterCards, rosterProblem,
+return Object.freeze({ modeRulesLoaded, NOT_KNOWN, groupLock, accountsReadable, readableName, rosterFamilies, FILTERS, laneLock, laneMaySend, laneFeed, PICK_MIN, STAGES, lanes, outsideAuto, armState, armMsgs, armWords, pickChoices, pickMsg, maySend, KILL_MIN, SWITCH_MIN, DAYSTOP_MIN, ROSTER_MIN, ROSTER_FORMAT, LINEUP_FORMAT, CONFIRM_MS, ARM_MS, ANSWER_WAIT_MS, ROSTER_WAIT_MS, MAX_CARDS, MAX_MEMBERS, MAX_NOT_SHOWN, MODE_NAME, atLeast, usd, signed, stageCard, rosterCards, rosterProblem,
   kindOf, seatsKind, dayMark, traderAccounts, statusText, traders, propAccounts, killAllState, killAllMsg, autoLine, badAnswer, clock });
 });
 
@@ -1124,8 +1138,11 @@ function create(o) {
   }
   /* ---------------- the Traders fold (build answers B4-1, section 3; builder 4's Legion trader desk, chart-engine 103): ONE mount,
      o.traderDesk(el), handed by the page (it calls LegionDesk.mount with the page's feed; the desk puts Legion's gate round it).
-     Closed by default; mounted when opened and taken down when shut, when the tab closes and on destroy, so a shut fold holds
-     no listener and sends nothing (not even a "seen"). Nothing else of the desk is here. */
+     Closed by default; mounted the first time it is opened, then told show(true) when opened and show(false) when shut (the
+     desk counts as shown only between the two: no "seen", no polling, no live chart while shut, builder 4's fixes of B4-2);
+     taken down (destroy, which also takes its gate off the feed) when the tab closes and on destroy. Nothing else of the
+     desk is here. */
+  const deskShow = on => { if (S.desk && typeof S.desk.show === 'function') { try { S.desk.show(on); } catch (e) { /* gone */ } } };
   function openDesk() {
     S.deskOpen = true;
     if (el.desk) {
@@ -1133,11 +1150,18 @@ function create(o) {
       if (!S.desk && typeof o.traderDesk === 'function') { try { S.desk = o.traderDesk(el.desk) || null; } catch (e) { S.desk = null; } }
       if (!S.desk) el.desk.innerHTML = '<p class="fl-empty">The trader desk shows here when the page has it (live/legion-desk.js).</p>';
     }
+    deskShow(true);
     deskButton();
   }
-  function closeDesk() {
+  function shutDesk() {
     S.deskOpen = false;
-    if (S.desk) { try { if (typeof S.desk.destroy === 'function') S.desk.destroy(); } catch (e) { /* gone */ } S.desk = null; }
+    deskShow(false);
+    if (el.desk) el.desk.hidden = true;
+    deskButton();
+  }
+  function dropDesk() {
+    S.deskOpen = false;
+    if (S.desk) { deskShow(false); try { if (typeof S.desk.destroy === 'function') S.desk.destroy(); } catch (e) { /* gone */ } S.desk = null; }
     if (el.desk) { el.desk.hidden = true; el.desk.innerHTML = ''; }
     deskButton();
   }
@@ -1246,7 +1270,7 @@ function create(o) {
     if (what === 'filter') { const f = String(b.dataset.filter || ''); if (C.FILTERS.includes(f) && f !== S.filter) { S.filter = f; S.rosterDirty = true; render(); } return; }
     if (what === 'fam') { const k = String(b.dataset.fam || ''); if (S.famShut.has(k)) S.famShut.delete(k); else S.famShut.add(k); S.rosterDirty = true; render(); return; }
     if (what === 'others') { S.othersOpen = !S.othersOpen; S.drawn.traders = null; render(); return; }
-    if (what === 'desk') { if (S.deskOpen) closeDesk(); else openDesk(); return; }
+    if (what === 'desk') { if (S.deskOpen) shutDesk(); else openDesk(); return; }
     if (what === 'more') {                                                  // display only: a card's detail open or shut
       const k = String(b.dataset.card || '');
       if (S.open.has(k)) S.open.delete(k); else S.open.add(k);
@@ -1309,7 +1333,7 @@ function create(o) {
     if (on === S.shown) return;
     S.shown = on;
     if (tabBtn) { tabBtn.setAttribute('aria-pressed', String(on)); if (on) tabBtn.hidden = false; }
-    if (!on) { endAsk(); endArmAsk(); dropLanePanels(); closeDesk(); S.built = false; if (view) view.innerHTML = ''; offer(); }
+    if (!on) { endAsk(); endArmAsk(); dropLanePanels(); dropDesk(); S.built = false; if (view) view.innerHTML = ''; offer(); }
     /* Escape cancels a question wherever the focus is while the tab is open (build answers 15, section 3) */
     if (DOC) { if (on) DOC.addEventListener('keydown', onKey, true); else DOC.removeEventListener('keydown', onKey, true); }
     if (typeof o.onTab === 'function') o.onTab(on);
@@ -1350,7 +1374,7 @@ function create(o) {
       traders: C.traders(agentList(), S.accounts, S.version), accounts: C.propAccounts(S.accounts, S.groups, agentList()),
       roster: { state: S.roster.state, text: S.roster.text, asked: S.roster.asked, bots: S.roster.cards ? S.roster.cards.bots.map(c => c.name) : [], lineups: S.roster.cards ? S.roster.cards.lineups.map(c => c.name) : [], notShown: S.roster.cards ? S.roster.cards.notShown.length : 0 } }),
     reloadRoster: loadRoster,
-    destroy: () => { dropLanePanels(); closeDesk(); S.roster.seq++; clearTimeout(S.settleTimer); clearTimeout(S.rosterTimer); clearTimeout(S.waitTimer); unlisten(); endAsk(); endArmAsk(); if (DOC) DOC.removeEventListener('keydown', onKey, true); if (view) { view.removeEventListener('click', onClick); view.removeEventListener('change', onChange); view.removeEventListener('input', onInput); view.removeEventListener('keydown', onKey); } },
+    destroy: () => { dropLanePanels(); dropDesk(); S.roster.seq++; clearTimeout(S.settleTimer); clearTimeout(S.rosterTimer); clearTimeout(S.waitTimer); unlisten(); endAsk(); endArmAsk(); if (DOC) DOC.removeEventListener('keydown', onKey, true); if (view) { view.removeEventListener('click', onClick); view.removeEventListener('change', onChange); view.removeEventListener('input', onInput); view.removeEventListener('keydown', onKey); } },
   };
 }
 window.FleetView = { create };
