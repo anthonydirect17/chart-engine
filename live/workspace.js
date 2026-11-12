@@ -839,11 +839,11 @@ function askGroup(m, onSend, onCancel) {
     <p class="ws-help">${n} account${n === 1 ? '' : 's'}, ${usd(Math.round(total * 100) / 100)} at risk in all. Each account gets its own entry with the bracket's stop and target. ChartBridge refuses the whole entry if a size changed since this was worked out.</p>
     <div class="ws-dlg-btns"><span class="sg-fill"></span><button type="button" class="ws-btn" data-act="cancel">Cancel</button><button type="button" class="ws-btn primary" id="gqSend" title="Sends every account entry (a click only, as every order button)">Send to ${n} account${n === 1 ? '' : 's'}</button></div>
   </form>`;
-  /* Send works by a real click only (e.detail 0 is a key), as the ticket's order buttons; Enter never sends */
+  /* Send works by a real click only (OT.realClick, the one rule Kill all's Yes uses too), as the ticket's order buttons; Enter never sends */
   let sent = false;
   showDialog(d, () => false, () => { if (!sent && onCancel) onCancel(); });
   d.querySelector('#gqSend').addEventListener('click', e => {
-    if (e.detail === 0) { tnote('The group entry is sent by a click on Send only, not by keyboard.', 'warn'); return; }
+    if (!OT.realClick(e)) { tnote('The group entry is sent by a click on Send only, not by keyboard.', 'warn'); return; }
     sent = true; d.close(); onSend();
   });
   d.querySelector('[data-act="cancel"]').focus();
@@ -3666,7 +3666,7 @@ const legionLink = { listen: part => AF.listen(part), post: m => !!m && m.type =
 let fleetView = null;
 function startFleet() {
   if (!window.FleetView) return;
-  fleetView = window.FleetView.create({ view: $('flView'), tab: $('wsFleetTab'), v3: legionLink, headers: () => (PIN ? PIN.headers() : {}),
+  fleetView = window.FleetView.create({ view: $('flView'), tab: $('wsFleetTab'), v3: legionLink, realClick: OT.realClick, headers: () => (PIN ? PIN.headers() : {}),
     onTab: on => {
       document.body.classList.toggle('fl-on', on);
       if (on) { closePops(); restoreMax(); if (botDesk && botDesk.shown()) botDesk.showTab(false); if (agentDesk && agentDesk.shown()) agentDesk.showTab(false); if (leagueView && leagueView.shown()) leagueView.showTab(false); }   // one tab at a time

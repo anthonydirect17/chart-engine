@@ -26,12 +26,13 @@ const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta n
 <body class="fl-on"><div class="ws-top"><span>SAMPLE DATA: made-up accounts and traders</span>
 <button type="button" class="ws-btn fl-tabbtn" id="wsFleetTab" aria-pressed="false" hidden>Legion</button></div>
 <section class="fl-view fl-in-ws" id="flView" aria-label="Legion tab"></section>
+<script src="${pathToFileURL(path.join(root, 'live', 'order-ticket.js'))}"></script>
 <script src="${pathToFileURL(path.join(root, 'live', 'fleet.js'))}"></script>
 <script>
   window.sent = []; window.subs = []; window.asked = []; window.rosterAnswer = { status: 404 };
   window.V3 = { listen: h => { window.subs.push(h); return () => {}; }, post: m => { window.sent.push(m); return true; } };
   window.feed = m => { for (const h of window.subs) h.message(m); };
-  window.fleet = window.FleetView.create({ view: document.getElementById('flView'), tab: document.getElementById('wsFleetTab'), v3: window.V3, onTab: on => { window.tabOn = on; },
+  window.fleet = window.FleetView.create({ view: document.getElementById('flView'), tab: document.getElementById('wsFleetTab'), v3: window.V3, realClick: window.OrderTicket.realClick, onTab: on => { window.tabOn = on; },
     fetch: (url, opt) => { window.asked.push(url); const a = window.rosterAnswer; return a ? Promise.resolve({ status: a.status, json: () => Promise.resolve(a.body) }) : Promise.reject(new Error('down')); } });
 </script></body></html>`;
 const file = path.join(SHOTS, 'fleet-smoke.html');
@@ -243,6 +244,24 @@ try {
   await sleep(ARM); await page.click('[data-do="no"]');
   check(!(await asking()) && await sentN() === n0, 'Cancel: the question goes, nothing sent');
   check(await page.locator('.fl-answer.bad').count() === 1 && (await text('.fl-answer')).includes('NOT STOPPED'), 'and the NOT STOPPED answer is still there after a new question and Cancel');
+  // Yes takes a real click only (Anthony 2026-11-11): the keyboard can open the question and cancel it, never confirm it
+  await page.locator('[data-do="ask"]').focus(); await page.keyboard.press('Enter');
+  check(await asking() && await page.evaluate(() => document.activeElement.dataset.do === 'no'), 'Enter on Kill all opens the question, the focus on Cancel');
+  await sleep(ARM);
+  await page.keyboard.press('Shift+Tab');
+  check(await page.evaluate(() => document.activeElement.dataset.do === 'yes'), 'Shift+Tab reaches Yes');
+  await page.keyboard.press('Enter'); await page.keyboard.press('Space'); await page.keyboard.press('Enter');
+  check(await sentN() === n0 && await asking() && (await text('.fl-said')).includes('confirmed by a click on Yes only, not by keyboard'), 'Enter and Space on Yes send nothing, and the tab says Yes is a click only');
+  await page.keyboard.press('Escape');
+  check(!(await asking()) && await sentN() === n0, 'Escape cancels');
+  await page.locator('[data-do="ask"]').focus(); await page.keyboard.press('Enter'); await page.keyboard.press('Enter');
+  check(!(await asking()) && await sentN() === n0, 'Enter on Cancel cancels, at once');
+  await page.locator('[data-do="ask"]').focus(); await page.keyboard.press('Enter'); await sleep(ARM);
+  await page.evaluate(() => document.querySelector('[data-do="yes"]').click());      // a click made by script, as a key's is
+  check(await sentN() === n0, 'a click on Yes made by script sends nothing');
+  await page.click('[data-do="yes"]');
+  check(await sentN() === n0 + 1, 'and a real click on the same question sends');
+  await feed({ type: 'status', level: 'warn', text: 'Kill all (prop accounts): sample answer' });
   // a refusal is shown too
   await page.click('[data-do="ask"]'); await sleep(ARM); await page.click('[data-do="yes"]');
   const cid = await page.evaluate(() => window.sent[window.sent.length - 1].cid);

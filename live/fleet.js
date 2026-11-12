@@ -402,11 +402,16 @@ const HINT = 'Kill all stops every trader on a prop account and closes its posit
  * No answer is taken for ARM_MS after it opens, and never from the second click of a double click (detail above 1), so a
  * double click anywhere on the button answers nothing. Yes counts only while the question is up and not older than CONFIRM_MS
  * by the clock (a held-back timer does not keep it alive), and everything is checked again at that moment.
+ * Yes takes a REAL CLICK ONLY (Anthony 2026-11-11, the review's N10): never Enter, Space or a click made by a key. The test of
+ * a real click is the page's one rule, OrderTicket.realClick, handed in by workspace.js (o.realClick), the same function the
+ * group entry's Send calls; with none handed in, Yes is never taken. Cancel may be given by the keyboard, and Escape cancels.
+ * Opening the question by keyboard is as it was.
  */
 function create(o) {
   o = o || {};
   const view = o.view || null, tabBtn = o.tab || null, V3 = o.v3 || null;
   const now = typeof o.now === 'function' ? o.now : () => Date.now();
+  const realClick = typeof o.realClick === 'function' ? o.realClick : () => false;      // none handed in: Yes is never taken
   const S = { shown: false, built: false, version: '', connected: false, signedIn: false, accounts: null, groups: null, agents: new Map(),
     ask: 0, askTimer: 0, hint: '', hintBad: false, hintState: false, answer: '', answerBad: false, cidSeq: 0, pending: '', pendingAt: 0, waitTimer: 0, sent: 0,
     roster: { state: 'idle', text: '', cards: null, seq: 0, asked: 0, at: 0, version: '' }, rosterDirty: true, rosterTimer: 0, open: new Set(), drawn: {}, draws: { head: 0, roster: 0, traders: 0, accounts: 0 } };
@@ -676,6 +681,8 @@ function create(o) {
     if (!S.ask) return;
     const age = now() - S.ask;
     if (age > C.CONFIRM_MS) { endAsk(); render(); return; }                 // the 8 seconds, by the clock (PROP 6)
+    if (what === 'no' && !realClick(e)) { endAsk(); hint('', false); render(); return; }   // Cancel by the keyboard: always
+    if (what === 'yes' && !realClick(e)) { hint('Kill all is confirmed by a click on Yes only, not by keyboard. Cancel and Escape work from the keyboard.', true); render(); return; }
     if (e.detail > 1 || age < C.ARM_MS) return;                             // a double click, or too soon: no answer (STOP 1)
     if (what === 'yes') killAll();
     else { endAsk(); hint('', false); render(); }
@@ -690,7 +697,9 @@ function create(o) {
     render();
     if (on) loadRoster();
   }
+  function onKey(e) { if (e && e.key === 'Escape' && S.ask) { endAsk(); hint('', false); render(); if (typeof e.preventDefault === 'function') e.preventDefault(); } }
   if (view) view.addEventListener('click', onClick);
+  if (view) view.addEventListener('keydown', onKey);
   if (tabBtn) tabBtn.addEventListener('click', () => showTab(!S.shown));
   const unlisten = V3 ? V3.listen({ message: onMessage, closed: () => lost() }) : () => {};
   return {
@@ -700,7 +709,7 @@ function create(o) {
       traders: C.traders(agentList(), S.accounts, S.version), accounts: C.propAccounts(S.accounts, S.groups, agentList()),
       roster: { state: S.roster.state, text: S.roster.text, asked: S.roster.asked, bots: S.roster.cards ? S.roster.cards.bots.map(c => c.name) : [], lineups: S.roster.cards ? S.roster.cards.lineups.map(c => c.name) : [], notShown: S.roster.cards ? S.roster.cards.notShown.length : 0 } }),
     reloadRoster: loadRoster,
-    destroy: () => { S.roster.seq++; clearTimeout(S.rosterTimer); clearTimeout(S.waitTimer); unlisten(); endAsk(); if (view) view.removeEventListener('click', onClick); },
+    destroy: () => { S.roster.seq++; clearTimeout(S.rosterTimer); clearTimeout(S.waitTimer); unlisten(); endAsk(); if (view) { view.removeEventListener('click', onClick); view.removeEventListener('keydown', onKey); } },
   };
 }
 window.FleetView = { create };

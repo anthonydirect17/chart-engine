@@ -165,7 +165,7 @@ test('legion: the tab is wired into the page beside the other three, with a conn
   // N5: the tab is not handed the feed. Its connection is built here and run: it passes agentKillAllProp with a cid and nothing else
   const m = /const legionLink = (\{[^\n]*\});\n/.exec(ws);
   assert.ok(m, 'the tab\'s own connection is one line in workspace.js');
-  assert.match(ws, /tab: \$\('wsFleetTab'\), v3: legionLink, headers:/, 'and it is what the tab gets, not AF');
+  assert.match(ws, /tab: \$\('wsFleetTab'\), v3: legionLink, realClick: OT\.realClick, headers:/, 'and it is what the tab gets, not AF');
   const posted = [], heard = [];
   const AF = { listen: part => { heard.push(part); return () => {}; }, post: x => { posted.push(x); return true; }, send: () => { throw new Error('send reached'); }, sendOrder: () => { throw new Error('sendOrder reached'); } };
   const link = new Function('AF', 'return ' + m[1])(AF);
@@ -330,7 +330,8 @@ function page(t, over) {
   new Function('window', 'document', 'self', read('live', 'fleet.js'))(win, win.document, win);
   const P = { T: 1_800_000_000_000, posts: [], asks: [], answers: [], subs: null, view, tab, part: k => view.querySelector('[data-k="' + k + '"]') };
   const V3 = { listen: h => { P.subs = h; return () => {}; }, post: m => { P.posts.push(m); return P.postOk !== false; } };
-  P.fv = win.FleetView.create(Object.assign({ view, tab, v3: V3, now: () => P.T, fetch: (u, o) => { P.asks.push([u, o]); return new Promise((res, rej) => P.answers.push({ res, rej })); } }, over || {}));
+  P.key = key => listeners.keydown({ key, preventDefault() {} });
+  P.fv = win.FleetView.create(Object.assign({ view, tab, v3: V3, realClick: require('../live/order-ticket.js').realClick, now: () => P.T, fetch: (u, o) => { P.asks.push([u, o]); return new Promise((res, rej) => P.answers.push({ res, rej })); } }, over || {}));
   P.feed = m => P.subs.message(m);
   P.click = (what, detail, card) => listeners.click({ target: { closest: () => ({ dataset: { do: what, card } }) }, detail: detail === undefined ? 1 : detail });
   P.html = () => view.innerHTML + ['roster', 'traders', 'accounts'].map(k => P.part(k).innerHTML).join('');
@@ -582,4 +583,37 @@ test('an older ChartBridge with the tab open by its address keeps the button (N9
   assert.strictEqual((h.match(/class="fl-mname"/g) || []).length, F.MAX_MEMBERS);
   assert.match(h, /And 28 more bots in this lineup, not drawn\./);
   assert.match(h, /b11 2, and 28 more/);
+});
+
+test('Kill all\'s Yes takes a real click only (Anthony 2026-11-11): never a key; Cancel and Escape work from the keyboard; one rule with the group entry\'s Send', t => {
+  timers(t);
+  const OT = require('../live/order-ticket.js');
+  assert.deepStrictEqual([{ detail: 1 }, { detail: 2 }, { detail: 0 }, {}, null, { detail: '1' }, { detail: NaN }].map(OT.realClick), [true, true, false, false, false, false, false], 'a click made by a key or by script carries detail 0');
+  const P = page(t); P.fv.showTab(true); P.ready();
+  P.click('ask'); P.T += 700;
+  P.click('yes', 0);                                              // Enter or Space on Yes
+  assert.deepStrictEqual([P.posts, P.fv.state().asking], [[], true], 'Yes from the keyboard sends nothing; the question stays');
+  assert.match(P.part('hint').textContent, /confirmed by a click on Yes only, not by keyboard/);
+  P.click('yes');
+  assert.strictEqual(P.posts.length, 1, 'a real click then sends');
+  // Cancel from the keyboard, at once
+  P.click('ask'); P.click('no', 0);
+  assert.strictEqual(P.fv.state().asking, false, 'Cancel by Enter, even in the first moment');
+  // Escape cancels; with no question up it does nothing
+  P.click('ask'); P.key('Enter'); assert.strictEqual(P.fv.state().asking, true);
+  P.key('Escape'); assert.deepStrictEqual([P.fv.state().asking, P.posts.length], [false, 1]);
+  P.key('Escape');
+  // opening the question by keyboard is as it was
+  P.click('ask', 0); assert.strictEqual(P.fv.state().asking, true);
+  P.T += 700; P.click('yes', 0); assert.strictEqual(P.posts.length, 1);
+  // a tab that was handed no rule never takes a Yes at all
+  const Q = page(t, { realClick: undefined }); Q.fv.showTab(true); Q.ready();
+  Q.click('ask'); Q.T += 700; Q.click('yes');
+  assert.deepStrictEqual(Q.posts, [], 'no rule handed in: Yes is never taken');
+  // the one rule, in both places: workspace.js calls OrderTicket.realClick for the group entry's Send and hands the same function to the tab
+  const ws = read('live', 'workspace.js'), src = read('live', 'fleet.js');
+  assert.match(ws, /d\.querySelector\('#gqSend'\)\.addEventListener\('click', e => \{\s*if \(!OT\.realClick\(e\)\) \{ tnote\('The group entry is sent by a click on Send only, not by keyboard\.', 'warn'\); return; \}/);
+  assert.match(ws, /v3: legionLink, realClick: OT\.realClick, headers:/);
+  assert.match(ws, /OT = window\.OrderTicket,/);
+  assert.ok(!/detail === 0|detail !== 0|detail < 1/.test(src), 'fleet.js has no copy of the rule');
 });

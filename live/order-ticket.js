@@ -483,6 +483,13 @@ const OTHER_KEYS = {
   ArrowLeft: 'the arrow keys pan the chart', ArrowRight: 'the arrow keys pan the chart', Delete: 'Delete removes the selected drawing',
   Backspace: 'Backspace removes the selected drawing',
 };
+/**
+ * Was this click made with the pointer, by a person's press, and not by a key? A click made from the keyboard (Enter or Space
+ * on the focused button) and a click made by script carry detail 0; a pointer click carries 1 or more. ONE rule for every
+ * button that must never be worked by a key: the group entry's Send (workspace.js) and Kill all's Yes on the Legion tab
+ * (fleet.js; Anthony 2026-11-11: "yes real click only"). Both call this; neither has its own copy.
+ */
+function realClick(e) { return !!e && typeof e.detail === 'number' && e.detail > 0; }
 /** Whether a KeyboardEvent is one of the chart's own keys, read as the chart reads it (e.key, so any keyboard layout). */
 function isChartKey(e) {
   if (!e || typeof e.key !== 'string') return false;
@@ -543,6 +550,6 @@ function hotkeyAction(keys, combo) {
   return a ? a.id : '';
 }
 
-return { GROUP_MERGE_TICKS, mergeEnd, mergeLevels, HOTKEY_ACTIONS, hotkeyKeyName, hotkeyCombo, parseHotkey, hotkeyRefused, isChartKey, cleanHotkeys, hotkeyFromEvent, hotkeyAction, flattenAllRoots,
+return { realClick, GROUP_MERGE_TICKS, mergeEnd, mergeLevels, HOTKEY_ACTIONS, hotkeyKeyName, hotkeyCombo, parseHotkey, hotkeyRefused, isChartKey, cleanHotkeys, hotkeyFromEvent, hotkeyAction, flattenAllRoots,
   MAX_BRACKET_TICKS, NO_CAP, bracketCap, planIdOf, plannedLines, planDrag, BRACKET_RATIOS, BRACKET_PRESET_MAX, BRACKET_PRESET_NAME_MAX, QTY_CHOICES, ratioOf, ratioBracket, bracketPresetName, defaultPresetName, cleanBracketPresets, qtyOptions, breakEvenPrice, breakEvenLegs, breakEvenAllowed, paceChunks, isWorking, bracketAllowed, opensPosition, placeKind, maxQtyFor, checkQty, cleanBracket, defaultAccount, openEntryFills, groupFillMarks, groupFillWords, cancelAllIds, orderEvent, legSummary, protectionLine, repeatGuard };
 });

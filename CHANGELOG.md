@@ -94,6 +94,8 @@ none of them. Build answers 7, part D1.
   - **A click is never lost.** The head of the tab (Kill all, Yes, Cancel, the lines under them) is built once and kept;
     messages from ChartBridge change its words only. Each part under it is redrawn by itself, the roster only when the
     roster changes.
+  - **Yes takes a real click only** (Anthony 2026-11-11): never Enter, Space or a click made by a key, by the same one
+    rule as the group entry's Send (`OrderTicket.realClick`). Cancel works from the keyboard, and Escape cancels.
   - **Yes counts for 8 seconds by the clock,** and everything is checked again at that moment (signed in, a personal
     account picked, connected).
   - **ChartBridge's answer stays on the tab,** with its time in front, until the next one. It is marked, large, when it
