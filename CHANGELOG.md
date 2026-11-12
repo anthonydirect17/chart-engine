@@ -92,7 +92,8 @@ accounts". The name is his: "Praetorian is good". Rule 12: this changes what the
   shape the page cannot read (an account that is not null or a name, a group that is not an object, a seat without an
   account) is "the page cannot tell": only the stops go. Only null is None: a missing account key, for a trader or the
   bot, is "the page cannot tell" too. A trader on None that still has a seat (a leftover position) is no one's: only the
-  stops go, with "a leftover position on <kind>: stop and flatten it first".
+  stops go, with "a leftover position on <kind>: stop and flatten it first"; Off then asks, and "Flatten and turn off"
+  sends Shadow and the page's Flatten for that seat only, as for a group's seats (`live/agent-helper.js`).
 - **Held back on screen, said in one line:** a trader on a prop account, a group or an account the page cannot tell shows
   all its readings; its modes, Change account, Change the rules, the helper's On and Auto-On time, and its kill switch's
   release are off, with "On Praetorian this trader can only be stopped (Kill switch, Off)" and why: "it is set up from

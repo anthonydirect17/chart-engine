@@ -227,6 +227,8 @@ test('the shapes: a leftover seat counts, and a shape the page cannot read lets 
     [agent({ account: 123 }), /cannot tell its accounts \(ChartBridge sent a shape/, 'a number'],
     [agent({ account: { name: 'MINE-1' } }), /cannot tell its accounts/, 'an object'],
     [agent({ account: '' }), /cannot tell its accounts/, 'an empty string'],
+    [agent({ account: true }), /cannot tell its accounts/, 'true (answers B4-4, G1)'],
+    [agent({ account: ['MINE-1'] }), /cannot tell its accounts/, 'a list (answers B4-4, G1)'],
     [agent({ account: null, group: true, seats: [{ account: 'MINE-1' }] }), /cannot tell its accounts/, 'group: true'],
     [agent({ account: null, group: 'g1' }), /cannot tell its accounts/, 'a group named by a string'],
     [agent({ account: null, seats: 'MINE-1' }), /cannot tell its accounts/, 'seats not a list'],
@@ -275,4 +277,21 @@ test('answers B4-3, item 3: a None trader with a leftover seat is not a personal
   assert.equal(AC.leftoverWhy(agent({ account: 'MINE-1', seats: [{ account: 'MINE-1' }] }), accounts()), '', 'a trader on an account is not this case');
   assert.equal(AC.leftoverWhy(agent({ account: null, group: { id: 'g1' }, seats: [{ account: 'PROP-1' }] }), accounts()), '', 'nor a group trader');
   assert.match(AC.leftoverWhy(agent({ account: null, seats: [{ account: 'PROP-1' }] }), accounts({ personalNamed: false })), /an account the page cannot tell/, 'no pick: not told');
+});
+
+/* answers B4-4, G3: "flatten it first" is true: a leftover seat is flattened per seat, never through an account he lacks */
+test('a None trader with a leftover seat: Off asks, and "Flatten and turn off" flattens that seat only', () => {
+  const AH = require('../live/agent-helper.js');
+  const left = (mode, qty) => agent({ account: null, mode, owns: !!qty, position: qty ? { root: 'MNQ', qty, avgPrice: 25000 } : null,
+    seats: [{ account: 'MINE-1', owns: !!qty, position: qty ? { root: 'MNQ', qty, avgPrice: 25000 } : null }] });
+  assert.equal(AH.offStep(left('auto', 1)), 'ask');
+  assert.match(AH.offQuestion(left('auto', 1), 'Demo Agent'), /holds long 1 MNQ on MINE-1/);
+  const st = AH.flatOffStart(left('auto', 1), 1000);
+  assert.equal(st.action, 'shadow');
+  assert.deepEqual(st.job.seats, [{ account: 'MINE-1', root: 'MNQ' }]); assert.equal(st.job.account, '');
+  assert.equal(AH.flatOffStart(left('shadow', 1), 1000).action, 'flatten');
+  assert.equal(AH.offStep(left('shadow', 0)), 'off', 'a flat leftover seat: Off at once');
+  assert.match(AH.flatOffStart(agent({ account: null, mode: 'auto', position: { root: 'MNQ', qty: 1 }, seats: [{ account: 'MINE-1', position: { qty: 1 } }] }), 1000).error, /A seat's instrument is not known: nothing was sent/);
+  /* a trader on an account with a leftover seat is not this case (his own account is flattened, as before) */
+  assert.equal(AH.flatOffStart(agent({ account: 'MINE-1', mode: 'shadow', position: { root: 'MNQ', qty: 1 }, seats: [{ account: 'PROP-1', position: { root: 'MNQ', qty: 1 } }] }), 1000).job.account, 'MINE-1');
 });
