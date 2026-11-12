@@ -41,6 +41,11 @@ the focus is while the tab is open).
   courtesy, not a guard. Wanted: both refused by ChartBridge while the group's agent is in Auto or Copilot or owns
   anything, and `accountGroup` carrying the group the page believes the account is leaving (closes the page's
   stale-copy race: an account moved in another window a moment before).
+- R3-3 of the third look at 94 and 99 (answers 26), beside N12 for the next ChartBridge change: ChartBridge also sends
+  `agentStandDowns` from other threads on any stand-down change, so in a rare case one lands in the middle of a
+  sign-in replay and Legion reads the traders as heard early; the 1.5 s floor covers it until then. Wanted: an explicit
+  "replay done" message after the replay (item 7 of the design note
+  FROM_BUILD1_2026-11-12_design_next_chartbridge_change.md in TradingApp_Handoff).
 - D2, the second half: done in 1.48.0. Each lane holds the Multi-Account panel itself on its own group, so a move into
   or out of a lane is that panel's own drag and drop and join question (the narrow feed of 1.47.0: `accountGroup` and
   `memberBench` only, refused on the page while the lane is in Auto or holds something).
