@@ -68,7 +68,7 @@ const agentsNow = async () => (await control('agents')).agents;
 const agentNow = async id => (await agentsNow()).find(a => a.agent === id);
 async function startBridge(flags) {
   port = await freePort();
-  const br = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(port), '--v3', '--trading', '--test-controls', '--test-pin=' + TEST_PIN, '--clock-offset=' + CLOCK_OFFSET_S].concat(flags), { stdio: ['ignore', 'pipe', 'inherit'] });
+  const br = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(port), '--v3', '--trading', '--test-controls', '--test-pin=' + TEST_PIN, '--clock-offset=' + CLOCK_OFFSET_S, '--personal=EVAL-A'].concat(flags), { stdio: ['ignore', 'pipe', 'inherit'] });
   await new Promise((res, rej) => { br.stdout.once('data', res); br.once('exit', c => rej(new Error('bridge exited ' + c))); });
   return br;
 }

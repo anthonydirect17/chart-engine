@@ -61,7 +61,7 @@ function offsetToNy(hhmm, now) {
 const CLOCK_OFFSET_S = offsetToNy(SMOKE_NY, Date.now());
 async function startBridge(p, flags) {
   port = p;
-  const br = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(p), '--v3', '--trading', '--test-controls', '--test-pin=' + TEST_PIN, '--clock-offset=' + CLOCK_OFFSET_S].concat(flags || []), { stdio: ['ignore', 'pipe', 'inherit'] });
+  const br = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(p), '--v3', '--trading', '--test-controls', '--test-pin=' + TEST_PIN, '--clock-offset=' + CLOCK_OFFSET_S, '--personal=EVAL-A'].concat(flags || []), { stdio: ['ignore', 'pipe', 'inherit'] });
   await new Promise((res, rej) => { br.stdout.once('data', res); br.once('exit', c => rej(new Error('bridge exited ' + c))); });
   return br;
 }
@@ -166,7 +166,7 @@ try {
      not connected), so the alert is never hidden */
   check(await page.isVisible('#wsAgentTab') && (!(await page.isVisible('#wsBotTab')) || await page.$eval('#wsBotTab', b => b.classList.contains('bt-alert'))),
     'the Agent tab button is in the top bar (the Bot tab is a panel now; its button is there only with its red alert)');
-  check(await page.evaluate(() => { const a = document.getElementById('wsAgentTab'); return a.previousElementSibling === document.getElementById('wsTopTabs') && a.nextElementSibling === document.getElementById('wsTabSlot'); }), '1.50.0: the Agent button right after the top tabs (Chart, Legion, Colosseum), the Bot\'s slot after it');
+  check(await page.evaluate(() => { const a = document.getElementById('wsAgentTab'); return a.parentElement === document.getElementById('wsPrGroup') && a.previousElementSibling === document.getElementById('wsPraetorianTab') && a.nextElementSibling === document.getElementById('wsTabSlot'); }), '1.51.0: the Agent button is Praetorian\'s first side, after the Praetorian button, the Bot\'s slot after it');
   await control('agent-connect', { agent: 'demo', name: 'Demo Agent', build: 'sample-build-1' });
   await control('agent-connect', { agent: 'demotwo', name: 'Second Demo Agent', build: 'sample-build-7' });
   await page.click('#wsAgentTab');
@@ -667,13 +667,12 @@ try {
   check(seats.rows.join(',') === 'SIM-F1,SIM-F2' && seats.total && seats.out === 'Not in this trade: SIM-F2 is not connected' && seats.account === 'Group Lucid: SIM-F1, SIM-F2',
     'a group: His account names it and shows a row per seat, why one sat out, and the group total: ' + JSON.stringify(seats));
   await page.screenshot({ path: path.join(SHOTS, 'agent-group.png') });
-  await page.click('#agView [data-act="acctOpen"]');
-  await until(() => page.isVisible('#agView [data-k="acctSel"]'), 'the picker open');
-  const gOpts = await page.evaluate(() => [...document.querySelectorAll('#agView [data-k="acctSel"] option')].map(o => o.textContent));
-  const gi = gOpts.findIndex(t => /^Group /.test(t)), si = gOpts.findIndex(t => !/^(None|Group )/.test(t));
-  check(/^None/.test(gOpts[0]) && gi === 1 && si > gi && gOpts.some(t => t === 'Group Lucid: SIM-F1, SIM-F2 (SIM), now'), 'the one picker: None first, then the groups, then single accounts: ' + JSON.stringify(gOpts));
-  await page.screenshot({ path: path.join(SHOTS, 'agent-group-picker.png'), clip: { x: 0, y: 0, width: 640, height: 1000 } });
-  await page.click('#agView [data-act="acctCancel"]');
+  /* 1.51.0 Praetorian: a trader on a group (the prop business, set up from Legion's trader desk) is shown whole and can only be stopped here;
+     the picker's order (None, the groups, single accounts) is test/agent.test.js's, and the Agent window (Pop out) keeps it */
+  const held = await page.evaluate(() => ({ why: document.querySelector('#agView [data-k="prWhy"]').textContent, acct: document.querySelector('#agView [data-k="acctOpen"]').disabled,
+    rules: document.querySelector('#agView [data-k="rulesOpen"]').disabled, modes: [...document.querySelectorAll('#agView [data-k="modes"] button')].every(b => b.disabled), kill: document.querySelector('#agView [data-k="kill"]').disabled }));
+  check(/trades a group: groups are the prop business, it is set up from Legion's trader desk/.test(held.why) && held.acct && held.rules && held.modes && !held.kill,
+    '1.51.0 Praetorian: a trader on a group is held back (account, rules, modes off; Kill switch on): ' + JSON.stringify(held));
   await control('agent-group', { agent: 'demo', on: '0' });
   await page.close();
   await bridge.kill(); bridge = null;

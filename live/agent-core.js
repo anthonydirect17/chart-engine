@@ -1339,6 +1339,218 @@ function copilotRouter(doc) {
   return r;
 }
 
+/* ======================================================================== Praetorian (chart 1.51.0)
+ * Anthony 2026-11-11: the Agent tab and the Bot tab as one tab, Praetorian, "focused on the personal (not prop business)
+ * accounts"; "They already have all the rules and safety's built in". The two desks are mounted as they are; this is the one
+ * thing neither had: a gate on the connection they are handed (live/workspace.js praetorianLink), so that from Praetorian
+ * nothing reaches a prop account. It hears ChartBridge's own `accounts`, `agent` and `bot` messages and answers, for each
+ * message a desk would post, '' (it may go) or why not. It passes:
+ *   - a kill switch turned ON (agentKill or botKill with on: true): it only stops a trader, so it is never held back; and a
+ *     trader's or the bot's Shadow (agentMode or botMode to exactly 'shadow'), a stop too (the review of 102, F2; 03:30);
+ *   - the two acknowledgements (agentSeen, botSeen): they change nothing;
+ *   - every other agent or bot message only when the trader (or the bot) is on your personal account, a Sim account or None,
+ *     and an account change only to one of those (a league seat is a Sim account, and ChartBridge checks Sim again).
+ * Everything else is refused by name: a group (groups are the prop business), a prop account, a live account the page cannot
+ * tell, a trader ChartBridge has not described yet, and every message type not named above. Sim is offered because it can
+ * never reach a prop account and the Agent and Bot tabs are where a trader is tried on Sim (to confirm).
+ * Personal is ChartBridge's own flag (0.6.16: personal: true on the one account picked on the Accounts tab, with
+ * personalNamed), read by FleetCore.kindOf, the reader Legion uses. With no pick, before the first accounts message, or with no
+ * FleetCore on the page, no account is personal and only a kill switch ON gets through (the careful side). It lives here, in
+ * a file every PC already installs, and reads FleetCore when asked (fleet.js loads after this file).
+ */
+const fleetCore = () => {
+  if (typeof module === 'object' && module.exports && typeof require === 'function') { try { return require('./fleet.js'); } catch (e) { return null; } }
+  return (typeof self !== 'undefined' && self.FleetCore) || null;
+};
+const PR_AGENT_TYPES = new Set(['agentMode', 'agentKill', 'agentRules', 'agentAnswer', 'agentAccount', 'agentSeen']);
+const PR_BOT_TYPES = new Set(['botMode', 'botKill', 'botRails', 'botAnswer', 'botAccount', 'botSeen']);
+const PR_ACKS = new Set(['agentSeen', 'botSeen']);
+const PR_WHERE = 'it is set up from Legion\'s trader desk (being built); from here you can only stop it';   // the review of 102 (F5): the words say the truth until Legion's trader desk is in
+
+/**
+ * Every account one trader (its `agent` message) is on, for both gates (the review of 103, b F2): its `account` (a non-empty
+ * string) and the account of EVERY seat it has, a group's or a leftover one (ChartBridge keeps a seat that still holds its trade
+ * when the trader goes to None). Null when the page cannot read the shape: an `account` that is neither null nor a non-empty
+ * string, a `group` that is neither null nor a plain object, `seats` that are not a list, or a seat without a string account.
+ * Not known is refused (only the stops go). FleetCore.traderAccounts (Legion's strip) is left as it is.
+ */
+function gateAccounts(agentMsg) {
+  if (!plainObj(agentMsg)) return null;
+  const a = agentMsg, out = [];
+  if (!('account' in a)) return null;   // the review of 102 and 103, round 2 (F2): only null is None; a missing key is not known
+  if (a.account !== null) { if (typeof a.account !== 'string' || !a.account) return null; out.push(a.account); }
+  if (a.group !== undefined && a.group !== null && !plainObj(a.group)) return null;
+  if (a.seats !== undefined && a.seats !== null) {
+    if (!Array.isArray(a.seats)) return null;
+    for (const x of a.seats) { if (!plainObj(x) || typeof x.account !== 'string' || !x.account) return null; if (!out.includes(x.account)) out.push(x.account); }
+  }
+  return out;
+}
+const GATE_SHAPE = 'the page cannot tell its accounts (ChartBridge sent a shape the page does not know)';
+/**
+ * A trader on None that still has a seat (answers B4-3, item 3): ChartBridge keeps a seat that still holds its trade when the
+ * trader goes to None. That is not a personal (or prop) trader: on both desks only the stops go (kill switch, Shadow, and
+ * the flatten of that seat) until ChartBridge drops the seat. '' when it is not that case; else the words.
+ */
+function leftoverWhy(agentMsg, accountsMsg) {
+  if (!plainObj(agentMsg) || agentMsg.account !== null || plainObj(agentMsg.group) || !Array.isArray(agentMsg.seats) || !agentMsg.seats.length) return '';
+  const names = gateAccounts(agentMsg) || [];
+  const FC = fleetCore(), rows = plainObj(accountsMsg) && Array.isArray(accountsMsg.list) ? accountsMsg.list : [];
+  const kinds = names.map(n => { const row = rows.find(r => plainObj(r) && r.name === n); return row && FC && typeof FC.kindOf === 'function' ? FC.kindOf(row) : ''; });
+  const named = plainObj(accountsMsg) && accountsMsg.personalNamed === true;
+  const one = new Set(kinds).size === 1 ? kinds[0] : 'mixed';
+  const where = one === 'sim' ? 'a Sim account' : !named || one === '' ? 'an account the page cannot tell' : one === 'personal' ? 'your personal account' : one === 'prop' ? 'a prop account' : 'more than one kind of account';
+  return 'a leftover position on ' + where + ': stop and flatten it first';
+}
+
+/** Whether Praetorian may reach the account `name`: your personal account (ChartBridge's own flag, with a pick made) or a Sim
+ *  account (ChartBridge's sim flag). Not known is no. */
+function prIsPersonal(name, accountsMsg) {
+  const FC = fleetCore();
+  if (!FC || typeof FC.kindOf !== 'function') return false;
+  if (typeof name !== 'string' || !name || !plainObj(accountsMsg)) return false;
+  const row = (Array.isArray(accountsMsg.list) ? accountsMsg.list : []).find(r => plainObj(r) && r.name === name);
+  if (!row) return false;
+  const k = FC.kindOf(row);
+  return k === 'sim' || (k === 'personal' && accountsMsg.personalNamed === true);
+}
+
+/** Words for an account that is not personal: what it is, or that the page cannot tell. */
+function prNotPersonalWhy(name, accountsMsg) {
+  const FC = fleetCore();
+  if (!FC || typeof FC.kindOf !== 'function') return 'the page cannot tell its accounts here (fleet.js is not served)';
+  if (!plainObj(accountsMsg)) return 'ChartBridge has not listed its accounts yet';
+  const row = (Array.isArray(accountsMsg.list) ? accountsMsg.list : []).find(r => plainObj(r) && r.name === name);
+  if (!row) return name + ' is not in ChartBridge\'s accounts now';
+  const k = FC.kindOf(row);
+  if (k === 'prop') return name + ' is a prop account: ' + PR_WHERE;
+  if (accountsMsg.personalNamed !== true) return name + ' is a live account and no personal account is picked yet (pick it on the Accounts tab)';
+  return name + ' is an account the page cannot tell';
+}
+
+/**
+ * Where one trader (its `agent` message) may be reached from: '' when every account it is on (its account and every seat,
+ * gateAccounts) is personal or Sim (None with no seat counts as none); else why not. A group is never personal; a shape the
+ * page cannot read is refused.
+ */
+function prTraderWhy(agentMsg, accountsMsg) {
+  if (!plainObj(agentMsg)) return 'ChartBridge has not described this trader yet';
+  const name = typeof agentMsg.name === 'string' && agentMsg.name ? agentMsg.name : String(agentMsg.agent || 'this trader');
+  if (plainObj(agentMsg.group)) return name + ' trades a group: groups are the prop business, ' + PR_WHERE;
+  const accts = gateAccounts(agentMsg);
+  if (!accts) return name + ': ' + GATE_SHAPE;
+  const left = leftoverWhy(agentMsg, accountsMsg);
+  if (left) return name + ': ' + left;
+  for (const a of accts) if (!prIsPersonal(a, accountsMsg)) return name + ': ' + prNotPersonalWhy(a, accountsMsg);
+  return '';
+}
+
+/** The bot slot (its `bot` message): '' on your personal account or on None; else why not. */
+const BOT_SHAPE = 'the page cannot tell its account (ChartBridge sent a shape the page does not know)';
+/** The bot's account: '' for None (null only), the name, or null when the page cannot read it (round 2, F2). */
+function botAccountOf(botMsg) {
+  if (!plainObj(botMsg) || !('account' in botMsg)) return null;
+  if (botMsg.account === null) return '';
+  return typeof botMsg.account === 'string' && botMsg.account ? botMsg.account : null;
+}
+function prBotWhy(botMsg, accountsMsg) {
+  const acct = botAccountOf(botMsg);
+  if (acct === null) return 'The bot: ' + BOT_SHAPE;
+  if (!acct) return '';
+  return prIsPersonal(acct, accountsMsg) ? '' : 'The bot: ' + prNotPersonalWhy(acct, accountsMsg);
+}
+
+/**
+ * One message a desk would post, against what ChartBridge has said: '' (it may go) or why not.
+ * st: { agents: Map(id -> agent message), bot (the bot message), accounts (the accounts message) }.
+ */
+function prCheck(m, st) {
+  const s = st || {};
+  if (!plainObj(m) || typeof m.type !== 'string') return 'Not a message.';
+  const t = m.type;
+  if ((t === 'agentKill' || t === 'botKill') && m.on === true) return '';
+  /* the review of 102 (F2): Shadow is a stop too (it places nothing new): agentMode to exactly 'shadow' goes for any trader
+     ChartBridge has described, so "Flatten and turn off" works on a prop trader. Nothing else for one. */
+  if (t === 'agentMode' && m.mode === 'shadow' && s.agents instanceof Map && typeof m.agent === 'string' && s.agents.has(m.agent)) return '';
+  /* the coordinator, 03:30: the bot's Shadow is a stop too, with the same exact check, once ChartBridge has described the bot */
+  if (t === 'botMode' && m.mode === 'shadow' && plainObj(s.bot)) return '';
+  if (PR_ACKS.has(t)) return '';
+  if (PR_AGENT_TYPES.has(t)) {
+    const a = s.agents instanceof Map && typeof m.agent === 'string' ? s.agents.get(m.agent) || null : null;
+    if (!a) return 'Not sent from Praetorian: ChartBridge has not described trader ' + String(m.agent || '') + ' yet.';
+    const why = prTraderWhy(a, s.accounts);
+    if (why) return 'Not sent from Praetorian: ' + why + '.';
+    if (t === 'agentAccount') {
+      if (m.group !== undefined) return 'Not sent from Praetorian: a group is the prop business, ' + PR_WHERE + '.';
+      if (m.account !== null && !prIsPersonal(m.account, s.accounts)) return 'Not sent from Praetorian: ' + prNotPersonalWhy(m.account, s.accounts) + '.';
+    }
+    return '';
+  }
+  if (PR_BOT_TYPES.has(t)) {
+    if (!plainObj(s.bot)) return 'Not sent from Praetorian: ChartBridge has not described the bot yet.';
+    const why = prBotWhy(s.bot, s.accounts);
+    if (why) return 'Not sent from Praetorian: ' + why + '.';
+    if (t === 'botAccount' && m.account !== null && !prIsPersonal(m.account, s.accounts)) return 'Not sent from Praetorian: ' + prNotPersonalWhy(m.account, s.accounts) + '.';
+    return '';
+  }
+  return 'Not sent from Praetorian: it does not send ' + t.slice(0, 40) + '.';
+}
+
+/**
+ * The Agent desk's one picker on Praetorian (pickerChoices' list): None as it is; a group listed, never offered (groups are the
+ * prop business); a single account or a league seat offered only when ok(name) says Praetorian may reach it, else listed with
+ * the reason. Never adds a choice and never offers one pickerChoices did not.
+ */
+function prChoices(list, ok) {
+  return (Array.isArray(list) ? list : []).map(c => {
+    if (!c || c.kind === 'none') return c;
+    if (!c.ok && !c.current) return c;   // not offered by the desk already: its own reason stands (a league seat on a LIVE account, a taken account)
+    if (c.kind === 'group') return Object.assign({}, c, { ok: false, text: c.label + (c.current ? ', now' : '') + ', not on Praetorian: groups are the prop business, ' + PR_WHERE });
+    if (typeof ok === 'function' && ok(c.name) === true) return c;
+    return Object.assign({}, c, { ok: false, text: (c.kind === 'league' ? 'League seat: ' : '') + c.name + (c.mark ? ' (' + c.mark + ')' : '') + (c.current ? ', now' : '') + ', not on Praetorian: a prop account or one the page cannot tell' });
+  });
+}
+/** The bot's picker on Praetorian (BotCore.accountChoices' list): the same rule, for the bot slot. */
+function prBotChoices(list, ok) {
+  return (Array.isArray(list) ? list : []).map(c => (!c || (typeof ok === 'function' && ok(c.name) === true) ? c : Object.assign({}, c, { tradable: false, praetorian: 'not on Praetorian: a prop account or one the page cannot tell' })));
+}
+/**
+ * The connection a desk is handed on Praetorian, built in ONE place for the page (live/workspace.js) and both pop-out windows
+ * (live/agent.html, live/bot.html; the review of 102, F1): a gate hears `feed` first (it is added to the feed's listeners
+ * before the desk exists), and the frozen object posts only what the gate passes. It has no send and no sendOrder. onHear(m)
+ * (optional) is told of each message and of a drop (null). Null with no feed: the desk then gets no connection (careful).
+ */
+function praetorianLink(feed, onHear) {
+  if (!feed || typeof feed.listen !== 'function' || typeof feed.post !== 'function') return null;
+  const gate = praetorianGate();
+  const told = m => { if (typeof onHear === 'function') { try { onHear(m); } catch (e) { /* the page's own redraw */ } } };
+  feed.listen({ message: m => { gate.hear(m); told(m); }, closed: () => { gate.lost(); told(null); } });
+  return Object.freeze({ personal: true, listen: part => feed.listen(part), post: m => gate.check(m) === '' && feed.post(m) === true,
+    limit: name => (typeof feed.limit === 'function' ? feed.limit(name) : null), why: m => gate.check(m), traderWhy: id => gate.traderWhy(id),
+    botWhy: () => gate.botWhy(), accountOk: name => gate.accountOk(name), named: () => gate.state().personalNamed });
+}
+/**
+ * The gate the two desks' connection goes through: hear(m) every message ChartBridge sends, lost() when the connection drops
+ * (everything heard is forgotten, so nothing is passed on an old word), check(m) as above, state() for the tests.
+ */
+function praetorianGate() {
+  const S = { agents: new Map(), bot: null, accounts: null };
+  return {
+    hear(m) {
+      if (!plainObj(m)) return;
+      if (m.type === 'accounts') S.accounts = m;
+      else if (m.type === 'agent' && typeof m.agent === 'string') S.agents.set(m.agent, m);
+      else if (m.type === 'bot') S.bot = m;
+    },
+    lost() { S.agents.clear(); S.bot = null; S.accounts = null; },
+    check: m => prCheck(m, S),
+    traderWhy: id => prTraderWhy(S.agents.get(id) || null, S.accounts),
+    botWhy: () => (plainObj(S.bot) ? prBotWhy(S.bot, S.accounts) : 'ChartBridge has not described the bot yet'),
+    accountOk: name => prIsPersonal(name, S.accounts),
+    state: () => ({ agents: S.agents.size, bot: !!S.bot, accounts: !!S.accounts, personalNamed: !!(S.accounts && S.accounts.personalNamed === true) }),
+  };
+}
+
 return {
   VERSION, MIN_BRIDGE, MODES, MODE_NAME, NOTE_KINDS, NOTE_NAME, PROPOSAL_STATES, RULE_ROOTS, CEILING, LIMITS, DEFAULT_RULES, LATE_MS, CONFIRM_MS, NOTES_MAX, PLANS_MAX, DEFAULT_ACCOUNT, NONE_LABEL,
   validId, parseVersion, atLeast, offText,
@@ -1353,5 +1565,6 @@ return {
   createCopilotRouter, copilotRouter, KEY_LOCK_MS, KEY_MIN_SHOWN_MS, KEY_SAY,
   boardRows, boardRoom, boardPosition, rWords, leagueChoices, standDownClearMsg, sdWhen,
   LIGHT, STEPS, PANELS, LIGHT_HOLD, LAP_MS, lightEvents, lightState, stepLines, ageText, entryRisk, tradesR, heatNow, rowTone, decisionRecord, sessionTrail, roomLines, MOTION_KEY, motionPref, setMotionPref,
+  gateAccounts, leftoverWhy, botAccountOf, prChoices, prBotChoices, praetorianLink, PR_AGENT_TYPES, PR_BOT_TYPES, prIsPersonal, prNotPersonalWhy, prTraderWhy, prBotWhy, prCheck, praetorianGate
 };
 });

@@ -73,10 +73,16 @@
     <!-- 1.35.0: the League tab (live/league.js); 1.50.0: the Colosseum, research on the live market: the shadow league and the
          traders in Shadow. SHADOW: no orders -->
     <button type="button" class="ws-btn lg-tabbtn" id="wsLeagueTab" aria-pressed="false" title="Colosseum: research on the live market. The shadow league on paper and the traders in Shadow. SHADOW: no orders" hidden>Colosseum</button>
+    <!-- 1.51.0 (Anthony 2026-11-11, "Praetorian is good"): Praetorian, the Agent tab and the Bot tab as one tab for the personal
+         account. Its two sides are the two desks' own buttons, with their own listeners, states and the Bot's red alert, so an
+         alert is never hidden behind a closed tab; Praetorian opens the side used last. Shown when either side is offered -->
+    <span class="pr-tabs" id="wsPrGroup" role="group" aria-label="Praetorian: your personal account">
+      <button type="button" class="ws-btn pr-tabbtn" id="wsPraetorianTab" aria-pressed="false" title="Praetorian: your agents and the bot on your personal account (and Sim). A trader on a prop account is run from Legion; here it can only be stopped" hidden>Praetorian</button>
+      <!-- the Agent tab (1.17.0, live/agent.js): shown with a ChartBridge that speaks protocol v3; its agents come with ChartBridge 0.5.0 -->
+      <button type="button" class="ws-btn ag-tabbtn" id="wsAgentTab" aria-pressed="false" hidden>Agent</button>
+      <span class="ws-tabslot" id="wsTabSlot"></span>
+    </span>
   </span>
-  <!-- the Agent tab (1.17.0, live/agent.js): shown with a ChartBridge that speaks protocol v3; its agents come with ChartBridge 0.5.0 -->
-  <button type="button" class="ws-btn ag-tabbtn" id="wsAgentTab" aria-pressed="false" hidden>Agent</button>
-  <span class="ws-tabslot" id="wsTabSlot"></span>
   <!-- 1.34.0 (Anthony 2026-10-20): Save these screens / Open my screens (live/screens.js) -->
   <button type="button" class="ws-btn ws-gear ws-scrbtn" id="wsScreens" aria-label="Screens" title="Screens" aria-haspopup="dialog" aria-expanded="false" aria-controls="wsScreensPop"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><rect x="1.5" y="2.5" width="9" height="6.5" rx="1" fill="none" stroke="currentColor" stroke-width="1.3"/><rect x="5.5" y="6.5" width="9" height="6.5" rx="1" fill="var(--ws-field)" stroke="currentColor" stroke-width="1.3"/></svg></button>
   <label class="ws-lbl" for="wsLayout">Layout</label>

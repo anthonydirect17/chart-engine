@@ -86,7 +86,7 @@ test('the page: the Colosseum (1.50.0, was League) in the top tabs; the Bot butt
   const html = read('live/index.html');
   assert.match(html, /id="wsLeagueTab"[^>]*>Colosseum<\/button>/);
   assert.match(html, /<div id="wsTabHold" hidden>\s*<!--[^>]*-->\s*<button[^>]*id="wsBotTab"[^>]*>Bot<\/button>\s*<\/div>/, 'the Bot\'s own button waits in the hold');
-  assert.match(html, /id="wsLeagueTab"[^>]*>Colosseum<\/button>\s*<\/span>\s*<!--[^>]*-->\s*<button type="button" class="ws-btn ag-tabbtn" id="wsAgentTab" aria-pressed="false" hidden>Agent<\/button>/, '1.50.0: the Agent tab stays in the top bar, after the top tabs, until Praetorian takes it');
+  assert.match(html, /id="wsLeagueTab"[^>]*>Colosseum<\/button>\s*<!--[^>]*-->\s*<span class="pr-tabs" id="wsPrGroup"[^>]*>\s*<button[^>]*id="wsPraetorianTab"[^>]*>Praetorian<\/button>\s*<!--[^>]*-->\s*<button type="button" class="ws-btn ag-tabbtn" id="wsAgentTab" aria-pressed="false" hidden>Agent<\/button>\s*<span class="ws-tabslot" id="wsTabSlot"><\/span>/, '1.51.0: after the Colosseum, Praetorian with its two sides, the Agent desk\'s own button and the Bot\'s slot');
   assert.doesNotMatch(html, /data-add="agentdesk"/, 'no agent panel');
   assert.doesNotMatch(html, /data-add="bot"/, '1.36.0: no Bot panel (merged into the Agents strip)');
   assert.match(html, /data-do="league" hidden>League trades \(faint\): off<\/button>/);

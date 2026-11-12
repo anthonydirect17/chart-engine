@@ -94,7 +94,7 @@ try {
   /* the top bar (1.50.0): the top tabs Chart, Legion, Colosseum (the League's button, renamed), then the Agent tab as it was; the
      Bot button in the top bar (1.36.0: on a layout with no Agents strip) */
   check(await p.isVisible('#wsLeagueTab') && (await p.textContent('#wsLeagueTab')) === 'Colosseum', '1.50.0: the top bar has the Colosseum (the League tab, renamed)');
-  check(await p.evaluate(() => [...document.getElementById('wsTopTabs').children].map(b => b.id).join() === 'wsChartTab,wsFleetTab,wsLeagueTab' && document.getElementById('wsTopTabs').nextElementSibling === document.getElementById('wsAgentTab') && !!document.getElementById('wsAgentTab').closest('.ws-top')), '1.50.0: the top tabs in order Chart, Legion, Colosseum; the Agent tab stays in the top bar after them');
+  check(await p.evaluate(() => [...document.getElementById('wsTopTabs').children].map(b => b.id).join() === 'wsChartTab,wsFleetTab,wsLeagueTab,wsPrGroup' && [...document.getElementById('wsPrGroup').children].map(b => b.id).join() === 'wsPraetorianTab,wsAgentTab,wsTabSlot' && !!document.getElementById('wsAgentTab').closest('.ws-top')), '1.51.0: the top tabs in order Chart, Legion, Colosseum, Praetorian (its sides Agent and the Bot\'s slot)');
   check(await p.isVisible('#wsBotTab') && await p.$eval('#wsTabSlot', h => h.contains(document.getElementById('wsBotTab'))), '1.36.0: no Agents strip on the layout: the Bot button is in the top bar');
   await p.click('#wsAdd');
   const menu = await p.$$eval('#wsAddMenu [data-add]', bs => bs.map(b => b.textContent));
@@ -202,6 +202,24 @@ try {
   check(new URL(p.url()).searchParams.get('tab') === 'bot', '?tab=bot as before');
   await p.click('#wsBotTab');
   await until(() => p.evaluate(() => !document.body.classList.contains('bt-on')), 'closed again from its button');
+  /* 1.51.0 Praetorian: its name over its two sides; it opens the side used last (the Bot, just now), closes again, and is
+     pressed while either side is open; the Chart tab closes it */
+  check(await p.isVisible('#wsPraetorianTab') && (await p.textContent('#wsPraetorianTab')) === 'Praetorian' && await p.getAttribute('#wsPraetorianTab', 'aria-pressed') === 'false', '1.51.0: Praetorian offered, not pressed');
+  await p.click('#wsPraetorianTab');
+  await until(() => p.evaluate(() => document.body.classList.contains('bt-on')), 'Praetorian opens the side used last (the Bot)');
+  check(await p.getAttribute('#wsPraetorianTab', 'aria-pressed') === 'true' && await p.getAttribute('#wsChartTab', 'aria-pressed') === 'false', '1.51.0: Praetorian pressed while its Bot side is open');
+  await p.screenshot({ path: path.join(out, 'praetorian-topbar-1366.png'), clip: { x: 0, y: 0, width: 1366, height: 48 } });
+  await p.click('#wsAgentTab');
+  await until(() => p.evaluate(() => document.body.classList.contains('ag-on') && !document.body.classList.contains('bt-on')), 'its Agent side');
+  check(await p.getAttribute('#wsPraetorianTab', 'aria-pressed') === 'true', '1.51.0: still pressed on its Agent side');
+  await p.click('#wsPraetorianTab');
+  await until(() => p.evaluate(() => !document.body.classList.contains('ag-on') && !document.body.classList.contains('bt-on')), 'Praetorian closes');
+  await p.click('#wsPraetorianTab');
+  await until(() => p.evaluate(() => document.body.classList.contains('ag-on')), 'Praetorian opens the Agent side, used last');
+  await p.click('#wsChartTab');
+  await until(() => p.evaluate(() => !document.body.classList.contains('ag-on')), 'Chart closes Praetorian');
+  check(await p.getAttribute('#wsPraetorianTab', 'aria-pressed') === 'false', '1.51.0: Praetorian opens the side used last, closes, and Chart closes it');
+  check(await p.evaluate(() => document.documentElement.scrollWidth <= innerWidth), '1.51.0: no sideways scroll with the four tabs at ' + (await p.evaluate(() => innerWidth)));
   const socks0 = socks;
   await p.click('#wsAdd'); await p.click('#wsAddMenu [data-add="agents"]');
   /* the bot's drone: in the sky, or (a narrow panel) in the "+N more" list */

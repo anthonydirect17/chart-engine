@@ -671,7 +671,7 @@ test('hotkeys under a tab (Anthony 2026-11-11 and 2026-11-12): one place, every 
   // every body class a tab sets while it covers the grid is in the list: a later tab that forgets it fails here
   const toggled = [...ws.matchAll(/document\.body\.classList\.toggle\('([a-z]+-on)', on\)/g)].map(x => x[1]).sort();
   assert.deepStrictEqual(Object.keys(tabs).sort(), toggled);
-  assert.deepStrictEqual(tabs, { 'fl-on': 'Legion', 'ag-on': 'Agent', 'bt-on': 'Bot', 'lg-on': 'Colosseum' });   // 1.50.0: the League tab is the Colosseum
+  assert.deepStrictEqual(tabs, { 'fl-on': 'Legion', 'ag-on': 'Praetorian', 'bt-on': 'Praetorian', 'lg-on': 'Colosseum' });   // 1.50.0: the League tab is the Colosseum; 1.51.0: Agent and Bot are Praetorian's sides
   for (const [cls, f] of [['fl-on', 'fleet.css'], ['ag-on', 'agent.css'], ['bt-on', 'bot.css'], ['lg-on', 'league.css']])
     assert.match(read('live', f), new RegExp('body\\.' + cls + ' \\.ws-grid[^{]*\\{ display: none !important; \\}'), cls + ' hides the chart grid');
   // the rule itself, run: which keys act under which tab

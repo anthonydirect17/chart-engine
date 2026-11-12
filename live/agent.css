@@ -738,3 +738,15 @@ body.ag-agents .bt-props { --bt-corner-bottom: 56px; }
 .ag-view .ag-bsdclear { min-height: 32px; color: var(--ag-warn); border-color: rgba(255, 194, 102, .7); background: transparent; }
 .ag-view .ag-bsdclear:disabled { opacity: .5; cursor: not-allowed; }
 .ag-view .ag-tier.tier-league { color: var(--ag-warn); border-color: rgba(255, 194, 102, .55); border-style: dashed; }
+
+/* 1.51.0 Praetorian (Anthony 2026-11-11): the Agent tab and the Bot tab as one tab. In the top tabs, its name and its two
+   sides (the two desks' own buttons, the Bot's alert kept) in one pill group. No head row: Layout 5's column needs the height;
+   a held-back trader says why in its own Mode card. */
+/* Its name is a small gold caption over its two sides, so the group is no wider than the two buttons were (the top bar's
+   room at 1366 px, test/workspace-smoke.mjs); the caption is a button too (it opens the side used last). */
+.pr-tabs { display: inline-grid; grid-template-columns: auto auto; grid-template-rows: 11px 22px; align-items: center; column-gap: 1px; padding: 0 0 0 4px; margin-left: 2px; border-left: 1px solid var(--ws-line2); }
+.pr-tabs .ws-tabslot { grid-row: 2; gap: 1px; }
+#wsTopTabs .pr-tabs #wsPraetorianTab { grid-column: 1 / -1; grid-row: 1; justify-self: start; height: 11px; padding: 0 4px; border: 0; border-radius: 3px; background: transparent; font: 600 9px/11px var(--ws-sans); letter-spacing: .16em; text-transform: uppercase; color: var(--ws-gold-text); }
+#wsTopTabs .pr-tabs #wsPraetorianTab[aria-pressed="true"] { border: 0; background: transparent; color: var(--ws-gold); }
+#wsTopTabs .pr-tabs .ag-tabbtn, #wsTopTabs .pr-tabs .bt-tabbtn { grid-row: 2; height: 22px; font-weight: 500; padding: 0 9px; }
+.ag-prwhy:not([hidden]), .bt-prwhy:not([hidden]) { color: var(--ws-warn); }

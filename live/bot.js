@@ -112,7 +112,7 @@ function create(o) {
         '<div class="bt-pb bt-panelb">' +
           '<div class="bt-sec" data-no-motion><span class="bt-cap">Mode <span class="bt-acct" data-k="modeAcct"></span></span>' +
             '<div class="bt-modes" role="group" aria-label="Bot mode" data-k="modes">' + BC.MODES.map(m => '<button type="button" data-mode="' + m + '" aria-pressed="false">' + BC.MODE_NAME[m] + '</button>').join('') + '</div>' +
-            '<p class="bt-why" data-k="modeWhy" hidden></p></div>' +
+            '<p class="bt-why" data-k="modeWhy" hidden></p><p class="bt-why bt-prwhy" data-k="prWhy" role="note" hidden></p></div>' +
           '<div class="bt-kv" data-in=".1,.38">' +
             '<span class="k">Bot</span><span class="v" data-k="name">-</span>' +
             '<span class="k">Size</span><span class="v" data-k="size" title="ChartBridge\'s botRoot in config.txt; at most 1 contract (a rail)">-</span>' +
@@ -155,6 +155,12 @@ function create(o) {
   /* ---------------- the window's v3 connection (o.v3): its messages in, this tab's few out */
   const V3 = o.v3 || null;
   const sendRaw = m => !!V3 && V3.post(m);
+  /* 1.51.0 (Praetorian): the workspace's connection says why a message would not go and whether the bot is held back (on a
+     prop account, or one the page cannot tell); the Bot window's connection (bot.html) has neither, and there nothing changes */
+  const refusal = m => (V3 && typeof V3.why === 'function' ? V3.why(m) || '' : '');
+  const praetorian = !!(V3 && V3.personal === true);
+  const heldBot = () => (praetorian && typeof V3.botWhy === 'function' && S.bot ? V3.botWhy() || '' : '');
+  const botChoices = () => { const l = BC.accountChoices(S.accounts, S.bot); return praetorian && window.AgentCore && typeof window.AgentCore.prBotChoices === 'function' ? window.AgentCore.prBotChoices(l, n => V3.accountOk(n)) : l; };
   const cid = () => 'bt' + (++S.cidSeq).toString(36) + Math.random().toString(36).slice(2, 6);
   function lost() {
     S.signedIn = false; S.trading = null; S.orders.clear(); simFills.clear(); ledger.clear();
@@ -378,6 +384,8 @@ function create(o) {
     const r = props.answer(id, ans, Date.now(), c);
     const msgEl = x.el.querySelector('[data-k="msg"]');
     if (r.error) { put(msgEl, 'textContent', r.error); return false; }
+    const no = refusal(r.msg);
+    if (no) { props.refused(id); put(msgEl, 'textContent', no); return false; }   // 1.51.0: said as it is
     if (!sendRaw(r.msg)) { props.refused(id); put(msgEl, 'textContent', 'Not sent: not connected to ChartBridge.'); return false; }
     S.pending.set(c, { kind: 'answer', id });
     x.waiting = true; syncButtons(x);
@@ -716,10 +724,13 @@ function create(o) {
     const ev = q('[data-k="ev"]');
     put(ev, 'hidden', !e);
     if (e) { put(ev, 'textContent', e.shelf === 'research' ? 'Research' : e.evidence); put(ev, 'className', 'bt-badge ' + (e.shelf === 'research' ? 'rs' : BC.evidenceLevel(e.evidence) >= 2 ? 'l2' : '')); }
+    /* 1.51.0 (Praetorian): the bot on a prop account, or one the page cannot tell, can only be stopped here (its kill switch on) */
+    const held = heldBot();
+    const pw = q('[data-k="prWhy"]'); put(pw, 'hidden', !held); put(pw, 'textContent', held ? 'On Praetorian the bot can only be stopped (Kill switch, Shadow): ' + held + '.' : '');
     for (const btn of q('[data-k="modes"]').children) {
       const m = btn.dataset.mode, a = allowed[m];
       attr(btn, 'aria-pressed', String(b.mode === m));
-      put(btn, 'disabled', !a.ok || !S.signedIn);
+      put(btn, 'disabled', !a.ok || !S.signedIn || (!!held && m !== 'shadow'));   // the coordinator, 03:30: Shadow is a stop, offered for a held bot too
       attr(btn, 'title', a.ok ? (m === 'auto' ? 'ChartBridge places the bot\'s signals on ' + acc.name + (acc.mark ? ' (' + acc.mark + ')' : '') + ' by itself' : m === 'copilot' ? 'Each signal is a proposal for ' + acc.name + ': you accept or reject it' : 'Signals are shown and logged; no orders') : a.why);
       put(btn, 'textContent', m === 'auto' && S.autoConfirm > Date.now() ? 'Confirm' : BC.MODE_NAME[m]);
     }
@@ -730,7 +741,7 @@ function create(o) {
     put(q('[data-k="account"]'), 'textContent', acc.label);
     for (const k of ['accountMark', 'modeAcct']) { const el = q('[data-k="' + k + '"]'); put(el, 'textContent', acc.mark); put(el, 'className', 'bt-acct' + (acc.mark === 'LIVE' ? ' live' : acc.mark ? ' sim' : '')); put(el, 'hidden', !acc.mark); }
     attr(q('[data-k="modeAcct"]'), 'title', acc.mark ? 'The bot trades ' + acc.name + (acc.mark === 'LIVE' ? ', a LIVE account' : ', a Sim account') : null);
-    put(q('[data-k="acctOpen"]'), 'disabled', !S.signedIn || !!(b.position && b.position.qty));   // ChartBridge refuses a change unless the bot is flat
+    put(q('[data-k="acctOpen"]'), 'disabled', !S.signedIn || !!(b.position && b.position.qty) || !!held);   // ChartBridge refuses a change unless the bot is flat
     put(q('[data-k="acctEdit"]'), 'hidden', !S.acctEdit || !!S.acctAsk);
     put(q('[data-k="acctAsk"]'), 'hidden', !S.acctAsk);
     if (S.acctAsk) put(q('[data-k="acctAskText"]'), 'textContent', 'The bot will trade LIVE account ' + S.acctAsk + ' in ' + (BC.MODE_NAME[S.bot && S.bot.mode] || 'Shadow') + '. Continue?');   // 1.18.1: the mode it keeps
@@ -754,12 +765,12 @@ function create(o) {
       put(bar, 'className', x.level === 'ok' ? '' : x.level);
       tog(box, 'amber', x.level === 'amber'); tog(box, 'red', x.level === 'red');
     }
-    put(q('[data-k="railsOpen"]'), 'disabled', !S.signedIn || !isNum(b.maxTrades) || !!(b.position && b.position.qty));   // ChartBridge refuses a change unless the bot is flat
+    put(q('[data-k="railsOpen"]'), 'disabled', !S.signedIn || !isNum(b.maxTrades) || !!(b.position && b.position.qty) || !!held);   // ChartBridge refuses a change unless the bot is flat
     put(q('[data-k="railsEdit"]'), 'hidden', !S.railsEdit);
     const kill = q('[data-k="kill"]');
     put(kill, 'textContent', b.killed ? (S.killConfirm > Date.now() ? 'Release: click again' : 'Kill switch on · Release') : 'Kill switch');
     tog(kill, 'on', !!b.killed);
-    put(kill, 'disabled', !S.signedIn);
+    put(kill, 'disabled', !S.signedIn || (!!b.killed && !!held));   // 1.51.0: on always; the release held back on Praetorian
     attr(kill, 'aria-pressed', String(!!b.killed));
     const cur = days.current();
     for (const btn of q('[data-k="dtype"]').children) attr(btn, 'aria-pressed', String(btn.dataset.dt === cur));
@@ -831,6 +842,8 @@ function create(o) {
   /* ---------------- actions */
   function sendBot(m, kind) {
     const c = cid(); m.cid = c;
+    const no = refusal(m);
+    if (no) { notice({ kind: 'refused', level: 'amber', text: no }); return false; }   // 1.51.0: Praetorian's gate, said as it is
     if (!S.signedIn || !sendRaw(m)) { notice({ kind: 'refused', level: 'amber', text: 'Not sent: not signed in to ChartBridge.' }); return false; }
     S.pending.set(c, { kind });
     setTimeout(() => S.pending.delete(c), 15000);
@@ -905,9 +918,9 @@ function create(o) {
     } else if (a === 'railsCancel') { S.railsEdit = false; railsWhy(''); renderPanel(); }
     else if (a === 'acctOpen') {
       S.acctEdit = true; S.acctAsk = ''; acctWhy('');
-      const sel = q('[data-k="acctSel"]'), cur = BC.botAccount(S.bot).name, list = BC.accountChoices(S.accounts, S.bot);
+      const sel = q('[data-k="acctSel"]'), cur = BC.botAccount(S.bot).name, list = botChoices();   // 1.51.0: on Praetorian, your personal account, Sim and None
       // DECISION 2026-10-14e: None first (nothing trades on it)
-      sel.replaceChildren(new Option(BC.NONE_LABEL + ' (nothing trades)' + (cur ? '' : ', now'), ''), ...list.map(c => { const op = new Option(c.name + ' (' + c.mark + ')' + (c.current ? ', now' : c.tradable ? '' : ', not tradable'), c.name); op.disabled = !c.tradable && !c.current; return op; }));
+      sel.replaceChildren(new Option(BC.NONE_LABEL + ' (nothing trades)' + (cur ? '' : ', now'), ''), ...list.map(c => { const op = new Option(c.name + ' (' + c.mark + ')' + (c.current ? ', now' : c.praetorian ? ', ' + c.praetorian : c.tradable ? '' : ', not tradable'), c.name); op.disabled = !c.tradable && !c.current; return op; }));
       sel.value = cur;
       if (!list.some(c => !c.current)) acctWhy('No other account is tradable in ChartBridge now: check one on the Accounts tab.');
       renderPanel();
