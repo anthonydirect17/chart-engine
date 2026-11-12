@@ -241,7 +241,11 @@ try {
   await sleep(800);
   const legionSaid = () => page.evaluate(() => window.fromLegion.slice());
   check(!(await legionSaid()).includes('botSeen'), 'a bot proposal while Legion\'s fold is closed (the desk told it is shown): no botSeen from Legion\'s copy (Praetorian\'s floating card is the page\'s own): ' + JSON.stringify(await legionSaid()));
-  await page.evaluate(() => { document.getElementById('fold').open = true; window.legion.show(true); document.querySelector('#lgd .bt-props').scrollIntoView({ block: 'center' }); window.legion.show(true); });
+  /* answers B4-6, H2: the fold open and the desk shown, but the bot card scrolled up off screen: no botSeen */
+  await page.evaluate(() => { document.getElementById('fold').open = true; window.scrollTo(0, document.body.scrollHeight); window.legion.show(true); });
+  await sleep(600);
+  check(!(await legionSaid()).includes('botSeen'), 'H2: the bot card scrolled off screen (fold open, desk shown): no botSeen: ' + JSON.stringify(await legionSaid()));
+  await page.evaluate(() => { document.querySelector('#lgd .bt-props').scrollIntoView({ block: 'center' }); window.legion.show(true); });
   await sleep(600);
   check((await legionSaid()).filter(x => x === 'botSeen').length === 1, 'the fold opens with the card on screen: Legion\'s copy sends botSeen once: ' + JSON.stringify(await legionSaid()));
 
