@@ -126,6 +126,9 @@ gate, everything they did for prop traders, groups and the bot on a prop account
   trader's missing account key follow "only null is None" on Legion too; a leftover position is stops only on both desks;
   "on screen" counts visibility and opacity, and the agent card must be in view like the bot's; the desks' live charts
   keep their view under Legion's own prefix.
+- **Round 3:** "in view" (both desks, the cards' acknowledgement and the copilot keys) is measured from the window's top
+  edge or the top bar, whichever is lower, so a card scrolled up past the window no longer counts as in view (a smoke step
+  scrolls the agent card away: no agentSeen); a leftover seat is flattened from Legion's desk too (a smoke step).
 - **The board on Legion:** Assign hero, a group trader's Start in Shadow and a group's Clear stand-down work there; for a
   group Legion refuses, Assign hero and Clear stand-down are held back up front with the reason. The words no longer say
   Legion's trader desk is "being built".
@@ -165,7 +168,8 @@ accounts". The name is his: "Praetorian is good". Rule 12: this changes what the
   shape the page cannot read (an account that is not null or a name, a group that is not an object, a seat without an
   account) is "the page cannot tell": only the stops go. Only null is None: a missing account key, for a trader or the
   bot, is "the page cannot tell" too. A trader on None that still has a seat (a leftover position) is no one's: only the
-  stops go, with "a leftover position on <kind>: stop and flatten it first".
+  stops go, with "a leftover position on <kind>: stop and flatten it first"; Off then asks, and "Flatten and turn off"
+  sends Shadow and the page's Flatten for that seat only, as for a group's seats (`live/agent-helper.js`).
 - **Held back on screen, said in one line:** a trader on a prop account, a group or an account the page cannot tell shows
   all its readings; its modes, Change account, Change the rules, the helper's On and Auto-On time, and its kill switch's
   release are off, with "On Praetorian this trader can only be stopped (Kill switch, Off)" and why: "it is set up from

@@ -353,7 +353,7 @@ function create(o) {
   }
   /* the shown card is whole in the window, under the top bar: the keys answer it only then */
   function inView(el) {
-    const r = el.getBoundingClientRect(), bar = document.querySelector('.ws-top'), top = bar ? bar.getBoundingClientRect().bottom : 0;
+    const r = el.getBoundingClientRect(), bar = document.querySelector('.ws-top'), top = Math.max(0, bar ? bar.getBoundingClientRect().bottom : 0);
     return r.height > 0 && r.top >= top - 1 && r.bottom <= innerHeight + 1 && r.left >= -1 && r.right <= innerWidth + 1;
   }
   /* botSeen the moment it shows (PROTOCOL.md: "the page sends botSeen the moment it shows it"; not rate counted): in a

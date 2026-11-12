@@ -182,6 +182,25 @@ try {
   await page.waitForFunction(() => window.helperCalls.includes('POST /off'), null, { timeout: 5000 }).catch(() => {});
   check(await page.evaluate(() => window.helperCalls.includes('POST /off')), 'F2: then Off (POST /off) once he is flat');
   check(!(await posted()).some(x => /^agentMode:demo:(auto|copilot)/.test(x)), 'F2: nothing but Shadow was sent for him');
+  /* answers B4-4, G3: a trader on None with a leftover seat (MINE-1 long 1 MNQ, the strip's position being the seat's trade):
+     stops only, said; Off asks, "Flatten and turn off" sends Shadow, then the flatten of that seat only, then Off once flat */
+  await page.evaluate(() => { Object.assign(window.helperState.demo, { on: true, running: true, why: 'on', runningBuild: 'sample-build-1' }); window.flattened.length = 0; window.helperCalls.length = 0; });
+  const left = (mode, qty) => agent({ account: null, mode, owns: !!qty, position: qty ? { root: 'MNQ', qty, avg: 25000 } : null, seats: [{ account: 'MINE-1', owns: !!qty, position: qty ? { root: 'MNQ', qty, avgPrice: 25000 } : null }] });
+  await feed(left('auto', 1));
+  await sleep(3600);
+  check(/a leftover position on your personal account: stop and flatten it first/.test(await page.$eval('#agView [data-k="prWhy"]', e => e.textContent)), 'G3: a leftover position: held back, with the words');
+  await clear();
+  await page.evaluate(() => { const b = document.querySelector('#agView [data-k="hBtns"] [data-onoff="off"]'); b.disabled = false; b.click(); });
+  await page.waitForSelector('#agView [data-act="hFlatOff"]', { state: 'visible', timeout: 5000 }).catch(() => {});
+  await page.click('#agView [data-act="hFlatOff"]').catch(() => {});
+  await sleep(300);
+  check(JSON.stringify(await posted()) === JSON.stringify(['agentMode:demo:shadow']), 'G3: "Flatten and turn off" sends Shadow first: ' + JSON.stringify(await posted()));
+  await feed(left('shadow', 1));
+  await page.waitForFunction(() => window.flattened.length > 0, null, { timeout: 5000 }).catch(() => {});
+  check(JSON.stringify(await page.evaluate(() => window.flattened)) === JSON.stringify(['MINE-1 MNQ']), 'G3: then the flatten of that seat only (MINE-1 MNQ): ' + JSON.stringify(await page.evaluate(() => window.flattened)));
+  await feed(agent({ account: null, mode: 'shadow', owns: false, position: null, seats: [] }));
+  await page.waitForFunction(() => window.helperCalls.includes('POST /off'), null, { timeout: 5000 }).catch(() => {});
+  check(await page.evaluate(() => window.helperCalls.includes('POST /off')) && JSON.stringify(await posted()) === JSON.stringify(['agentMode:demo:shadow']), 'G3: then Off once flat; nothing but Shadow was sent to ChartBridge');
   /* F3: Start in Shadow on the board: on the personal account in Auto; moved to PROP-1 while the desk waits for Shadow: no POST /on */
   await page.evaluate(() => { Object.assign(window.helperState.demo, { on: false, running: false, why: 'off', runningBuild: null }); window.helperCalls.length = 0; });
   await feed(agent({ account: 'MINE-1', mode: 'auto', connected: false }));   // Off: the board offers Start in Shadow

@@ -238,6 +238,8 @@ test('b F2 and B6 on Legion: every seat counts, a shape the page cannot read is 
     [agent({ account: 123 }), /cannot tell its accounts \(ChartBridge sent a shape/, 'a number'],
     [agent({ account: { name: 'PROP-1' } }), /cannot tell its accounts/, 'an object'],
     [agent({ account: '' }), /cannot tell its accounts/, 'an empty string'],
+    [agent({ account: true }), /cannot tell its accounts/, 'true (answers B4-4, G1)'],
+    [agent({ account: ['PROP-1'] }), /cannot tell its accounts/, 'a list (answers B4-4, G1)'],
     [agent({ account: null, group: true, seats: [{ account: 'PROP-1' }] }), /cannot tell its accounts/, 'group: true'],
     [agent({ account: null, group: { id: 'g1', name: 'Evals' }, seats: [{ account: 'PROP-1' }, { acct: 'MINE-1' }] }), /cannot tell its accounts/, 'a seat with no account'],
     [agent({ account: null, group: { id: 'g1', name: 'Evals' }, seats: [] }), /no home yet: its group has no seats now, so the page cannot tell it; from here you can only stop it/, 'B6: no seats'],
@@ -480,4 +482,16 @@ test('round 2, item 3: a leftover position of two kinds is its own case, never "
     assert.match(g.traderWhy('demo'), /a leftover position on more than one kind of account: stop and flatten it first/);
     assert.match(g.check({ type: 'agentAccount', agent: 'demo', account: null, keepMode: 'shadow' }), /a leftover position/, 'None is not offered as a no-home move');
   }
+});
+
+test('answers B4-4, G2: a no-home trader in Auto, flat, moved to None from PRAETORIAN: Shadow first, then None', () => {
+  const B = stand({ agent: { mode: 'auto', account: 'LIVE-X' } });
+  const link = AC.praetorianLink(B.feed);
+  B.hearAll(accounts(), groups); B.say();
+  const P = AC.praetorianGate(); P.hear(accounts()); P.hear(groups); P.hear(agent({ mode: 'auto', account: 'LIVE-X', owns: false, position: null }));
+  assert.match(P.check({ type: 'agentAccount', agent: 'demo', account: null, keepMode: 'auto' }), /goes only while the trader is in Shadow/, 'the gate: None only in Shadow');
+  assert.equal(link.post({ type: 'agentAccount', agent: 'demo', account: null, keepMode: 'auto' }), true);
+  assert.deepEqual(B.posted, [{ type: 'agentMode', agent: 'demo', mode: 'shadow' }]);
+  B.say();
+  assert.deepEqual(B.posted[1], { type: 'agentAccount', agent: 'demo', account: null, keepMode: 'shadow' });
 });
