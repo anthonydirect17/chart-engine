@@ -313,8 +313,9 @@ try {
   await feed(lane1()); await feed(lane2());
   await page.waitForFunction(() => window.fleet.state().roster.state === 'ok' && window.fleet.state().lanes[0].armable === true);
   // the review of 94, FIX 2: a trader in Auto on a prop account outside the lanes (germanicus, from above) is named at the switch
-  check((await text('[data-do="arm"]')) === 'Armed: PARTLY' && /Not a lane, so not armed from here: germanicus in Auto/.test(await text('.fl-armsaid')), 'a trader in Auto outside the lanes: Armed reads PARTLY and names it: ' + await text('.fl-armsaid'));
+  check((await text('[data-do="arm"]')) === 'Armed: PARTLY' && /Not a lane, so not armed from here: germanicus on a prop account; resting on a prop account in Auto/.test(await text('.fl-armsaid')), 'a trader in Auto outside the lanes: Armed reads PARTLY and names it: ' + await text('.fl-armsaid'));
   await feed(agent('germanicus', { mode: 'shadow' }));
+  await feed(agent('resting', { mode: 'shadow', account: 'SAMPLE-EVAL-2' }));   // a stood-down trader in Auto counts too (the re-review of 94, R3)
   const laneText = await page.evaluate(() => [...document.querySelectorAll('.fl-lane')].map(e => e.innerText.replace(/\s+/g, ' ')));
   check(laneText.length === 2 && /^Eval lane legion1, group Sample evals SHADOW READY/i.test(laneText[0]) && laneText[0].includes('SAMPLE-EVAL-1') && laneText[0].includes('SAMPLE-EVAL-2'), 'the eval lane: its trader, its group, its mode, its accounts, Ready: ' + laneText[0]);
   check(/^Funded lane legion2, group Sample funded SHADOW NOT READY/i.test(laneText[1]) && laneText[1].includes('No bot is picked for it'), 'the funded lane: not ready, and why: ' + laneText[1]);
@@ -435,6 +436,17 @@ try {
   await feed({ type: 'trading', enabled: true }); await feed(accounts); await feed(groups);
   await feed(agent('germanicus', { rules: { entryFrom: '09:40', entryUntil: '15:00', flatAt: '15:55', marketEntry: true, noTarget: true }, dayStop: 900, owns: true }));
 
+  // the re-review of 94, R1: Armed never moves when the words beside it grow (the longest PARTLY reason), at four widths
+  for (const width of [1440, 700, 390, 320]) {
+    await page.setViewportSize({ width, height: 844 });
+    await sleep(150);
+    const box = () => page.evaluate(() => { const r = document.querySelector('[data-do="arm"]').getBoundingClientRect(); return [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)]; });
+    const before = await box();
+    await page.evaluate(() => { document.querySelector('[data-k="armsaid"]').textContent = 'Eval lane has a trader not in Shadow: twin (Copilot). '.repeat(7); });
+    const after = await box();
+    await page.evaluate(() => { document.querySelector('[data-k="armsaid"]').textContent = ''; });
+    check(JSON.stringify(before) === JSON.stringify(after), 'Armed stays where it is at ' + width + ' px when the words beside it grow: ' + JSON.stringify(before) + ' and ' + JSON.stringify(after));
+  }
   // phone width: one column, no sideways scroll of the page, the buttons big enough to touch
   await page.setViewportSize({ width: 390, height: 844 });
   const m = await page.evaluate(() => ({ sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth,
