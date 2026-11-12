@@ -3755,9 +3755,23 @@ function startLeague() {
 const legionGate = window.FleetCore && Object.isFrozen(window.FleetCore) ? window.FleetCore.maySend : null;
 const legionLink = AF && legionGate ? { listen: part => AF.listen(part), post: m => legionGate(m) === true && AF.post(m) === true } : null;
 let fleetView = null;
+/* 1.48.1 (B4): Legion reads the PC helper's GET /status for the lanes' runners, and only that: the client's status call is
+   handed over, never the client, so On and Off cannot be reached from the tab */
+const legionHelperStatus = (() => {
+  const AH = window.AgentHelper;
+  if (!AH || typeof AH.createClient !== 'function' || typeof fetch !== 'function') return null;
+  const client = AH.createClient({ fetch: (u, i) => fetch(u, i), headers: () => (PIN ? PIN.headers() : {}) });
+  return () => client.status();
+})();
 function startFleet() {
   if (!window.FleetView) return;
   fleetView = window.FleetView.create({ view: $('flView'), tab: $('wsFleetTab'), v3: legionLink, realClick: OT.realClick, headers: () => (PIN ? PIN.headers() : {}),
+    helperStatus: legionHelperStatus,
+    /* 1.49.0 (Legion Live, the reuse map): a real chart as the League tab mounts one (no toolbar, no orders), the Accounts
+       tab's own rows for the prop accounts, and the trading day's start (18:00 New York, chart seconds) for the lanes' marks */
+    liveChart: el => (window.ChartLive && hub ? window.ChartLive.mount(el, { feed: hub, paneId: 'legion', storagePrefix: PREFIX, toolbar: false, compact: true, view: { root: 'MNQ', tf: 'm1' } }) : null),
+    accountRows: (el, key, filter) => window.workspace.accountRows(el, key, filter),
+    sessionStart: () => { const n = etNowSec(); return n - ((((n - 18 * 3600) % 86400) + 86400) % 86400); },
     /* 1.48.0 (Legion Setup): a lane's accounts are the Multi-Account panel itself, one fixed group, the narrow feed (FleetCore.laneFeed),
        never the page's feed; the tab hands the group and the lane's lock, the page mounts */
     lanePanel: (el, key, opts) => (opts && typeof opts.group === 'string' && opts.group && typeof opts.locked === 'function' ? mountLegionLane(el, key, opts) : null),

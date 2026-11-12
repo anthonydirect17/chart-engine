@@ -177,6 +177,8 @@ accounts". The name is his: "Praetorian is good". Rule 12: this changes what the
   bot, is "the page cannot tell" too. A trader on None that still has a seat (a leftover position) is no one's: only the
   stops go, with "a leftover position on <kind>: stop and flatten it first"; Off then asks, and "Flatten and turn off"
   sends Shadow and the page's Flatten for that seat only, as for a group's seats (`live/agent-helper.js`).
+  Any trader whose seats list holds his trade goes by those seats, whatever his own account says (ChartBridge fills his
+  position from that seat without naming the account), so his own account is never flattened for a trade held elsewhere.
 - **Held back on screen, said in one line:** a trader on a prop account, a group or an account the page cannot tell shows
   all its readings; its modes, Change account, Change the rules, the helper's On and Auto-On time, and its kill switch's
   release are off, with "On Praetorian this trader can only be stopped (Kill switch, Off)" and why: "it is set up from
@@ -221,6 +223,41 @@ its own release; until then the Agent and Bot buttons stay in the top bar after 
   no sendOrder. A test checks the object's keys and that `league.js` calls no post; the smoke checks nothing was sent.
 - **Old links:** `?tab=league` (and `&day=`, The Desk's Agent Stats links) opens the Colosseum on that day; the address
   then reads `?tab=colosseum`. The hotkey note names the Colosseum tab.
+## chart 1.49.0 (2026-11-12): Legion Live, assembled from the page's own parts (page only, no F5)
+
+In plain words: Legion's Live page shows the day: four numbers on top, one chart with each lane's fills on it, each lane's
+trader, and the prop accounts as the Accounts tab shows them. Kill all and Armed stay exactly where they are on Setup.
+
+- **The four tiles** (`FleetCore.liveTiles`): today on every prop account, on the eval lane and on the funded lane, each
+  ChartBridge's own realized plus open (`pnlToday`); one account with no number makes the sum "not known" (never a sum of
+  the rest). The business so far needs The Desk (the payouts and the fees), which Legion does not read yet: the tile says
+  "not built yet".
+- **Today on one chart:** a real chart, mounted the way the League tab mounts its own (no toolbar, no ticket: it takes no
+  orders), with each lane's fills drawn by the League tab's overlay (`LeagueOverlay.attach`, its generic marks since
+  1.47.0): a circle where a fill opens or adds, a diamond where one reduces or closes, E in eval blue and F in funded gold
+  (`FleetCore.laneMarks`, from ChartBridge's `exec` and `execs` on the lane's accounts since 18:00 New York). Stop and
+  target lines are not drawn: the page does not hold a lane's planned stop.
+- **By trader** (`FleetCore.traderDays`): each lane's trader, its mode, today, ChartBridge's count of its trades today, in a
+  trade or flat; not said is "not known". The live record against its test comes from The Desk and says "not enough data
+  yet" until Legion reads it.
+- **Accounts live:** the Accounts tab's own rows (`workspace.accountRows`, the rows-only mount of 1.47.0), the prop
+  accounts only, one section a group, read only. Legion's own Prop accounts table is drawn only where the page has no
+  Accounts part (accounts.js not served).
+- The chart and the rows are mounted only while Live is open, and taken down on Setup and when the tab closes.
+
+## chart 1.48.1 (2026-11-12): each Legion lane says what the PC helper says of its runner (page only, no F5)
+
+In plain words: Bot-Lab's PC helper now keeps each lane's runner going by itself (Bot-Lab B4), and each lane on Legion says
+whether it runs, why not, and how often it stopped today.
+
+- **One line a lane** (`FleetCore.laneRunner`): "Its runner runs.", "Its runner is not running: <the helper's reason>.", and
+  "It stopped n times this session (last: <reason>)." when it has. Not known is said as not known: the helper not
+  answering, the page not unlocked with the PIN, or the helper keeping no runner for that trader ("lanes" in its
+  helper.json); a helper that runs the trader as the other lane says so.
+- **A read only.** The page hands Legion the helper client's status call (`helperStatus`), never the client, so On and
+  Off cannot be reached from the tab (the helper refuses both for a lane's trader anyway). It is read every 3 s while the
+  tab is open and not at all while it is shut.
+- Armed is unchanged: it changes the traders' modes on ChartBridge; it does not start or stop a program.
 
 ## chart 1.48.0 (2026-11-12): Legion Setup, assembled from the page's own panels (page only, no F5)
 
