@@ -217,9 +217,13 @@ function accountBlock(a, h, sim) {
 
 /** Chart 1.27.0 (ChartBridge 0.6.0): a hero on a group (its strip carries group and seats). */
 const onGroup = a => !!(a && a.group && Array.isArray(a.seats));
+/* chart 1.51.0 (answers B4-4, G3): a trader on None that still has a seat (a leftover position; ChartBridge keeps the seat
+   while it holds his trade) is flattened as a group's seats are: per seat, never by an account he does not have */
+const leftover = a => !!(a && a.account === null && !a.group && Array.isArray(a.seats) && a.seats.length > 0);
+const bySeats = a => onGroup(a) || leftover(a);
 /** The seats holding his trade now (a group): [{ account, root, qty }]. */
 function seatsHeld(a) {
-  return onGroup(a) ? a.seats.filter(x => x && typeof x.account === 'string' && x.position && isNum(x.position.qty) && x.position.qty !== 0)
+  return bySeats(a) ? a.seats.filter(x => x && typeof x.account === 'string' && x.position && isNum(x.position.qty) && x.position.qty !== 0)
     .map(x => ({ account: x.account, root: str(x.position.root), qty: x.position.qty })) : [];
 }
 const heldText = h => (h.qty > 0 ? 'long ' : 'short ') + Math.abs(h.qty) + (h.root ? ' ' + h.root : '') + ' on ' + h.account;
@@ -227,7 +231,7 @@ const heldText = h => (h.qty > 0 ? 'long ' : 'short ') + Math.abs(h.qty) + (h.ro
 /** Off pressed: 'off' (send it), 'ask' (he holds a position: "Flatten and turn him off?"). a: his `agent` message. A group:
  *  'ask' while any seat holds his trade. */
 function offStep(a) {
-  if (onGroup(a) && seatsHeld(a).length) return 'ask';
+  if (bySeats(a) && seatsHeld(a).length) return 'ask';
   const p = a && a.position;
   return p && isNum(p.qty) && p.qty !== 0 ? 'ask' : 'off';
 }
@@ -255,7 +259,7 @@ function flatOffStart(a, now) {
   if (flat(x)) return { job: { agent: str(x.agent), account: str(x.account), root: str(p.root), phase: 'off', until: 0 }, action: 'off' };
   // chart 1.27.0 (ChartBridge 0.6.0): a group, as one account: Shadow first (no new entries), then the page's Flatten on every
   // seat holding his trade (one per seat and root), then Off once every seat is flat
-  if (onGroup(x)) {
+  if (bySeats(x)) {
     const held = seatsHeld(x);
     if (held.some(h => !h.root)) return { error: 'A seat\'s instrument is not known: nothing was sent. Flatten in NinjaTrader, then press Off.' };
     const gj = { agent: str(x.agent), account: '', root: '', seats: held.map(h => ({ account: h.account, root: h.root })), phase: x.mode === 'shadow' ? 'flatten' : 'shadow', until: now + (x.mode === 'shadow' ? FLAT_WAIT_MS : SHADOW_WAIT_MS) };
