@@ -91,7 +91,7 @@ body.fl-on .fl-wrap { padding-bottom: 120px; }
 @media (max-width: 900px) { .fl-cols { grid-template-columns: minmax(0, 1fr); } }
 /* D2 (chart 1.46.0): the Armed switch, in the pinned head under Kill all's lines, and the two lanes. The switch is gold when
    on (the page's accent), plain when off; "partly" is marked as a warning. No green or red: a mode is not a P&L. */
-.fl-armrow { display: flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: nowrap; }
+.fl-armrow { display: flex; align-items: flex-start; gap: 8px; min-width: 0; flex-wrap: nowrap; }
 .fl-armrow > .ws-btn { flex: none; min-height: 30px; }
 .ws-btn.fl-arm { font-weight: 600; letter-spacing: .02em; min-width: 132px; }
 .ws-btn.fl-arm[data-state="on"] { border-color: var(--ws-tint-line); background: var(--ws-tint); color: var(--ws-soft); box-shadow: inset 0 0 0 1px var(--ws-tint-line); }

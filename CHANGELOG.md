@@ -89,6 +89,8 @@ the page already has. Kill all and Armed keep their place and their rules.
 
 Checked: `test/fleet.test.js` (31), `npm run smoke:fleet` (152), `npm run smoke:lanes` (25, with Legion's eval lane
 holding the real Multi-Account panel in the page and a move from it sending `memberBench` only).
+- **94's re-review in Legion Setup:** each lane's lock, and the other lane's, is "not known" until the traders have
+  settled after sign-in, the same wait as Armed, so a second trader on a lane not heard yet never reads as a free lane.
 
 ## chart 1.47.0 (2026-11-12): three shared panels made ready for Legion (page only, no F5)
 
@@ -169,6 +171,15 @@ Checked in `test/fleet.test.js` (28 tests) and `npm run smoke:fleet` (140 checks
 anywhere on the switch arms nothing at four widths; a press, messages and a release still count on the switch and on
 Yes; a key or a scripted click never arms). `docs/LEGION_and_the_old_tabs.md` lists every control and reading on the
 Agent tab and the Bot tab and whether Legion carries it (for Anthony; nothing is removed).
+
+- **The second round of the review's fixes (rule 12):** Armed sits at the top of its row, so it never moves when the
+  words beside it grow (a smoke check at 320, 390, 700 and 1440 px); a lane with any trader not said to be in Shadow
+  (a doubled lane in Copilot included) reads PARTLY, never "off"; every trader in Auto outside the lanes reads PARTLY,
+  whatever its account but the personal one, named with what it is on and whether Kill all reaches it; "not known"
+  lasts until the traders have settled after sign-in, not the first one; the bench is the Multi-Account panel's own
+  rule when that file is loaded; a Sim-only lane says Kill all does not reach it and a mixed lane how many are Sim; the
+  gate refuses a bare Auto (Legion arms only a lane with a pick); without the page's mode rules Armed says it cannot
+  switch from here.
 
 ## ChartBridge 0.6.21 and chart 1.45.1 (2026-11-12): the pick, the day's profit side for the runner, the roster reader tightened
 

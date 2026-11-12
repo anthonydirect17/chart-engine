@@ -177,9 +177,9 @@ test('legion: the tab is wired into the page beside the other three, with a conn
   assert.deepStrictEqual(Object.keys(link).sort(), ['listen', 'post'], 'two things only: no send, no sendOrder');
   assert.strictEqual(link.post({ type: 'agentKillAllProp', cid: 'c1' }), true);
   assert.strictEqual(link.post({ type: 'agentKillAllProp' }), true);
-  const good = [{ type: 'agentMode', cid: 'c2', agent: 'legion1', mode: 'auto' }, { type: 'agentMode', agent: 'legion1', mode: 'shadow' }, { type: 'agentPick', cid: 'c3', agent: 'legion1', file: 'germanicus_r115.json' }, { type: 'agentPick', agent: 'legion1', file: null }];
+  const good = [{ type: 'agentMode', cid: 'c2', agent: 'legion1', mode: 'auto', pick: 'germanicus_r115.json', pickSha: 'a'.repeat(64) }, { type: 'agentMode', agent: 'legion1', mode: 'shadow' }, { type: 'agentPick', cid: 'c3', agent: 'legion1', file: 'germanicus_r115.json' }, { type: 'agentPick', agent: 'legion1', file: null }];
   for (const ok of good) assert.strictEqual(link.post(ok), true, JSON.stringify(ok));
-  for (const bad of [{ type: 'agentMode', agent: 'x', mode: 'copilot' }, { type: 'agentMode', agent: 'x', mode: 'auto', account: 'A' }, { type: 'agentMode', agent: 'Not An Id', mode: 'auto' }, { type: 'agentMode', mode: 'auto' },
+  for (const bad of [{ type: 'agentMode', cid: 'c2', agent: 'legion1', mode: 'auto' } /* a bare Auto (the re-review of 94, N4) */, { type: 'agentMode', agent: 'x', mode: 'copilot' }, { type: 'agentMode', agent: 'x', mode: 'auto', account: 'A' }, { type: 'agentMode', agent: 'Not An Id', mode: 'auto' }, { type: 'agentMode', mode: 'auto' },
     { type: 'agentPick', agent: 'x' }, { type: 'agentPick', agent: 'x', file: '../x.json' }, { type: 'agentPick', agent: 'x', file: 'x.txt' }, { type: 'agentPick', agent: 'x', file: 7 }, { type: 'agentPick', agent: 'x', file: null, group: 'g1' },
     { type: 'order' }, { type: 'flatten' }, { type: 'agentKill', agent: 'x', on: false }, { type: 'agentKillAllProp', cid: 'c', account: 'A' }, { type: 'agentKillAllProp', cid: 7 }, { type: 'agentKillAllProp', cid: '' }, { type: 'accountPersonal' },
     { type: 'agentAccount', agent: 'x', group: 'g1' }, { type: 'agentRules', agent: 'x' }, { type: 'accountGroup', account: 'A', group: 'g1' }, { cid: 'c' }, null, 'agentKillAllProp', []])
@@ -332,7 +332,7 @@ test('roster: why it is not shown, by ChartBridge\'s answer; the format names ar
 /* The view half of fleet.js runs against a small stand-in for the page: enough to build the tab once, read what each part
    holds and click its buttons. The clock is the test's (o.now), the timers are node:test's. What needs a real browser (where
    a double click lands, a press and a release around a message, colours, injected markup) is in test/fleet-smoke.mjs. */
-function page(t, over) {
+function page(t, over, opt) {
   const parts = new Map(), listeners = {};
   const mk = sel => {
     const e = { sel, textContent: '', innerHTML: '', hidden: false, attrs: {}, style: {}, cls: new Set(), focused: 0,
@@ -344,12 +344,12 @@ function page(t, over) {
   const view = Object.assign(mk('view'), { addEventListener: (k, f) => { listeners[k] = f; }, removeEventListener() {}, querySelector: sel => { if (!parts.has(sel)) parts.set(sel, mk(sel)); return parts.get(sel); } });
   const tab = Object.assign(mk('tab'), { hidden: true, addEventListener() {} });
   const win = { document: { createElement: tag => ({ tagName: String(tag).toUpperCase(), className: '', parentNode: null }) } };
-  new Function('window', 'document', 'self', read('live', 'agent-core.js'))(win, win.document, win);   // the page's mode rules (Legion reuses them)
+  if (!(opt && opt.noAgentCore)) new Function('window', 'document', 'self', read('live', 'agent-core.js'))(win, win.document, win);   // the page's mode rules (Legion reuses them)
   new Function('window', 'document', 'self', read('live', 'fleet.js'))(win, win.document, win);
   const P = { T: 1_800_000_000_000, posts: [], asks: [], answers: [], subs: null, view, tab, part: k => view.querySelector('[data-k="' + k + '"]') };
   const V3 = { listen: h => { P.subs = h; return () => {}; }, post: m => { P.posts.push(m); return P.postOk !== false; } };
   P.key = key => listeners.keydown({ key, preventDefault() {} });
-  P.fv = win.FleetView.create(Object.assign({ view, tab, v3: V3, realClick: require('../live/order-ticket.js').realClick, now: () => P.T, fetch: (u, o) => { P.asks.push([u, o]); return new Promise((res, rej) => P.answers.push({ res, rej })); } }, over || {}));
+  P.fv = win.FleetView.create(Object.assign({ view, tab, v3: V3, settleMs: 0, realClick: require('../live/order-ticket.js').realClick, now: () => P.T, fetch: (u, o) => { P.asks.push([u, o]); return new Promise((res, rej) => P.answers.push({ res, rej })); } }, over || {}));
   P.feed = m => P.subs.message(m);
   P.click = (what, detail, card) => listeners.click({ target: { closest: () => ({ dataset: { do: what, card } }) }, detail: detail === undefined ? 1 : detail });
   P.html = () => view.innerHTML + ['lanes', 'lane-eval', 'lane-funded', 'roster', 'traders', 'accounts'].map(k => P.part(k).innerHTML).join('');
@@ -812,13 +812,13 @@ test('the Armed switch: offered only when Kill all is, "not known" until heard, 
   // note 8: a lane in Copilot is not off: PARTLY, and a click sends it to Shadow
   const cop = [evalTrader({ mode: 'copilot' }), fundTrader()];
   const sc = A(L(cop), cop);
-  assert.deepStrictEqual([sc.state, sc.reasons], ['partly', ['Eval lane is in Copilot']]);
+  assert.deepStrictEqual([sc.state, sc.reasons], ['partly', ['Eval lane has a trader not in Shadow: legion1 (Copilot)']]);
   assert.deepStrictEqual(F.armMsgs(L(cop), false, cop, null).map(m => [m.agent, m.mode]), [['legion1', 'shadow']]);
   // FIX 2: a trader in Auto on a prop account outside the lanes: PARTLY with its name; a click sends it to Shadow, never arms
   const loose = [evalTrader(), fundTrader({ pick: 'duo.json' }), agent('loose', { mode: 'auto', account: 'EVAL-A' })];
   const sl = A(L(loose), loose);
   assert.strictEqual(sl.state, 'partly');
-  assert.match(sl.reasons.join(' '), /^Not a lane, so not armed from here: loose in Auto \(a click sends it to Shadow; or the Agent tab, or Kill all\)$/);
+  assert.match(sl.reasons.join(' '), /^Not a lane, so not armed from here: loose on a prop account in Auto \(a click sends it to Shadow; or Praetorian, the Agent tab until Praetorian merges\)$/);
   assert.deepStrictEqual(F.armMsgs(L(loose), false, loose, null, F.outsideAuto(L(loose), loose, accounts, V)).map(m => [m.agent, m.mode]), [['loose', 'shadow']]);
   // off: every trader of every lane that is not in Shadow, the second trader of a doubled lane included, and the loose one
   const mixed = [evalTrader({ mode: 'auto' }), fundTrader({ mode: 'copilot' }), agent('twin', { mode: 'auto', account: null, group: { id: 'g1', name: 'Evals' }, seats: [] }), agent('solo', { mode: 'auto', account: 'EVAL-A' })];
@@ -1126,3 +1126,98 @@ test('Legion Setup\'s roster by family (1.48.0): readable names, the family from
   assert.deepStrictEqual(fam('nonsense', '').shown, 7, 'an unknown filter is All');
   assert.deepStrictEqual(F.rosterFamilies(null, ls, 'all', ''), { families: [], total: 0, shown: 0 });
 });
+
+/* ---------------------------------------------------------------- the re-review of 94 (answers 22) */
+test('the re-review of 94, R2: a doubled lane with a trader in Copilot (or not said) is never "off"; one click only switches off', () => {
+  const V = '0.6.21', cards = liveCards();
+  const twin = (mode) => agent('twin', { mode, account: null, group: { id: 'g1', name: 'Evals' }, seats: [] });
+  for (const mode of ['copilot', undefined]) {
+    const list = [evalTrader(), twin(mode), fundTrader({ pick: 'duo.json' })];
+    const ls = F.lanes(list, groups, accounts, V, cards);
+    assert.strictEqual(ls[0].notShadow, true, String(mode));
+    const st = F.armState(ls, V, true, true, accounts, groups, true, F.outsideAuto(ls, list, accounts, V));
+    assert.strictEqual(st.state, 'partly', String(mode));
+    assert.match(st.reasons.join(' '), /Eval lane has a trader not in Shadow: twin \((Copilot|not known)\)/);
+    const off = F.armMsgs(ls, false, list, null, []);
+    assert.deepStrictEqual(off.map(m => [m.agent, m.mode]), [['twin', 'shadow']], 'a click on PARTLY sends Shadow, never Auto');
+  }
+});
+
+test('the re-review of 94, R3: any trader in Auto outside the lanes reads PARTLY, named with what it is on; the personal account is left out', () => {
+  const V = '0.6.21', cards = liveCards();
+  const list = [evalTrader(), fundTrader(), agent('simmy', { mode: 'auto', account: 'SIM-X' }), agent('mine', { mode: 'auto', account: 'MINE-1' }), agent('odd', { mode: 'auto', account: 'NOBODY-9' })];
+  const acc = Object.assign({}, accounts, { list: accounts.list.concat([{ name: 'SIM-X', sim: true, prop: false, connection: 'connected' }, { name: 'MINE-1', personal: true, prop: false, sim: false, connection: 'connected' }]) });
+  const ls = F.lanes(list, groups, acc, V, cards);
+  const out = F.outsideAuto(ls, list, acc, V);
+  assert.ok(out.includes('simmy') && !out.includes('mine'), JSON.stringify(out));
+  const st = F.armState(ls, V, true, true, acc, groups, true, out);
+  assert.strictEqual(st.state, 'partly');
+  assert.match(st.reasons.join(' '), /simmy on a Sim account \(Kill all does not reach it\)/);
+  assert.match(st.reasons.join(' '), /or Praetorian, the Agent tab until Praetorian merges/);
+  // no personal account picked: Kill all is refused, the switch still reads PARTLY (never "off") and may only switch off
+  const noPick = Object.assign({}, acc, { personalNamed: false });
+  const st2 = F.armState(F.lanes(list, groups, noPick, V, cards), V, true, true, noPick, groups, true, F.outsideAuto(F.lanes(list, groups, noPick, V, cards), list, noPick, V));
+  assert.deepStrictEqual([st2.state, st2.can, st2.canOff], ['partly', false, true]);
+});
+
+test('the re-review of 94, N1: "not known" until the traders have settled, not at the first one', t => {
+  timers(t);
+  const P = page(t, { settleMs: 1500 });
+  P.fv.showTab(true); P.ready();
+  assert.strictEqual(P.fv.state().arm.state, 'unknown', 'the first trader heard: not known yet');
+  P.T += 1500;
+  assert.notStrictEqual(P.fv.state().arm.state, 'unknown', 'settled');
+});
+
+test('the re-review of 94, N1, in Legion Setup: a lane\'s lock is not known until the traders have settled', t => {
+  timers(t);
+  const mounts = [];
+  const lanePanel = (el, key, opts) => { const m = { key, opts, destroy() {} }; mounts.push(m); return m; };
+  const P = page(t, { lanePanel, settleMs: 1500 });
+  P.fv.showTab(true);
+  P.feed({ type: 'hello', version: '0.6.21' }); P.feed({ type: 'trading', enabled: true }); P.feed(accounts); P.feed(groups);
+  P.feed(evalTrader()); P.feed(fundTrader());
+  assert.strictEqual(mounts[0].opts.locked(), F.NOT_KNOWN, 'a second trader on this lane may not be heard yet');
+  assert.strictEqual(mounts[0].opts.otherLocked('g2'), F.NOT_KNOWN);
+  P.T += 1500;
+  assert.strictEqual(mounts[0].opts.locked(), '', 'settled: in Shadow and flat, moves are free');
+  assert.strictEqual(mounts[0].opts.otherLocked('g2'), '');
+});
+
+test('the re-review of 94, N2: a lane reads its bench through the Multi-Account panel\'s own rule when that file is loaded', () => {
+  const win = { document: {} };
+  new Function('window', 'document', 'self', read('live', 'agent-core.js'))(win, win.document, win);
+  const calls = [];
+  win.MultiAccountCore = { lanes: (g, S) => { calls.push(g.id); return { bench: [{ name: 'EVAL-B', member: true }, { name: 'LOOSE', member: false }], active: [] }; } };
+  new Function('window', 'document', 'self', read('live', 'fleet.js'))(win, win.document, win);
+  const ls = win.FleetCore.lanes([evalTrader()], groups, accounts, '0.6.21', liveCards());
+  assert.deepStrictEqual([calls, ls[0].seats, ls[0].benched], [['g1'], ['EVAL-A'], ['EVAL-B']], 'the panel\'s bench, not the field read here');
+});
+
+test('the re-review of 94, N3: a Sim-only lane says Kill all does not reach it; a mixed lane says how many are Sim', () => {
+  const ls = [{ stage: 'eval', title: 'Eval lane', armable: true, name: 'L1', pickText: 'germ', seats: ['A', 'B'], benched: [], sim: true, simCount: 2, connected: true },
+    { stage: 'funded', title: 'Funded lane', armable: true, name: 'L2', pickText: 'duo', seats: ['C', 'D'], benched: [], sim: false, simCount: 1, connected: true }];
+  const w = F.armWords(ls);
+  assert.match(w, /on 2 Sim accounts \(Kill all does not reach Sim accounts: Armed off does\)/);
+  assert.match(w, /trades duo on 2 accounts, 1 Sim\./);
+});
+
+test('the re-review of 94, N5: without the page\'s mode rules, Armed says it cannot switch from here, never "nothing to switch off"', t => {
+  timers(t);
+  const P = page(t, {}, { noAgentCore: true });
+  P.fv.showTab(true);
+  P.feed({ type: 'hello', version: '0.6.21' }); P.feed({ type: 'trading', enabled: true }); P.feed(accounts); P.feed(groups);
+  P.feed(evalTrader({ mode: 'auto' })); P.feed(fundTrader());
+  assert.strictEqual(P.fv.state().arm.state, 'partly', 'a lane in Auto: something to switch off');
+  P.click('arm');
+  assert.deepStrictEqual(P.posts, []);
+  assert.match(P.part('armsaid').textContent, /cannot switch off from here: the page is incomplete/);
+  assert.doesNotMatch(P.part('armsaid').textContent, /nothing to switch off/);
+});
+
+test('the re-review of 94, N6: the day stop mark says it is the page\'s own working', t => {
+  timers(t);
+  const P = page(t); P.fv.showTab(true); P.ready();
+  assert.match(P.part('accounts').innerHTML, /The mark shown is worked out on this page from the group's rules and the plan's value; ChartBridge's own mark is not sent to the page yet\./);
+});
+
