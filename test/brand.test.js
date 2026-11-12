@@ -60,6 +60,9 @@ test('Cinzel for the wordmark only, with a real fallback stack; the old title an
     const uses = [...css.matchAll(/([^{}]+)\{[^}]*var\(--ws-title-font\)[^}]*\}/g)].map(m => m[1].trim());
     if (f === 'workspace.css') assert.deepEqual(uses, ['.ws-title.ws-mark', '.ws-mark-suite', '.ws-mark-name']);
     else if (f === 'league.css') assert.deepEqual(uses, ['.lg-word'], '1.50.0: the Colosseum\'s name, a title (never a live value)');
+    /* 1.48.0 (look B for Legion, 2026-11-11: Cinzel for the wordmark and the section titles only, never a live value): Legion's
+       title, its section titles and its lane titles, each a fixed word */
+    else if (f === 'fleet.css') assert.deepEqual(uses, ['.fl-title', '.fl-box .fl-h', '.fl-lanetitle'], f + ': Cinzel on titles only');
     else assert.deepEqual(uses, [], f + ': no Cinzel');
   }
   const rule = sel => (new RegExp('^' + sel.replace(/\./g, '\\.') + ' \\{([^}]*)\\}', 'm').exec(ws) || [])[1] || '';
