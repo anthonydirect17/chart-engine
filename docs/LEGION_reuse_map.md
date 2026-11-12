@@ -101,6 +101,15 @@ a setting's line, still `agentPick`.
 
 ## Legion Live
 
+**Built in chart 1.49.0, as below** (`live/fleet.js`: `liveTiles`, `laneMarks`, `traderDays`; the page hands `liveChart`,
+`accountRows` and `sessionStart`): the tiles from ChartBridge's `pnlToday` (the business so far said "not built yet"); the
+chart mounted the League tab's way with `LeagueOverlay.attach`'s generic marks from ChartBridge's `exec` and `execs` on each
+lane's accounts (settled here: the fills come from those two messages; no stop or target line, the page holds no lane's
+planned stop); Traders today from the `agent` message and the lanes (the live record says "not enough data yet" until
+The Desk is read); Accounts live is the Account page's rows-only mount, handed a feed that reads and sends nothing (the
+review of 97, F8). Legion's own Prop accounts table is drawn only where the page has no Accounts part. Not done: the
+indicators seeded from the main chart, the payout line from the playbook, The Desk's history.
+
 ### The four tiles
 
 New, small. Sums of numbers the Account page's rows already hold (`pnlToday`, the positions), by group. "The
