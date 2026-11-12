@@ -473,6 +473,14 @@ try {
   check(m.sw <= m.cw + 1 && m.cols === 1 && await page.locator('.fl-set').count() === 4, 'at 390 px: the lanes in one column, the roster scrolls inside its box, no sideways scroll of the page (' + m.sw + ' in ' + m.cw + ')');
   check(m.kill >= 30, 'the Kill all button keeps its height (' + m.kill + ' px)');
   await page.screenshot({ path: path.join(SHOTS, 'fleet-phone.png'), fullPage: true });
+  // 1.49.0: Live at phone width: the tiles in one column, the traders' table scrolls inside its box, no sideways scroll
+  await page.click('[data-do="sub"][data-sub="live"]');
+  await sleep(200);
+  const lv = await page.evaluate(() => ({ sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth,
+    tiles: getComputedStyle(document.querySelector('.fl-tiles')).gridTemplateColumns.split(' ').length }));
+  check(lv.sw <= lv.cw + 1 && lv.tiles === 1, 'Live at 390 px: the tiles in one column, no sideways scroll of the page (' + lv.sw + ' in ' + lv.cw + ', ' + lv.tiles + ' columns)');
+  await page.screenshot({ path: path.join(SHOTS, 'fleet-live-phone.png'), fullPage: true });
+  await page.click('[data-do="sub"][data-sub="setup"]');
   check(pageErrors.length === 0, 'no page errors and no browser dialog: ' + pageErrors.join(' | '));
 } finally { await browser.close(); }
 
