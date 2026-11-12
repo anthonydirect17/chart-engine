@@ -1405,6 +1405,48 @@ test('a trader\'s accounts are its account and every seat it has; a shape the pa
   assert.match(ls[0].why, /The page cannot tell its accounts/);
 });
 
+test('answers B4-8, F2 (rule 12): no lane is armed while another trader is on, or may be on, one of its accounts, in any mode; the reason names the trader and the place, never the account', () => {
+  const V = '0.6.21', cards = liveCards();
+  const ready = [evalTrader(), fundTrader()];
+  const armed = list => { const ls = F.lanes(list, groups, accounts, V, cards); return { ls, arm: F.armState(ls, V, true, true, accounts, groups, true, F.outsideAuto(ls, list, accounts, V)) }; };
+  // a clean lane is still armable, and an unrelated trader on another account does not hold it
+  for (const list of [ready, ready.concat([agent('solo', { mode: 'copilot', account: 'MINE-1' })])]) {
+    const { ls, arm } = armed(list);
+    assert.deepStrictEqual([ls[0].armable, ls[0].why, arm.can], [true, '', true], 'clean: ' + list.map(x => x.agent).join(', '));
+  }
+  // the reviewer's probes (P2, P3, P8, P9), and two more places, each refused
+  const probes = [
+    [agent('odd', { mode: 'shadow', account: 42 }), /odd: the page cannot read its accounts, so it may be on one of this lane's accounts/],
+    [agent('odd', { mode: 'copilot', account: null, group: { id: 'g5', name: 'Other' }, seats: 'EVAL-B' }), /odd: the page cannot read its accounts/],
+    [agent('odd', { mode: 'shadow', account: null, group: 'g1' }), /odd: the page cannot read its accounts/],
+    [agent('odd', { mode: 'shadow', seats: [{ account: 'FUND-A' }], account: undefined }), /odd: the page cannot read its accounts/],
+    [agent('cop', { mode: 'copilot', account: 'EVAL-B' }), /cop has one of this lane's accounts as its own account/],
+    [agent('cop', { mode: 'shadow', account: 'eval-b', enabled: false }), /cop has one of this lane's accounts as its own account/],
+    [agent('left', { mode: 'shadow', account: null, group: null, seats: [{ account: 'EVAL-B' }] }), /left has a seat left over on one of this lane's accounts/],
+    [agent('oth', { mode: 'shadow', account: null, group: { id: 'g5', name: 'Other' }, seats: [{ account: 'EVAL-A' }] }), /oth has a seat of its own group on one of this lane's accounts/],
+  ];
+  for (const [x, rx] of probes) {
+    const { ls, arm } = armed(ready.concat([x]));
+    assert.strictEqual(ls[0].armable, false, 'refused: ' + JSON.stringify(x));
+    assert.match(ls[0].why, /^Another trader is on, or may be on, one of its accounts \(in any mode\), and a lane is never armed beside another trader: /);
+    assert.match(ls[0].why, rx);
+    assert.doesNotMatch(ls[0].why, /EVAL|FUND|MINE/i, 'never the account\'s name');
+    assert.strictEqual(arm.can, false, 'Armed is not offered: ' + arm.why);
+    assert.strictEqual(F.armMsgs(ls, true, ready.concat([x]), () => 'c').length, 0, 'nothing is sent to Auto');
+  }
+  // a member on the bench is still the lane's account: another trader on it holds the lane too
+  const benchGroups = { type: 'groups', list: groups.list.map(g => (g.id === 'g1' ? Object.assign({}, g, { benched: ['EVAL-B'] }) : g)) };
+  const bl = F.lanes(ready.concat([agent('cop', { mode: 'copilot', account: 'EVAL-B' })]), benchGroups, accounts, V, cards)[0];
+  assert.deepStrictEqual([bl.armable, /cop has one of this lane's accounts/.test(bl.why)], [false, true]);
+  // a member of its group the lane's trader has no seat on (ChartBridge has not seated it yet) is still the lane's account
+  const moreGroups = { type: 'groups', list: groups.list.map(g => (g.id === 'g1' ? Object.assign({}, g, { members: ['EVAL-A', 'EVAL-B', 'EVAL-C'] }) : g)) };
+  const ml = F.lanes(ready.concat([agent('cop', { mode: 'shadow', account: 'EVAL-C' })]), moreGroups, accounts, V, cards)[0];
+  assert.deepStrictEqual([ml.armable, /cop has one of this lane's accounts as its own account/.test(ml.why)], [false, true]);
+  // the other lane is not held by a trader on this one's accounts only
+  const fl = F.lanes([evalTrader(), fundTrader({ pick: 'duo.json' }), agent('cop', { mode: 'copilot', account: 'EVAL-B' })], groups, accounts, V, cards);
+  assert.deepStrictEqual([fl[0].armable, fl[1].armable], [false, true]);
+});
+
 test('answers 27, 104-A: the Live sub-page tells the desk it is hidden, and Setup shows it again (no polling, no chart off screen)', t => {
   timers(t);
   const mounts = [];
@@ -1433,6 +1475,13 @@ test('answers 27, 104-B and 104-D: the Kill all line names a trader in Auto whos
   assert.match(F.autoLine(rows, true), /^In Auto on accounts the page cannot read \(Kill all may not reach it\): x4$/);
   assert.doesNotMatch(F.autoLine(rows, true), /No trader is in Auto/);
   assert.strictEqual(F.traders([agent('x5', { mode: 'shadow', account: 42 })], accts, V)[0].cannotTell, false, 'only one in Auto');
+  // answers B4-8, F1: the row never says None, nor only the seats it can read
+  assert.strictEqual(F.traders([agent('x6', { account: 42 })], accts, V)[0].accountText, 'Cannot tell its accounts');
+  assert.strictEqual(F.traders([agent('x7', { account: null, group: 'g1' })], accts, V)[0].accountText, 'Cannot tell its accounts');
+  assert.strictEqual(rows[0].accountText, 'Cannot tell its accounts (it reads EVAL-A, and not the rest)');
+  // answers B4-8, F4: Armed's reason for it outside the lanes says the page cannot read its accounts
+  assert.deepStrictEqual(F.outsideAuto([], [odd], accts, V).words, ['x4 (the page cannot read its accounts; Kill all may not reach it)']);
+  assert.deepStrictEqual(F.outsideAuto([], [agent('x8', { account: 'NOBODY-9' })], { type: 'accounts', list: [{ name: 'NOBODY-9' }] }, V).words, ['x8 on an account ChartBridge has not marked prop or personal (Kill all may not reach it)'], 'a readable account not marked keeps its words');
   // a one-account trader on the personal account with a prop seat left over
   const left = agent('m1', { mode: 'auto', account: 'MINE', group: null, seats: [{ account: 'EVAL-A' }] });
   const lr = F.traders([left], accts, V);

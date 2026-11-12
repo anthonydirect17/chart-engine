@@ -190,9 +190,11 @@ function traders(agents, accountsMsg, version) {
     out.push({
       id: a.agent, name: str(a.name, 40) || a.agent, build: str(a.build, 40), mode, modeText: mode ? MODE_NAME[mode] : 'Not known',
       connected: a.connected === true, autoProp: can && mode === 'auto' && (kind === 'prop' || kind === 'propsim' || kind === 'unlisted' || kind === 'mixed'),
-      cannotTell: can && mode === 'auto' && !accountsReadable(a), grouped: plainObj(a.group),   // 104-B and 104-D (answers 27)
+      cannotTell: can && mode === 'auto' && !accountsReadable(a), readsAccounts: accountsReadable(a), grouped: plainObj(a.group),   // 104-B and 104-D (answers 27)
       status: statusText(a), tone: a.enabled === false ? 'off' : a.killed ? 'killed' : a.standDown ? 'standDown' : !a.connected ? 'lost' : 'on',
-      accounts: names, accountText: !names.length ? 'None' : plainObj(a.group) ? 'Group ' + (str(a.group.name, 40) || str(a.group.id, 12)) + ': ' + names.join(', ')
+      // answers B4-8, F1: a trader whose accounts the page cannot read never shows as None, nor as only the seats it can read
+      accounts: names, accountText: !accountsReadable(a) ? 'Cannot tell its accounts' + (names.length ? ' (it reads ' + names.join(', ') + ', and not the rest)' : '')
+        : !names.length ? 'None' : plainObj(a.group) ? 'Group ' + (str(a.group.name, 40) || str(a.group.id, 12)) + ': ' + names.join(', ')
         : names.length > 1 ? names[0] + ', left over: ' + names.slice(1).join(', ') : names[0],   // 104-D: every account, as Kill all counts them
       kind, window: str(r.entryFrom, 5) && str(r.entryUntil, 5) ? str(r.entryFrom, 5) + ' to ' + str(r.entryUntil, 5) : '', flatAt: str(r.flatAt, 5),
       marketEntry: r.marketEntry === true, noTarget: r.noTarget === true, switchesKnown: atLeast(version, SWITCH_MIN),
@@ -476,12 +478,25 @@ function lanes(agents, groupsMsg, accountsMsg, version, cards) {
     const kinds = L.seats.map(n => { const row = idx.get(n.toLowerCase()); return row ? kindOf(row) : ''; });
     L.sim = kinds.length > 0 && kinds.every(k => k === 'sim');
     L.simCount = kinds.filter(k => k === 'sim').length;
+    /* answers B4-8, F2 (rule 12, A28-1's rule for Armed too): no lane is armed while ANY other trader holds, or may hold, one of
+       its accounts (the group's members and every account of its own trader), in any mode: a trader the page cannot read may be
+       on any of them. The reason names the trader and the place, never the account. */
+    const mine = new Set(all.concat(Array.isArray(g.members) ? g.members.filter(m => typeof m === 'string' && m) : []).map(n => n.toLowerCase()));
+    const sharing = list.filter(x => x !== a).map(x => {
+      const who = str(x.agent, 40);
+      if (!accountsReadable(x)) return who + ': the page cannot read its accounts, so it may be on one of this lane\'s accounts';
+      const acct = typeof x.account === 'string' && mine.has(x.account.toLowerCase());
+      const seat = (Array.isArray(x.seats) ? x.seats : []).some(y => plainObj(y) && typeof y.account === 'string' && mine.has(y.account.toLowerCase()));
+      return acct ? who + ' has one of this lane\'s accounts as its own account' : seat ? who + (plainObj(x.group) ? ' has a seat of its own group' : ' has a seat left over') + ' on one of this lane\'s accounts' : '';
+    }).filter(Boolean);
+    const shareWhy = sharing.length ? 'Another trader is on, or may be on, one of its accounts (in any mode), and a lane is never armed beside another trader: ' + sharing.join('; ') : '';
     const r = plainObj(a.rules) ? a.rules : {};
     const allowed = AGC && typeof AGC.modesAllowed === 'function' && typeof AGC.groupTradable === 'function'
       ? AGC.modesAllowed({ tradable: AGC.groupTradable(accountsMsg, null, L.seats), account: L.groupName }).auto : { ok: false, why: 'The page\'s mode rules (agent-core.js) are not loaded' };
     L.why = !L.pickKnown ? 'The pick needs ChartBridge ' + PICK_MIN + ' or later (this one is ' + (version || 'not known') + ')'
       : !ID_RX.test(a.agent) ? 'Its id is not one ChartBridge takes'
       : !accountsReadable(a) ? 'The page cannot tell its accounts (what ChartBridge sent is not an account, a group or a list of seats)'
+      : shareWhy ? shareWhy
       : a.enabled === false ? 'The trader is off in ChartBridge'
       : a.killed ? 'Its kill switch is on (it is released on the Agent tab, by you)'
       : a.standDown ? 'It is stood down: ' + str(a.standDown, 300)
@@ -514,7 +529,9 @@ function outsideAuto(ls, agents, accountsMsg, version) {
   const rows = traders(agents, accountsMsg, version).filter(t => t.mode === 'auto' && t.tone !== 'off' && t.tone !== 'killed' && t.kind !== 'personal' && !onLane.has(t.id));
   const where = t => (t.kind === 'sim' ? 'on a Sim account (Kill all does not reach it)' : t.kind === 'prop' || t.kind === 'propsim' ? 'on a prop account'
     : t.kind === 'mixed' ? 'on a prop account and your personal account (Kill all will NOT stop it)'   // 104-D (answers 27)
-    : t.kind === 'unlisted' ? 'on an account NinjaTrader does not list now' : 'on an account ChartBridge has not marked prop or personal (Kill all may not reach it)');
+    : t.kind === 'unlisted' ? 'on an account NinjaTrader does not list now'
+    : t.readsAccounts === false ? '(the page cannot read its accounts; Kill all may not reach it)'   // answers B4-8, F4
+    : 'on an account ChartBridge has not marked prop or personal (Kill all may not reach it)');
   const out = rows.map(t => t.id);
   out.words = rows.map(t => t.id + ' ' + where(t));
   return out;

@@ -343,11 +343,18 @@ try {
   await page.evaluate(b => { window.rosterAnswer = { status: 200, body: b }; }, rosterBody);
   await feed({ type: 'hello', version: '0.6.21' }); await feed({ type: 'trading', enabled: true }); await feed(accounts); await feed(groups);
   await feed(lane1()); await feed(lane2()); await feed({ type: 'agentStandDowns', list: [] });   // ChartBridge's end of the sign-in replay (answers 25, S1)
-  await page.waitForFunction(() => window.fleet.state().roster.state === 'ok' && window.fleet.state().lanes[0].armable === true);
+  // answers B4-8, F2 (rule 12): germanicus and resting (from above) are on the eval lane's own accounts: no lane is armed beside them
+  await page.waitForFunction(() => window.fleet.state().roster.state === 'ok' && window.fleet.state().lanes[0].id === 'legion1');
+  const held = await page.evaluate(() => window.fleet.state().lanes[0]);
+  check(held.armable === false && /^Another trader is on, or may be on, one of its accounts/.test(held.why) && /germanicus has one of this lane's accounts as its own account; resting has one/.test(held.why) && !/SAMPLE-/.test(held.why),
+    'a lane with another trader on its accounts is not armable, and the reason names the trader, never the account: ' + held.why);
+  await feed(agent('germanicus', { account: 'SAMPLE-NEW-1', rules: { entryFrom: '09:40', entryUntil: '15:00', flatAt: '15:55', marketEntry: true, noTarget: true }, dayStop: 900 }));
+  await feed(agent('resting', { account: 'SAMPLE-NEW-1', standDown: 'sample stand-down' }));   // both off the lane's accounts, still in Auto
+  await page.waitForFunction(() => window.fleet.state().lanes[0].armable === true);
   // the review of 94, FIX 2: a trader in Auto on a prop account outside the lanes (germanicus, from above) is named at the switch
   check((await text('[data-do="arm"]')) === 'Armed: PARTLY' && /Not a lane, so not armed from here: germanicus on a prop account; resting on a prop account in Auto/.test(await text('.fl-armsaid')), 'a trader in Auto outside the lanes: Armed reads PARTLY and names it: ' + await text('.fl-armsaid'));
-  await feed(agent('germanicus', { mode: 'shadow' }));
-  await feed(agent('resting', { mode: 'shadow', account: 'SAMPLE-EVAL-2' }));   // a stood-down trader in Auto counts too (the re-review of 94, R3)
+  await feed(agent('germanicus', { mode: 'shadow', account: 'SAMPLE-NEW-1' }));
+  await feed(agent('resting', { mode: 'shadow', account: 'SAMPLE-NEW-1' }));   // a stood-down trader in Auto counts too (the re-review of 94, R3)
   const laneText = await page.evaluate(() => [...document.querySelectorAll('.fl-lane')].map(e => e.innerText.replace(/\s+/g, ' ')));
   check(laneText.length === 2 && /^Eval lane Goal: pass the eval SHADOW READY legion1, group Sample evals Bot /i.test(laneText[0]) && laneText[0].includes('Sample alpha BOT risk $400 a trade Watching +$1,510'), 'the eval lane: its goal, its mode, Ready, its trader and group, the picked bot with its risk, its state and today on its accounts: ' + laneText[0]);
   check(/^Funded lane Goal: reach the payout SHADOW NOT READY legion2, group Sample funded Bot /i.test(laneText[1]) && laneText[1].includes('No bot is picked for this lane. A second bot on a lane comes as a lineup file from the Lab.') && laneText[1].includes('No bot is picked for it'), 'the funded lane: not ready, and why: ' + laneText[1]);

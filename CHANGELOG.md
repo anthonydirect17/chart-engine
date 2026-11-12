@@ -84,6 +84,12 @@
   `AgentCore.gateAccounts`, held by one test of the same shapes, a missing `account` key now "cannot tell" (104-E); a
   trader in any mode the page cannot read locks the lanes (A33-1), with its own words (`NOT_READABLE`, A33-2); a test
   that the page loads the desk and the install copies it (104-C).
+- **Answers B4-8 (rule 12):** no lane is armed while any other trader is on, or may be on, one of its accounts (its
+  group's members and every account of its own trader), in any mode: a trader the page cannot read, a trader on one of
+  them as its own account, or with a seat of its own group or a seat left over on one. The reason names the trader and
+  the place, never the account (F2). A trader whose accounts the page cannot read shows "Cannot tell its accounts" on
+  its row, never None or only the seats it can read (F1), and Armed's reason for one in Auto outside the lanes says the
+  page cannot read its accounts (F4).
 
 ## chart 1.52.0 (2026-11-12): Legion's trader desk, the Agent and Bot desks behind Praetorian's gate turned round (page only, no F5)
 
