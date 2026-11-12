@@ -1169,3 +1169,12 @@ test('Legion Live (1.49.0): the tab keeps each fill once, draws the tiles and th
   assert.deepStrictEqual(mounted.slice(-2), ['chart down', 'rows down'], 'closing the tab takes them down too');
 });
 function listenersClick(P, sub) { P.clickSub(sub); }
+
+test('T-6 of the third look at 92: the head row (Kill all, its Yes and Cancel) never wraps; the last word on it in fleet.css says nowrap', () => {
+  const css = read('live', 'fleet.css').replace(/\/\*[\s\S]*?\*\//g, '');
+  const said = [...css.matchAll(/(^|\n)\.fl-head \{([^}]*)\}/g)].map(m => (/flex-wrap:\s*([a-z]+)/.exec(m[2]) || [])[1]).filter(Boolean);
+  assert.ok(said.length >= 1, 'a flex-wrap is set on .fl-head');
+  assert.strictEqual(said[said.length - 1], 'nowrap', 'the rule that wins is nowrap: ' + said.join(', '));
+  assert.doesNotMatch(css, /@media[^{]*\{[^@]*\.fl-head \{[^}]*flex-wrap:\s*wrap/, 'no width puts the wrap back');
+});
+
