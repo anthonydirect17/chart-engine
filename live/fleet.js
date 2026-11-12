@@ -123,11 +123,14 @@ function dayMark(rules, stage, planValue) {
   return mark > 0 ? { mark, from } : null;
 }
 
-/** The accounts one trader is on, from its `agent` message: its account, or its group's seats. */
+/** The accounts one trader is on, from its `agent` message: its account AND every seat it has (a group's, or one left over
+ *  after a move), each once (answers 26, R3-4, and builder 4's note on answers B4-2: the gates count them the same way). */
 function traderAccounts(agent) {
-  const a = agent || {};
-  if (plainObj(a.group) && Array.isArray(a.seats)) return a.seats.filter(x => plainObj(x) && typeof x.account === 'string').map(x => x.account);
-  return typeof a.account === 'string' && a.account ? [a.account] : [];
+  const a = plainObj(agent) ? agent : {};
+  const out = [];
+  if (typeof a.account === 'string' && a.account) out.push(a.account);
+  if (Array.isArray(a.seats)) for (const x of a.seats) if (plainObj(x) && typeof x.account === 'string' && x.account && !out.includes(x.account)) out.push(x.account);
+  return out;
 }
 
 /** What a trader is doing, in a few words (the Agent tab's own order of reasons). */
@@ -656,20 +659,25 @@ function laneLock(l, heard) {
   return '';
 }
 /**
- * ANY GROUP'S LOCK (answers 25, S2): may an account be taken out of group gid now? Every trader heard on that group counts,
- * not only one lane's: '' only when no trader is on it, or its one trader is in Shadow and holds nothing; else why not,
- * with the trader named. Not heard yet is NOT_KNOWN, which is locked.
+ * ANY GROUP'S LOCK (answers 25, S2; answers 26, R3-4): may an account be taken out of group gid now? Every trader heard ON
+ * that group counts, and every trader seated directly on one of its accounts (its account, its group's seats or a seat left
+ * over: traderAccounts), not only one lane's: '' only when no trader is on it, or its one trader is in Shadow and holds
+ * nothing; else why not, with the trader named. Not heard yet, or a group ChartBridge does not list with its members
+ * (groupsMsg), is NOT_KNOWN, which is locked.
  */
-function groupLock(gid, list, heard) {
+function groupLock(gid, list, heard, groupsMsg) {
   if (heard !== true || !Array.isArray(list)) return NOT_KNOWN;
   if (typeof gid !== 'string' || !gid) return NOT_KNOWN;
-  const on = list.filter(a => plainObj(a) && plainObj(a.group) && a.group.id === gid);
+  const g = plainObj(groupsMsg) && Array.isArray(groupsMsg.list) ? groupsMsg.list.find(x => plainObj(x) && x.id === gid) : null;
+  if (!g || !Array.isArray(g.members)) return NOT_KNOWN;
+  const members = new Set(g.members.filter(m => typeof m === 'string').map(m => m.toLowerCase()));
+  const on = list.filter(a => plainObj(a) && ((plainObj(a.group) && a.group.id === gid) || traderAccounts(a).some(n => members.has(n.toLowerCase()))));
   if (!on.length) return '';
   const name = a => str(a.agent, 40) || 'a trader';
-  if (on.length > 1) return 'Two traders are on that group (' + on.map(name).join(', ') + '): no account moves out of it until one is taken off (the Agent tab).';
+  if (on.length > 1) return 'Two traders are on that group or its accounts (' + on.map(name).join(', ') + '): no account moves out of it until one is taken off (the Agent tab).';
   const a = on[0];
-  if (a.mode !== 'shadow') return name(a) + ' trades that group in ' + (own(MODE_NAME, a.mode) ? MODE_NAME[a.mode] : 'a mode not known') + ': an account moves out of it only while it is in Shadow.';
-  if (a.owns === true) return name(a) + ' holds a position or a working entry on that group: an account moves out of it once it is flat.';
+  if (a.mode !== 'shadow') return name(a) + ' trades that group or one of its accounts in ' + (own(MODE_NAME, a.mode) ? MODE_NAME[a.mode] : 'a mode not known') + ': an account moves out of it only while it is in Shadow.';
+  if (a.owns === true) return name(a) + ' holds a position or a working entry on that group or its accounts: an account moves out of it once it is flat.';
   return '';
 }
 /** The one message a lane's panel may post itself: memberBench with exactly its keys. (Its join goes through accountGroup.) */
@@ -1251,7 +1259,7 @@ function create(o) {
     const locked = () => { const now = laneList().find(x => x.stage === stage); return C.laneLock(now, heard()) || (!S.connected ? 'ChartBridge is not connected' : ''); };
     /* taking an account from another group asks that group's lane too (F2); a group no lane trades is free once heard */
     // answers 25, S2: any group's lock covers every trader heard on it, not only a lane's own (a doubled lane's second group, a group of no Type)
-    const otherLocked = gid => { if (!heard()) return C.NOT_KNOWN; return C.groupLock(gid, agentList(), true) || (!S.connected ? 'ChartBridge is not connected' : ''); };
+    const otherLocked = gid => { if (!heard()) return C.NOT_KNOWN; return C.groupLock(gid, agentList(), true, S.groups) || (!S.connected ? 'ChartBridge is not connected' : ''); };
     let mount = null;
     try { mount = o.lanePanel(host, 'legion-' + stage, { group: l.groupId, locked, otherLocked }); } catch (e) { mount = null; }
     if (!mount) return null;
