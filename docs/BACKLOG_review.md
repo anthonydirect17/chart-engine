@@ -34,6 +34,13 @@ the focus is while the tab is open).
   in 1.46.0: ChartBridge does not send either to a page (only the plan's `dayStop` on `agent`), so this needs a
   ChartBridge change first (the mark and "reached" on each row of `accounts`). Written up for the next ChartBridge
   change (2026-11-12), with the account-move refusal, the Copilot race and a lane's group through 17:00; not built.
+- The account-move gap (the review of 97, F4; build answers 18, point 3), beside N12 for the next ChartBridge change:
+  ChartBridge does not refuse `accountGroup` or `memberBench` by the state of the trader whose group it is (it refuses a
+  bench only while that one account is not flat, and a join only for the bot's, the copier's or another agent's own
+  account). The page refuses (`FleetCore.laneLock`, and the narrow feed bound to its lane, 1.47.0), and that is a
+  courtesy, not a guard. Wanted: both refused by ChartBridge while the group's agent is in Auto or Copilot or owns
+  anything, and `accountGroup` carrying the group the page believes the account is leaving (closes the page's
+  stale-copy race: an account moved in another window a moment before).
 - D2, the second half: done in 1.48.0. Each lane holds the Multi-Account panel itself on its own group, so a move into
   or out of a lane is that panel's own drag and drop and join question (the narrow feed of 1.47.0: `accountGroup` and
   `memberBench` only, refused on the page while the lane is in Auto or holds something).
