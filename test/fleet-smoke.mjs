@@ -1,10 +1,12 @@
-// The Bots tab's view (drafted as Fleet; chart 1.45.0, live/fleet.js FleetView) in a browser, on its own: the real fleet.js and the page's real
+// The Legion tab's view (drafted as Fleet; chart 1.45.0, live/fleet.js FleetView) in a browser, on its own: the real fleet.js and the page's real
 // stylesheets, fed ChartBridge's messages through a stand-in for the window's v3 connection (listen and post). It checks what is
 // drawn, the roster cards from a stand-in GET /roster, the Kill all question, and that exactly one message is ever sent, only
 // after Yes. Every account, trader, bot and number is made up: sample data only.
 //   npm run smoke:fleet      (CHROMIUM_PATH=/path/to/chrome; SHOTS=dir)
 // Then the tab inside the whole workspace against the fake bridge (the button, one view at a time, a reload).
-// Screenshots: fleet-desktop, fleet-ask, fleet-phone, fleet-empty, fleet-workspace (.png in test/out).
+// The review of 92: a double click anywhere on Kill all sends nothing (STOP 1); a press, a message, a release still counts, on
+// Kill all and on Yes, also under a stream of messages (STOP 2); hostile strings run nothing; a roster tag is never a P&L colour.
+// Screenshots: fleet-roster-shut, fleet-desktop, fleet-ask, fleet-answer, fleet-phone, fleet-empty, fleet-workspace (.png in test/out).
 import { chromium } from 'playwright';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
@@ -22,8 +24,8 @@ const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta n
 <link rel="stylesheet" href="${pathToFileURL(path.join(root, 'live', 'fleet.css'))}">
 <style>html,body{height:100%;margin:0}body{display:flex;flex-direction:column}</style></head>
 <body class="fl-on"><div class="ws-top"><span>SAMPLE DATA: made-up accounts and traders</span>
-<button type="button" class="ws-btn fl-tabbtn" id="wsFleetTab" aria-pressed="false" hidden>Bots</button></div>
-<section class="fl-view fl-in-ws" id="flView" aria-label="Bots tab"></section>
+<button type="button" class="ws-btn fl-tabbtn" id="wsFleetTab" aria-pressed="false" hidden>Legion</button></div>
+<section class="fl-view fl-in-ws" id="flView" aria-label="Legion tab"></section>
 <script src="${pathToFileURL(path.join(root, 'live', 'fleet.js'))}"></script>
 <script>
   window.sent = []; window.subs = []; window.asked = []; window.rosterAnswer = { status: 404 };
@@ -58,62 +60,80 @@ const rosterBody = { left: 0, files: [
   { name: 'sample-beta.json', ok: true, roster: botFile('sample-beta', false, 0.1, false) },
   { name: 'sample-pair.json', ok: true, roster: Object.assign({ format: 'specrunner.lineup/1', lineup: 'sample-pair', runs_live: false, joined: { sessions: 230, trades: 300, skipped: 12 },
       bots: ['sample-alpha', 'sample-beta'].map((b, i) => Object.assign({ taken: 150, skipped: 6, sessions_left_out: i * 10 }, (({ bot, spec, runs_live, why_not, record }) => ({ bot, spec, runs_live, why_not, record }))(botFile(b, i === 0, 0, false)))) }, scored(0.44, true)) },
+  { name: 'sample-quick.json', ok: true, roster: Object.assign(botFile('sample-quick', true, 0.3, false), { counts: { quick: true } }) },
+  { name: 'sample-wrong.json', ok: true, roster: (d => { d.playbook.eval.daily_loss_stop = '800'; return d; })(botFile('sample-wrong', true, 0.3, false)) },
   { name: 'broken.json', ok: false, why: 'not valid JSON' }] };
 
+const X = '<img src=x onerror="window.ranScript=1">';
 const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
 try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 });
   const pageErrors = [];
   page.on('pageerror', e => pageErrors.push(String(e)));
   page.on('console', m => { if (m.type() === 'error') pageErrors.push(m.text()); });
+  page.on('dialog', d => { pageErrors.push('a browser dialog: ' + d.message()); d.dismiss(); });
   await page.goto(pathToFileURL(file).href);
   const feed = m => page.evaluate(x => window.feed(x), m);
   const text = sel => page.locator(sel).innerText();
+  const sentN = () => page.evaluate(() => window.sent.length);
+  const asking = () => page.evaluate(() => window.fleet.state().asking);
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const ARM = 650;                                             // just past the tab's 600 ms
 
   // before ChartBridge says anything the tab's button is hidden; an older ChartBridge keeps it hidden
-  check(await page.locator('#wsFleetTab').isHidden(), 'the Bots button is hidden before ChartBridge says hello');
+  check(await page.locator('#wsFleetTab').isHidden(), 'the Legion button is hidden before ChartBridge says hello');
   await feed({ type: 'hello', version: '0.6.16', features: ['v3'] });
   check(await page.locator('#wsFleetTab').isHidden(), 'and with a ChartBridge before 0.6.17');
   await feed({ type: 'hello', version: '0.6.19', features: ['v3'] });
-  check(await page.locator('#wsFleetTab').isVisible() && (await text('#wsFleetTab')) === 'Bots', 'shown with ChartBridge 0.6.19, named Bots');
+  check(await page.locator('#wsFleetTab').isVisible() && (await text('#wsFleetTab')) === 'Legion', 'shown with ChartBridge 0.6.19, named Legion');
   await page.click('#wsFleetTab');
   check(await page.evaluate(() => window.tabOn === true && window.fleet.shown()), 'a click opens the tab');
-  check((await text('.fl-title')) === 'Bots', 'the tab is titled Bots');
+  check((await text('.fl-title')) === 'Legion', 'the tab is titled Legion');
 
   // the roster: an older ChartBridge is not asked; no folder set is said; then the cards
   check((await text('.fl-roster .fl-empty')).includes('The roster needs ChartBridge 0.6.20 or later (this one is 0.6.19)') && await page.evaluate(() => window.asked.length === 0), 'ChartBridge 0.6.19: the roster is not asked for, and the tab says which version it needs');
   await feed({ type: 'hello', version: '0.6.20', features: ['v3'] });
   await page.waitForFunction(() => window.fleet.state().roster.state === 'none');
   check((await text('.fl-roster .fl-empty')).includes('No roster folder is set on this PC') && await page.evaluate(() => window.asked.join() === '/roster'), 'ChartBridge 0.6.20 with no roster folder: one GET /roster, and the tab says the folder is not set');
+
+  // nothing known yet: said plainly, and Kill all is not offered
+  check((await text('.fl-box[aria-label="Prop accounts"] .fl-empty')).includes('No personal account is picked yet'), 'no accounts message yet: says how to pick the personal account');
+  check(await page.locator('[data-do="ask"]').getAttribute('aria-disabled') === 'true', 'Kill all is not offered yet');
+  await page.click('[data-do="ask"]', { force: true });      // Playwright will not click an aria-disabled button by itself; a person can
+  check(await sentN() === 0 && (await text('.fl-said')).includes('Sign in to trading first'), 'a click on it sends nothing and says why');
+  await page.screenshot({ path: path.join(SHOTS, 'fleet-empty.png') });
+
   await page.evaluate(b => { window.rosterAnswer = { status: 200, body: b }; }, rosterBody);
   await page.click('.fl-roster [data-do="roster"]');
   await page.waitForFunction(() => window.fleet.state().roster.state === 'ok');
+  // one line a card, the detail behind Details (Anthony 2026-11-11: "detail should be there, but expandable when needed")
+  const lines = await page.locator('.fl-card').evaluateAll(els => els.map(e => ({ h: e.getBoundingClientRect().height, text: e.innerText.replace(/\s+/g, ' '), more: e.querySelectorAll('.fl-more').length })));
+  check(lines.length === 4 && lines.every(l => l.h <= 46 && l.more === 0), 'shut, each card is one line (' + lines.map(l => Math.round(l.h)).join(', ') + ' px high) with no detail drawn');
+  check(/sample-alpha Bot RUNS LIVE In-sample, not confirmed; try 3 EVAL \+0\.62 ABOVE NO EDGE FUNDED \+0\.10 NOT ABOVE NO EDGE Details/i.test(lines[1].text), 'the line: the name, runs live, in-sample and the try count, each stage\'s profit per $1 with its word against no edge: ' + lines[1].text);
+  const rosterH = (await page.locator('.fl-roster').boundingBox()).height;
+  check(rosterH < 330, 'the whole roster, four cards shut, is ' + Math.round(rosterH) + ' px high');
+  await page.screenshot({ path: path.join(SHOTS, 'fleet-roster-shut.png') });
+  for (const b of await page.locator('[data-do="more"]').all()) await b.click();
+  check(await page.locator('.fl-more').count() === 4 && (await page.locator('[data-do="more"]').first().innerText()) === 'Hide', 'Details opens each card');
   const cards = await page.locator('.fl-card').evaluateAll(els => els.map(e => ({ name: e.dataset.name, kind: e.dataset.kind, tone: e.dataset.tone || '', text: e.innerText.replace(/\s+/g, ' ') })));
-  check(cards.map(c => c.kind + ' ' + c.name).join(', ') === 'lineup sample-pair, bot sample-alpha, bot sample-beta', 'Read again: the lineup, then the bots, by name: ' + cards.map(c => c.kind + ' ' + c.name).join(', '));
-  const al = cards[1].text, be = cards[2], pr = cards[0];
-  check(/RUNS LIVE/i.test(al) && al.includes('50K with the daily loss limit') && al.includes('In-sample, not confirmed; try 3') && al.includes('Run sample-run-7: 240 sessions, 198 trades, MNQ'), 'a bot: runs live, its plan, in-sample and its try count, its run: ' + al);
+  check(cards.map(c => c.kind + ' ' + c.name).join(', ') === 'lineup sample-pair, bot sample-alpha, bot sample-beta, bot sample-quick', 'Read again: the lineup, then the bots, by name: ' + cards.map(c => c.kind + ' ' + c.name).join(', '));
+  const al = cards[1].text, be = cards[2], pr = cards[0], qk = cards[3];
+  check(/RUNS LIVE/i.test(al) && !/DOES NOT/i.test(al) && al.includes('File sample-alpha.json, 50K with the daily loss limit') && al.includes('In-sample, not confirmed; try 3') && al.includes('Run sample-run-7: 240 sessions, 198 trades, MNQ'), 'a bot: runs live, its plan, its file, in-sample and its try count, its run: ' + al);
+  check(al.includes("The run's own per-trade verdict (in-sample): sample verdict: not enough to call"), 'the file\'s free-text verdict is labelled as the run\'s own, in-sample');
   check(al.includes('Profit per $1: +0.62 (95%: +0.32 to +0.92)') && al.includes('No edge would show +0.05 (5th to 95th: -0.40 to +0.35)') && /ABOVE NO EDGE/i.test(al) && al.includes('Passes 58% of evals, in 9 sessions (median)'), 'its eval numbers beside the no-edge range');
   check(al.includes('Risk $400 a trade; day loss stop $800; day profit stop $1,200; at most 1 trade a day') && al.includes('Paid $1,830.50 per funded account; 41% reach a payout, the first in 14 sessions (median)') && al.includes('payout at $1,500') && /NOT ABOVE NO EDGE/i.test(al), 'the playbook it sizes with, and the funded stage, which is not above no edge');
   check(be.tone === 'notlive' && /DOES NOT RUN LIVE/i.test(be.text) && be.text.includes('Why not: a level trigger'), 'a bot the runner refuses says so and why');
   check(pr.tone === 'notlive' && pr.text.includes('Why not: sample-beta: a level trigger') && pr.text.includes('230 sessions in common, 300 trades taken, 12 skipped because another bot\'s trade was open') && pr.text.includes('In-sample, not confirmed; tries: sample-alpha 3, sample-beta 3'), 'the lineup: not live because one bot is not, its joined record, each try count: ' + pr.text);
-  check((await text('.fl-notshown')).includes('broken.json: not shown, not valid JSON'), 'a file ChartBridge did not serve is listed with why');
-  const gold = await page.locator('.fl-card[data-name="sample-alpha"] .fl-stage[data-stage="eval"] .fl-tag').evaluate(el => getComputedStyle(el).color);
-  const pnlUp = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--ws-buy').trim());
-  check(!!gold && gold !== pnlUp, 'a roster number is never green or red: it is not a P&L');
-  await page.evaluate(() => { window.rosterAnswer = { status: 500, body: { error: 'the roster folder named in config.txt is not there' } }; });
-  await page.click('.fl-roster [data-do="roster"]');
-  await page.waitForFunction(() => window.fleet.state().roster.state === 'error');
-  check((await text('.fl-roster .fl-empty')).includes('could not read the roster folder: the roster folder named in config.txt is not there') && await page.locator('.fl-card').count() === 0, 'a folder that cannot be read: ChartBridge\'s reason, and no stale cards');
-  await page.evaluate(b => { window.rosterAnswer = { status: 200, body: b }; }, rosterBody);
-  await page.click('.fl-roster [data-do="roster"]');
-  await page.waitForFunction(() => window.fleet.state().roster.state === 'ok');
-
-  // nothing known yet: said plainly, and Kill all is not offered
-  check((await text('.fl-box[aria-label="Prop accounts"] .fl-empty')).includes('No personal account is picked yet'), 'no accounts message yet: says how to pick the personal account');
-  check(await page.locator('.fl-kill').getAttribute('aria-disabled') === 'true', 'Kill all is not offered yet');
-  await page.click('.fl-kill', { force: true });      // Playwright will not click an aria-disabled button by itself; a person can
-  check(await page.evaluate(() => window.sent.length === 0) && (await text('.fl-said')).includes('Sign in to trading first'), 'a click on it sends nothing and says why');
-  await page.screenshot({ path: path.join(SHOTS, 'fleet-empty.png') });
+  check(qk.tone === 'notlive' && /QUICK LOOK: NEVER TRADED/i.test(qk.text) && /DOES NOT RUN LIVE/i.test(qk.text) && qk.text.includes('built with --quick'), 'a quick file is marked, and never reads as running live');
+  check((await text('.fl-notshown')).includes('broken.json: not shown, not valid JSON') && (await text('.fl-notshown')).includes('sample-wrong.json: not shown, its playbook or its numbers are not in the format\'s shape'), 'a file ChartBridge did not serve, and one with a wrong-typed value, are listed with why');
+  check((await text('.fl-roster')).includes('Every number is from in-sample runs, and none is a promise.') && !/confirmed\b(?!;)/i.test((await text('.fl-roster')).replace(/not confirmed/gi, '')), 'no card and no footer says "confirmed"');
+  // a roster tag is never a P&L colour: both tags against both P&L colours, each resolved by the browser to the same form
+  const colours = await page.evaluate(() => {
+    const as = v => { const e = document.createElement('span'); e.style.color = 'var(' + v + ')'; document.body.appendChild(e); const c = getComputedStyle(e).color; e.remove(); return c; };
+    const tag = k => getComputedStyle(document.querySelector('.fl-card[data-name="sample-alpha"] .fl-tag[data-kind="' + k + '"]'));
+    return { buy: as('--ws-buy'), sell: as('--ws-sell'), tags: ['edge', 'noedge', 'live'].flatMap(k => [tag(k).color, tag(k).borderTopColor, tag(k).backgroundColor]) };
+  });
+  check(/^rgb/.test(colours.buy) && /^rgb/.test(colours.sell) && colours.buy !== colours.sell && colours.tags.every(c => c !== colours.buy && c !== colours.sell), 'a roster tag is never green or red (text, border or fill): it is not a P&L: ' + JSON.stringify(colours));
 
   await feed({ type: 'trading', enabled: true });
   await feed(accounts); await feed(groups);
@@ -122,14 +142,17 @@ try {
   await feed(agent('resting', { account: 'SAMPLE-EVAL-2', standDown: "the day's profit stop is reached on SAMPLE-EVAL-2 ($1200, 40% of the profit target (the consistency rule); the day is at $1200, realized plus open): flat, and no new entries for agent resting until 18:00 ET" }));
 
   check(!(await text('.fl-said')).includes('Sign in') && (await text('.fl-said')).includes('Kill all stops every trader on a prop account and closes its position there whole'), 'signed in: the reason it was not offered is gone, and the line says what Kill all touches');
-  check((await text('.fl-dutyline')) === 'On duty: germanicus, Auto on SAMPLE-EVAL-1', 'the duty line names the one trader in Auto on a prop account: ' + await text('.fl-dutyline'));
-  const g = page.locator('.fl-trader[data-id="germanicus"]');
-  const gt = await g.innerText();
-  check(gt.includes('ON DUTY') && /AUTO/i.test(gt) && gt.includes('SAMPLE-EVAL-1') && gt.includes('09:40 to 15:00 New York, flat at 15:55') && gt.includes('In a trade'), 'germanicus: Auto, on duty, its account, window and what it is doing');
+  check((await text('.fl-autoline')) === 'In Auto on prop accounts: germanicus', 'the head line names the one trader in Auto on a prop account: ' + await text('.fl-autoline'));
+  const gt = await page.locator('.fl-trader[data-id="germanicus"]').innerText();
+  check(gt.includes('AUTO ON PROP') && !/on duty/i.test(gt) && gt.includes('SAMPLE-EVAL-1') && gt.includes('09:40 to 15:00 New York, flat at 15:55') && gt.includes('In a trade'), 'germanicus: Auto on prop, its account, window and what it is doing');
   check(gt.includes('Market entry: on') && gt.includes('No target: on') && gt.includes('$900 (from its plan)'), 'its two entry switches are on and shown, and its day stop: ' + gt.replace(/\s+/g, ' '));
   const mt = await page.locator('.fl-trader[data-id="manrae"]').innerText();
-  check(mt.includes('Market entry: off') && mt.includes('No target: off') && !mt.includes('ON DUTY') && /personal/i.test(mt), 'manrae: both switches off, on the personal account, not on duty');
+  check(mt.includes('Market entry: off') && mt.includes('No target: off') && !mt.includes('AUTO ON PROP') && /personal/i.test(mt), 'manrae: both switches off, on the personal account, not counted');
   check((await page.locator('.fl-trader[data-id="resting"]').getAttribute('data-tone')) === 'standDown' && (await page.locator('.fl-trader[data-id="resting"]').innerText()).includes("Stood down: the day's profit stop is reached"), 'a trader stood down by the day stop says so');
+  // PROP 3: a trader in Auto on a group with the personal account in it is named as the one Kill all will not stop
+  await feed(agent('mixed', { account: null, group: { id: 'g9', name: 'Sample both' }, seats: [{ account: 'SAMPLE-MINE' }, { account: 'SAMPLE-EVAL-2' }] }));
+  check((await text('.fl-autoline')).includes('In Auto on a group with your personal account in it (Kill all will NOT stop it: stop it on the Agent tab): mixed'), 'the head line names the trader Kill all will not stop: ' + await text('.fl-autoline'));
+  await feed(agent('mixed', { mode: 'shadow', account: null }));
 
   const rows = await page.locator('.fl-table tbody tr').evaluateAll(trs => trs.map(tr => ({ name: tr.dataset.name, done: tr.classList.contains('fl-done'), cells: [...tr.cells].map(c => c.innerText.replace(/\s+/g, ' ').trim()) })));
   check(rows.map(r => r.name).join(',') === 'SAMPLE-EVAL-1,SAMPLE-EVAL-2,SAMPLE-FUNDED-1,SAMPLE-NEW-1', 'the prop accounts only (the personal account is not listed): ' + rows.map(r => r.name).join(','));
@@ -138,51 +161,141 @@ try {
   check(r2.done && r2.cells[4].startsWith('$1,200 of $1,200 (40% of the $3,000 target)') && /reached/i.test(r2.cells[4]), 'eval 2: at the consistency mark: reached: ' + r2.cells[4]);
   check(r3[0].includes('Funded') && r3[3] === '-$155.50' && r3[4] === 'none (funded, and no plan value)', 'funded: no mark without a plan value: ' + r3.join(' | '));
   check(r4[0].includes('In no group: the runner sizes it 0'), 'an account in no group says why it would be sized 0');
-  const tone = await page.locator('.fl-table tbody tr[data-name="SAMPLE-EVAL-1"] .fl-pnl').evaluate(el => getComputedStyle(el).color);
-  const tone2 = await page.locator('.fl-table tbody tr[data-name="SAMPLE-FUNDED-1"] .fl-pnl').evaluate(el => getComputedStyle(el).color);
-  check(tone !== tone2, 'Today is green when up and red when down (the only green and red on the tab)');
+  const pnl = await page.evaluate(() => ['SAMPLE-EVAL-1', 'SAMPLE-FUNDED-1'].map(n => getComputedStyle(document.querySelector('.fl-table tbody tr[data-name="' + n + '"] .fl-pnl')).color));
+  check(pnl[0] === colours.buy && pnl[1] === colours.sell, 'Today is green when up and red when down (the only green and red on the tab): ' + pnl.join(' '));
   check((await text('.fl-later')).includes('Not built yet, so not shown') && (await text('.fl-later')).includes('the one Armed slider'), 'what is not built (the pick, the Armed slider) is said, not faked');
+  // nothing on the tab can be pressed, typed in or switched but its four buttons (no Armed control until D2 adds the real one)
+  const pressable = await page.evaluate(() => [...document.querySelectorAll('#flView button, #flView input, #flView select, #flView textarea, #flView a, #flView [tabindex], #flView [contenteditable], #flView [role="switch"], #flView [role="checkbox"], #flView [role="slider"], #flView label, #flView summary')].map(e => e.tagName + ':' + (e.dataset.do || '?')).sort());
+  check(pressable.join() === 'BUTTON:ask,BUTTON:more,BUTTON:more,BUTTON:more,BUTTON:more,BUTTON:no,BUTTON:roster,BUTTON:yes', 'the tab has Kill all, Yes, Cancel, Read again and a Details on each card, and no other control: ' + pressable.join());
   await page.screenshot({ path: path.join(SHOTS, 'fleet-desktop.png') });
 
-  // Kill all: asks first; Cancel sends nothing; Yes sends exactly one message
-  check(await page.locator('.fl-kill[data-do="ask"]').getAttribute('aria-disabled') === null, 'Kill all is offered now');
-  await page.click('.fl-kill[data-do="ask"]');
-  check(await page.locator('.fl-ask').isVisible() && await page.evaluate(() => window.sent.length === 0), 'a click asks first and sends nothing');
+  // the head is pinned: scrolled to the bottom of the tab, Kill all is still in sight
+  await page.evaluate(() => { const v = document.getElementById('flView'); v.scrollTop = v.scrollHeight; });
+  const pinned = await page.evaluate(() => { const v = document.getElementById('flView'), b = document.querySelector('[data-do="ask"]').getBoundingClientRect(), r = v.getBoundingClientRect(); return { scrolled: v.scrollTop, top: b.top - r.top, hit: document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2) === document.querySelector('[data-do="ask"]') }; });
+  check(pinned.scrolled > 50 && pinned.top >= 0 && pinned.top < 40 && pinned.hit, 'scrolled down ' + pinned.scrolled + ' px, Kill all is still at the top and can be clicked');
+  // ---- STOP 2: the head is built once. A press, a message, a release still counts, on Kill all and on Yes
+  await page.evaluate(() => { window.killNode = document.querySelector('[data-do="ask"]'); window.yesNode = document.querySelector('[data-do="yes"]'); });
+  const centre = async sel => { const b = await page.locator(sel).boundingBox(); return [b.x + b.width / 2, b.y + b.height / 2]; };
+  let [kx, ky] = await centre('[data-do="ask"]');
+  await page.mouse.move(kx, ky); await page.mouse.down();
+  await feed(agent('germanicus', { owns: false })); await feed(Object.assign({}, accounts, { tickle: 1 })); await feed({ type: 'status', level: 'info', text: 'sample status' });
+  await page.mouse.up();
+  check(await asking() && await sentN() === 0, 'a press on Kill all, three messages, a release: the question opens (the click is not lost)');
   check(await page.evaluate(() => document.activeElement && document.activeElement.dataset.do === 'no'), 'the focus is on Cancel');
+  await feed(agent('germanicus', { owns: true }));
+  check(await page.evaluate(() => document.activeElement && document.activeElement.dataset.do === 'no'), 'and stays there when a message arrives');
   await page.screenshot({ path: path.join(SHOTS, 'fleet-ask.png') });
-  await page.click('.fl-ask [data-do="no"]');
-  check(await page.locator('.fl-ask').count() === 0 && await page.evaluate(() => window.sent.length === 0), 'Cancel: the question goes, nothing sent');
-  await page.click('.fl-kill[data-do="ask"]');
-  await page.click('.fl-ask [data-do="yes"]');
-  const sent = await page.evaluate(() => window.sent);
-  check(sent.length === 1 && sent[0].type === 'agentKillAllProp' && typeof sent[0].cid === 'string' && Object.keys(sent[0]).sort().join(',') === 'cid,type', 'Yes: exactly one message, agentKillAllProp with a cid and nothing else: ' + JSON.stringify(sent));
-  check((await text('.fl-said')).includes('waiting for ChartBridge'), 'and the tab says it was sent');
+  await sleep(ARM);
+  let [yx, yy] = await centre('[data-do="yes"]');
+  await page.mouse.move(yx, yy); await page.mouse.down();
+  await feed(Object.assign({}, accounts, { tickle: 2 })); await feed(agent('germanicus', { owns: false }));
+  await page.mouse.up();
+  let sent = await page.evaluate(() => window.sent);
+  check(sent.length === 1 && sent[0].type === 'agentKillAllProp' && typeof sent[0].cid === 'string' && Object.keys(sent[0]).sort().join(',') === 'cid,type', 'a press on Yes, two messages, a release: exactly one message, agentKillAllProp with a cid and nothing else: ' + JSON.stringify(sent));
+  check(await page.evaluate(() => window.killNode === document.querySelector('[data-do="ask"]') && window.yesNode === document.querySelector('[data-do="yes"]') && document.body.contains(window.killNode)), 'the Kill all and Yes buttons are the same elements after all of it: the head is never rebuilt');
+  check(/^\d\d:\d\d:\d\d\s+Kill all sent: waiting for ChartBridge's answer$/.test(await text('.fl-answer')), 'and the tab says it was sent, with the time, claiming nothing: ' + await text('.fl-answer'));
   await feed({ type: 'status', level: 'warn', text: 'Kill all (prop accounts): agent germanicus on SAMPLE-EVAL-1: flattening what it owns, the kill switch on, mode shadow. The bot, the copier and manual orders are never touched' });
-  check((await text('.fl-said')).startsWith('Kill all (prop accounts): agent germanicus'), "ChartBridge's own words are shown");
+  check(/^\d\d:\d\d:\d\d\s+Kill all \(prop accounts\): agent germanicus/.test(await text('.fl-answer')) && await page.locator('.fl-answer.bad').count() === 0, "ChartBridge's own words are shown with the time in front");
+
+  // the same under a stream of messages at more than the rate PROTOCOL states (6 traders a second and accounts: here 20 a second)
+  await page.evaluate(({ a, acc }) => { let i = 0; window.stream = setInterval(() => { i++; window.feed(Object.assign({}, a, { agent: 'germanicus', owns: i % 2 === 0 })); if (i % 3 === 0) window.feed(Object.assign({}, acc, { tickle: i })); }, 50); }, { a: agent('germanicus'), acc: accounts });
+  let opened = 0, got = 0;
+  const rosterDraws = await page.evaluate(() => window.fleet.state().draws.roster);
+  for (let i = 0; i < 12; i++) {
+    const before = await sentN();
+    [kx, ky] = await centre('[data-do="ask"]');
+    await page.mouse.move(kx, ky); await page.mouse.down(); await sleep(i % 2 ? 150 : 90); await page.mouse.up();
+    if (await asking()) opened++;
+    await sleep(ARM);
+    [yx, yy] = await centre('[data-do="yes"]');
+    await page.mouse.move(yx, yy); await page.mouse.down(); await sleep(i % 2 ? 150 : 90); await page.mouse.up();
+    if (await sentN() === before + 1) got++;
+  }
+  await page.evaluate(() => clearInterval(window.stream));
+  check(opened === 12 && got === 12, 'under 20 messages a second, mouse held 90 and 150 ms: Kill all opened the question ' + opened + ' of 12 times and Kill all then Yes sent ' + got + ' of 12');
+  check(await page.evaluate(() => window.fleet.state().draws.roster) === rosterDraws, 'and the roster was not drawn again by any of those messages');
+  await feed({ type: 'status', level: 'warn', text: 'Kill all (prop accounts): agent germanicus: stopped. Agent resting: NOT STOPPED, still trading its prop accounts' });
+  const badStyle = await page.evaluate(() => { const e = document.querySelector('.fl-answer'), h = document.querySelector('.fl-said'); return { bad: e.classList.contains('bad'), w: +getComputedStyle(e).fontWeight, size: parseFloat(getComputedStyle(e).fontSize), hint: parseFloat(getComputedStyle(h).fontSize), colour: getComputedStyle(e).color, muted: getComputedStyle(h).color }; });
+  check(badStyle.bad && badStyle.w >= 600 && badStyle.size > badStyle.hint && badStyle.colour !== badStyle.muted, 'an answer holding NOT STOPPED is marked: heavier, larger and not the muted colour: ' + JSON.stringify(badStyle));
+  await page.screenshot({ path: path.join(SHOTS, 'fleet-answer.png') });
+
+  // ---- STOP 1: a double click anywhere on Kill all sends nothing, at every width
+  for (const width of [1440, 1024, 700, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    const base = await sentN(); let stayed = 0;
+    for (let i = 0; i < 10; i++) {
+      const b = await page.locator('[data-do="ask"]').boundingBox();
+      await page.mouse.dblclick(b.x + 2 + (b.width - 4) * i / 9, b.y + b.height / 2);
+      if (await asking()) stayed++;
+      // where the first button was, the question now has Cancel (or nothing), never Yes
+      const under = await page.evaluate(([x, y]) => { const e = document.elementFromPoint(x, y); const btn = e && e.closest('button'); return btn ? btn.dataset.do : ''; }, [b.x + 2 + (b.width - 4) * i / 9, b.y + b.height / 2]);
+      if (under === 'yes') errors.push('at ' + width + ' px, point ' + i + ': Yes is drawn where Kill all was');
+      await sleep(ARM); await page.click('[data-do="no"]');
+    }
+    check(await sentN() === base && stayed === 10, 'at ' + width + ' px: a double click at 10 points across Kill all sent nothing, and the question stayed up for a real answer (' + stayed + ' of 10)');
+  }
+  await page.setViewportSize({ width: 1440, height: 900 });
+  // each guard by itself: too soon; then the 8 seconds
+  await page.click('[data-do="ask"]');
+  const n0 = await sentN();
+  await page.click('[data-do="yes"]');
+  check(await sentN() === n0 && await asking(), 'Yes at once after the question opens: nothing sent, the question still up');
+  await sleep(ARM); await page.click('[data-do="no"]');
+  check(!(await asking()) && await sentN() === n0, 'Cancel: the question goes, nothing sent');
+  check(await page.locator('.fl-answer.bad').count() === 1 && (await text('.fl-answer')).includes('NOT STOPPED'), 'and the NOT STOPPED answer is still there after a new question and Cancel');
   // a refusal is shown too
-  await page.click('.fl-kill[data-do="ask"]');
-  await page.click('.fl-ask [data-do="yes"]');
-  const cid = await page.evaluate(() => window.sent[1].cid);
+  await page.click('[data-do="ask"]'); await sleep(ARM); await page.click('[data-do="yes"]');
+  const cid = await page.evaluate(() => window.sent[window.sent.length - 1].cid);
   await feed({ type: 'reject', cid, reason: 'this connection may not trade; reload ChartBridge\'s page' });
-  check((await text('.fl-said')).includes('this connection may not trade') && await page.locator('.fl-said.bad').count() === 1, 'a refusal from ChartBridge is shown as one');
-  check(await page.evaluate(() => window.sent.every(m => m.type === 'agentKillAllProp')) && (await page.evaluate(() => window.sent.length)) === 2, 'nothing but Kill all was ever sent');
+  check((await text('.fl-answer')).includes('ChartBridge refused Kill all: this connection may not trade') && await page.locator('.fl-answer.bad').count() === 1, 'a refusal from ChartBridge is shown as one');
+  check(await page.evaluate(() => window.sent.every(m => m.type === 'agentKillAllProp' && Object.keys(m).sort().join() === 'cid,type')), 'nothing but Kill all was ever sent');
   check(await page.evaluate(() => window.asked.every(u => u === '/roster')), 'and nothing but GET /roster was ever asked for');
 
-  // the connection drops: everything ChartBridge said is forgotten
+  // ---- hostile strings in every field of the roster and of ChartBridge's own messages: nothing runs, nothing is injected
+  await page.evaluate(({ X, body }) => {
+    const j = JSON.parse(JSON.stringify(body));
+    const a = j.files[0].roster; a.runs_live = false; a.why_not = X; a.record.run_id = X; a.record.verdict = X; a.record.instrument = X; a.plan.size = X;
+    const l = j.files[2].roster; l.bots[1].why_not = X; l.bots[0].record.run_id = X;
+    j.files.push({ name: X, ok: false, why: X }); j.files[0].name = X + '.json';
+    window.rosterAnswer = { status: 200, body: j };
+  }, { X, body: rosterBody });
+  await page.click('.fl-roster [data-do="roster"]');
+  await page.waitForFunction(() => window.fleet.state().roster.state === 'ok' && window.fleet.state().roster.notShown >= 3);
+  for (const b of await page.locator('[data-do="more"][aria-expanded="false"]').all()) await b.click();
+  await feed({ type: 'accounts', personalNamed: true, list: [{ name: 'S' + X, connection: X, prop: true, group: 'g1', pnlToday: 1, why: { roomFloor: X }, rules: { target: 3000, consistency: 40 }, positions: [{ root: X, qty: 1 }] }] });
+  await feed({ type: 'groups', list: [{ id: 'g1', name: X, accountType: 'eval' }] });
+  await feed(agent('hostile', { name: X, build: X, account: 'S' + X, standDown: X, rules: { entryFrom: X, entryUntil: X, flatAt: X } }));
+  await feed(agent('hostile2', { account: null, group: { id: X, name: X }, seats: [{ account: X }] }));
+  await page.click('[data-do="ask"]'); await sleep(ARM); await page.click('[data-do="yes"]');
+  await feed({ type: 'status', level: 'warn', text: 'Kill all (prop accounts): ' + X });
+  await feed({ type: 'trading', enabled: false });
+  const hostile = await page.evaluate(() => ({ ran: window.ranScript || 0, imgs: document.querySelectorAll('#flView img, #flView script, #flView iframe, #flView [onerror]').length, seen: (document.getElementById('flView').innerText.match(/<img src=x/g) || []).length }));
+  check(hostile.ran === 0 && hostile.imgs === 0 && hostile.seen >= 12, 'hostile strings in every roster field, account, group, trader and answer: 0 scripts ran, 0 elements injected, shown as text ' + hostile.seen + ' times');
+  await page.evaluate(b => { window.rosterAnswer = { status: 500, body: { error: 'the roster folder named in config.txt is not there' } }; }, null);
+  await page.click('.fl-roster [data-do="roster"]');
+  await page.waitForFunction(() => window.fleet.state().roster.state === 'error');
+  check((await text('.fl-roster .fl-empty')).includes('could not read the roster folder: the roster folder named in config.txt is not there') && await page.locator('.fl-card').count() === 0, 'a folder that cannot be read: ChartBridge\'s reason, and no stale cards');
+
+  // the connection drops: everything ChartBridge said is forgotten; an unanswered Kill all is not
+  await feed({ type: 'trading', enabled: true }); await feed(accounts); await feed(groups);
+  await page.click('[data-do="ask"]'); await sleep(ARM); await page.click('[data-do="yes"]');
   await page.evaluate(() => { for (const h of window.subs) h.closed(); });
   check((await text('.fl-box[aria-label="Traders"] .fl-empty')).includes('ChartBridge is not connected') && await page.locator('.fl-table').count() === 0 && await page.locator('.fl-card').count() === 0, 'connection lost: no stale traders, accounts or roster');
+  check((await text('.fl-answer')).includes("Kill all was sent and ChartBridge's answer never came (the connection dropped): look in NinjaTrader now") && await page.locator('.fl-answer.bad').count() === 1, 'and a Kill all that was sent and not answered is said, marked bad');
+  await page.evaluate(b => { window.rosterAnswer = { status: 200, body: b }; }, rosterBody);
   await feed({ type: 'hello', version: '0.6.20', features: ['v3'] });
-  await page.waitForFunction(() => window.fleet.state().roster.state === 'ok'); await feed({ type: 'trading', enabled: true }); await feed(accounts); await feed(groups);
+  await page.waitForFunction(() => window.fleet.state().roster.state === 'ok');
+  await feed({ type: 'trading', enabled: true }); await feed(accounts); await feed(groups);
   await feed(agent('germanicus', { rules: { entryFrom: '09:40', entryUntil: '15:00', flatAt: '15:55', marketEntry: true, noTarget: true }, dayStop: 900, owns: true }));
 
   // phone width: one column, no sideways scroll of the page, the buttons big enough to touch
   await page.setViewportSize({ width: 390, height: 844 });
   const m = await page.evaluate(() => ({ sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth,
-    cols: getComputedStyle(document.querySelector('.fl-cols')).gridTemplateColumns.split(' ').length, kill: document.querySelector('.fl-kill').getBoundingClientRect().height }));
-  check(m.sw <= m.cw + 1 && m.cols === 1 && await page.locator('.fl-card').count() === 3, 'at 390 px: one column and no sideways scroll of the page (' + m.sw + ' in ' + m.cw + ')');
+    cols: getComputedStyle(document.querySelector('.fl-cols')).gridTemplateColumns.split(' ').length, kill: document.querySelector('[data-do="ask"]').getBoundingClientRect().height }));
+  check(m.sw <= m.cw + 1 && m.cols === 1 && await page.locator('.fl-card').count() === 4, 'at 390 px: one column and no sideways scroll of the page (' + m.sw + ' in ' + m.cw + ')');
   check(m.kill >= 30, 'the Kill all button keeps its height (' + m.kill + ' px)');
   await page.screenshot({ path: path.join(SHOTS, 'fleet-phone.png'), fullPage: true });
-  check(pageErrors.length === 0, 'no page errors: ' + pageErrors.join(' | '));
+  check(pageErrors.length === 0, 'no page errors and no browser dialog: ' + pageErrors.join(' | '));
 } finally { await browser.close(); }
 
 /* ---- in the whole workspace, against the fake bridge: the button shows with a ChartBridge that knows Kill all, the tab opens
@@ -210,14 +323,14 @@ try {
     await enterPin(page, TEST_PIN);
     await page.waitForFunction(() => document.getElementById('wsConn').classList.contains('live'), null, { timeout: 30000 });
     await page.waitForFunction(() => !document.getElementById('wsFleetTab').hidden, null, { timeout: 15000 }).catch(() => {});
-    check(await page.locator('#wsFleetTab').isVisible(), 'workspace: the Bots button shows with ChartBridge 0.6.20');
+    check(await page.locator('#wsFleetTab').isVisible(), 'workspace: the Legion button shows with ChartBridge 0.6.20');
     await page.waitForFunction(() => !document.getElementById('wsAgentTab').hidden, null, { timeout: 15000 }).catch(() => {});
     check(await page.locator('#wsAgentTab').isVisible(), 'workspace: the Agent button is still there');
     await page.click('#wsFleetTab');
     await sleep(300);
     const on = await page.evaluate(() => ({ cls: document.body.classList.contains('fl-on'), url: location.search, grid: getComputedStyle(document.querySelector('.ws-grid')).display,
       view: getComputedStyle(document.getElementById('flView')).display, title: (document.querySelector('.fl-title') || {}).textContent }));
-    check(on.cls && /tab=bots/.test(on.url) && on.grid === 'none' && on.view !== 'none' && on.title === 'Bots', 'workspace: the tab opens over the grid and the address keeps it: ' + JSON.stringify(on));
+    check(on.cls && /tab=legion/.test(on.url) && on.grid === 'none' && on.view !== 'none' && on.title === 'Legion', 'workspace: the tab opens over the grid and the address keeps it: ' + JSON.stringify(on));
     await page.waitForFunction(() => document.querySelectorAll('.fl-trader').length > 0, null, { timeout: 10000 }).catch(() => {});
     check(await page.locator('.fl-trader[data-id="demo"]').count() === 1, 'workspace: the fake bridge\'s agent is listed as a trader');
     check((await page.locator('.fl-box[aria-label="Prop accounts"] .fl-empty').innerText()).includes('No personal account is picked yet'), 'workspace: no pick, so no prop account, and it says how to pick');
@@ -226,14 +339,14 @@ try {
     check(ro.state === 'none' && ro.asked === 1 && /No roster folder is set on this PC/.test(ro.text), 'workspace: the real request: the fake bridge has no roster (404), asked once, and the tab says the folder is not set: ' + JSON.stringify(ro));
     await page.click('#wsAgentTab');
     await sleep(300);
-    check(await page.evaluate(() => !document.body.classList.contains('fl-on') && document.body.classList.contains('ag-on') && /tab=agent/.test(location.search)), 'workspace: opening the Agent tab closes Bots (one view at a time)');
+    check(await page.evaluate(() => !document.body.classList.contains('fl-on') && document.body.classList.contains('ag-on') && /tab=agent/.test(location.search)), 'workspace: opening the Agent tab closes Legion (one view at a time)');
     await page.click('#wsFleetTab');
     await sleep(300);
-    check(await page.evaluate(() => document.body.classList.contains('fl-on') && !document.body.classList.contains('ag-on')), 'workspace: and Bots closes the Agent tab');
+    check(await page.evaluate(() => document.body.classList.contains('fl-on') && !document.body.classList.contains('ag-on')), 'workspace: and Legion closes the Agent tab');
     await page.reload();
     await page.waitForSelector('.cb-pin-key', { timeout: 15000 }).then(() => enterPin(page, TEST_PIN)).catch(() => {});
     await page.waitForFunction(() => document.body.classList.contains('fl-on'), null, { timeout: 20000 }).catch(() => {});
-    check(await page.evaluate(() => document.body.classList.contains('fl-on')), 'workspace: a reload with ?tab=bots opens the tab again');
+    check(await page.evaluate(() => document.body.classList.contains('fl-on')), 'workspace: a reload with ?tab=legion opens the tab again');
     await page.click('#wsFleetTab');
     await sleep(300);
     check(await page.evaluate(() => !document.body.classList.contains('fl-on') && !/tab=/.test(location.search) && getComputedStyle(document.querySelector('.ws-grid')).display !== 'none'), 'workspace: a second click closes it and the grid is back');

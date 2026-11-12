@@ -3700,7 +3700,7 @@ copier; the order ticket and every manual order. With no personal account picked
 ("no personal account is picked ... nothing was done") and nothing changes. The older `agentKill` (one agent, no flatten)
 and the Board's KILL ALL AGENTS (agentKill on to every agent) are unchanged.
 
-No page sends this message yet: the button comes with the Fleet tab. Checked in `check/AgentHarness.cs` (`PropAccounts`, the
+The page's Legion tab sends this message (chart 1.45.0, `live/fleet.js`: asked first on the page; the tab's connection can post nothing else); no other page file names it. Checked in `check/AgentHarness.cs` (`PropAccounts`, the
 "kill all" parts, the review's three scenarios among them) and `test/nt8-agents.test.js`.
 
 ### The roster: the Lab's files, served read only (0.6.20)

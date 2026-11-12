@@ -316,11 +316,13 @@ test('0.6.17 Kill all for the prop accounts: only agents whose every account is 
   const h = read(path.join('check', 'AgentHarness.cs'));
   for (const s of ['kill all, no personal account picked: refused', 'kill all: the personal account and a prop account the agent does not trade: no order, no cancel', 'kill all: an agent on a Sim account is not touched', 'kill all: an agent on the personal account: not killed, not flattened, still in Auto', 'kill all: released: Auto stays off until it is set on the page'])
     assert.ok(h.includes(s), s);
-  // until chart 1.44.5 no page sent it; the Board's KILL ALL AGENTS is as it was
+  // until chart 1.44.6 no page sent it; the Board's KILL ALL AGENTS is as it was
   const fsx = require('node:fs');
-  // chart 1.45.0: the Fleet tab is the one page file that sends it (asked first; test/fleet.test.js); no other page file names it
+  // chart 1.45.0: the Legion tab (live/fleet.js) is the one page file that sends it (asked first; test/fleet.test.js), through the
+  // one-message connection workspace.js builds for it (the only other file that names it, once, in that gate); no other page file does
   for (const f of fsx.readdirSync(path.join(__dirname, '..', 'live')).filter(f => f.endsWith('.js')))
-    assert.strictEqual(fsx.readFileSync(path.join(__dirname, '..', 'live', f), 'utf8').includes('agentKillAllProp'), f === 'fleet.js', f);
+    assert.strictEqual(fsx.readFileSync(path.join(__dirname, '..', 'live', f), 'utf8').includes('agentKillAllProp'), f === 'fleet.js' || f === 'workspace.js', f);
+  assert.strictEqual((fsx.readFileSync(path.join(__dirname, '..', 'live', 'workspace.js'), 'utf8').match(/agentKillAllProp/g) || []).length, 2, 'workspace.js: one comment and the gate, nothing that builds the message');
 });
 
 test('0.6.19 the day\'s profit stop: the plan\'s dayStopDollars, the smaller of it and the consistency mark off a funded account, the trader\'s own flatten, a stand-down until the roll', () => {

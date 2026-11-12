@@ -63,38 +63,61 @@
   `test/pc-updater.test.js`: the allowed git subcommands, the box job's name, useHttpPath read before the one ask, the
   token only after a 404 or 401 and then through the Actions API, one place that asks for it and one that sends it.
 
-## chart 1.45.0 (2026-11-11): the Bots tab: the roster, the traders, the prop accounts and Kill all (page only, no F5)
+## chart 1.45.0 (2026-11-11): the Legion tab: the roster, the traders, the prop accounts and Kill all (page only, no F5)
 
-In plain words: a new Bots button in the top bar opens one screen for the Prop Business. Nothing changes for hand trading,
-and the Agent, Bot and League tabs are all still there: this tab replaces none of them yet. Build answers 7, part D1.
+In plain words: a new Legion button in the top bar opens one screen for the Prop Business (the name is Anthony's,
+2026-11-11). Nothing changes for hand trading, and the Agent, Bot and League tabs are all still there: this tab replaces
+none of them. Build answers 7, part D1.
 
 - **The roster.** Every bot and every lineup the Lab has built a roster file for, read from this PC by ChartBridge 0.6.20
-  (`GET /roster`). Each card says whether the runner can run it live, and why not when it cannot; the run its numbers come
-  from; **"In-sample, not confirmed"** and its try count; and for the eval stage and the funded stage: the playbook it
-  sizes with (risk a trade, the day's loss stop and profit stop, trades a day, the payout mark), its profit per $1 with its
-  range, and beside it what the same trades would show with no edge. A number is marked "Above no edge" only when the file
-  says so. A lineup lists its bots in order with what each took and skipped. A file made with `--quick` is marked "Quick
-  look: never traded". A file that cannot be shown whole is listed with why, never half shown. Roster numbers are never
-  green or red: they are not a P&L. With no roster folder set on the PC, or an older ChartBridge, the tab says so.
+  (`GET /roster`). **One line each** (Anthony 2026-11-11: the detail "should be there, but expandable when needed"): the
+  name, whether the runner can run it live, **"In-sample, not confirmed"** with its try count, and its profit per $1 for
+  eval and for funded, each marked above or not above no edge. **Details** on a line opens the rest: why it does not run
+  live, its file, the run its numbers come from, and for the eval stage and the funded stage: the
+  playbook it sizes with (risk a trade, the day's loss stop and profit stop, trades a day, the payout mark), its profit
+  per $1 with its range, and beside it what the same trades would show with no edge. A number is marked "Above no edge"
+  only when the file says so. A lineup lists its bots in order with what each took and skipped. A file made with `--quick`
+  is marked "Quick look: never traded" and never reads as running live. The run's own verdict is labelled as that, and no
+  card can say "confirmed". Roster numbers are never green or red: they are not a P&L.
+- **A file is shown whole or not at all.** Only `null` means "none": a value of the wrong kind (the text "800", a 0, a key
+  left out, a share outside 0 to 1, a range upside down) sends the file to the "not shown" list with why, as do two files
+  that name one bot and a bot twice in a lineup. With no roster folder set on the PC, an older ChartBridge, a page not
+  opened as localhost, a folder that cannot be read, an answer that is not JSON or does not come in 10 seconds, the tab
+  says which.
 - **Kill all: flatten and stop.** One button for every trader on a prop account: its position there is closed whole (a
   contract added by hand on that account and contract included), its kill switch goes on and it drops to Shadow
-  (ChartBridge does the work). It asks first, on the page, with the focus on Cancel. Your personal account, a trader on Sim
-  accounts only, the bot and the copier are never touched. It is not offered until you are signed in and have picked your
-  personal account, and it says why.
-- **Traders.** Each trader slot: its mode, whether it is on duty (in Auto on prop accounts, connected, not stopped), its
-  account, its window and flat time, what it is doing now, and why it is stood down. And its two entry switches, **Market
-  entry** and **No target**, on or off. They are shown here and changed only on the Agent tab, by you.
+  (ChartBridge does the work). Your personal account, a trader on Sim accounts only, the bot and the copier are never
+  touched. It asks first, on the page:
+  - **A double click sends nothing.** The question opens where the button was with Cancel in the button's place; no answer
+    is taken for the first 600 ms, and never from the second click of a double click.
+  - **Always in sight.** The head of the tab stays at the top however far the tab is scrolled.
+  - **A click is never lost.** The head of the tab (Kill all, Yes, Cancel, the lines under them) is built once and kept;
+    messages from ChartBridge change its words only. Each part under it is redrawn by itself, the roster only when the
+    roster changes.
+  - **Yes counts for 8 seconds by the clock,** and everything is checked again at that moment (signed in, a personal
+    account picked, connected).
+  - **ChartBridge's answer stays on the tab,** with its time in front, until the next one. It is marked, large, when it
+    holds "NOT STOPPED", "FAILED" or "could NOT". A Kill all that was sent and not answered in 5 seconds, or cut off by a
+    lost connection, is said the same way: "look in NinjaTrader now".
+  - **The tab's connection can post this one message and nothing else** (`workspace.js` hands it `listen` and a `post`
+    that passes only `agentKillAllProp`).
+- **The line beside the title** names every trader in Auto on prop accounts, and separately a trader in Auto on a group
+  with your personal account in it (Kill all will NOT stop that one) and one on an account NinjaTrader does not list now
+  (Kill all does stop it). It never says nobody is trading while one of those is.
+- **Traders.** Each trader slot: its mode, its account and what kind it is, its window and flat time, what it is doing now,
+  and why it is stood down. And its two entry switches, **Market entry** and **No target**, on or off. They are shown here
+  and changed only on the Agent tab, by you.
 - **Prop accounts.** Each account that is not your personal one: Eval or Funded (its group's Type), progress to the target,
   the cushion to the floor, today, and the day stop: how much of it is used, the mark, and whether it comes from the trader's
   plan or from the consistency rule. An account in no group, or in a group with no Type, says that the runner will size it 0.
 - **Honest about what is missing.** Nothing on the tab is sample data. Not built yet, and said on the tab: the pick of which
   bots run today on the eval accounts and on the funded accounts, the one Armed slider, and each bot's own state from the
-  runner. Until then nothing on this tab starts a bot.
+  runner. Until then nothing on this tab starts a bot, and the tab has no control but its four buttons.
 
 The button shows with ChartBridge 0.6.17 or later; the roster needs 0.6.20. The tab sends one message, `agentKillAllProp`,
-makes one request, `GET /roster`, and builds no order (`test/fleet.test.js`). New files `live/fleet.js` and `live/fleet.css`
-(the tab was drafted as "Fleet"; the file names keep the word); `npm run smoke:fleet` (screenshots `test/out/fleet-*.png`).
-ChartBridge stays 0.6.20; no recompile.
+makes one request, `GET /roster` (when it opens, on a hello and on Read again: never on a timer), and builds no order.
+New files `live/fleet.js` and `live/fleet.css` (the tab was drafted as "Fleet"; the file names keep the word);
+`test/fleet.test.js`; `npm run smoke:fleet` (screenshots `test/out/fleet-*.png`). ChartBridge stays 0.6.20; no recompile.
 
 ## ChartBridge 0.6.20 and chart 1.44.6 (2026-11-11): the roster, the Lab's files served read only
 
