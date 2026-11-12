@@ -617,3 +617,36 @@ test('Kill all\'s Yes takes a real click only (Anthony 2026-11-11): never a key;
   assert.match(ws, /OT = window\.OrderTicket,/);
   assert.ok(!/detail === 0|detail !== 0|detail < 1/.test(src), 'fleet.js has no copy of the rule');
 });
+
+test('hotkeys under a tab (Anthony 2026-11-11 and 2026-11-12): one place, every tab that covers the chart, entries off, Close and Flatten all live', () => {
+  const ws = read('live', 'workspace.js');
+  const m = /const COVERING_TABS = (\{[^\n]*\});\n[\s\S]*?const LIVE_UNDER_TAB = new Set\((\[[^\n]*\])\);\nconst ACCEPT_SHOWN_ON = new Set\((\[[^\]]*\])\);[^\n]*\nconst underTab = (\(id, fn\) => \(\) => \{[\s\S]*?\n\};)\n/.exec(ws);
+  assert.ok(m, 'the rule is one block in workspace.js');
+  const tabs = new Function('return ' + m[1])();
+  // every body class a tab sets while it covers the grid is in the list: a later tab that forgets it fails here
+  const toggled = [...ws.matchAll(/document\.body\.classList\.toggle\('([a-z]+-on)', on\)/g)].map(x => x[1]).sort();
+  assert.deepStrictEqual(Object.keys(tabs).sort(), toggled);
+  assert.deepStrictEqual(tabs, { 'fl-on': 'Legion', 'ag-on': 'Agent', 'bt-on': 'Bot', 'lg-on': 'League' });
+  for (const [cls, f] of [['fl-on', 'fleet.css'], ['ag-on', 'agent.css'], ['bt-on', 'bot.css'], ['lg-on', 'league.css']])
+    assert.match(read('live', f), new RegExp('body\\.' + cls + ' \\.ws-grid[^{]*\\{ display: none !important; \\}'), cls + ' hides the chart grid');
+  // the rule itself, run: which keys act under which tab
+  const run = (cls, id) => {
+    let acted = false; const notes = [];
+    const fn = new Function('document', 'note', 'COVERING_TABS', 'coveringTab', 'LIVE_UNDER_TAB', 'ACCEPT_SHOWN_ON', 'return ' + m[4].replace(/^/, '').replace(/;$/, ''));
+    const doc = { body: { classList: { contains: c => c === cls } } };
+    const covering = () => { for (const c of Object.keys(tabs)) if (doc.body.classList.contains(c)) return tabs[c]; return ''; };
+    fn(doc, (t, w) => notes.push([t, w]), tabs, covering, new Set(new Function('return ' + m[2])()), new Set(new Function('return ' + m[3])()))(id, () => { acted = true; })();
+    return [acted, notes];
+  };
+  const entry = ['buy', 'sell', 'buy:limit', 'buy:stop', 'sell:limit', 'sell:stop'], undecided = ['be', 'merge', 'strategy:s1'], live = ['close', 'flattenAll', 'reject'];
+  for (const id of entry.concat(undecided, live, ['accept'])) assert.deepStrictEqual(run('', id), [true, []], id + ' on the bare chart: as before, and nothing said');
+  for (const cls of Object.keys(tabs)) {
+    for (const id of live) assert.deepStrictEqual(run(cls, id), [true, []], id + ' under ' + tabs[cls] + ': live');
+    for (const id of entry.concat(undecided)) { const [acted, notes] = run(cls, id); assert.strictEqual(acted, false, id + ' under ' + tabs[cls] + ': off'); assert.strictEqual(notes.length, 1); assert.match(notes[0][0], new RegExp('^Hotkey ignored: the ' + tabs[cls] + ' tab covers the chart\\.')); assert.strictEqual(notes[0][1], true); }
+  }
+  assert.deepStrictEqual(['fl-on', 'lg-on', 'ag-on', 'bt-on'].map(c => run(c, 'accept')[0]), [false, false, true, true], 'Accept: only on the tabs that show its proposal (Anthony 2026-11-12)');
+  // both handlers go through it, and nothing else reaches the actions
+  assert.match(ws, /actions: \{ buy: underTab\('buy', \(\) => keyAct\('buy'\)\), sell: underTab\('sell', \(\) => keyAct\('sell'\)\), be: underTab\('be', \(\) => keyAct\('be'\)\), close: underTab\('close', \(\) => core\.flattenHere\(\)\), flattenAll: underTab\('flattenAll', \(\) => core\.flattenAll\(\)\) \},/);
+  assert.match(ws, /run: id => underTab\(id, \(\) => runExtraKey\(id\)\)\(\),/);
+  assert.strictEqual((ws.match(/runExtraKey\(/g) || []).length, 2, 'runExtraKey: its definition and the one guarded call');
+});

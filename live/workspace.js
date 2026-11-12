@@ -1444,11 +1444,31 @@ setInterval(() => { if (holds() && TK.bar) { core.groupProjectTick(); TK.bar.ren
    this one, on the ticket's account (Anthony 2026-10-01). */
 let HK = OT.cleanHotkeys(prefs.raw.get(LP.KEYS.hotkeys));
 const busy = () => !!pop || $('wsDialog').open || !!document.querySelector('.ws-panel .ind-panel:not([hidden]), .ce-theme-panel:not([hidden]), .ind-chip-list:not([hidden]), .chip-pop:not([hidden]), .cb-pin') || !$('wsSettings').hidden;
+/* 1.45.0 (Anthony 2026-11-11, build answers 14, the review of 92's N11): while a tab covers the chart grid (Legion, Agent, Bot,
+   League; a later tab adds its body class here), a hotkey that can open or add to a position does nothing and says so. A
+   hotkey that can only reduce, close or cancel works as on the bare chart: Close, Flatten all, and Reject (it can only decline
+   a proposal). Off under a tab: Buy, Sell, and Buy and Sell with an entry-type modifier.
+   Accept (Anthony 2026-11-12: "On where shown"): it places a proposal's entry, so it works only under a tab that shows the
+   proposal it would answer, the Agent tab and the Bot tab (as before this release), and is off under Legion and League.
+   Not clearly one or the other, so off under a tab until Anthony rules (the careful side): B/E, Merge, and a strategy's key.
+   With no tab open nothing here changes anything. ONE place: both hotkey handlers below go through underTab. */
+const COVERING_TABS = { 'fl-on': 'Legion', 'ag-on': 'Agent', 'bt-on': 'Bot', 'lg-on': 'League' };
+const coveringTab = () => { for (const c of Object.keys(COVERING_TABS)) if (document.body.classList.contains(c)) return COVERING_TABS[c]; return ''; };
+const LIVE_UNDER_TAB = new Set(['close', 'flattenAll', 'reject']);
+const ACCEPT_SHOWN_ON = new Set(['Agent', 'Bot']);         // the tabs that show the proposal the Accept key answers
+const underTab = (id, fn) => () => {
+  const t = coveringTab();
+  if (t && !LIVE_UNDER_TAB.has(id) && !(id === 'accept' && ACCEPT_SHOWN_ON.has(t))) {
+    note('Hotkey ignored: the ' + t + ' tab covers the chart. Only Close, Flatten all and Reject work under ' + (ACCEPT_SHOWN_ON.has(t) ? 'it, and Accept for a proposal shown on it.' : 'a tab.'), true);
+    return;
+  }
+  fn();
+};
 /* a Buy or Sell key forwarded names the instrument this window knows the ticket is on (F2 review) */
 const keyAct = kind => { if (holds()) { actHere({ kind }); renderOrders(); } else { const hd = holder(); forward(kind === 'be' || !hd || !hd.root ? { kind } : { kind, root: hd.root }); } };
 document.addEventListener('keydown', window.ChartLive.hotkeyHandler({
   keys: () => HK, root: document.body, busy,
-  actions: { buy: () => keyAct('buy'), sell: () => keyAct('sell'), be: () => keyAct('be'), close: () => core.flattenHere(), flattenAll: () => core.flattenAll() },
+  actions: { buy: underTab('buy', () => keyAct('buy')), sell: underTab('sell', () => keyAct('sell')), be: underTab('be', () => keyAct('be')), close: underTab('close', () => core.flattenHere()), flattenAll: underTab('flattenAll', () => core.flattenAll()) },
   ignored: () => note(window.ChartLive.HOTKEY_IN_BOX, true),
 }));
 /* 1.16.0: the workspace's own hotkeys (Maximize panel), kept apart from the trading ones (live-ws-keys-v1) and never one
@@ -1726,7 +1746,7 @@ grid.addEventListener('pointerleave', () => { pointerAt = null; });
 document.addEventListener('keydown', window.ChartLive.hotkeyHandler({
   root: document.body, busy,
   resolve: combo => (DS.on && DS.hk ? OS.resolveKey(combo, Object.assign(keyCtx(), { on: { merge: core.switchOn('merge'), accept: copilotOn(), strategies: core.switchOn('strategies'), types: core.switchOn('orderTypes') } })) : ''),
-  run: id => runExtraKey(id),
+  run: id => underTab(id, () => runExtraKey(id))(),
 }));
 function runExtraKey(id) {
   if (id === 'merge') { keyAct('merge'); return; }

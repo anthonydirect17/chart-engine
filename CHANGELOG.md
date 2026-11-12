@@ -112,6 +112,11 @@ none of them. Build answers 7, part D1.
 - **Prop accounts.** Each account that is not your personal one: Eval or Funded (its group's Type), progress to the target,
   the cushion to the floor, today, and the day stop: how much of it is used, the mark, and whether it comes from the trader's
   plan or from the consistency rule. An account in no group, or in a group with no Type, says that the runner will size it 0.
+- **Hotkeys while a tab covers the chart** (every tab: Legion, Agent, Bot, League; Anthony 2026-11-11). A hotkey that can
+  open or add to a position does nothing and the top bar says so: Buy, Sell, and Buy or Sell with an entry-type modifier.
+  **Close, Flatten all and Reject work as on the bare chart.** Accept works only on a tab that shows the proposal it
+  answers, the Agent tab and the Bot tab, as before; it is off under Legion and League (Anthony 2026-11-12). B/E, Merge
+  and a strategy's key are off under a tab until Anthony rules on them. With no tab open every hotkey is exactly as before.
 - **Honest about what is missing.** Nothing on the tab is sample data. Not built yet, and said on the tab: the pick of which
   bots run today on the eval accounts and on the funded accounts, the one Armed slider, and each bot's own state from the
   runner. Until then nothing on this tab starts a bot, and the tab has no control but its four buttons.
@@ -119,7 +124,7 @@ none of them. Build answers 7, part D1.
 The button shows with ChartBridge 0.6.17 or later; the roster needs 0.6.20. The tab sends one message, `agentKillAllProp`,
 makes one request, `GET /roster` (when it opens, on a hello and on Read again: never on a timer), and builds no order.
 New files `live/fleet.js` and `live/fleet.css` (the tab was drafted as "Fleet"; the file names keep the word);
-`test/fleet.test.js`; `npm run smoke:fleet` (screenshots `test/out/fleet-*.png`). ChartBridge stays 0.6.20; no recompile.
+`test/fleet.test.js`; `npm run smoke:fleet` (screenshots `test/out/fleet-*.png`) and `npm run smoke:tabkeys`. ChartBridge stays 0.6.20; no recompile.
 
 ## ChartBridge 0.6.20 and chart 1.44.6 (2026-11-11): the roster, the Lab's files served read only
 
