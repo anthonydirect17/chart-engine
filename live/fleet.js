@@ -193,7 +193,7 @@ function traders(agents, accountsMsg, version) {
       cannotTell: can && mode === 'auto' && !accountsReadable(a), readsAccounts: accountsReadable(a), grouped: plainObj(a.group),   // 104-B and 104-D (answers 27)
       status: statusText(a), tone: a.enabled === false ? 'off' : a.killed ? 'killed' : a.standDown ? 'standDown' : !a.connected ? 'lost' : 'on',
       // answers B4-8, F1: a trader whose accounts the page cannot read never shows as None, nor as only the seats it can read
-      accounts: names, accountText: !accountsReadable(a) ? 'Cannot tell its accounts' + (names.length ? ' (it reads ' + names.join(', ') + ', and not the rest)' : '')
+      accounts: names, accountText: !accountsReadable(a) ? 'Cannot tell its accounts' + (names.length ? ' (the page reads ' + names.join(', ') + ', not the rest)' : '')
         : !names.length ? 'None' : plainObj(a.group) ? 'Group ' + (str(a.group.name, 40) || str(a.group.id, 12)) + ': ' + names.join(', ')
         : names.length > 1 ? names[0] + ', left over: ' + names.slice(1).join(', ') : names[0],   // 104-D: every account, as Kill all counts them
       kind, window: str(r.entryFrom, 5) && str(r.entryUntil, 5) ? str(r.entryFrom, 5) + ' to ' + str(r.entryUntil, 5) : '', flatAt: str(r.flatAt, 5),
@@ -485,9 +485,11 @@ function lanes(agents, groupsMsg, accountsMsg, version, cards) {
     const sharing = list.filter(x => x !== a).map(x => {
       const who = str(x.agent, 40);
       if (!accountsReadable(x)) return who + ': the page cannot read its accounts, so it may be on one of this lane\'s accounts';
+      // the next release (answers B4-9, N3): a group trader whose seats ChartBridge has not listed may be on any of them
+      if (plainObj(x.group) && (!Array.isArray(x.seats) || !x.seats.length)) return who + ': ChartBridge has not listed its group\'s seats, so it may be on one of this lane\'s accounts';
       const acct = typeof x.account === 'string' && mine.has(x.account.toLowerCase());
       const seat = (Array.isArray(x.seats) ? x.seats : []).some(y => plainObj(y) && typeof y.account === 'string' && mine.has(y.account.toLowerCase()));
-      return acct ? who + ' has one of this lane\'s accounts as its own account' : seat ? who + (plainObj(x.group) ? ' has a seat of its own group' : ' has a seat left over') + ' on one of this lane\'s accounts' : '';
+      return acct ? who + ' has one of this lane\'s accounts as its own account' : seat ? who + (plainObj(x.group) ? ' has a seat' : ' has a seat left over') + ' on one of this lane\'s accounts' : '';
     }).filter(Boolean);
     const shareWhy = sharing.length ? 'Another trader is on, or may be on, one of its accounts (in any mode), and a lane is never armed beside another trader: ' + sharing.join('; ') : '';
     const r = plainObj(a.rules) ? a.rules : {};
@@ -496,6 +498,7 @@ function lanes(agents, groupsMsg, accountsMsg, version, cards) {
     L.why = !L.pickKnown ? 'The pick needs ChartBridge ' + PICK_MIN + ' or later (this one is ' + (version || 'not known') + ')'
       : !ID_RX.test(a.agent) ? 'Its id is not one ChartBridge takes'
       : !accountsReadable(a) ? 'The page cannot tell its accounts (what ChartBridge sent is not an account, a group or a list of seats)'
+      : !Array.isArray(g.members) ? 'Not known yet: ChartBridge sent its group without its members, so the page cannot tell who else is on its accounts'   // N3, as groupLock
       : shareWhy ? shareWhy
       : a.enabled === false ? 'The trader is off in ChartBridge'
       : a.killed ? 'Its kill switch is on (it is released on the Agent tab, by you)'

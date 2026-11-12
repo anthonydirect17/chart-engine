@@ -45,7 +45,7 @@ const accounts = { type: 'accounts', personalNamed: true, list: [
   { name: 'SAMPLE-EVAL-2', connection: 'connected', prop: true, tradable: true, group: 'g1', pnlToday: 1200, roomFloor: 2380, targetLeft: 520, rules: { target: 3000, consistency: 40 }, positions: [] },
   { name: 'SAMPLE-FUNDED-1', connection: 'connected', prop: true, tradable: true, group: 'g2', pnlToday: -155.5, roomFloor: 2620, targetLeft: null, rules: { target: null, consistency: null }, positions: [{ root: 'MNQ', qty: 2 }] },
   { name: 'SAMPLE-NEW-1', connection: 'connected', prop: true, group: null, pnlToday: 0, rules: null, positions: [] }] };
-const groups = { type: 'groups', list: [{ id: 'g1', name: 'Sample evals', accountType: 'eval' }, { id: 'g2', name: 'Sample funded', accountType: 'funded' }] };
+const groups = { type: 'groups', list: [{ id: 'g1', name: 'Sample evals', accountType: 'eval', members: ['SAMPLE-EVAL-1', 'SAMPLE-EVAL-2'] }, { id: 'g2', name: 'Sample funded', accountType: 'funded', members: ['SAMPLE-FUNDED-1'] }] };
 const agent = (id, more) => Object.assign({ type: 'agent', agent: id, name: id, build: 'sample build', enabled: true, connected: true, mode: 'auto', account: 'SAMPLE-EVAL-1',
   rules: { entryFrom: '09:40', entryUntil: '15:00', flatAt: '15:55' }, pnlToday: 0, trades: 0, killed: false, standDown: null, owns: false, lastBeatMs: 300 }, more || {});
 
