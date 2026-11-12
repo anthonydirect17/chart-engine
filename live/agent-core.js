@@ -1377,7 +1377,8 @@ const PR_WHERE = 'it is set up from Legion\'s trader desk (being built); from he
 function gateAccounts(agentMsg) {
   if (!plainObj(agentMsg)) return null;
   const a = agentMsg, out = [];
-  if (a.account !== undefined && a.account !== null) { if (typeof a.account !== 'string' || !a.account) return null; out.push(a.account); }
+  if (!('account' in a)) return null;   // the review of 102 and 103, round 2 (F2): only null is None; a missing key is not known
+  if (a.account !== null) { if (typeof a.account !== 'string' || !a.account) return null; out.push(a.account); }
   if (a.group !== undefined && a.group !== null && !plainObj(a.group)) return null;
   if (a.seats !== undefined && a.seats !== null) {
     if (!Array.isArray(a.seats)) return null;
@@ -1386,6 +1387,21 @@ function gateAccounts(agentMsg) {
   return out;
 }
 const GATE_SHAPE = 'the page cannot tell its accounts (ChartBridge sent a shape the page does not know)';
+/**
+ * A trader on None that still has a seat (answers B4-3, item 3): ChartBridge keeps a seat that still holds its trade when the
+ * trader goes to None. That is not a personal (or prop) trader: on both desks only the stops go (kill switch, Shadow, and
+ * the flatten of that seat) until ChartBridge drops the seat. '' when it is not that case; else the words.
+ */
+function leftoverWhy(agentMsg, accountsMsg) {
+  if (!plainObj(agentMsg) || agentMsg.account !== null || plainObj(agentMsg.group) || !Array.isArray(agentMsg.seats) || !agentMsg.seats.length) return '';
+  const names = gateAccounts(agentMsg) || [];
+  const FC = fleetCore(), rows = plainObj(accountsMsg) && Array.isArray(accountsMsg.list) ? accountsMsg.list : [];
+  const kinds = names.map(n => { const row = rows.find(r => plainObj(r) && r.name === n); return row && FC && typeof FC.kindOf === 'function' ? FC.kindOf(row) : ''; });
+  const named = plainObj(accountsMsg) && accountsMsg.personalNamed === true;
+  const one = new Set(kinds).size === 1 ? kinds[0] : 'mixed';
+  const where = one === 'sim' ? 'a Sim account' : !named || one === '' ? 'an account the page cannot tell' : one === 'personal' ? 'your personal account' : one === 'prop' ? 'a prop account' : 'more than one kind of account';
+  return 'a leftover position on ' + where + ': stop and flatten it first';
+}
 
 /** Whether Praetorian may reach the account `name`: your personal account (ChartBridge's own flag, with a pick made) or a Sim
  *  account (ChartBridge's sim flag). Not known is no. */
@@ -1423,13 +1439,23 @@ function prTraderWhy(agentMsg, accountsMsg) {
   if (plainObj(agentMsg.group)) return name + ' trades a group: groups are the prop business, ' + PR_WHERE;
   const accts = gateAccounts(agentMsg);
   if (!accts) return name + ': ' + GATE_SHAPE;
+  const left = leftoverWhy(agentMsg, accountsMsg);
+  if (left) return name + ': ' + left;
   for (const a of accts) if (!prIsPersonal(a, accountsMsg)) return name + ': ' + prNotPersonalWhy(a, accountsMsg);
   return '';
 }
 
 /** The bot slot (its `bot` message): '' on your personal account or on None; else why not. */
+const BOT_SHAPE = 'the page cannot tell its account (ChartBridge sent a shape the page does not know)';
+/** The bot's account: '' for None (null only), the name, or null when the page cannot read it (round 2, F2). */
+function botAccountOf(botMsg) {
+  if (!plainObj(botMsg) || !('account' in botMsg)) return null;
+  if (botMsg.account === null) return '';
+  return typeof botMsg.account === 'string' && botMsg.account ? botMsg.account : null;
+}
 function prBotWhy(botMsg, accountsMsg) {
-  const acct = plainObj(botMsg) && typeof botMsg.account === 'string' ? botMsg.account : '';
+  const acct = botAccountOf(botMsg);
+  if (acct === null) return 'The bot: ' + BOT_SHAPE;
   if (!acct) return '';
   return prIsPersonal(acct, accountsMsg) ? '' : 'The bot: ' + prNotPersonalWhy(acct, accountsMsg);
 }
@@ -1539,6 +1565,6 @@ return {
   createCopilotRouter, copilotRouter, KEY_LOCK_MS, KEY_MIN_SHOWN_MS, KEY_SAY,
   boardRows, boardRoom, boardPosition, rWords, leagueChoices, standDownClearMsg, sdWhen,
   LIGHT, STEPS, PANELS, LIGHT_HOLD, LAP_MS, lightEvents, lightState, stepLines, ageText, entryRisk, tradesR, heatNow, rowTone, decisionRecord, sessionTrail, roomLines, MOTION_KEY, motionPref, setMotionPref,
-  gateAccounts, prChoices, prBotChoices, praetorianLink, PR_AGENT_TYPES, PR_BOT_TYPES, prIsPersonal, prNotPersonalWhy, prTraderWhy, prBotWhy, prCheck, praetorianGate
+  gateAccounts, leftoverWhy, botAccountOf, prChoices, prBotChoices, praetorianLink, PR_AGENT_TYPES, PR_BOT_TYPES, prIsPersonal, prNotPersonalWhy, prTraderWhy, prBotWhy, prCheck, praetorianGate
 };
 });
