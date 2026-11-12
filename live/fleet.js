@@ -620,9 +620,14 @@ function rosterFamilies(cards, ls, filter, find) {
  * known to be in Shadow, or holds a position, a working entry or a proposal (in Shadow it has no proposal). The conditions
  * under which ChartBridge 0.6.21 refuses a new pick. ChartBridge itself does NOT refuse accountGroup or memberBench for
  * these (it refuses a bench only while that one account is not flat), so this is the page's rule until ChartBridge has it.
+ * NOT KNOWN IS LOCKED (the review of 97, F1; the tab's PROP 5): heard is the caller's word that ChartBridge's groups and its
+ * traders have been heard on this connection. Before that, or with no lane, every move is refused ("not known yet"); a lane
+ * with no trader is free only once heard. A proposal exists only in Copilot, so "not in Shadow" covers it (F5).
  */
-function laneLock(l) {
-  if (!plainObj(l) || !Array.isArray(l.traders) || !l.traders.length) return '';
+const NOT_KNOWN = 'Not known yet: ChartBridge has not said this lane\'s traders and groups on this connection, so no account moves.';
+function laneLock(l, heard) {
+  if (heard !== true || !plainObj(l) || !Array.isArray(l.traders)) return NOT_KNOWN;
+  if (!l.traders.length) return '';
   if (l.traders.length > 1) return 'Two traders are on this lane\'s groups: no account moves here until one is taken off (the Agent tab).';
   if (l.auto || l.mode === 'auto') return 'The lane is in Auto: switch Armed off before an account moves.';
   if (l.exposed) return 'The lane\'s trader holds a position or a working entry: an account moves once it is flat.';
@@ -642,17 +647,38 @@ function laneMaySend(m) {
  * `refused`: a group cannot be renamed, retyped, re-risked or deleted from inside a lane, and nothing else of the feed
  * (send, sendOrder, the copier, limits) is there at all. locked(): '' or why no move goes out now; with a reason both sends
  * are refused here too, whatever the panel shows.
+ * BOUND TO ITS LANE (the review of 97, F2): groupId is the lane's group. accountGroup goes only INTO that group (for an account the
+ * feed's S shows in no group, in that group, or in another group whose own lock, otherLocked(gid), is free: ChartBridge moves an
+ * account straight out of its group) or OUT of it (group null, for a member of it); memberBench only for a member of it.
+ * Anything else is refused by name. With no locked function, no group id, or groups not known, everything is refused.
+ * The account's group is the page's copy: a move made in another window a moment before can still race (ChartBridge's gap,
+ * docs/BACKLOG_review.md beside N12).
  */
-function laneFeed(feed, locked) {
-  const refused = [], why = () => { try { const w = typeof locked === 'function' ? locked() : ''; return typeof w === 'string' ? w : 'not known'; } catch (e) { return 'not known'; } };
+function laneFeed(feed, locked, groupId, otherLocked) {
+  const ask = fn => { try { const w = typeof fn === 'function' ? fn() : null; return typeof w === 'string' ? w : 'not known'; } catch (e) { return 'not known'; } };
+  const refused = [], why = () => (typeof groupId === 'string' && groupId ? ask(locked) : 'no lane group');
+  /* the account's group on the page's copy: an id, null (none), or undefined (the groups are not known) */
+  const groupOf = name => {
+    const gs = feed && feed.S && Array.isArray(feed.S.groups) ? feed.S.groups : null;
+    if (!gs) return undefined;
+    const g = gs.find(x => plainObj(x) && Array.isArray(x.members) && x.members.includes(name));
+    return g ? String(g.id) : null;
+  };
+  const joinOk = name => {
+    const cur = groupOf(name);
+    if (cur === undefined) return false;
+    if (cur === null || cur === groupId) return true;
+    return ask(typeof otherLocked === 'function' ? () => otherLocked(cur) : null) === '';   // taking it from another group: that lane's lock too
+  };
   const no = name => { refused.push(String(name)); if (refused.length > 50) refused.shift(); return false; };
   const out = {
     get S() { return feed.S; },
     joinRefusal: (name, g) => feed.joinRefusal(name, g),
     joinPlan: (name, g, acc) => feed.joinPlan(name, g, acc),
     joinWords: j => feed.joinWords(j),
-    post: m => (laneMaySend(m) && !why() ? feed.post(m) === true : no(plainObj(m) && typeof m.type === 'string' ? m.type : 'not a message')),
-    accountGroup: (name, group, highText, rules, useCid) => (typeof name === 'string' && name && (group === null || typeof group === 'string') && !why() ? feed.accountGroup(name, group, highText, rules, useCid) === true : no('accountGroup')),
+    post: m => (laneMaySend(m) && !why() && groupOf(m.account) === groupId ? feed.post(m) === true : no(plainObj(m) && typeof m.type === 'string' ? m.type : 'not a message')),
+    accountGroup: (name, group, highText, rules, useCid) => (typeof name === 'string' && name && !why() &&
+      ((group === null && groupOf(name) === groupId) || (group === groupId && joinOk(name))) ? feed.accountGroup(name, group, highText, rules, useCid) === true : no('accountGroup')),
     refused,
   };
   return Object.freeze(out);
@@ -686,7 +712,7 @@ const badAnswer = text => /NOT STOPPED|FAILED|could NOT/.test(String(text || '')
 /** "09:41:07" of a Date (the PC's own clock), for the time in front of a Kill all answer. */
 const clock = d => [d.getHours(), d.getMinutes(), d.getSeconds()].map(x => String(x).padStart(2, '0')).join(':');
 
-return Object.freeze({ laneRunner, readableName, rosterFamilies, FILTERS, laneLock, laneMaySend, laneFeed, PICK_MIN, STAGES, lanes, outsideAuto, armState, armMsgs, armWords, pickChoices, pickMsg, maySend, KILL_MIN, SWITCH_MIN, DAYSTOP_MIN, ROSTER_MIN, ROSTER_FORMAT, LINEUP_FORMAT, CONFIRM_MS, ARM_MS, ANSWER_WAIT_MS, ROSTER_WAIT_MS, MAX_CARDS, MAX_MEMBERS, MAX_NOT_SHOWN, MODE_NAME, atLeast, usd, signed, stageCard, rosterCards, rosterProblem,
+return Object.freeze({ NOT_KNOWN, laneRunner, readableName, rosterFamilies, FILTERS, laneLock, laneMaySend, laneFeed, PICK_MIN, STAGES, lanes, outsideAuto, armState, armMsgs, armWords, pickChoices, pickMsg, maySend, KILL_MIN, SWITCH_MIN, DAYSTOP_MIN, ROSTER_MIN, ROSTER_FORMAT, LINEUP_FORMAT, CONFIRM_MS, ARM_MS, ANSWER_WAIT_MS, ROSTER_WAIT_MS, MAX_CARDS, MAX_MEMBERS, MAX_NOT_SHOWN, MODE_NAME, atLeast, usd, signed, stageCard, rosterCards, rosterProblem,
   kindOf, seatsKind, dayMark, traderAccounts, statusText, traders, propAccounts, killAllState, killAllMsg, autoLine, badAnswer, clock });
 });
 
@@ -730,6 +756,7 @@ function create(o) {
   const agentList = () => [...S.agents.values()];
   const cid = () => 'fl' + (++S.cidSeq).toString(36) + Math.random().toString(36).slice(2, 6);
   const killState = () => C.killAllState(S.version, S.accounts, S.signedIn, S.connected);
+  const heard = () => !!S.groups && S.agents.size > 0;          // ChartBridge's groups and at least one trader heard here
   const laneList = () => C.lanes(agentList(), S.groups, S.accounts, S.version, S.roster.cards);
   const outside = ls => C.outsideAuto(ls, agentList(), S.accounts, S.version);
   const armNow = ls => C.armState(ls, S.version, S.signedIn, S.connected, S.accounts, S.groups, S.agents.size > 0, outside(ls));
@@ -1032,9 +1059,12 @@ function create(o) {
     if (typeof document === 'undefined' || !document.createElement) return null;
     const host = document.createElement('div'); host.className = 'fl-lanepanel';
     const stage = l.stage;
-    const locked = () => { const now = laneList().find(x => x.stage === stage); return C.laneLock(now) || (!S.connected ? 'ChartBridge is not connected' : ''); };
+    /* not known is locked (the review of 97, F1): heard once ChartBridge's groups and its traders have come on this connection */
+    const locked = () => { const now = laneList().find(x => x.stage === stage); return C.laneLock(now, heard()) || (!S.connected ? 'ChartBridge is not connected' : ''); };
+    /* taking an account from another group asks that group's lane too (F2); a group no lane trades is free once heard */
+    const otherLocked = gid => { if (!heard()) return C.NOT_KNOWN; const l = laneList().find(x => x.groupId === gid); return l ? C.laneLock(l, true) || (!S.connected ? 'ChartBridge is not connected' : '') : ''; };
     let mount = null;
-    try { mount = o.lanePanel(host, 'legion-' + stage, { group: l.groupId, locked }); } catch (e) { mount = null; }
+    try { mount = o.lanePanel(host, 'legion-' + stage, { group: l.groupId, locked, otherLocked }); } catch (e) { mount = null; }
     if (!mount) return null;
     S.lanePanels[stage] = { groupId: l.groupId, host, mount };
     return S.lanePanels[stage];

@@ -204,7 +204,7 @@ function mount(el, host) {
   const savePick = id => { try { if (!store) return; const j = JSON.parse(store.getItem(PICK_KEY) || '{}') || {}; j[host.panelId] = id; store.setItem(PICK_KEY, JSON.stringify(j)); } catch (e) { /* blocked: this window only */ } };
   /* 1.47.0: one fixed group (host.group), and why moves are refused now (host.locked) */
   const FIXED = typeof host.group === 'string' && host.group ? host.group : '';
-  const lockWhy = () => { try { const w = typeof host.locked === 'function' ? host.locked() : ''; return typeof w === 'string' ? w : ''; } catch (e) { return 'the lane\'s state could not be read'; } };
+  const lockWhy = () => { if (typeof host.locked !== 'function') return ''; try { const w = host.locked(); return typeof w === 'string' ? w : 'the lane\'s state is not known yet'; } catch (e) { return 'the lane\'s state could not be read'; } };   // the review of 97, F9: a non-string is not known, as the feed reads it
   P.gid = FIXED || readPick();
   el.innerHTML = '<div class="ma" data-ma>' +
     '<div class="ac-tabs ma-tabs" role="tablist" aria-label="Multi-Account"><button type="button" role="tab" class="ac-tab" data-tab="groups" aria-selected="true">Groups</button>' +
@@ -474,7 +474,7 @@ function mount(el, host) {
   const pickNew = () => { if (FIXED || !P.wantName) return; const g = groups().find(x => x.name.toLowerCase() === P.wantName); if (g) { P.gid = g.id; savePick(g.id); P.wantName = ''; } };
   const renderAll = () => { pickNew(); render(); };
   renderAll();
-  return { render: renderAll, destroy: () => { if (cop) cop.destroy(); }, state: P };
+  return { render: renderAll, destroy: () => { if (cop) cop.destroy(); }, state: P, get feed() { return F; } };   // the review of 97, F3: what it was handed, read only
 }
 
 return { mount, PICK_KEY, DEFAULT_TOAST };

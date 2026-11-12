@@ -128,6 +128,15 @@ can be assembled from them instead of drawing its own copies (build answers 17 a
 Checked: `npm run smoke:lanes` (23 checks in a browser), `test/fleet.test.js` (30 tests; 9 breaks of the feed and the
 lock, all caught), `npm run smoke:multi-account` (51), the accounts smoke (106) and the League smoke unchanged.
 
+- **The review's fixes (rule 12):** not known is locked (`laneLock(lane, heard)`: before ChartBridge's groups and traders
+  are heard on this connection every move is refused, "Not known yet"; a lock function that is missing, throws or answers
+  anything but text refuses, on the feed and in the panel alike); the narrow feed is bound to its lane
+  (`laneFeed(feed, locked, groupId, otherLocked)`: a join only into the lane's group, a removal or a bench move only for its
+  member, and taking an account from another group asks that group's lock too); `workspace.lanePanel` mounts a panel only
+  with a group and a lock (the whole-feed mount is the two-mounts proof's alone); the panel shows the feed it holds (a test
+  checks it is the narrow one by identity); the rows-only mount gets a feed that reads and sends nothing; the ChartBridge gap
+  is on the backlog beside N12.
+
 ## chart 1.46.0 (2026-11-12): Legion: the two lanes, the pick and the one Armed switch (page only, no F5)
 
 In plain words: the Legion tab can now choose which bot each lane runs and switch the lanes on and off. It needs

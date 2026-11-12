@@ -2800,10 +2800,23 @@ function mountAccountsPage(v) {
 const lanePanels = new Map();
 function mountLegionLane(el, key, opts) {
   const FC = window.FleetCore;
-  if (!FC || !AF) return null;
-  const feed = FC.laneFeed(AF, opts.locked);
+  if (!FC || !AF || !opts || typeof opts.group !== 'string' || !opts.group || typeof opts.locked !== 'function') return null;   // no lock, no panel (F1)
+  const feed = FC.laneFeed(AF, opts.locked, opts.group, opts.otherLocked);           // bound to its lane (F2)
   const made = mountLanePanel(el, key, feed, { group: opts.group, locked: opts.locked });
   return made ? Object.assign(made, { refused: feed.refused, feed }) : null;
+}
+/* The Account page's rows-only mount reads the page's feed and sends nothing (the review of 97, F8): this object passes the
+   feed's state and its reading functions, and every other function answers false without calling the feed. */
+const FEED_READS = new Set(['account', 'limit', 'groupOf', 'rulesOf', 'typeOf', 'level', 'listen', 'joinRefusal', 'joinPlan', 'joinWords', 'readTypes', 'readFloors', 'firmMins', 'rateOf']);
+function readOnlyFeed(feed) {
+  const out = {};
+  for (const k of Object.keys(feed)) {
+    const d = Object.getOwnPropertyDescriptor(feed, k);
+    if (d.get) Object.defineProperty(out, k, { enumerable: true, get: () => feed[k] });
+    else if (typeof feed[k] !== 'function') Object.defineProperty(out, k, { enumerable: true, get: () => feed[k] });
+    else out[k] = FEED_READS.has(k) ? (...a) => feed[k](...a) : () => false;
+  }
+  return Object.freeze(out);
 }
 function mountLanePanel(el, key, feed, opts) {
   if (!feed || !window.MultiAccount || !el || lanePanels.has(key)) return null;
@@ -3635,15 +3648,17 @@ window.workspace = { get layout() { return layout; }, panels: () => panels.map(p
   accountRows: (el, key, filter) => {
     if (!AF || !window.AccountsPage || !el || typeof filter !== 'function' || lanePanels.has(key)) return null;
     const body = document.createElement('div'); el.appendChild(body);
-    const ap = window.AccountsPage.mount({ el, body, head: document.createElement('div') }, { feed: AF, rows: { filter }, watchQuote, quoteOf, quoteSubs, fitPanel, note: (t, w) => note(t, !!w, w ? 8000 : 4000), now: etNowSec });
+    const ap = window.AccountsPage.mount({ el, body, head: document.createElement('div') }, { feed: readOnlyFeed(AF), rows: { filter }, watchQuote, quoteOf, quoteSubs, fitPanel, note: (t, w) => note(t, !!w, w ? 8000 : 4000), now: etNowSec });
     lanePanels.set(key, ap); renderAccountPages();
     return { destroy: () => { if (lanePanels.get(key) === ap) { lanePanels.delete(key); ap.destroy(); } } };
   },
   lanePanel: (el, key, opts) => {
     const o = opts || {}, FC = window.FleetCore;
-    if (!o.group) return mountLanePanel(el, key, AF, null);                       // the whole panel, as on the grid (the two-mounts proof)
-    if (!FC || !AF) return null;
-    return mountLegionLane(el, key, { group: o.group, locked: typeof o.locked === 'function' ? o.locked : () => '' });   // one fixed group: the narrow feed, never AF itself
+    /* the whole panel, as on the grid, only for the two-mounts proof (test/lane-panels-smoke.mjs): no Legion code reaches the
+       page's whole feed by leaving the group out (the review of 97, F7) */
+    if (!o.group) return o.twoMountsProof === true ? mountLanePanel(el, key, AF, null) : null;
+    if (!FC || !AF || typeof o.locked !== 'function') return null;                // no lock, no panel (F1)
+    return mountLegionLane(el, key, { group: o.group, locked: o.locked, otherLocked: o.otherLocked });   // one fixed group: the narrow feed, never AF itself
   },
   multi: () => { const v = [...views.values()].find(x => x.panel.type === 'multi' && x.accountPage); return v ? { tab: v.accountPage.state.tab, gid: v.accountPage.state.gid, toast: v.accountPage.state.toast } : null; },
   /* 1.36.0: the Agents strip (read only) and how many times this window read the league */
