@@ -5725,6 +5725,16 @@ public static class AgentHarness
             try { Restart(); s0 = N(page); Advance(2000); }
             finally { ChartBridgeAccounts.ReadFault = null; }
             Check(ModeNow() == "shadow" && M.PickNow() == null && Any(page, s0, "Auto was NOT restored after the restart (its pick file could not be read)") && M.StripJson().Contains("tries): no roster file is picked"), "pick93 a: a pick file that cannot be read at the restart: no pick, Shadow, said: " + Last(page, "status"));
+            // FIX 1: a pick file held open only for a moment at the start is read on a later try (the retries), never lost
+            File.WriteAllText(pf, "# made-up\npick\talpha.json\n");
+            int heldReads = 0;
+            ChartBridgeAccounts.ReadFault = n => n == "agent-manrae-pick.txt" && ++heldReads <= 2 ? "The process cannot access the file because it is being used by another process" : null;
+            try { Restart(); }
+            finally { ChartBridgeAccounts.ReadFault = null; }
+            Check(M.PickNow() == "alpha.json" && heldReads >= 3 && !M.StripJson().Contains("pickProblem"), "pick93: a pick file held open for the first two reads is read on the third (" + heldReads + " reads)");
+            ChartBridgeAccounts.ReadFault = n => n == "agent-manrae-pick.txt" ? "held" : null;
+            try { Restart(); }
+            finally { ChartBridgeAccounts.ReadFault = null; }
             // FIX 1: None removes the file that could not be read, so the old pick never comes back
             P("{\"type\":\"agentPick\",\"cid\":\"q2\",\"agent\":\"manrae\",\"file\":null}");
             Check(!File.Exists(pf) && !M.StripJson().Contains("pickProblem"), "pick93: None after an unreadable pick file removes the file and the problem");
