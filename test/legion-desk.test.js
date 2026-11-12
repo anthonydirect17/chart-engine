@@ -104,6 +104,8 @@ test('the bot: on a prop account or None, every bot message; elsewhere only its 
     const g = gateWith(accounts(), { type: 'bot', account: acct, mode: 'auto' });
     for (const m of BOT_MSGS) assert.match(g.check(m), /^Not sent from Legion: The bot is on /, acct + ' ' + m.type);
     assert.equal(g.check({ type: 'botKill', on: true }), '');
+    assert.equal(g.check({ type: 'botMode', mode: 'shadow' }), '', 'the bot\'s Shadow: a stop on both desks (03:30)');
+    for (const mode of ['Shadow', ' shadow', 'copilot']) assert.notEqual(g.check({ type: 'botMode', mode }), '', mode);
   }
 });
 

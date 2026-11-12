@@ -730,11 +730,11 @@ function create(o) {
     if (e) { put(ev, 'textContent', e.shelf === 'research' ? 'Research' : e.evidence); put(ev, 'className', 'bt-badge ' + (e.shelf === 'research' ? 'rs' : BC.evidenceLevel(e.evidence) >= 2 ? 'l2' : '')); }
     /* 1.48.0 (Praetorian): the bot on a prop account, or one the page cannot tell, can only be stopped here (its kill switch on) */
     const held = heldBot();
-    const pw = q('[data-k="prWhy"]'); put(pw, 'hidden', !held); put(pw, 'textContent', held ? 'On ' + tabName + ' the bot can only be stopped (Kill switch): ' + held + '.' : '');
+    const pw = q('[data-k="prWhy"]'); put(pw, 'hidden', !held); put(pw, 'textContent', held ? 'On ' + tabName + ' the bot can only be stopped (Kill switch, Shadow): ' + held + '.' : '');
     for (const btn of q('[data-k="modes"]').children) {
       const m = btn.dataset.mode, a = allowed[m];
       attr(btn, 'aria-pressed', String(b.mode === m));
-      put(btn, 'disabled', !a.ok || !S.signedIn || !!held);
+      put(btn, 'disabled', !a.ok || !S.signedIn || (!!held && m !== 'shadow'));   // the coordinator, 03:30: Shadow is a stop, offered for a held bot too
       attr(btn, 'title', a.ok ? (m === 'auto' ? 'ChartBridge places the bot\'s signals on ' + acc.name + (acc.mark ? ' (' + acc.mark + ')' : '') + ' by itself' : m === 'copilot' ? 'Each signal is a proposal for ' + acc.name + ': you accept or reject it' : 'Signals are shown and logged; no orders') : a.why);
       put(btn, 'textContent', m === 'auto' && S.autoConfirm > Date.now() ? 'Confirm' : BC.MODE_NAME[m]);
     }

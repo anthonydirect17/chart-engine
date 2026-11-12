@@ -204,17 +204,22 @@ try {
 
   /* the Bot desk: the bot on a prop account */
   await page.evaluate(() => { window.agentDesk.showTab(false); window.botDesk.showTab(true); });
-  await feed(bot());
+  await feed(bot({ mode: 'auto' }));   // in Auto, so its Shadow is a change
   await sleep(300);
   const bWhy = await page.locator('#btView [data-k="prWhy"]').innerText().catch(() => '');
   check(/The bot: PROP-1 is a prop account/.test(bWhy), 'the bot on a prop account: why it is held back: ' + bWhy);
   const bd = await page.evaluate(() => ({ modes: [...document.querySelectorAll('#btView [data-k="modes"] button')].map(b => b.disabled), acct: document.querySelector('#btView [data-k="acctOpen"]').disabled, rails: document.querySelector('#btView [data-k="railsOpen"]').disabled, kill: document.querySelector('#btView [data-k="kill"]').disabled }));
-  check(bd.modes.every(Boolean) && bd.acct && bd.rails && !bd.kill, 'the bot on a prop account: modes, account and rails off; Kill switch on: ' + JSON.stringify(bd));
+  check(bd.modes.length === 3 && bd.modes[0] === false && bd.modes[1] && bd.modes[2] && bd.acct && bd.rails && !bd.kill, 'the bot on a prop account: Copilot, Auto, account and rails off; Shadow (a stop) and the Kill switch on: ' + JSON.stringify(bd));
   await page.screenshot({ path: path.join(SHOTS, 'praetorian-bot-prop.png') });
   await clear();
   await page.evaluate(() => { for (const b of document.querySelectorAll('#btView [data-k="modes"] button')) b.disabled = false; document.querySelector('#btView [data-mode="copilot"]').click(); });
   await sleep(200);
   check((await posted()).length === 0, 'the break: Copilot forced on the bot on a prop account sends nothing');
+  await clear();
+  await page.click('#btView [data-mode="shadow"]');
+  await sleep(200);
+  check(JSON.stringify(await posted()) === JSON.stringify(['botMode:shadow']), 'the bot on a prop account in Auto: its Shadow goes from Praetorian, a stop (03:30): ' + JSON.stringify(await posted()));
+  await clear();
   await page.click('#btView [data-k="kill"]');
   await sleep(200);
   check(JSON.stringify(await posted()) === JSON.stringify(['botKill:true']), 'the bot\'s Kill switch ON goes: ' + JSON.stringify(await posted()));

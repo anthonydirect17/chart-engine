@@ -106,8 +106,9 @@ accounts". The name is his: "Praetorian is good". Rule 12: this changes what the
 - **The gate** (`AgentCore.praetorianGate`, `live/agent-core.js`): both desks are handed a connection that posts only what
   the gate passes, built in one place (`AgentCore.praetorianLink`, frozen, no send or sendOrder) for the page and for both
   pop-out windows (`agent.html`, `bot.html`, which are Praetorian too). A kill switch ON always goes (it only stops a
-  trader), and so does a trader's Shadow (`agentMode` to exactly `shadow`: it places nothing new, so "Flatten and turn
-  off" works on a prop trader); the two acknowledgements go; any other agent or bot message goes only for a trader (or
+  trader), and so does a trader's or the bot's Shadow (`agentMode` or `botMode` to exactly `shadow`: it places nothing
+  new, so "Flatten and turn off" works on a prop trader, and the bot's Shadow button stays offered when the bot is held
+  back); the two acknowledgements go; any other agent or bot message goes only for a trader (or
   the bot) on your personal account (ChartBridge 0.6.16's own flag, read by `FleetCore.kindOf`), a Sim account or None,
   and an account change only to one of those. Refused by name: a group (the prop business), a prop
   account, a live account the page cannot tell, a trader ChartBridge has not described yet, and every other message type.
