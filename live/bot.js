@@ -62,6 +62,11 @@ function create(o) {
   const log = BC.createLog(storage), days = BC.createDayTypes(storage);
   const props = BC.createProposals();
   const popout = !!o.popout;
+  /* 1.49.0 (the review of 103, a F-B1 and b F3): a second copy inside the page (Legion's trader desk): no Pop out, shown only
+     when its owner says so, and botSeen only while its card is really on screen (keyPrefix: its own chart key) */
+  const embedded = !popout && !!o.embedded;
+  const chartKey = (embedded && typeof o.keyPrefix === 'string' ? o.keyPrefix : '') + CHART_KEY;
+  const onScreen = el => !!el && el.isConnected && el.getClientRects().length > 0 && (typeof el.checkVisibility !== 'function' || el.checkVisibility());
 
   /* ---------------- state */
   const S = {
@@ -103,7 +108,7 @@ function create(o) {
           '<select class="ws-sel bt-tf" data-k="tf" aria-label="Bars">' + Object.keys(TF_NAMES).map(k => '<option value="' + k + '">' + TF_NAMES[k] + '</option>').join('') + '</select>' +
           '<span class="chart-live ws-lv" data-k="ind"></span>' +
           '<span class="bt-r"><span class="bt-pill bt-legend" title="The bot\'s trades today: triangles in, dots out; its working entry, stop and target as lines. ChartBridge marks the bot\'s orders, so your own orders on its account do not show here.">Bot trades</span>' +
-          (popout ? '' : '<button type="button" class="ws-btn bt-pop" data-act="popout" title="Open the Bot tab in its own window (for a third monitor)">Pop out</button>') + '</span></div>' +
+          (popout || embedded ? '' : '<button type="button" class="ws-btn bt-pop" data-act="popout" title="Open the Bot tab in its own window (for a third monitor)">Pop out</button>') + '</span></div>' +
         '<div class="bt-chart" data-k="chart" data-no-motion></div>' +
       '</section>' +
       /* the bot panel */
@@ -357,6 +362,7 @@ function create(o) {
     if (document.visibilityState === 'hidden') return;
     const at = Date.now(), x = shownCard();           // the card shown (the ones waiting are not shown yet)
     if (!x || x.ended) return;
+    if (embedded && (!S.shown || !onScreen(x.el) || !inView(x.el))) return;   // 1.49.0: a folded, hidden or scrolled-off copy acknowledges nothing
     const seen = props.shown(x.p.id, at);
     if (seen) sendRaw(seen);
   }
@@ -840,7 +846,7 @@ function create(o) {
       '<p class="bt-help">Less motion shows every scene in its final state. The kill switch, Accept and Reject, the position and P&amp;L never move either way.</p>' +
       '<div class="bt-opt"><span>Copilot keys</span><span>' + keys + '</span></div>' + (k.notes && k.notes.length ? '<p class="bt-help warn">' + esc(k.notes.join('; ')) + '</p>' : '') +
       '<p class="bt-help">Ghost marks: the bot\'s trades, faint, on your own charts. Switch them on per chart from the chart\'s ⋯ menu (off by default).</p>' +
-      (popout ? '' : '<div class="bt-opt"><span>This tab in its own window</span><button type="button" class="ws-btn" data-act="popout">Pop out</button></div>');
+      (popout || embedded ? '' : '<div class="bt-opt"><span>This tab in its own window</span><button type="button" class="ws-btn" data-act="popout">Pop out</button></div>');
   }
 
   /* ---------------- actions */
@@ -951,14 +957,14 @@ function create(o) {
   if (view) {
     view.addEventListener('click', onViewClick);
     view.addEventListener('change', e => {
-      if (e.target.closest('[data-k="tf"]')) { S.chartTf = TF_NAMES[e.target.value] ? e.target.value : 'm1'; try { storage.setItem(CHART_KEY, JSON.stringify({ tf: S.chartTf })); } catch (er) { /* blocked */ } if (S.chart) S.chart.setView({ tf: S.chartTf }); renderChartHead(); }
+      if (e.target.closest('[data-k="tf"]')) { S.chartTf = TF_NAMES[e.target.value] ? e.target.value : 'm1'; try { storage.setItem(chartKey, JSON.stringify({ tf: S.chartTf })); } catch (er) { /* blocked */ } if (S.chart) S.chart.setView({ tf: S.chartTf }); renderChartHead(); }
     });
     view.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.closest('.bt-rails-edit input')) { e.preventDefault(); q('[data-act="railsSave"]').click(); } });
   }
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && S.detail) { e.preventDefault(); closeDetail(); } });
 
   /* ---------------- the Bot tab's chart: a normal live chart on the window's feed (never animated) */
-  try { const v = JSON.parse(storage.getItem(CHART_KEY)); if (v && TF_NAMES[v.tf]) S.chartTf = v.tf; } catch (e) { /* none */ }
+  try { const v = JSON.parse(storage.getItem(chartKey)); if (v && TF_NAMES[v.tf]) S.chartTf = v.tf; } catch (e) { /* none */ }
   const chartHost = {
     pressOff: () => 'The Bot tab\'s chart is for watching: it takes no orders. Its lines are the bot\'s own working orders.',
     place: () => {}, move: () => {}, cancel: () => {},
@@ -1082,7 +1088,7 @@ function create(o) {
     },
     /** the workspace's hotkeys changed (The Desk read): the keys shown on the buttons */
     keysChanged() { loadKeys(); renderPanelTab(); for (const x of propEls.values()) if (!x.ended) { const n = x.el.querySelector('[data-k="msg"]'); const t = n ? n.textContent : ''; x.el.innerHTML = propHtml(x.p); if (t) put(x.el.querySelector('[data-k="msg"]'), 'textContent', t); syncButtons(x); } },
-    showTab, shown: () => S.shown, on: () => S.on,
+    showTab, shown: () => S.shown, on: () => S.on, seenCheck: () => seenNow(),   // 1.49.0: seenCheck: Legion's desk asks again when its fold opens
     /** 1.36.0, read only: what the Agents strip's bot card shows (live/agents-strip.js): whether the Bot is offered (a v3
         ChartBridge), its channel on, the `bot` message, its red alert by the rule above, its status words and strip line. */
     glance: () => ({ offered: S.v3 === true, on: S.on, bot: S.bot ? Object.assign({}, S.bot) : null, alert: !!alertNow(),

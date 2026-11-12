@@ -1387,6 +1387,57 @@ function gateAccounts(agentMsg) {
 }
 const GATE_SHAPE = 'the page cannot tell its accounts (ChartBridge sent a shape the page does not know)';
 
+/**
+ * A trader with no home (the coordinator's decision, answers B4-2 item 5): its accounts fit neither desk (a group that holds
+ * your personal account or is Sim only, a group or account that mixes kinds, an account the page cannot tell). Both desks
+ * say so in the same words; either may send it the stops, and move it to None while ChartBridge says it is flat. '' when it
+ * has a home, or when the page cannot tell yet (no accounts message, no personal pick, a group not heard, an odd shape).
+ */
+const NO_HOME_TAIL = '; stop it, then fix its account or group';
+function noHomeWhy(agentMsg, accountsMsg, groupsMsg) {
+  const FC = fleetCore();
+  if (!FC || typeof FC.kindOf !== 'function' || typeof FC.seatsKind !== 'function') return '';
+  if (!plainObj(agentMsg) || !plainObj(accountsMsg) || accountsMsg.personalNamed !== true || agentMsg.league === true) return '';
+  const accts = gateAccounts(agentMsg);
+  if (!accts) return '';
+  const isGroup = plainObj(agentMsg.group);
+  let names = accts.slice();
+  if (isGroup) {
+    if (!plainObj(groupsMsg)) return '';
+    const g = (Array.isArray(groupsMsg.list) ? groupsMsg.list : []).find(x => plainObj(x) && x.id === agentMsg.group.id) || null;
+    if (!g) return '';
+    for (const m of Array.isArray(g.members) ? g.members : []) if (typeof m === 'string' && m && !names.includes(m)) names.push(m);
+  }
+  if (!names.length) return '';
+  const rows = Array.isArray(accountsMsg.list) ? accountsMsg.list : [];
+  const kinds = names.map(n => { const row = rows.find(r => plainObj(r) && r.name === n); return row ? FC.kindOf(row) : 'unlisted'; });
+  const k = FC.seatsKind(kinds);
+  if (isGroup ? LG_GROUP_KINDS.has(k) : k === 'prop' || k === 'personal' || k === 'sim') return '';
+  if (kinds.some(x => x === '' || x === 'unlisted')) return 'no home: the page cannot tell ' + (isGroup ? 'an account in its group' : 'its account') + NO_HOME_TAIL;
+  if (isGroup && (k === 'personal' || k === 'sim')) return 'no home: its group holds only your personal account or Sim accounts, and Praetorian takes no group' + NO_HOME_TAIL;
+  return 'no home: its account mixes kinds' + NO_HOME_TAIL;
+}
+/** ChartBridge says the trader is flat: it owns nothing (owns exactly false), no position, and no seat owns or holds one. */
+function traderFlat(agentMsg) {
+  const a = agentMsg;
+  const flatPos = p => p === null || p === undefined || (plainObj(p) && p.qty === 0);
+  if (!plainObj(a) || a.owns !== false || !flatPos(a.position)) return false;
+  if (a.seats !== undefined && a.seats !== null) {
+    if (!Array.isArray(a.seats)) return false;
+    for (const x of a.seats) if (!plainObj(x) || x.owns === true || !flatPos(x.position)) return false;
+  }
+  return true;
+}
+/**
+ * A move to None for a trader with no home: '' (it goes, as a stop) only when ChartBridge says he is flat; else why not.
+ * Null when the trader has a home (the desk's own rules apply).
+ */
+function noHomeMoveWhy(m, agentMsg, accountsMsg, groupsMsg, who) {
+  if (!noHomeWhy(agentMsg, accountsMsg, groupsMsg)) return null;
+  if (!plainObj(m) || m.type !== 'agentAccount' || m.account !== null || m.group !== undefined || m.league !== undefined) return null;
+  return traderFlat(agentMsg) ? '' : 'Not sent from ' + who + ': flatten first (a trader with no home goes to None only while ChartBridge says it is flat, with no working order).';
+}
+
 /** Whether Praetorian may reach the account `name`: your personal account (ChartBridge's own flag, with a pick made) or a Sim
  *  account (ChartBridge's sim flag). Not known is no. */
 function prIsPersonal(name, accountsMsg) {
@@ -1417,13 +1468,14 @@ function prNotPersonalWhy(name, accountsMsg) {
  * gateAccounts) is personal or Sim (None with no seat counts as none); else why not. A group is never personal; a shape the
  * page cannot read is refused.
  */
-function prTraderWhy(agentMsg, accountsMsg) {
+function prTraderWhy(agentMsg, accountsMsg, groupsMsg) {
   if (!plainObj(agentMsg)) return 'ChartBridge has not described this trader yet';
   const name = typeof agentMsg.name === 'string' && agentMsg.name ? agentMsg.name : String(agentMsg.agent || 'this trader');
-  if (plainObj(agentMsg.group)) return name + ' trades a group: groups are the prop business, ' + PR_WHERE;
+  const home = noHomeWhy(agentMsg, accountsMsg, groupsMsg);
+  if (plainObj(agentMsg.group)) return name + (home ? ': ' + home : ' trades a group: groups are the prop business, ' + PR_WHERE);
   const accts = gateAccounts(agentMsg);
   if (!accts) return name + ': ' + GATE_SHAPE;
-  for (const a of accts) if (!prIsPersonal(a, accountsMsg)) return name + ': ' + prNotPersonalWhy(a, accountsMsg);
+  for (const a of accts) if (!prIsPersonal(a, accountsMsg)) return name + ': ' + (home || prNotPersonalWhy(a, accountsMsg));
   return '';
 }
 
@@ -1452,9 +1504,12 @@ function prCheck(m, st) {
   if (PR_AGENT_TYPES.has(t)) {
     const a = s.agents instanceof Map && typeof m.agent === 'string' ? s.agents.get(m.agent) || null : null;
     if (!a) return 'Not sent from Praetorian: ChartBridge has not described trader ' + String(m.agent || '') + ' yet.';
-    const why = prTraderWhy(a, s.accounts);
+    const nh = noHomeMoveWhy(m, a, s.accounts, s.groups, 'Praetorian');
+    if (nh !== null) { if (nh) return nh; if (!s.preMove && a.mode !== 'shadow') return 'Not sent from Praetorian: an account or group change goes only while the trader is in Shadow (the page sends Shadow first, then the change).'; return ''; }
+    const why = prTraderWhy(a, s.accounts, s.groups);
     if (why) return 'Not sent from Praetorian: ' + why + '.';
     if (t === 'agentAccount') {
+      if (!s.preMove && a.mode !== 'shadow') return 'Not sent from Praetorian: an account or group change goes only while the trader is in Shadow (the page sends Shadow first, then the change).';
       if (m.group !== undefined) return 'Not sent from Praetorian: a group is the prop business, ' + PR_WHERE + '.';
       if (m.account !== null && !prIsPersonal(m.account, s.accounts)) return 'Not sent from Praetorian: ' + prNotPersonalWhy(m.account, s.accounts) + '.';
     }
@@ -1465,6 +1520,7 @@ function prCheck(m, st) {
     const why = prBotWhy(s.bot, s.accounts);
     if (why) return 'Not sent from Praetorian: ' + why + '.';
     if (t === 'botAccount' && m.account !== null && !prIsPersonal(m.account, s.accounts)) return 'Not sent from Praetorian: ' + prNotPersonalWhy(m.account, s.accounts) + '.';
+    if (t === 'botAccount' && !s.preMove && s.bot.mode !== 'shadow') return 'Not sent from Praetorian: the bot changes account only in Shadow (the page sends Shadow first, then the change).';
     return '';
   }
   return 'Not sent from Praetorian: it does not send ' + t.slice(0, 40) + '.';
@@ -1505,29 +1561,66 @@ function prBotChoices(list, ok, opts) {
  */
 function praetorianLink(feed, onHear) {
   if (!feed || typeof feed.listen !== 'function' || typeof feed.post !== 'function') return null;
-  const gate = praetorianGate();
+  const L = gatedLink(praetorianGate(), feed, onHear);
+  return Object.freeze({ personal: true, listen: L.listen, post: L.post, limit: L.limit, why: L.why, traderWhy: L.traderWhy,
+    noHome: L.noHome, botWhy: L.botWhy, accountOk: L.accountOk, named: L.named });
+}
+/**
+ * What both links share (chart 1.49.0): the gate hears `feed` first; post(m) sends only what the gate passes. An account or
+ * group change (agentAccount, botAccount) for a trader or the bot not in Shadow is never sent as it is (the coordinator's
+ * decision, answers B4-2 item 6: None is shared by both desks, and a mode must not travel with a move): the link sends
+ * Shadow first (a stop), keeps the change, and posts it with keepMode 'shadow' only once ChartBridge's own message shows
+ * Shadow and the gate passes it again; a change not sent within MOVE_MS, or a drop, forgets it. Auto or Copilot is then set
+ * again on the desk the trader now belongs to.
+ */
+const MOVE_MS = 10000;
+function gatedLink(gate, feed, onHear) {
   const told = m => { if (typeof onHear === 'function') { try { onHear(m); } catch (e) { /* the page's own redraw */ } } };
-  feed.listen({ message: m => { gate.hear(m); told(m); }, closed: () => { gate.lost(); told(null); } });
-  return Object.freeze({ personal: true, listen: part => feed.listen(part), post: m => gate.check(m) === '' && feed.post(m) === true,
-    limit: name => (typeof feed.limit === 'function' ? feed.limit(name) : null), why: m => gate.check(m), traderWhy: id => gate.traderWhy(id),
-    botWhy: () => gate.botWhy(), accountOk: name => gate.accountOk(name), named: () => gate.state().personalNamed });
+  const pending = new Map();
+  const isMove = m => plainObj(m) && (m.type === 'agentAccount' || m.type === 'botAccount');
+  const flush = () => {
+    const now = Date.now();
+    for (const [k, p] of [...pending]) {
+      if (now - p.at > MOVE_MS) { pending.delete(k); continue; }
+      if (gate.check(p.m) === '') { pending.delete(k); feed.post(p.m); }
+    }
+  };
+  const listener = { message: m => { gate.hear(m); if (pending.size && plainObj(m) && (m.type === 'agent' || m.type === 'bot')) flush(); told(m); }, closed: () => { gate.lost(); pending.clear(); told(null); } };
+  const off = feed.listen(listener);
+  const post = m => {
+    if (gate.check(m) === '') return feed.post(m) === true;
+    if (!isMove(m) || gate.check(m, true) !== '') return false;
+    const shadow = m.type === 'agentAccount' ? { type: 'agentMode', agent: m.agent, mode: 'shadow' } : { type: 'botMode', mode: 'shadow' };
+    if (gate.check(shadow) !== '' || feed.post(shadow) !== true) return false;
+    const q = Object.assign({}, m);
+    if (q.type === 'agentAccount') q.keepMode = 'shadow';
+    pending.set(m.type === 'agentAccount' ? 'agent:' + m.agent : 'bot', { m: q, at: Date.now() });
+    return true;
+  };
+  const why = m => { const w = gate.check(m); return w && isMove(m) && gate.check(m, true) === '' ? '' : w; };
+  return { listen: part => feed.listen(part), post, why, limit: name => (typeof feed.limit === 'function' ? feed.limit(name) : null),
+    traderWhy: id => gate.traderWhy(id), noHome: id => gate.noHome(id), botWhy: () => gate.botWhy(), accountOk: name => gate.accountOk(name),
+    groupOk: id => (typeof gate.groupOk === 'function' ? gate.groupOk(id) : false), named: () => gate.state().personalNamed,
+    moving: () => pending.size, unlisten: () => { if (typeof off === 'function') { try { off(); } catch (e) { /* gone */ } } } };
 }
 /**
  * The gate the two desks' connection goes through: hear(m) every message ChartBridge sends, lost() when the connection drops
  * (everything heard is forgotten, so nothing is passed on an old word), check(m) as above, state() for the tests.
  */
 function praetorianGate() {
-  const S = { agents: new Map(), bot: null, accounts: null };
+  const S = { agents: new Map(), bot: null, accounts: null, groups: null };
   return {
     hear(m) {
       if (!plainObj(m)) return;
       if (m.type === 'accounts') S.accounts = m;
+      else if (m.type === 'groups') S.groups = m;   // 1.49.0: only to say when a group trader has no home
       else if (m.type === 'agent' && typeof m.agent === 'string') S.agents.set(m.agent, m);
       else if (m.type === 'bot') S.bot = m;
     },
-    lost() { S.agents.clear(); S.bot = null; S.accounts = null; },
-    check: m => prCheck(m, S),
-    traderWhy: id => prTraderWhy(S.agents.get(id) || null, S.accounts),
+    lost() { S.agents.clear(); S.bot = null; S.accounts = null; S.groups = null; },
+    check: (m, preMove) => prCheck(m, preMove ? Object.assign({}, S, { preMove: true }) : S),
+    traderWhy: id => prTraderWhy(S.agents.get(id) || null, S.accounts, S.groups),
+    noHome: id => noHomeWhy(S.agents.get(id) || null, S.accounts, S.groups),
     botWhy: () => (plainObj(S.bot) ? prBotWhy(S.bot, S.accounts) : 'ChartBridge has not described the bot yet'),
     accountOk: name => prIsPersonal(name, S.accounts),
     state: () => ({ agents: S.agents.size, bot: !!S.bot, accounts: !!S.accounts, personalNamed: !!(S.accounts && S.accounts.personalNamed === true) }),
@@ -1563,6 +1656,7 @@ function lgKind(names, accountsMsg) {
 }
 /** A group (by id, from the `groups` message) Legion's desk may reach: it has accounts and every one is prop or Sim, at least one prop. */
 function lgGroupWhy(id, groupsMsg, accountsMsg) {
+  if (!plainObj(groupsMsg)) return 'ChartBridge has not listed its groups yet';
   const g = (plainObj(groupsMsg) && Array.isArray(groupsMsg.list) ? groupsMsg.list : []).find(x => plainObj(x) && x.id === id) || null;
   if (!g) return 'there is no group ' + String(id || '').slice(0, 40) + ' on this ChartBridge';
   const members = (Array.isArray(g.members) ? g.members : []).filter(x => typeof x === 'string' && x);
@@ -1571,18 +1665,31 @@ function lgGroupWhy(id, groupsMsg, accountsMsg) {
   if (LG_GROUP_KINDS.has(k)) return '';
   return 'group ' + (g.name || g.id) + (k === 'mixed' || k === 'personal' ? ' holds your personal account' : k === 'sim' ? ' is Sim accounts only' : ' holds an account the page cannot tell');
 }
-/** Where one trader may be reached from Legion's desk: '' on a prop account, a prop group, or None; else why not. */
-function lgTraderWhy(agentMsg, accountsMsg) {
+/**
+ * Where one trader may be reached from Legion's desk: '' on a prop account, a prop group (or prop and Sim) it has heard of
+ * in the `groups` message, or None with no seat; else why not. Every seat counts (gateAccounts); a group trader is judged by
+ * its seats AND by the group as last heard (the review of 103, b F1: ChartBridge sends `groups` at once, the seats on its
+ * next tick, so the careful side wins whichever comes first); a group with no seats now is not None (B6).
+ */
+function lgTraderWhy(agentMsg, accountsMsg, groupsMsg) {
   if (!plainObj(agentMsg)) return 'ChartBridge has not described this trader yet';
   const name = typeof agentMsg.name === 'string' && agentMsg.name ? agentMsg.name : String(agentMsg.agent || 'this trader');
+  const home = noHomeWhy(agentMsg, accountsMsg, groupsMsg);
   if (agentMsg.league === true) return name + ' is on a league seat (Sim): ' + LG_WHERE;
-  const FC = fleetCore();
-  const accts = FC && typeof FC.traderAccounts === 'function' ? FC.traderAccounts(agentMsg) : [];
-  if (!accts.length) return plainObj(agentMsg.group) ? name + '\'s group has no accounts now: the page cannot tell it' : '';
+  const accts = gateAccounts(agentMsg);
+  if (!accts) return name + ': ' + GATE_SHAPE;
+  const isGroup = plainObj(agentMsg.group);
+  if (isGroup) {
+    const gw = lgGroupWhy(agentMsg.group.id, groupsMsg, accountsMsg);
+    if (gw) return name + ': ' + (home || gw + ': ' + LG_WHERE);
+    if (!accts.length) return name + '\'s group has no seats now: the page cannot tell it';
+  }
+  if (!accts.length) return '';
   const k = lgKind(accts, accountsMsg);
-  if (k === 'prop' || (plainObj(agentMsg.group) && LG_GROUP_KINDS.has(k))) return '';
+  if (k === 'prop' || (isGroup && LG_GROUP_KINDS.has(k))) return '';
   if (!plainObj(accountsMsg)) return name + ': ChartBridge has not listed its accounts yet';
   if (accountsMsg.personalNamed !== true) return name + ': no personal account is picked yet, so no account is prop (pick it on the Accounts tab)';
+  if (home) return name + ': ' + home;
   return name + (k === 'personal' || k === 'mixed' ? ' trades your personal account' : k === 'sim' || k === 'propsim' ? ' trades a Sim account' : ' trades an account the page cannot tell') + ': ' + LG_WHERE;
 }
 /** The bot slot on Legion's desk: '' on a prop account or None; else why not. */
@@ -1607,9 +1714,12 @@ function lgCheck(m, st) {
   if (PR_AGENT_TYPES.has(t)) {
     const a = s.agents instanceof Map && typeof m.agent === 'string' ? s.agents.get(m.agent) || null : null;
     if (!a) return 'Not sent from Legion: ChartBridge has not described trader ' + String(m.agent || '') + ' yet.';
-    const why = lgTraderWhy(a, s.accounts);
+    const nh = noHomeMoveWhy(m, a, s.accounts, s.groups, 'Legion');
+    if (nh !== null) { if (nh) return nh; if (!s.preMove && a.mode !== 'shadow') return 'Not sent from Legion: an account or group change goes only while the trader is in Shadow (the page sends Shadow first, then the change).'; return ''; }
+    const why = lgTraderWhy(a, s.accounts, s.groups);
     if (why) return 'Not sent from Legion: ' + why + '.';
     if (t === 'agentAccount') {
+      if (!s.preMove && a.mode !== 'shadow') return 'Not sent from Legion: an account or group change goes only while the trader is in Shadow (the page sends Shadow first, then the change).';
       if (m.league !== undefined) return 'Not sent from Legion: a league seat is a Sim account: ' + LG_WHERE + '.';
       if (m.group !== undefined) { const gw = typeof m.group === 'string' ? lgGroupWhy(m.group, s.groups, s.accounts) : 'no group named'; return gw ? 'Not sent from Legion: ' + gw + '.' : ''; }
       if (m.account !== null && !lgAccountOk(m.account, s.accounts)) return 'Not sent from Legion: ' + String(m.account).slice(0, 40) + ' is not a prop account: ' + LG_WHERE + '.';
@@ -1621,6 +1731,7 @@ function lgCheck(m, st) {
     const why = lgBotWhy(s.bot, s.accounts);
     if (why) return 'Not sent from Legion: ' + why + '.';
     if (t === 'botAccount' && m.account !== null && !lgAccountOk(m.account, s.accounts)) return 'Not sent from Legion: ' + String(m.account).slice(0, 40) + ' is not a prop account: ' + LG_WHERE + '.';
+    if (t === 'botAccount' && !s.preMove && s.bot.mode !== 'shadow') return 'Not sent from Legion: the bot changes account only in Shadow (the page sends Shadow first, then the change).';
     return '';
   }
   return 'Not sent from Legion: it does not send ' + t.slice(0, 40) + '.';
@@ -1637,8 +1748,9 @@ function legionGate() {
       else if (m.type === 'bot') S.bot = m;
     },
     lost() { S.agents.clear(); S.bot = null; S.accounts = null; S.groups = null; },
-    check: m => lgCheck(m, S),
-    traderWhy: id => lgTraderWhy(S.agents.get(id) || null, S.accounts),
+    check: (m, preMove) => lgCheck(m, preMove ? Object.assign({}, S, { preMove: true }) : S),
+    traderWhy: id => lgTraderWhy(S.agents.get(id) || null, S.accounts, S.groups),
+    noHome: id => noHomeWhy(S.agents.get(id) || null, S.accounts, S.groups),
     botWhy: () => (plainObj(S.bot) ? lgBotWhy(S.bot, S.accounts) : 'ChartBridge has not described the bot yet'),
     accountOk: name => lgAccountOk(name, S.accounts),
     groupOk: id => lgGroupWhy(id, S.groups, S.accounts) === '',
@@ -1648,13 +1760,10 @@ function legionGate() {
 /** The connection Legion's desk hands both desks: as praetorianLink, named Legion, groups allowed (only prop ones). */
 function legionLink(feed, onHear) {
   if (!feed || typeof feed.listen !== 'function' || typeof feed.post !== 'function') return null;
-  const gate = legionGate();
-  const told = m => { if (typeof onHear === 'function') { try { onHear(m); } catch (e) { /* the page's own redraw */ } } };
-  feed.listen({ message: m => { gate.hear(m); told(m); }, closed: () => { gate.lost(); told(null); } });
+  const L = gatedLink(legionGate(), feed, onHear);
   return Object.freeze({ name: 'Legion', groups: true, notHere: 'your personal account, Sim, or one the page cannot tell: set up from Praetorian',
-    listen: part => feed.listen(part), post: m => gate.check(m) === '' && feed.post(m) === true,
-    limit: name => (typeof feed.limit === 'function' ? feed.limit(name) : null), why: m => gate.check(m), traderWhy: id => gate.traderWhy(id),
-    botWhy: () => gate.botWhy(), accountOk: name => gate.accountOk(name), groupOk: id => gate.groupOk(id), named: () => gate.state().personalNamed });
+    listen: L.listen, post: L.post, limit: L.limit, why: L.why, traderWhy: L.traderWhy, noHome: L.noHome, botWhy: L.botWhy, accountOk: L.accountOk,
+    groupOk: L.groupOk, named: L.named, close: L.unlisten });   // close: LegionDesk.destroy() takes the gate off the feed (the review of 103, b F7)
 }
 
 return {
@@ -1671,6 +1780,6 @@ return {
   createCopilotRouter, copilotRouter, KEY_LOCK_MS, KEY_MIN_SHOWN_MS, KEY_SAY,
   boardRows, boardRoom, boardPosition, rWords, leagueChoices, standDownClearMsg, sdWhen,
   LIGHT, STEPS, PANELS, LIGHT_HOLD, LAP_MS, lightEvents, lightState, stepLines, ageText, entryRisk, tradesR, heatNow, rowTone, decisionRecord, sessionTrail, roomLines, MOTION_KEY, motionPref, setMotionPref,
-  gateAccounts, prChoices, prBotChoices, praetorianLink, lgAccountOk, lgGroupWhy, lgTraderWhy, lgBotWhy, lgCheck, legionGate, legionLink, PR_AGENT_TYPES, PR_BOT_TYPES, prIsPersonal, prNotPersonalWhy, prTraderWhy, prBotWhy, prCheck, praetorianGate
+  gateAccounts, noHomeWhy, traderFlat, gatedLink, MOVE_MS, prChoices, prBotChoices, praetorianLink, lgAccountOk, lgGroupWhy, lgTraderWhy, lgBotWhy, lgCheck, legionGate, legionLink, PR_AGENT_TYPES, PR_BOT_TYPES, prIsPersonal, prNotPersonalWhy, prTraderWhy, prBotWhy, prCheck, praetorianGate
 };
 });

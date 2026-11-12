@@ -42,14 +42,16 @@ test('a trader on a prop account, a group (even of Sim accounts), or an account 
     [agent({ account: null, group: { id: 'g1', name: 'Evals' }, seats: [{ account: 'PROP-1' }, { account: 'PROP-2' }] }), /trades a group: groups are the prop business/],
     [agent({ account: null, group: { id: 'g2', name: 'Mine' }, seats: [{ account: 'MINE-1' }] }), /trades a group/],
     [agent({ account: null, group: { id: 'g3', name: 'Sims' }, seats: [{ account: 'SIM-A' }] }), /trades a group/],
-    [agent({ account: 'LIVE-X' }), /LIVE-X is an account the page cannot tell/],
-    [agent({ account: 'GONE-9' }), /GONE-9 is not in ChartBridge's accounts now/],
+    [agent({ account: 'LIVE-X' }), /no home: the page cannot tell its account; stop it, then fix its account or group/],
+    [agent({ account: 'GONE-9' }), /no home: the page cannot tell its account/],
   ];
   for (const [a, rx] of cases) {
     const g = gateWith(accounts(), a);
     for (const m of AGENT_MSGS('demo')) {
       if (m.type === 'agentMode' && m.mode === 'shadow') { assert.equal(g.check(m), '', 'Shadow is a stop: it goes for any described trader (the review of 102, F2)'); continue; }
-      const why = g.check(m); assert.match(why, /^Not sent from Praetorian: /, m.type); assert.match(why, rx, m.type);
+      const why = g.check(m); assert.match(why, /^Not sent from Praetorian: /, m.type);
+      if (m.type === 'agentAccount' && m.account === null && /no home/.test(rx.source)) { assert.match(why, /flatten first/, 'None for a trader with no home: only when flat'); continue; }
+      assert.match(why, rx, m.type);
     }
     assert.match(g.check({ type: 'agentAccount', agent: 'demo', account: 'MINE-1', keepMode: 'shadow' }), rx, 'not even to your personal account: the prop trader is moved from Legion');
     assert.equal(g.check({ type: 'agentKill', agent: 'demo', on: true }), '', 'the kill switch ON always goes: it only stops a trader');
@@ -112,7 +114,7 @@ test('the link the page and both pop-out windows hand the desks (AgentCore.praet
   const posted = [], subs = [], told = [];
   const AF = { listen: p => { subs.push(p); return () => {}; }, post: x => { posted.push(x); return true; }, send: x => posted.push(['send', x]), sendOrder: x => posted.push(['order', x]), limit: () => ({ level: '' }) };
   const link = AC.praetorianLink(AF, m => told.push(m ? m.type : null));
-  assert.deepStrictEqual(Object.keys(link).sort(), ['accountOk', 'botWhy', 'limit', 'listen', 'named', 'personal', 'post', 'traderWhy', 'why'], 'no send, no sendOrder');
+  assert.deepStrictEqual(Object.keys(link).sort(), ['accountOk', 'botWhy', 'limit', 'listen', 'named', 'noHome', 'personal', 'post', 'traderWhy', 'why'], 'no send, no sendOrder');
   assert.ok(Object.isFrozen(link));
   assert.equal(subs.length, 1, 'the gate listens as the link is made, before any desk');
   for (const x of [accounts(), agent({ agent: 'mine', account: 'MINE-1' }), agent({ agent: 'prop', account: 'PROP-1' }), { type: 'bot', account: 'PROP-1', mode: 'auto' }]) subs[0].message(x);
@@ -219,8 +221,8 @@ test('the shapes: a leftover seat counts, and a shape the page cannot read lets 
   const stops = [{ type: 'agentKill', agent: 'demo', on: true }, { type: 'agentMode', agent: 'demo', mode: 'shadow' }, { type: 'agentSeen', agent: 'demo', id: 'p1' }];
   const refused = [
     [agent({ account: null, seats: [{ account: 'PROP-1' }] }), /PROP-1 is a prop account/, 'None with a leftover seat on a prop account'],
-    [agent({ account: 'MINE-1', seats: [{ account: 'PROP-1' }] }), /PROP-1 is a prop account/, 'personal with a leftover prop seat'],
-    [agent({ account: null, seats: [{ account: 'LIVE-X' }] }), /LIVE-X is an account the page cannot tell/, 'None with a seat the page cannot tell'],
+    [agent({ account: 'MINE-1', seats: [{ account: 'PROP-1' }] }), /no home: its account mixes kinds/, 'personal with a leftover prop seat'],
+    [agent({ account: null, seats: [{ account: 'LIVE-X' }] }), /no home: the page cannot tell its account/, 'None with a seat the page cannot tell'],
     [agent({ account: 123 }), /cannot tell its accounts \(ChartBridge sent a shape/, 'a number'],
     [agent({ account: { name: 'MINE-1' } }), /cannot tell its accounts/, 'an object'],
     [agent({ account: '' }), /cannot tell its accounts/, 'an empty string'],

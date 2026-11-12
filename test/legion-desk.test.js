@@ -51,14 +51,19 @@ test('a trader on your personal account, Sim, a mixed group, a league seat or an
   const cases = [
     [agent({ account: 'MINE-1' }), /trades your personal account: it is set up from Praetorian/],
     [agent({ account: 'SIM-A' }), /trades a Sim account/],
-    [agent({ account: 'LIVE-X' }), /trades an account the page cannot tell/],
+    [agent({ account: 'LIVE-X' }), /no home: the page cannot tell its account; stop it, then fix its account or group/],
     [agent({ account: 'SIM-A', league: true }), /league seat/],
-    [agent({ account: null, group: { id: 'g3', name: 'Mixed' }, seats: [{ account: 'PROP-1' }, { account: 'MINE-1' }] }), /trades your personal account/],
-    [agent({ account: null, group: { id: 'g4', name: 'Sims' }, seats: [{ account: 'SIM-A' }] }), /trades a Sim account/],
+    [agent({ account: null, group: { id: 'g3', name: 'Mixed' }, seats: [{ account: 'PROP-1' }, { account: 'MINE-1' }] }), /no home: its account mixes kinds; stop it, then fix its account or group/],
+    [agent({ account: null, group: { id: 'g4', name: 'Sims' }, seats: [{ account: 'SIM-A' }] }), /no home: its group holds only your personal account or Sim accounts, and Praetorian takes no group/],
+    [agent({ account: null, group: { id: 'g6', name: 'Unknown' }, seats: [{ account: 'LIVE-X' }] }), /no home: the page cannot tell an account in its group/],
   ];
   for (const [a, rx] of cases) {
     const g = gateWith(accounts(), groups, a);
-    for (const m of AGENT_MSGS('demo')) { const why = g.check(m); assert.match(why, /^Not sent from Legion: /, m.type); assert.match(why, rx, m.type); }
+    for (const m of AGENT_MSGS('demo')) {
+      const why = g.check(m); assert.match(why, /^Not sent from Legion: /, m.type);
+      if (m.type === 'agentAccount' && m.account === null && /no home/.test(rx.source)) { assert.match(why, /flatten first/, 'None for a trader with no home: only when flat'); continue; }
+      assert.match(why, rx, m.type);
+    }
     assert.equal(g.check({ type: 'agentKill', agent: 'demo', on: true }), '', 'kill switch ON: a stop');
     assert.equal(g.check({ type: 'agentMode', agent: 'demo', mode: 'shadow' }), '', 'Shadow: a stop');
     assert.equal(g.check({ type: 'agentSeen', agent: 'demo', id: 'p1' }), '');
@@ -126,7 +131,7 @@ test('the connection drops: everything heard is forgotten; the link has no send,
   const posted = [], subs = [];
   const AF = { listen: p => { subs.push(p); return () => {}; }, post: x => { posted.push(x); return true; }, send: x => posted.push(x), sendOrder: x => posted.push(x) };
   const link = AC.legionLink(AF);
-  assert.deepStrictEqual(Object.keys(link).sort(), ['accountOk', 'botWhy', 'groupOk', 'groups', 'limit', 'listen', 'name', 'named', 'notHere', 'post', 'traderWhy', 'why']);
+  assert.deepStrictEqual(Object.keys(link).sort(), ['accountOk', 'botWhy', 'close', 'groupOk', 'groups', 'limit', 'listen', 'name', 'named', 'noHome', 'notHere', 'post', 'traderWhy', 'why']);
   assert.ok(Object.isFrozen(link)); assert.equal(link.name, 'Legion'); assert.equal(link.groups, true); assert.equal(link.personal, undefined, 'not Praetorian');
   assert.equal(subs.length, 1);
   for (const x of [accounts(), groups, agent(), { type: 'bot', account: 'PROP-1' }]) subs[0].message(x);
@@ -156,7 +161,12 @@ test('the pickers on Legion: groups that pass its gate offered, a personal or Si
 test('the desk file: both desks reused with keys off, the bot card kept inside, the Legion link and never the feed', () => {
   const src = read('live/legion-desk.js');
   assert.match(src, /const link = AC && typeof AC\.legionLink === 'function' && o\.v3 \? AC\.legionLink\(o\.v3, o\.onHear\) : null;/);
-  assert.match(src, /const common = \{ popout: true, keys: false, v3: link,/);
+  assert.match(src, /const common = \{ embedded: true, keyPrefix: KEY_PREFIX, keys: false, v3: link,/, 'embedded, never popout (popout means "always shown")');
+  assert.doesNotMatch(src, /popout/, 'never a pop-out copy');
+  assert.match(src, /const KEY_PREFIX = 'legion-';/);
+  assert.match(src, /if \(link && typeof link\.close === 'function'\) link\.close\(\);/, 'destroy takes the gate off the feed');
+  assert.match(src, /agent\.showTab\(open && current === 'agent'\)/); assert.match(src, /bot\.showTab\(open && current === 'bot'\)/);
+  assert.match(src, /let current = SIDES\.includes\(o\.side\) \? o\.side : 'agent', open = o\.shown === true;/, 'closed unless told');
   assert.match(src, /window\.BotDesk\.create\(Object\.assign\(\{\}, common, \{ floating: false,/);
   assert.doesNotMatch(src, /v3: o\.v3|\.post\(|\.send\(|sendOrder|agentKillAllProp/, 'no direct send of any kind');
   const ag = read('live/agent.js'), bt = read('live/bot.js');
@@ -165,6 +175,16 @@ test('the desk file: both desks reused with keys off, the bot card kept inside, 
   assert.match(bt, /if \(!ROUTER && o\.keys !== false\) document\.addEventListener\('chart-copilot-key', onCopilotKey\);/);
   assert.match(bt, /if \(o\.floating !== false\) document\.body\.appendChild\(d\); return d; \}\)\(\);/, 'floating false: never on the page\'s body');
   assert.match(bt, /if \(o\.floating === false && view && propBox\.parentElement !== view\) view\.appendChild\(propBox\);/, 'placed in the desk\'s own view, after it is drawn');
+  /* the review of 103 (a F-B1, b F3): an embedded copy acknowledges only what is on screen and leaves the page's own things alone */
+  assert.match(ag, /const embedded = !popout && !!o\.embedded;/); assert.match(bt, /const embedded = !popout && !!o\.embedded;/);
+  assert.match(ag, /if \(embedded && !onScreen\(view\)\) return;/); assert.match(ag, /if \(embedded && !onScreen\(x\.inline\)\) continue;/);
+  assert.match(bt, /if \(embedded && \(!S\.shown \|\| !onScreen\(x\.el\) \|\| !inView\(x\.el\)\)\) return;/);
+  assert.match(ag, /const propBox = embedded \? null : document\.querySelector\('\.bt-props'\);/, 'never hides the page\'s Bot card');
+  assert.match(ag, /const cornerLine = view && !popout && !embedded \?/); assert.match(ag, /const alertsEl = popout \|\| embedded \? null :/);
+  assert.match(ag, /function placeNotes\(\) \{\s*if \(embedded\) return;/, 'never moves the page\'s notes');
+  assert.match(ag, /const K = \{ board: KP \+ KEYS\.board, chosen: KP \+ KEYS\.chosen, chart: KP \+ KEYS\.chart, fills: KEYS\.fills, feed: KP \+ KEYS\.feed, risk: KEYS\.risk \};/);
+  assert.ok(!/(read|write)Json\(KEYS\./.test(ag), 'every key through K');
+  assert.match(bt, /storage\.getItem\(chartKey\)/); assert.match(bt, /storage\.setItem\(chartKey,/);
   for (const f of ['live/legion-desk.js', 'test/legion-desk.test.js']) assert.ok(!/[\u2013\u2014]/.test(read(f)), f + ': no en or em dash');
 });
 
@@ -182,4 +202,157 @@ test('deliberate breaks of Legion\'s gate a test missed at first: the pick, an e
   d.lost(); d.hear(accounts());
   assert.equal(d.groupOk('g1'), false, 'no groups heard since the drop');
   assert.deepEqual(d.state(), { agents: 0, bot: false, accounts: true, groups: false, personalNamed: true });
+});
+
+/* answers B4-2 (the reviews of 102's fixes and 103): items 1, 2, 5 and 6 */
+const NON_STOP = id => [{ type: 'agentMode', agent: id, mode: 'auto' }, { type: 'agentMode', agent: id, mode: 'copilot' }, { type: 'agentKill', agent: id, on: false },
+  { type: 'agentRules', agent: id, maxTrades: 2 }, { type: 'agentAnswer', agent: id, id: 'p1', answer: 'accept' }];
+const STOPS = id => [{ type: 'agentKill', agent: id, on: true }, { type: 'agentMode', agent: id, mode: 'shadow' }, { type: 'agentSeen', agent: id, id: 'p1' }];
+const bothGates = (...msgs) => { const L = gateWith(...msgs), P = AC.praetorianGate(); for (const m of msgs) P.hear(m); return [L, P]; };
+
+test('b F1: a group that changes under a group trader refuses at once, before ChartBridge moves his seats', () => {
+  const g1 = agent({ account: null, group: { id: 'g1', name: 'Evals' }, seats: [{ account: 'PROP-1' }, { account: 'PROP-2' }] });
+  const g = gateWith(accounts(), groups, g1);
+  assert.equal(g.check({ type: 'agentMode', agent: 'demo', mode: 'auto' }), '', 'g1 all prop: Legion');
+  g.hear({ type: 'groups', list: [{ id: 'g1', name: 'Evals', members: ['PROP-1', 'MINE-1'] }] });   // the seats still say PROP-1, PROP-2
+  for (const m of NON_STOP('demo')) assert.match(g.check(m), /no home: its account mixes kinds/, m.type + ': the group as last heard counts');
+  for (const m of STOPS('demo')) assert.equal(g.check(m), '', m.type + ' is a stop');
+  assert.match(gateWith(accounts(), g1).check({ type: 'agentMode', agent: 'demo', mode: 'auto' }), /has not listed its groups yet/, 'no groups heard: refused');
+  const gone = gateWith(accounts(), { type: 'groups', list: [] }, g1);
+  assert.match(gone.check({ type: 'agentMode', agent: 'demo', mode: 'auto' }), /there is no group g1/, 'a group no longer there: refused');
+  /* the reviewer's browser case, through the link: two clicks on Auto after the change post nothing */
+  const posted = [], subs = [];
+  const link = AC.legionLink({ listen: p => { subs.push(p); return () => {}; }, post: x => { posted.push(x); return true; } });
+  for (const x of [accounts(), groups, g1, { type: 'groups', list: [{ id: 'g1', name: 'Evals', members: ['PROP-1', 'MINE-1'] }] }]) subs[0].message(x);
+  assert.equal(link.post({ type: 'agentMode', agent: 'demo', mode: 'auto' }), false); assert.equal(link.post({ type: 'agentMode', agent: 'demo', mode: 'auto' }), false);
+  assert.deepEqual(posted, []);
+});
+
+test('b F2 and B6 on Legion: every seat counts, a shape the page cannot read is refused, a group with no seats is not None', () => {
+  const cases = [
+    [agent({ account: 'PROP-1', seats: [{ account: 'MINE-1' }] }), /no home: its account mixes kinds/, 'prop with a leftover personal seat'],
+    [agent({ account: 123 }), /cannot tell its accounts \(ChartBridge sent a shape/, 'a number'],
+    [agent({ account: { name: 'PROP-1' } }), /cannot tell its accounts/, 'an object'],
+    [agent({ account: '' }), /cannot tell its accounts/, 'an empty string'],
+    [agent({ account: null, group: true, seats: [{ account: 'PROP-1' }] }), /cannot tell its accounts/, 'group: true'],
+    [agent({ account: null, group: { id: 'g1', name: 'Evals' }, seats: [{ account: 'PROP-1' }, { acct: 'MINE-1' }] }), /cannot tell its accounts/, 'a seat with no account'],
+    [agent({ account: null, group: { id: 'g1', name: 'Evals' }, seats: [] }), /group has no seats now: the page cannot tell it/, 'B6: no seats'],
+    [agent({ account: null, group: { id: 'g1', name: 'Evals' } }), /group has no seats now/, 'B6: seats left out'],
+    [agent({ account: null, group: { id: 'g5', name: 'Empty' }, seats: [] }), /group Empty has no accounts/, 'an empty group'],
+  ];
+  for (const [a, re, what] of cases) {
+    const [L, P] = bothGates(accounts(), groups, a);
+    for (const m of NON_STOP('demo')) { assert.match(L.check(m), re, what + ': ' + m.type); assert.notEqual(P.check(m), '', what + ' on Praetorian: ' + m.type); }
+    for (const m of STOPS('demo')) { assert.equal(L.check(m), '', what + ': ' + m.type); assert.equal(P.check(m), '', what + ' on Praetorian: ' + m.type); }
+  }
+  /* None with a leftover seat on your personal account: Praetorian's (whole there), stops only on Legion */
+  const [L1, P1] = bothGates(accounts(), groups, agent({ account: null, seats: [{ account: 'MINE-1' }] }));
+  for (const m of NON_STOP('demo')) { assert.match(L1.check(m), /trades your personal account/, m.type); assert.equal(P1.check(m), '', m.type); }
+  for (const a of [agent({ account: 'PROP-1', seats: [{ account: 'PROP-1' }] }), agent({ account: null, seats: [{ account: 'PROP-1' }] }),
+    agent({ account: null, group: { id: 'g2', name: 'Prop and Sim' }, seats: [{ account: 'PROP-1' }, { account: 'SIM-A' }] })])
+    for (const m of NON_STOP('demo')) assert.equal(gateWith(accounts(), groups, a).check(m), '', JSON.stringify(a) + ' ' + m.type);
+});
+
+test('item 5: a trader with no home says so on both desks; either moves him to None, only while ChartBridge says he is flat', () => {
+  const flat = { owns: false, position: null };
+  const homeless = [
+    [agent(Object.assign({ account: null, group: { id: 'g3', name: 'Mixed' }, seats: [{ account: 'PROP-1', owns: false, position: null }, { account: 'MINE-1', owns: false, position: null }] }, flat)), /no home: its account mixes kinds; stop it, then fix its account or group/],
+    [agent(Object.assign({ account: null, group: { id: 'g4', name: 'Sims' }, seats: [{ account: 'SIM-A', owns: false, position: null }] }, flat)), /no home: its group holds only your personal account or Sim accounts/],
+    [agent(Object.assign({ account: null, group: { id: 'g6', name: 'Unknown' }, seats: [{ account: 'LIVE-X', owns: false, position: null }] }, flat)), /no home: the page cannot tell an account in its group/],
+    [agent(Object.assign({ account: 'LIVE-X' }, flat)), /no home: the page cannot tell its account/],
+    [agent(Object.assign({ account: 'GONE-9' }, flat)), /no home: the page cannot tell its account/],
+    [agent(Object.assign({ account: 'MINE-1', seats: [{ account: 'PROP-1', owns: false, position: null }] }, flat)), /no home: its account mixes kinds/],
+  ];
+  const none = { type: 'agentAccount', agent: 'demo', account: null, keepMode: 'shadow' };
+  for (const [a, re] of homeless) {
+    const [L, P] = bothGates(accounts(), groups, a);
+    for (const g of [L, P]) {
+      for (const m of NON_STOP('demo')) assert.match(g.check(m), re, m.type);
+      assert.match(g.traderWhy('demo'), re); assert.match(g.noHome('demo'), /^no home: /);
+      assert.equal(g.check(none), '', 'flat: None goes, as a stop');
+      for (const m of [{ type: 'agentAccount', agent: 'demo', account: 'PROP-1', keepMode: 'shadow' }, { type: 'agentAccount', agent: 'demo', account: 'MINE-1', keepMode: 'shadow' },
+        { type: 'agentAccount', agent: 'demo', group: 'g1', keepMode: 'shadow' }, { type: 'agentAccount', agent: 'demo', account: null, group: 'g1' },
+        { type: 'agentAccount', agent: 'demo', account: null, league: true }, { type: 'agentAccount', agent: 'demo', account: 'SIM-A', keepMode: 'shadow' }])
+        assert.notEqual(g.check(m), '', 'only None: ' + JSON.stringify(m));
+    }
+    for (const notFlat of [{ owns: true }, { owns: undefined }, { position: { root: 'MNQ', qty: 1, avgPrice: 1 } }, { owns: 'false' },
+      { seats: [{ account: 'PROP-1', owns: true, position: null }] }, { seats: [{ account: 'PROP-1', owns: false, position: { root: 'MNQ', qty: -2 } }] }]) {
+      const b = Object.assign({}, a, notFlat);
+      const [L2, P2] = bothGates(accounts(), groups, b);
+      for (const g of [L2, P2]) if (g.noHome('demo')) assert.match(g.check(none), /flatten first/, JSON.stringify(notFlat));
+    }
+  }
+  /* a trader with a home is not "no home", and the flat rule does not touch his desk's own None */
+  for (const a of [agent({ account: 'PROP-1' }), agent({ account: 'MINE-1' }), agent({ account: null }), agent({ account: 'SIM-A' })]) {
+    const [L, P] = bothGates(accounts(), groups, a);
+    assert.equal(L.noHome('demo'), ''); assert.equal(P.noHome('demo'), '');
+  }
+  /* not known yet is not "no home": no pick, no accounts message */
+  assert.equal(gateWith(accounts({ personalNamed: false }), groups, agent({ account: 'LIVE-X' })).noHome('demo'), '');
+  assert.equal(gateWith(groups, agent({ account: 'LIVE-X' })).noHome('demo'), '');
+  assert.equal(AC.traderFlat(agent({ owns: false, position: { qty: 0 } })), true);
+  assert.equal(AC.traderFlat(agent({ owns: false, seats: 'x' })), false);
+});
+
+test('item 6: a move goes only in Shadow; the link sends Shadow first and the move once ChartBridge shows Shadow', () => {
+  const posted = [], subs = [];
+  const feed = { listen: p => { subs.push(p); return () => { subs.splice(subs.indexOf(p), 1); }; }, post: x => { posted.push(x); return true; } };
+  const link = AC.legionLink(feed);
+  const hear = m => { for (const s of subs.slice()) s.message(m); };
+  hear(accounts()); hear(groups); hear(agent({ mode: 'auto', account: null })); hear({ type: 'bot', account: null, mode: 'auto' });
+  const L = gateWith(accounts(), groups, agent({ mode: 'auto', account: null }), { type: 'bot', account: null, mode: 'auto' });
+  assert.match(L.check({ type: 'agentAccount', agent: 'demo', account: 'PROP-1', keepMode: 'auto' }), /goes only while the trader is in Shadow/);
+  assert.match(L.check({ type: 'botAccount', account: 'PROP-1' }), /the bot changes account only in Shadow/);
+  assert.equal(link.why({ type: 'agentAccount', agent: 'demo', account: 'PROP-1', keepMode: 'auto' }), '', 'the link will do it in two steps');
+  assert.equal(link.post({ type: 'agentAccount', agent: 'demo', account: 'PROP-1', keepMode: 'auto' }), true);
+  assert.deepEqual(posted, [{ type: 'agentMode', agent: 'demo', mode: 'shadow' }], 'Shadow first, nothing else');
+  hear(agent({ mode: 'auto', account: null }));
+  assert.equal(posted.length, 1, 'still in Auto: the move waits');
+  hear(agent({ mode: 'shadow', account: null }));
+  assert.deepEqual(posted[1], { type: 'agentAccount', agent: 'demo', account: 'PROP-1', keepMode: 'shadow' }, 'then the move, keeping Shadow');
+  hear(agent({ mode: 'shadow', account: null }));
+  assert.equal(posted.length, 2, 'once');
+  /* a move the gate refuses is never queued, and its Shadow is not sent either */
+  assert.equal(link.post({ type: 'agentAccount', agent: 'demo', account: 'MINE-1', keepMode: 'auto' }), false);
+  assert.equal(posted.length, 2);
+  /* a drop forgets a waiting move */
+  hear(agent({ mode: 'auto', account: null }));
+  assert.equal(link.post({ type: 'agentAccount', agent: 'demo', account: 'PROP-2', keepMode: 'auto' }), true);
+  assert.equal(posted.length, 3);
+  for (const s of subs.slice()) s.closed();
+  for (const m of [accounts(), groups, agent({ mode: 'shadow', account: null })]) hear(m);
+  assert.equal(posted.length, 3, 'forgotten on the drop');
+  /* the bot the same */
+  hear({ type: 'bot', account: null, mode: 'auto' });
+  assert.equal(link.post({ type: 'botAccount', account: 'PROP-1' }), true);
+  assert.deepEqual(posted[3], { type: 'botMode', mode: 'shadow' });
+  hear({ type: 'bot', account: null, mode: 'shadow' });
+  assert.deepEqual(posted[4], { type: 'botAccount', account: 'PROP-1' });
+  link.close();
+  assert.equal(subs.length, 0, 'close takes the gate off the feed');
+});
+
+test('item 6, the reviewer\'s sequence: Legion sets the bot to Auto on None, Praetorian gives it your personal account: it ends in Shadow there', () => {
+  const posted = [], subs = [];
+  const bridge = { mode: 'shadow', account: null };
+  const feed = { listen: p => { subs.push(p); return () => {}; }, post: x => {
+    posted.push(x);
+    if (x.type === 'botMode') bridge.mode = x.mode;
+    if (x.type === 'botAccount') bridge.account = x.account;   // ChartBridge keeps the bot's mode across a change
+    setTimeout(() => { for (const s of subs) s.message(Object.assign({ type: 'bot' }, bridge)); }, 0);
+    return true; } };
+  const legion = AC.legionLink(feed), praet = AC.praetorianLink(feed);
+  for (const s of subs) { s.message(accounts()); s.message(groups); s.message(Object.assign({ type: 'bot' }, bridge)); }
+  return new Promise(done => setTimeout(() => {
+    assert.equal(legion.post({ type: 'botMode', mode: 'auto' }), true, 'None: Legion may set Auto');
+    setTimeout(() => {
+      assert.equal(bridge.mode, 'auto');
+      assert.equal(praet.post({ type: 'botAccount', account: 'MINE-1' }), true);
+      setTimeout(() => {
+        assert.equal(bridge.account, 'MINE-1'); assert.equal(bridge.mode, 'shadow', 'the mode did not travel');
+        assert.deepEqual(posted.map(x => x.type + ':' + (x.mode || x.account)), ['botMode:auto', 'botMode:shadow', 'botAccount:MINE-1']);
+        done();
+      }, 20);
+    }, 10);
+  }, 10));
 });

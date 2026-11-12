@@ -931,7 +931,7 @@ test('1.27.0 the seats table: each seat\'s size, P&L, R from its own risk, rooms
 test('1.27.0 the Agent tab draws the picker from pickerChoices and a group\'s seats table; Off never flattens a group by itself', () => {
   const js = read('live', 'agent.js'), helper = require('../live/agent-helper.js');
   assert.match(js, /case 'groups': S\.groups = m; renderPanel\(\); return;/);
-  assert.match(js, /function choicesFor\(a\) \{ const c = AC\.pickerChoices\(S\.accounts, S\.groups, a, others\(\)\); return praetorian \? AC\.prChoices\(c, n => V3\.accountOk\(n\)\) : gated \? AC\.prChoices\(c, n => V3\.accountOk\(n\), \{ name: tabName, groupOk: id => V3\.groupOk\(id\), notHere: V3\.notHere \}\) : c; \}/);   // 1.48.0 Praetorian, 1.49.0 Legion's trader desk   // 1.48.0: Praetorian filters the one picker's list
+  assert.match(js, /function choicesFor\(a\) \{\s*const c = AC\.pickerChoices\(S\.accounts, S\.groups, a, others\(\)\);\s*if \(gated && a && noHome\(a\.agent\)\) return c\.map\(x => \(!x \|\| x\.kind === 'none' \|\| x\.current \? x : Object\.assign\(\{\}, x, \{ ok: false,[^\n]*\n\s*return praetorian \? AC\.prChoices\(c, n => V3\.accountOk\(n\)\) : gated \? AC\.prChoices\(c, n => V3\.accountOk\(n\), \{ name: tabName, groupOk: id => V3\.groupOk\(id\), notHere: V3\.notHere \}\) : c;/);   // 1.48.0 Praetorian, 1.49.0 Legion's trader desk   // 1.48.0: Praetorian filters the one picker's list
   assert.ok(!/AC\.accountChoices\(/.test(js), 'every account choice goes through the one picker');
   assert.match(js, /sel\.replaceChildren\(\.\.\.list\.map\(c => \{ const op = new Option\(c\.text, c\.value\); op\.disabled = !c\.ok && !c\.current; return op; \}\)\);/);
   assert.match(js, /AC\.groupTradable\(S\.accounts, S\.trading, acc\.seats\)/);
