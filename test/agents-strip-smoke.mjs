@@ -253,6 +253,7 @@ try {
   check(await p.isVisible('.bt-kill'), 'a click on the bot\'s drone opens the Bot view, its kill switch in reach');
   await p.click('#wsBotTab');
   await until(() => p.evaluate(() => !document.body.classList.contains('bt-on')), 'the Bot view closed');
+  await until(async () => (await sky()).running && await p.$(SKY + ' .ak-hit[data-key="agent:demo"]'), 'the strip laid out again', 4000);   // the review of 103, round 3: the Bot view's close, then the layout
   const ha = await hit('agent:demo');
   await p.mouse.click(ha.x, ha.y);
   await until(() => p.evaluate(() => window.workspace.agent().shown && window.workspace.agent().chosen === 'demo'), 'the agent\'s drone opens the Agent tab on him');

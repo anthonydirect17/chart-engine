@@ -111,6 +111,9 @@ gate, everything they did for prop traders, groups and the bot on a prop account
   trader's missing account key follow "only null is None" on Legion too; a leftover position is stops only on both desks;
   "on screen" counts visibility and opacity, and the agent card must be in view like the bot's; the desks' live charts
   keep their view under Legion's own prefix.
+- **Round 3:** "in view" (both desks, the cards' acknowledgement and the copilot keys) is measured from the window's top
+  edge or the top bar, whichever is lower, so a card scrolled up past the window no longer counts as in view (a smoke step
+  scrolls the agent card away: no agentSeen); a leftover seat is flattened from Legion's desk too (a smoke step).
 - **The board on Legion:** Assign hero, a group trader's Start in Shadow and a group's Clear stand-down work there; for a
   group Legion refuses, Assign hero and Clear stand-down are held back up front with the reason. The words no longer say
   Legion's trader desk is "being built".

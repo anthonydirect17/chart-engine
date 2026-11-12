@@ -23,15 +23,28 @@ let checks = 0;
 const check = (ok, m) => { checks++; if (!ok) { errors.push(m); console.error('  FAIL ' + m); } else console.log('  ok   ' + m); };
 
 const css = ['workspace.css', 'bot.css', 'agent.css'].map(f => `<link rel="stylesheet" href="${pathToFileURL(path.join(root, 'live', f))}">`).join('');
-const js = ['bot-core.js', 'agent-core.js', 'fleet.js', 'motion.js', 'agent-grid.js', 'bot.js', 'agent.js', 'legion-desk.js'].map(f => `<script src="${pathToFileURL(path.join(root, 'live', f))}"></script>`).join('\n');
+const js = ['bot-core.js', 'agent-core.js', 'fleet.js', 'motion.js', 'agent-helper.js', 'agent-grid.js', 'bot.js', 'agent.js', 'legion-desk.js'].map(f => `<script src="${pathToFileURL(path.join(root, 'live', f))}"></script>`).join('\n');
 const html = `<!doctype html><html lang="en"><head><meta charset="utf-8">${css}
 <style>html,body{margin:0}body{display:block;overflow:auto}#prAg,#prBt{display:none}</style></head>
 <body><div class="ws-top"><span>SAMPLE DATA: made-up accounts and traders</span></div>
 <section class="ag-view" id="prAg"></section><section class="bt-view" id="prBt"></section>
-<details id="fold"><summary>Traders (Legion's trader desk)</summary><div id="lgd" style="height:900px"></div></details>
+<details id="fold"><summary>Traders (Legion's trader desk)</summary><div id="lgd" style="height:900px"></div></details><div id="below" style="height:3000px"></div>
 ${js}
 <script>
   window.posted = []; window.subs = [];
+  /* a stand-in PC helper (made up, as test/praetorian-smoke.mjs has): GET /status, POST /on, /off, each call kept */
+  window.helperCalls = []; window.flattened = [];
+  window.helperState = { demo: { on: false, running: false, why: 'off', build: 'sample-build-1', runningBuild: null, hero: null, since: null, autoOn: '', cap: null, lastExit: null, spend: { session: 0, overall: 0, date: '2026-11-12' } } };
+  const realFetch = window.fetch;
+  window.fetch = (u, o) => {
+    const url = String(u), at = url.indexOf(':8767/'), m = at > 0 && (url.startsWith('http://localhost') || url.startsWith('http://127.0.0.1')) ? [null, null, '/' + url.slice(at + 6).split(/[?#]/)[0]] : null;
+    if (!m) return realFetch(u, o);
+    const route = ((o && o.method) || 'GET') + ' ' + m[2];
+    window.helperCalls.push(route);
+    const body = route === 'GET /status' ? { v: 1, agents: window.helperState, builds: [{ build: 'sample-build-1', stamp: 'aaaaaaaaaaaa', hero: 'Demo', here: true, shadowOk: true, trades: 40, meanR: 0.2, dollars: 900, frozenAt: '2026-10-05' }],
+      buildsNote: null, bar: { min_trades: null, min_mean_r: null }, barSet: false, session: '2026-11-12' } : { ok: true };
+    return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) });
+  };
   const AF = { listen: h => { window.subs.push(h); return () => {}; }, post: m => { window.posted.push(m); return true; }, send: m => { window.posted.push(['send', m]); return true; }, sendOrder: m => { window.posted.push(['order', m]); return true; }, limit: () => null };
   window.feed = m => { for (const h of window.subs) h.message(m); };
   const mem = window.mem = new Map(), storage = { getItem: k => (mem.has(k) ? mem.get(k) : null), setItem: (k, v) => mem.set(k, String(v)), removeItem: k => mem.delete(k) };
@@ -40,7 +53,7 @@ ${js}
   window.prBot = window.BotDesk.create({ v3: pr, storage, els: { view: document.getElementById('prBt') }, onTab: () => {} });
   window.fromLegion = [];   // what Legion's copy posted (the same feed, counted apart)
   const AFL = Object.assign({}, AF, { post: m => { window.fromLegion.push(m.type); return AF.post(m); } });
-  window.legion = window.LegionDesk.mount(document.getElementById('lgd'), { v3: AFL, storage });
+  window.legion = window.LegionDesk.mount(document.getElementById('lgd'), { v3: AFL, storage, flatten: (account, root) => { window.flattened.push(account + ' ' + root); return true; } });
 </script></body></html>`;
 const file = path.join(SHOTS, 'legion-desk-smoke.html');
 fs.writeFileSync(file, html);
@@ -91,6 +104,17 @@ try {
   await page.evaluate(() => { document.getElementById('fold').style.opacity = ''; window.legion.show(true); }); await sleep(400);
   check((await posted()).filter(x => /^agentSeen:demo/.test(x)).length === 1, 'the fold opens: agentSeen once: ' + JSON.stringify(await posted()));
   await feed({ type: 'agentProposal', agent: 'demo', id: 'q1', at: Date.now(), account: 'PROP-1', sim: false, root: 'MNQ', side: 'buy', kind: 'limit', price: 25000, qty: 1, stopTicks: 12, targetTicks: 24, expireSec: 60, setup: 'Sample', reason: 'Sample', expiresAt: Date.now() + 60000, state: 'ended', end: 'withdrawn', seenAt: Date.now(), answeredAt: null });
+  await feed(agent());
+  await clear();
+  /* answers B4-4, G4: the fold open and the desk shown, but the agent card scrolled off screen: no agentSeen; back in view: one */
+  await feed(agent({ mode: 'copilot' }));
+  await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+  await feed({ type: 'agentProposal', agent: 'demo', id: 'q2', at: Date.now(), account: 'PROP-1', sim: false, root: 'MNQ', side: 'sell', kind: 'limit', price: 25010, qty: 1, stopTicks: 12, targetTicks: 24, expireSec: 60, setup: 'Sample', reason: 'Sample: another made-up level', expiresAt: Date.now() + 60000, state: 'open', seenAt: null, answeredAt: null });
+  await sleep(500); await page.evaluate(() => window.legion.show(true)); await sleep(300);
+  check(!(await posted()).some(x => /^agentSeen/.test(x)), 'G4: the agent card scrolled off screen: no agentSeen: ' + JSON.stringify(await posted()));
+  await page.evaluate(() => { window.scrollTo(0, 0); window.legion.show(true); }); await sleep(400);
+  check((await posted()).filter(x => /^agentSeen:demo/.test(x)).length === 1, 'G4: scrolled back into view: agentSeen once: ' + JSON.stringify(await posted()));
+  await feed({ type: 'agentProposal', agent: 'demo', id: 'q2', at: Date.now(), account: 'PROP-1', sim: false, root: 'MNQ', side: 'sell', kind: 'limit', price: 25010, qty: 1, stopTicks: 12, targetTicks: 24, expireSec: 60, setup: 'Sample', reason: 'Sample', expiresAt: Date.now() + 60000, state: 'ended', end: 'withdrawn', seenAt: Date.now(), answeredAt: null });
   await feed(agent());
   await clear();
   check(await page.evaluate(() => !document.querySelector('#lgd [data-act="popout"]') && !document.querySelector('.ws-top [data-parity]')), 'no Pop out in Legion\'s copies, and the page\'s top bar keeps no parity tags of theirs');
@@ -147,6 +171,29 @@ try {
   check((await posted()).length === 0, 'the break: Copilot forced on Legion\'s desk for a personal trader sends nothing');
   await page.click(L + ' [data-k="kill"]'); await sleep(200);
   check(JSON.stringify(await posted()) === JSON.stringify(['agentKill:demo:true']), 'Kill switch ON from Legion\'s desk goes for anyone');
+
+  /* answers B4-4, G3 on Legion's desk: a trader on None with a leftover seat on PROP-1: stops only, said; Off asks, "Flatten and
+     turn off" sends Shadow, then the flatten of that seat only, then Off once flat */
+  await page.evaluate(() => { Object.assign(window.helperState.demo, { on: true, running: true, why: 'on', runningBuild: 'sample-build-1' }); window.flattened.length = 0; window.helperCalls.length = 0; });
+  const left = (mode, qty) => agent({ account: null, mode, killed: false, owns: !!qty, position: qty ? { root: 'MNQ', qty, avg: 25000 } : null, seats: [{ account: 'PROP-1', owns: !!qty, position: qty ? { root: 'MNQ', qty, avgPrice: 25000 } : null }] });
+  await feed(left('auto', 1));
+  await page.waitForFunction(() => window.helperCalls.includes('GET /status'), null, { timeout: 8000 }).catch(() => {});
+  await sleep(3600);
+  check(/a leftover position on a prop account: stop and flatten it first/.test(await page.$eval(L + ' [data-k="prWhy"]', e => e.textContent)), 'G3 (Legion): a leftover position: held back, with the words');
+  await clear(); await page.evaluate(() => { window.fromLegion.length = 0; });
+  await page.evaluate(L2 => { const b = document.querySelector(L2 + ' [data-k="hBtns"] [data-onoff="off"]'); b.disabled = false; b.click(); }, L);
+  await page.waitForSelector(L + ' [data-act="hFlatOff"]', { state: 'visible', timeout: 5000 }).catch(() => {});
+  await page.click(L + ' [data-act="hFlatOff"]').catch(() => {});
+  await sleep(300);
+  check(JSON.stringify(await page.evaluate(() => window.fromLegion)) === JSON.stringify(['agentMode']) && JSON.stringify(await posted()) === JSON.stringify(['agentMode:demo:shadow']), 'G3 (Legion): "Flatten and turn off" sends Shadow first: ' + JSON.stringify(await posted()));
+  await feed(left('shadow', 1));
+  await page.waitForFunction(() => window.flattened.length > 0, null, { timeout: 5000 }).catch(() => {});
+  check(JSON.stringify(await page.evaluate(() => window.flattened)) === JSON.stringify(['PROP-1 MNQ']), 'G3 (Legion): then the flatten of that seat only (PROP-1 MNQ): ' + JSON.stringify(await page.evaluate(() => window.flattened)));
+  await feed(agent({ account: null, mode: 'shadow', killed: false, owns: false, position: null, seats: [] }));
+  await page.waitForFunction(() => window.helperCalls.includes('POST /off'), null, { timeout: 5000 }).catch(() => {});
+  check(await page.evaluate(() => window.helperCalls.includes('POST /off')) && JSON.stringify(await posted()) === JSON.stringify(['agentMode:demo:shadow']), 'G3 (Legion): then Off once flat; nothing but Shadow was sent to ChartBridge');
+  await page.evaluate(() => { Object.assign(window.helperState.demo, { on: false, running: false, why: 'off', runningBuild: null }); });
+  await feed(agent({ account: 'PROP-1' }));
 
   /* the Bot side: the bot on a prop account in Copilot, a proposal */
   await page.click('#lgd .lgd-seg [data-side="bot"]');

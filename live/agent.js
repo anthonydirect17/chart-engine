@@ -71,7 +71,7 @@ function create(o) {
   const KP = embedded && typeof o.keyPrefix === 'string' ? o.keyPrefix : '';
   const K = { board: KP + KEYS.board, chosen: KP + KEYS.chosen, chart: KP + KEYS.chart, fills: KEYS.fills, feed: KP + KEYS.feed, risk: KEYS.risk };
   /* the card whole in the window, under the top bar (the Bot desk's own test, bot.js inView) */
-  const inView = el => { const r = el.getBoundingClientRect(), bar = document.querySelector('.ws-top'), top = bar ? bar.getBoundingClientRect().bottom : 0; return r.height > 0 && r.top >= top - 1 && r.bottom <= innerHeight + 1 && r.left >= -1 && r.right <= innerWidth + 1; };
+  const inView = el => { const r = el.getBoundingClientRect(), bar = document.querySelector('.ws-top'), top = Math.max(0, bar ? bar.getBoundingClientRect().bottom : 0); return r.height > 0 && r.top >= top - 1 && r.bottom <= innerHeight + 1 && r.left >= -1 && r.right <= innerWidth + 1; };
   const onScreen = el => !!el && el.isConnected && el.getClientRects().length > 0 && (typeof el.checkVisibility !== 'function' || el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true, opacityProperty: true, visibilityProperty: true }));   // round 2, F3: visibility and opacity too
   const agents = AC.createAgents(), props = AC.createProposals(), feed = AC.createFeed();
   const readJson = k => { try { return JSON.parse(storage.getItem(k)); } catch (e) { return null; } };
