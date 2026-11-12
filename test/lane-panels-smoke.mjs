@@ -98,6 +98,41 @@ try {
   await wait(1500);
   check(await p.evaluate(() => document.getElementById('laneC').innerHTML === window.frozen), 'the mount that was taken away is not drawn again');
   check(JSON.stringify((await lane('laneB')).in) === '["SIM-H"]', 'and the mount on Apex goes on');
+
+  // ---- one fixed group with the narrow feed (a Legion lane): what it shows, what it sends, and the lock
+  await p.evaluate(() => {
+    window.lockWhy = '';
+    const el = document.getElementById('laneC'); el.innerHTML = '';
+    window.fixed = window.workspace.lanePanel(el, 'laneF', { group: 'g1', locked: () => window.lockWhy });
+  });
+  await until(async () => (await p.$$('#laneC .ma-lane.in [data-chip]')).length >= 3, 'the fixed panel drawn');
+  const fx = await p.evaluate(() => { const q = x => document.querySelector('#laneC ' + x); return {
+    tabs: q('.ma-tabs') ? q('.ma-tabs').hidden : null, select: !!q('[data-ma="group"]'), settings: !!q('[data-ma="settings"]'), create: !!q('[data-ma="new"]'), risk: !!q('[data-ma="risk"]'),
+    name: (q('.ma-bar .ma-lname') || {}).textContent, narrow: !!window.fixed.feed && typeof window.fixed.feed.send === 'undefined' && typeof window.fixed.feed.sendOrder === 'undefined' }; });
+  check(fx.tabs === true && !fx.select && !fx.settings && !fx.create && !fx.risk && fx.name === 'Lucid', 'one fixed group: its name, no group list, no Copier, no Group settings, no New group, no risk box: ' + JSON.stringify(fx));
+  check(fx.narrow, 'it holds the narrow feed: no send and no sendOrder');
+  const n2 = (await groupMsgs()).length;
+  await p.click('#laneC [data-chip="SIM-D"]');
+  await until(async () => ((await groupMsgs()).slice(n2)).length === 1, 'a move from the fixed panel');
+  const s3 = (await groupMsgs()).slice(n2);
+  check(s3.length === 1 && s3[0].type === 'memberBench' && s3[0].account === 'SIM-D', 'moves are free while the lane is in Shadow and flat: one memberBench: ' + JSON.stringify(s3));
+  await wait(800);
+  // forced sends through the narrow feed: refused by name, nothing reaches ChartBridge
+  const n3 = (await groupMsgs()).length;
+  const forced = await p.evaluate(() => { const f = window.fixed.feed; return [f.post({ type: 'groupSave', cid: 'x1', group: 'g1', name: 'Renamed', accountType: 'funded' }), f.post({ type: 'groupDelete', cid: 'x2', group: 'g1' }), f.post({ type: 'accountGroup', cid: 'x3', account: 'SIM-E', group: 'g1' }), window.fixed.refused.slice()]; });
+  await wait(800);
+  check(forced[0] === false && forced[1] === false && forced[2] === false && JSON.stringify(forced[3]) === '["groupSave","groupDelete","accountGroup"]' && (await groupMsgs()).length === n3, 'groupSave, groupDelete and a bare accountGroup through it are refused by name and never reach ChartBridge: ' + JSON.stringify(forced[3]));
+  // the lock: every chip locked, a click and a drag send nothing, the reason is shown
+  await p.evaluate(() => { window.lockWhy = 'The lane is in Auto: switch Armed off before an account moves.'; });
+  await until(async () => p.evaluate(() => /in Auto/.test((document.querySelector('#laneC [data-ma="lockwhy"]') || {}).textContent || '')), 'the reason shown');
+  const n4 = (await groupMsgs()).length;
+  const locked = await p.evaluate(() => [...document.querySelectorAll('#laneC [data-chip]')].every(c => c.classList.contains('locked') && c.getAttribute('draggable') === 'false'));
+  await p.click('#laneC [data-chip="SIM-A"]', { force: true });
+  await p.dragAndDrop('#laneC [data-chip="SIM-B"]', '#laneC .ma-lane.bench', { force: true });
+  await wait(800);
+  check(locked && (await groupMsgs()).length === n4, 'locked: every chip locked and not draggable; a click and a drag sent nothing');
+  check(/in Auto: switch Armed off/.test(await p.evaluate(() => (document.querySelector('#laneC .ma-toast:last-child') || {}).textContent)), 'and the panel\'s line says why');
+  await p.screenshot({ path: path.join(out, 'lane-panel-fixed-locked.png') });
   check(errors.filter(e => e.startsWith('pageerror')).length === 0, 'no page error');
 } finally {
   await browser.close();

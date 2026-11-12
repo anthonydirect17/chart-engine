@@ -3623,7 +3623,14 @@ window.workspace = { get layout() { return layout; }, panels: () => panels.map(p
   leagueGhosts: () => [...LG.overlays.keys()],
   /* 1.37.0: the Multi-Account panel's state (its tab, group, toast), for the smokes */
   /* 1.47.0: a second Multi-Account panel in any element (the smokes; Legion's lanes are mounted the same way) */
-  lanePanel: (el, key, opts) => mountLanePanel(el, key, AF, opts),
+  lanePanel: (el, key, opts) => {
+    const o = opts || {}, FC = window.FleetCore;
+    if (!o.group) return mountLanePanel(el, key, AF, null);                       // the whole panel, as on the grid (the two-mounts proof)
+    if (!FC || !AF) return null;
+    const feed = FC.laneFeed(AF, o.locked);                                        // one fixed group: the narrow feed, never AF itself
+    const made = mountLanePanel(el, key, feed, { group: o.group, locked: o.locked });
+    return made ? Object.assign(made, { refused: feed.refused, feed }) : null;
+  },
   multi: () => { const v = [...views.values()].find(x => x.panel.type === 'multi' && x.accountPage); return v ? { tab: v.accountPage.state.tab, gid: v.accountPage.state.gid, toast: v.accountPage.state.toast } : null; },
   /* 1.36.0: the Agents strip (read only) and how many times this window read the league */
   agentsStrip: () => { const v = stripViews()[0]; return v ? v.strip.state() : null; },

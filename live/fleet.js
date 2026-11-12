@@ -503,12 +503,56 @@ function maySend(m) {
   return false;
 }
 
+/* ---------------------------------------------------------------- a lane's own Multi-Account panel (1.47.0, the reuse map) */
+/**
+ * Why no account may move into, out of or within a lane now ('' when moves are free): the lane's trader is in Auto, is not
+ * known to be in Shadow, or holds a position, a working entry or a proposal (in Shadow it has no proposal). The conditions
+ * under which ChartBridge 0.6.21 refuses a new pick. ChartBridge itself does NOT refuse accountGroup or memberBench for
+ * these (it refuses a bench only while that one account is not flat), so this is the page's rule until ChartBridge has it.
+ */
+function laneLock(l) {
+  if (!plainObj(l) || !Array.isArray(l.traders) || !l.traders.length) return '';
+  if (l.traders.length > 1) return 'Two traders are on this lane\'s groups: no account moves here until one is taken off (the Agent tab).';
+  if (l.auto || l.mode === 'auto') return 'The lane is in Auto: switch Armed off before an account moves.';
+  if (l.exposed) return 'The lane\'s trader holds a position or a working entry: an account moves once it is flat.';
+  if (l.mode !== 'shadow') return 'The lane\'s trader is not in Shadow (' + (l.modeText || 'not known') + '): an account moves only while it is.';
+  return '';
+}
+/** The one message a lane's panel may post itself: memberBench with exactly its keys. (Its join goes through accountGroup.) */
+function laneMaySend(m) {
+  if (!plainObj(m) || m.type !== 'memberBench') return false;
+  return Object.keys(m).every(k => ['type', 'cid', 'account', 'benched'].includes(k)) && typeof m.account === 'string' && m.account.length > 0 && m.account.length <= 60 &&
+    typeof m.benched === 'boolean' && (!own(m, 'cid') || (typeof m.cid === 'string' && m.cid.length > 0 && m.cid.length <= 40));
+}
+/**
+ * THE NARROW FEED a lane's Multi-Account panel is handed in place of the page's whole feed (build answers 18, points 1 to 3).
+ * It passes what the panel reads (S, joinRefusal, joinPlan, joinWords) and two sends: post() for memberBench only, and
+ * accountGroup() (a join with its question's answers, or a removal). Every other send is refused and its name kept in
+ * `refused`: a group cannot be renamed, retyped, re-risked or deleted from inside a lane, and nothing else of the feed
+ * (send, sendOrder, the copier, limits) is there at all. locked(): '' or why no move goes out now; with a reason both sends
+ * are refused here too, whatever the panel shows.
+ */
+function laneFeed(feed, locked) {
+  const refused = [], why = () => { try { const w = typeof locked === 'function' ? locked() : ''; return typeof w === 'string' ? w : 'not known'; } catch (e) { return 'not known'; } };
+  const no = name => { refused.push(String(name)); if (refused.length > 50) refused.shift(); return false; };
+  const out = {
+    get S() { return feed.S; },
+    joinRefusal: (name, g) => feed.joinRefusal(name, g),
+    joinPlan: (name, g, acc) => feed.joinPlan(name, g, acc),
+    joinWords: j => feed.joinWords(j),
+    post: m => (laneMaySend(m) && !why() ? feed.post(m) === true : no(plainObj(m) && typeof m.type === 'string' ? m.type : 'not a message')),
+    accountGroup: (name, group, highText, rules, useCid) => (typeof name === 'string' && name && (group === null || typeof group === 'string') && !why() ? feed.accountGroup(name, group, highText, rules, useCid) === true : no('accountGroup')),
+    refused,
+  };
+  return Object.freeze(out);
+}
+
 /** Does ChartBridge's own answer to Kill all say something was not stopped? (PROP 1: then the tab marks it bad.) */
 const badAnswer = text => /NOT STOPPED|FAILED|could NOT/.test(String(text || ''));
 /** "09:41:07" of a Date (the PC's own clock), for the time in front of a Kill all answer. */
 const clock = d => [d.getHours(), d.getMinutes(), d.getSeconds()].map(x => String(x).padStart(2, '0')).join(':');
 
-return { PICK_MIN, STAGES, lanes, armState, armMsgs, armWords, pickChoices, pickMsg, maySend, KILL_MIN, SWITCH_MIN, DAYSTOP_MIN, ROSTER_MIN, ROSTER_FORMAT, LINEUP_FORMAT, CONFIRM_MS, ARM_MS, ANSWER_WAIT_MS, ROSTER_WAIT_MS, MAX_CARDS, MAX_MEMBERS, MAX_NOT_SHOWN, MODE_NAME, atLeast, usd, signed, stageCard, rosterCards, rosterProblem,
+return { laneLock, laneMaySend, laneFeed, PICK_MIN, STAGES, lanes, armState, armMsgs, armWords, pickChoices, pickMsg, maySend, KILL_MIN, SWITCH_MIN, DAYSTOP_MIN, ROSTER_MIN, ROSTER_FORMAT, LINEUP_FORMAT, CONFIRM_MS, ARM_MS, ANSWER_WAIT_MS, ROSTER_WAIT_MS, MAX_CARDS, MAX_MEMBERS, MAX_NOT_SHOWN, MODE_NAME, atLeast, usd, signed, stageCard, rosterCards, rosterProblem,
   kindOf, seatsKind, dayMark, traderAccounts, statusText, traders, propAccounts, killAllState, killAllMsg, autoLine, badAnswer, clock };
 });
 
