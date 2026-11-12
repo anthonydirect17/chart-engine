@@ -1372,8 +1372,8 @@ const PR_WHERE = 'it is set up from Legion\'s trader desk; from here you can onl
  * string) and the account of EVERY seat it has, a group's or a leftover one (ChartBridge keeps a seat that still holds its trade
  * when the trader goes to None). Null when the page cannot read the shape: an `account` that is neither null nor a non-empty
  * string, a `group` that is neither null nor a plain object, `seats` that are not a list, or a seat without a string account.
- * Not known is refused (only the stops go). FleetCore.traderAccounts and accountsReadable (Legion's strip, builder 1's
- * chart-engine 104) read the same rule; a test should feed both the same shapes once 104 is on this.
+ * Not known is refused (only the stops go). FleetCore.traderAccounts and accountsReadable (Legion's strip and lanes,
+ * live/fleet.js) read the same rule; test/fleet.test.js ("answers 27, 104-E") feeds both the same shapes.
  */
 function gateAccounts(agentMsg) {
   if (!plainObj(agentMsg)) return null;

@@ -3775,6 +3775,11 @@ function startFleet() {
     /* 1.48.0 (Legion Setup): a lane's accounts are the Multi-Account panel itself, one fixed group, the narrow feed (FleetCore.laneFeed),
        never the page's feed; the tab hands the group and the lane's lock, the page mounts */
     lanePanel: (el, key, opts) => (opts && typeof opts.group === 'string' && opts.group && typeof opts.locked === 'function' ? mountLegionLane(el, key, opts) : null),
+    /* the Traders fold of Legion Setup: builder 4's Legion trader desk (chart-engine 103), handed the page's own feed (AF): the desk
+       wraps it in Legion's gate itself and never posts on AF directly. None until live/legion-desk.js is on the page. */
+    traderDesk: el => (window.LegionDesk && typeof window.LegionDesk.mount === 'function' && el
+      ? window.LegionDesk.mount(el, { v3: AF, feed: hub, headers: () => (PIN ? PIN.headers() : {}), storage: store, storagePrefix: PREFIX, flatten: (a, r) => core.flattenAgent(a, r) })
+      : null),
     onTab: on => {
       document.body.classList.toggle('fl-on', on);
       if (on) { closePops(); restoreMax(); if (botDesk && botDesk.shown()) botDesk.showTab(false); if (agentDesk && agentDesk.shown()) agentDesk.showTab(false); if (leagueView && leagueView.shown()) leagueView.showTab(false); }   // one tab at a time

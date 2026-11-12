@@ -136,7 +136,8 @@ function traderAccounts(agent) {
  *  { account: name }. Anything else is "the page cannot tell" (answers 28, R4-1; the same reader as 104's). */
 function accountsReadable(a) {
   if (!plainObj(a)) return false;
-  const acct = a.account === undefined || a.account === null || (typeof a.account === 'string' && a.account.length > 0);
+  // answers 34, 104-E: the same rule as the gates' AgentCore.gateAccounts: a missing `account` key is not None, it is not known
+  const acct = own(a, 'account') && (a.account === null || (typeof a.account === 'string' && a.account.length > 0));
   const grp = a.group === undefined || a.group === null || (plainObj(a.group) && typeof a.group.id === 'string' && a.group.id.length > 0);
   const seats = a.seats === undefined || a.seats === null || (Array.isArray(a.seats) && a.seats.every(x => plainObj(x) && typeof x.account === 'string' && x.account.length > 0));
   return acct && grp && seats;
@@ -182,15 +183,19 @@ function traders(agents, accountsMsg, version) {
   for (const a of (Array.isArray(agents) ? agents : [])) {
     if (!plainObj(a) || typeof a.agent !== 'string') continue;
     const names = traderAccounts(a);
-    const kind = seatsKind(names.map(n => { const row = idx.get(n.toLowerCase()); return row ? kindOf(row) : (accountsMsg && accountsMsg.personalNamed === true ? 'unlisted' : ''); }));
+    const kind = !accountsReadable(a) ? '' : seatsKind(names.map(n => { const row = idx.get(n.toLowerCase()); return row ? kindOf(row) : (accountsMsg && accountsMsg.personalNamed === true ? 'unlisted' : ''); }));
     const r = plainObj(a.rules) ? a.rules : {};
     const mode = own(MODE_NAME, a.mode) ? a.mode : '';
     const can = a.enabled !== false && !a.killed && !a.standDown;
     out.push({
       id: a.agent, name: str(a.name, 40) || a.agent, build: str(a.build, 40), mode, modeText: mode ? MODE_NAME[mode] : 'Not known',
       connected: a.connected === true, autoProp: can && mode === 'auto' && (kind === 'prop' || kind === 'propsim' || kind === 'unlisted' || kind === 'mixed'),
+      cannotTell: can && mode === 'auto' && !accountsReadable(a), readsAccounts: accountsReadable(a), grouped: plainObj(a.group),   // 104-B and 104-D (answers 27)
       status: statusText(a), tone: a.enabled === false ? 'off' : a.killed ? 'killed' : a.standDown ? 'standDown' : !a.connected ? 'lost' : 'on',
-      accounts: names, accountText: !names.length ? 'None' : plainObj(a.group) ? 'Group ' + (str(a.group.name, 40) || str(a.group.id, 12)) + ': ' + names.join(', ') : names[0],
+      // answers B4-8, F1: a trader whose accounts the page cannot read never shows as None, nor as only the seats it can read
+      accounts: names, accountText: !accountsReadable(a) ? 'Cannot tell its accounts' + (names.length ? ' (it reads ' + names.join(', ') + ', and not the rest)' : '')
+        : !names.length ? 'None' : plainObj(a.group) ? 'Group ' + (str(a.group.name, 40) || str(a.group.id, 12)) + ': ' + names.join(', ')
+        : names.length > 1 ? names[0] + ', left over: ' + names.slice(1).join(', ') : names[0],   // 104-D: every account, as Kill all counts them
       kind, window: str(r.entryFrom, 5) && str(r.entryUntil, 5) ? str(r.entryFrom, 5) + ' to ' + str(r.entryUntil, 5) : '', flatAt: str(r.flatAt, 5),
       marketEntry: r.marketEntry === true, noTarget: r.noTarget === true, switchesKnown: atLeast(version, SWITCH_MIN),
       dayStop: isNum(a.dayStop) && a.dayStop > 0 ? a.dayStop : null, dayStopKnown: atLeast(version, DAYSTOP_MIN),
@@ -402,7 +407,12 @@ function autoLine(rows, heard) {
   const parts = [];
   if (plain.length) parts.push('In Auto on prop accounts: ' + plain.map(nm).join(', '));
   if (unl.length) parts.push('In Auto on an account NinjaTrader does not list now (Kill all stops it): ' + unl.map(nm).join(', '));
-  if (mixed.length) parts.push('In Auto on a group with your personal account in it (Kill all will NOT stop it: stop it on the Agent tab): ' + mixed.map(nm).join(', '));
+  const mixedGroup = mixed.filter(t => t.grouped), mixedOne = mixed.filter(t => !t.grouped);
+  if (mixedGroup.length) parts.push('In Auto on a group with your personal account in it (Kill all will NOT stop it: stop it on the Agent tab): ' + mixedGroup.map(nm).join(', '));
+  if (mixedOne.length) parts.push('In Auto on your personal account with a prop account left over (Kill all will NOT stop it: stop it on the Agent tab): ' + mixedOne.map(nm).join(', '));   // 104-D: not a group
+  // 104-B (answers 27): never quiet about a trader in Auto whose accounts the page cannot read
+  const cannot = rows.filter(t => t.cannotTell);
+  if (cannot.length) parts.push('In Auto on accounts the page cannot read (Kill all may not reach it): ' + cannot.map(nm).join(', '));
   if (parts.length) return parts.join('. ');
   return rows.length ? 'No trader is in Auto on a prop account' : 'No traders yet';
 }
@@ -468,11 +478,25 @@ function lanes(agents, groupsMsg, accountsMsg, version, cards) {
     const kinds = L.seats.map(n => { const row = idx.get(n.toLowerCase()); return row ? kindOf(row) : ''; });
     L.sim = kinds.length > 0 && kinds.every(k => k === 'sim');
     L.simCount = kinds.filter(k => k === 'sim').length;
+    /* answers B4-8, F2 (rule 12, A28-1's rule for Armed too): no lane is armed while ANY other trader holds, or may hold, one of
+       its accounts (the group's members and every account of its own trader), in any mode: a trader the page cannot read may be
+       on any of them. The reason names the trader and the place, never the account. */
+    const mine = new Set(all.concat(Array.isArray(g.members) ? g.members.filter(m => typeof m === 'string' && m) : []).map(n => n.toLowerCase()));
+    const sharing = list.filter(x => x !== a).map(x => {
+      const who = str(x.agent, 40);
+      if (!accountsReadable(x)) return who + ': the page cannot read its accounts, so it may be on one of this lane\'s accounts';
+      const acct = typeof x.account === 'string' && mine.has(x.account.toLowerCase());
+      const seat = (Array.isArray(x.seats) ? x.seats : []).some(y => plainObj(y) && typeof y.account === 'string' && mine.has(y.account.toLowerCase()));
+      return acct ? who + ' has one of this lane\'s accounts as its own account' : seat ? who + (plainObj(x.group) ? ' has a seat of its own group' : ' has a seat left over') + ' on one of this lane\'s accounts' : '';
+    }).filter(Boolean);
+    const shareWhy = sharing.length ? 'Another trader is on, or may be on, one of its accounts (in any mode), and a lane is never armed beside another trader: ' + sharing.join('; ') : '';
     const r = plainObj(a.rules) ? a.rules : {};
     const allowed = AGC && typeof AGC.modesAllowed === 'function' && typeof AGC.groupTradable === 'function'
       ? AGC.modesAllowed({ tradable: AGC.groupTradable(accountsMsg, null, L.seats), account: L.groupName }).auto : { ok: false, why: 'The page\'s mode rules (agent-core.js) are not loaded' };
     L.why = !L.pickKnown ? 'The pick needs ChartBridge ' + PICK_MIN + ' or later (this one is ' + (version || 'not known') + ')'
       : !ID_RX.test(a.agent) ? 'Its id is not one ChartBridge takes'
+      : !accountsReadable(a) ? 'The page cannot tell its accounts (what ChartBridge sent is not an account, a group or a list of seats)'
+      : shareWhy ? shareWhy
       : a.enabled === false ? 'The trader is off in ChartBridge'
       : a.killed ? 'Its kill switch is on (it is released on the Agent tab, by you)'
       : a.standDown ? 'It is stood down: ' + str(a.standDown, 300)
@@ -503,8 +527,11 @@ function lanes(agents, groupsMsg, accountsMsg, version, cards) {
 function outsideAuto(ls, agents, accountsMsg, version) {
   const onLane = new Set([].concat.apply([], (ls || []).map(l => l.traders)));
   const rows = traders(agents, accountsMsg, version).filter(t => t.mode === 'auto' && t.tone !== 'off' && t.tone !== 'killed' && t.kind !== 'personal' && !onLane.has(t.id));
-  const where = t => (t.kind === 'sim' ? 'on a Sim account (Kill all does not reach it)' : t.kind === 'prop' || t.kind === 'propsim' || t.kind === 'mixed' ? 'on a prop account'
-    : t.kind === 'unlisted' ? 'on an account NinjaTrader does not list now' : 'on an account ChartBridge has not marked prop or personal (Kill all may not reach it)');
+  const where = t => (t.kind === 'sim' ? 'on a Sim account (Kill all does not reach it)' : t.kind === 'prop' || t.kind === 'propsim' ? 'on a prop account'
+    : t.kind === 'mixed' ? 'on a prop account and your personal account (Kill all will NOT stop it)'   // 104-D (answers 27)
+    : t.kind === 'unlisted' ? 'on an account NinjaTrader does not list now'
+    : t.readsAccounts === false ? '(the page cannot read its accounts; Kill all may not reach it)'   // answers B4-8, F4
+    : 'on an account ChartBridge has not marked prop or personal (Kill all may not reach it)');
   const out = rows.map(t => t.id);
   out.words = rows.map(t => t.id + ' ' + where(t));
   return out;
@@ -658,6 +685,9 @@ function rosterFamilies(cards, ls, filter, find) {
  * with no trader is free only once heard. A proposal exists only in Copilot, so "not in Shadow" covers it (F5).
  */
 const NOT_KNOWN = 'Not known yet: ChartBridge has not said this lane\'s traders and groups on this connection, so no account moves.';
+/** The same lock, when the cause is a trader the page cannot read (answers 34, A33-2): it starts the same way, so it is locked
+ *  wherever NOT_KNOWN is. */
+const NOT_READABLE = 'Not known yet: a trader on this connection could not be read: the lane stays locked until it can.';
 function laneLock(l, heard) {
   if (heard !== true || !plainObj(l) || !Array.isArray(l.traders)) return NOT_KNOWN;
   if (!l.traders.length) return '';
@@ -681,7 +711,7 @@ function groupLock(gid, list, heard, groupsMsg) {
   if (typeof gid !== 'string' || !gid) return NOT_KNOWN;
   const g = plainObj(groupsMsg) && Array.isArray(groupsMsg.list) ? groupsMsg.list.find(x => plainObj(x) && x.id === gid) : null;
   if (!g || !Array.isArray(g.members)) return NOT_KNOWN;
-  if (list.some(a => !accountsReadable(a))) return NOT_KNOWN;
+  if (list.some(a => !accountsReadable(a))) return NOT_READABLE;
   const members = new Set(g.members.filter(m => typeof m === 'string').map(m => m.toLowerCase()));
   const name = a => str(a.agent, 40) || 'a trader';
   const onIt = a => plainObj(a.group) && a.group.id === gid;
@@ -863,7 +893,7 @@ const badAnswer = text => /NOT STOPPED|FAILED|could NOT/.test(String(text || '')
 /** "09:41:07" of a Date (the PC's own clock), for the time in front of a Kill all answer. */
 const clock = d => [d.getHours(), d.getMinutes(), d.getSeconds()].map(x => String(x).padStart(2, '0')).join(':');
 
-return Object.freeze({ modeRulesLoaded, NOT_KNOWN, groupLock, accountsReadable, MAX_FILLS, LANE_COLOR, LANE_LETTER, propRows, todayOf, liveTiles, cleanFill, laneMarks, traderDays, laneRunner, readableName, rosterFamilies, FILTERS, laneLock, laneMaySend, laneFeed, PICK_MIN, STAGES, lanes, outsideAuto, armState, armMsgs, armWords, pickChoices, pickMsg, maySend, KILL_MIN, SWITCH_MIN, DAYSTOP_MIN, ROSTER_MIN, ROSTER_FORMAT, LINEUP_FORMAT, CONFIRM_MS, ARM_MS, ANSWER_WAIT_MS, ROSTER_WAIT_MS, MAX_CARDS, MAX_MEMBERS, MAX_NOT_SHOWN, MODE_NAME, atLeast, usd, signed, stageCard, rosterCards, rosterProblem,
+return Object.freeze({ modeRulesLoaded, NOT_KNOWN, NOT_READABLE, groupLock, accountsReadable, MAX_FILLS, LANE_COLOR, LANE_LETTER, propRows, todayOf, liveTiles, cleanFill, laneMarks, traderDays, laneRunner, readableName, rosterFamilies, FILTERS, laneLock, laneMaySend, laneFeed, PICK_MIN, STAGES, lanes, outsideAuto, armState, armMsgs, armWords, pickChoices, pickMsg, maySend, KILL_MIN, SWITCH_MIN, DAYSTOP_MIN, ROSTER_MIN, ROSTER_FORMAT, LINEUP_FORMAT, CONFIRM_MS, ARM_MS, ANSWER_WAIT_MS, ROSTER_WAIT_MS, MAX_CARDS, MAX_MEMBERS, MAX_NOT_SHOWN, MODE_NAME, atLeast, usd, signed, stageCard, rosterCards, rosterProblem,
   kindOf, seatsKind, dayMark, traderAccounts, statusText, traders, propAccounts, killAllState, killAllMsg, autoLine, badAnswer, clock });
 });
 
@@ -901,7 +931,7 @@ function create(o) {
   const S = { shown: false, built: false, version: '', connected: false, signedIn: false, accounts: null, groups: null, agents: new Map(), firstAgentAt: null, signInAt: null, replayDone: false, settleTimer: 0,
     ask: 0, askTimer: 0, hint: '', hintBad: false, hintState: false, answer: '', answerBad: false, cidSeq: 0, pending: '', pendingAt: 0, waitTimer: 0, sent: 0,
     armAsk: 0, armTimer: 0, armSaid: '', armBad: false, modeSent: new Map(), pickSent: new Map(),
-    helper: null, helperTimer: 0, helperSeq: 0, sub: 'setup', filter: 'all', find: '', famShut: new Set(), othersOpen: false, lanePanels: {},
+    helper: null, helperTimer: 0, helperSeq: 0, sub: 'setup', filter: 'all', find: '', famShut: new Set(), othersOpen: false, lanePanels: {}, desk: null, deskOpen: false, deskSent: null,
     roster: { state: 'idle', text: '', cards: null, seq: 0, asked: 0, at: 0, version: '' }, rosterDirty: true, rosterTimer: 0, open: new Set(), drawn: {}, draws: { head: 0, roster: 0, traders: 0, accounts: 0, lanes: 0, 'lane-eval': 0, 'lane-funded': 0, tiles: 0, bytrader: 0 },
     fills: new Map(), pane: null, overlay: null, rows: null };
   const el = {};
@@ -1230,6 +1260,9 @@ function create(o) {
           <p class="fl-empty">Not built yet. The zone (the trend's direction and the volatility, in words) comes from Bot-Lab's plain-code labeler on this PC once it exists. It will suggest; you choose.</p></section>
         <section class="fl-box fl-today" aria-label="Today"><div class="fl-btitle"><h3 class="fl-h">Today</h3><span class="fl-sub2">Drop an account into a lane. Pick the bot for the lane. Flip Armed.</span></div>
           <div class="fl-lanegrid"><div data-k="lane-eval"></div><div data-k="lane-funded"></div></div><div data-k="lanes"></div></section>
+        <section class="fl-box fl-desk" aria-label="Traders"><div class="fl-btitle"><h3 class="fl-h">Traders</h3><span class="fl-sub2">Set up a prop trader: its account or group, its rules, its proposals. Closed until you open it.</span>
+          <span class="fl-fill"></span><button type="button" class="fl-pill" data-do="desk" data-k="deskbtn" aria-expanded="false" aria-controls="flDesk">Show</button></div>
+          <div id="flDesk" class="fl-deskbody" data-k="desk" hidden></div></section>
         <section class="fl-box fl-roster" aria-label="Roster"><div class="fl-btitle"><h3 class="fl-h">Roster</h3><span class="fl-sub2">The bots the Lab built. One line a family; open it for its settings.</span></div>
           <div class="fl-filters" role="group" aria-label="Roster filters">
             <button type="button" class="fl-pill" data-do="filter" data-filter="fits" aria-pressed="false" aria-disabled="true" title="Market now is not built yet, so nothing can be matched to the market">Fits now</button>
@@ -1251,8 +1284,10 @@ function create(o) {
           <div class="fl-acctrows" data-k="acctrows"></div><div data-k="accounts"></div></section>
       </div>
     </div>`;
-    for (const k of ['autoline', 'ask', 'kill', 'yes', 'no', 'hint', 'answer', 'roster', 'traders', 'accounts', 'lanes', 'lane-eval', 'lane-funded', 'arm', 'armyes', 'armno', 'armsaid', 'armask', 'setup', 'live', 'allbtn', 'tiles', 'chart', 'chartsaid', 'bytrader', 'acctrows']) el[k] = view.querySelector('[data-k="' + k + '"]');
+    for (const k of ['autoline', 'ask', 'kill', 'yes', 'no', 'hint', 'answer', 'roster', 'traders', 'accounts', 'lanes', 'lane-eval', 'lane-funded', 'desk', 'deskbtn', 'arm', 'armyes', 'armno', 'armsaid', 'armask', 'setup', 'live', 'allbtn', 'tiles', 'chart', 'chartsaid', 'bytrader', 'acctrows']) el[k] = view.querySelector('[data-k="' + k + '"]');
     el.cancel = view.querySelector('[data-do="no"]');
+    if (el.desk) el.desk.hidden = !S.deskOpen;           // the Traders fold: shut until opened (the desk is mounted only then)
+    deskButton();
     S.built = true; S.drawn = {}; S.rosterDirty = true;
   }
   const setText = (e, t) => { if (e && e.textContent !== t) e.textContent = t; };
@@ -1275,7 +1310,7 @@ function create(o) {
     const stage = l.stage;
     /* not known is locked (the review of 97, F1): heard once ChartBridge's groups and its traders have come on this connection */
     // answers 33, A28-1: every group's lock includes the lane's own: a heard trader the page cannot read makes it not known too
-    const locked = () => { if (agentList().some(x => !C.accountsReadable(x))) return C.NOT_KNOWN; const now = laneList().find(x => x.stage === stage); return C.laneLock(now, heard()) || (!S.connected ? 'ChartBridge is not connected' : ''); };
+    const locked = () => { if (agentList().some(x => !C.accountsReadable(x))) return C.NOT_READABLE; const now = laneList().find(x => x.stage === stage); return C.laneLock(now, heard()) || (!S.connected ? 'ChartBridge is not connected' : ''); };
     /* taking an account from another group asks that group's lane too (F2); a group no lane trades is free once heard */
     // answers 25, S2: any group's lock covers every trader heard on it, not only a lane's own (a doubled lane's second group, a group of no Type)
     const otherLocked = gid => { if (!heard()) return C.NOT_KNOWN; return C.groupLock(gid, agentList(), true, S.groups) || (!S.connected ? 'ChartBridge is not connected' : ''); };
@@ -1285,6 +1320,38 @@ function create(o) {
     S.lanePanels[stage] = { groupId: l.groupId, host, mount };
     return S.lanePanels[stage];
   }
+  /* ---------------- the Traders fold (build answers B4-1, section 3; builder 4's Legion trader desk, chart-engine 103): ONE mount,
+     o.traderDesk(el), handed by the page (it calls LegionDesk.mount with the page's feed; the desk puts Legion's gate round it).
+     Closed by default; mounted the first time it is opened, then told show(true) when opened and show(false) when shut (the
+     desk counts as shown only between the two: no "seen", no polling, no live chart while shut, builder 4's fixes of B4-2);
+     taken down (destroy, which also takes its gate off the feed) when the tab closes and on destroy. Nothing else of the
+     desk is here. */
+  /* told only when the value changes (the last one sent is kept); the Live sub-page hides the fold too (answers 27, 104-A) */
+  const deskShow = on => { if (S.desk && typeof S.desk.show === 'function' && S.deskSent !== on) { S.deskSent = on; try { S.desk.show(on); } catch (e) { /* gone */ } } };
+  function openDesk() {
+    S.deskOpen = true;
+    if (el.desk) {
+      el.desk.hidden = false;
+      if (!S.desk && typeof o.traderDesk === 'function') { S.deskSent = null; try { S.desk = o.traderDesk(el.desk) || null; } catch (e) { S.desk = null; } }
+      if (!S.desk) el.desk.innerHTML = '<p class="fl-empty">The trader desk shows here when the page has it (live/legion-desk.js).</p>';
+    }
+    deskShow(S.sub === 'setup');
+    deskButton();
+  }
+  function shutDesk() {
+    S.deskOpen = false;
+    deskShow(false);
+    if (el.desk) el.desk.hidden = true;
+    deskButton();
+  }
+  function dropDesk() {
+    S.deskOpen = false;
+    if (S.desk) { deskShow(false); try { if (typeof S.desk.destroy === 'function') S.desk.destroy(); } catch (e) { /* gone */ } S.desk = null; }
+    S.deskSent = null;
+    if (el.desk) { el.desk.hidden = true; el.desk.innerHTML = ''; }
+    deskButton();
+  }
+  function deskButton() { if (el.deskbtn) { el.deskbtn.setAttribute('aria-expanded', String(S.deskOpen)); el.deskbtn.textContent = S.deskOpen ? 'Hide' : 'Show'; } }
   function dropLanePanels() { for (const k of Object.keys(S.lanePanels)) { try { S.lanePanels[k].mount.destroy(); } catch (e) { /* gone */ } } S.lanePanels = {}; }
   function placeLanePanels() {
     for (const stage of C.STAGES) {
@@ -1347,6 +1414,7 @@ function create(o) {
   }
   function renderSub() {
     setHidden(el.setup, S.sub !== 'setup'); setHidden(el.live, S.sub !== 'live');
+    deskShow(S.deskOpen && S.sub === 'setup');           // 104-A: off the Setup page the desk is not shown (no polling, no chart)
     if (S.sub === 'live') mountLive(); else unmountLive();
     if (view && typeof view.querySelectorAll === 'function') for (const b of view.querySelectorAll('[data-do="sub"]')) b.setAttribute('aria-pressed', String(b.dataset.sub === S.sub));
     if (view && typeof view.querySelectorAll === 'function') for (const b of view.querySelectorAll('[data-do="filter"]')) b.setAttribute('aria-pressed', String(b.dataset.filter === S.filter));
@@ -1410,6 +1478,7 @@ function create(o) {
     if (what === 'filter') { const f = String(b.dataset.filter || ''); if (C.FILTERS.includes(f) && f !== S.filter) { S.filter = f; S.rosterDirty = true; render(); } return; }
     if (what === 'fam') { const k = String(b.dataset.fam || ''); if (S.famShut.has(k)) S.famShut.delete(k); else S.famShut.add(k); S.rosterDirty = true; render(); return; }
     if (what === 'others') { S.othersOpen = !S.othersOpen; S.drawn.traders = null; render(); return; }
+    if (what === 'desk') { if (S.deskOpen) shutDesk(); else openDesk(); return; }
     if (what === 'more') {                                                  // display only: a card's detail open or shut
       const k = String(b.dataset.card || '');
       if (S.open.has(k)) S.open.delete(k); else S.open.add(k);
@@ -1487,7 +1556,7 @@ function create(o) {
     if (on === S.shown) return;
     S.shown = on;
     if (tabBtn) { tabBtn.setAttribute('aria-pressed', String(on)); if (on) tabBtn.hidden = false; }
-    if (!on) { endAsk(); endArmAsk(); dropLanePanels(); unmountLive(); clearTimeout(S.helperTimer); S.helperSeq++; S.built = false; if (view) view.innerHTML = ''; offer(); }
+    if (!on) { endAsk(); endArmAsk(); dropLanePanels(); dropDesk(); unmountLive(); clearTimeout(S.helperTimer); S.helperSeq++; S.built = false; if (view) view.innerHTML = ''; offer(); }
     /* Escape cancels a question wherever the focus is while the tab is open (build answers 15, section 3) */
     if (DOC) { if (on) DOC.addEventListener('keydown', onKey, true); else DOC.removeEventListener('keydown', onKey, true); }
     if (typeof o.onTab === 'function') o.onTab(on);
@@ -1528,7 +1597,7 @@ function create(o) {
       traders: C.traders(agentList(), S.accounts, S.version), accounts: C.propAccounts(S.accounts, S.groups, agentList()),
       roster: { state: S.roster.state, text: S.roster.text, asked: S.roster.asked, bots: S.roster.cards ? S.roster.cards.bots.map(c => c.name) : [], lineups: S.roster.cards ? S.roster.cards.lineups.map(c => c.name) : [], notShown: S.roster.cards ? S.roster.cards.notShown.length : 0 } }),
     reloadRoster: loadRoster,
-    destroy: () => { dropLanePanels(); unmountLive(); clearTimeout(S.helperTimer); S.helperSeq++; S.roster.seq++; clearTimeout(S.settleTimer); clearTimeout(S.rosterTimer); clearTimeout(S.waitTimer); unlisten(); endAsk(); endArmAsk(); if (DOC) DOC.removeEventListener('keydown', onKey, true); if (view) { view.removeEventListener('click', onClick); view.removeEventListener('change', onChange); view.removeEventListener('input', onInput); view.removeEventListener('keydown', onKey); } },
+    destroy: () => { dropLanePanels(); dropDesk(); unmountLive(); clearTimeout(S.helperTimer); S.helperSeq++; S.roster.seq++; clearTimeout(S.settleTimer); clearTimeout(S.rosterTimer); clearTimeout(S.waitTimer); unlisten(); endAsk(); endArmAsk(); if (DOC) DOC.removeEventListener('keydown', onKey, true); if (view) { view.removeEventListener('click', onClick); view.removeEventListener('change', onChange); view.removeEventListener('input', onInput); view.removeEventListener('keydown', onKey); } },
   };
 }
 window.FleetView = { create };

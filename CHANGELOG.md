@@ -63,6 +63,34 @@
   `test/pc-updater.test.js`: the allowed git subcommands, the box job's name, useHttpPath read before the one ask, the
   token only after a 404 or 401 and then through the Actions API, one place that asks for it and one that sends it.
 
+## chart 1.52.1 (2026-11-12): Legion Setup's Traders fold, Legion's trader desk mounted (page only, no F5)
+
+- **Legion Setup's Traders fold (build answers B4-1, section 3):** one mount of builder 4's Legion trader desk
+  (chart-engine 103, `live/legion-desk.js`) in a folded section under the lanes, closed by default, handed the page's
+  own feed (the desk puts Legion's gate round it). Mounted the first time it is opened, then told it is shown or hidden
+  with the fold (it counts as shown only then: no "seen", no polling while shut), and taken down when the tab closes and
+  on destroy. Until the desk is on the page, the fold says where it will show. It merges together with 102 and 103; the
+  page loads `live/legion-desk.js` and the install copies it (`nt8/install-files.json`).
+- **A trader's accounts are its account and every seat it has** (`FleetCore.traderAccounts`, builder 4's note on 103's
+  review): a seat left over after a move counts in what Kill all and Armed say; a trader whose account fields the page
+  cannot read is "cannot tell", and a lane of it is never armable (`FleetCore.accountsReadable`).
+- **With 103 merged in:** the page loads `live/legion-desk.js` (after agent.js) and the install copies it. Two lines of
+  the Colosseum's tests follow what is merged now: an account of `''` is "the page cannot tell yet", never None (answers
+  28, R4-1, the gates' own reader); builder 1's two box tokens are defined in `workspace.css` since 97 merged.
+- **Answers 27 and 34:** the Live sub-page tells the desk it is hidden, and Setup shows it again (104-A); the line
+  beside Kill all names a trader in Auto whose accounts the page cannot read (104-B); a one-account trader with a prop
+  seat left over is said as such, not "a group", Armed's reasons say Kill all will NOT stop a trader on the personal
+  account and a prop one, and a trader's row lists every account (104-D); one rule with the gates' reader,
+  `AgentCore.gateAccounts`, held by one test of the same shapes, a missing `account` key now "cannot tell" (104-E); a
+  trader in any mode the page cannot read locks the lanes (A33-1), with its own words (`NOT_READABLE`, A33-2); a test
+  that the page loads the desk and the install copies it (104-C).
+- **Answers B4-8 (rule 12):** no lane is armed while any other trader is on, or may be on, one of its accounts (its
+  group's members and every account of its own trader), in any mode: a trader the page cannot read, a trader on one of
+  them as its own account, or with a seat of its own group or a seat left over on one. The reason names the trader and
+  the place, never the account (F2). A trader whose accounts the page cannot read shows "Cannot tell its accounts" on
+  its row, never None or only the seats it can read (F1), and Armed's reason for one in Auto outside the lanes says the
+  page cannot read its accounts (F4).
+
 ## chart 1.52.0 (2026-11-12): Legion's trader desk, the Agent and Bot desks behind Praetorian's gate turned round (page only, no F5)
 
 Rule 12. The review of Praetorian (chart-engine 102, F5) found that, once the Agent and Bot desks are behind Praetorian's

@@ -200,7 +200,7 @@ try {
   check((await text('.fl-market')).includes('Not built yet.'), 'Market now says it is not built yet, not faked');
   // nothing on the tab can be pressed, typed in or switched but Kill all with its two answers, the Armed switch with its two, Read again and the Details
   const pressable = await page.evaluate(() => [...document.querySelectorAll('#flView button, #flView input, #flView select, #flView textarea, #flView a, #flView [tabindex], #flView [contenteditable], #flView [role="switch"], #flView [role="checkbox"], #flView [role="slider"], #flView label, #flView summary')].map(e => e.tagName + ':' + (e.dataset.do || '?')).sort());
-  check(pressable.join() === 'BUTTON:arm,BUTTON:armno,BUTTON:armyes,BUTTON:ask,BUTTON:fam,BUTTON:fam,BUTTON:filter,BUTTON:filter,BUTTON:filter,BUTTON:filter,BUTTON:more,BUTTON:more,BUTTON:more,BUTTON:more,BUTTON:no,BUTTON:others,BUTTON:roster,BUTTON:sub,BUTTON:sub,BUTTON:yes,INPUT:find,LABEL:?', 'the tab has Kill all, the Armed switch, their Yes and Cancel, Read again and a Details on each card, and no other control: ' + pressable.join());
+  check(pressable.join() === 'BUTTON:arm,BUTTON:armno,BUTTON:armyes,BUTTON:ask,BUTTON:desk,BUTTON:fam,BUTTON:fam,BUTTON:filter,BUTTON:filter,BUTTON:filter,BUTTON:filter,BUTTON:more,BUTTON:more,BUTTON:more,BUTTON:more,BUTTON:no,BUTTON:others,BUTTON:roster,BUTTON:sub,BUTTON:sub,BUTTON:yes,INPUT:find,LABEL:?', 'the tab has Kill all, the Armed switch, their Yes and Cancel, Read again and a Details on each card, the Traders fold\'s Show, and no other control: ' + pressable.join());
   await page.screenshot({ path: path.join(SHOTS, 'fleet-desktop.png') });
 
   // the head is pinned: scrolled to the bottom of the tab, Kill all is still in sight
@@ -343,18 +343,31 @@ try {
   await page.evaluate(b => { window.rosterAnswer = { status: 200, body: b }; }, rosterBody);
   await feed({ type: 'hello', version: '0.6.21' }); await feed({ type: 'trading', enabled: true }); await feed(accounts); await feed(groups);
   await feed(lane1()); await feed(lane2()); await feed({ type: 'agentStandDowns', list: [] });   // ChartBridge's end of the sign-in replay (answers 25, S1)
-  await page.waitForFunction(() => window.fleet.state().roster.state === 'ok' && window.fleet.state().lanes[0].armable === true);
+  // answers B4-8, F2 (rule 12): germanicus and resting (from above) are on the eval lane's own accounts: no lane is armed beside them
+  await page.waitForFunction(() => window.fleet.state().roster.state === 'ok' && window.fleet.state().lanes[0].id === 'legion1');
+  const held = await page.evaluate(() => window.fleet.state().lanes[0]);
+  check(held.armable === false && /^Another trader is on, or may be on, one of its accounts/.test(held.why) && /germanicus has one of this lane's accounts as its own account; resting has one/.test(held.why) && !/SAMPLE-/.test(held.why),
+    'a lane with another trader on its accounts is not armable, and the reason names the trader, never the account: ' + held.why);
+  await feed(agent('germanicus', { account: 'SAMPLE-NEW-1', rules: { entryFrom: '09:40', entryUntil: '15:00', flatAt: '15:55', marketEntry: true, noTarget: true }, dayStop: 900 }));
+  await feed(agent('resting', { account: 'SAMPLE-NEW-1', standDown: 'sample stand-down' }));   // both off the lane's accounts, still in Auto
+  await page.waitForFunction(() => window.fleet.state().lanes[0].armable === true);
   // the review of 94, FIX 2: a trader in Auto on a prop account outside the lanes (germanicus, from above) is named at the switch
   check((await text('[data-do="arm"]')) === 'Armed: PARTLY' && /Not a lane, so not armed from here: germanicus on a prop account; resting on a prop account in Auto/.test(await text('.fl-armsaid')), 'a trader in Auto outside the lanes: Armed reads PARTLY and names it: ' + await text('.fl-armsaid'));
-  await feed(agent('germanicus', { mode: 'shadow' }));
-  await feed(agent('resting', { mode: 'shadow', account: 'SAMPLE-EVAL-2' }));   // a stood-down trader in Auto counts too (the re-review of 94, R3)
+  await feed(agent('germanicus', { mode: 'shadow', account: 'SAMPLE-NEW-1' }));
+  await feed(agent('resting', { mode: 'shadow', account: 'SAMPLE-NEW-1' }));   // a stood-down trader in Auto counts too (the re-review of 94, R3)
   const laneText = await page.evaluate(() => [...document.querySelectorAll('.fl-lane')].map(e => e.innerText.replace(/\s+/g, ' ')));
   check(laneText.length === 2 && /^Eval lane Goal: pass the eval SHADOW READY legion1, group Sample evals Bot /i.test(laneText[0]) && laneText[0].includes('Sample alpha BOT risk $400 a trade Watching +$1,510'), 'the eval lane: its goal, its mode, Ready, its trader and group, the picked bot with its risk, its state and today on its accounts: ' + laneText[0]);
   check(/^Funded lane Goal: reach the payout SHADOW NOT READY legion2, group Sample funded Bot /i.test(laneText[1]) && laneText[1].includes('No bot is picked for this lane. A second bot on a lane comes as a lineup file from the Lab.') && laneText[1].includes('No bot is picked for it'), 'the funded lane: not ready, and why: ' + laneText[1]);
   const offered = await page.evaluate(() => [...document.querySelectorAll('#flPick-eval option')].map(o => o.value + (o.selected ? '*' : '')));
   check(offered.join() === ',sample-alpha.json*', 'the pick list offers None and only the files that run live, with ChartBridge\'s pick chosen: ' + offered.join());
   const order = await page.evaluate(() => [...document.querySelectorAll('#flView [data-k="setup"] > section')].map(e => e.getAttribute('aria-label')));
-  check(order.join() === 'Market now,Today,Roster,Other connections', 'Setup, top to bottom: Market now, Today (the lanes), the Roster, Other connections: ' + order.join());
+  check(order.join() === 'Market now,Today,Traders,Roster,Other connections', 'Setup, top to bottom: Market now, Today (the lanes), Traders (folded), the Roster, Other connections: ' + order.join());
+  // the Traders fold (builder 4's Legion trader desk): closed by default; with no desk on the page it says where it will show
+  check(await page.locator('#flDesk').isHidden() && (await page.locator('[data-do="desk"]').getAttribute('aria-expanded')) === 'false', 'the Traders fold is closed by default');
+  await page.click('[data-do="desk"]');
+  check((await page.locator('#flDesk').innerText()).includes('The trader desk shows here when the page has it') && (await page.locator('[data-do="desk"]').getAttribute('aria-expanded')) === 'true', 'opened with no desk on the page: it says where the desk will show');
+  await page.click('[data-do="desk"]');
+  check(await page.locator('#flDesk').isHidden(), 'and shuts again');
   check((await text('[data-do="arm"]')) === 'Armed: off' && await page.locator('#flView [role="switch"]').count() === 1 && await page.locator('[data-do="arm"]').getAttribute('aria-checked') === 'false', 'one Armed switch, off');
   await page.evaluate(() => { document.getElementById('flView').scrollTop = 0; });
   await page.screenshot({ path: path.join(SHOTS, 'fleet-lanes.png') });
@@ -546,6 +559,15 @@ try {
     await page.waitForFunction(() => window.workspace.fleet().roster.state !== 'loading', null, { timeout: 10000 }).catch(() => {});
     const ro = await page.evaluate(() => window.workspace.fleet().roster);
     check(ro.state === 'none' && ro.asked === 1 && /No roster folder is set on this PC/.test(ro.text), 'workspace: the real request: the fake bridge has no roster (404), asked once, and the tab says the folder is not set: ' + JSON.stringify(ro));
+    // 1.52.1: the Traders fold mounts the real Legion trader desk (live/legion-desk.js, loaded by the page) when opened
+    check(await page.locator('#flDesk').isHidden(), 'workspace: the Traders fold is shut until opened');
+    await page.click('[data-do="desk"]');
+    await page.waitForFunction(() => { const d = document.getElementById('flDesk'); return d && !d.hidden && d.querySelector('*') && !/shows here when the page has it/.test(d.textContent); }, null, { timeout: 10000 }).catch(() => {});
+    const desk = await page.evaluate(() => { const d = document.getElementById('flDesk'); return { shown: !d.hidden, kids: d.querySelectorAll('*').length, placeholder: /shows here when the page has it/.test(d.textContent), loaded: !!window.LegionDesk }; });
+    check(desk.loaded && desk.shown && desk.kids > 0 && !desk.placeholder, 'workspace: opened, the Traders fold holds the real Legion trader desk: ' + JSON.stringify(desk));
+    await page.screenshot({ path: path.join(SHOTS, 'fleet-workspace-desk.png') });
+    await page.click('[data-do="desk"]');
+    check(await page.locator('#flDesk').isHidden(), 'workspace: and shuts again');
     /* 1.49.0 Legion Live in the real page: a real chart (the League tab's way), the Accounts tab's own rows, and Kill all and
        Armed in the very same place as on Setup */
     const head = () => page.evaluate(() => ['[data-do="ask"]', '[data-do="arm"]'].map(s => { const r = document.querySelector(s).getBoundingClientRect(); return [Math.round(r.x), Math.round(r.y)]; }));

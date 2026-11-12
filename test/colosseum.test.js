@@ -28,7 +28,8 @@ test('the watch: only traders in Shadow, in ChartBridge\'s own words, nothing gu
   assert.equal(by.d4.trades, null, 'no trade count reported: none shown');
   assert.equal(by.f6.place, 'on your personal account');
   assert.match(by.f6.status, /^Not connected/);
-  assert.equal(by.g7.place, 'on None: no account');
+  // an account of '' is a shape the page cannot read (answers 28, R4-1; the gates' own reader says the same): never None
+  assert.equal(by.g7.place, 'on an account the page cannot tell yet');
   assert.equal(by.demo.trades, 2);
   assert.deepEqual(LC.watchRows(null), []); assert.deepEqual(LC.watchRows([null, 'x', { mode: 'shadow' }]), []);
   /* no personal account picked: the page cannot tell a live account, and says so */
