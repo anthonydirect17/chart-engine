@@ -85,3 +85,17 @@ test('the Colosseum\'s look: the title font for its name only, the chosen box wi
   assert.doesNotMatch(read('live/workspace.css'), /--ws-box-radius:|--ws-box-shadow:/, 'the two tokens are defined by builder 1, not here');
   assert.doesNotMatch(css, /--ws-buy|--ws-sell/, 'no green or red: nothing on the watch is P&L or a side');
 });
+
+test('the watch row is text, never markup: every field it shows goes through esc() (a deliberate break no test caught at first)', () => {
+  const lg = read('live/league.js');
+  const m = /function renderWatch\(\) \{[\s\S]*?\n  \}\n/.exec(lg);
+  assert.ok(m, 'renderWatch is one function');
+  const body = m[0];
+  for (const f of ['r.id', 'r.name', 'r.build', 'r.status', 'r.place']) {
+    const uses = body.split(f).length - 1, escaped = body.split('esc(' + f + ')').length - 1;
+    assert.ok(uses > 0 && escaped === uses - (body.split('(' + f + ' ?').length - 1), f + ': every place it is drawn is esc(' + f + ') (' + escaped + ' of ' + uses + ')');
+  }
+  assert.match(body, /r\.trades !== null \? ' · ' \+ r\.trades \+ ' trades today'/, 'the one number is a number (watchRows makes it one or null)');
+  const wr = /function watchRows\(traders\) \{[\s\S]*?\n\}/.exec(lg)[0];
+  assert.match(wr, /trades: isNum\(t\.trades\) \? t\.trades : null/);
+});
