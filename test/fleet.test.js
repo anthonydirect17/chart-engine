@@ -1091,3 +1091,39 @@ test('B4 (1.48.1): the tab reads the helper every 3 s while open, draws each lan
   assert.match(ws, /return \(\) => client\.status\(\);\n\}\)\(\);/, 'the page hands the status call only, never the client');
   assert.match(ws, /helperStatus: legionHelperStatus,/);
 });
+
+test('Legion Setup\'s roster by family (1.48.0): readable names, the family from the run, the two "good for" filters on the file\'s own word and their order, Find, and where a file is picked', () => {
+  assert.strictEqual(F.readableName('germanicus_r75_cap_off_v1.json'), 'Germanicus r75 cap off v1', 'the whole file name, the family capitalised (Anthony 2026-11-12)');
+  assert.strictEqual(F.readableName('a-b_c'), 'A b c'); assert.strictEqual(F.readableName(''), ''); assert.strictEqual(F.readableName(null), '');
+  const nums = (ppd, pass, aboveE, paid, aboveF) => { const s = scored(); return { numbers: { eval: Object.assign({}, s.numbers.eval, { profit_per_dollar: ppd, eval_pass: pass, above_no_edge: aboveE }), funded: Object.assign({}, s.numbers.funded, { paid_per_funded: paid, above_no_edge: aboveF }) } }; };
+  const bot = (name, family, n, over) => served(name + '.json', botFile(name, Object.assign({ record: { run_id: 'run-' + name, family, try: 1, sessions: 100, trades: 50, instrument: 'MNQ', verdict: 'v' } }, n, over || {})));
+  const cards = F.rosterCards({ left: 0, files: [
+    bot('germ_a', 'germanicus', nums(0.2, 0.30, true, 2500, true)),
+    bot('germ_b', 'germanicus', nums(0.9, 0.70, true, 400, false)),
+    bot('germ_c', 'germanicus', nums(0.5, 0.90, false, 2000, true)),
+    bot('germ_d', 'germanicus', nums(0.7, 0.95, true, 3000, true), { runs_live: false, why_not: 'two trades a session' }),
+    bot('zz_other', '', nums(0.1, 0.5, true, 100, true)),
+    bot('duo_solo', '', nums(0.3, 0.5, false, 100, false)),
+    served('duo.json', lineupFile('duo', [member('germ_a'), member('germ_b')]))] });
+  assert.ok(cards.ok, cards.why);
+  const ls = [{ stage: 'eval', title: 'Eval lane', pick: 'germ_b.json' }, { stage: 'funded', title: 'Funded lane', pick: 'germ_b.json' }];
+  const fam = (f, q) => F.rosterFamilies(cards, ls, f, q);
+  const all = fam('all', '');
+  const byName = (x, y) => (x[0] + x[1] < y[0] + y[1] ? -1 : 1);
+  assert.deepStrictEqual(all.families.map(x => [x.kind, x.name, x.settings.map(r => r.name)]).sort(byName), [
+    ['bot', 'Duo', ['duo_solo']], ['bot', 'Germanicus', ['germ_b', 'germ_d', 'germ_c', 'germ_a']], ['bot', 'Zz', ['zz_other']], ['lineup', 'Duo', ['duo']]],
+    'one family a run family (a file with none: the first word of its name), a lineup its own; settings by profit per $1');
+  assert.deepStrictEqual([all.total, all.shown], [7, 7]);
+  const g = all.families.find(x => x.name === 'Germanicus');
+  assert.deepStrictEqual(g.settings.map(r => r.readable), ['Germ b', 'Germ d', 'Germ c', 'Germ a']);
+  assert.strictEqual(g.settings[0].where, 'Eval lane and Funded lane', 'where a file is picked is said');
+  assert.strictEqual(g.settings[1].where, '');
+  const ev = fam('evals', '').families.find(x => x.name === 'Germanicus');
+  assert.deepStrictEqual(ev.settings.map(r => r.name), ['germ_b', 'germ_a'], 'good for evals: runs live AND the file says above no edge for the eval; best eval pass first (germ_d does not run live, germ_c is not above)');
+  const fu = fam('funded', '').families.find(x => x.name === 'Germanicus');
+  assert.deepStrictEqual(fu.settings.map(r => r.name), ['germ_a', 'germ_c'], 'good for funded: the funded word; most paid per funded account first (not the eval pass order)');
+  assert.deepStrictEqual(fam('all', 'germ_c.json').families.map(x => x.settings.map(r => r.name)), [['germ_c']], 'Find reads the file name too');
+  assert.deepStrictEqual(fam('all', 'zz').families.map(x => x.name), ['Zz']);
+  assert.deepStrictEqual(fam('nonsense', '').shown, 7, 'an unknown filter is All');
+  assert.deepStrictEqual(F.rosterFamilies(null, ls, 'all', ''), { families: [], total: 0, shown: 0 });
+});
