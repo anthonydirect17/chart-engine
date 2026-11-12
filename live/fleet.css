@@ -110,3 +110,55 @@ body.fl-on .fl-wrap { padding-bottom: 120px; }
 .fl-seat { display: inline-block; font: 11px var(--ws-mono); border: 1px solid var(--ws-line); border-radius: 5px; padding: 0 6px; margin: 0 4px 2px 0; }
 .fl-lanewhy { font-size: 12px; }
 @media (max-width: 900px) { .fl-lanegrid { grid-template-columns: minmax(0, 1fr); } }
+/* chart 1.48.0, Legion Setup in the chosen look (B, Anthony 2026-11-11): each section a raised charcoal box on the page's own
+   tokens (--ws-row ground, --ws-line2 border, the two box tokens), its title in Cinzel and gold with a short gold rule; rows
+   inside on --ws-panel; pills for filters and small buttons. Eval steel blue, funded gold, BOT grey, AGENT cyan: never colour
+   alone, the word is always there. Green and red stay for P&L. Cinzel never shows a live value. */
+.fl-view { --fl-eval: #8FB4E0; --fl-eval-text: #CFE0F5; --fl-funded: var(--ws-gold, #C9A55C); --fl-agent: #7FD3E0; }
+.fl-title { font: 700 20px var(--ws-title-font); letter-spacing: .12em; color: var(--ws-gold, #C9A55C); text-transform: uppercase; }
+.fl-sub { flex: none; }
+.fl-box { background: var(--ws-row); border: 1px solid var(--ws-line2); border-radius: var(--ws-box-radius, 18px); box-shadow: var(--ws-box-shadow); padding: 16px 20px; gap: 10px; }
+.fl-page { display: flex; flex-direction: column; gap: 18px; }
+.fl-page[hidden] { display: none !important; }
+.fl-btitle { display: flex; flex-wrap: wrap; align-items: baseline; gap: 14px; }
+.fl-box .fl-h { font: 600 13px var(--ws-title-font); letter-spacing: .14em; color: var(--ws-gold, #C9A55C); text-transform: uppercase; padding-bottom: 6px; position: relative; }
+.fl-box .fl-h::after { content: ""; position: absolute; left: 0; bottom: 0; width: 32px; height: 2px; border-radius: 2px; background: var(--ws-gold, #C9A55C); }
+.fl-box .fl-hsmall { font-size: 11px; color: var(--ws-text2); }
+.fl-box .fl-hsmall::after { display: none; }
+.fl-sub2 { font-size: 12px; color: var(--ws-muted); }
+.fl-legend { margin: 0; display: flex; flex-wrap: wrap; gap: 18px; font-size: 12px; color: var(--ws-text2); }
+.fl-key { display: inline-flex; align-items: center; gap: 7px; }
+.fl-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ws-line2); display: inline-block; flex: none; }
+.fl-dot[data-stage="eval"] { background: var(--fl-eval); }
+.fl-dot[data-stage="funded"] { background: var(--fl-funded); }
+.fl-who { font: 500 10px var(--ws-mono); letter-spacing: .08em; border: 1px solid var(--ws-line2); border-radius: 4px; padding: 1px 6px; color: var(--ws-text2); }
+.fl-who[data-who="agent"] { color: var(--fl-agent); border-color: rgba(95, 201, 216, .6); background: #0C1517; }
+.fl-lanegrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 16px; }
+.fl-lane { background: var(--ws-panel); border: 1px solid var(--ws-line); border-radius: 14px; padding: 14px 16px; gap: 10px; }
+.fl-lane[data-auto="1"] { border-color: var(--ws-tint-line); }
+.fl-lanetitle { display: inline-flex; align-items: center; gap: 9px; font: 600 13px var(--ws-title-font); letter-spacing: .1em; text-transform: uppercase; }
+.fl-lane[data-stage="eval"] .fl-lanetitle { color: var(--fl-eval-text); }
+.fl-lane[data-stage="funded"] .fl-lanetitle { color: var(--ws-soft); }
+.fl-botcard { background: var(--ws-row); border-radius: 12px; padding: 10px 12px; display: flex; flex-direction: column; gap: 5px; }
+.fl-slot { border: 1px dashed var(--ws-line2); border-radius: 12px; padding: 10px 12px; color: var(--ws-muted); font-size: 12px; }
+.fl-lanepanels { min-width: 0; }
+.fl-lanepanels .ma { --ma-pad: 0; }
+.fl-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.fl-pill { border: 1px solid transparent; background: var(--ws-field); color: var(--ws-text); border-radius: 999px; padding: 4px 13px; min-height: 30px; font: 12px var(--ws-sans); cursor: pointer; }
+.fl-pill[aria-pressed="true"], .fl-pill[aria-expanded="true"] { border-color: var(--ws-gold, #C9A55C); background: var(--ws-tint); color: var(--ws-gold-text, #E2C687); }
+.fl-pill[aria-disabled="true"] { opacity: .5; cursor: not-allowed; }
+.fl-find { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ws-muted); }
+.fl-find .ws-in { border-radius: 999px; width: 150px; }
+.fl-stable { min-width: 860px; display: flex; flex-direction: column; gap: 6px; }
+.fl-fams, .fl-sets { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.fl-srow { display: grid; grid-template-columns: 2.4fr 1.4fr .7fr 1fr 1.6fr 86px; gap: 12px; align-items: center; padding: 10px 14px; font-size: 12px; }
+.fl-shead { font: 600 10px var(--ws-sans); letter-spacing: .08em; text-transform: uppercase; color: var(--ws-muted); padding-top: 2px; padding-bottom: 2px; }
+.fl-fam { background: var(--ws-panel); border-radius: 12px; overflow: hidden; }
+.fl-set { border-top: 1px solid var(--ws-line); }
+.fl-set .fl-srow { padding-left: 30px; }
+.fl-set[data-tone="notlive"] .fl-sname { color: var(--ws-text2); }
+.fl-set .fl-more { padding: 6px 14px 10px 30px; max-width: none; }
+.fl-sname { min-width: 0; overflow-wrap: anywhere; }
+/* the Setup and Live switch sits on its own row under the head: the head row holds the title and Kill all's buttons only, so
+   Yes is never drawn where Kill all was, at any width (the review of 92, STOP 1) */
+.fl-subrow { display: flex; align-items: center; gap: 8px; }

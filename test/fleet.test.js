@@ -340,7 +340,7 @@ function page(t, over) {
   };
   const view = Object.assign(mk('view'), { addEventListener: (k, f) => { listeners[k] = f; }, removeEventListener() {}, querySelector: sel => { if (!parts.has(sel)) parts.set(sel, mk(sel)); return parts.get(sel); } });
   const tab = Object.assign(mk('tab'), { hidden: true, addEventListener() {} });
-  const win = { document: {} };
+  const win = { document: { createElement: tag => ({ tagName: String(tag).toUpperCase(), className: '', parentNode: null }) } };
   new Function('window', 'document', 'self', read('live', 'fleet.js'))(win, win.document, win);
   const P = { T: 1_800_000_000_000, posts: [], asks: [], answers: [], subs: null, view, tab, part: k => view.querySelector('[data-k="' + k + '"]') };
   const V3 = { listen: h => { P.subs = h; return () => {}; }, post: m => { P.posts.push(m); return P.postOk !== false; } };
@@ -530,7 +530,7 @@ test('the roster is asked for when the tab opens, on a hello while it is open an
   for (let i = 0; i < 40; i++) { P.feed(agent('germanicus', { owns: i % 2 === 0 })); P.feed(Object.assign({}, accounts, { n: i })); P.feed(groups); P.feed({ type: 'status', level: 'info', text: 's' + i }); P.feed({ type: 'trading', enabled: true }); }
   P.T += 120_000; t.mock.timers.tick(120_000);
   assert.deepStrictEqual([P.asks.length, P.fv.state().draws.roster], [2, drawn], 'no polling, and a trader\'s message never redraws the roster');
-  assert.ok(P.fv.state().draws.traders > 30, 'while the traders are redrawn as they change');
+  assert.ok(P.fv.state().draws.traders >= 1, 'the other connections are drawn (folded: their count only)');
   // a lost connection forgets the roster; the hello after it asks again
   P.subs.closed();
   assert.deepStrictEqual([P.fv.state().roster.state, P.fv.state().roster.bots], ['idle', []]);
@@ -591,11 +591,12 @@ test('what the tab draws: one line a card with its detail behind Details; its bu
   // Kill all with its Yes and Cancel, the Armed switch with its Yes and Cancel, one pick list a lane that has a trader, Read
   // again and a Details on each card: nothing else can be pressed, typed in or switched
   const pressable = html.match(/<(button|input|select|textarea|a|details|summary)\b[^>]*>/g) || [];
-  assert.deepStrictEqual(pressable.map(x => (/data-do="([a-z]+)"/.exec(x) || [])[1]).sort(), ['arm', 'armno', 'armyes', 'ask', 'more', 'more', 'no', 'pick', 'roster', 'yes'], pressable.join(' '));
-  assert.ok(pressable.every(x => x.startsWith('<button type="button"') || x.startsWith('<select class="fl-pick"')));
+  assert.deepStrictEqual(pressable.map(x => (/data-do="([a-z]+)"/.exec(x) || [])[1]).sort(), ['arm', 'armno', 'armyes', 'ask', 'fam', 'fam', 'filter', 'filter', 'filter', 'filter', 'find', 'more', 'more', 'no', 'others', 'pick', 'roster', 'sub', 'sub', 'yes'], pressable.join(' '));
+  assert.ok(pressable.every(x => x.startsWith('<button type="button"') || x.startsWith('<select class="fl-pick"') || x.startsWith('<input type="text" class="ws-in" data-do="find"')));
   assert.strictEqual((html.match(/role="switch"/g) || []).length, 1, 'one Armed switch, for both lanes');
   assert.ok(!/contenteditable|tabindex|onclick|role="(checkbox|slider)"|draggable/i.test(html));
-  assert.match(html, /Not built yet, so not here: moving an account into or out of a lane by drag and drop/);
+  assert.match(html, /Market now<\/h3><\/div>\s*<p class="fl-empty">Not built yet\./, 'what is not built is said, not faked');
+  assert.match(html, /Legion Live \(the tiles, one chart with each lane's marks, each trader's day, the accounts by group\) is the next change/);
   // the lane's hostile strings (the trader's name, its group, its seat, why it is stood down, a pick that is gone) are text
   const lanesHtml = P.part('lanes').innerHTML;
   assert.ok(lanesHtml.includes('It is stood down: &lt;img src=x onerror=1&gt;') && lanesHtml.includes('gone.json (not offered now)'));
@@ -615,7 +616,7 @@ test('an older ChartBridge with the tab open by its address keeps the button (N9
   P.answers[0].res({ status: 200, json: () => Promise.resolve({ files: [served('big.json', many)] }) }); await P.tick(); await P.tick();
   P.click('more', 1, 'lineup:big');
   const h = P.part('roster').innerHTML;
-  assert.match(h, /Lineup of 40/);
+  assert.match(h, /Big<\/span> <span class="fl-who" data-who="bot">LINEUP<\/span>/, 'a lineup is a family line of its own');
   assert.strictEqual((h.match(/class="fl-mname"/g) || []).length, F.MAX_MEMBERS);
   assert.match(h, /And 28 more bots in this lineup, not drawn\./);
   assert.match(h, /b11 2, and 28 more/);
@@ -711,7 +712,9 @@ test('the head: the line under the title has its own row, and each number on a c
   assert.ok(head[1].indexOf('data-do="yes"') < head[1].indexOf('data-do="no"') && head[1].indexOf('data-do="no"') < head[1].indexOf('data-do="ask"') && !/<(span|p)[^>]*fl-ask/.test(head[1]), 'Yes, then Cancel, then Kill all at the right end; the question\'s words are not in the row');
   P.answers[0].res({ status: 200, json: () => Promise.resolve({ files: [served('z.json', botFile('zeta'))] }) }); await P.tick(); await P.tick();
   const line = P.part('roster').innerHTML.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
-  assert.match(line, /Eval \+0\.62 per \$1 Above no edge Funded -0\.10 per \$1 Not above no edge/, 'each number on the line is named: ' + line);
+  assert.match(line, /^ ?Family and setting Profit per \$1 Eval pass In this zone Standing /, 'the columns are named once, above the lines: ' + line);
+  assert.match(line, /Zeta risk \$400 eval, \$250 funded \+0\.62 \(\+0\.32 to \+0\.92\) Above no edge 58% not built yet 198 trades, 240 sessions; In-sample, not confirmed; try \d Details/, 'one number a setting with its range and the file\'s own word: ' + line);
+  assert.ok(!/-0\.10/.test(line), 'never the second stage\'s number beside it');
 });
 
 
@@ -880,7 +883,7 @@ test('the pick: one list a lane, sent as agentPick; locked in Auto and while the
   assert.match(html, /<select class="fl-pick" id="flPick-eval" data-do="pick" data-agent="legion1"><option value="">None<\/option><option value="duo\.json">duo \(lineup of 2\)<\/option><option value="germ\.json" selected>germ<\/option><\/select>/);
   assert.match(html, /<select class="fl-pick" id="flPick-funded" data-do="pick" data-agent="legion2"><option value="" selected>None<\/option>/);
   assert.match(html, /data-stage="eval" data-armable="true"/); assert.match(html, /data-stage="funded" data-armable="false"/);
-  assert.match(html, /<span class="fl-seat">EVAL-A<\/span><span class="fl-seat">EVAL-B<\/span>/);
+  assert.match(html, /<div class="fl-lanepanels" data-panel="eval">/, 'the lane keeps a place for its own Multi-Account panel (mounted by the page)');
   P.change('legion2', 'duo.json');
   assert.deepStrictEqual(P.posts.map(m => [m.type, m.agent, m.file, typeof m.cid]), [['agentPick', 'legion2', 'duo.json', 'string']]);
   assert.match(P.part('armsaid').textContent, /Sent the pick for funded lane: duo\.json$/);
@@ -951,4 +954,30 @@ test('a lane\'s lock: moves are free only while its one trader is in Shadow and 
   assert.match(F.laneLock(L([evalTrader(), agent('twin', { mode: 'shadow', account: null, group: { id: 'g1', name: 'Evals' }, seats: [] })])), /Two traders are on this lane/);
   assert.strictEqual(F.laneLock(L([])), '', 'a lane with no trader: nothing trades it, moves are free');
   assert.strictEqual(F.laneLock(null), '');
+});
+
+test('Legion Setup: each lane mounts the page\'s own Multi-Account panel on its group, with the lane\'s lock; a new group or a closed tab takes it down', async t => {
+  timers(t);
+  const mounts = [];
+  const lanePanel = (el, key, opts) => { const m = { key, opts, el, destroyed: 0, destroy() { this.destroyed++; } }; mounts.push(m); return m; };
+  const P = page(t, { lanePanel });
+  P.fv.showTab(true);
+  P.feed({ type: 'hello', version: '0.6.21' }); P.feed({ type: 'trading', enabled: true }); P.feed(accounts); P.feed(groups);
+  P.feed(evalTrader()); P.feed(fundTrader());
+  assert.deepStrictEqual(mounts.map(m => [m.key, m.opts.group]), [['legion-eval', 'g1'], ['legion-funded', 'g2']], 'one mount a lane, on its own group, keyed by its stage');
+  assert.strictEqual(mounts[0].opts.locked(), '', 'in Shadow and flat: moves are free');
+  P.feed(evalTrader({ mode: 'auto' }));
+  assert.match(mounts[0].opts.locked(), /in Auto: switch Armed off/, 'the lock reads the lane as it is now, not as it was when mounted');
+  P.feed(evalTrader({ owns: true }));
+  assert.match(mounts[0].opts.locked(), /holds a position/);
+  assert.strictEqual(mounts.length, 2, 'messages never mount again');
+  P.subs.closed();
+  P.feed({ type: 'hello', version: '0.6.21' }); P.feed({ type: 'trading', enabled: true }); P.feed(accounts); P.feed(groups);
+  P.feed(evalTrader({ group: { id: 'g3', name: 'New' } }));
+  assert.ok(mounts[0].destroyed >= 1, 'the lane\'s group changed: the old mount is taken down');
+  P.fv.showTab(false);
+  assert.ok(mounts.every(m => m.destroyed >= 1), 'closing the tab takes every mount down');
+  // without the page's mount (the tab alone) a lane says where its accounts would show, and nothing throws
+  const Q = page(t); Q.fv.showTab(true); Q.feed({ type: 'hello', version: '0.6.21' }); Q.feed(accounts); Q.feed(groups); Q.feed(evalTrader());
+  assert.match(Q.part('lanes').innerHTML, /The accounts of this lane show here when the page is open with its accounts part\./);
 });

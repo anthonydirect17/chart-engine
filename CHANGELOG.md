@@ -63,6 +63,33 @@
   `test/pc-updater.test.js`: the allowed git subcommands, the box job's name, useHttpPath read before the one ask, the
   token only after a 404 or 401 and then through the Actions API, one place that asks for it and one that sends it.
 
+## chart 1.48.0 (2026-11-12): Legion Setup, assembled from the page's own panels (page only, no F5)
+
+In plain words: the Legion tab gets two pages, Setup and Live, and Setup is laid out as the approved picture, built from what
+the page already has. Kill all and Armed keep their place and their rules.
+
+- **Setup and Live.** A two-way switch under the title (`.ws-seg`, the page's own). Kill all and Armed are in the same head
+  on both pages. Live keeps the prop accounts table until Legion Live replaces it.
+- **Market now** says it is not built yet: the zone comes from Bot-Lab's plain-code labeler once it exists.
+- **Today: the two lanes.** Each lane holds the Multi-Account panel itself, mounted by the page on the lane's group (one
+  fixed group, the narrow feed of 1.47.0, the lane's lock): its chips, its bench, a drag or a click in or out, and its join
+  question. Nothing here is a copy. Beside it: the lane's trader, its mode, Ready or why not, the pick list, and the picked
+  bot's card (its readable name, BOT or LINEUP, its risk a trade, what it is doing, today on the lane's accounts). One file
+  a lane; a second bot on a lane comes as a lineup file.
+- **The roster, one line a family.** A bot's family is its run's family; a lineup is a family of its own. Each setting is
+  one row: its readable name (the whole file name, the family capitalised), its risk, ONE profit per $1 with its range and
+  the file's word against no edge, its eval pass, its standing, in-sample and its try, and Details as before. Filters:
+  "Good for evals" and "Good for funded" show what runs live and the file itself marks above no edge for that stage,
+  sorted by eval pass or by dollars paid per funded account; no threshold is set on the page. "Fits now" waits for
+  Market now and says so. All, and Find.
+- **Other connections**, folded: the traders on no lane. A trader on a lane shows on its lane.
+- **The look:** raised boxes on the two box tokens, titles in Cinzel and gold with a short gold rule, pills; eval steel blue,
+  funded gold, BOT grey, AGENT cyan, the word always with the colour. The Setup and Live switch sits on its own row so the
+  head row holds only the title and Kill all's buttons: Yes is never drawn where Kill all was, at any width.
+
+Checked: `test/fleet.test.js` (31), `npm run smoke:fleet` (152), `npm run smoke:lanes` (25, with Legion's eval lane
+holding the real Multi-Account panel in the page and a move from it sending `memberBench` only).
+
 ## chart 1.47.0 (2026-11-12): three shared panels made ready for Legion (page only, no F5)
 
 In plain words: nothing on screen changes. Three panels the page already has learn to be shown a second time, so Legion

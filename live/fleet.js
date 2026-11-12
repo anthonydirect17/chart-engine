@@ -259,6 +259,7 @@ function stageCard(d, stage) {
     profitPerDollar: n.profit_per_dollar, range: [r[0], r[1]],
     noEdge: { median: ne.median, p5: ne.p5, p95: ne.p95 }, aboveNoEdge: n.above_no_edge,
     notSearchedOn: n.not_searched_on,
+    evalPass: stage === 'eval' ? n.eval_pass : null, paidPerFunded: stage === 'funded' ? n.paid_per_funded : null,
   };
   out.playbookText = 'Risk ' + usd(out.risk) + ' a trade; day loss stop ' + (out.dayLoss === null ? 'none' : usd(out.dayLoss)) + '; day profit stop ' + (out.dayProfit === null ? 'none' : usd(out.dayProfit)) +
     '; ' + (out.maxTrades === null ? 'no cap on trades a day' : 'at most ' + one(out.maxTrades, 'trade') + ' a day') + (stage === 'funded' ? '; payout ' + (out.payoutAt === null ? 'not set' : 'at ' + usd(out.payoutAt)) : '');
@@ -277,7 +278,7 @@ function botPart(b) {
   if (b.runs_live ? b.why_not !== null : !(typeof b.why_not === 'string' && b.why_not)) return null;
   const r = b.record, sess = count(r.sessions), trades = count(r.trades), tries = count(r.try);
   return {
-    name: b.bot, runsLive: b.runs_live, whyNot: b.runs_live ? '' : str(b.why_not, 400),
+    name: b.bot, runsLive: b.runs_live, whyNot: b.runs_live ? '' : str(b.why_not, 400), family: str(r.family, 40),
     runId: str(r.run_id, 80), sessions: sess, trades, tries, instrument: str(r.instrument, 12), verdict: str(r.verdict, 200),
     recordText: 'Run ' + str(r.run_id, 80) + ': ' + (sess === null ? 'sessions not known' : one(sess, 'session')) + ', ' + (trades === null ? 'trades not known' : one(trades, 'trade')) + (str(r.instrument, 12) ? ', ' + str(r.instrument, 12) : ''),
     /* a roster/1 file carries no confirmation on locked weeks: every number in it is in-sample (build answers 8, section 4) */
@@ -503,6 +504,61 @@ function maySend(m) {
   return false;
 }
 
+/* ---------------------------------------------------------------- the roster by family (Legion Setup, chart 1.48.0) */
+/** A bot's readable name from its file's own name (Anthony 2026-11-12: the whole name, the family capitalised, so two
+ *  settings never read the same): "germanicus_r75_cap_off_v1" -> "Germanicus r75 cap off v1". */
+function readableName(name) {
+  const parts = String(name || '').replace(/\.json$/, '').split(/[_-]+/).filter(Boolean);
+  if (!parts.length) return '';
+  return [parts[0].charAt(0).toUpperCase() + parts[0].slice(1)].concat(parts.slice(1)).join(' ').slice(0, 80);
+}
+const FILTERS = ['all', 'evals', 'funded'];
+/**
+ * The roster as one line a FAMILY with its settings inside (Legion Setup). cards: rosterCards()'s result; ls: lanes();
+ * filter: 'all' | 'evals' | 'funded'; find: text. A bot's family is its run's family (record.family), else the first word of
+ * its name; a lineup is a family of its own. One number a setting: profit per $1 with its range (the eval stage's; a file
+ * whose two stages differ says so in Details). The two "good for" filters use only the file's own word (Anthony 2026-11-12):
+ * a setting that runs live and that the file marks above no edge for that stage, sorted by its eval pass share or by the
+ * dollars paid per funded account. No threshold is set on the page. -> { families: [...], total, shown }
+ */
+function rosterFamilies(cards, ls, filter, find) {
+  const out = { families: [], total: 0, shown: 0 };
+  if (!cards || !cards.ok) return out;
+  const f = FILTERS.includes(filter) ? filter : 'all', q = String(find || '').trim().toLowerCase();
+  const where = new Map();
+  for (const l of Array.isArray(ls) ? ls : []) if (l && l.pick) where.set(l.pick, (where.get(l.pick) || []).concat(l.title));
+  const fams = new Map();
+  for (const c of cards.lineups.concat(cards.bots)) {
+    const famKey = c.kind === 'lineup' ? 'lineup:' + c.name : 'bot:' + (c.family || String(c.name).split(/[_-]/)[0]).toLowerCase();
+    const ev = c.stages[0], fu = c.stages[1];
+    const row = { card: c, file: c.file, name: c.name, readable: readableName(c.name), kind: c.kind, runsLive: c.runsLive,
+      ppd: ev.profitPerDollar, range: ev.range, stagesDiffer: ev.profitPerDollar !== fu.profitPerDollar, evalPass: ev.evalPass, paid: fu.paidPerFunded,
+      riskEval: ev.risk, riskFunded: fu.risk, aboveEval: ev.aboveNoEdge, aboveFunded: fu.aboveNoEdge,
+      where: (where.get(c.file) || []).join(' and '),
+      standing: c.kind === 'lineup' ? c.joinedText : (c.trades === null ? 'trades not known' : one(c.trades, 'trade')) + ', ' + (c.sessions === null ? 'sessions not known' : one(c.sessions, 'session')),
+      evidence: c.evidenceText };
+    if (!fams.has(famKey)) fams.set(famKey, { key: famKey, kind: c.kind, name: c.kind === 'lineup' ? readableName(c.name) : readableName(famKey.slice(4)), settings: [] });
+    fams.get(famKey).settings.push(row);
+    out.total++;
+  }
+  for (const fam of fams.values()) {
+    let list = fam.settings;
+    if (f === 'evals') list = list.filter(r => r.runsLive && r.aboveEval).sort((a, b) => b.evalPass - a.evalPass);
+    else if (f === 'funded') list = list.filter(r => r.runsLive && r.aboveFunded).sort((a, b) => b.paid - a.paid);
+    else list = list.slice().sort((a, b) => b.ppd - a.ppd);
+    if (q) list = list.filter(r => (r.readable + ' ' + fam.name + ' ' + r.file).toLowerCase().includes(q));
+    if (!list.length) continue;
+    out.shown += list.length;
+    out.families.push({ key: fam.key, kind: fam.kind, name: fam.name, settings: list, count: fam.settings.length,
+      best: Math.max.apply(null, list.map(r => r.ppd)), bestPass: Math.max.apply(null, list.map(r => (isNum(r.evalPass) ? r.evalPass : -1))),
+      bestPaid: Math.max.apply(null, list.map(r => (isNum(r.paid) ? r.paid : -1))),
+      where: list.filter(r => r.where).map(r => r.readable + ': ' + r.where).join('; ') });
+  }
+  const by = f === 'evals' ? (a, b) => b.bestPass - a.bestPass : f === 'funded' ? (a, b) => b.bestPaid - a.bestPaid : (a, b) => b.best - a.best;
+  out.families.sort(by);
+  return out;
+}
+
 /* ---------------------------------------------------------------- a lane's own Multi-Account panel (1.47.0, the reuse map) */
 /**
  * Why no account may move into, out of or within a lane now ('' when moves are free): the lane's trader is in Auto, is not
@@ -552,7 +608,7 @@ const badAnswer = text => /NOT STOPPED|FAILED|could NOT/.test(String(text || '')
 /** "09:41:07" of a Date (the PC's own clock), for the time in front of a Kill all answer. */
 const clock = d => [d.getHours(), d.getMinutes(), d.getSeconds()].map(x => String(x).padStart(2, '0')).join(':');
 
-return { laneLock, laneMaySend, laneFeed, PICK_MIN, STAGES, lanes, armState, armMsgs, armWords, pickChoices, pickMsg, maySend, KILL_MIN, SWITCH_MIN, DAYSTOP_MIN, ROSTER_MIN, ROSTER_FORMAT, LINEUP_FORMAT, CONFIRM_MS, ARM_MS, ANSWER_WAIT_MS, ROSTER_WAIT_MS, MAX_CARDS, MAX_MEMBERS, MAX_NOT_SHOWN, MODE_NAME, atLeast, usd, signed, stageCard, rosterCards, rosterProblem,
+return { readableName, rosterFamilies, FILTERS, laneLock, laneMaySend, laneFeed, PICK_MIN, STAGES, lanes, armState, armMsgs, armWords, pickChoices, pickMsg, maySend, KILL_MIN, SWITCH_MIN, DAYSTOP_MIN, ROSTER_MIN, ROSTER_FORMAT, LINEUP_FORMAT, CONFIRM_MS, ARM_MS, ANSWER_WAIT_MS, ROSTER_WAIT_MS, MAX_CARDS, MAX_MEMBERS, MAX_NOT_SHOWN, MODE_NAME, atLeast, usd, signed, stageCard, rosterCards, rosterProblem,
   kindOf, seatsKind, dayMark, traderAccounts, statusText, traders, propAccounts, killAllState, killAllMsg, autoLine, badAnswer, clock };
 });
 
@@ -590,6 +646,7 @@ function create(o) {
   const S = { shown: false, built: false, version: '', connected: false, signedIn: false, accounts: null, groups: null, agents: new Map(),
     ask: 0, askTimer: 0, hint: '', hintBad: false, hintState: false, answer: '', answerBad: false, cidSeq: 0, pending: '', pendingAt: 0, waitTimer: 0, sent: 0,
     armAsk: 0, armTimer: 0, armSaid: '', armBad: false, modeSent: new Map(), pickSent: new Map(),
+    sub: 'setup', filter: 'all', find: '', famShut: new Set(), othersOpen: false, lanePanels: {},
     roster: { state: 'idle', text: '', cards: null, seq: 0, asked: 0, at: 0, version: '' }, rosterDirty: true, rosterTimer: 0, open: new Set(), drawn: {}, draws: { head: 0, roster: 0, traders: 0, accounts: 0, lanes: 0 } };
   const el = {};
   const agentList = () => [...S.agents.values()];
@@ -726,32 +783,30 @@ function create(o) {
       <p class="fl-line mono">${esc(st.profitText)}</p><p class="fl-line mono fl-mutline">${esc(st.noEdgeText)}</p>
       <p class="fl-line mono fl-mutline">${esc(st.heldBackText)}</p><p class="fl-line">${esc(st.stageText)}</p><p class="fl-line fl-mutline">${esc(st.playbookText)}</p></div>`;
   }
-  /* One line a bot or a lineup (Anthony 2026-11-11: "detail should be there, but expandable when needed"): the name, whether
-     it runs live, in-sample and the try count, and each stage's profit per $1 with the file's own word against no edge.
-     Everything else (the file, the run, why not, the playbook, the ranges, a lineup's bots) opens under it with Details. */
-  function stageShort(st) {
-    return `<span class="fl-short" data-stage="${esc(st.stage)}"><span class="fl-stname">${esc(st.title)}</span> <span class="mono">${esc(C.signed(st.profitPerDollar))}</span> <span class="fl-per">per $1</span> <span class="fl-tag" data-kind="${st.aboveNoEdge ? 'edge' : 'noedge'}">${esc(st.edgeText)}</span></span>`;
-  }
-  function cardHtml(c) {
-    const open = S.open.has(c.kind + ':' + c.name);
-    const live = c.runsLive ? '<span class="fl-tag" data-kind="live">Runs live</span>' : '<span class="fl-tag" data-kind="notlive">Does not run live</span>';
+  function settingHtml(r) {
+    const open = S.open.has(r.kind + ':' + r.name), c = r.card;
+    const live = r.runsLive ? '' : '<span class="fl-tag" data-kind="notlive">Does not run live</span>';
     let more = '';
     if (open) {
       const shown = c.kind === 'lineup' ? c.bots.slice(0, C.MAX_MEMBERS) : [];
-      const members = c.kind === 'lineup' ? `<ol class="fl-members">${shown.map(b => `<li><span class="fl-mname">${esc(b.name)}</span> <span class="fl-mut">took ${b.taken}, skipped ${b.skipped}${b.sessionsLeftOut ? ', ' + b.sessionsLeftOut + ' of its sessions left out' : ''}; ${esc(b.recordText)}</span></li>`).join('')}</ol>
+      const members = c.kind === 'lineup' ? `<ol class="fl-members">${shown.map(b => `<li><span class="fl-mname">${esc(C.readableName(b.name))}</span> <span class="fl-mut">took ${b.taken}, skipped ${b.skipped}${b.sessionsLeftOut ? ', ' + b.sessionsLeftOut + ' of its sessions left out' : ''}; ${esc(b.recordText)}</span></li>`).join('')}</ol>
           ${c.bots.length > shown.length ? `<p class="fl-line fl-mutline">And ${c.bots.length - shown.length} more bots in this lineup, not drawn.</p>` : ''}
           <p class="fl-line fl-mutline">${esc(c.joinedText)}. One playbook for the lineup; the bot listed first takes a tie.</p>` : `<p class="fl-line fl-mutline">${esc(c.recordText)}</p>${c.verdictText ? `<p class="fl-line fl-mutline fl-verdict">${esc(c.verdictText)}</p>` : ''}`;
       more = `<div class="fl-more">
-        <p class="fl-line fl-mutline">File <span class="mono">${esc(c.file)}</span>, ${esc(c.planText)}</p>
-        ${c.runsLive ? '' : `<p class="fl-line fl-warn">Why not: ${esc(c.whyNot)}</p>`}
+        <p class="fl-line fl-mutline">File <span class="mono">${esc(c.file)}</span>, ${esc(c.planText)}. ${esc(r.evidence)}.</p>
+        ${r.runsLive ? '' : `<p class="fl-line fl-warn">Why not: ${esc(c.whyNot)}</p>`}
+        ${r.stagesDiffer ? '<p class="fl-line fl-warn">The file gives the eval and the funded stage different numbers; the line shows the eval stage\'s.</p>' : ''}
         ${members}
         <div class="fl-stages">${c.stages.map(stageHtml).join('')}</div>
       </div>`;
     }
-    return `<li class="fl-card" data-kind="${c.kind}" data-name="${esc(c.name)}"${c.runsLive ? '' : ' data-tone="notlive"'}${open ? ' data-open="1"' : ''}>
-      <div class="fl-row"><span class="fl-tname">${esc(c.name)}</span><span class="fl-mut">${c.kind === 'lineup' ? 'Lineup of ' + c.bots.length : 'Bot'}</span>${live}${c.quick ? '<span class="fl-tag" data-kind="quick">Quick look: never traded</span>' : ''}
-        <span class="fl-evidence">${esc(c.evidenceText)}</span><span class="fl-fill"></span>${c.stages.map(stageShort).join('')}
-        <button type="button" class="ws-btn fl-morebtn" data-do="more" data-card="${esc(c.kind + ':' + c.name)}" aria-expanded="${open}">${open ? 'Hide' : 'Details'}</button></div>
+    return `<li class="fl-set" data-kind="${r.kind}" data-name="${esc(r.name)}"${r.runsLive ? '' : ' data-tone="notlive"'}${open ? ' data-open="1"' : ''}>
+      <div class="fl-srow"><span class="fl-sname">${esc(r.readable)} <span class="fl-mut">risk ${esc(C.usd(r.riskEval))} eval, ${esc(C.usd(r.riskFunded))} funded${r.where ? ' · on the ' + esc(r.where) + ' today' : ''}</span>${live}${c.quick ? '<span class="fl-tag" data-kind="quick">Quick look: never traded</span>' : ''}</span>
+        <span class="mono">${esc(C.signed(r.ppd))} <span class="fl-mut">(${esc(C.signed(r.range[0]))} to ${esc(C.signed(r.range[1]))})</span> <span class="fl-tag" data-kind="${r.aboveEval ? 'edge' : 'noedge'}">${r.aboveEval ? 'Above no edge' : 'Not above no edge'}</span></span>
+        <span class="mono">${r.evalPass === null ? '' : esc(Math.round(r.evalPass * 1000) / 10 + '%')}</span>
+        <span class="fl-mut">not built yet</span>
+        <span class="fl-mut">${esc(r.standing)}; ${esc(r.evidence)}</span>
+        <button type="button" class="fl-pill" data-do="more" data-card="${esc(r.kind + ':' + r.name)}" aria-expanded="${open}">${open ? 'Hide' : 'Details'}</button></div>
       ${more}
     </li>`;
   }
@@ -759,10 +814,22 @@ function create(o) {
     const R = S.roster, c = R.cards;
     let body;
     if (c && (c.bots.length || c.lineups.length || c.notShown.length)) {
-      const all = c.lineups.concat(c.bots), cards = all.slice(0, C.MAX_CARDS), not = c.notShown.slice(0, C.MAX_NOT_SHOWN);
+      const all = C.rosterFamilies(c, laneList(), S.filter, S.find);
+      const fams = all.families.slice(0, C.MAX_CARDS), not = c.notShown.slice(0, C.MAX_NOT_SHOWN);
+      const head = '<div class="fl-srow fl-shead"><span>Family and setting</span><span>Profit per $1</span><span>Eval pass</span><span>In this zone</span><span>Standing</span><span></span></div>';
+      const famHtml = f => {
+        const open = !S.famShut.has(f.key) || !!S.find.trim();
+        return `<li class="fl-fam" data-fam="${esc(f.key)}"${open ? ' data-open="1"' : ''}>
+          <div class="fl-srow fl-famrow"><span class="fl-sname"><span class="fl-tname">${esc(f.name)}</span> <span class="fl-who" data-who="bot">${f.kind === 'lineup' ? 'LINEUP' : 'BOT'}</span> <span class="fl-mut">${esc(f.count + (f.count === 1 ? ' setting' : ' settings'))}${f.settings.length < f.count ? ', ' + f.settings.length + ' shown' : ''}${f.where ? ' · ' + esc(f.where) : ''}</span></span>
+            <span class="mono">best ${esc(C.signed(f.best))}</span><span class="mono">${f.bestPass >= 0 ? esc(Math.round(f.bestPass * 1000) / 10 + '%') : ''}</span><span class="fl-mut">not built yet</span><span class="fl-mut">in-sample, not proven</span>
+            <button type="button" class="fl-pill" data-do="fam" data-fam="${esc(f.key)}" aria-expanded="${open}">${open ? 'Close' : 'Open ' + f.settings.length}</button></div>
+          ${open ? `<ul class="fl-sets">${f.settings.map(settingHtml).join('')}</ul>` : ''}
+        </li>`;
+      };
       body = (R.state === 'loading' ? '<p class="fl-empty">Reading the roster again...</p>' : '') +
-        (cards.length ? `<ul class="fl-cards">${cards.map(cardHtml).join('')}</ul>` : '<p class="fl-empty">No roster file here can be shown.</p>') +
-        (all.length > cards.length ? `<p class="fl-note">${all.length - cards.length} more cards not drawn (the tab draws ${C.MAX_CARDS} at most).</p>` : '') +
+        (fams.length ? `<div class="fl-scroll"><div class="fl-stable">${head}<ul class="fl-fams">${fams.map(famHtml).join('')}</ul></div></div>`
+          : `<p class="fl-empty">${S.find.trim() || S.filter !== 'all' ? 'Nothing in the roster matches this filter.' : 'No roster file here can be shown.'}</p>`) +
+        (all.families.length > fams.length ? `<p class="fl-note">${all.families.length - fams.length} more families not drawn.</p>` : '') +
         (not.length ? `<ul class="fl-notshown">${not.map(x => `<li><span class="mono">${esc(x.name)}</span>: not shown, ${esc(x.why)}</li>`).join('')}</ul>` : '') +
         (c.notShown.length > not.length ? `<p class="fl-note">And ${c.notShown.length - not.length} more files not shown.</p>` : '') +
         (c.left ? `<p class="fl-note">${c.left} more file${c.left === 1 ? '' : 's'} in the folder not read (ChartBridge reads 200 at most).</p>` : '');
@@ -770,10 +837,7 @@ function create(o) {
     else if (R.state === 'loading') body = '<p class="fl-empty">Reading the roster...</p>';
     else if (R.state === 'idle') body = `<p class="fl-empty">${S.connected ? 'The roster is not read yet.' : 'ChartBridge is not connected.'}</p>`;
     else body = `<p class="fl-empty${R.state === 'error' ? ' fl-warn' : ''}">${esc(R.text)}</p>`;
-    return `<div class="fl-trow"><h3 class="fl-h">Roster</h3><span class="fl-fill"></span>
-        <button type="button" class="ws-btn" data-do="roster"${R.state === 'loading' ? ' aria-disabled="true"' : ''}>Read again</button></div>
-      ${body}
-      <p class="fl-note">The number on each line is profit per $1 spent on accounts. Every number is from in-sample runs, and none is a promise. "No edge" is what the same trades would show with their edge taken out, so only a number above that range says anything. Details shows the rest.</p>`;
+    return body + `<p class="fl-note">Profit per $1 is profit per $1 spent on accounts, one number for the eval and its funded account together, with its range. Every number is from in-sample runs, and none is a promise. "No edge" is what the same trades would show with their edge taken out. The two "Good for" filters use only each file's own word. "In this zone" waits for Market now.</p>`;
   }
 
   function traderHtml(t) {
@@ -803,10 +867,15 @@ function create(o) {
       <td>${esc(a.position)}${a.traders.length ? `<span class="fl-mut">${esc(a.traders.join(', '))}</span>` : '<span class="fl-mut">no trader on it</span>'}</td>
     </tr>`;
   }
-  function tradersHtml(rows) {
-    return `<h3 class="fl-h">Traders</h3>
-      ${rows.length ? `<ul class="fl-traders">${rows.map(traderHtml).join('')}</ul>` : `<p class="fl-empty">${S.connected ? 'No trader is set up in ChartBridge yet.' : 'ChartBridge is not connected.'}</p>`}
-      <p class="fl-note">A trader's mode, account, window and its two entry switches are changed on the Agent tab, by you. Nothing here changes them.</p>`;
+  /* the traders on no lane (the old runners in Shadow and any other program on the agent channel), folded: a trader on a lane
+     shows on its lane */
+  function tradersHtml(rows, ls) {
+    const onLane = new Set([].concat.apply([], (ls || []).map(l => l.traders)));
+    const rest = rows.filter(t => !onLane.has(t.id));
+    return `<div class="fl-trow"><h3 class="fl-h fl-hsmall">Other connections (${rest.length})</h3><span class="fl-mut">Programs on ChartBridge's agent channel that are on no lane. Kill all still stops those on prop accounts.</span><span class="fl-fill"></span>
+        ${rest.length ? `<button type="button" class="fl-pill" data-do="others" aria-expanded="${S.othersOpen}">${S.othersOpen ? 'Hide' : 'Show'}</button>` : ''}</div>
+      ${!rest.length ? `<p class="fl-empty">${S.connected ? 'None.' : 'ChartBridge is not connected.'}</p>` : S.othersOpen ? `<ul class="fl-traders">${rest.map(traderHtml).join('')}</ul>
+      <p class="fl-note">A trader's mode, account, window and its two entry switches are changed on the Agent tab, by you. Nothing here changes them.</p>` : ''}`;
   }
   function accountsHtml(accts) {
     return `<h3 class="fl-h">Prop accounts</h3>
@@ -820,10 +889,12 @@ function create(o) {
   function build() {
     view.innerHTML = `<div class="fl-wrap">
       <div class="fl-top"><div class="fl-head">
-        <span class="fl-title">Legion</span><span class="fl-fill"></span>
+        <span class="fl-title">Legion</span>
+        <span class="fl-fill"></span>
         <button type="button" class="ws-btn fl-kill fl-yes" data-do="yes" data-k="yes" hidden>Yes, kill all</button><button type="button" class="ws-btn fl-cancel" data-do="no" data-k="no" hidden>Cancel</button>
         <button type="button" class="ws-btn fl-kill" data-do="ask" data-k="kill">Kill all: flatten and stop</button>
       </div>
+      <div class="fl-subrow"><span class="ws-seg fl-sub" role="group" aria-label="Legion page"><button type="button" data-do="sub" data-sub="setup" aria-pressed="true">Setup</button><button type="button" data-do="sub" data-sub="live" aria-pressed="false">Live</button></span></div>
       <p class="fl-ask" data-k="ask" role="alertdialog" aria-label="Kill all" hidden>Close every trader's position on the prop accounts and stop them? Yes, or Cancel, at the top right.</p>
       <p class="fl-autoline" data-k="autoline"></p>
       <p class="fl-said" data-k="hint" role="status" aria-live="polite"></p>
@@ -833,16 +904,31 @@ function create(o) {
         <button type="button" class="ws-btn fl-armyes" data-do="armyes" data-k="armyes" hidden>Yes, arm</button>
         <span class="fl-armsaid" data-k="armsaid" role="status" aria-live="polite"></span>
       </div>
-      <p class="fl-ask fl-armask" data-k="armask" role="alertdialog" aria-label="Armed" hidden></p></div>
-      <section class="fl-box fl-lanes" aria-label="Lanes" data-k="lanes"></section>
-      <div class="fl-cols">
-        <section class="fl-box" aria-label="Traders" data-k="traders"></section>
-        <section class="fl-box" aria-label="Prop accounts" data-k="accounts"></section>
+      <p class="fl-ask fl-armask" data-k="armask" role="alertdialog" aria-label="Armed" hidden></p>
+      <p class="fl-legend"><span class="fl-key"><span class="fl-dot" data-stage="eval"></span>Eval account</span><span class="fl-key"><span class="fl-dot" data-stage="funded"></span>Funded account</span><span class="fl-key"><span class="fl-who" data-who="bot">BOT</span>fixed rules</span><span class="fl-key"><span class="fl-who" data-who="agent">AGENT</span>an AI trader</span></p></div>
+      <div class="fl-page" data-k="setup">
+        <section class="fl-box fl-market" aria-label="Market now"><div class="fl-btitle"><h3 class="fl-h">Market now</h3></div>
+          <p class="fl-empty">Not built yet. The zone (the trend's direction and the volatility, in words) comes from Bot-Lab's plain-code labeler on this PC once it exists. It will suggest; you choose.</p></section>
+        <section class="fl-box fl-today" aria-label="Today"><div class="fl-btitle"><h3 class="fl-h">Today</h3><span class="fl-sub2">Drop an account into a lane. Pick the bot for the lane. Flip Armed.</span></div>
+          <div data-k="lanes"></div></section>
+        <section class="fl-box fl-roster" aria-label="Roster"><div class="fl-btitle"><h3 class="fl-h">Roster</h3><span class="fl-sub2">The bots the Lab built. One line a family; open it for its settings.</span></div>
+          <div class="fl-filters" role="group" aria-label="Roster filters">
+            <button type="button" class="fl-pill" data-do="filter" data-filter="fits" aria-pressed="false" aria-disabled="true" title="Market now is not built yet, so nothing can be matched to the market">Fits now</button>
+            <button type="button" class="fl-pill" data-do="filter" data-filter="evals" aria-pressed="false" title="Runs live, and the file itself says its eval number is above no edge; best eval pass share first">Good for evals</button>
+            <button type="button" class="fl-pill" data-do="filter" data-filter="funded" aria-pressed="false" title="Runs live, and the file itself says its funded number is above no edge; most paid per funded account first">Good for funded</button>
+            <button type="button" class="fl-pill" data-do="filter" data-filter="all" aria-pressed="true" data-k="allbtn">All</button>
+            <label class="fl-find">Find <input type="text" class="ws-in" data-do="find" placeholder="name or family" autocomplete="off" spellcheck="false" maxlength="40"></label>
+            <span class="fl-fill"></span><button type="button" class="fl-pill" data-do="roster">Read again</button>
+          </div>
+          <div data-k="roster"></div></section>
+        <section class="fl-box fl-others" aria-label="Other connections"><div data-k="traders"></div></section>
       </div>
-      <section class="fl-box fl-roster" aria-label="Roster" data-k="roster"></section>
-      <p class="fl-later">Not built yet, so not here: moving an account into or out of a lane by drag and drop (today an account's group is set on the Accounts tab), starting the runner's program with Armed, and each bot's own state from the runner.</p>
+      <div class="fl-page" data-k="live" hidden>
+        <section class="fl-box" aria-label="Prop accounts"><div data-k="accounts"></div></section>
+        <p class="fl-later">Legion Live (the tiles, one chart with each lane's marks, each trader's day, the accounts by group) is the next change. Until then this page shows the prop accounts as before.</p>
+      </div>
     </div>`;
-    for (const k of ['autoline', 'ask', 'kill', 'yes', 'no', 'hint', 'answer', 'roster', 'traders', 'accounts', 'lanes', 'arm', 'armyes', 'armno', 'armsaid', 'armask']) el[k] = view.querySelector('[data-k="' + k + '"]');
+    for (const k of ['autoline', 'ask', 'kill', 'yes', 'no', 'hint', 'answer', 'roster', 'traders', 'accounts', 'lanes', 'arm', 'armyes', 'armno', 'armsaid', 'armask', 'setup', 'live', 'allbtn']) el[k] = view.querySelector('[data-k="' + k + '"]');
     el.cancel = view.querySelector('[data-do="no"]');
     S.built = true; S.drawn = {}; S.rosterDirty = true;
   }
@@ -851,6 +937,33 @@ function create(o) {
   function section(key, html) {
     if (S.drawn[key] === html || !el[key]) return;
     S.drawn[key] = html; el[key].innerHTML = html; S.draws[key]++;
+    if (key === 'lanes') placeLanePanels();
+  }
+  /* ---------------- a lane's accounts: the Multi-Account panel itself, mounted by the page once a lane (o.lanePanel: the page's
+     own mount with one fixed group, the narrow feed and the lane's lock). Its element is made once and kept: after the lane's
+     words are drawn again it is put back in its place, so a drag or a join under way is never torn down by a message. */
+  function lanePanelFor(l) {
+    if (typeof o.lanePanel !== 'function' || !l || !l.groupId) return null;
+    const cur = S.lanePanels[l.stage];
+    if (cur && cur.groupId === l.groupId) return cur;
+    if (cur) { try { cur.mount.destroy(); } catch (e) { /* gone */ } delete S.lanePanels[l.stage]; }
+    if (typeof document === 'undefined' || !document.createElement) return null;
+    const host = document.createElement('div'); host.className = 'fl-lanepanel';
+    const stage = l.stage;
+    const locked = () => { const now = laneList().find(x => x.stage === stage); return C.laneLock(now) || (!S.connected ? 'ChartBridge is not connected' : ''); };
+    let mount = null;
+    try { mount = o.lanePanel(host, 'legion-' + stage, { group: l.groupId, locked }); } catch (e) { mount = null; }
+    if (!mount) return null;
+    S.lanePanels[stage] = { groupId: l.groupId, host, mount };
+    return S.lanePanels[stage];
+  }
+  function dropLanePanels() { for (const k of Object.keys(S.lanePanels)) { try { S.lanePanels[k].mount.destroy(); } catch (e) { /* gone */ } } S.lanePanels = {}; }
+  function placeLanePanels() {
+    if (!el.lanes || typeof el.lanes.querySelector !== 'function') return;
+    for (const stage of C.STAGES) {
+      const spot = el.lanes.querySelector('[data-panel="' + stage + '"]'), lp = S.lanePanels[stage];
+      if (spot && lp && typeof spot.appendChild === 'function' && lp.host.parentNode !== spot) spot.appendChild(lp.host);
+    }
   }
   function renderArm(ls) {
     const st = armNow(ls), asking = S.armAsk > 0;
@@ -867,26 +980,47 @@ function create(o) {
     setText(el.armsaid, S.armSaid || (st.state === 'partly' ? 'The lanes differ: ' + ls.map(l => l.title + ' ' + (l.auto ? 'in Auto' : 'not in Auto')).join(', ') + '. A click switches every lane off.' : st.state === 'off' && !st.can ? st.why : ''));
     if (el.armsaid) el.armsaid.classList.toggle('bad', S.armBad && !!S.armSaid);
   }
+  /* today's result on a lane: the sum of its accounts' today as ChartBridge sends it, or null when one is not known */
+  function laneToday(l) {
+    const rows = S.accounts && Array.isArray(S.accounts.list) ? S.accounts.list : [];
+    let sum = 0;
+    for (const n of l.seats) { const r = rows.find(x => x && typeof x.name === 'string' && x.name.toLowerCase() === n.toLowerCase()); if (!r || typeof r.pnlToday !== 'number' || !isFinite(r.pnlToday)) return null; sum += r.pnlToday; }
+    return l.seats.length ? Math.round(sum * 100) / 100 : null;
+  }
   function laneHtml(l, choices) {
     const none = !l.id;
     const opts = [{ file: '', text: 'None' }].concat(choices);
     if (l.pick && !choices.some(c => c.file === l.pick)) opts.push({ file: l.pick, text: l.pickText + ' (not offered now)' });
     const locked = l.auto ? 'Switch Armed off first: the pick changes only while the lane is not in Auto' : l.exposed ? 'The trader holds something: the pick changes once it is flat' : !l.pickKnown ? 'The pick needs ChartBridge ' + C.PICK_MIN : '';
     const sel = none ? '' : `<label class="fl-k" for="flPick-${esc(l.stage)}">Bot</label><select class="fl-pick" id="flPick-${esc(l.stage)}" data-do="pick" data-agent="${esc(l.id)}"${locked ? ` disabled title="${esc(locked)}"` : ''}>${opts.map(c => `<option value="${esc(c.file)}"${c.file === l.pick ? ' selected' : ''}>${esc(c.text)}</option>`).join('')}</select>`;
+    const c = l.card, st = c ? c.stages[l.stage === 'eval' ? 0 : 1] : null, today = none ? null : laneToday(l);
+    const card = none ? '' : c ? `<div class="fl-botcard">
+        <div class="fl-trow"><span class="fl-tname">${esc(C.readableName(c.name))}</span><span class="fl-who" data-who="bot">${c.kind === 'lineup' ? 'LINEUP' : 'BOT'}</span><span class="fl-fill"></span><span class="fl-mut mono">risk ${esc(C.usd(st.risk))} a trade</span></div>
+        <div class="fl-trow"><span class="fl-status">${esc(l.status)}</span><span class="fl-fill"></span>${today === null ? '<span class="fl-mut">today not known</span>' : `<span class="mono fl-pnl${today > 0 ? ' up' : today < 0 ? ' down' : ''}">${esc(C.usd(today, true))}</span>`}</div>
+        ${c.kind === 'lineup' ? `<p class="fl-line fl-mutline">${esc(c.bots.map(b => C.readableName(b.name)).join(', '))}: one open trade at a time, the first listed wins a tie.</p>` : ''}</div>`
+      : '<div class="fl-slot">No bot is picked for this lane. A second bot on a lane comes as a lineup file from the Lab.</div>';
     return `<div class="fl-lane" data-stage="${esc(l.stage)}" data-armable="${l.armable}"${l.auto ? ' data-auto="1"' : ''}>
-      <div class="fl-trow"><span class="fl-tname">${esc(l.title)}</span>${none ? '' : `<span class="fl-mut">${esc(l.name)}, group ${esc(l.groupName)}</span><span class="fl-mode" data-mode="${esc(l.mode)}">${esc(l.modeText)}</span>`}
-        <span class="fl-fill"></span><span class="fl-tag" data-kind="${l.armable ? 'live' : 'notlive'}">${l.armable ? 'Ready' : 'Not ready'}</span></div>
-      ${none ? '' : `<div class="fl-trow">${sel}</div>
-      <div class="fl-trow"><span class="fl-k">Accounts</span><span class="fl-v">${l.seats.length ? l.seats.map(n => `<span class="fl-seat">${esc(n)}</span>`).join('') : 'none in its group'}</span></div>
-      <div class="fl-trow"><span class="fl-k">Now</span><span class="fl-v fl-status">${esc(l.status)}</span></div>`}
+      <div class="fl-trow"><span class="fl-lanetitle"><span class="fl-dot" data-stage="${esc(l.stage)}"></span>${esc(l.title)}</span><span class="fl-mut">${l.stage === 'eval' ? 'Goal: pass the eval' : 'Goal: reach the payout'}</span>
+        <span class="fl-fill"></span>${none ? '' : `<span class="fl-mode" data-mode="${esc(l.mode)}">${esc(l.modeText)}</span>`}<span class="fl-tag" data-kind="${l.armable ? 'live' : 'notlive'}">${l.armable ? 'Ready' : 'Not ready'}</span></div>
+      ${none ? '' : `<div class="fl-trow"><span class="fl-mut">${esc(l.name)}, group ${esc(l.groupName)}</span></div><div class="fl-trow">${sel}</div>${card}`}
       ${l.why ? `<p class="fl-line fl-warn fl-lanewhy">${esc(l.why)}</p>` : ''}
       ${!none && l.runnerNote && l.armable ? `<p class="fl-line fl-mutline">${esc(l.runnerNote)}</p>` : ''}
+      ${none ? '' : `<div class="fl-lanepanels" data-panel="${esc(l.stage)}">${typeof o.lanePanel === 'function' ? '' : '<p class="fl-mut">The accounts of this lane show here when the page is open with its accounts part.</p>'}</div>`}
     </div>`;
   }
   function lanesHtml(ls) {
     const choices = C.pickChoices(S.roster.cards);
-    return `<h3 class="fl-h">Lanes</h3><div class="fl-lanegrid">${ls.map(l => laneHtml(l, choices)).join('')}</div>
-      <p class="fl-note">A lane is a trader whose account is a group; the group's Type (eval or funded) says which lane. Armed sends each ready lane to Auto; off sends every lane to Shadow. What shows here is what ChartBridge says, so a mode changed on the Agent tab, by Kill all or at 17:00 New York shows here too. Off closes no position: Kill all does.</p>`;
+    for (const l of ls) lanePanelFor(l);
+    for (const stage of Object.keys(S.lanePanels)) { const l = ls.find(x => x.stage === stage); if (!l || !l.groupId) { try { S.lanePanels[stage].mount.destroy(); } catch (e) { /* gone */ } delete S.lanePanels[stage]; } }
+    return `<div class="fl-lanegrid">${ls.map(l => laneHtml(l, choices)).join('')}</div>
+      <p class="fl-note">A lane is a trader whose account is a group; the group's Type (eval or funded) says which lane. Its accounts are that group, with the Multi-Account panel's own lanes and bench: drag or click an account in or out. No account moves while the lane is in Auto or holds something. Accounts no bot may touch stay on the bench. Armed sends each ready lane to Auto; off sends every lane to Shadow. Off closes no position: Kill all does.</p>`;
+  }
+  function renderSub() {
+    setHidden(el.setup, S.sub !== 'setup'); setHidden(el.live, S.sub !== 'live');
+    if (view && typeof view.querySelectorAll === 'function') for (const b of view.querySelectorAll('[data-do="sub"]')) b.setAttribute('aria-pressed', String(b.dataset.sub === S.sub));
+    if (view && typeof view.querySelectorAll === 'function') for (const b of view.querySelectorAll('[data-do="filter"]')) b.setAttribute('aria-pressed', String(b.dataset.filter === S.filter));
+    const total = S.roster.cards && S.roster.cards.ok ? S.roster.cards.bots.length + S.roster.cards.lineups.length : 0;
+    setText(el.allbtn, 'All (' + total + ')');
   }
   function renderHead(rows) {
     const st = killState(), asking = S.ask > 0;
@@ -913,7 +1047,8 @@ function create(o) {
     try { renderArm(ls); } catch (e) { /* the switch is already there */ }
     try { section('lanes', lanesHtml(ls)); } catch (e) { section('lanes', '<p class="fl-empty fl-warn">The lanes could not be drawn.</p>'); }
     try { if (S.rosterDirty) { S.rosterDirty = false; section('roster', rosterHtml()); if (el.roster) el.roster.setAttribute('data-state', S.roster.state); } } catch (e) { section('roster', '<p class="fl-empty fl-warn">The roster could not be drawn.</p>'); }
-    try { section('traders', tradersHtml(rows)); } catch (e) { section('traders', '<p class="fl-empty fl-warn">The traders could not be drawn.</p>'); }
+    try { renderSub(); } catch (e) { /* the pages are already there */ }
+    try { section('traders', tradersHtml(rows, ls)); } catch (e) { section('traders', '<p class="fl-empty fl-warn">The traders could not be drawn.</p>'); }
     try { section('accounts', accountsHtml(C.propAccounts(S.accounts, S.groups, agentList()))); } catch (e) { section('accounts', '<p class="fl-empty fl-warn">The prop accounts could not be drawn.</p>'); }
   }
   function onClick(e) {
@@ -921,6 +1056,10 @@ function create(o) {
     if (!b) return;
     const what = b.dataset.do;
     if (what === 'roster') { if (S.roster.state !== 'loading') loadRoster(); return; }
+    if (what === 'sub') { const sub = b.dataset.sub === 'live' ? 'live' : 'setup'; if (sub !== S.sub) { S.sub = sub; render(); } return; }
+    if (what === 'filter') { const f = String(b.dataset.filter || ''); if (C.FILTERS.includes(f) && f !== S.filter) { S.filter = f; S.rosterDirty = true; render(); } return; }
+    if (what === 'fam') { const k = String(b.dataset.fam || ''); if (S.famShut.has(k)) S.famShut.delete(k); else S.famShut.add(k); S.rosterDirty = true; render(); return; }
+    if (what === 'others') { S.othersOpen = !S.othersOpen; S.drawn.traders = null; render(); return; }
     if (what === 'more') {                                                  // display only: a card's detail open or shut
       const k = String(b.dataset.card || '');
       if (S.open.has(k)) S.open.delete(k); else S.open.add(k);
@@ -982,7 +1121,7 @@ function create(o) {
     if (on === S.shown) return;
     S.shown = on;
     if (tabBtn) { tabBtn.setAttribute('aria-pressed', String(on)); if (on) tabBtn.hidden = false; }
-    if (!on) { endAsk(); endArmAsk(); S.built = false; if (view) view.innerHTML = ''; offer(); }
+    if (!on) { endAsk(); endArmAsk(); dropLanePanels(); S.built = false; if (view) view.innerHTML = ''; offer(); }
     /* Escape cancels a question wherever the focus is while the tab is open (build answers 15, section 3) */
     if (DOC) { if (on) DOC.addEventListener('keydown', onKey, true); else DOC.removeEventListener('keydown', onKey, true); }
     if (typeof o.onTab === 'function') o.onTab(on);
@@ -997,6 +1136,12 @@ function create(o) {
     render();
     if (typeof e.preventDefault === 'function') e.preventDefault();
   }
+  function onInput(e) {
+    const t = e && e.target;
+    if (!t || !t.dataset || t.dataset.do !== 'find') return;
+    const v = String(t.value || '').slice(0, 40);
+    if (v !== S.find) { S.find = v; S.rosterDirty = true; render(); }
+  }
   function onChange(e) {
     const t = e && e.target;
     if (!t || !t.dataset || t.dataset.do !== 'pick') return;
@@ -1005,6 +1150,7 @@ function create(o) {
   const DOC = typeof document !== 'undefined' && document && typeof document.addEventListener === 'function' ? document : null;
   if (view) view.addEventListener('click', onClick);
   if (view) view.addEventListener('change', onChange);
+  if (view) view.addEventListener('input', onInput);
   if (view) view.addEventListener('keydown', onKey);
   if (tabBtn) tabBtn.addEventListener('click', () => showTab(!S.shown));
   const unlisten = V3 ? V3.listen({ message: onMessage, closed: () => lost() }) : () => {};
@@ -1016,7 +1162,7 @@ function create(o) {
       traders: C.traders(agentList(), S.accounts, S.version), accounts: C.propAccounts(S.accounts, S.groups, agentList()),
       roster: { state: S.roster.state, text: S.roster.text, asked: S.roster.asked, bots: S.roster.cards ? S.roster.cards.bots.map(c => c.name) : [], lineups: S.roster.cards ? S.roster.cards.lineups.map(c => c.name) : [], notShown: S.roster.cards ? S.roster.cards.notShown.length : 0 } }),
     reloadRoster: loadRoster,
-    destroy: () => { S.roster.seq++; clearTimeout(S.rosterTimer); clearTimeout(S.waitTimer); unlisten(); endAsk(); endArmAsk(); if (DOC) DOC.removeEventListener('keydown', onKey, true); if (view) { view.removeEventListener('click', onClick); view.removeEventListener('change', onChange); view.removeEventListener('keydown', onKey); } },
+    destroy: () => { dropLanePanels(); S.roster.seq++; clearTimeout(S.rosterTimer); clearTimeout(S.waitTimer); unlisten(); endAsk(); endArmAsk(); if (DOC) DOC.removeEventListener('keydown', onKey, true); if (view) { view.removeEventListener('click', onClick); view.removeEventListener('change', onChange); view.removeEventListener('input', onInput); view.removeEventListener('keydown', onKey); } },
   };
 }
 window.FleetView = { create };

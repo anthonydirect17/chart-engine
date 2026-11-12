@@ -2798,6 +2798,13 @@ function mountAccountsPage(v) {
    lane is that panel showing one group). The same factory and the same redraw loop as the grid's panel: no copy of the panel.
    key: its own panel id (its element ids and its kept group pick carry it). -> { panel, destroy } or null. */
 const lanePanels = new Map();
+function mountLegionLane(el, key, opts) {
+  const FC = window.FleetCore;
+  if (!FC || !AF) return null;
+  const feed = FC.laneFeed(AF, opts.locked);
+  const made = mountLanePanel(el, key, feed, { group: opts.group, locked: opts.locked });
+  return made ? Object.assign(made, { refused: feed.refused, feed }) : null;
+}
 function mountLanePanel(el, key, feed, opts) {
   if (!feed || !window.MultiAccount || !el || lanePanels.has(key)) return null;
   const AC = window.AccountsCore;
@@ -3636,9 +3643,7 @@ window.workspace = { get layout() { return layout; }, panels: () => panels.map(p
     const o = opts || {}, FC = window.FleetCore;
     if (!o.group) return mountLanePanel(el, key, AF, null);                       // the whole panel, as on the grid (the two-mounts proof)
     if (!FC || !AF) return null;
-    const feed = FC.laneFeed(AF, o.locked);                                        // one fixed group: the narrow feed, never AF itself
-    const made = mountLanePanel(el, key, feed, { group: o.group, locked: o.locked });
-    return made ? Object.assign(made, { refused: feed.refused, feed }) : null;
+    return mountLegionLane(el, key, { group: o.group, locked: typeof o.locked === 'function' ? o.locked : () => '' });   // one fixed group: the narrow feed, never AF itself
   },
   multi: () => { const v = [...views.values()].find(x => x.panel.type === 'multi' && x.accountPage); return v ? { tab: v.accountPage.state.tab, gid: v.accountPage.state.gid, toast: v.accountPage.state.toast } : null; },
   /* 1.36.0: the Agents strip (read only) and how many times this window read the league */
@@ -3721,6 +3726,9 @@ let fleetView = null;
 function startFleet() {
   if (!window.FleetView) return;
   fleetView = window.FleetView.create({ view: $('flView'), tab: $('wsFleetTab'), v3: legionLink, realClick: OT.realClick, headers: () => (PIN ? PIN.headers() : {}),
+    /* 1.48.0 (Legion Setup): a lane's accounts are the Multi-Account panel itself, one fixed group, the narrow feed (FleetCore.laneFeed),
+       never the page's feed; the tab hands the group and the lane's lock, the page mounts */
+    lanePanel: (el, key, opts) => (opts && typeof opts.group === 'string' && opts.group && typeof opts.locked === 'function' ? mountLegionLane(el, key, opts) : null),
     onTab: on => {
       document.body.classList.toggle('fl-on', on);
       if (on) { closePops(); restoreMax(); if (botDesk && botDesk.shown()) botDesk.showTab(false); if (agentDesk && agentDesk.shown()) agentDesk.showTab(false); if (leagueView && leagueView.shown()) leagueView.showTab(false); }   // one tab at a time
