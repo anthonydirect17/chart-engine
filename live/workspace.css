@@ -655,7 +655,10 @@ body.ws-tight .ws-body > .chart-live { padding: 2px 3px 2px; }
 
 /* 1.47.0 (Anthony 2026-11-11): the top tabs, Chart, Legion, Colosseum, Praetorian: each tab's own button in one row, as the
    chosen look's pills; the open one in gold (border and text on the tint). Nothing moves: the press changes at once. */
-.ws-toptabs { display: inline-flex; align-items: center; gap: 4px; flex: none; padding: 2px; border: 1px solid var(--ws-line2); border-radius: 999px; background: var(--ws-panel); }
-#wsTopTabs .ws-btn { height: 26px; padding: 0 12px; border-radius: 999px; border-color: transparent; background: transparent; color: var(--ws-text2); font-weight: 600; letter-spacing: .02em; box-shadow: none; }
+.ws-toptabs[hidden] { display: none; }
+.ws-toptabs { display: inline-flex; align-items: center; gap: 1px; flex: none; padding: 1px; border: 1px solid var(--ws-line2); border-radius: 999px; background: var(--ws-panel); }
+#wsTopTabs .ws-btn { height: 26px; padding: 0 9px; border-radius: 999px; border-color: transparent; background: transparent; color: var(--ws-text2); font-weight: 600; letter-spacing: .02em; box-shadow: none; }
 #wsTopTabs .ws-btn:hover { color: var(--ws-text); }
 #wsTopTabs .ws-btn[aria-pressed="true"] { border-color: var(--ws-gold); background: var(--ws-tint); color: var(--ws-gold-text); }
+/* the Agent and Bot tab buttons after the row, at the same tab padding (the top bar's room at 1366 px, test/workspace-smoke.mjs) */
+.ws-top .ws-btn.ag-tabbtn, .ws-top .ws-btn.bt-tabbtn { padding: 0 9px; }

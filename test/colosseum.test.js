@@ -57,12 +57,13 @@ test('nothing on the Colosseum can send: its link has one key, listen, and leagu
 
 test('the top tabs: Chart, Legion, Colosseum in one row, each its own button; old links land on the Colosseum', () => {
   const html = read('live/index.html');
-  const row = /<span class="ws-toptabs" id="wsTopTabs" role="group" aria-label="Tabs">([\s\S]*?)\n  <\/span>/.exec(html);
+  const row = /<span class="ws-toptabs" id="wsTopTabs" role="group" aria-label="Tabs" hidden>([\s\S]*?)\n  <\/span>/.exec(html);
   assert.ok(row, 'one row in the top bar');
   assert.deepEqual([...row[1].matchAll(/<button[^>]*id="(\w+)"[^>]*>([^<]*)<\/button>/g)].map(x => x[1] + ':' + x[2]), ['wsChartTab:Chart', 'wsFleetTab:Legion', 'wsLeagueTab:Colosseum', 'wsPraetorianTab:Praetorian', 'wsAgentTab:Agent'], '1.48.0: Praetorian and its sides last (the Bot\'s button comes into its slot)');
   assert.match(row[1], /<span class="ws-tabslot" id="wsTabSlot"><\/span>/);
   assert.match(row[1], /id="wsChartTab" aria-pressed="true"/, 'Chart pressed at the start');
-  assert.doesNotMatch(row[1], /id="wsChartTab"[^>]*hidden/, 'Chart is never hidden, so the row never jumps');
+  assert.doesNotMatch(row[1], /id="wsChartTab"[^>]*hidden/, 'Chart is never hidden on its own: the row shows while another tab is offered');
+  assert.match(read('live/workspace.js'), /const OTHER_TABS = \['wsFleetTab', 'wsLeagueTab', 'wsAgentTab', 'wsBotTab'\];/);
   assert.equal((html.match(/id="wsLeagueTab"/g) || []).length, 1); assert.equal((html.match(/id="wsFleetTab"/g) || []).length, 1);
   assert.match(html, /aria-label="Colosseum tab"/);
   const ws = read('live/workspace.js');

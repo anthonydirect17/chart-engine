@@ -107,8 +107,9 @@ its own release; until then the Agent and Bot buttons stay in the top bar after 
 - **The top tabs** (`live/index.html`, `live/workspace.js`, `live/workspace.css`): each tab's own button, with its own
   listener and its own rule for when it is offered, moved into one row in Anthony's order: Chart, Legion, Colosseum.
   Chart is new and small: it is pressed while no tab covers the grid (it reads the tabs' own body classes, so a tab
-  opened or closed any way moves it) and a click closes whichever tab is open. The chosen look's pills, the open one
-  in gold. Nothing animates.
+  opened or closed any way moves it) and a click closes whichever tab is open. The row shows only while another tab
+  is offered (alone, Chart would take the top bar's room from the status line and its clock warning at 1366 px). The
+  chosen look's pills, the open one in gold, and the Agent and Bot buttons at the same tighter padding. Nothing animates.
 - **The Colosseum** (`live/league.js`, `live/league.css`): the League tab, renamed, with everything it showed (the
   shadow league's chart and marks, the seats' day, the spend, the week and month table, the decision log, a past day).
   Its name in the title font, gold, with what the tab is in one line: "Nothing here sends an order or changes a
