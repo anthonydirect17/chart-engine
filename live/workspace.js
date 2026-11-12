@@ -3721,7 +3721,8 @@ function startLeague() {
    keys. The feed's send and sendOrder never reach it, so "these messages and no other" is true by how it is built. With no
    feed at all (accounts.js not served: AF is null, as the page has allowed since 1.16.0), or with fleet.js not served, the
    tab gets no connection and the page starts exactly as before (the second look at 92, FIX A). */
-const legionLink = AF && window.FleetCore ? { listen: part => AF.listen(part), post: m => window.FleetCore.maySend(m) === true && AF.post(m) === true } : null;
+const legionGate = window.FleetCore && Object.isFrozen(window.FleetCore) ? window.FleetCore.maySend : null;
+const legionLink = AF && legionGate ? { listen: part => AF.listen(part), post: m => legionGate(m) === true && AF.post(m) === true } : null;
 let fleetView = null;
 function startFleet() {
   if (!window.FleetView) return;

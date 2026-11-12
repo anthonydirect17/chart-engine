@@ -147,15 +147,25 @@ release.
   tab), starting the runner's program with Armed (the helper), each bot's own state from the runner. N12 (the day
   stop mark as ChartBridge works it out) needs ChartBridge to send it and stays in the backlog.
 
-Checked in `test/fleet.test.js` (28 tests) and `npm run smoke:fleet` (139 checks in a browser: a double click
+- **The review of 94.** Armed is offered only when Kill all is (one function decides both). Until the page has heard
+  ChartBridge it reads "Armed: not known" and does nothing. A lane in Copilot, or a trader in Auto on a prop account outside
+  the lanes, reads "Armed: PARTLY" with its name, and one click sends it to Shadow. An account on its group's bench is not a
+  lane's account. A lane's trading accounts must each be prop or Sim (said as such), never one ChartBridge has not said.
+  Auto is asked for as the Agent tab would (AgentCore's modeMsg, and modesAllowed with groupTradable), and names the pick
+  and its file's sha256 (ChartBridge 0.6.21's rule). The 17:00 reset's daily None is said plainly. The day stop mark says it
+  is the page's own working. The Armed row sits straight under the head row; each lane is drawn on its own; a pick is sent
+  only from the list's own files; the gate is captured once from a frozen FleetCore.
+
+Checked in `test/fleet.test.js` (28 tests) and `npm run smoke:fleet` (140 checks in a browser: a double click
 anywhere on the switch arms nothing at four widths; a press, messages and a release still count on the switch and on
 Yes; a key or a scripted click never arms). `docs/LEGION_and_the_old_tabs.md` lists every control and reading on the
 Agent tab and the Bot tab and whether Legion carries it (for Anthony; nothing is removed).
 
 ## ChartBridge 0.6.21 and chart 1.45.1 (2026-11-12): the pick, the day's profit side for the runner, the roster reader tightened
 
-In plain words: nothing changes on the chart, for hand trading or for any trader that runs today. ChartBridge learns three
-things the lanes on the Legion tab and the spec runner need. No page sends the new message yet. Build answers 7 part D2
+In plain words: nothing changes on the chart or for hand trading. On the wire one thing changes for every trader that runs
+today: each `accountState` gains two keys, `profitToday` and `profitWhy` (a runner that checks the keys in order must know
+them). ChartBridge learns three things the lanes on the Legion tab and the spec runner need. Build answers 7 part D2
 (the ChartBridge half) and the review backlog of build answers 11.
 
 - **The pick.** Each trader slot can hold the name of one roster file: the bot or the lineup its runner runs. It is set
@@ -177,6 +187,11 @@ things the lanes on the Legion tab and the spec runner need. No page sends the n
   - D4: one cap of 2 MB for a whole answer; a file that would pass it is listed with why, not served.
   - D2, said in PROTOCOL: a hard link in the folder is served and a parent folder that is a link is followed; each
     needs write access to the folder.
+- **The review of 93:** a cleared pick (None) always removes its file, also one that could not be read, and a pick file
+  that cannot be opened at a start is tried four times and then means no pick, said; Auto is bound to the pick it was armed
+  with: `agentMode` auto names the pick and its roster file's sha256 (a trader with a pick), the saved Auto keeps both, and
+  a restart restores Auto only for the same pick and the same file; the roster file is read outside the placement gate with
+  a 2 s limit, so the kill switch and Kill all never wait on it; `GET /roster` gives each file's sha256.
 - No order path file changes. `ChartBridgeGroups.cs` gains two lines, both in the `accountState` message.
 
 Checked in `check/AgentHarness.cs` (`Pick`) and `check/BotHarness.cs` (`Http`). ChartBridge 0.6.21 is a recompile

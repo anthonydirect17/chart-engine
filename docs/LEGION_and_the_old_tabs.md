@@ -17,7 +17,12 @@ messages, and both send the same `agentMode` message. So:
 - A trader set to Auto on the Agent tab while its lane is not ready on Legion (no bot picked, for one): Legion reads
   "Armed: PARTLY" and says which lane is where. One click on the switch sends every lane to Shadow.
 - Kill all, a kill switch, a stand-down and the 17:00 New York reset show on both tabs the same way.
-- Copilot exists only on the Agent tab. Legion reads a lane in Copilot as off, and its off sends it to Shadow.
+- Copilot exists only on the Agent tab. Legion reads a lane in Copilot as "Armed: PARTLY" (never as off), says so beside
+  the switch, and one click sends it to Shadow.
+- A trader in Auto on a prop account that is on no lane makes the switch read "Armed: PARTLY" with its name; one click
+  sends it to Shadow too. The switch never arms it.
+- Until the page has heard ChartBridge (connected, signed in, the groups, the accounts and the traders), the switch reads
+  "Armed: not known" and does nothing; Kill all still works.
 
 ChartBridge is the truth on both.
 
@@ -32,7 +37,7 @@ ChartBridge is the truth on both.
 | Auto-On time and daily cap | The helper starts him at a time; a dollar cap on model spend | No. A spec runner has no model spend |
 | Shadow, Copilot, Auto (Auto: a second click within 4 s) | The trader's mode (`agentMode`) | Partly. The Armed switch sends Auto (asked first, a real click) and Shadow to the lanes' traders. No Copilot. A trader that is not in a lane is not switched from Legion |
 | Kill switch (on: one click; release: a second click within 4 s) | That trader's kill switch (`agentKill`) | No. Legion has Kill all for the prop accounts, which turns the switch on; the release is on the Agent tab only |
-| Change account (None, a group, one account; a LIVE choice asks first) | The trader's account (`agentAccount`) | No. A lane's trader gets its group on the Agent tab, once |
+| Change account (None, a group, one account; a LIVE choice asks first) | The trader's account (`agentAccount`) | No. A lane's trader gets its group on the Agent tab. ChartBridge's 17:00 reset puts a flat trader on None each trading day, so today this is a daily step (a change to keep a lane's group through the reset is before Anthony) |
 | Change the rules (markets and sizes, the entry window, flat time, entry life, trades a day, losing trades, Market entry, No target) | The trader's rules (`agentRules`) | No. Legion shows the window, the flat time and the two entry switches, read only |
 | Accept, Reject (and The Desk's two hotkeys) | Answer a Copilot proposal (`agentAnswer`) | No. A lane runs in Auto or not at all |
 | Chart: market, bar size, Maximize | The trader's own chart | No |
@@ -44,7 +49,7 @@ ChartBridge is the truth on both.
 
 | Reading | On Legion |
 |---|---|
-| Name, build, connected and heartbeat age | Yes (Traders; a lane says "Its runner is not connected") |
+| Name, build, connected and heartbeat age | Yes, in part (Traders, and a lane says "Its runner is not connected"; Legion says a heartbeat is late, over 5 s, and never shows its age) |
 | Mode | Yes (Traders, each lane, the Armed switch) |
 | Account or group and its accounts, SIM or LIVE | Yes (Traders, each lane's accounts; prop, sim or personal instead of SIM or LIVE) |
 | Killed, stood down and why | Yes (Traders; a lane's reason it cannot be armed) |
