@@ -1052,7 +1052,8 @@ test('B4 (1.48.1): a lane says what the PC helper says of its runner, and not kn
   assert.deepStrictEqual(say({ id: '' , stage: 'eval' }, ok({})), { text: '', tone: 'mut', stops: 0 }, 'no trader: nothing to say');
   assert.match(say(L, null).text, /has not answered yet/);
   assert.match(say(L, { reach: 'locked', body: null }).text, /unlocked with the PIN/);
-  for (const h of [{ reach: 'down', body: null }, { reach: 'refused', body: {} }, { reach: 'ok', body: null }, { reach: 'ok', body: { agents: [] } }]) {
+  for (const h of [{ reach: 'down', body: null }, { reach: 'refused', body: {} }, { reach: 'ok', body: null }, { reach: 'ok', body: { agents: [] } },
+    { reach: 'down', body: { agents: { legion1: { lane: 'eval', running: true } } } }]) {   // a body with a failed answer is never read
     const r = say(L, h);
     assert.match(r.text, /is not known: the PC helper is not answering/); assert.strictEqual(r.tone, 'bad');
   }
