@@ -3709,10 +3709,21 @@ function startFleet() {
 const TAB_CLASSES = ['bt-on', 'ag-on', 'lg-on', 'fl-on'];
 const tabCovering = () => TAB_CLASSES.some(c => document.body.classList.contains(c));
 function closeTabs() { for (const d of [botDesk, agentDesk, leagueView, fleetView]) if (d && d.shown()) d.showTab(false); }
-function syncChartTab() { const b = $('wsChartTab'), v = String(!tabCovering()); if (b && b.getAttribute('aria-pressed') !== v) b.setAttribute('aria-pressed', v); }
+/* the row shows only while another tab is offered: alone, Chart would mean nothing and take the top bar's room (the status
+   line and its clock warning, test/workspace-smoke.mjs at 1366 px) */
+const OTHER_TABS = ['wsFleetTab', 'wsLeagueTab', 'wsAgentTab', 'wsBotTab'];
+function syncChartTab() {
+  const b = $('wsChartTab'), v = String(!tabCovering());
+  if (b && b.getAttribute('aria-pressed') !== v) b.setAttribute('aria-pressed', v);
+  const row = $('wsTopTabs'), any = OTHER_TABS.some(id => $(id) && !$(id).hidden);
+  if (row && row.hidden !== !any) row.hidden = !any;
+}
 if ($('wsChartTab')) {
   $('wsChartTab').addEventListener('click', e => { e.currentTarget.blur(); closePops(); closeTabs(); syncChartTab(); });
-  if (typeof MutationObserver === 'function') new MutationObserver(syncChartTab).observe(document.body, { attributes: true, attributeFilter: ['class'] });
+  if (typeof MutationObserver === 'function') {
+    new MutationObserver(syncChartTab).observe(document.body, { attributes: true, attributeFilter: ['class'] });
+    for (const id of OTHER_TABS) if ($(id)) new MutationObserver(syncChartTab).observe($(id), { attributes: true, attributeFilter: ['hidden'] });
+  }
 }
 /* the league's trades, faint, on the charts whose ⋯ switch is on (kept in this browser, off by default): one read of The Desk
    every 30 seconds while any is on, one overlay per such chart */
