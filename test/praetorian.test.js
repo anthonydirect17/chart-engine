@@ -162,3 +162,24 @@ test('every send path in the two desks says the gate\'s reason, never "not conne
   assert.match(bt, /const no = refusal\(m\);\n    if \(no\) \{ notice\(\{ kind: 'refused', level: 'amber', text: no \}\); return false; \}/, 'sendBot');
   assert.match(bt, /const no = refusal\(r\.msg\);\n    if \(no\) \{ props\.refused\(id\); put\(msgEl, 'textContent', no\); return false; \}/, 'the bot\'s answer');
 });
+
+test('deliberate breaks of the gate, each one a test missed at first (2026-11-12): exact values only', () => {
+  const g = gateWith(accounts(), agent({ account: 'PROP-1' }), { type: 'bot', account: 'PROP-1', mode: 'auto' });
+  /* a kill switch passes only when it is turned ON, exactly: "on" that is not true is a release or nonsense */
+  for (const on of [1, 'yes', 'true', {}, [true]]) {
+    assert.notEqual(g.check({ type: 'agentKill', agent: 'demo', on }), '', 'agentKill on ' + JSON.stringify(on));
+    assert.notEqual(g.check({ type: 'botKill', on }), '', 'botKill on ' + JSON.stringify(on));
+  }
+  /* only the two acknowledgements are acknowledgements */
+  for (const t of ['orderSeen', 'botSeenX', 'agentseen', 'Seen']) assert.match(g.check({ type: t, agent: 'demo' }), /it does not send/, t);
+  /* an account change: a group key, even empty, is a group; no account key, or an empty one, is not None */
+  const p = gateWith(accounts(), agent({ account: 'MINE-1' }), { type: 'bot', account: 'MINE-1', mode: 'shadow' });
+  assert.match(p.check({ type: 'agentAccount', agent: 'demo', group: '', account: null, keepMode: 'shadow' }), /a group is the prop business/);
+  assert.match(p.check({ type: 'agentAccount', agent: 'demo', group: null, account: null, keepMode: 'shadow' }), /a group is the prop business/);
+  for (const m of [{}, { account: '' }, { account: undefined }, { account: 0 }, { account: false }]) {
+    assert.notEqual(p.check(Object.assign({ type: 'agentAccount', agent: 'demo', keepMode: 'shadow' }, m)), '', 'agentAccount ' + JSON.stringify(m));
+    assert.notEqual(p.check(Object.assign({ type: 'botAccount' }, m)), '', 'botAccount ' + JSON.stringify(m));
+  }
+  assert.equal(p.check({ type: 'agentAccount', agent: 'demo', account: null, keepMode: 'shadow' }), '', 'None is account: null, exactly');
+  assert.equal(p.check({ type: 'botAccount', account: null }), '');
+});
