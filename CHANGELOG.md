@@ -63,6 +63,67 @@
   `test/pc-updater.test.js`: the allowed git subcommands, the box job's name, useHttpPath read before the one ask, the
   token only after a 404 or 401 and then through the Actions API, one place that asks for it and one that sends it.
 
+## chart 1.52.0 (2026-11-12): Legion's trader desk, the Agent and Bot desks behind Praetorian's gate turned round (page only, no F5)
+
+Rule 12. The review of Praetorian (chart-engine 102, F5) found that, once the Agent and Bot desks are behind Praetorian's
+gate, everything they did for prop traders, groups and the bot on a prop account had no home on the page. The decision
+(reuse first): the same two desks, mounted a second time for Legion. No control is written again.
+
+- **Legion's trader desk** (`live/legion-desk.js`, `LegionDesk.mount(el, o)`): the Agent desk and the Bot desk with a
+  two-way switch (Agents, Bot) and one line on what it reaches. Builder 1 places it once, folded, in Legion Setup; this
+  release adds the file and its tests only, nothing on the page loads it yet.
+- **The gate turned round** (`AgentCore.legionGate`, `legionLink`, `live/agent-core.js`): kill switch ON, a trader's
+  Shadow and the two acknowledgements for anyone ChartBridge has described; any other agent or bot message only for a
+  trader on a prop account, on a group whose seats are prop (or prop and Sim), or on None, and the bot on a prop account
+  or None; an account change only to a prop account, such a group, or None; a group's Clear stand-down only for such a
+  group. Refused by name: your personal account, Sim alone, a league seat, a group that holds your personal account, an
+  account the page cannot tell, an undescribed trader, every other type. Prop needs ChartBridge 0.6.16's pick: with
+  none, no account is prop. It hears `groups` too, and forgets everything on a drop. Praetorian and Legion never both
+  pass the same message for a described trader except the stops and a trader on None (a test proves it).
+- **A second copy on one page** (`live/agent.js`, `live/bot.js`): `keys: false` (the copilot keys never reach it) and,
+  for the bot, `floating: false` (its proposal card stays inside the desk, placed after the desk is drawn). The desks'
+  words name the tab they are on; their pickers offer groups only where the gate allows them
+  (`AgentCore.prChoices` and `prBotChoices` take a name, a group test and the words; Praetorian passes none and is
+  unchanged).
+- **Embedded, not a pop-out** (the reviews of 103): `embedded: true` hides Pop out and leaves the page's own things alone
+  (its top bar, the Bot tab's floating card, the corner line, the notes and the alert band). The copy counts as shown only
+  while `LegionDesk.show(true)` says so (builder 1's fold and Legion's tab call it; it starts closed), and a proposal is
+  acknowledged (`agentSeen`, `botSeen`) only while its card is really on screen: a closed fold acknowledges nothing.
+  `keyPrefix` gives it its own browser keys (`legion-...`), so a reload never mixes the two copies; `destroy()` takes the
+  gate off the feed.
+- **What a trader is on** (both gates): every account counts, its own and every seat, a group's or a leftover one; a shape
+  the page cannot read is refused (only the stops go). A group trader is judged by the group as last heard too, so a group
+  that now holds your personal account is refused at once, before ChartBridge moves his seats; a group with no seats now
+  is not None.
+- **No home** (the coordinator's decision): a trader whose accounts fit neither desk (a group that holds your personal
+  account or is Sim only, a mix of kinds, an account the page cannot tell) says so on both desks, in the same words ("no
+  home: ...; stop it, then fix its account or group"). Either desk sends it the stops, and moves it to None only while
+  ChartBridge says it is flat (no position, no working order, no seat holding one); its picker offers None only.
+- **A move goes in Shadow** (the coordinator's decision: None is shared by both desks and a mode must not travel): an
+  account or group change for a trader or the bot not in Shadow is never sent as it is. The link sends Shadow first (a
+  stop), and the change, with keepMode Shadow, only once ChartBridge's own message shows Shadow (forgotten after 10 s or
+  on a drop). The LIVE question names Shadow; Auto or Copilot is set again on the desk the trader now belongs to. This
+  holds on Praetorian too.
+- **Round 2 of the review:** a move the link kept until Shadow and then could not make (refused once Shadow shows, or
+  Shadow not shown within 10 s) is said on the desk ("The move was not made: <why>; <trader> stays in Shadow"), never
+  silent; every move the link posts keeps Shadow; a seat must say it owns nothing for a trader to count as flat; a group
+  trader whose group the page cannot tell yet says "no home yet", never "set up from Praetorian"; the bot's account and a
+  trader's missing account key follow "only null is None" on Legion too; a leftover position is stops only on both desks;
+  "on screen" counts visibility and opacity, and the agent card must be in view like the bot's; the desks' live charts
+  keep their view under Legion's own prefix.
+- **Round 3:** "in view" (both desks, the cards' acknowledgement and the copilot keys) is measured from the window's top
+  edge or the top bar, whichever is lower, so a card scrolled up past the window no longer counts as in view (a smoke step
+  scrolls the agent card away: no agentSeen); a leftover seat is flattened from Legion's desk too (a smoke step).
+- **The board on Legion:** Assign hero, a group trader's Start in Shadow and a group's Clear stand-down work there; for a
+  group Legion refuses, Assign hero and Clear stand-down are held back up front with the reason. The words no longer say
+  Legion's trader desk is "being built".
+- **Tests:** `test/legion-desk.test.js` (the gate as Praetorian's is tested; the shapes, a changing group, no home and the
+  flat move, the move in Shadow and the reviewer's sequence; deliberate breaks, each caught);
+  `test/legion-desk-smoke.mjs` (`npm run smoke:legion-desk`, 37 checks: both copies on one page, a prop and a personal
+  trader each way, forced controls, the picker, the bot's card, the copilot key, the fold and the acknowledgements, the
+  bot's Shadow and hold-back on each desk, a move in Shadow); `test/agent-board-smoke.mjs` runs the board's flows on
+  Legion's desk (`test/legion-desk-page.html`, a test page until builder 1's mount is in).
+
 ## chart 1.51.0 (2026-11-12): Praetorian, the Agent tab and the Bot tab as one tab for the personal account (page only, no F5)
 
 Anthony's direction of 2026-11-11: "The bot and agent tabs ... should be rolled into ... a way to trade any of these bots
@@ -99,7 +160,7 @@ accounts". The name is his: "Praetorian is good". Rule 12: this changes what the
 - **Held back on screen, said in one line:** a trader on a prop account, a group or an account the page cannot tell shows
   all its readings; its modes, Change account, Change the rules, the helper's On and Auto-On time, and its kill switch's
   release are off, with "On Praetorian this trader can only be stopped (Kill switch, Off)" and why: "it is set up from
-  Legion's trader desk (being built)". Its Kill switch ON, Off and "Flatten and turn off" stay. The bot the same. The
+  Legion's trader desk". Its Kill switch ON, Off and "Flatten and turn off" stay. The bot the same. The
   board's Assign hero and a group's Clear stand-down are held back (groups are the prop business). The helper's On, its
   Auto-On time and the board's Start (calls to the PC helper, not ChartBridge messages) are guarded in the desk, and Start
   and Assign check again right before the helper's On, after the wait for Shadow.

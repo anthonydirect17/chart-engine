@@ -62,6 +62,11 @@ function create(o) {
   const log = BC.createLog(storage), days = BC.createDayTypes(storage);
   const props = BC.createProposals();
   const popout = !!o.popout;
+  /* 1.52.0 (the review of 103, a F-B1 and b F3): a second copy inside the page (Legion's trader desk): no Pop out, shown only
+     when its owner says so, and botSeen only while its card is really on screen (keyPrefix: its own chart key) */
+  const embedded = !popout && !!o.embedded;
+  const chartKey = (embedded && typeof o.keyPrefix === 'string' ? o.keyPrefix : '') + CHART_KEY;
+  const onScreen = el => !!el && el.isConnected && el.getClientRects().length > 0 && (typeof el.checkVisibility !== 'function' || el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true, opacityProperty: true, visibilityProperty: true }));   // round 2, F3: visibility and opacity too
 
   /* ---------------- state */
   const S = {
@@ -79,7 +84,7 @@ function create(o) {
   /* ---------------- the DOM: built once, then written only where it changed */
   const view = els.view, strip = els.strip, tabBtn = els.tab;
   const notes = els.notes || (() => { const d = document.createElement('div'); d.className = 'bt-notes'; d.setAttribute('aria-live', 'polite'); document.body.appendChild(d); return d; })();
-  const propBox = (() => { const d = document.createElement('div'); d.className = 'bt-props'; d.setAttribute('data-no-motion', ''); d.setAttribute('role', 'region'); d.setAttribute('aria-label', 'Copilot proposals'); document.body.appendChild(d); return d; })();
+  const propBox = (() => { const d = document.createElement('div'); d.className = 'bt-props'; d.setAttribute('data-no-motion', ''); d.setAttribute('role', 'region'); d.setAttribute('aria-label', 'Copilot proposals'); if (o.floating !== false) document.body.appendChild(d); return d; })();   // 1.52.0: o.floating false (Legion's trader desk): placed in this desk's own view (placeCorner), never over the page
   const q = sel => view ? view.querySelector(sel) : null;
   if (view) build();
 
@@ -103,7 +108,7 @@ function create(o) {
           '<select class="ws-sel bt-tf" data-k="tf" aria-label="Bars">' + Object.keys(TF_NAMES).map(k => '<option value="' + k + '">' + TF_NAMES[k] + '</option>').join('') + '</select>' +
           '<span class="chart-live ws-lv" data-k="ind"></span>' +
           '<span class="bt-r"><span class="bt-pill bt-legend" title="The bot\'s trades today: triangles in, dots out; its working entry, stop and target as lines. ChartBridge marks the bot\'s orders, so your own orders on its account do not show here.">Bot trades</span>' +
-          (popout ? '' : '<button type="button" class="ws-btn bt-pop" data-act="popout" title="Open the Bot tab in its own window (for a third monitor)">Pop out</button>') + '</span></div>' +
+          (popout || embedded ? '' : '<button type="button" class="ws-btn bt-pop" data-act="popout" title="Open the Bot tab in its own window (for a third monitor)">Pop out</button>') + '</span></div>' +
         '<div class="bt-chart" data-k="chart" data-no-motion></div>' +
       '</section>' +
       /* the bot panel */
@@ -159,8 +164,11 @@ function create(o) {
      prop account, or one the page cannot tell); the Bot window's connection (bot.html) has neither, and there nothing changes */
   const refusal = m => (V3 && typeof V3.why === 'function' ? V3.why(m) || '' : '');
   const praetorian = !!(V3 && V3.personal === true);
-  const heldBot = () => (praetorian && typeof V3.botWhy === 'function' && S.bot ? V3.botWhy() || '' : '');
-  const botChoices = () => { const l = BC.accountChoices(S.accounts, S.bot); return praetorian && window.AgentCore && typeof window.AgentCore.prBotChoices === 'function' ? window.AgentCore.prBotChoices(l, n => V3.accountOk(n)) : l; };
+  /* 1.52.0 (Legion's trader desk): the same desk behind the gate turned round (AgentCore.legionLink), its name in its lines */
+  const gated = praetorian || !!(V3 && typeof V3.accountOk === 'function');
+  const tabName = gated && V3 && typeof V3.name === 'string' && V3.name ? V3.name : 'Praetorian';
+  const heldBot = () => (gated && typeof V3.botWhy === 'function' && S.bot ? V3.botWhy() || '' : '');
+  const botChoices = () => { const l = BC.accountChoices(S.accounts, S.bot); return gated && window.AgentCore && typeof window.AgentCore.prBotChoices === 'function' ? window.AgentCore.prBotChoices(l, n => V3.accountOk(n), praetorian ? undefined : { name: tabName, notHere: V3.notHere }) : l; };
   const cid = () => 'bt' + (++S.cidSeq).toString(36) + Math.random().toString(36).slice(2, 6);
   function lost() {
     S.signedIn = false; S.trading = null; S.orders.clear(); simFills.clear(); ledger.clear();
@@ -198,6 +206,7 @@ function create(o) {
       case 'execs': for (const x of m.list || []) onExec(x, true); renderTrips(); return;
       case 'reject': onReject(m); return;
       case 'status': if (S.on && m.level === 'warn' && typeof m.text === 'string' && /^Bot\b/.test(m.text)) notice({ kind: 'status', level: 'amber', text: m.text }); return;
+      case 'linkMove': if (m.bot === true && typeof m.text === 'string') notice({ kind: 'account', level: 'amber', text: m.text }); return;   // 1.52.0 (round 2, F7): a kept move not made, said
     }
   }
 
@@ -329,6 +338,7 @@ function create(o) {
       }
     }
     const want = x ? [x.el, moreEl] : [];
+    if (o.floating === false && view && propBox.parentElement !== view) view.appendChild(propBox);   // 1.52.0: after the view is drawn (its build replaces its contents)
     if (propBox.children.length !== want.length || want.some((e, i) => propBox.children[i] !== e)) propBox.replaceChildren(...want);
     const more = [...propEls.values()].filter(y => !y.ended && y !== x).length;
     put(moreEl, 'textContent', more ? '+' + more + ' more bot proposal' + (more === 1 ? '' : 's') : '');
@@ -343,7 +353,7 @@ function create(o) {
   }
   /* the shown card is whole in the window, under the top bar: the keys answer it only then */
   function inView(el) {
-    const r = el.getBoundingClientRect(), bar = document.querySelector('.ws-top'), top = bar ? bar.getBoundingClientRect().bottom : 0;
+    const r = el.getBoundingClientRect(), bar = document.querySelector('.ws-top'), top = Math.max(0, bar ? bar.getBoundingClientRect().bottom : 0);
     return r.height > 0 && r.top >= top - 1 && r.bottom <= innerHeight + 1 && r.left >= -1 && r.right <= innerWidth + 1;
   }
   /* botSeen the moment it shows (PROTOCOL.md: "the page sends botSeen the moment it shows it"; not rate counted): in a
@@ -353,6 +363,7 @@ function create(o) {
     if (document.visibilityState === 'hidden') return;
     const at = Date.now(), x = shownCard();           // the card shown (the ones waiting are not shown yet)
     if (!x || x.ended) return;
+    if (embedded && (!S.shown || !onScreen(x.el) || !inView(x.el))) return;   // 1.52.0: a folded, hidden or scrolled-off copy acknowledges nothing
     const seen = props.shown(x.p.id, at);
     if (seen) sendRaw(seen);
   }
@@ -433,8 +444,8 @@ function create(o) {
     if (armed(open) && inView(open.el)) answer(open.p.id, ans);
   }
   const ROUTER = window.AgentCore && window.AgentCore.copilotRouter ? window.AgentCore.copilotRouter(document) : null;
-  const unroute = ROUTER ? ROUTER.add('bot', { open: () => { const x = keyTarget(); return x ? [{ id: x.p.id, shownAt: x.shownAt, ready: armed(x) && inView(x.el), answer: ans => answer(x.p.id, ans) }] : []; } }) : null;
-  if (!ROUTER) document.addEventListener('chart-copilot-key', onCopilotKey);
+  const unroute = ROUTER && o.keys !== false ? ROUTER.add('bot', { open: () => { const x = keyTarget(); return x ? [{ id: x.p.id, shownAt: x.shownAt, ready: armed(x) && inView(x.el), answer: ans => answer(x.p.id, ans) }] : []; } }) : null;
+  if (!ROUTER && o.keys !== false) document.addEventListener('chart-copilot-key', onCopilotKey);   // 1.52.0: o.keys false: no key reaches this copy
   /** the keys shown on the buttons and in Options: what the workspace has (o.copilotKeys), checked as before */
   function loadKeys() {
     if (typeof o.copilotKeys !== 'function') { S.keys = { accept: '', reject: '', notes: [], from: 'window' }; return; }
@@ -726,7 +737,7 @@ function create(o) {
     if (e) { put(ev, 'textContent', e.shelf === 'research' ? 'Research' : e.evidence); put(ev, 'className', 'bt-badge ' + (e.shelf === 'research' ? 'rs' : BC.evidenceLevel(e.evidence) >= 2 ? 'l2' : '')); }
     /* 1.51.0 (Praetorian): the bot on a prop account, or one the page cannot tell, can only be stopped here (its kill switch on) */
     const held = heldBot();
-    const pw = q('[data-k="prWhy"]'); put(pw, 'hidden', !held); put(pw, 'textContent', held ? 'On Praetorian the bot can only be stopped (Kill switch, Shadow): ' + held + '.' : '');
+    const pw = q('[data-k="prWhy"]'); put(pw, 'hidden', !held); put(pw, 'textContent', held ? 'On ' + tabName + ' the bot can only be stopped (Kill switch, Shadow): ' + held + '.' : '');
     for (const btn of q('[data-k="modes"]').children) {
       const m = btn.dataset.mode, a = allowed[m];
       attr(btn, 'aria-pressed', String(b.mode === m));
@@ -836,7 +847,7 @@ function create(o) {
       '<p class="bt-help">Less motion shows every scene in its final state. The kill switch, Accept and Reject, the position and P&amp;L never move either way.</p>' +
       '<div class="bt-opt"><span>Copilot keys</span><span>' + keys + '</span></div>' + (k.notes && k.notes.length ? '<p class="bt-help warn">' + esc(k.notes.join('; ')) + '</p>' : '') +
       '<p class="bt-help">Ghost marks: the bot\'s trades, faint, on your own charts. Switch them on per chart from the chart\'s ⋯ menu (off by default).</p>' +
-      (popout ? '' : '<div class="bt-opt"><span>This tab in its own window</span><button type="button" class="ws-btn" data-act="popout">Pop out</button></div>');
+      (popout || embedded ? '' : '<div class="bt-opt"><span>This tab in its own window</span><button type="button" class="ws-btn" data-act="popout">Pop out</button></div>');
   }
 
   /* ---------------- actions */
@@ -947,14 +958,14 @@ function create(o) {
   if (view) {
     view.addEventListener('click', onViewClick);
     view.addEventListener('change', e => {
-      if (e.target.closest('[data-k="tf"]')) { S.chartTf = TF_NAMES[e.target.value] ? e.target.value : 'm1'; try { storage.setItem(CHART_KEY, JSON.stringify({ tf: S.chartTf })); } catch (er) { /* blocked */ } if (S.chart) S.chart.setView({ tf: S.chartTf }); renderChartHead(); }
+      if (e.target.closest('[data-k="tf"]')) { S.chartTf = TF_NAMES[e.target.value] ? e.target.value : 'm1'; try { storage.setItem(chartKey, JSON.stringify({ tf: S.chartTf })); } catch (er) { /* blocked */ } if (S.chart) S.chart.setView({ tf: S.chartTf }); renderChartHead(); }
     });
     view.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.closest('.bt-rails-edit input')) { e.preventDefault(); q('[data-act="railsSave"]').click(); } });
   }
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && S.detail) { e.preventDefault(); closeDetail(); } });
 
   /* ---------------- the Bot tab's chart: a normal live chart on the window's feed (never animated) */
-  try { const v = JSON.parse(storage.getItem(CHART_KEY)); if (v && TF_NAMES[v.tf]) S.chartTf = v.tf; } catch (e) { /* none */ }
+  try { const v = JSON.parse(storage.getItem(chartKey)); if (v && TF_NAMES[v.tf]) S.chartTf = v.tf; } catch (e) { /* none */ }
   const chartHost = {
     pressOff: () => 'The Bot tab\'s chart is for watching: it takes no orders. Its lines are the bot\'s own working orders.',
     place: () => {}, move: () => {}, cancel: () => {},
@@ -964,7 +975,7 @@ function create(o) {
     const body = q('[data-k="chart"]');
     S.chartRoot = botRoot();
     S.chart = window.ChartLive.mount(body, {
-      feed: o.feed, paneId: 'bot', storagePrefix: o.storagePrefix || '', toolbar: false, compact: true, trade: chartHost,
+      feed: o.feed, paneId: 'bot', storagePrefix: (o.storagePrefix || '') + (embedded && typeof o.keyPrefix === 'string' ? o.keyPrefix : ''), toolbar: false, compact: true, trade: chartHost,
       view: { root: S.chartRoot, tf: S.chartTf },
       onStatus: s => { if (s.state === 'live') { S.contract = typeof s.contract === 'string' ? s.contract : ''; renderChartHead(); } },
     });
@@ -1078,7 +1089,7 @@ function create(o) {
     },
     /** the workspace's hotkeys changed (The Desk read): the keys shown on the buttons */
     keysChanged() { loadKeys(); renderPanelTab(); for (const x of propEls.values()) if (!x.ended) { const n = x.el.querySelector('[data-k="msg"]'); const t = n ? n.textContent : ''; x.el.innerHTML = propHtml(x.p); if (t) put(x.el.querySelector('[data-k="msg"]'), 'textContent', t); syncButtons(x); } },
-    showTab, shown: () => S.shown, on: () => S.on,
+    showTab, shown: () => S.shown, on: () => S.on, seenCheck: () => seenNow(),   // 1.52.0: seenCheck: Legion's desk asks again when its fold opens
     /** 1.36.0, read only: what the Agents strip's bot card shows (live/agents-strip.js): whether the Bot is offered (a v3
         ChartBridge), its channel on, the `bot` message, its red alert by the rule above, its status words and strip line. */
     glance: () => ({ offered: S.v3 === true, on: S.on, bot: S.bot ? Object.assign({}, S.bot) : null, alert: !!alertNow(),

@@ -13,7 +13,10 @@
 //   npm run smoke:agent-board   (CHROMIUM_PATH=/path/to/chrome; AGENT_BOARD_PORT, else the first free port from 9011; SHOTS=dir)
 //   - 1.29.0 (SPEC CE-2): a league seat in the picker (Sim only, a LIVE one listed with the reason) and its PROVING n of 100; an
 //     amber stand-down row with its why, kind and time, and Clear stand-down (agentStandDownClear, one click).
-// Screenshots: agent-board, agent-board-assign-ask, agent-board-assigned, agent-board-off, agent-board-standdown, agent-board-killed, agent-board-picker (.png in test/out).
+//   - 1.52.0 (answers B4-2 item 7): Assign hero, a group trader's Start in Shadow and a group's Clear stand-down run end to end
+//     on Legion's trader desk (test/legion-desk-page.html; --personal=EVAL-A makes SIM-D prop, so Group B is Legion's), and a
+//     group Legion refuses (Group A, Sim only) is held back there with the reason; on Praetorian they are held back.
+// Screenshots: agent-board, agent-board-legion-assigned, agent-board-assign-ask, agent-board-assigned, agent-board-off, agent-board-standdown, agent-board-killed, agent-board-picker (.png in test/out).
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -47,7 +50,7 @@ const BUILDS = [
 ];
 
 const bridge = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(port), '--v3', '--trading', '--test-controls', '--test-pin=' + TEST_PIN,
-  '--agents=demo,demotwo,demothree', '--agent-any-time', '--board-groups', '--agent-accounts=demotwo:Sim101'], { stdio: ['ignore', 'pipe', 'inherit'] });
+  '--agents=demo,demotwo,demothree', '--agent-any-time', '--board-groups', '--agent-accounts=demotwo:Sim101', '--personal=EVAL-A'], { stdio: ['ignore', 'pipe', 'inherit'] });
 await new Promise((res, rej) => { bridge.stdout.once('data', res); bridge.once('exit', c => rej(new Error('bridge exited ' + c))); });
 let helper = null;
 const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
@@ -121,9 +124,9 @@ try {
   await page.screenshot({ path: path.join(SHOTS, 'agent-board.png') });
 
   /* 1.51.0 (the review of 102, F1 and F5): the Agent window is Praetorian too. Assign hero, a group trader's Start in Shadow
-     and a group's Clear stand-down are the prop business: held back here, with the reason, and WAITING FOR LEGION'S TRADER
-     DESK (the next pull request), where this smoke's flows for them run again. Their checks below are the hold-backs. */
-  console.log('  waiting for Legion\'s trader desk: Assign hero and a group trader\'s Start in Shadow run there; here they are held back');
+     and a group's Clear stand-down are the prop business: held back here, with the reason; this smoke runs them end to end
+     on Legion's trader desk further down (1.52.0). Their checks here are the hold-backs. */
+  console.log('  Assign hero and a group trader\'s Start in Shadow run on Legion\'s trader desk (below); here they are held back');
   const asg = await page.$eval('#agView [data-act="bAssign"][data-gid="g2"]', b => ({ d: b.disabled, t: b.title }));
   check(asg.d && /Not on Praetorian: a group is the prop business/.test(asg.t), '1.51.0: in the Agent window too (F1), Assign hero is held back with the reason: ' + JSON.stringify(asg));
   const before = (await sent()).length;
@@ -194,11 +197,89 @@ try {
   check(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'no sideways scroll with the stand-down row');
   await page.screenshot({ path: path.join(SHOTS, 'agent-board-standdown.png') });
   const sd = await page.$eval('#agView [data-act="bSdClear"][data-gid="' + gidA + '"]', b => ({ d: b.disabled, t: b.title }));
-  check(sd.d && /Not on Praetorian: a stand-down is on a group/.test(sd.t), '1.51.0 (F6): a group\'s Clear stand-down held back with the reason (waiting for Legion\'s trader desk): ' + JSON.stringify(sd));
+  check(sd.d && /Not on Praetorian: a stand-down is on a group/.test(sd.t), '1.51.0 (F6): a group\'s Clear stand-down held back with the reason (it runs on Legion\'s trader desk, below): ' + JSON.stringify(sd));
   const c0 = (await sent()).length;
   await page.evaluate(g => { const b = document.querySelector('#agView [data-act="bSdClear"][data-gid="' + g + '"]'); b.disabled = false; b.click(); }, gidA);
   await sleep(300);
   check(!(await sent()).slice(c0).some(m => m.type === 'agentStandDownClear'), '1.51.0: Clear stand-down forced: refused by the gate, nothing sent');
+
+  /* ---------------- answers B4-2 item 7 (the review of 103, a F-B2): the flows held back on Praetorian run end to end on
+     Legion's trader desk: test/legion-desk-page.html mounts LegionDesk on the window's own connection, as Legion Setup will
+     (builder 1's mount). --personal=EVAL-A (ChartBridge 0.6.16's pick, made up): every other live account reads as prop, so
+     Group B (SIM-C Sim, SIM-D prop) is Legion's; Group A (Sim only) has no home and is held back there too (a F-B7). */
+  console.log('Legion\'s trader desk: Assign hero, Start in Shadow and Clear stand-down end to end');
+  const lp = await ctx.newPage();
+  lp.on('pageerror', e => fail('page error: ' + e.message));
+  lp.on('dialog', d => { fail('a browser dialog: ' + d.message()); d.dismiss(); });
+  await lp.goto(`http://localhost:${port}/test/legion-desk-page.html`);
+  await lp.waitForSelector('.cb-pin-key', { timeout: 15000 }).then(() => enterPin(lp, TEST_PIN), () => {});
+  await lp.waitForFunction(() => !!window.agentDesk && window.__st().agents.length === 3 && window.legion.link.named(), null, { timeout: 30000 });
+  const lsent = () => lp.evaluate(() => window.__socks.flatMap(s => s.msgs));
+  const LG = '#lgd .lgd-agent';
+  await lp.click(LG + ' [data-act="board"]');
+  await until(() => lp.isVisible(LG + ' [data-k="board"]'), 'the board on Legion\'s desk');
+  const sdA = await lp.$eval(LG + ' [data-act="bSdClear"][data-gid="' + gidA + '"]', b => ({ d: b.disabled, t: b.title }));
+  check(sdA.d && /Not on Legion: a group that is not all prop accounts/.test(sdA.t), 'a F-B7: on Legion, Group A (Sim only) has its Clear stand-down held back with the reason: ' + JSON.stringify(sdA));
+  /* Assign hero with no free slot: the words, nothing sent */
+  helper.status.demothree.on = true;
+  await sleep(3500);
+  const lb0 = (await lsent()).length;
+  await lp.click(LG + ' [data-act="bAssign"][data-gid="g2"]');
+  const lNoSlot = await until(async () => { const t = await lp.textContent(LG + ' [data-k="bLine"]'); return /config\.txt/.test(t) ? t : null; }, 'the no free slot words on Legion');
+  check(lNoSlot && (await lsent()).length === lb0, 'Legion: Assign hero with no free slot: "add an agent id to config.txt", nothing sent');
+  helper.status.demothree.on = false;
+  await sleep(3500);
+  /* with a free slot: agentAccount {group}, the LIVE member asked once in the page (asked again at Continue), then POST /on in Shadow */
+  const lOns = helper.calls.length;
+  await lp.click(LG + ' [data-act="bAssign"][data-gid="g2"]');
+  let lAsk = await until(() => lp.$(LG + ' [data-brow="none"] .ag-ask'), 'the LIVE question for SIM-D on Legion');
+  const lAskText = lAsk ? (await lAsk.innerText()).replace(/\s+/g, ' ') : '';
+  check(/Agent demothree will trade group Group B \(SIM-C, SIM-D\), with LIVE account SIM-D, in Shadow/.test(lAskText) && !(await lsent()).some(m => m.type === 'agentAccount'), 'Legion: a LIVE member asked once, nothing sent yet: ' + lAskText);
+  helper.status.demothree.on = true;
+  await sleep(3500);
+  await lp.click(LG + ' [data-act="bYes"]');
+  const lStale = await until(async () => { const t = await lp.textContent(LG + ' [data-k="bLine"]'); return /^Nothing was sent: agent demothree is On in the helper now/.test(t) ? t : null; }, 'the recheck at Continue on Legion');
+  check(lStale && !(await lsent()).some(m => m.type === 'agentAccount'), 'Legion: Continue asks the free slot again: On meanwhile, nothing sent');
+  helper.status.demothree.on = false;
+  await sleep(3500);
+  await lp.click(LG + ' [data-act="bAssign"][data-gid="g2"]');
+  lAsk = await until(() => lp.$(LG + ' [data-brow="none"] .ag-ask'), 'the LIVE question again on Legion');
+  await lp.click(LG + ' [data-act="bYes"]');
+  const lAcc = await until(async () => (await lsent()).find(m => m.type === 'agentAccount' && m.agent === 'demothree'), 'agentAccount sent from Legion');
+  check(lAcc && lAcc.group === 'g2' && lAcc.keepMode === 'shadow' && lAcc.account === undefined, 'Legion: agentAccount {agent, group g2, keepMode shadow}: ' + JSON.stringify(lAcc));
+  const lOn = await until(() => helper.calls.slice(lOns).find(c => c.route === 'POST /on'), 'the helper\'s POST /on from Legion');
+  check(lOn && lOn.body.agent === 'demothree' && lOn.body.build === 'sample-build-1' && lOn.body.mode === 'shadow', 'Legion: then POST /on with Group B\'s default hero, in Shadow: ' + JSON.stringify(lOn && lOn.body));
+  check(!!(await until(async () => /is on Group B with sample-build-1, in Shadow/.test(await lp.textContent(LG + ' [data-k="bLine"]')), 'Legion\'s board says so')), 'Legion\'s board says demothree is on Group B in Shadow');
+  await lp.screenshot({ path: path.join(SHOTS, 'agent-board-legion-assigned.png') });
+  /* Start in Shadow for a group trader left in Auto and Off: Shadow first; never confirmed, nothing started; confirmed, POST /on */
+  await control('agent-mode', { agent: 'demothree', mode: 'auto' });
+  Object.assign(helper.status.demothree, { on: false, running: false, runningBuild: null, build: 'sample-build-1' });
+  await control('agent-connect', { agent: 'demothree', on: '0' });
+  const lOff = await until(async () => { const t = await lp.$eval(LG + ' [data-brow="hero"][data-agent="demothree"]', e => e.innerText.replace(/\s+/g, ' ')).catch(() => ''); return /Off: not started \(nothing trades\)/.test(t) ? t : null; }, 'the Off warning on his row on Legion', 15000);
+  check(lOff && /Start in Shadow/i.test(lOff), 'Legion: a seated slot that is Off: Start in Shadow offered: ' + lOff);
+  const lOns1 = helper.calls.length, lm1 = (await lsent()).length;
+  await lp.evaluate(() => { window.__dropMode = true; });
+  await lp.click(LG + ' [data-act="bStart"][data-agent="demothree"]');
+  const lGave = await until(async () => { const t = await lp.textContent(LG + ' [data-k="bLine"]'); return /did not put him in Shadow within 10 s: nothing was started/.test(t) ? t : null; }, 'the give-up words on Legion', 16000);
+  const lFirst = (await lsent()).slice(lm1);
+  check(lGave && lFirst.length === 1 && lFirst[0].type === 'agentMode' && lFirst[0].mode === 'shadow' && helper.calls.slice(lOns1).every(c => c.route !== 'POST /on'), 'Legion: Shadow never confirmed: agentMode shadow the only thing sent, no POST /on: ' + JSON.stringify(lFirst));
+  await lp.evaluate(() => { window.__dropMode = false; });
+  await lp.click(LG + ' [data-act="bStart"][data-agent="demothree"]');
+  const lOn2 = await until(() => helper.calls.slice(lOns1).find(c => c.route === 'POST /on'), 'Start in Shadow\'s POST /on from Legion');
+  check(lOn2 && lOn2.body.agent === 'demothree' && lOn2.body.mode === 'shadow' && await lp.evaluate(() => window.__st().agents.find(a => a.agent === 'demothree').mode) === 'shadow',
+    'Legion: Start in Shadow for a group trader: Shadow first, then POST /on in Shadow: ' + JSON.stringify(lOn2 && lOn2.body));
+  /* Clear stand-down on Legion's own group: one click */
+  const g2Build = await lp.evaluate(() => window.__st().agents.find(a => a.agent === 'demothree').build);
+  await control('agent-standdown', { agent: 'demothree', group: 'g2', kind: 'edge watch', why: 'sample: a made-up stand-down on Group B' });
+  await until(() => lp.$(LG + ' [data-act="bSdClear"][data-gid="g2"]'), 'Group B\'s stand-down row on Legion');
+  check(!(await lp.$eval(LG + ' [data-act="bSdClear"][data-gid="g2"]', b => b.disabled)), 'Legion: Group B\'s Clear stand-down offered');
+  const lc0 = (await lsent()).length;
+  await lp.click(LG + ' [data-act="bSdClear"][data-gid="g2"]');
+  const lClr = await until(async () => (await lsent()).slice(lc0).find(m => m.type === 'agentStandDownClear'), 'agentStandDownClear from Legion');
+  check(lClr && lClr.group === 'g2' && lClr.build === g2Build && lClr.agent === undefined && typeof lClr.cid === 'string', 'Legion: one click: agentStandDownClear {cid, build, group g2}: ' + JSON.stringify(lClr));
+  await until(async () => !(await lp.$(LG + ' [data-brow="standdown"][data-gid="g2"]')), 'Group B\'s amber row gone once ChartBridge clears it');
+  check((await control('agents')).log.some(l => l.file === 'agent-standdowns.txt' && /cleared on the page/.test(l.line) && /g2|Group B/.test(l.line)), 'the fake bridge logged Group B\'s "cleared on the page"');
+  await lp.close();
 
   /* KILL ALL AGENTS: agentKill on to every agent, one click */
   const k0 = (await sent()).filter(m => m.type === 'agentKill').length;

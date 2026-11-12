@@ -257,8 +257,10 @@ try {
   check(new RegExp('^demo went to ' + otherName + ' while the question said (Shadow|Copilot|Auto): nothing was sent\\. Choose Set to be asked again\\.$').test(await text('#agView [data-k="acctWhy"]')) && (await sent()).length === before,
     'the mode changed under the open question (it said: ' + askedSaid + '): closed with a note, nothing sent: ' + await text('#agView [data-k="acctWhy"]'));
   await page.click('#agView [data-act="acctSave"]');
-  check(await visible('#agView [data-k="acctAsk"]') && new RegExp('Agent demo will trade LIVE account EVAL-A in ' + otherName + '\\. Continue\\?').test(await text('#agView [data-k="acctAsk"]')),
-    'Set asks again, naming the mode now: ' + await text('#agView [data-k="acctAsk"]'));
+  /* 1.52.0 (answers B4-2, item 6): on Praetorian a move goes only in Shadow (the link sends Shadow first), so the question
+     names Shadow whatever the mode was; the closing above is what guards a question opened under another mode */
+  check(await visible('#agView [data-k="acctAsk"]') && /Agent demo will trade LIVE account EVAL-A in Shadow \(nothing is placed until you choose Copilot or Auto\)\. Continue\?/.test(await text('#agView [data-k="acctAsk"]')),
+    'Set asks again; on Praetorian it names Shadow (' + otherName + ' now: a move goes in Shadow): ' + await text('#agView [data-k="acctAsk"]'));
   await page.click('#agView [data-act="acctNo"]');
   await control('agent-mode', { agent: 'demo', mode: wasMode });
   await until(async () => (await agentsNow()).find(x => x.agent === 'demo').mode === wasMode, 'demo back in ' + wasMode);
@@ -271,6 +273,7 @@ try {
   check(am.length === 1 && am[0].agent === 'demo' && am[0].account === 'SIM-AG1' && Object.keys(am[0]).join(',') === 'type,cid,agent,account,keepMode' && ['shadow', 'copilot', 'auto'].includes(am[0].keepMode),
     'agentAccount sent once, exactly the contract\'s keys; to ChartBridge 0.5.2 or later (the fake says fake-0.5.4) keepMode names the mode the page showed: ' + JSON.stringify(am));
   check((await agentsNow()).find(a => a.agent === 'demo').mode === am[0].keepMode, 'the mode is kept: ' + am[0].keepMode);
+  check(am[0].keepMode === 'shadow', '1.52.0 (item 6): on Praetorian the move goes in Shadow (Shadow first when ' + wasMode + '): keepMode ' + am[0].keepMode);
 
   /* ---------------------------------------------------------------- the light: a look */
   console.log('the light follows his real state');
@@ -671,8 +674,15 @@ try {
      the picker's order (None, the groups, single accounts) is test/agent.test.js's, and the Agent window (Pop out) keeps it */
   const held = await page.evaluate(() => ({ why: document.querySelector('#agView [data-k="prWhy"]').textContent, acct: document.querySelector('#agView [data-k="acctOpen"]').disabled,
     rules: document.querySelector('#agView [data-k="rulesOpen"]').disabled, modes: [...document.querySelectorAll('#agView [data-k="modes"] button')].every(b => b.disabled), kill: document.querySelector('#agView [data-k="kill"]').disabled }));
-  check(/trades a group: groups are the prop business, it is set up from Legion's trader desk/.test(held.why) && held.acct && held.rules && held.modes && !held.kill,
-    '1.51.0 Praetorian: a trader on a group is held back (account, rules, modes off; Kill switch on): ' + JSON.stringify(held));
+  /* 1.52.0 (answers B4-2, item 5): a group of Sim accounts fits neither desk: "no home", held back, but Change account stays
+     offered with None only (the gate lets None go only while ChartBridge says he is flat) */
+  check(/no home: its group holds only your personal account or Sim accounts, and Praetorian takes no group; stop it, then fix its account or group/.test(held.why) && !held.acct && held.rules && held.modes && !held.kill,
+    '1.51.0 Praetorian: a trader on a group is held back (rules, modes off; Kill switch on); 1.52.0: with no home, Change account offers None only: ' + JSON.stringify(held));
+  await page.click('#agView [data-act="acctOpen"]');
+  const homeless = await page.$eval('#agView [data-k="acctSel"]', sel => [...sel.options].filter(x => !x.disabled && x.value !== sel.value).map(x => x.value));   // its own group stays listed, as now
+  check(homeless.length === 1 && homeless[0] === '' && /It has no home: only None is offered here/.test(await text('#agView [data-k="acctWhy"]')),
+    '1.52.0: no home: the picker offers None only, and says so: ' + JSON.stringify(homeless) + ' ' + await text('#agView [data-k="acctWhy"]'));
+  await page.click('#agView [data-act="acctCancel"]');
   await control('agent-group', { agent: 'demo', on: '0' });
   await page.close();
   await bridge.kill(); bridge = null;

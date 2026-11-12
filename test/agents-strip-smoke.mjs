@@ -210,7 +210,9 @@ try {
   await post('/test/elsewhere', { account: acct, root: 'MNQ', side: 'sell', kind: 'market', qty: 1 });   // flat again
 
   /* the hover card: the strip's card for that drone */
-  const hit = async k => p.$eval(SKY + ` .ak-hit[data-key="${k}"]`, e => { const r = e.getBoundingClientRect(); return { x: r.x + 30, y: r.y + 20 }; });
+  /* the drones' hit layer is drawn again as the sky resumes (after a tab closes, for one): wait for the drone, never read
+     it in the middle of a redraw (under load the read came between the two and found nothing, then the drone was there) */
+  const hit = async k => until(() => p.$eval(SKY + ` .ak-hit[data-key="${k}"]`, e => { const r = e.getBoundingClientRect(); return r.width > 0 ? { x: r.x + 30, y: r.y + 20 } : null; }).catch(() => null), 'the drone ' + k, 4000);
   const hs = await hit('seat:S');
   await p.mouse.move(hs.x, hs.y);
   const pop = await until(() => p.$eval(SKY + ' .ak-pop', e => (!e.hidden ? e.innerText : null)), 'the hover card', 4000);
@@ -251,6 +253,7 @@ try {
   check(await p.isVisible('.bt-kill'), 'a click on the bot\'s drone opens the Bot view, its kill switch in reach');
   await p.click('#wsBotTab');
   await until(() => p.evaluate(() => !document.body.classList.contains('bt-on')), 'the Bot view closed');
+  await until(async () => (await sky()).running && await p.$(SKY + ' .ak-hit[data-key="agent:demo"]'), 'the strip laid out again', 4000);   // the review of 103, round 3: the Bot view's close, then the layout
   const ha = await hit('agent:demo');
   await p.mouse.click(ha.x, ha.y);
   await until(() => p.evaluate(() => window.workspace.agent().shown && window.workspace.agent().chosen === 'demo'), 'the agent\'s drone opens the Agent tab on him');

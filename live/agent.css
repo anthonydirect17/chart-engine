@@ -750,3 +750,12 @@ body.ag-agents .bt-props { --bt-corner-bottom: 56px; }
 #wsTopTabs .pr-tabs #wsPraetorianTab[aria-pressed="true"] { border: 0; background: transparent; color: var(--ws-gold); }
 #wsTopTabs .pr-tabs .ag-tabbtn, #wsTopTabs .pr-tabs .bt-tabbtn { grid-row: 2; height: 22px; font-weight: 500; padding: 0 9px; }
 .ag-prwhy:not([hidden]), .bt-prwhy:not([hidden]) { color: var(--ws-warn); }
+
+/* 1.52.0 Legion's trader desk (live/legion-desk.js): the same Agent and Bot desks, mounted once in Legion Setup by builder 1;
+   its head is the page's two-way switch and one line on what it reaches. The desks keep their own look. */
+.lgd { display: flex; flex-direction: column; gap: 6px; min-height: 640px; }
+.lgd-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; min-width: 0; }
+.lgd-note { font-size: 12px; color: var(--ws-text2); }
+.lgd > .ag-view, .lgd > .bt-view { flex: 1 1 auto; min-height: 600px; display: flex; flex-direction: column; }
+.lgd > [hidden] { display: none !important; }
+.lgd .bt-props { position: static; }

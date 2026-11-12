@@ -27,7 +27,7 @@ test('a trader on None: it may be given your personal account or a Sim account, 
   const g = gateWith(accounts(), agent({ account: null }));
   assert.equal(g.check({ type: 'agentMode', agent: 'demo', mode: 'auto' }), '', 'on None nothing trades');
   assert.equal(g.check({ type: 'agentAccount', agent: 'demo', account: 'MINE-1', keepMode: 'shadow' }), '');
-  assert.match(g.check({ type: 'agentAccount', agent: 'demo', account: 'PROP-1', keepMode: 'shadow' }), /PROP-1 is a prop account: it is set up from Legion's trader desk \(being built\); from here you can only stop it/);
+  assert.match(g.check({ type: 'agentAccount', agent: 'demo', account: 'PROP-1', keepMode: 'shadow' }), /PROP-1 is a prop account: it is set up from Legion's trader desk; from here you can only stop it/);
   assert.equal(g.check({ type: 'agentAccount', agent: 'demo', account: 'SIM-A', keepMode: 'shadow' }), '', 'a Sim account (to confirm)');
   assert.equal(g.check({ type: 'agentAccount', agent: 'demo', account: 'SIM-A', league: true, keepMode: 'shadow' }), '', 'a league seat is a Sim account');
   assert.match(g.check({ type: 'agentAccount', agent: 'demo', account: 'PROP-1', league: true, keepMode: 'shadow' }), /PROP-1 is a prop account/);
@@ -38,18 +38,20 @@ test('a trader on None: it may be given your personal account or a Sim account, 
 
 test('a trader on a prop account, a group (even of Sim accounts), or an account the page cannot tell: only its kill switch ON gets through', () => {
   const cases = [
-    [agent({ account: 'PROP-1' }), /PROP-1 is a prop account: it is set up from Legion's trader desk \(being built\); from here you can only stop it/],
+    [agent({ account: 'PROP-1' }), /PROP-1 is a prop account: it is set up from Legion's trader desk; from here you can only stop it/],
     [agent({ account: null, group: { id: 'g1', name: 'Evals' }, seats: [{ account: 'PROP-1' }, { account: 'PROP-2' }] }), /trades a group: groups are the prop business/],
     [agent({ account: null, group: { id: 'g2', name: 'Mine' }, seats: [{ account: 'MINE-1' }] }), /trades a group/],
     [agent({ account: null, group: { id: 'g3', name: 'Sims' }, seats: [{ account: 'SIM-A' }] }), /trades a group/],
-    [agent({ account: 'LIVE-X' }), /LIVE-X is an account the page cannot tell/],
-    [agent({ account: 'GONE-9' }), /GONE-9 is not in ChartBridge's accounts now/],
+    [agent({ account: 'LIVE-X' }), /no home: the page cannot tell its account; stop it, then fix its account or group/],
+    [agent({ account: 'GONE-9' }), /no home: the page cannot tell its account/],
   ];
   for (const [a, rx] of cases) {
     const g = gateWith(accounts(), a);
     for (const m of AGENT_MSGS('demo')) {
       if (m.type === 'agentMode' && m.mode === 'shadow') { assert.equal(g.check(m), '', 'Shadow is a stop: it goes for any described trader (the review of 102, F2)'); continue; }
-      const why = g.check(m); assert.match(why, /^Not sent from Praetorian: /, m.type); assert.match(why, rx, m.type);
+      const why = g.check(m); assert.match(why, /^Not sent from Praetorian: /, m.type);
+      if (m.type === 'agentAccount' && m.account === null && /no home/.test(rx.source)) { assert.match(why, /flatten first/, 'None for a trader with no home: only when flat'); continue; }
+      assert.match(why, rx, m.type);
     }
     assert.match(g.check({ type: 'agentAccount', agent: 'demo', account: 'MINE-1', keepMode: 'shadow' }), rx, 'not even to your personal account: the prop trader is moved from Legion');
     assert.equal(g.check({ type: 'agentKill', agent: 'demo', on: true }), '', 'the kill switch ON always goes: it only stops a trader');
@@ -112,7 +114,7 @@ test('the link the page and both pop-out windows hand the desks (AgentCore.praet
   const posted = [], subs = [], told = [];
   const AF = { listen: p => { subs.push(p); return () => {}; }, post: x => { posted.push(x); return true; }, send: x => posted.push(['send', x]), sendOrder: x => posted.push(['order', x]), limit: () => ({ level: '' }) };
   const link = AC.praetorianLink(AF, m => told.push(m ? m.type : null));
-  assert.deepStrictEqual(Object.keys(link).sort(), ['accountOk', 'botWhy', 'limit', 'listen', 'named', 'personal', 'post', 'traderWhy', 'why'], 'no send, no sendOrder');
+  assert.deepStrictEqual(Object.keys(link).sort(), ['accountOk', 'botWhy', 'limit', 'listen', 'named', 'noHome', 'personal', 'post', 'traderWhy', 'why'], 'no send, no sendOrder');
   assert.ok(Object.isFrozen(link));
   assert.equal(subs.length, 1, 'the gate listens as the link is made, before any desk');
   for (const x of [accounts(), agent({ agent: 'mine', account: 'MINE-1' }), agent({ agent: 'prop', account: 'PROP-1' }), { type: 'bot', account: 'PROP-1', mode: 'auto' }]) subs[0].message(x);
@@ -171,11 +173,15 @@ test('every send path in the two desks says the gate\'s reason, never "not conne
   assert.match(ag, /const no = refusal\(m\);\n    if \(no\) \{ notice\(\{ kind: 'refused', level: 'amber', text: no \}\); return false; \}/, 'sendAgent');
   assert.match(ag, /const no = refusal\(r\.msg\);\n    if \(no\) \{ props\.refused\(agent, id\); setMsg\(x, no\); return false; \}/, 'an answer');
   assert.match(ag, /const no = refusal\(m\); if \(no\) \{ boardSay\(no\); return; \}/, 'the board\'s assign');
-  assert.match(ag, /const held = heldWhy\(id\); if \(held\) \{ boardSay\('Nothing was started from Praetorian: '/, 'the board\'s Start in Shadow (the helper)');
+  assert.match(ag, /const held = heldWhy\(id\); if \(held\) \{ boardSay\('Nothing was started from ' \+ tabName \+ ': '/, 'the board\'s Start in Shadow (the helper)');
   assert.match(ag, /async function helperOn\(a\) \{\n    const build = q\('\[data-k="hPick"\]'\)\.value;\n    if \(!build\) return;\n    const held = heldWhy\(a\.agent\); if \(held\)/, 'On (the helper), in its own body (the review of 102, F4; the behaviour is test/praetorian-smoke.mjs)');
   assert.match(ag, /async function startOn\(j\) \{\n    const held = heldWhy\(j\.agent\); if \(held\)/, 'Start in Shadow checks again before the helper\'s On (F3)');
   assert.match(ag, /async function assignOn\(j\) \{\n    const held = heldWhy\(j\.agent\); if \(held\)/, 'and Assign hero\'s On');
-  assert.match(ag, /data-act="bSdClear"[^\n]*\(!can \|\| praetorian \? ' disabled' : ''\)/, 'Clear stand-down held back on Praetorian (F6)');
+  assert.match(ag, /data-act="bSdClear"[^\n]*\(!can \|\| praetorian \|\| lgNoGroup\(s\.group\) \? ' disabled' : ''\)/, 'Clear stand-down held back on Praetorian (F6), and on Legion for a group it refuses (a F-B7)');
+  assert.match(ag, /data-act="bAssign"[^\n]*\(!can \|\| B\.job \|\| praetorian \|\| lgNoGroup\(g\.id\) \? ' disabled' : ''\)/, 'Assign hero the same');
+  /* the review of 103 (b F7, B18): a desk handed a link with accountOk is gated (Praetorian's or Legion's), whatever its name */
+  assert.match(ag, /const gated = praetorian \|\| !!\(V3 && typeof V3\.accountOk === 'function'\);/);
+  assert.match(bt, /const gated = praetorian \|\| !!\(V3 && typeof V3\.accountOk === 'function'\);/);
   assert.match(ag, /async function helperSave\(a\) \{\n    const held = heldWhy\(a\.agent\); if \(held\)/, 'Auto-On time (the helper)');
   assert.equal((ag.match(/sendRaw\(/g) || []).length, 5, 'sendRaw: its use in the seen ack, the answer, the assign, the board start and sendAgent; each refused one is said');
   assert.match(bt, /const no = refusal\(m\);\n    if \(no\) \{ notice\(\{ kind: 'refused', level: 'amber', text: no \}\); return false; \}/, 'sendBot');
@@ -221,7 +227,7 @@ test('the shapes: a leftover seat counts, and a shape the page cannot read lets 
     [agent({ account: null, seats: [{ account: 'PROP-1' }] }), /a leftover position on a prop account: stop and flatten it first/, 'None with a leftover seat on a prop account'],
     [agent({ account: null, seats: [{ account: 'MINE-1' }] }), /a leftover position on your personal account: stop and flatten it first/, 'None with a leftover seat on your personal account (answers B4-3, item 3)'],
     [agent({ account: null, seats: [{ account: 'SIM-A' }, { account: 'MINE-1' }] }), /a leftover position on more than one kind of account/, 'None with leftover seats of two kinds'],
-    [agent({ account: 'MINE-1', seats: [{ account: 'PROP-1' }] }), /PROP-1 is a prop account/, 'personal with a leftover prop seat'],
+    [agent({ account: 'MINE-1', seats: [{ account: 'PROP-1' }] }), /no home: its account mixes kinds/, 'personal with a leftover prop seat'],
     [agent({ account: null, seats: [{ account: 'LIVE-X' }] }), /a leftover position on an account the page cannot tell/, 'None with a seat the page cannot tell'],
     [(() => { const x = agent(); delete x.account; return x; })(), /cannot tell its accounts/, 'no account key at all (round 2, F2)'],
     [agent({ account: 123 }), /cannot tell its accounts \(ChartBridge sent a shape/, 'a number'],
