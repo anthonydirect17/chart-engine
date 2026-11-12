@@ -50,7 +50,7 @@ async function until(fn, what, ms = 10000) {
 }
 async function startBridge(p, flags) {
   port = p;
-  const br = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(p), '--v3', '--trading', '--test-controls', '--test-pin=' + TEST_PIN].concat(flags || []), { stdio: ['ignore', 'pipe', 'inherit'] });
+  const br = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(p), '--v3', '--trading', '--test-controls', '--test-pin=' + TEST_PIN, '--personal=EVAL-A'].concat(flags || []), { stdio: ['ignore', 'pipe', 'inherit'] });
   await new Promise((res, rej) => { br.stdout.once('data', res); br.once('exit', c => rej(new Error('bridge exited ' + c))); });
   return br;
 }

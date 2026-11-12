@@ -69,15 +69,19 @@ try {
     function Spy(url, p) { const s = p === undefined ? new Real(url) : new Real(url, p); const rec = { msgs: [] }; const send = s.send.bind(s); s.send = d => { let m = null; try { m = JSON.parse(d); if (/^agent/.test(m.type)) rec.msgs.push(m); } catch (e) { /* not JSON */ } if (m && m.type === 'agentMode' && window.__dropMode) return; return send(d); }; socks.push(rec); return s; }
     Spy.prototype = Real.prototype; for (const k of ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED']) Spy[k] = Real[k];
     window.WebSocket = Spy;
+    /* 1.48.0: the desk's state on the page (window.workspace) or in the Agent window (window.agentDesk) */
+    window.__st = () => (window.workspace ? window.workspace.agent() : window.agentDesk.state());
   });
   const page = await ctx.newPage();
   page.on('pageerror', e => fail('page error: ' + e.message));
   page.on('dialog', d => { fail('a browser dialog: ' + d.message()); d.dismiss(); });
-  await page.goto(`http://localhost:${port}/live/?layout=Main&tab=agent`);
+  /* 1.48.0 (Praetorian): Assign hero and a group's Clear stand-down are the prop business: on the page they are not on
+     Praetorian (the end of this smoke checks that), and the Agent window (Pop out, agent.html, the page's full feed as before)
+     keeps them. So the board runs there: the same desk, the same code */
+  await page.goto(`http://localhost:${port}/live/agent.html`);
   await page.waitForSelector('.cb-pin-key', { timeout: 15000 });
   await enterPin(page, TEST_PIN);
-  await page.waitForFunction(() => document.getElementById('wsConn').classList.contains('live'), null, { timeout: 30000 });
-  await page.waitForFunction(() => window.workspace.agent().agents.length === 3, null, { timeout: 15000 });
+  await page.waitForFunction(() => !!window.agentDesk && window.__st().agents.length === 3, null, { timeout: 30000 });
   const sent = () => page.evaluate(() => window.__socks.flatMap(s => s.msgs));
 
   /* ---------------- piece 3: a group's default hero preselected, every hero listed with its tier fit */
@@ -94,7 +98,7 @@ try {
   await page.screenshot({ path: path.join(SHOTS, 'agent-board-picker.png'), clip: { x: 0, y: 0, width: 520, height: 520 } });
   await control('agent-group', { agent: 'demothree', on: '0' });
   await control('agent-connect', { agent: 'demothree', on: '0' });
-  await until(async () => !(await page.evaluate(() => window.workspace.agent().agents.find(a => a.agent === 'demothree').connected)), 'demothree back on None, not connected');
+  await until(async () => !(await page.evaluate(() => window.__st().agents.find(a => a.agent === 'demothree').connected)), 'demothree back on None, not connected');
 
   /* ---------------- piece 2: the board */
   console.log('piece 2: the heroes-on-duty board');
@@ -161,7 +165,7 @@ try {
   const offRow = await until(async () => { const t = await page.$eval('#agView [data-brow="hero"][data-agent="demothree"]', e => e.innerText.replace(/\s+/g, ' ')).catch(() => ''); return /Off: not started \(nothing trades\)/.test(t) ? t : null; }, 'the Off warning on his row', 15000);
   check(offRow && /No hero on duty/i.test(offRow) && /Start in Shadow/i.test(offRow) && /set None on his desk to free the slot/.test(offRow), 'a seated slot that is Off: the warning, No hero on duty, Start in Shadow and the hint: ' + offRow);
   await page.screenshot({ path: path.join(SHOTS, 'agent-board-off.png') });
-  check(await page.evaluate(() => window.workspace.agent().agents.find(a => a.agent === 'demothree').mode) === 'auto', 'he was left in Auto');
+  check(await page.evaluate(() => window.__st().agents.find(a => a.agent === 'demothree').mode) === 'auto', 'he was left in Auto');
   /* Shadow never confirmed (the agentMode never reaches ChartBridge): nothing is started */
   const ons1 = helper.calls.length, m1 = (await sent()).length;
   await page.evaluate(() => { window.__dropMode = true; });
@@ -178,26 +182,38 @@ try {
   const modeSent = (await sent()).slice(m2).find(m => m.type === 'agentMode');
   check(modeSent && modeSent.mode === 'shadow' && on2 && on2.at >= 0 && on2.body.agent === 'demothree' && on2.body.build === 'sample-build-1' && on2.body.mode === 'shadow',
     'left in Auto: agentMode shadow first, then the helper\'s POST /on with his build in Shadow once Shadow shows: ' + JSON.stringify(on2 && on2.body));
-  check(await page.evaluate(() => window.workspace.agent().agents.find(a => a.agent === 'demothree').mode) === 'shadow', 'he is in Shadow');
+  check(await page.evaluate(() => window.__st().agents.find(a => a.agent === 'demothree').mode) === 'shadow', 'he is in Shadow');
   await until(async () => !(await page.$('#agView [data-brow="hero"][data-agent="demothree"] .ag-boff')), 'the warning gone once he is on');
 
   /* ---------------- ChartBridge's line on the board (Anthony 2026-10-22): it lay over Desk and Kill all agents (a "no heartbeat"
      warning, now and then, made the Desk click below time out); in the band above the board it covers neither and moves neither */
   console.log('ChartBridge\'s line on the board: in the band above it, over no Desk or Kill all agents, moving neither');
-  const headBtns = () => page.evaluate(() => [...document.querySelectorAll('#agView [data-act="boardClose"], #agView [data-act="killAll"]')].map(b => {
+  const headBtns = (pg) => (pg || page).evaluate(() => [...document.querySelectorAll('#agView [data-act="boardClose"], #agView [data-act="killAll"]')].map(b => {
     const r = b.getBoundingClientRect(), hits = [[r.left + r.width / 2, r.top + r.height / 2], [r.left + 3, r.top + 3], [r.right - 3, r.bottom - 3]].every(([x, y]) => { const e = document.elementFromPoint(x, y); return !!e && b.contains(e); });
     return b.dataset.act + ' ' + Math.round(r.left) + ',' + Math.round(r.top) + (hits ? '' : ' covered');
   }));
+  /* the workspace's own alert line lives on the page, not in the Agent window: this part runs on the page's Praetorian */
+  const mp = await ctx.newPage();
+  mp.on('pageerror', e => fail('page error: ' + e.message));
+  await mp.goto(`http://localhost:${port}/live/?layout=Main&tab=agent`);
+  await mp.waitForSelector('.cb-pin-key', { timeout: 15000 }).then(() => enterPin(mp, TEST_PIN), () => {});
+  await mp.waitForFunction(() => document.getElementById('wsConn').classList.contains('live') && window.workspace.agent().agents.length === 3, null, { timeout: 30000 });
+  await mp.click('#agView [data-act="board"]');
+  await until(() => mp.isVisible('#agView [data-k="board"]'), 'the board on the page');
   for (const [w, h] of [[1440, 900], [390, 844]]) {
-    await page.setViewportSize({ width: w, height: h }); await sleep(400);
-    if (await page.isVisible('#wsAlertClose')) { await page.click('#wsAlertClose'); await sleep(200); }
-    const b0 = await headBtns();
+    await mp.setViewportSize({ width: w, height: h }); await sleep(400);
+    if (await mp.isVisible('#wsAlertClose')) { await mp.click('#wsAlertClose'); await sleep(200); }
+    const b0 = await headBtns(mp);
     await control('status', { level: 'warn', text: 'Sample: Agent demothree: no heartbeat for 5 s (a made-up warning for the board)' });
-    await until(() => page.isVisible('#wsAlert'), 'the line shows on the board');
-    const b1 = await headBtns(), inTray = await page.evaluate(() => !!document.getElementById('wsAlerts').closest('#agView [data-k="tray"]'));
+    await until(() => mp.isVisible('#wsAlert'), 'the line shows on the board');
+    const b1 = await headBtns(mp), inTray = await mp.evaluate(() => !!document.getElementById('wsAlerts').closest('#agView [data-k="tray"]'));
     check(inTray && b0.length === 2 && JSON.stringify(b1) === JSON.stringify(b0) && !b1.some(s => s.endsWith('covered')), 'at ' + w + ' x ' + h + ' ChartBridge\'s line on the board sits in the band above it, over no Desk or Kill all agents, moving neither: ' + JSON.stringify({ inTray, b0, b1 }));
-    await page.click('#wsAlertClose');
+    await mp.click('#wsAlertClose');
   }
+  /* 1.48.0 Praetorian on the page: Assign hero held back with the reason; a group's Clear stand-down refused by the gate */
+  const assign = await mp.$('#agView [data-act="bAssign"]');
+  if (assign) check(await assign.evaluate(b => b.disabled && /Not on Praetorian: a group is the prop business/.test(b.title)), '1.48.0: on the page, Assign hero is held back with the reason (the Agent window keeps it)');
+  await mp.close();
   await page.setViewportSize({ width: 1440, height: 900 }); await sleep(400);
 
   /* ---------------- chart 1.29.0 (ChartBridge 0.6.2, SPEC CE-2): a league seat in the picker, its PROVING chip; a stand-down */
@@ -216,12 +232,12 @@ try {
   await page.click('#agView [data-act="acctSave"]');
   const lmsg = await until(async () => (await sent()).slice(l0).find(m => m.type === 'agentAccount' && m.agent === 'demotwo'), 'agentAccount league sent');
   check(lmsg && lmsg.account === lacct && lmsg.league === true && lmsg.group === undefined, 'agentAccount {agent, account, league: true, keepMode}: ' + JSON.stringify(lmsg));
-  await until(async () => (await page.evaluate(() => window.workspace.agent().agents.find(a => a.agent === 'demotwo').league)) === true, 'ChartBridge says demotwo is a league seat');
+  await until(async () => (await page.evaluate(() => window.__st().agents.find(a => a.agent === 'demotwo').league)) === true, 'ChartBridge says demotwo is a league seat');
   await page.click('#agView [data-act="board"]');
   await until(() => page.isVisible('#agView [data-k="board"]'), 'the board again');
   const lrow = await until(async () => { const t = await page.$eval('#agView [data-brow="hero"][data-agent="demotwo"]', e => e.innerText.replace(/\s+/g, ' ')).catch(() => ''); return /PROVING 30 of 100/i.test(t) ? t : null; }, 'the league row\'s PROVING chip');
   check(lrow && /league seat \(Sim only\)/.test(lrow) && lrow.includes(lacct), 'a league seat\'s row: PROVING n of 100 (n the helper\'s liveN), league seat (Sim only): ' + lrow);
-  const gidA = await page.$eval('#agView [data-brow="hero"][data-agent="demo"]', e => e.innerText).then(() => page.evaluate(() => { const g = window.workspace.agent().agents.find(a => a.agent === 'demo').group; return g && g.id; }));
+  const gidA = await page.$eval('#agView [data-brow="hero"][data-agent="demo"]', e => e.innerText).then(() => page.evaluate(() => { const g = window.__st().agents.find(a => a.agent === 'demo').group; return g && g.id; }));
   await control('agent-standdown', { agent: 'demo', group: gidA, kind: 'edge watch', why: 'sample: live mean below the exam mean by more than 2 SE' });
   const sdRowT = await until(async () => { const t = await page.$eval('#agView [data-brow="standdown"][data-gid="' + gidA + '"]', e => e.innerText.replace(/\s+/g, ' ')).catch(() => ''); return t || null; }, 'the amber stand-down row');
   check(sdRowT && /Stood down/i.test(sdRowT) && /Sample Hero B on Group A/i.test(sdRowT) && /build sample-build-2 bbbbbbbbbbbb/.test(sdRowT) && /edge watch: sample: live mean below the exam mean by more than 2 SE/.test(sdRowT) && /Since [A-Z][a-z]{2} [0-9]{1,2}, [0-9]{2}:[0-9]{2} ET/.test(sdRowT) &&
@@ -244,14 +260,14 @@ try {
   await page.click('#agView [data-act="killAll"]');
   const kills = await until(async () => { const k = (await sent()).filter(m => m.type === 'agentKill').slice(k0); return k.length >= 3 ? k : null; }, 'three agentKill');
   check(kills && kills.length === 3 && kills.every(m => m.on === true) && kills.map(m => m.agent).sort().join() === 'demo,demothree,demotwo', 'one click: agentKill on to every agent: ' + JSON.stringify(kills));
-  await until(async () => (await page.evaluate(() => window.workspace.agent().agents.every(a => a.killed))), 'every agent killed');
+  await until(async () => (await page.evaluate(() => window.__st().agents.every(a => a.killed))), 'every agent killed');
   await until(async () => /All agents killed/i.test(await page.textContent('#agView [data-act="killAll"]')), 'the button says so');
   check((await page.$$eval('#agView [data-act="bKill"]', b => b.map(x => x.disabled && /Killed/i.test(x.textContent)))).every(Boolean), 'each row\'s Kill says Killed');
   await page.screenshot({ path: path.join(SHOTS, 'agent-board-killed.png') });
   /* Open goes to his desk; the board is kept in this browser */
   await page.click('#agView [data-act="bOpen"][data-agent="demo"]');
   await until(() => page.isVisible('#agView [data-k="main"]'), 'his desk');
-  check(await page.evaluate(() => window.workspace.agent().chosen) === 'demo', 'Open shows that agent\'s desk');
+  check(await page.evaluate(() => window.__st().chosen) === 'demo', 'Open shows that agent\'s desk');
   await page.close();
 } catch (e) {
   fail('smoke stopped: ' + (e && e.stack || e));

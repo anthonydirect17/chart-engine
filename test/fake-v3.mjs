@@ -189,6 +189,7 @@ export class OrderDeskV3 extends OrderDesk {
     super(o);
     this.sw = Object.fromEntries(SWITCHES.map(k => [k, !(o.switches && o.switches[k] === false)]));   // Anthony 2026-10-07: on by default
     this.graceMs = o.graceMs === undefined ? 10000 : o.graceMs;
+    this.personalName = typeof o.personal === 'string' ? o.personal : '';   // 1.48.0 (ChartBridge 0.6.16, made up): the one personal account
     this.botConfigRoot = o.botRoot || 'MNQ';   // config.txt botRoot
     this.botRoot = this.botConfigRoot;          // the root in force: botRoot, or its micro or mini set from the page (bot-rails.txt)
     this.acct = new Map();
@@ -279,10 +280,12 @@ export class OrderDeskV3 extends OrderDesk {
     return null;
   }
   accountsMsg() {
-    /* 0.6.10: an account NinjaTrader no longer lists (a.unlisted, /test/unlist-account) is not in the list; it is in notListed */
-    return { type: 'accounts', list: [...this.acct.values()].filter(a => a.state !== 'archived' && !a.unlisted).sort((x, y) => x.name < y.name ? -1 : 1).map(a => this.accountMsg(a)),
+    /* 0.6.10: an account NinjaTrader no longer lists (a.unlisted, /test/unlist-account) is not in the list; it is in notListed.
+       1.48.0: with --personal=<name>, ChartBridge 0.6.16's flags: personalNamed, that account personal, every other live one prop */
+    const p = this.personalName, flags = a => (p ? Object.assign(a, { personal: a.name === p, prop: !a.sim && a.name !== p }) : a);
+    return Object.assign(p ? { personalNamed: true } : {}, { type: 'accounts', list: [...this.acct.values()].filter(a => a.state !== 'archived' && !a.unlisted).sort((x, y) => x.name < y.name ? -1 : 1).map(a => flags(this.accountMsg(a))),
       archived: [...this.acct.values()].filter(a => a.state === 'archived').map(a => ({ name: a.name, at: a.archivedAt })),
-      notListed: [...this.acct.values()].filter(a => a.state !== 'archived' && a.unlisted).map(a => ({ name: a.name, trade: !!a.trade, lastConnected: a.since || null })) };
+      notListed: [...this.acct.values()].filter(a => a.state !== 'archived' && a.unlisted).map(a => ({ name: a.name, trade: !!a.trade, lastConnected: a.since || null })) });
   }
   /** to v3 pages from the own origin, signed in or not */
   sendAccounts() { const m = this.accountsMsg(); for (const c of this.conns()) if (c.v3 && c.origin === this.origin()) this.send(c, m); if (this.gr) this.sendGroups(); }

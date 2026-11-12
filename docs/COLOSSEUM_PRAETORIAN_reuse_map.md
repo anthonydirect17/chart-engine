@@ -19,8 +19,8 @@ How it was read: by hand, `live/workspace.js` (the top bar, `startBot`, `startAg
 | Old links and keys | `tabUrl` and the start-up reads of `?tab=` in `workspace.js` | `league` opens the Colosseum; `agent` and `bot` open Praetorian on that side |
 | The Colosseum: the agents' live training | The League tab (`LeagueView`, `LeagueOverlay`, `LeagueCore`), as it stands | Its title and the button's word; nothing in what it reads or draws |
 | The Colosseum: bots on the watch | `FleetCore.traders` (the traders as ChartBridge says them), read only | A listen-only connection handed to the view (no post at all); a new small box; "not built yet" for the loop's own list |
-| Praetorian | The Agent tab (`AgentDesk`) and the Bot tab (`BotDesk`), both mounted as they are, inside one tab | A two-way switch (Agents, Bot) with the page's `.ws-seg`; one option on each desk: which accounts it may offer |
-| Praetorian: personal accounts only | `FleetCore.kindOf` (ChartBridge's own `prop` and `personal` flags on each account, 0.6.16) | One filter in `AgentCore.pickerChoices` and `BotCore.accountChoices`, off by default |
+| Praetorian | The Agent tab (`AgentDesk`) and the Bot tab (`BotDesk`), both mounted as they are, inside one tab | Their two buttons become its two sides; each desk says the gate's reason and holds a prop trader's controls back |
+| Praetorian: personal accounts only | `FleetCore.kindOf` (ChartBridge's own `prop`, `personal` and `sim` flags on each account, 0.6.16) | A gate on the connection the desks are handed (`AgentCore.praetorianGate`), the pattern of Legion's `legionLink`; a filter on each picker's list (`prChoices`, `prBotChoices`) |
 | Boxes, pills, titles | The page's `ws-` classes and tokens | `var(--ws-box-radius, 18px)` and `var(--ws-box-shadow, ...)` with fallbacks; builder 1 defines them |
 
 ## The top tabs
@@ -38,11 +38,12 @@ Colosseum, Praetorian. No button is rewritten.
   laptop tabs' click already makes). It is never hidden, so the row never jumps.
 - **Legion:** `#wsFleetTab` as it is. Builder 1 owns what it opens and when it is offered.
 - **Colosseum:** `#wsLeagueTab`, its word changed from League to Colosseum, offered as today (The Desk answers).
-- **Praetorian:** in the Colosseum pull request, the Agent and Bot buttons stay as they are, after the four, so nothing
-  is lost before Praetorian exists. In the Praetorian pull request they leave the top bar and one `#wsPraetorianTab`
-  takes their place. The Bot button's alert class (`bt-alert`, the red mark when the bot needs Anthony) moves onto the
-  Praetorian button, so an alert is never hidden behind a closed tab. Not determined: whether anything else reads
-  `#wsBotTab`'s place in the top bar; the smokes that click it (`test/tab-buttons.mjs` and the Bot smokes) will say.
+- **Praetorian (as built, 1.48.0):** one group in the row: a Praetorian button (opens the side used last, closes it when
+  open) and its two sides, which are the Agent desk's and the Bot desk's own buttons, moved into the group with their
+  listeners, their offered state and the Bot's red alert (`bt-alert`). So an alert is never hidden behind a closed tab,
+  and every link and smoke that clicks `#wsAgentTab` or `#wsBotTab` keeps working. (The first draft of this map had the
+  two buttons leave the top bar and the alert move onto one button; keeping them as the sides does the same with less
+  new code.)
 - **The look:** the mockup's pills (gold border and text on the open one). The laptop tabs' gold ink
   (`ChartMotion.syncInk`, `.ws-tab`) is the page's existing look for a tab row and is reused for this row.
 
@@ -59,10 +60,10 @@ Colosseum, Praetorian. No button is rewritten.
 | The covering tabs' names in the hotkey line (`COVERING_TABS`, about 1455: `lg-on` League, `ag-on` Agent, `bt-on` Bot) | Colosseum; Praetorian (both body classes) |
 | `ACCEPT_SHOWN_ON` (Agent, Bot: the tabs that show the proposal the Accept key answers) | Praetorian. The rule is unchanged: Accept and Reject answer only on the tab that shows the proposal |
 
-The new address for each is `?tab=colosseum` and `?tab=praetorian&side=agents|bot`. The old words keep working; nothing
-stored in this browser names a tab today (the tab lives only in the address), so there is no stored key to move. Not
-determined: whether The Desk or the PC updaters write `?tab=league` or `?tab=agent` anywhere else; the old words keep
-working either way.
+The Colosseum's address is `?tab=colosseum`. Praetorian keeps `?tab=agent` and `?tab=bot`, which now name its two sides,
+and adds `?tab=praetorian` (the side used last). The old words keep working; nothing stored in this browser named a tab
+before (the tab lived only in the address); Praetorian keeps the side used last in this browser
+(`live-praetorian-side-v1`), a convenience only.
 
 ## The Colosseum
 
@@ -118,18 +119,17 @@ personal accounts only, with every rule and safety they have today.
 section (`#agView`, `#btView`), listens on the page's one v3 connection, and keeps its own safeties: Auto and a kill
 release ask a second click within 4 s, a LIVE account is asked once in the page, Accept sends only the proposal's id,
 the rails are tighten-only, the motion rules (R3) never touch a live value. Praetorian is one tab that shows one of the
-two sections at a time, with a switch in its head: **Agents, Bot** (`.ws-seg`, buttons with `aria-pressed`).
+two sections at a time; its two sides, **Agent** and **Bot**, are the two desks' own buttons (below).
 
 - The two desks are not merged into one view. Merging would rewrite both, which is what the direction forbids ("by
   moving the existing code, not by writing it again"). Their looks differ today (the Agent tab's Layout 5, the Bot tab's
-  Library); Praetorian gives both the same head (PRAETORIAN in Cinzel, the switch, the personal-only line) and leaves each
-  body as it is. Bringing both bodies to look B is a later piece, said in the pull request.
-- Each desk's own button (`#wsAgentTab`, `#wsBotTab`) stays in the DOM, hidden in `#wsTabHold`, so its listener, its
-  `hidden` (offered with a v3 ChartBridge) and its alert class keep working; the Praetorian button reads them.
-  Praetorian is offered when either is.
-- `onTab` of each desk is wired as today, with `pr-on` added to the body while either is open, and the switch moves
-  between them by the desks' own `showTab`.
-- The pop-out windows (`agent.html`, `bot.html`) are unchanged.
+  Library); Praetorian leaves each body as it is. Bringing both bodies to look B is a later piece. (A head row over both,
+  PRAETORIAN in Cinzel, was built and taken out: the Agent desk's Layout 5 needs that height, test/agent-l5-smoke.mjs.
+  Its words went into the Praetorian button's title and each held-back trader's own line.)
+- Each desk's own button (`#wsAgentTab`, `#wsBotTab`) is one of Praetorian's two sides (above). Praetorian is offered when
+  either is.
+- `onTab` of each desk is wired as before; the Praetorian button is pressed while either is open.
+- The pop-out windows (`agent.html`, `bot.html`) are unchanged: they keep the page's feed (to confirm).
 
 ### Personal accounts only
 
@@ -138,31 +138,34 @@ Anthony picked on the Accounts tab, "This is my personal account") or `prop: tru
 picked), with `personalNamed` saying whether a pick exists. `FleetCore.kindOf(row)` reads that into 'personal', 'prop',
 'sim' or '' (not known). That is the Accounts page's own answer (`live/accounts.js` about 1767 draws the same flags).
 
-**Use:** one option on each existing picker, off by default so the pop-out windows and every other caller are unchanged:
+**Use (as built):** the guard is on the connection, not in the pickers, so it holds whatever a desk draws:
 
-- `AgentCore.pickerChoices(accountsMsg, groupsMsg, agent, others, opts)` (about 382): with `opts.onlyKind = 'personal'`,
-  a single account is offered only when its row says `personal: true`; a group is offered only when every member is
-  personal; a league seat stays as it is (Sim only, already). Every other account is listed with the reason ("a prop
-  account: it trades from Legion") and not offered, the way a taken account is today.
-- `BotCore.accountChoices(accountsMsg, bot, opts)` (about 189): the same filter for the bot's account.
+- `AgentCore.praetorianGate()` hears ChartBridge's `accounts`, `agent` and `bot` messages and answers, for each message a
+  desk would post, '' or why not. `live/workspace.js` hands both desks `praetorianLink`: frozen, its post passes only
+  what the gate passes, and it has no send or sendOrder. It lives in `agent-core.js` (already installed on every PC) so no
+  new page file needs a line in `nt8/install-files.json`.
+- Passed: a kill switch ON (agent or bot), the two acknowledgements, and any other agent or bot message for a trader (or
+  the bot) on your personal account, a Sim account or None, an account change only to one of those.
+- The pickers: `AgentCore.prChoices` and `prBotChoices` mark a prop account, a live account the page cannot tell and
+  every group "not on Praetorian" (listed, not offered); they never offer what the desk did not.
 - None ("nothing trades") is always offered: it reaches no account.
 
 **The careful side, as the kickoff asks:** an account the page cannot tell is not offered. With no personal account
-picked (`personalNamed` not true), or before the first `accounts` message, or with a ChartBridge older than 0.6.16, no
-account is offered on Praetorian and the line says why ("No personal account is picked yet: pick it on the Accounts
-tab"). A Sim account is 'sim', not 'personal': **not offered on Praetorian (to confirm).** It is the narrower choice;
-Sim trading stays possible from the pop-out windows, which are unchanged.
+picked (`personalNamed` not true), before the first `accounts` message, or with no FleetCore on the page, no live account
+is offered and the Praetorian button's title and each held-back trader's line say why. **A Sim account IS offered (to confirm):** the first draft of this map said not; Sim
+never reaches a prop account, and the Agent and Bot tabs are where a trader is tried on Sim.
 
 **A trader already on a prop account:** Praetorian must not add a way to reach a prop account, and the Agent desk's
 mode, kill, rules and Accept controls act on whatever account the trader is on. So on Praetorian a trader whose
 accounts are not all personal (`FleetCore.seatsKind` of its accounts is not 'personal' and not 'none') shows its
 readings with a line "On a prop account: it is run from Legion" and its mode, rules and account controls are not
-offered there. **Its kill switch stays offered:** turning a kill switch on only stops a trader, and taking a stop away
-from a screen is the less careful choice (to confirm). The same for the bot slot when its account is prop.
+offered there. **What only stops it stays offered:** its kill switch ON, the helper's Off and "Flatten and turn off";
+taking a stop away from a screen is the less careful choice (to confirm). The same for the bot slot when its account is
+prop (its kill switch ON).
 
-Not determined until built: whether every control in `agent.js` can be held back by one flag at its render, or whether
-a few need it at their click as well. Both are checked by a test that sends each control's click on a prop-account
-trader and sees no message posted.
+As built: held back at render (disabled, with one line saying why) and again at the click for the helper's On, Auto-On
+time and the board's Start; the gate refuses every ChartBridge message regardless. `test/praetorian-smoke.mjs` forces the
+disabled controls on a prop trader and sees nothing posted.
 
 ### Praetorian is rule 12
 
@@ -192,8 +195,8 @@ for a trader on a prop account (above).
 | Control | Where it lands |
 |---|---|
 | Agents picker, Board, Pop out, Motion | Praetorian, unchanged |
-| Build picker, On, Off, "Flatten and turn off" | Praetorian, unchanged for a personal trader; prop held back |
-| Auto-On time and daily cap | Praetorian, unchanged for a personal trader; prop held back |
+| Build picker, On, Off, "Flatten and turn off" | Praetorian, unchanged for a personal trader; for a prop trader On is held back, Off and "Flatten and turn off" stay (they only stop) |
+| Auto-On time and daily cap | Praetorian, unchanged for a personal trader; prop held back (an Auto-On time starts it) |
 | Shadow, Copilot, Auto (Auto's second click in 4 s) | Praetorian, unchanged for a personal trader; prop held back |
 | Kill switch (on: one click; release: a second click in 4 s) | Praetorian; on is always offered; the release is prop held back (to confirm) |
 | Change account (None, a group, one account; LIVE asked first) | Praetorian, personal accounts only (above) |
@@ -202,7 +205,7 @@ for a trader on a prop account (above).
 | Chart: market, bar size, Maximize | Praetorian, unchanged |
 | Stream filters, a row's drawer | Praetorian, unchanged |
 | Board: Kill all agents | Praetorian, unchanged (it only turns kill switches on) |
-| Board: Start in Shadow, Open, Kill, Clear stand-down | Praetorian, unchanged for a personal trader; prop held back except Kill |
+| Board: Start in Shadow, Open, Kill, Clear stand-down | Praetorian; Open and Kill as before; Start held back for a prop trader; Clear stand-down (a group's) refused by the gate |
 | Board: Assign hero (gives a group a trader) | **Not on Praetorian** (groups are the prop business): it stays reachable from the Agent pop-out window, unchanged, until Legion takes it (to confirm) |
 
 Every reading in that list's Agent tab table (name, build, connection, mode, account, killed and stood down, position,
@@ -230,9 +233,10 @@ account.
 | New | Why nothing existing does it |
 |---|---|
 | The Chart button | The page has no button that means "no tab"; today a tab closes by its own button or a layout tab |
+| Praetorian's gate (`AgentCore.praetorianGate`) | Nothing limited the Agent and Bot tabs by account kind; Legion's `legionLink` is the pattern |
 | The watch box in the Colosseum | No read-only list of traders in Shadow exists outside tabs that carry controls |
-| Praetorian's head and its Agents and Bot switch | The arrangement itself |
-| The personal-only option on two pickers | An option on existing functions, not a new picker |
+| The Praetorian button and its group of two sides | The arrangement itself |
+| The personal-only filter on two pickers | A filter on the existing lists, not a new picker |
 | Praetorian's prop hold-back line | Nothing today limits the Agent and Bot tabs by account kind |
 
 ## Things I need that are not mine

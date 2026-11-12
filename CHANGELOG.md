@@ -63,6 +63,40 @@
   `test/pc-updater.test.js`: the allowed git subcommands, the box job's name, useHttpPath read before the one ask, the
   token only after a 404 or 401 and then through the Actions API, one place that asks for it and one that sends it.
 
+## chart 1.48.0 (2026-11-12): Praetorian, the Agent tab and the Bot tab as one tab for the personal account (page only, no F5)
+
+Anthony's direction of 2026-11-11: "The bot and agent tabs ... should be rolled into ... a way to trade any of these bots
+or agents we are training, on the personal account ... They already have all the rules and safety's built in, so there's
+no need to trash then, but they dont need 2 tabs, they can be one, and focused on the personal (not prop business)
+accounts". The name is his: "Praetorian is good". Rule 12: this changes what the Agent and Bot desks can send. The map is
+`docs/COLOSSEUM_PRAETORIAN_reuse_map.md`.
+
+- **One tab, both desks as they were** (`live/index.html`, `live/workspace.js`, `live/agent.css`): Praetorian in the top
+  tabs, its two sides the Agent desk's and the Bot desk's own buttons (their listeners, their states and the Bot's red
+  alert kept, so an alert is never behind a closed tab). Praetorian opens the side used last (kept in this browser); its
+  title says whether a personal account is picked. No head row of its own: the Agent desk's Layout 5 needs the height
+  (test/agent-l5-smoke.mjs). Every rule and safety of both desks is the same code:
+  Auto's and a release's second click, the LIVE question, Accept sending only the proposal's id, tighten-only rails, R3.
+- **The gate** (`AgentCore.praetorianGate`, `live/agent-core.js`): both desks are handed a connection that posts only what
+  the gate passes, built in `live/workspace.js` (`praetorianLink`, frozen, no send or sendOrder). A kill switch ON always
+  goes (it only stops a trader); the two acknowledgements go; any other agent or bot message goes only for a trader (or
+  the bot) on your personal account (ChartBridge 0.6.16's own flag, read by `FleetCore.kindOf`), a Sim account or None,
+  and an account change only to one of those. Refused by name: a group (the prop business, run from Legion), a prop
+  account, a live account the page cannot tell, a trader ChartBridge has not described yet, and every other message type.
+  The gate hears ChartBridge before the desks and forgets everything when the connection drops.
+- **Held back on screen, said in one line:** a trader on a prop account, a group or an account the page cannot tell shows
+  all its readings; its modes, Change account, Change the rules, the helper's On and Auto-On time, and its kill switch's
+  release are off, with "On Praetorian this trader can only be stopped (Kill switch, Off)" and why. The bot the same.
+  The board's Assign hero is not on Praetorian (groups are the prop business); the Agent window (Pop out) keeps it.
+- **The pickers** (`AgentCore.prChoices`, `prBotChoices`): your personal account, Sim and None offered; a prop account or
+  one the page cannot tell listed with "not on Praetorian"; a group never offered. Never a choice the desk did not offer.
+- **Said as it is:** a message the gate refuses is never reported as "not signed in": each desk shows the gate's reason.
+- **Unchanged:** the pop-out windows (`agent.html`, `bot.html`) keep the page's feed as before; `?tab=agent` and `?tab=bot`
+  open Praetorian on that side, `?tab=praetorian` on the side used last; the hotkey note names Praetorian, and Accept
+  still answers only under the tab that shows its proposal.
+- **To confirm with Anthony:** Sim accounts are offered on Praetorian (they never reach a prop account, and the Agent and
+  Bot tabs are where a trader is tried on Sim); a trader on a group of Sim accounts is held back like any group.
+
 ## chart 1.47.0 (2026-11-12): the top tabs and the Colosseum (page only, no F5)
 
 Anthony's direction of 2026-11-11 (the loop, amendment 1, section 5): four top tabs, Chart, Legion, Colosseum and

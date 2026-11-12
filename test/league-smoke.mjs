@@ -94,7 +94,7 @@ try {
   /* the top bar (1.47.0): the top tabs Chart, Legion, Colosseum (the League's button, renamed), then the Agent tab as it was; the
      Bot button in the top bar (1.36.0: on a layout with no Agents strip) */
   check(await p.isVisible('#wsLeagueTab') && (await p.textContent('#wsLeagueTab')) === 'Colosseum', '1.47.0: the top bar has the Colosseum (the League tab, renamed)');
-  check(await p.evaluate(() => [...document.getElementById('wsTopTabs').children].map(b => b.id).join() === 'wsChartTab,wsFleetTab,wsLeagueTab' && document.getElementById('wsTopTabs').nextElementSibling === document.getElementById('wsAgentTab') && !!document.getElementById('wsAgentTab').closest('.ws-top')), '1.47.0: the top tabs in order Chart, Legion, Colosseum; the Agent tab stays in the top bar after them');
+  check(await p.evaluate(() => [...document.getElementById('wsTopTabs').children].map(b => b.id).join() === 'wsChartTab,wsFleetTab,wsLeagueTab,wsPrGroup' && [...document.getElementById('wsPrGroup').children].map(b => b.id).join() === 'wsPraetorianTab,wsAgentTab,wsTabSlot' && !!document.getElementById('wsAgentTab').closest('.ws-top')), '1.48.0: the top tabs in order Chart, Legion, Colosseum, Praetorian (its sides Agent and the Bot\'s slot)');
   check(await p.isVisible('#wsBotTab') && await p.$eval('#wsTabSlot', h => h.contains(document.getElementById('wsBotTab'))), '1.36.0: no Agents strip on the layout: the Bot button is in the top bar');
   await p.click('#wsAdd');
   const menu = await p.$$eval('#wsAddMenu [data-add]', bs => bs.map(b => b.textContent));
