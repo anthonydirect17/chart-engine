@@ -63,6 +63,67 @@
   `test/pc-updater.test.js`: the allowed git subcommands, the box job's name, useHttpPath read before the one ask, the
   token only after a 404 or 401 and then through the Actions API, one place that asks for it and one that sends it.
 
+## chart 1.46.0 (2026-11-12): Legion: the two lanes, the pick and the one Armed switch (page only, no F5)
+
+In plain words: the Legion tab can now choose which bot each lane runs and switch the lanes on and off. It needs
+ChartBridge 0.6.21 for that and says so with an older one. Nothing changes on the chart or for hand trading. Build answers
+7 part D2, the first half; moving an account between lanes by drag and drop is the second half and is not in this
+release.
+
+- **Lanes.** Two at most: the eval lane and the funded lane. A lane is a trader whose account is a group, and the
+  group's Type (eval or funded) says which lane it is. Each lane shows its trader, its mode, the accounts in its group,
+  the bot picked for it, what the trader is doing, and, when it cannot be armed, the one reason why (no bot picked,
+  the kill switch, a stand-down, a picked file that is gone or does not run live, no account, Market entry off in its
+  rules, an older ChartBridge). No trader on a group of that Type, or two of them: the lane says what to set up, once,
+  on the Agent tab and in Settings.
+- **The pick.** One list a lane: None and every roster file that runs live. A choice is sent to ChartBridge
+  (`agentPick`), which keeps it; the list shows ChartBridge's pick, never the tab's own guess, so a refusal puts it
+  back and is said. Locked while the lane is in Auto or the trader holds something.
+- **One Armed switch for both lanes**, in the head that stays in sight, under Kill all. On: every lane that is ready
+  goes to Auto. It asks first, in the page, saying what each lane will do; Yes takes a real click only, not in the
+  first 600 ms and not after 8 seconds (Kill all's rules). Off: every lane's trader goes to Shadow at one click or
+  key, with no question. Off closes no position: Kill all does.
+- **ChartBridge is the truth.** The switch keeps no state. It reads each trader's mode from ChartBridge, so a mode
+  changed on the Agent tab, by Kill all, or by the 17:00 New York reset shows on Legion at once. When the lanes
+  differ it reads "Armed: PARTLY", says which lane is where, and a click switches everything off.
+- **Three messages and no other.** The tab's connection passes `agentKillAllProp`, `agentPick` and `agentMode` (to
+  Auto or to Shadow), each with exactly its keys (`FleetCore.maySend`, which `workspace.js` puts in front of the
+  connection). No kill switch, no account or rules change, no order.
+- From the review backlog: the lanes, the traders and the prop accounts are above the roster (PROP 4); before the
+  first `accounts` message the tab says "not heard yet", and that alone never holds Kill all back (PROP 5); Escape
+  cancels a question wherever the focus is while the tab is open.
+- Not in this release, and said on the tab: drag and drop of an account into or out of a lane (today: the Accounts
+  tab), starting the runner's program with Armed (the helper), each bot's own state from the runner. N12 (the day
+  stop mark as ChartBridge works it out) needs ChartBridge to send it and stays in the backlog.
+
+- **The review of 94.** Armed is offered only when Kill all is (one function decides both). Until the page has heard
+  ChartBridge it reads "Armed: not known" and does nothing. A lane in Copilot, or a trader in Auto on a prop account outside
+  the lanes, reads "Armed: PARTLY" with its name, and one click sends it to Shadow. An account on its group's bench is not a
+  lane's account. A lane's trading accounts must each be prop or Sim (said as such), never one ChartBridge has not said.
+  Auto is asked for as the Agent tab would (AgentCore's modeMsg, and modesAllowed with groupTradable), and names the pick
+  and its file's sha256 (ChartBridge 0.6.21's rule). The 17:00 reset's daily None is said plainly. The day stop mark says it
+  is the page's own working. The Armed row sits straight under the head row; each lane is drawn on its own; a pick is sent
+  only from the list's own files; the gate is captured once from a frozen FleetCore.
+
+Checked in `test/fleet.test.js` (28 tests) and `npm run smoke:fleet` (140 checks in a browser: a double click
+anywhere on the switch arms nothing at four widths; a press, messages and a release still count on the switch and on
+Yes; a key or a scripted click never arms). `docs/LEGION_and_the_old_tabs.md` lists every control and reading on the
+Agent tab and the Bot tab and whether Legion carries it (for Anthony; nothing is removed).
+
+- **The second round of the review's fixes (rule 12):** Armed sits at the top of its row, so it never moves when the
+  words beside it grow (a smoke check at 320, 390, 700 and 1440 px); a lane with any trader not said to be in Shadow
+  (a doubled lane in Copilot included) reads PARTLY, never "off"; every trader in Auto outside the lanes reads PARTLY,
+  whatever its account but the personal one, named with what it is on and whether Kill all reaches it; "not known"
+  lasts until the traders have settled after sign-in, not the first one; the bench is the Multi-Account panel's own
+  rule when that file is loaded; a Sim-only lane says Kill all does not reach it and a mixed lane how many are Sim; the
+  gate refuses a bare Auto (Legion arms only a lane with a pick); without the page's mode rules Armed says it cannot
+  switch from here.
+- **The review of 94's fixes (answers 25):** the traders count as heard only when ChartBridge's end of the sign-in
+  replay (agentStandDowns, sent right after it) has come for the latest sign-in AND 1.5 s have passed since its first
+  trader, so a trader replayed late never reads as no trader; a sign-in or sign-out (not ChartBridge's trading message
+  sent again on a checkmark change) and a dropped connection start again, and nothing is heard while signed out (S1).
+  Armed has one width in every state, so neither edge moves (N-c).
+
 ## ChartBridge 0.6.21 and chart 1.45.1 (2026-11-12): the pick, the day's profit side for the runner, the roster reader tightened
 
 In plain words: nothing changes on the chart or for hand trading. On the wire one thing changes for every trader that runs

@@ -21,13 +21,24 @@
  *     never a surprise (the coordinator's condition, 2026-11-11). Read only: a switch is changed on the Agent tab, by a person.
  *   - Prop accounts: stage (the group's Type), progress to the target, the cushion to the floor, today, the day's profit stop
  *     mark and where it comes from, and what would stop the runner sizing it (no group Type: size 0).
- * Not in this cut, and said plainly on the tab: the pick of which bots run today on the eval and the funded accounts, the one
- * Armed slider (D2), and each bot's own state from the spec runner (B3).
+ *   - The lanes (chart 1.46.0, build answers 7 part D2; needs ChartBridge 0.6.21). Two at most: the eval lane and the funded
+ *     lane. A lane is a trader whose account is a group, and the group's Type (eval or funded) says which lane it is. Each
+ *     lane shows its trader, the accounts in its group, the roster file picked for it, and why it cannot be armed when it
+ *     cannot. The PICK is changed here (`agentPick`: ChartBridge keeps it and refuses a change while the trader is in Auto
+ *     or holds anything). ONE ARMED SWITCH for both lanes: on, every lane that is ready goes to Auto (`agentMode`); off,
+ *     every lane's trader goes to Shadow. On asks first, in the page, and takes a real click only, as Kill all's Yes; off
+ *     is one click. The switch holds no state of its own: it reads each trader's mode from ChartBridge, so a mode changed
+ *     on the Agent tab, by Kill all or at 17:00 New York shows here at once, and "partly" is said when the lanes differ.
+ * Not in this cut, and said plainly on the tab: moving an account into or out of a lane by drag and drop (today: the
+ * Accounts tab, the account's group), starting the runner's program with Armed (the helper, B4), and each bot's own state
+ * from the spec runner.
  *
  * "Prop" is ChartBridge's word (`prop` on each row of the `accounts` message, 0.6.16): every live account that is not the
  * personal account Anthony picked. With no pick nothing is prop, and the tab says how to pick.
  *
- * Nothing here places an order. The one message it can send is `agentKillAllProp`. The one request it makes is GET /roster.
+ * Nothing here places an order. It can send three messages and no other (FleetCore.maySend, which workspace.js puts in
+ * front of the connection): `agentKillAllProp`, `agentPick`, and `agentMode` to Auto or to Shadow. The one request it makes
+ * is GET /roster.
  *
  * Two parts, as league.js: FleetCore (pure: Node tests, test/fleet.test.js) and, in a browser, FleetView (the tab).
  */
@@ -41,6 +52,10 @@ const KILL_MIN = '0.6.17';       // ChartBridge that knows agentKillAllProp
 const SWITCH_MIN = '0.6.18';     // ... the two entry switches
 const DAYSTOP_MIN = '0.6.19';    // ... the day's profit stop
 const ROSTER_MIN = '0.6.20';     // ... GET /roster
+const PICK_MIN = '0.6.21';       // ... the pick (agentPick)
+const STAGES = ['eval', 'funded'];
+const FILE_RX = /^[A-Za-z0-9][A-Za-z0-9_-]{0,39}\.json$/;      // a roster file's name, as ChartBridge takes it (PlainName)
+const ID_RX = /^[a-z0-9]{1,12}$/;                              // a trader's id
 const ROSTER_FORMAT = 'specrunner.roster/1', LINEUP_FORMAT = 'specrunner.lineup/1';   // Bot-Lab specrunner/roster.py
 const NAME_RX = /^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$/;
 const CONFIRM_MS = 8000;         // the Kill all question stays this long (compared at the Yes too, not left to a timer)
@@ -299,7 +314,7 @@ function rosterCards(body) {
     if (!stages[0] || !stages[1]) { no('its playbook or its numbers are not in the format\'s shape'); continue; }
     if (!plainObj(d.counts)) { no('its counts are not in the format\'s shape'); continue; }
     const quick = !!d.counts.quick;
-    const base = { file: name, quick, planText: planText(d.plan), stages };
+    const base = { file: name, quick, planText: planText(d.plan), stages, sha256: typeof f.sha256 === 'string' && /^[0-9a-f]{64}$/.test(f.sha256) ? f.sha256 : '' };   // 0.6.21: the file's sha256, which Armed names
     if (d.format === ROSTER_FORMAT) {
       const b = botPart(d);
       if (!b) { no('its bot, its run or whether it runs live is not in the format\'s shape'); continue; }
@@ -355,7 +370,9 @@ function killAllState(version, accountsMsg, signedIn, connected) {
   if (!connected) return { ok: false, why: 'ChartBridge is not connected' };
   if (!atLeast(version, KILL_MIN)) return { ok: false, why: 'Kill all needs ChartBridge ' + KILL_MIN + ' or later (this one is ' + (version || 'not known') + ')' };
   if (!signedIn) return { ok: false, why: 'Sign in to trading first (the PIN in the top bar)' };
-  if (!accountsMsg || accountsMsg.personalNamed !== true) return { ok: false, why: 'No personal account is picked yet, so no account is prop: pick it on the Accounts tab (an account\'s settings, This is my personal account)' };
+  /* PROP 5: "not heard yet" is not "no". Before the first accounts message the tab does not know whether a personal account
+     is picked; when that is the only thing missing, Yes sends and ChartBridge answers (it knows) */
+  if (accountsMsg && accountsMsg.personalNamed !== true) return { ok: false, why: 'No personal account is picked yet, so no account is prop: pick it on the Accounts tab (an account\'s settings, This is my personal account)' };
   return { ok: true, why: '' };
 }
 const killAllMsg = cid => Object.assign({ type: 'agentKillAllProp' }, cid ? { cid } : {});
@@ -365,7 +382,8 @@ const killAllMsg = cid => Object.assign({ type: 'agentKillAllProp' }, cid ? { ci
  * 92, PROP 3). It never says nobody is trading while a trader is in Auto on a group with the personal account in it, or on
  * an account NinjaTrader does not list now.
  */
-function autoLine(rows) {
+function autoLine(rows, heard) {
+  if (heard === false) return 'Not heard from ChartBridge yet which accounts are prop';
   const on = rows.filter(t => t.autoProp), nm = t => t.name + (t.connected ? '' : ' (its program is not connected now)');
   const plain = on.filter(t => t.kind === 'prop' || t.kind === 'propsim'), unl = on.filter(t => t.kind === 'unlisted'), mixed = on.filter(t => t.kind === 'mixed');
   const parts = [];
@@ -375,13 +393,199 @@ function autoLine(rows) {
   if (parts.length) return parts.join('. ');
   return rows.length ? 'No trader is in Auto on a prop account' : 'No traders yet';
 }
+/* ---------------------------------------------------------------- the lanes, the pick and the Armed switch (D2) */
+/** What a lane's trader is doing, with no number that changes by the second (the lane is not redrawn while nothing changed). */
+function laneStatus(a) {
+  if (a.enabled === false) return 'Off in ChartBridge';
+  if (a.killed) return 'Kill switch on';
+  if (a.standDown) return 'Stood down: ' + str(a.standDown, 300);
+  if (!a.connected) return 'Its runner is not connected';
+  return a.owns ? 'In a trade' : 'Watching';
+}
+/* The Agent tab's own rules for a trader's mode (the review of 94, FIX 6: one rule and one builder on the page): AgentCore's
+   modeMsg builds agentMode, and modesAllowed with groupTradable says whether Auto may be asked for. */
+const AGC = typeof require === 'function' && typeof module === 'object' ? (() => { try { return require('./agent-core.js'); } catch (e) { return null; } })() : (typeof self !== 'undefined' ? self.AgentCore : null);
+const SHA_RX = /^[0-9a-f]{64}$/;
+/**
+ * The two lanes. agents: the `agent` messages; cards: rosterCards()'s result or null (not read).
+ * -> [{ stage, title, traders: [ids], id, name, mode, modeText, auto (a trader of the lane is in Auto), connected, status,
+ *       groupId, groupName, seats: [the accounts that trade with the group], benched: [members on the bench], pick, sha,
+ *       pickKnown, card (the picked file's card or null), pickText, exposed, why (why it cannot be armed, '' when it can),
+ *       armable, runnerNote }]
+ * A lane's trader is the one whose account is a group of that Type. None, or more than one: the lane says so and cannot be
+ * armed. Nothing here is worked out from a roster file's numbers: a file is named, and only its own "runs live" is read.
+ * The review of 94: an account on the group's bench is not a lane's account (FIX 3); every account that trades with the
+ * group must be one ChartBridge marks prop (or Sim, said as such), never one it has not said (STOP 1); Auto must be one the
+ * Agent tab would offer (AgentCore.modesAllowed with groupTradable, FIX 6); and the 17:00 reset's daily None is said (FIX 4).
+ */
+function lanes(agents, groupsMsg, accountsMsg, version, cards) {
+  const groups = groupIndex(groupsMsg), idx = accountIndex(accountsMsg), files = new Map();
+  if (cards && cards.ok) for (const c of cards.lineups.concat(cards.bots)) files.set(c.file, c);
+  const list = (Array.isArray(agents) ? agents : []).filter(a => plainObj(a) && typeof a.agent === 'string').sort((x, y) => (x.agent < y.agent ? -1 : x.agent > y.agent ? 1 : 0));
+  return STAGES.map(stage => {
+    const title = stage === 'eval' ? 'Eval lane' : 'Funded lane';
+    const on = list.filter(a => plainObj(a.group) && typeof a.group.id === 'string' && groups.has(a.group.id) && groups.get(a.group.id).accountType === stage);
+    const L = { stage, title, traders: on.map(a => a.agent), id: '', name: '', mode: '', modeText: '', auto: on.some(a => a.mode === 'auto'), connected: false, status: '',
+      groupId: '', groupName: '', seats: [], benched: [], sim: false, simCount: 0, pick: '', sha: '', pickKnown: atLeast(version, PICK_MIN), card: null, pickText: '', exposed: false, why: '', armable: false, runnerNote: '',
+      /* the re-review of 94, R2: any trader of the lane not said to be in Shadow (Copilot, Auto, or not said), set before any
+         early return, so a doubled lane in Copilot is never read as "off" */
+      notShadow: on.some(a => a.mode !== 'shadow'), notShadowIds: on.filter(a => a.mode !== 'shadow').map(a => a.agent + ' (' + (own(MODE_NAME, a.mode) ? MODE_NAME[a.mode] : 'not known') + ')') };
+    if (!groupsMsg) { L.why = 'Not heard from ChartBridge yet'; return L; }
+    if (!on.length) {
+      L.why = 'No trader is on a group of Type ' + stage + '. ChartBridge\'s 17:00 reset puts a flat trader on None each trading day, so give the trader its group again on the Agent tab each day (a group with Type ' + stage + ': Settings, Account groups).';
+      return L;
+    }
+    if (on.length > 1) { L.why = on.length + ' traders are on ' + stage + ' groups (' + on.map(a => a.agent).join(', ') + '): Legion runs one lane a stage. Take all but one off on the Agent tab.'; return L; }
+    const a = on[0], g = groups.get(a.group.id);
+    L.id = a.agent; L.name = str(a.name, 40) || a.agent; L.mode = own(MODE_NAME, a.mode) ? a.mode : ''; L.modeText = L.mode ? MODE_NAME[L.mode] : 'Not known';
+    L.connected = a.connected === true; L.status = laneStatus(a); L.exposed = a.owns === true;
+    L.groupId = a.group.id; L.groupName = str(g.name, 40) || a.group.id;
+    /* the re-review of 94, N2: the bench is the Multi-Account panel's own rule (MultiAccountCore.lanes, one rule in one place)
+       when that file is loaded (the page loads it after this one, so it is asked here, at the call); the same field read here
+       otherwise (Node tests, or the panel not served) */
+    const MAC = typeof self !== 'undefined' && self.MultiAccountCore && typeof self.MultiAccountCore.lanes === 'function' ? self.MultiAccountCore : null;
+    let bench = new Set(Array.isArray(g.benched) ? g.benched.filter(x => typeof x === 'string') : []);
+    if (MAC) { try { const ml = MAC.lanes(g, { accounts: plainObj(accountsMsg) && Array.isArray(accountsMsg.list) ? accountsMsg.list : [], desk: new Map() }, []); bench = new Set(ml.bench.filter(c => c.member).map(c => c.name)); } catch (e) { /* the field as read above */ } }
+    const all = traderAccounts(a);
+    L.seats = all.filter(n => !bench.has(n)); L.benched = all.filter(n => bench.has(n));
+    L.pick = typeof a.pick === 'string' && FILE_RX.test(a.pick) ? a.pick : '';
+    L.card = L.pick ? files.get(L.pick) || null : null;
+    L.sha = L.card && SHA_RX.test(String(L.card.sha256 || '')) ? L.card.sha256 : '';
+    L.pickText = !L.pick ? 'None' : L.card ? L.card.name + (L.card.kind === 'lineup' ? ' (lineup of ' + L.card.bots.length + ')' : '') : L.pick;
+    const kinds = L.seats.map(n => { const row = idx.get(n.toLowerCase()); return row ? kindOf(row) : ''; });
+    L.sim = kinds.length > 0 && kinds.every(k => k === 'sim');
+    L.simCount = kinds.filter(k => k === 'sim').length;
+    const r = plainObj(a.rules) ? a.rules : {};
+    const allowed = AGC && typeof AGC.modesAllowed === 'function' && typeof AGC.groupTradable === 'function'
+      ? AGC.modesAllowed({ tradable: AGC.groupTradable(accountsMsg, null, L.seats), account: L.groupName }).auto : { ok: false, why: 'The page\'s mode rules (agent-core.js) are not loaded' };
+    L.why = !L.pickKnown ? 'The pick needs ChartBridge ' + PICK_MIN + ' or later (this one is ' + (version || 'not known') + ')'
+      : !ID_RX.test(a.agent) ? 'Its id is not one ChartBridge takes'
+      : a.enabled === false ? 'The trader is off in ChartBridge'
+      : a.killed ? 'Its kill switch is on (it is released on the Agent tab, by you)'
+      : a.standDown ? 'It is stood down: ' + str(a.standDown, 300)
+      : typeof a.pickProblem === 'string' && a.pickProblem ? 'Its saved pick could not be read: ' + str(a.pickProblem, 200)
+      : !L.pick ? 'No bot is picked for it'
+      : !cards || !cards.ok ? 'The roster is not read, so the picked file cannot be checked'
+      : !L.card ? 'The picked file ' + L.pick + ' is not a roster file this PC serves now'
+      : !L.card.runsLive ? L.card.name + ' does not run live: ' + str(L.card.whyNot, 300)
+      : !L.sha ? 'ChartBridge gave no sha256 for ' + L.pick + ' (it needs ChartBridge 0.6.21 with the review\'s fixes): Auto must name the file it arms'
+      : !accountsMsg ? 'Not heard from ChartBridge yet which accounts are prop'
+      : !L.seats.length ? 'No account trades with its group (all on the bench, or none)'
+      : kinds.some(k => k === 'personal') ? 'Its group holds your personal account'
+      : kinds.some(k => k === '') ? 'ChartBridge has not said whether ' + L.seats.filter((n, i) => kinds[i] === '').join(', ') + ' is prop'
+      : !kinds.every(k => k === 'prop' || k === 'sim') ? 'An account of its group is neither prop nor Sim'
+      : atLeast(version, SWITCH_MIN) && r.marketEntry !== true ? 'Market entry is off in its rules (the Agent tab): the runner\'s entries would be refused'
+      : !allowed.ok ? allowed.why
+      : '';
+    L.armable = !L.why;
+    L.runnerNote = L.connected ? '' : 'Its runner is not connected: nothing trades in this lane until it is.';
+    return L;
+  });
+}
+/**
+ * Every trader in Auto that is on no lane (the review of 94, FIX 2; the re-review, R3: whatever its account, prop, Sim or
+ * not known; only the personal account is Praetorian's and left out), enabled and not killed. -> [ids], with .words: each
+ * one named with what it is on and whether Kill all reaches it.
+ */
+function outsideAuto(ls, agents, accountsMsg, version) {
+  const onLane = new Set([].concat.apply([], (ls || []).map(l => l.traders)));
+  const rows = traders(agents, accountsMsg, version).filter(t => t.mode === 'auto' && t.tone !== 'off' && t.tone !== 'killed' && t.kind !== 'personal' && !onLane.has(t.id));
+  const where = t => (t.kind === 'sim' ? 'on a Sim account (Kill all does not reach it)' : t.kind === 'prop' || t.kind === 'propsim' || t.kind === 'mixed' ? 'on a prop account'
+    : t.kind === 'unlisted' ? 'on an account NinjaTrader does not list now' : 'on an account ChartBridge has not marked prop or personal (Kill all may not reach it)');
+  const out = rows.map(t => t.id);
+  out.words = rows.map(t => t.id + ' ' + where(t));
+  return out;
+}
+/**
+ * The Armed switch, read from ChartBridge's own modes. -> { state: 'unknown' | 'off' | 'on' | 'partly', text, can (may be
+ * switched on), canOff, why, reasons }.
+ * The review of 94: Armed is offered only when Kill all is (one function decides both: killAllState; STOP 1). Until the page has
+ * heard ChartBridge's groups, accounts and traders, signed in and connected, it reads "Armed: not known" and is not offered
+ * either way (FIX 1). A trader in Auto outside the lanes, or a lane in Copilot, reads PARTLY with the reason, and a click
+ * then only switches off (FIX 2, note 8).
+ */
+function armState(ls, version, signedIn, connected, accountsMsg, groupsMsg, heard, outside) {
+  const kill = killAllState(version, accountsMsg, signedIn, connected);
+  const known = connected && signedIn && !!groupsMsg && !!accountsMsg && heard;
+  if (!known) {
+    const why = !connected ? 'ChartBridge is not connected' : !signedIn ? 'Sign in to trading first (the PIN in the top bar)' : !accountsMsg || !groupsMsg ? 'Not heard from ChartBridge yet' : 'No trader heard from ChartBridge yet';
+    return { state: 'unknown', text: 'Armed: not known', can: false, canOff: false, why: why + ': the page does not know whether a lane is in Auto (Kill all and NinjaTrader still work)', reasons: [], outside: [] };
+  }
+  const out = Array.isArray(outside) ? outside : [];
+  const busy = ls.filter(l => l.traders.length && (l.auto || l.notShadow)), ready = ls.filter(l => l.armable);
+  const reasons = [];
+  for (const l of ls) if (l.traders.length && l.notShadow && !l.auto) reasons.push(l.title + ' has a trader not in Shadow: ' + (l.notShadowIds || []).join(', '));
+  for (const l of busy) if (l.auto && !l.armable) reasons.push(l.title + ' is in Auto but not ready (' + l.why + ')');
+  for (const l of ready) if (!l.auto && l.mode === 'shadow' && busy.length) reasons.push(l.title + ' is not in Auto');
+  if (out.length) reasons.push('Not a lane, so not armed from here: ' + (Array.isArray(out.words) && out.words.length === out.length ? out.words : out).join('; ') + ' in Auto (a click sends it to Shadow; or Praetorian, the Agent tab until Praetorian merges)');
+  const state = !busy.length && !out.length ? 'off' : !reasons.length && ready.length && ready.every(l => l.auto) ? 'on' : 'partly';
+  const why = !kill.ok ? kill.why : !atLeast(version, PICK_MIN) ? 'Armed needs ChartBridge ' + PICK_MIN + ' or later (this one is ' + (version || 'not known') + ')'
+    : !ready.length ? 'No lane is ready: ' + ls.map(l => l.title + ': ' + l.why).join(' ') : '';
+  return { state, text: state === 'on' ? 'Armed: ON' : state === 'partly' ? 'Armed: PARTLY' : 'Armed: off', can: !why, canOff: true, why, reasons, outside: out };
+}
+/** The messages one use of the switch sends, built by AgentCore.modeMsg. on: every ready lane not yet in Auto goes to Auto,
+ *  naming its pick and that file's sha256 (the review of 93, FIX 2). Off: every trader of every lane that is not in Shadow,
+ *  and every trader in Auto outside the lanes, goes to Shadow. */
+/** True when the page's mode rules (agent-core.js) are loaded, so Armed can build a message at all (the re-review of 94, N5). */
+const modeRulesLoaded = () => !!(AGC && typeof AGC.modeMsg === 'function');
+function armMsgs(ls, on, agents, cidFn, outside) {
+  const out = [], mk = (agent, mode) => { const c = cidFn ? cidFn() : ''; const m = AGC && typeof AGC.modeMsg === 'function' ? AGC.modeMsg(agent, mode, c || undefined) : null; if (m) out.push(m); return m; };
+  if (on) {
+    for (const l of ls) if (l.armable && l.mode !== 'auto' && ID_RX.test(l.id) && FILE_RX.test(l.pick) && SHA_RX.test(l.sha)) { const m = mk(l.id, 'auto'); if (m) { m.pick = l.pick; m.pickSha = l.sha; } }
+    return out;
+  }
+  const modes = new Map((Array.isArray(agents) ? agents : []).filter(a => plainObj(a) && typeof a.agent === 'string').map(a => [a.agent, a.mode]));
+  const ids = [].concat.apply([], ls.map(l => l.traders)).concat(Array.isArray(outside) ? outside : []);
+  for (const id of ids.filter((x, i) => ids.indexOf(x) === i)) if (ID_RX.test(id) && modes.get(id) !== 'shadow') mk(id, 'shadow');
+  return out;
+}
+/** What switching on would do, in words, for the question: each lane, its bot, its trading accounts, or why it stays off. */
+function armWords(ls) {
+  return ls.map(l => (l.armable ? l.title + ': ' + l.name + ' goes to Auto and trades ' + l.pickText + ' on ' + one(l.seats.length, l.sim ? 'Sim account' : 'account') + (!l.sim && l.simCount ? ', ' + l.simCount + ' Sim' : '') + (l.sim ? ' (Kill all does not reach Sim accounts: Armed off does)' : '') + (l.benched.length ? ' (' + one(l.benched.length, 'account') + ' on the bench sit' + (l.benched.length === 1 ? 's' : '') + ' out)' : '') + (l.connected ? '' : ' (its runner is not connected: nothing trades there until it is)')
+    : l.title + ': stays off (' + l.why + ')') + '.').join(' ');
+}
+/** The files a lane can pick: every card that runs live, lineups first. -> [{ file, text }] */
+function pickChoices(cards) {
+  if (!cards || !cards.ok) return [];
+  return cards.lineups.concat(cards.bots).filter(c => c.runsLive && FILE_RX.test(c.file)).slice(0, MAX_CARDS)
+    .map(c => ({ file: c.file, text: c.name + (c.kind === 'lineup' ? ' (lineup of ' + c.bots.length + ')' : '') }));
+}
+/** agentPick: a served file's name, or null for none. null when the id or the name is not one ChartBridge takes. */
+function pickMsg(agent, file, cid) {
+  if (!ID_RX.test(String(agent || '')) || !(file === null || (typeof file === 'string' && FILE_RX.test(file)))) return null;
+  return Object.assign({ type: 'agentPick' }, cid ? { cid } : {}, { agent, file });
+}
+/**
+ * THE GATE on the tab's connection (workspace.js calls it before every post; N5 of the review of 92): the three messages the
+ * tab may send, each with exactly its keys, and nothing else. A mode other than Auto or Shadow, a kill switch, an account
+ * change, an order: never.
+ */
+function maySend(m) {
+  if (!plainObj(m)) return false;
+  const keys = Object.keys(m), only = allowed => keys.every(k => allowed.includes(k));
+  const cidOk = !own(m, 'cid') || (typeof m.cid === 'string' && m.cid.length > 0 && m.cid.length <= 40);
+  if (!cidOk) return false;
+  if (m.type === 'agentKillAllProp') return only(['type', 'cid']);
+  if (m.type === 'agentPick') return only(['type', 'cid', 'agent', 'file']) && own(m, 'file') && typeof m.agent === 'string' && ID_RX.test(m.agent) && (m.file === null || (typeof m.file === 'string' && FILE_RX.test(m.file)));
+  if (m.type === 'agentMode') {
+    if (!(typeof m.agent === 'string' && ID_RX.test(m.agent))) return false;
+    if (m.mode === 'shadow') return only(['type', 'cid', 'agent', 'mode']);
+    /* Auto names the pick and its file's sha256 (the review of 93, FIX 2). Legion arms only a lane with a pick, so the gate
+       refuses a bare Auto outright (the re-review of 94, N4): a trader with a pick is never armed from here without it */
+    if (m.mode === 'auto') return only(['type', 'cid', 'agent', 'mode', 'pick', 'pickSha']) && typeof m.pick === 'string' && FILE_RX.test(m.pick) &&
+      typeof m.pickSha === 'string' && SHA_RX.test(m.pickSha);
+    return false;
+  }
+  return false;
+}
+
 /** Does ChartBridge's own answer to Kill all say something was not stopped? (PROP 1: then the tab marks it bad.) */
 const badAnswer = text => /NOT STOPPED|FAILED|could NOT/.test(String(text || ''));
 /** "09:41:07" of a Date (the PC's own clock), for the time in front of a Kill all answer. */
 const clock = d => [d.getHours(), d.getMinutes(), d.getSeconds()].map(x => String(x).padStart(2, '0')).join(':');
 
-return { KILL_MIN, SWITCH_MIN, DAYSTOP_MIN, ROSTER_MIN, ROSTER_FORMAT, LINEUP_FORMAT, CONFIRM_MS, ARM_MS, ANSWER_WAIT_MS, ROSTER_WAIT_MS, MAX_CARDS, MAX_MEMBERS, MAX_NOT_SHOWN, MODE_NAME, atLeast, usd, signed, stageCard, rosterCards, rosterProblem,
-  kindOf, seatsKind, dayMark, traderAccounts, statusText, traders, propAccounts, killAllState, killAllMsg, autoLine, badAnswer, clock };
+return Object.freeze({ modeRulesLoaded, PICK_MIN, STAGES, lanes, outsideAuto, armState, armMsgs, armWords, pickChoices, pickMsg, maySend, KILL_MIN, SWITCH_MIN, DAYSTOP_MIN, ROSTER_MIN, ROSTER_FORMAT, LINEUP_FORMAT, CONFIRM_MS, ARM_MS, ANSWER_WAIT_MS, ROSTER_WAIT_MS, MAX_CARDS, MAX_MEMBERS, MAX_NOT_SHOWN, MODE_NAME, atLeast, usd, signed, stageCard, rosterCards, rosterProblem,
+  kindOf, seatsKind, dayMark, traderAccounts, statusText, traders, propAccounts, killAllState, killAllMsg, autoLine, badAnswer, clock });
 });
 
 /* ================================================================================================ the tab (browser only) */
@@ -415,22 +619,58 @@ function create(o) {
   const view = o.view || null, tabBtn = o.tab || null, V3 = o.v3 || null;
   const now = typeof o.now === 'function' ? o.now : () => Date.now();
   const realClick = typeof o.realClick === 'function' ? o.realClick : () => false;      // none handed in: Yes is never taken
-  const S = { shown: false, built: false, version: '', connected: false, signedIn: false, accounts: null, groups: null, agents: new Map(),
+  const S = { shown: false, built: false, version: '', connected: false, signedIn: false, accounts: null, groups: null, agents: new Map(), firstAgentAt: null, signInAt: null, replayDone: false, settleTimer: 0,
     ask: 0, askTimer: 0, hint: '', hintBad: false, hintState: false, answer: '', answerBad: false, cidSeq: 0, pending: '', pendingAt: 0, waitTimer: 0, sent: 0,
-    roster: { state: 'idle', text: '', cards: null, seq: 0, asked: 0, at: 0, version: '' }, rosterDirty: true, rosterTimer: 0, open: new Set(), drawn: {}, draws: { head: 0, roster: 0, traders: 0, accounts: 0 } };
+    armAsk: 0, armTimer: 0, armSaid: '', armBad: false, modeSent: new Map(), pickSent: new Map(),
+    roster: { state: 'idle', text: '', cards: null, seq: 0, asked: 0, at: 0, version: '' }, rosterDirty: true, rosterTimer: 0, open: new Set(), drawn: {}, draws: { head: 0, roster: 0, traders: 0, accounts: 0, lanes: 0, 'lane-eval': 0, 'lane-funded': 0 } };
   const el = {};
   const agentList = () => [...S.agents.values()];
   const cid = () => 'fl' + (++S.cidSeq).toString(36) + Math.random().toString(36).slice(2, 6);
   const killState = () => C.killAllState(S.version, S.accounts, S.signedIn, S.connected);
+  const laneList = () => C.lanes(agentList(), S.groups, S.accounts, S.version, S.roster.cards);
+  const outside = ls => C.outsideAuto(ls, agentList(), S.accounts, S.version);
+  /* "Heard" (the re-review of 94, N1, and its S1; answers 25). At sign-in ChartBridge replays every trader, one after another,
+     and then sends agentStandDowns (ChartBridgeAgents.AfterAuth, 0.6.21). Every trader is heard only when that message has
+     come for the LATEST sign-in AND SETTLE_MS have passed since the first trader of that sign-in (or since the sign-in, when
+     none came): a stand-down list broadcast in the middle of a replay is rare but possible, the floor covers it. Until both,
+     "not known", which is locked. A sign-in or a sign-out (a change of trading.enabled; ChartBridge sends trading again on
+     every checkmark change, which is not a new sign-in) and a dropped connection forget the traders and start again; nothing
+     is heard while signed out. o.settleMs: the tests' clock. */
+  const SETTLE_MS = typeof o.settleMs === 'number' && o.settleMs >= 0 ? o.settleMs : 1500;
+  const settleFrom = () => (S.firstAgentAt !== null ? S.firstAgentAt : S.signInAt);
+  const heardAll = () => S.connected && S.signedIn && S.replayDone && settleFrom() !== null && now() - settleFrom() >= SETTLE_MS;
+  /* a render at the moment "heard" can turn true (the message came before the floor ran out) */
+  function settleSoon() {
+    clearTimeout(S.settleTimer); S.settleTimer = 0;
+    if (!S.replayDone || settleFrom() === null) return;
+    const left = SETTLE_MS - (now() - settleFrom());
+    if (left > 0) S.settleTimer = setTimeout(() => { if (S.shown) render(); }, left + 10);
+  }
+  /* a sign-in or a sign-out: what was heard of the traders is forgotten; ChartBridge replays them after a sign-in */
+  function newSignIn() {
+    S.agents.clear(); S.firstAgentAt = null; S.replayDone = false; S.signInAt = S.signedIn ? now() : null;
+    clearTimeout(S.settleTimer); S.settleTimer = 0;
+  }
+  const armNow = ls => C.armState(ls, S.version, S.signedIn, S.connected, S.accounts, S.groups, heardAll(), outside(ls));
 
   function onMessage(m) {
     switch (m && m.type) {
       case 'hello': S.version = typeof m.version === 'string' ? m.version : ''; S.connected = true; offer(); if (S.shown) helloRoster(); break;
-      case 'trading': S.signedIn = !!m.enabled; break;
+      case 'trading': { const was = S.signedIn; S.signedIn = !!m.enabled; if (S.signedIn !== was) newSignIn(); break; }
+      case 'agentStandDowns': if (S.signedIn) { S.replayDone = true; settleSoon(); } break;   // after the sign-in replay (S1)
       case 'accounts': S.accounts = m; break;
       case 'groups': S.groups = m; break;
-      case 'agent': if (m && typeof m.agent === 'string') S.agents.set(m.agent, m); break;
-      case 'reject': if (S.pending && m.cid === S.pending) answered(typeof m.reason === 'string' && m.reason ? 'ChartBridge refused Kill all: ' + m.reason : 'ChartBridge refused Kill all', true); break;
+      case 'agent':
+        if (m && typeof m.agent === 'string') {
+          S.agents.set(m.agent, m);
+          if (S.firstAgentAt === null) { S.firstAgentAt = now(); settleSoon(); }
+        }
+        break;
+      case 'reject':
+        if (S.pending && m.cid === S.pending) answered(typeof m.reason === 'string' && m.reason ? 'ChartBridge refused Kill all: ' + m.reason : 'ChartBridge refused Kill all', true);
+        else if (typeof m.cid === 'string' && S.modeSent.has(m.cid)) { const x = S.modeSent.get(m.cid); S.modeSent.delete(m.cid); armSay('ChartBridge refused ' + (x.mode === 'auto' ? 'Auto' : 'Shadow') + ' for ' + x.agent + (typeof m.reason === 'string' && m.reason ? ': ' + m.reason : ''), true); }
+        else if (typeof m.cid === 'string' && S.pickSent.has(m.cid)) { const id = S.pickSent.get(m.cid); S.pickSent.delete(m.cid); armSay('ChartBridge refused the pick for ' + id + (typeof m.reason === 'string' && m.reason ? ': ' + m.reason : ''), true); S.drawn.lanes = null; }
+        break;
       case 'status': if (typeof m.text === 'string' && /^Kill all \(prop accounts\)/.test(m.text)) answered(m.text, m.level === 'error' || C.badAnswer(m.text)); break;
       default: return;
     }
@@ -441,7 +681,9 @@ function create(o) {
   /* the connection dropped: what ChartBridge said is forgotten; a Kill all sent and not answered is NOT (PROP 2) */
   function lost() {
     S.roster = { state: 'idle', text: '', cards: null, seq: S.roster.seq + 1, asked: S.roster.asked, at: 0, version: '' }; S.rosterDirty = true; clearTimeout(S.rosterTimer);
-    S.connected = false; S.signedIn = false; S.agents.clear(); S.accounts = null; S.groups = null;
+    S.connected = false; S.signedIn = false; S.agents.clear(); S.firstAgentAt = null; S.signInAt = null; S.replayDone = false; S.accounts = null; S.groups = null;
+    clearTimeout(S.settleTimer); S.settleTimer = 0;
+    endArmAsk(); S.modeSent.clear(); S.pickSent.clear(); S.armSaid = ''; S.armBad = false;
     if (S.pending) answered('Kill all was sent and ChartBridge\'s answer never came (the connection dropped): look in NinjaTrader now', true);
     hint('', false); endAsk();
     if (S.shown) render();
@@ -461,6 +703,42 @@ function create(o) {
     }
   }
   function endAsk() { clearTimeout(S.askTimer); S.askTimer = 0; S.ask = 0; }
+  function endArmAsk() { clearTimeout(S.armTimer); S.armTimer = 0; S.armAsk = 0; }
+  /* the line beside the Armed switch: what was just sent, or ChartBridge's refusal (marked bad), with this PC's time in front */
+  function armSay(text, bad) { S.armSaid = text ? C.clock(new Date(now())) + '  ' + String(text) : ''; S.armBad = !!bad; }
+  const remember = (map, k, v) => { map.set(k, v); if (map.size > 50) map.delete(map.keys().next().value); };
+
+  /* ---------------- the Armed switch and the pick (D2). The switch has no state: what it shows is read from ChartBridge's
+     own `agent` messages each time. On: one agentMode auto for each ready lane not yet in Auto, after the question and a
+     real click on Yes. Off: one agentMode shadow for every lane trader not in Shadow, at one click or key, no question
+     (the safe direction is never held up). Everything is checked again at the moment it is sent. */
+  function arm(on) {
+    const ls = laneList(), st = armNow(ls);
+    endArmAsk();
+    if (on && !st.can) { armSay(st.why, true); render(); return; }
+    if (!on && !st.canOff) { armSay(st.why, true); render(); return; }
+    const msgs = C.armMsgs(ls, on, agentList(), cid, outside(ls));
+    if (!msgs.length && !C.modeRulesLoaded()) { armSay('Armed cannot switch ' + (on ? 'on' : 'off') + ' from here: the page is incomplete (agent-core.js is not loaded). Use Kill all, or NinjaTrader.', true); render(); return; }
+    if (!msgs.length) { armSay(on ? 'Every ready lane is already in Auto' : 'No lane\'s trader is in Auto or Copilot: nothing to switch off', false); render(); return; }
+    let sent = 0;
+    for (const m of msgs) { if (V3 && V3.post(m) === true) { sent++; remember(S.modeSent, m.cid, { agent: m.agent, mode: m.mode }); } }
+    S.sent += sent;
+    if (sent < msgs.length) armSay((on ? 'Auto' : 'Shadow') + ' could NOT be sent for ' + (msgs.length - sent) + ' of ' + msgs.length + ': ChartBridge is not connected.' + (on ? '' : ' Use Kill all, or NinjaTrader'), true);
+    else armSay((on ? 'Sent Auto for ' : 'Sent Shadow for ') + msgs.map(m => m.agent).join(', ') + ': the switch shows what ChartBridge says next', false);
+    render();
+  }
+  function pick(agent, file) {
+    const l = laneList().find(x => x.id === agent);
+    /* the review of 94, note 7: only None or a file the list offers is sent */
+    const offered = file === null || C.pickChoices(S.roster.cards).some(c => c.file === file);
+    const m = l && offered ? C.pickMsg(agent, file, cid()) : null;
+    if (l) S.drawn['lane-' + l.stage] = null;             // the list goes back to what ChartBridge says until it says otherwise
+    if (!m) { armSay('That pick cannot be sent' + (l && !offered ? ': the list does not offer it' : ''), true); render(); return; }
+    if (l.auto) { armSay('The pick changes only while the lane is not in Auto: switch Armed off first', true); render(); return; }
+    if (V3 && V3.post(m) === true) { S.sent++; remember(S.pickSent, m.cid, agent); armSay('Sent the pick for ' + l.title.toLowerCase() + ': ' + (file === null ? 'none' : file), false); }
+    else armSay('The pick could NOT be sent: ChartBridge is not connected', true);
+    render();
+  }
 
   function killAll() {
     const st = killState();
@@ -601,7 +879,7 @@ function create(o) {
       ${accts.length ? `<div class="fl-scroll"><table class="fl-table"><thead><tr><th>Account</th><th>Progress</th><th>Cushion to floor</th><th>Today</th><th>Day stop</th><th>Status</th></tr></thead>
           <tbody>${accts.map(accountHtml).join('')}</tbody></table></div>`
         : `<p class="fl-empty">${!S.connected ? 'ChartBridge is not connected.' : S.accounts && S.accounts.personalNamed === true ? 'No prop account is connected.' : 'No personal account is picked yet, so no account is prop. Pick it once on the Accounts tab: an account\'s settings, This is my personal account.'}</p>`}
-      <p class="fl-note">Today counts realized plus open. The day stop is held by ChartBridge itself: reached while a trader holds something on the account, that trader is flattened and stops until 18:00 New York.</p>`;
+      <p class="fl-note">Today counts realized plus open. The mark shown is worked out on this page from the group's rules and the plan's value; ChartBridge's own mark is not sent to the page yet. The day stop is held by ChartBridge itself: reached while a trader holds something on the account, that trader is flattened and stops until 18:00 New York.</p>`;
   }
 
   /* built once for each time the tab opens; nothing in the head is ever replaced after that */
@@ -612,18 +890,25 @@ function create(o) {
         <button type="button" class="ws-btn fl-kill fl-yes" data-do="yes" data-k="yes" hidden>Yes, kill all</button><button type="button" class="ws-btn fl-cancel" data-do="no" data-k="no" hidden>Cancel</button>
         <button type="button" class="ws-btn fl-kill" data-do="ask" data-k="kill">Kill all: flatten and stop</button>
       </div>
+      <div class="fl-armrow">
+        <button type="button" class="ws-btn fl-arm" data-do="arm" data-k="arm" role="switch" aria-checked="false" data-state="unknown">Armed: not known</button><button type="button" class="ws-btn fl-cancel" data-do="armno" data-k="armno" hidden>Cancel</button>
+        <button type="button" class="ws-btn fl-armyes" data-do="armyes" data-k="armyes" hidden>Yes, arm</button>
+        <span class="fl-armsaid" data-k="armsaid" role="status" aria-live="polite"></span>
+      </div>
+      <p class="fl-ask fl-armask" data-k="armask" role="alertdialog" aria-label="Armed" hidden></p>
       <p class="fl-ask" data-k="ask" role="alertdialog" aria-label="Kill all" hidden>Close every trader's position on the prop accounts and stop them? Yes, or Cancel, at the top right.</p>
       <p class="fl-autoline" data-k="autoline"></p>
       <p class="fl-said" data-k="hint" role="status" aria-live="polite"></p>
       <p class="fl-answer" data-k="answer" role="status" aria-live="polite" hidden></p></div>
-      <section class="fl-box fl-roster" aria-label="Roster" data-k="roster"></section>
+      <section class="fl-box fl-lanes" aria-label="Lanes"><h3 class="fl-h">Lanes</h3><div class="fl-lanegrid"><div data-k="lane-eval"></div><div data-k="lane-funded"></div></div><div data-k="lanes"></div></section>
       <div class="fl-cols">
         <section class="fl-box" aria-label="Traders" data-k="traders"></section>
         <section class="fl-box" aria-label="Prop accounts" data-k="accounts"></section>
       </div>
-      <p class="fl-later">Not built yet, so not shown: the pick of which bots run today on the eval accounts and on the funded accounts, the one Armed slider, and each bot's own state from the runner. Until then nothing on this tab starts a bot: a trader's mode is changed on the Agent tab.</p>
+      <section class="fl-box fl-roster" aria-label="Roster" data-k="roster"></section>
+      <p class="fl-later">Not built yet, so not here: moving an account into or out of a lane by drag and drop (today an account's group is set on the Accounts tab), starting the runner's program with Armed, and each bot's own state from the runner.</p>
     </div>`;
-    for (const k of ['autoline', 'ask', 'kill', 'yes', 'no', 'hint', 'answer', 'roster', 'traders', 'accounts']) el[k] = view.querySelector('[data-k="' + k + '"]');
+    for (const k of ['autoline', 'ask', 'kill', 'yes', 'no', 'hint', 'answer', 'roster', 'traders', 'accounts', 'lanes', 'lane-eval', 'lane-funded', 'arm', 'armyes', 'armno', 'armsaid', 'armask']) el[k] = view.querySelector('[data-k="' + k + '"]');
     el.cancel = view.querySelector('[data-do="no"]');
     S.built = true; S.drawn = {}; S.rosterDirty = true;
   }
@@ -633,9 +918,45 @@ function create(o) {
     if (S.drawn[key] === html || !el[key]) return;
     S.drawn[key] = html; el[key].innerHTML = html; S.draws[key]++;
   }
+  function renderArm(ls) {
+    const st = armNow(ls), asking = S.armAsk > 0;
+    /* "Sent ..." is kept only until ChartBridge's word changes the switch; a refusal or a failed send stays until the next use */
+    /* what was said beside the switch (sent, or ChartBridge's refusal) goes when ChartBridge's word changes the switch (note 4) */
+    if (S.armSeen !== st.state) { if (S.armSeen !== undefined) { S.armSaid = ''; S.armBad = false; } S.armSeen = st.state; }
+    setText(el.arm, st.text);
+    if (el.arm) {
+      el.arm.setAttribute('aria-checked', st.state === 'on' ? 'true' : st.state === 'partly' || st.state === 'unknown' ? 'mixed' : 'false'); el.arm.setAttribute('data-state', st.state);
+      if ((st.state === 'off' && !st.can) || st.state === 'unknown') { el.arm.setAttribute('aria-disabled', 'true'); el.arm.setAttribute('title', st.why); }
+      else { el.arm.removeAttribute('aria-disabled'); el.arm.setAttribute('title', st.state === 'off' ? 'Switch on: every ready lane goes to Auto. It asks first.' : 'Switch off: every lane\'s trader goes to Shadow, at this one click. It closes no position: Kill all does.'); }
+    }
+    setHidden(el.arm, asking); setHidden(el.armno, !asking); setHidden(el.armyes, !asking); setHidden(el.armask, !asking);
+    if (asking) setText(el.armask, 'Arm? ' + C.armWords(ls) + ' Yes, or Cancel, beside this.');
+    setText(el.armsaid, S.armSaid || (st.state === 'partly' ? st.reasons.join('. ') + '. A click switches ' + (st.outside.length ? 'every lane and ' + st.outside.join(', ') : 'every lane') + ' off.' : (st.state === 'off' && !st.can) || st.state === 'unknown' ? st.why : ''));
+    if (el.armsaid) el.armsaid.classList.toggle('bad', S.armBad && !!S.armSaid);
+  }
+  function laneHtml(l, choices) {
+    const none = !l.id;
+    const opts = [{ file: '', text: 'None' }].concat(choices);
+    if (l.pick && !choices.some(c => c.file === l.pick)) opts.push({ file: l.pick, text: l.pickText + ' (not offered now)' });
+    const locked = l.auto ? 'Switch Armed off first: the pick changes only while the lane is not in Auto' : l.exposed ? 'The trader holds something: the pick changes once it is flat' : !l.pickKnown ? 'The pick needs ChartBridge ' + C.PICK_MIN : '';
+    const sel = none ? '' : `<label class="fl-k" for="flPick-${esc(l.stage)}">Bot</label><select class="fl-pick" id="flPick-${esc(l.stage)}" data-do="pick" data-agent="${esc(l.id)}"${locked ? ` disabled title="${esc(locked)}"` : ''}>${opts.map(c => `<option value="${esc(c.file)}"${c.file === l.pick ? ' selected' : ''}>${esc(c.text)}</option>`).join('')}</select>`;
+    return `<div class="fl-lane" data-stage="${esc(l.stage)}" data-armable="${l.armable}"${l.auto ? ' data-auto="1"' : ''}>
+      <div class="fl-trow"><span class="fl-tname">${esc(l.title)}</span>${none ? '' : `<span class="fl-mut">${esc(l.name)}, group ${esc(l.groupName)}</span><span class="fl-mode" data-mode="${esc(l.mode)}">${esc(l.modeText)}</span>`}
+        <span class="fl-fill"></span><span class="fl-tag" data-kind="${l.armable ? 'live' : 'notlive'}">${l.armable ? 'Ready' : 'Not ready'}</span></div>
+      ${none ? '' : `<div class="fl-trow">${sel}</div>
+      <div class="fl-trow"><span class="fl-k">Accounts</span><span class="fl-v">${l.seats.length ? l.seats.map(n => `<span class="fl-seat">${esc(n)}</span>`).join('') : 'none trades with its group'}${l.benched.map(n => `<span class="fl-seat" data-bench="1">${esc(n)}: on the bench</span>`).join('')}${l.sim ? ' <span class="fl-tag" data-kind="sim">Sim: no money at stake</span>' : ''}</span></div>
+      <div class="fl-trow"><span class="fl-k">Now</span><span class="fl-v fl-status">${esc(l.status)}</span></div>`}
+      ${l.why ? `<p class="fl-line fl-warn fl-lanewhy">${esc(l.why)}</p>` : ''}
+      ${!none && l.runnerNote && l.armable ? `<p class="fl-line fl-mutline">${esc(l.runnerNote)}</p>` : ''}
+    </div>`;
+  }
+  /* each lane is drawn on its own (the review of 94, note 3): a change in one never takes an open pick list away in the other */
+  function lanesHtml(ls) {
+    return `<p class="fl-note">A lane is a trader whose account is a group; the group's Type (eval or funded) says which lane. Armed sends each ready lane to Auto; off sends every lane to Shadow. What shows here is what ChartBridge says, so a mode changed on the Agent tab, by Kill all or at 17:00 New York shows here too. Off closes no position: Kill all does.</p>`;
+  }
   function renderHead(rows) {
     const st = killState(), asking = S.ask > 0;
-    setText(el.autoline, C.autoLine(rows));
+    setText(el.autoline, C.autoLine(rows, !!S.accounts));
     setHidden(el.ask, !asking); setHidden(el.yes, !asking); setHidden(el.no, !asking); setHidden(el.kill, asking);
     if (el.kill) {
       if (st.ok) { el.kill.removeAttribute('aria-disabled'); el.kill.removeAttribute('title'); }
@@ -653,6 +974,10 @@ function create(o) {
     let rows = [];
     try { rows = C.traders(agentList(), S.accounts, S.version); } catch (e) { rows = []; }
     try { renderHead(rows); } catch (e) { /* the head's buttons are already there: a text that cannot be set never takes them away */ }
+    let ls = [];
+    try { ls = laneList(); } catch (e) { ls = []; }
+    try { renderArm(ls); } catch (e) { /* the switch is already there */ }
+    try { const choices = C.pickChoices(S.roster.cards); for (const l of ls) section('lane-' + l.stage, laneHtml(l, choices)); section('lanes', lanesHtml(ls)); } catch (e) { section('lanes', '<p class="fl-empty fl-warn">The lanes could not be drawn.</p>'); }
     try { if (S.rosterDirty) { S.rosterDirty = false; section('roster', rosterHtml()); if (el.roster) el.roster.setAttribute('data-state', S.roster.state); } } catch (e) { section('roster', '<p class="fl-empty fl-warn">The roster could not be drawn.</p>'); }
     try { section('traders', tradersHtml(rows)); } catch (e) { section('traders', '<p class="fl-empty fl-warn">The traders could not be drawn.</p>'); }
     try { section('accounts', accountsHtml(C.propAccounts(S.accounts, S.groups, agentList()))); } catch (e) { section('accounts', '<p class="fl-empty fl-warn">The prop accounts could not be drawn.</p>'); }
@@ -681,6 +1006,31 @@ function create(o) {
       try { if (el.cancel) el.cancel.focus(); } catch (x) { /* the safe answer has the focus where focus exists */ }
       return;
     }
+    if (what === 'arm') {
+      if (S.armAsk) return;
+      const ls = laneList(), st = armNow(ls);
+      if (st.state === 'unknown') { armSay(st.why, true); render(); return; }
+      if (st.state !== 'off') { arm(false); return; }      // on or partly: one click switches every lane off, no question
+      if (!st.can) { armSay(st.why, true); render(); return; }
+      /* Cancel takes the switch's own place, so the second click of a double click lands on Cancel, inside the first moment */
+      try { const w = el.arm.getBoundingClientRect().width; if (w > 0 && el.armno) el.armno.style.minWidth = Math.ceil(w) + 'px'; } catch (x) { /* no layout: the wait still holds */ }
+      S.armAsk = now(); armSay('', false);
+      clearTimeout(S.armTimer);
+      S.armTimer = setTimeout(() => { endArmAsk(); render(); }, C.CONFIRM_MS);
+      render();
+      try { if (el.armno) el.armno.focus(); } catch (x) { /* the safe answer has the focus where focus exists */ }
+      return;
+    }
+    if (what === 'armyes' || what === 'armno') {
+      if (!S.armAsk) return;
+      const age = now() - S.armAsk;
+      if (age > C.CONFIRM_MS) { endArmAsk(); render(); return; }
+      if (what === 'armno' && !realClick(e)) { endArmAsk(); render(); return; }          // Cancel by the keyboard: always
+      if (what === 'armyes' && !realClick(e)) { armSay('Armed is confirmed by a click on Yes only, not by keyboard. Cancel and Escape work from the keyboard.', true); render(); return; }
+      if (age < C.ARM_MS) { if (what === 'armyes') { armSay('Too soon: read the question, then click Yes.', true); render(); } return; }
+      if (what === 'armyes') arm(true); else { endArmAsk(); armSay('', false); render(); }
+      return;
+    }
     if (what !== 'yes' && what !== 'no') return;
     if (!S.ask) return;
     const age = now() - S.ask;
@@ -699,24 +1049,41 @@ function create(o) {
     if (on === S.shown) return;
     S.shown = on;
     if (tabBtn) { tabBtn.setAttribute('aria-pressed', String(on)); if (on) tabBtn.hidden = false; }
-    if (!on) { endAsk(); S.built = false; if (view) view.innerHTML = ''; offer(); }
+    if (!on) { endAsk(); endArmAsk(); S.built = false; if (view) view.innerHTML = ''; offer(); }
+    /* Escape cancels a question wherever the focus is while the tab is open (build answers 15, section 3) */
+    if (DOC) { if (on) DOC.addEventListener('keydown', onKey, true); else DOC.removeEventListener('keydown', onKey, true); }
     if (typeof o.onTab === 'function') o.onTab(on);
     render();
     if (on) loadRoster();
   }
-  function onKey(e) { if (e && e.key === 'Escape' && S.ask) { endAsk(); hint('', false); render(); if (typeof e.preventDefault === 'function') e.preventDefault(); } }
+  function onKey(e) {
+    if (!e || e.key !== 'Escape' || !(S.ask || S.armAsk) || e.flSeen) return;
+    e.flSeen = true;                                       // the tab's own listener and the document's both hear one key
+    if (S.ask) { endAsk(); hint('', false); }
+    if (S.armAsk) { endArmAsk(); armSay('', false); }
+    render();
+    if (typeof e.preventDefault === 'function') e.preventDefault();
+  }
+  function onChange(e) {
+    const t = e && e.target;
+    if (!t || !t.dataset || t.dataset.do !== 'pick') return;
+    pick(String(t.dataset.agent || ''), t.value ? String(t.value) : null);
+  }
+  const DOC = typeof document !== 'undefined' && document && typeof document.addEventListener === 'function' ? document : null;
   if (view) view.addEventListener('click', onClick);
+  if (view) view.addEventListener('change', onChange);
   if (view) view.addEventListener('keydown', onKey);
   if (tabBtn) tabBtn.addEventListener('click', () => showTab(!S.shown));
   const unlisten = V3 ? V3.listen({ message: onMessage, closed: () => lost() }) : () => {};
   return {
     showTab, shown: () => S.shown, offered: () => !!tabBtn && !tabBtn.hidden,
     hello: m => onMessage(m),
-    state: () => ({ shown: S.shown, version: S.version, connected: S.connected, signedIn: S.signedIn, asking: S.ask > 0, hint: S.hint, answer: S.answer, answerBad: S.answerBad, pending: !!S.pending, sent: S.sent, draws: Object.assign({}, S.draws),
+    state: () => ({ lanes: laneList(), arm: Object.assign({ asking: S.armAsk > 0, said: S.armSaid, bad: S.armBad }, armNow(laneList())),
+      shown: S.shown, version: S.version, connected: S.connected, signedIn: S.signedIn, asking: S.ask > 0, hint: S.hint, answer: S.answer, answerBad: S.answerBad, pending: !!S.pending, sent: S.sent, draws: Object.assign({}, S.draws),
       traders: C.traders(agentList(), S.accounts, S.version), accounts: C.propAccounts(S.accounts, S.groups, agentList()),
       roster: { state: S.roster.state, text: S.roster.text, asked: S.roster.asked, bots: S.roster.cards ? S.roster.cards.bots.map(c => c.name) : [], lineups: S.roster.cards ? S.roster.cards.lineups.map(c => c.name) : [], notShown: S.roster.cards ? S.roster.cards.notShown.length : 0 } }),
     reloadRoster: loadRoster,
-    destroy: () => { S.roster.seq++; clearTimeout(S.rosterTimer); clearTimeout(S.waitTimer); unlisten(); endAsk(); if (view) { view.removeEventListener('click', onClick); view.removeEventListener('keydown', onKey); } },
+    destroy: () => { S.roster.seq++; clearTimeout(S.settleTimer); clearTimeout(S.rosterTimer); clearTimeout(S.waitTimer); unlisten(); endAsk(); endArmAsk(); if (DOC) DOC.removeEventListener('keydown', onKey, true); if (view) { view.removeEventListener('click', onClick); view.removeEventListener('change', onChange); view.removeEventListener('keydown', onKey); } },
   };
 }
 window.FleetView = { create };
