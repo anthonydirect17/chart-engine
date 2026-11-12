@@ -77,6 +77,13 @@
 - **With 103 merged in:** the page loads `live/legion-desk.js` (after agent.js) and the install copies it. Two lines of
   the Colosseum's tests follow what is merged now: an account of `''` is "the page cannot tell yet", never None (answers
   28, R4-1, the gates' own reader); builder 1's two box tokens are defined in `workspace.css` since 97 merged.
+- **Answers 27 and 34:** the Live sub-page tells the desk it is hidden, and Setup shows it again (104-A); the line
+  beside Kill all names a trader in Auto whose accounts the page cannot read (104-B); a one-account trader with a prop
+  seat left over is said as such, not "a group", Armed's reasons say Kill all will NOT stop a trader on the personal
+  account and a prop one, and a trader's row lists every account (104-D); one rule with the gates' reader,
+  `AgentCore.gateAccounts`, held by one test of the same shapes, a missing `account` key now "cannot tell" (104-E); a
+  trader in any mode the page cannot read locks the lanes (A33-1), with its own words (`NOT_READABLE`, A33-2); a test
+  that the page loads the desk and the install copies it (104-C).
 
 ## chart 1.52.0 (2026-11-12): Legion's trader desk, the Agent and Bot desks behind Praetorian's gate turned round (page only, no F5)
 
