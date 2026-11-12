@@ -202,6 +202,24 @@ try {
   check(new URL(p.url()).searchParams.get('tab') === 'bot', '?tab=bot as before');
   await p.click('#wsBotTab');
   await until(() => p.evaluate(() => !document.body.classList.contains('bt-on')), 'closed again from its button');
+  /* 1.48.0 Praetorian: its name over its two sides; it opens the side used last (the Bot, just now), closes again, and is
+     pressed while either side is open; the Chart tab closes it */
+  check(await p.isVisible('#wsPraetorianTab') && (await p.textContent('#wsPraetorianTab')) === 'Praetorian' && await p.getAttribute('#wsPraetorianTab', 'aria-pressed') === 'false', '1.48.0: Praetorian offered, not pressed');
+  await p.click('#wsPraetorianTab');
+  await until(() => p.evaluate(() => document.body.classList.contains('bt-on')), 'Praetorian opens the side used last (the Bot)');
+  check(await p.getAttribute('#wsPraetorianTab', 'aria-pressed') === 'true' && await p.getAttribute('#wsChartTab', 'aria-pressed') === 'false', '1.48.0: Praetorian pressed while its Bot side is open');
+  await p.screenshot({ path: path.join(out, 'praetorian-topbar-1366.png'), clip: { x: 0, y: 0, width: 1366, height: 48 } });
+  await p.click('#wsAgentTab');
+  await until(() => p.evaluate(() => document.body.classList.contains('ag-on') && !document.body.classList.contains('bt-on')), 'its Agent side');
+  check(await p.getAttribute('#wsPraetorianTab', 'aria-pressed') === 'true', '1.48.0: still pressed on its Agent side');
+  await p.click('#wsPraetorianTab');
+  await until(() => p.evaluate(() => !document.body.classList.contains('ag-on') && !document.body.classList.contains('bt-on')), 'Praetorian closes');
+  await p.click('#wsPraetorianTab');
+  await until(() => p.evaluate(() => document.body.classList.contains('ag-on')), 'Praetorian opens the Agent side, used last');
+  await p.click('#wsChartTab');
+  await until(() => p.evaluate(() => !document.body.classList.contains('ag-on')), 'Chart closes Praetorian');
+  check(await p.getAttribute('#wsPraetorianTab', 'aria-pressed') === 'false', '1.48.0: Praetorian opens the side used last, closes, and Chart closes it');
+  check(await p.evaluate(() => document.documentElement.scrollWidth <= innerWidth), '1.48.0: no sideways scroll with the four tabs at ' + (await p.evaluate(() => innerWidth)));
   const socks0 = socks;
   await p.click('#wsAdd'); await p.click('#wsAddMenu [data-add="agents"]');
   /* the bot's drone: in the sky, or (a narrow panel) in the "+N more" list */

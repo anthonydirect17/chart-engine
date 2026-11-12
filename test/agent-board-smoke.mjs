@@ -198,7 +198,8 @@ try {
   await mp.goto(`http://localhost:${port}/live/?layout=Main&tab=agent`);
   await mp.waitForSelector('.cb-pin-key', { timeout: 15000 }).then(() => enterPin(mp, TEST_PIN), () => {});
   await mp.waitForFunction(() => document.getElementById('wsConn').classList.contains('live') && window.workspace.agent().agents.length === 3, null, { timeout: 30000 });
-  await mp.click('#agView [data-act="board"]');
+  await until(() => mp.isVisible('#agView [data-k="board"]') || mp.isVisible('#agView [data-act="board"]'), 'the desk or the board on the page');
+  if (!(await mp.isVisible('#agView [data-k="board"]'))) await mp.click('#agView [data-act="board"]');   // the board is kept in this browser: the Agent window may have opened it
   await until(() => mp.isVisible('#agView [data-k="board"]'), 'the board on the page');
   for (const [w, h] of [[1440, 900], [390, 844]]) {
     await mp.setViewportSize({ width: w, height: h }); await sleep(400);
