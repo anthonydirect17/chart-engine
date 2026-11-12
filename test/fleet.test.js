@@ -1079,7 +1079,7 @@ test('Legion Setup: each lane mounts the page\'s own Multi-Account panel on its 
   // the review of 97 (F2): taking an account from the other lane's group asks THAT lane's lock; a group no lane trades is free
   P.feed(evalTrader()); P.feed(fundTrader({ mode: 'auto' }));
   assert.strictEqual(typeof mounts[0].opts.otherLocked, 'function');
-  assert.match(mounts[0].opts.otherLocked('g2'), /legion2 trades that group or one of its accounts in Auto/, 'the funded lane in Auto: nothing taken from it');
+  assert.match(mounts[0].opts.otherLocked('g2'), /legion2 trades that group in Auto/, 'the funded lane in Auto: nothing taken from it');
   assert.strictEqual(mounts[0].opts.otherLocked('g3'), '', 'a listed group no trader is on');
   assert.strictEqual(mounts[0].opts.otherLocked('g-none'), F.NOT_KNOWN, 'a group ChartBridge does not list: not known (answers 26, R3-4)');
   P.feed(fundTrader());
@@ -1163,8 +1163,8 @@ test('answers 25, S2: another group\'s lock covers every trader heard on it (a d
   P.feed(agent('loose9', { mode: 'auto', account: null, group: { id: 'g9', name: 'Loose' }, seats: [{ account: 'OTHER-1' }] }));
   P.replayDone();
   const funded = mounts.find(m => m.key === 'legion-funded');
-  assert.match(funded.opts.otherLocked('g4'), /legion3 trades that group or one of its accounts in Auto/, 'the doubled lane\'s second group');
-  assert.match(funded.opts.otherLocked('g9'), /loose9 trades that group or one of its accounts in Auto/, 'a group of no Type');
+  assert.match(funded.opts.otherLocked('g4'), /legion3 trades that group in Auto/, 'the doubled lane\'s second group');
+  assert.match(funded.opts.otherLocked('g9'), /loose9 trades that group in Auto/, 'a group of no Type');
   assert.strictEqual(funded.opts.otherLocked('g-empty'), '', 'a group no trader is on');
   P.feed(agent('loose9', { mode: 'shadow', account: null, group: { id: 'g9', name: 'Loose' }, seats: [{ account: 'OTHER-1' }], owns: true }));
   assert.match(funded.opts.otherLocked('g9'), /loose9 holds a position or a working entry/);
@@ -1172,18 +1172,58 @@ test('answers 25, S2: another group\'s lock covers every trader heard on it (a d
   assert.strictEqual(funded.opts.otherLocked('g9'), '', 'its one trader in Shadow and flat');
   // answers 26, R3-4, the reviewer's probe: a trader in Auto seated directly on OTHER-2, a member of g9, with no group
   P.feed(agent('direct', { mode: 'auto', account: 'OTHER-2', group: null }));
-  assert.match(funded.opts.otherLocked('g9'), /Two traders are on that group or its accounts \(loose9, direct\)/);
+  assert.match(funded.opts.otherLocked('g9'), /^direct is seated on an account of that group/);
   P.feed(agent('loose9', { mode: 'shadow', account: null, group: { id: 'g5', name: 'Elsewhere' }, seats: [] }));
-  assert.match(funded.opts.otherLocked('g9'), /direct trades that group or one of its accounts in Auto/, 'seated on a member: locked');
+  assert.match(funded.opts.otherLocked('g9'), /^direct is seated on an account of that group/, 'seated on a member: locked');
   P.feed(agent('direct', { mode: 'auto', account: 'MINE', group: null, seats: [{ account: 'OTHER-1' }] }));
-  assert.match(funded.opts.otherLocked('g9'), /direct trades that group or one of its accounts in Auto/, 'a seat left over on a member: locked');
+  assert.match(funded.opts.otherLocked('g9'), /^direct is seated on an account of that group/, 'a seat left over on a member: locked');
+  // answers 28, R4-4: the narrow feed matches an account's group ignoring case, as ChartBridge does
+  P.feed(agent('direct', { mode: 'auto', account: 'OTHER-2', group: null }));
+  const posted = [];
+  const AF = { S: { groups: more.list }, accountGroup: (...x) => { posted.push(x); return true; }, post: () => true };
+  const nf = F.laneFeed(AF, () => '', 'g2', funded.opts.otherLocked);
+  assert.strictEqual(nf.accountGroup('other-1', 'g2'), false, 'the probe in lower case: refused, g9 is locked');
+  assert.strictEqual(nf.accountGroup('OTHER-1', 'g2'), false);
+  assert.deepStrictEqual(posted, []);
   // B1: signed out, nothing is heard, so every lock is not known
   P.feed({ type: 'trading', enabled: false });
   assert.strictEqual(funded.opts.otherLocked('g-empty'), F.NOT_KNOWN);
   assert.strictEqual(funded.opts.locked(), F.NOT_KNOWN);
 });
 
-test('answers 25, S2, and answers 26, R3-4: FleetCore.groupLock on its own', () => {
+test('answers 33, A28-1: a heard trader the page cannot read makes the lane\'s OWN lock not known too; A28-2: two groups matching a name ignoring case is refused', t => {
+  timers(t);
+  const mounts = [];
+  const lanePanel = (el, key, opts) => { const m = { key, opts, el, destroy() {} }; mounts.push(m); return m; };
+  const P = page(t, { lanePanel });
+  P.fv.showTab(true);
+  P.feed({ type: 'hello', version: '0.6.21' }); P.feed({ type: 'trading', enabled: true }); P.feed(accounts); P.feed(groups);
+  P.feed(evalTrader()); P.feed(fundTrader()); P.replayDone();
+  const funded = mounts.find(m => m.key === 'legion-funded');
+  assert.strictEqual(funded.opts.locked(), '', 'both lanes in Shadow and flat: free');
+  for (const [why, bad] of [['group a string', { group: 'g2' }], ['group id a number', { group: { id: 2 } }], ['account a number', { account: 42 }]]) {
+    P.feed(agent('odd', Object.assign({ mode: 'auto', account: null }, bad)));
+    assert.strictEqual(funded.opts.locked(), F.NOT_KNOWN, why);
+    assert.strictEqual(funded.opts.otherLocked('g1'), F.NOT_KNOWN, why + ': the other lane\'s group too (break B1 at page level)');
+    const sent = [];
+    const AF = { S: { groups: groups.list }, accountGroup: (...x) => { sent.push(x); return true; }, post: m => { sent.push(m); return true; } };
+    const nf = F.laneFeed(AF, funded.opts.locked, 'g2', funded.opts.otherLocked);
+    assert.strictEqual(nf.accountGroup('FUND-A', null), false, why + ': out of the lane refused');
+    assert.strictEqual(nf.post({ type: 'memberBench', account: 'FUND-A', benched: true }), false, why + ': bench refused');
+    assert.deepStrictEqual(sent, [], why + ': 0 sent');
+  }
+  P.feed(agent('odd', { mode: 'shadow', account: null, group: null }));
+  assert.strictEqual(funded.opts.locked(), '', 'readable again: free');
+  // A28-2: two groups list the same name in different case: the account\'s group is not known, so the move is refused
+  const sent = [];
+  const twice = { S: { groups: [{ id: 'g2', members: ['FUND-A'] }, { id: 'g7', members: ['fund-a'] }] }, accountGroup: (...x) => { sent.push(x); return true; } };
+  const nf = F.laneFeed(twice, () => '', 'g2', () => '');
+  assert.strictEqual(nf.accountGroup('FUND-A', null), false);
+  assert.strictEqual(nf.accountGroup('Fund-A', 'g2'), false);
+  assert.deepStrictEqual(sent, []);
+});
+
+test('answers 25, S2, answers 26, R3-4, and answers 28, R4-1 to R4-3: FleetCore.groupLock on its own', () => {
   const tr = (id, gid, more) => Object.assign({ agent: id, mode: 'shadow', owns: false, account: null, group: gid ? { id: gid, name: 'G' } : null }, more || {});
   const gm = { type: 'groups', list: [{ id: 'g1', members: ['ACC-1', 'ACC-2'] }, { id: 'g2', members: ['ACC-3'] }, { id: 'g-odd' }] };
   assert.strictEqual(F.groupLock('g1', [], false, gm), F.NOT_KNOWN);
@@ -1194,13 +1234,23 @@ test('answers 25, S2, and answers 26, R3-4: FleetCore.groupLock on its own', () 
   assert.strictEqual(F.groupLock('g-odd', [], true, gm), F.NOT_KNOWN, 'a group with no member list');
   assert.strictEqual(F.groupLock('g1', [tr('a', 'g2', { mode: 'auto' })], true, gm), '', 'a trader on another group');
   assert.strictEqual(F.groupLock('g1', [tr('a', 'g1')], true, gm), '');
-  assert.match(F.groupLock('g1', [tr('a', 'g1'), tr('b', 'g1')], true, gm), /Two traders are on that group or its accounts \(a, b\)/);
-  assert.match(F.groupLock('g1', [tr('a', 'g1', { mode: 'copilot' })], true, gm), /a trades that group or one of its accounts in Copilot/);
+  assert.match(F.groupLock('g1', [tr('a', 'g1'), tr('b', 'g1')], true, gm), /Two traders are on that group \(a, b\)/);
+  assert.match(F.groupLock('g1', [tr('a', 'g1', { mode: 'copilot' })], true, gm), /a trades that group in Copilot/);
   assert.match(F.groupLock('g1', [tr('a', 'g1', { mode: undefined })], true, gm), /a mode not known/);
   assert.match(F.groupLock('g1', [tr('a', 'g1', { owns: true })], true, gm), /holds a position/);
-  assert.match(F.groupLock('g1', [tr('a', null, { mode: 'auto', account: 'acc-2' })], true, gm), /a trades that group or one of its accounts in Auto/, 'seated on a member, any letter case');
-  assert.match(F.groupLock('g1', [tr('a', 'g2', { mode: 'auto', account: null, seats: [{ account: 'ACC-3' }, { account: 'ACC-1' }] })], true, gm), /in Auto/, 'a seat on a member');
   assert.strictEqual(F.groupLock('g1', [tr('a', null, { mode: 'auto', account: 'ACC-3' })], true, gm), '', 'seated on another group\'s account only');
+  // R3-4 and R4-2, R4-3: seated directly on a member (its account or a seat left over), in ANY mode, any letter case
+  for (const [why, t] of [['Auto', tr('a', null, { mode: 'auto', account: 'acc-2' })], ['Copilot', tr('a', null, { mode: 'copilot', account: 'ACC-1' })],
+    ['Shadow holding something', tr('a', null, { account: 'ACC-1', owns: true })], ['Shadow and flat', tr('a', null, { account: 'ACC-1' })],
+    ['a seat left over', tr('a', 'g2', { mode: 'shadow', seats: [{ account: 'ACC-3' }, { account: 'ACC-1' }] })]])
+    assert.match(F.groupLock('g1', [t], true, gm), /^a is seated on an account of that group: no account moves out of it while another trader is on one of its accounts, in any mode\.$/, why);
+  assert.match(F.groupLock('g1', [tr('a', 'g1'), tr('b', null, { account: 'ACC-2' })], true, gm), /^b is seated on an account of that group/, 'its own trader in Shadow and flat, another seated on a member');
+  // R4-1: any heard trader the page cannot read makes every group's lock not known
+  for (const [why, bad] of [['account a number', { account: 42 }], ['group a string', { group: 'g9' }], ['seats a string', { seats: 'OTHER-1' }],
+    ['a seat with a number', { seats: [{ account: 7 }] }], ['group id a number', { group: { id: 9 } }], ['account empty', { account: '' }], ['account an object', { account: { n: 1 } }]])
+    assert.strictEqual(F.groupLock('g2', [tr('a', 'g1'), Object.assign(tr('odd', null), bad)], true, gm), F.NOT_KNOWN, why);
+  assert.strictEqual(F.accountsReadable(null), false);
+  assert.strictEqual(F.accountsReadable(tr('a', 'g1', { seats: [{ account: 'ACC-1' }] })), true);
 });
 
 test('Legion Setup\'s roster by family (1.48.0): readable names, the family from the run, the two "good for" filters on the file\'s own word and their order, Find, and where a file is picked', () => {
