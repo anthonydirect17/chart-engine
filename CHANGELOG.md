@@ -63,6 +63,28 @@
   `test/pc-updater.test.js`: the allowed git subcommands, the box job's name, useHttpPath read before the one ask, the
   token only after a 404 or 401 and then through the Actions API, one place that asks for it and one that sends it.
 
+## chart 1.49.0 (2026-11-12): Legion Live, assembled from the page's own parts (page only, no F5)
+
+In plain words: Legion's Live page shows the day: four numbers on top, one chart with each lane's fills on it, each lane's
+trader, and the prop accounts as the Accounts tab shows them. Kill all and Armed stay exactly where they are on Setup.
+
+- **The four tiles** (`FleetCore.liveTiles`): today on every prop account, on the eval lane and on the funded lane, each
+  ChartBridge's own realized plus open (`pnlToday`); one account with no number makes the sum "not known" (never a sum of
+  the rest). The business so far needs The Desk (the payouts and the fees), which Legion does not read yet: the tile says
+  "not built yet".
+- **Today on one chart:** a real chart, mounted the way the League tab mounts its own (no toolbar, no ticket: it takes no
+  orders), with each lane's fills drawn by the League tab's overlay (`LeagueOverlay.attach`, its generic marks since
+  1.47.0): a circle where a fill opens or adds, a diamond where one reduces or closes, E in eval blue and F in funded gold
+  (`FleetCore.laneMarks`, from ChartBridge's `exec` and `execs` on the lane's accounts since 18:00 New York). Stop and
+  target lines are not drawn: the page does not hold a lane's planned stop.
+- **By trader** (`FleetCore.traderDays`): each lane's trader, its mode, today, ChartBridge's count of its trades today, in a
+  trade or flat; not said is "not known". The live record against its test comes from The Desk and says "not enough data
+  yet" until Legion reads it.
+- **Accounts live:** the Accounts tab's own rows (`workspace.accountRows`, the rows-only mount of 1.47.0), the prop
+  accounts only, one section a group, read only. Legion's own Prop accounts table is drawn only where the page has no
+  Accounts part (accounts.js not served).
+- The chart and the rows are mounted only while Live is open, and taken down on Setup and when the tab closes.
+
 ## chart 1.48.1 (2026-11-12): each Legion lane says what the PC helper says of its runner (page only, no F5)
 
 In plain words: Bot-Lab's PC helper now keeps each lane's runner going by itself (Bot-Lab B4), and each lane on Legion says

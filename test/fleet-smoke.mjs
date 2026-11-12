@@ -99,7 +99,7 @@ try {
   check((await text('.fl-roster .fl-empty')).includes('No roster folder is set on this PC') && await page.evaluate(() => window.asked.join() === '/roster'), 'ChartBridge 0.6.20 with no roster folder: one GET /roster, and the tab says the folder is not set');
 
   // nothing known yet: said plainly, and Kill all is not offered
-  check((await text('.fl-box[aria-label="Prop accounts"] .fl-empty')).includes('No personal account is picked yet'), 'no accounts message yet: says how to pick the personal account');
+  check((await text('.fl-box[aria-label="Accounts live"] .fl-empty')).includes('No personal account is picked yet'), 'no accounts message yet: says how to pick the personal account');
   check(await page.locator('[data-do="ask"]').getAttribute('aria-disabled') === 'true', 'Kill all is not offered yet');
   await page.click('[data-do="ask"]', { force: true });      // Playwright will not click an aria-disabled button by itself; a person can
   check(await sentN() === 0 && (await text('.fl-said')).includes('Sign in to trading first'), 'a click on it sends nothing and says why');
@@ -194,7 +194,7 @@ try {
   check(r4[0].includes('In no group: the runner sizes it 0'), 'an account in no group says why it would be sized 0');
   const pnl = await page.evaluate(() => ['SAMPLE-EVAL-1', 'SAMPLE-FUNDED-1'].map(n => getComputedStyle(document.querySelector('.fl-table tbody tr[data-name="' + n + '"] .fl-pnl')).color));
   check(pnl[0] === colours.buy && pnl[1] === colours.sell, 'Today is green when up and red when down (the only green and red on the tab): ' + pnl.join(' '));
-  check((await text('.fl-later')).includes('Legion Live (the tiles, one chart with each lane\'s marks, each trader\'s day, the accounts by group) is the next change'), 'Live says what comes next, not faked');
+  check((await text('.fl-tile[data-tile="business"] .fl-tiletext')).includes('not built yet'), 'Live: the business so far says it is not built, never a made-up number');
   await page.click('[data-do="sub"][data-sub="setup"]');
   check((await text('.fl-market')).includes('Not built yet.'), 'Market now says it is not built yet, not faked');
   // nothing on the tab can be pressed, typed in or switched but Kill all with its two answers, the Armed switch with its two, Read again and the Details
@@ -512,10 +512,27 @@ try {
     await page.waitForFunction(() => /Other connections \((\d+)\)/i.test((document.querySelector('.fl-others') || {}).textContent || '') && !/\(0\)/.test(document.querySelector('.fl-others').textContent), null, { timeout: 10000 }).catch(() => {});
     if (await page.locator('[data-do="others"][aria-expanded="false"]').count()) await page.click('[data-do="others"]');
     check(await page.locator('.fl-trader[data-id="demo"]').count() === 1, 'workspace: the fake bridge\'s agent is listed as a trader');
-    check((await page.locator('.fl-box[aria-label="Prop accounts"] .fl-empty').innerText()).includes('No personal account is picked yet'), 'workspace: no pick, so no prop account, and it says how to pick');
+    check((await page.locator('.fl-box[aria-label="Accounts live"] .fl-empty').innerText()).includes('No personal account is picked yet'), 'workspace: no pick, so no prop account, and it says how to pick');
     await page.waitForFunction(() => window.workspace.fleet().roster.state !== 'loading', null, { timeout: 10000 }).catch(() => {});
     const ro = await page.evaluate(() => window.workspace.fleet().roster);
     check(ro.state === 'none' && ro.asked === 1 && /No roster folder is set on this PC/.test(ro.text), 'workspace: the real request: the fake bridge has no roster (404), asked once, and the tab says the folder is not set: ' + JSON.stringify(ro));
+    /* 1.49.0 Legion Live in the real page: a real chart (the League tab's way), the Accounts tab's own rows, and Kill all and
+       Armed in the very same place as on Setup */
+    const head = () => page.evaluate(() => ['[data-do="ask"]', '[data-do="arm"]'].map(s => { const r = document.querySelector(s).getBoundingClientRect(); return [Math.round(r.x), Math.round(r.y)]; }));
+    const onSetup = await head();
+    await page.click('[data-do="sub"][data-sub="live"]');
+    await page.waitForFunction(() => document.querySelector('.fl-chart .ce-canvas'), null, { timeout: 10000 }).catch(() => {});
+    const live = await page.evaluate(() => ({ canvas: !!document.querySelector('.fl-chart .ce-canvas'), h: Math.round((document.querySelector('.fl-chart') || {}).getBoundingClientRect ? document.querySelector('.fl-chart').getBoundingClientRect().height : 0),
+      rows: !!document.querySelector('.fl-acctrows [data-ap]'), table: !!document.querySelector('.fl-box[aria-label="Accounts live"] .fl-table'),
+      tiles: [...document.querySelectorAll('.fl-tile')].map(t => t.dataset.tile).join(','), ghosts: window.workspace.leagueGhosts().length }));
+    check(live.canvas && live.h >= 250, 'workspace, Live: a real chart is mounted on the tab: ' + JSON.stringify(live));
+    check(live.rows && !live.table, 'workspace, Live: the Accounts tab\'s own rows, not Legion\'s old table: ' + JSON.stringify(live));
+    check(live.tiles === 'all,eval,funded,business', 'workspace, Live: the four tiles: ' + live.tiles);
+    check(JSON.stringify(await head()) === JSON.stringify(onSetup), 'workspace, Live: Kill all and Armed stay exactly where they are on Setup: ' + JSON.stringify(onSetup));
+    await page.screenshot({ path: path.join(SHOTS, 'fleet-live.png') });
+    await page.click('[data-do="sub"][data-sub="setup"]');
+    await sleep(200);
+    check(await page.evaluate(() => !document.querySelector('.fl-chart .ce-canvas') && !document.querySelector('.fl-acctrows [data-ap]')), 'workspace: back on Setup, the chart and the rows are taken down');
     await page.click('#wsAgentTab');
     await sleep(300);
     check(await page.evaluate(() => !document.body.classList.contains('fl-on') && document.body.classList.contains('ag-on') && /tab=agent/.test(location.search)), 'workspace: opening the Agent tab closes Legion (one view at a time)');

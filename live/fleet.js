@@ -658,6 +658,93 @@ function laneFeed(feed, locked) {
   return Object.freeze(out);
 }
 
+/* ---------------------------------------------------------------- Legion Live (chart 1.49.0, the reuse map's Live page) */
+const LANE_COLOR = { eval: '#8FB4E0', funded: '#C9A55C' };            // eval steel blue, funded gold (build answers 16); the letter says it too
+const LANE_LETTER = { eval: 'E', funded: 'F' };
+const MAX_FILLS = 4000;
+/** The accounts message's prop rows, by name (lower case) -> row. A row ChartBridge does not mark prop is never counted. */
+function propRows(accounts) {
+  const out = new Map();
+  for (const r of plainObj(accounts) && Array.isArray(accounts.list) ? accounts.list : []) if (plainObj(r) && r.prop === true && typeof r.name === 'string' && r.name) out.set(r.name.toLowerCase(), r);
+  return out;
+}
+/** Today's result of a list of account names: { value, known, of } from each row's pnlToday (realized plus open, ChartBridge's).
+ *  value null when one is not known (an account not in the message, or no number): never a sum of the ones that are. */
+function todayOf(names, accounts) {
+  const rows = propRows(accounts), list = Array.isArray(names) ? names.filter(n => typeof n === 'string' && n) : [];
+  let sum = 0, known = 0;
+  for (const n of list) { const r = rows.get(n.toLowerCase()); if (r && isNum(r.pnlToday)) { sum += r.pnlToday; known++; } }
+  return { value: list.length && known === list.length ? Math.round(sum * 100) / 100 : null, known, of: list.length };
+}
+/**
+ * THE FOUR TILES: today on every prop account, on the eval lane, on the funded lane, and the business so far.
+ * -> [{ key, title, value (dollars or null), text (what the number is, or why there is none) }]. The business so far needs The
+ * Desk (payouts, fees); Legion does not read it yet, and the tile says so instead of a number.
+ */
+function liveTiles(ls, accounts) {
+  const tile = (key, title, t, none) => ({ key, title, value: t.value, text: t.of === 0 ? none : t.value === null ? 'not known: ' + t.known + ' of ' + t.of + ' accounts say today' : one(t.of, 'account') + ', realized plus open' });
+  const all = [...propRows(accounts).values()].map(r => r.name);
+  const out = [tile('all', 'Today, every prop account', todayOf(all, accounts), plainObj(accounts) ? 'no prop account' : 'the accounts are not known yet')];
+  for (const stage of STAGES) {
+    const l = (Array.isArray(ls) ? ls : []).find(x => plainObj(x) && x.stage === stage);
+    const names = l && l.id ? l.seats : [];
+    out.push(tile(stage, stage === 'eval' ? 'Today, the eval lane' : 'Today, the funded lane', todayOf(names, accounts), l && l.id ? 'no account trades with its group' : 'no trader on this lane'));
+  }
+  out.push({ key: 'business', title: 'The business so far', value: null, text: 'not built yet: it needs The Desk (the payouts and the fees), which Legion does not read yet' });
+  return out;
+}
+/** A fill as ChartBridge's exec sends it, cleaned, or null. */
+function cleanFill(f) {
+  if (!plainObj(f) || typeof f.id !== 'string' || !f.id || typeof f.account !== 'string' || !f.account) return null;
+  if (f.side !== 'buy' && f.side !== 'sell') return null;
+  if (!isNum(f.qty) || f.qty <= 0 || !Number.isInteger(f.qty) || !isNum(f.p) || f.p <= 0 || !isNum(f.t)) return null;
+  return { id: str(f.id, 80), account: str(f.account, 60), root: str(f.root, 12), side: f.side, qty: f.qty, p: f.p, t: f.t };
+}
+/**
+ * EACH LANE'S MARKS on the one chart (LeagueOverlay.attach's { kind: 'marks' }): every fill since `since` (chart seconds) on an
+ * account of the lane's group (trading or on the bench), in time order, per account and market: a fill that opens or adds is
+ * an entry (a circle), one that reduces or closes is an exit (a diamond); a fill that turns a position over is an exit. The
+ * colour and letter are the lane's (E eval blue, F funded gold). roots: the markets drawn on this chart (MNQ and NQ share a
+ * price). Lines (stop, target) are not drawn: the page does not hold a lane's planned stop; ChartBridge's own is on the
+ * account. -> { kind: 'marks', marks, lines: [] }
+ */
+function laneMarks(ls, fills, since, roots) {
+  const want = new Set((Array.isArray(roots) ? roots : []).map(r => String(r).toUpperCase()));
+  const owner = new Map();
+  for (const l of Array.isArray(ls) ? ls : []) {
+    if (!plainObj(l) || !l.id || !STAGES.includes(l.stage)) continue;
+    for (const n of [].concat(l.seats || [], l.benched || [])) if (typeof n === 'string' && n) owner.set(n.toLowerCase(), l.stage);
+  }
+  const list = (Array.isArray(fills) ? fills : []).map(cleanFill).filter(f => f && owner.has(f.account.toLowerCase()) && (!isNum(since) || f.t >= since));
+  list.sort((a, b) => a.t - b.t || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const pos = new Map(), marks = [];
+  for (const f of list) {
+    const k = f.account.toLowerCase() + '|' + f.root, before = pos.get(k) || 0, d = f.side === 'buy' ? f.qty : -f.qty, after = before + d;
+    pos.set(k, after);
+    if (want.size && !want.has(f.root.toUpperCase())) continue;
+    const opens = before === 0 || (Math.sign(after) === Math.sign(before) && Math.abs(after) > Math.abs(before));
+    const stage = owner.get(f.account.toLowerCase());
+    marks.push({ kind: opens ? 'entry' : 'exit', t: f.t, price: f.p, color: LANE_COLOR[stage], letter: LANE_LETTER[stage] });
+  }
+  return { kind: 'marks', marks: marks.slice(-2000), lines: [] };
+}
+/**
+ * BY TRADER: one row a lane's trader. -> [{ stage, id, name, mode, today (dollars or null), trades (ChartBridge's count today, or
+ * null), inTrade (true, false, or null when ChartBridge did not say), record }]. record: the trader's live record against its
+ * test: The Desk's, not read by Legion yet, so it says so; never a number made up here.
+ */
+function traderDays(ls, agents, accounts) {
+  const rows = [];
+  for (const l of Array.isArray(ls) ? ls : []) {
+    if (!plainObj(l) || !l.id) continue;
+    const a = (Array.isArray(agents) ? agents : []).find(x => plainObj(x) && x.agent === l.id) || {};
+    const t = todayOf(l.seats, accounts);
+    rows.push({ stage: l.stage, id: l.id, name: l.name, mode: l.modeText, today: t.value, trades: isNum(a.trades) && a.trades >= 0 ? Math.floor(a.trades) : null,
+      inTrade: a.owns === true ? true : a.owns === false ? false : null, record: 'not enough data yet: the live record against its test comes from The Desk, which Legion does not read yet' });
+  }
+  return rows;
+}
+
 /**
  * A LANE'S RUNNER (B4, chart 1.48.1). Bot-Lab's PC helper (manrae/helper.py, "lanes" in its helper.json) keeps each lane's
  * spec runner running; Legion only READS its GET /status (o.helperStatus: the AgentHelper client's status call and nothing
@@ -686,7 +773,7 @@ const badAnswer = text => /NOT STOPPED|FAILED|could NOT/.test(String(text || '')
 /** "09:41:07" of a Date (the PC's own clock), for the time in front of a Kill all answer. */
 const clock = d => [d.getHours(), d.getMinutes(), d.getSeconds()].map(x => String(x).padStart(2, '0')).join(':');
 
-return Object.freeze({ laneRunner, readableName, rosterFamilies, FILTERS, laneLock, laneMaySend, laneFeed, PICK_MIN, STAGES, lanes, outsideAuto, armState, armMsgs, armWords, pickChoices, pickMsg, maySend, KILL_MIN, SWITCH_MIN, DAYSTOP_MIN, ROSTER_MIN, ROSTER_FORMAT, LINEUP_FORMAT, CONFIRM_MS, ARM_MS, ANSWER_WAIT_MS, ROSTER_WAIT_MS, MAX_CARDS, MAX_MEMBERS, MAX_NOT_SHOWN, MODE_NAME, atLeast, usd, signed, stageCard, rosterCards, rosterProblem,
+return Object.freeze({ MAX_FILLS, LANE_COLOR, LANE_LETTER, propRows, todayOf, liveTiles, cleanFill, laneMarks, traderDays, laneRunner, readableName, rosterFamilies, FILTERS, laneLock, laneMaySend, laneFeed, PICK_MIN, STAGES, lanes, outsideAuto, armState, armMsgs, armWords, pickChoices, pickMsg, maySend, KILL_MIN, SWITCH_MIN, DAYSTOP_MIN, ROSTER_MIN, ROSTER_FORMAT, LINEUP_FORMAT, CONFIRM_MS, ARM_MS, ANSWER_WAIT_MS, ROSTER_WAIT_MS, MAX_CARDS, MAX_MEMBERS, MAX_NOT_SHOWN, MODE_NAME, atLeast, usd, signed, stageCard, rosterCards, rosterProblem,
   kindOf, seatsKind, dayMark, traderAccounts, statusText, traders, propAccounts, killAllState, killAllMsg, autoLine, badAnswer, clock });
 });
 
@@ -725,7 +812,8 @@ function create(o) {
     ask: 0, askTimer: 0, hint: '', hintBad: false, hintState: false, answer: '', answerBad: false, cidSeq: 0, pending: '', pendingAt: 0, waitTimer: 0, sent: 0,
     armAsk: 0, armTimer: 0, armSaid: '', armBad: false, modeSent: new Map(), pickSent: new Map(),
     helper: null, helperTimer: 0, helperSeq: 0, sub: 'setup', filter: 'all', find: '', famShut: new Set(), othersOpen: false, lanePanels: {},
-    roster: { state: 'idle', text: '', cards: null, seq: 0, asked: 0, at: 0, version: '' }, rosterDirty: true, rosterTimer: 0, open: new Set(), drawn: {}, draws: { head: 0, roster: 0, traders: 0, accounts: 0, lanes: 0, 'lane-eval': 0, 'lane-funded': 0 } };
+    roster: { state: 'idle', text: '', cards: null, seq: 0, asked: 0, at: 0, version: '' }, rosterDirty: true, rosterTimer: 0, open: new Set(), drawn: {}, draws: { head: 0, roster: 0, traders: 0, accounts: 0, lanes: 0, 'lane-eval': 0, 'lane-funded': 0, tiles: 0, bytrader: 0 },
+    fills: new Map(), pane: null, overlay: null, rows: null };
   const el = {};
   const agentList = () => [...S.agents.values()];
   const cid = () => 'fl' + (++S.cidSeq).toString(36) + Math.random().toString(36).slice(2, 6);
@@ -734,6 +822,30 @@ function create(o) {
   const outside = ls => C.outsideAuto(ls, agentList(), S.accounts, S.version);
   const armNow = ls => C.armState(ls, S.version, S.signedIn, S.connected, S.accounts, S.groups, S.agents.size > 0, outside(ls));
 
+  function takeFill(f) {
+    const c = C.cleanFill(f);
+    if (!c) return;
+    S.fills.set(c.account + '|' + c.id, c);                            // the same fill twice (execs then exec) is one
+    if (S.fills.size > 4000) S.fills.delete(S.fills.keys().next().value);
+    if (S.overlay) S.overlay.redraw();
+  }
+  const marksNow = () => { try { return C.laneMarks(laneList(), [...S.fills.values()], typeof o.sessionStart === 'function' ? o.sessionStart() : null, ['MNQ', 'NQ']); } catch (e) { return null; } };
+  /* the Live page's chart and the accounts' rows: mounted while the tab is open on Live, taken down otherwise */
+  function mountLive() {
+    if (!S.pane && typeof o.liveChart === 'function' && el.chart) {
+      try { S.pane = o.liveChart(el.chart); } catch (e) { S.pane = null; }
+      if (S.pane && window.LeagueOverlay && typeof window.LeagueOverlay.attach === 'function') S.overlay = window.LeagueOverlay.attach(S.pane, el.chart, marksNow, () => 'MNQ', false);
+    }
+    if (!S.rows && typeof o.accountRows === 'function' && el.acctrows) {
+      try { S.rows = o.accountRows(el.acctrows, 'legion-live', a => !!a && typeof a.name === 'string' && C.propRows(S.accounts).has(a.name.toLowerCase())); } catch (e) { S.rows = null; }
+    }
+  }
+  function unmountLive() {
+    if (S.overlay) { try { S.overlay.destroy(); } catch (e) { /* gone */ } S.overlay = null; }
+    if (S.pane) { try { S.pane.destroy(); if (S.pane.indicators) S.pane.indicators.remove(); if (S.pane.chips) S.pane.chips.remove(); if (S.pane.badge) S.pane.badge.remove(); } catch (e) { /* gone */ } S.pane = null; }
+    if (S.rows) { try { S.rows.destroy(); } catch (e) { /* gone */ } S.rows = null; }
+    for (const k of ['chart', 'acctrows']) if (el[k] && el[k].innerHTML) el[k].innerHTML = '';   // nothing of them is left behind
+  }
   function onMessage(m) {
     switch (m && m.type) {
       case 'hello': S.version = typeof m.version === 'string' ? m.version : ''; S.connected = true; offer(); if (S.shown) helloRoster(); break;
@@ -741,6 +853,8 @@ function create(o) {
       case 'accounts': S.accounts = m; break;
       case 'groups': S.groups = m; break;
       case 'agent': if (m && typeof m.agent === 'string') S.agents.set(m.agent, m); break;
+      case 'exec': takeFill(m); break;                                 // Legion Live: each lane's fills on the one chart
+      case 'execs': if (m && Array.isArray(m.list)) for (const f of m.list.slice(0, C.MAX_FILLS || 4000)) takeFill(f); break;
       case 'reject':
         if (S.pending && m.cid === S.pending) answered(typeof m.reason === 'string' && m.reason ? 'ChartBridge refused Kill all: ' + m.reason : 'ChartBridge refused Kill all', true);
         else if (typeof m.cid === 'string' && S.modeSent.has(m.cid)) { const x = S.modeSent.get(m.cid); S.modeSent.delete(m.cid); armSay('ChartBridge refused ' + (x.mode === 'auto' ? 'Auto' : 'Shadow') + ' for ' + x.agent + (typeof m.reason === 'string' && m.reason ? ': ' + m.reason : ''), true); }
@@ -1006,11 +1120,15 @@ function create(o) {
         <section class="fl-box fl-others" aria-label="Other connections"><div data-k="traders"></div></section>
       </div>
       <div class="fl-page" data-k="live" hidden>
-        <section class="fl-box" aria-label="Prop accounts"><div data-k="accounts"></div></section>
-        <p class="fl-later">Legion Live (the tiles, one chart with each lane's marks, each trader's day, the accounts by group) is the next change. Until then this page shows the prop accounts as before.</p>
+        <section class="fl-box fl-tilebox" aria-label="Today"><div class="fl-tiles" data-k="tiles"></div></section>
+        <section class="fl-box fl-chartbox" aria-label="Today on one chart"><div class="fl-btitle"><h3 class="fl-h">Today on one chart</h3><span class="fl-sub2">Each lane's fills: E the eval lane, F the funded lane; a circle opens or adds, a diamond reduces or closes. This chart takes no orders.</span></div>
+          <div class="fl-chart" data-k="chart"></div><p class="fl-note" data-k="chartsaid"></p></section>
+        <section class="fl-box" aria-label="By trader"><div class="fl-btitle"><h3 class="fl-h">By trader</h3><span class="fl-sub2">Each lane's trader today, as ChartBridge says it.</span></div><div data-k="bytrader"></div></section>
+        <section class="fl-box" aria-label="Accounts live"><div class="fl-btitle"><h3 class="fl-h">Accounts live</h3><span class="fl-sub2">The Accounts tab's own rows, the prop accounts only, one section a group. Read only.</span></div>
+          <div class="fl-acctrows" data-k="acctrows"></div><div data-k="accounts"></div></section>
       </div>
     </div>`;
-    for (const k of ['autoline', 'ask', 'kill', 'yes', 'no', 'hint', 'answer', 'roster', 'traders', 'accounts', 'lanes', 'lane-eval', 'lane-funded', 'arm', 'armyes', 'armno', 'armsaid', 'armask', 'setup', 'live', 'allbtn']) el[k] = view.querySelector('[data-k="' + k + '"]');
+    for (const k of ['autoline', 'ask', 'kill', 'yes', 'no', 'hint', 'answer', 'roster', 'traders', 'accounts', 'lanes', 'lane-eval', 'lane-funded', 'arm', 'armyes', 'armno', 'armsaid', 'armask', 'setup', 'live', 'allbtn', 'tiles', 'chart', 'chartsaid', 'bytrader', 'acctrows']) el[k] = view.querySelector('[data-k="' + k + '"]');
     el.cancel = view.querySelector('[data-do="no"]');
     S.built = true; S.drawn = {}; S.rosterDirty = true;
   }
@@ -1101,10 +1219,23 @@ function create(o) {
   }
   function renderSub() {
     setHidden(el.setup, S.sub !== 'setup'); setHidden(el.live, S.sub !== 'live');
+    if (S.sub === 'live') mountLive(); else unmountLive();
     if (view && typeof view.querySelectorAll === 'function') for (const b of view.querySelectorAll('[data-do="sub"]')) b.setAttribute('aria-pressed', String(b.dataset.sub === S.sub));
     if (view && typeof view.querySelectorAll === 'function') for (const b of view.querySelectorAll('[data-do="filter"]')) b.setAttribute('aria-pressed', String(b.dataset.filter === S.filter));
     const total = S.roster.cards && S.roster.cards.ok ? S.roster.cards.bots.length + S.roster.cards.lineups.length : 0;
     setText(el.allbtn, 'All (' + total + ')');
+  }
+  function tilesHtml(tiles) {
+    return tiles.map(t => `<div class="fl-tile" data-tile="${esc(t.key)}"><span class="fl-tiletitle">${esc(t.title)}</span>` +
+      (t.value === null ? '<span class="fl-tileval fl-mut">-</span>' : `<span class="fl-tileval mono fl-pnl${t.value > 0 ? ' up' : t.value < 0 ? ' down' : ''}">${esc(C.usd(t.value, true))}</span>`) +
+      `<span class="fl-tiletext">${esc(t.text)}</span></div>`).join('');
+  }
+  function byTraderHtml(rows) {
+    if (!rows.length) return '<p class="fl-empty">No lane has a trader yet: put a trader on a group on Setup.</p>';
+    return `<div class="fl-bytrader" role="table" aria-label="By trader"><div class="fl-btrow fl-bthead" role="row"><span role="columnheader">Lane</span><span role="columnheader">Trader</span><span role="columnheader">Mode</span><span role="columnheader" class="r">Today</span><span role="columnheader" class="r">Trades</span><span role="columnheader">Now</span><span role="columnheader">Live record</span></div>` +
+      rows.map(r => `<div class="fl-btrow" role="row"><span role="cell"><span class="fl-dot" data-stage="${esc(r.stage)}"></span>${esc(r.stage === 'eval' ? 'Eval' : 'Funded')}</span><span role="cell">${esc(r.name)}</span><span role="cell">${esc(r.mode)}</span>` +
+        `<span role="cell" class="r mono">${r.today === null ? 'not known' : esc(C.usd(r.today, true))}</span><span role="cell" class="r mono">${r.trades === null ? 'not known' : esc(String(r.trades))}</span>` +
+        `<span role="cell">${r.inTrade === null ? 'not known' : r.inTrade ? 'in a trade' : 'flat'}</span><span role="cell" class="fl-mut">${esc(r.record)}</span></div>`).join('') + '</div>';
   }
   function renderHead(rows) {
     const st = killState(), asking = S.ask > 0;
@@ -1133,7 +1264,14 @@ function create(o) {
     try { if (S.rosterDirty) { S.rosterDirty = false; section('roster', rosterHtml()); if (el.roster) el.roster.setAttribute('data-state', S.roster.state); } } catch (e) { section('roster', '<p class="fl-empty fl-warn">The roster could not be drawn.</p>'); }
     try { renderSub(); } catch (e) { /* the pages are already there */ }
     try { section('traders', tradersHtml(rows, ls)); } catch (e) { section('traders', '<p class="fl-empty fl-warn">The traders could not be drawn.</p>'); }
-    try { section('accounts', accountsHtml(C.propAccounts(S.accounts, S.groups, agentList()))); } catch (e) { section('accounts', '<p class="fl-empty fl-warn">The prop accounts could not be drawn.</p>'); }
+    /* the old Prop accounts table only where the page cannot hand the Accounts tab's own rows (accounts.js not served) */
+    try { section('accounts', S.rows ? '' : accountsHtml(C.propAccounts(S.accounts, S.groups, agentList()))); } catch (e) { section('accounts', '<p class="fl-empty fl-warn">The prop accounts could not be drawn.</p>'); }
+    if (S.sub === 'live') {
+      try { section('tiles', tilesHtml(C.liveTiles(ls, S.accounts))); } catch (e) { section('tiles', '<p class="fl-empty fl-warn">The tiles could not be drawn.</p>'); }
+      try { section('bytrader', byTraderHtml(C.traderDays(ls, agentList(), S.accounts))); } catch (e) { section('bytrader', '<p class="fl-empty fl-warn">The traders could not be drawn.</p>'); }
+      setText(el.chartsaid, !S.pane ? 'The chart shows when the page is open with its chart part.' : S.fills.size ? '' : 'No fill on a lane\'s account yet today.');
+      if (S.overlay) S.overlay.redraw();
+    }
   }
   function onClick(e) {
     const b = e.target && e.target.closest ? e.target.closest('button[data-do]') : null;
@@ -1221,7 +1359,7 @@ function create(o) {
     if (on === S.shown) return;
     S.shown = on;
     if (tabBtn) { tabBtn.setAttribute('aria-pressed', String(on)); if (on) tabBtn.hidden = false; }
-    if (!on) { endAsk(); endArmAsk(); dropLanePanels(); clearTimeout(S.helperTimer); S.helperSeq++; S.built = false; if (view) view.innerHTML = ''; offer(); }
+    if (!on) { endAsk(); endArmAsk(); dropLanePanels(); unmountLive(); clearTimeout(S.helperTimer); S.helperSeq++; S.built = false; if (view) view.innerHTML = ''; offer(); }
     /* Escape cancels a question wherever the focus is while the tab is open (build answers 15, section 3) */
     if (DOC) { if (on) DOC.addEventListener('keydown', onKey, true); else DOC.removeEventListener('keydown', onKey, true); }
     if (typeof o.onTab === 'function') o.onTab(on);
@@ -1258,11 +1396,11 @@ function create(o) {
     showTab, shown: () => S.shown, offered: () => !!tabBtn && !tabBtn.hidden,
     hello: m => onMessage(m),
     state: () => ({ lanes: laneList(), arm: Object.assign({ asking: S.armAsk > 0, said: S.armSaid, bad: S.armBad }, armNow(laneList())),
-      shown: S.shown, version: S.version, connected: S.connected, signedIn: S.signedIn, asking: S.ask > 0, hint: S.hint, answer: S.answer, answerBad: S.answerBad, pending: !!S.pending, sent: S.sent, draws: Object.assign({}, S.draws),
+      shown: S.shown, sub: S.sub, fills: S.fills.size, live: { chart: !!S.pane, rows: !!S.rows }, version: S.version, connected: S.connected, signedIn: S.signedIn, asking: S.ask > 0, hint: S.hint, answer: S.answer, answerBad: S.answerBad, pending: !!S.pending, sent: S.sent, draws: Object.assign({}, S.draws),
       traders: C.traders(agentList(), S.accounts, S.version), accounts: C.propAccounts(S.accounts, S.groups, agentList()),
       roster: { state: S.roster.state, text: S.roster.text, asked: S.roster.asked, bots: S.roster.cards ? S.roster.cards.bots.map(c => c.name) : [], lineups: S.roster.cards ? S.roster.cards.lineups.map(c => c.name) : [], notShown: S.roster.cards ? S.roster.cards.notShown.length : 0 } }),
     reloadRoster: loadRoster,
-    destroy: () => { dropLanePanels(); S.roster.seq++; clearTimeout(S.rosterTimer); clearTimeout(S.waitTimer); unlisten(); endAsk(); endArmAsk(); if (DOC) DOC.removeEventListener('keydown', onKey, true); if (view) { view.removeEventListener('click', onClick); view.removeEventListener('change', onChange); view.removeEventListener('input', onInput); view.removeEventListener('keydown', onKey); } },
+    destroy: () => { dropLanePanels(); unmountLive(); clearTimeout(S.helperTimer); S.helperSeq++; S.roster.seq++; clearTimeout(S.rosterTimer); clearTimeout(S.waitTimer); unlisten(); endAsk(); endArmAsk(); if (DOC) DOC.removeEventListener('keydown', onKey, true); if (view) { view.removeEventListener('click', onClick); view.removeEventListener('change', onChange); view.removeEventListener('input', onInput); view.removeEventListener('keydown', onKey); } },
   };
 }
 window.FleetView = { create };
