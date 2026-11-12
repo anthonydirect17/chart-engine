@@ -326,7 +326,7 @@ test('0.6.17 Kill all for the prop accounts: only agents whose every account is 
   for (const f of fsx.readdirSync(path.join(__dirname, '..', 'live')).filter(f => f.endsWith('.js')))
     assert.strictEqual(fsx.readFileSync(path.join(__dirname, '..', 'live', f), 'utf8').includes('agentKillAllProp'), f === 'fleet.js' || f === 'workspace.js', f);
   assert.strictEqual((fsx.readFileSync(path.join(__dirname, '..', 'live', 'workspace.js'), 'utf8').match(/agentKillAllProp/g) || []).length, 1, 'workspace.js: one comment, nothing that builds the message');
-  assert.match(fsx.readFileSync(path.join(__dirname, '..', 'live', 'workspace.js'), 'utf8'), /post: m => window\.FleetCore\.maySend\(m\) === true && AF\.post\(m\) === true \}/, 'and the gate is in front of every post');
+  assert.match(fsx.readFileSync(path.join(__dirname, '..', 'live', 'workspace.js'), 'utf8'), /post: m => legionGate\(m\) === true && AF\.post\(m\) === true \}/, 'and the gate (captured once from the frozen FleetCore) is in front of every post');
 });
 
 test('0.6.19 the day\'s profit stop: the plan\'s dayStopDollars, the smaller of it and the consistency mark off a funded account, the trader\'s own flatten, a stand-down until the roll', () => {

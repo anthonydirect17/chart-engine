@@ -96,7 +96,16 @@ release.
   tab), starting the runner's program with Armed (the helper), each bot's own state from the runner. N12 (the day
   stop mark as ChartBridge works it out) needs ChartBridge to send it and stays in the backlog.
 
-Checked in `test/fleet.test.js` (28 tests) and `npm run smoke:fleet` (139 checks in a browser: a double click
+- **The review of 94.** Armed is offered only when Kill all is (one function decides both). Until the page has heard
+  ChartBridge it reads "Armed: not known" and does nothing. A lane in Copilot, or a trader in Auto on a prop account outside
+  the lanes, reads "Armed: PARTLY" with its name, and one click sends it to Shadow. An account on its group's bench is not a
+  lane's account. A lane's trading accounts must each be prop or Sim (said as such), never one ChartBridge has not said.
+  Auto is asked for as the Agent tab would (AgentCore's modeMsg, and modesAllowed with groupTradable), and names the pick
+  and its file's sha256 (ChartBridge 0.6.21's rule). The 17:00 reset's daily None is said plainly. The day stop mark says it
+  is the page's own working. The Armed row sits straight under the head row; each lane is drawn on its own; a pick is sent
+  only from the list's own files; the gate is captured once from a frozen FleetCore.
+
+Checked in `test/fleet.test.js` (28 tests) and `npm run smoke:fleet` (140 checks in a browser: a double click
 anywhere on the switch arms nothing at four widths; a press, messages and a release still count on the switch and on
 Yes; a key or a scripted click never arms). `docs/LEGION_and_the_old_tabs.md` lists every control and reading on the
 Agent tab and the Bot tab and whether Legion carries it (for Anthony; nothing is removed).
