@@ -133,6 +133,24 @@ try {
   check(locked && (await groupMsgs()).length === n4, 'locked: every chip locked and not draggable; a click and a drag sent nothing');
   check(/in Auto: switch Armed off/.test(await p.evaluate(() => (document.querySelector('#laneC .ma-toast:last-child') || {}).textContent)), 'and the panel\'s line says why');
   await p.screenshot({ path: path.join(out, 'lane-panel-fixed-locked.png') });
+
+  // ---- the Account page's own rows, read only, for the accounts a filter passes (Legion Live's accounts by group)
+  await p.evaluate(() => {
+    window.fixed.destroy(); window.lanes.laneA.destroy(); window.lanes.laneB.destroy();
+    const host = document.getElementById('laneHost'); host.innerHTML = ''; host.style.gridTemplateColumns = '1fr';
+    const el = document.createElement('div'); el.id = 'rowsBox'; el.style.cssText = 'min-width:0;overflow:auto'; host.appendChild(el);
+    window.rows = window.workspace.accountRows(el, 'rowsL', a => a.group === 'g1');
+  });
+  const R = await until(async () => { const r = await p.evaluate(() => ({ rows: [...document.querySelectorAll('#rowsBox .gr-row.apg-acc')].map(e => e.dataset.k), secs: [...document.querySelectorAll('#rowsBox .apg-stitle')].map(e => e.textContent),
+    tabs: (document.querySelector('#rowsBox .apg-tabs') || {}).hidden, controls: [...document.querySelectorAll('#rowsBox button, #rowsBox input, #rowsBox select')].filter(e => !e.closest('[hidden]')).length, room: (document.querySelector('#rowsBox .apg-rpart') || {}).textContent,
+    foot: (document.querySelector('#rowsBox [data-foot]') || {}).textContent })); return r.rows.length ? r : null; }, 'the rows drawn');
+  check(R && JSON.stringify(R.secs) === '["Lucid"]' && R.rows.every(k => ['SIM-A', 'SIM-B', 'SIM-C', 'SIM-D'].includes(k)) && R.rows.length >= 3, 'the Account page\'s rows for Lucid only, under its own section: ' + JSON.stringify(R && [R.secs, R.rows]));
+  check(R && R.tabs === true && R.controls === 0 && R.foot === '', 'read only: no tab strip, no button, checkbox or dropdown, no foot line');
+  check(R && /\$/.test(R.room || ''), 'with the Room cell the Accounts tab draws (limitState): ' + (R && R.room));
+  const n5 = (await groupMsgs()).length;
+  await p.click('#rowsBox .gr-row.apg-acc', { force: true }); await wait(500);
+  check((await groupMsgs()).length === n5 && await p.evaluate(() => !document.querySelector('#rowsBox .apg-open')), 'a click on a row opens nothing and sends nothing');
+  await p.screenshot({ path: path.join(out, 'lane-account-rows.png') });
   check(errors.filter(e => e.startsWith('pageerror')).length === 0, 'no page error');
 } finally {
   await browser.close();

@@ -3623,6 +3623,15 @@ window.workspace = { get layout() { return layout; }, panels: () => panels.map(p
   leagueGhosts: () => [...LG.overlays.keys()],
   /* 1.37.0: the Multi-Account panel's state (its tab, group, toast), for the smokes */
   /* 1.47.0: a second Multi-Account panel in any element (the smokes; Legion's lanes are mounted the same way) */
+  /* 1.47.0: the Account page's own rows for the accounts filter() passes, read only, in any element (Legion Live's accounts by
+     group; the smokes). The same mount and redraw as the Accounts panel. -> { destroy } or null */
+  accountRows: (el, key, filter) => {
+    if (!AF || !window.AccountsPage || !el || typeof filter !== 'function' || lanePanels.has(key)) return null;
+    const body = document.createElement('div'); el.appendChild(body);
+    const ap = window.AccountsPage.mount({ el, body, head: document.createElement('div') }, { feed: AF, rows: { filter }, watchQuote, quoteOf, quoteSubs, fitPanel, note: (t, w) => note(t, !!w, w ? 8000 : 4000), now: etNowSec });
+    lanePanels.set(key, ap); renderAccountPages();
+    return { destroy: () => { if (lanePanels.get(key) === ap) { lanePanels.delete(key); ap.destroy(); } } };
+  },
   lanePanel: (el, key, opts) => {
     const o = opts || {}, FC = window.FleetCore;
     if (!o.group) return mountLanePanel(el, key, AF, null);                       // the whole panel, as on the grid (the two-mounts proof)
