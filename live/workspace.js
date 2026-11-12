@@ -2794,8 +2794,21 @@ function mountAccountsPage(v) {
   v.accountPage = ap;
   v.destroy = () => { ap.destroy(); delete v.accountPage; };
 }
+/* 1.47.0 (the reuse map, build answers 17 and 18): the Multi-Account panel mounted a second time, outside the grid (a Legion
+   lane is that panel showing one group). The same factory and the same redraw loop as the grid's panel: no copy of the panel.
+   key: its own panel id (its element ids and its kept group pick carry it). -> { panel, destroy } or null. */
+const lanePanels = new Map();
+function mountLanePanel(el, key, feed, opts) {
+  if (!feed || !window.MultiAccount || !el || lanePanels.has(key)) return null;
+  const AC = window.AccountsCore;
+  const ma = window.MultiAccount.mount(el, Object.assign({ feed, panelId: key, note: (t, w) => note(t, !!w, w ? 8000 : 4000),
+    working: () => [...feed.S.orders.values()].filter(o => (AC && typeof AC.isWorking === 'function' ? AC.isWorking(o) : true)) }, opts || {}));
+  lanePanels.set(key, ma);
+  renderAccountPages();
+  return { panel: ma, destroy: () => { if (lanePanels.get(key) === ma) { lanePanels.delete(key); ma.destroy(); } } };
+}
 let accountPageRaf = 0;
-function renderAccountPages() { if (!accountPageRaf && accountPages().length) accountPageRaf = requestAnimationFrame(() => { accountPageRaf = 0; for (const v of accountPages()) v.accountPage.render(); }); }
+function renderAccountPages() { if (!accountPageRaf && (accountPages().length || lanePanels.size)) accountPageRaf = requestAnimationFrame(() => { accountPageRaf = 0; for (const v of accountPages()) v.accountPage.render(); for (const ma of lanePanels.values()) ma.render(); }); }
 setInterval(renderAccountPages, 1000);                   // the clock (Gone's since, a new trading day)
 /* Item 15: a chart trading an account near its limit says so in its header (amber at 70 percent of the room used to the
    closer of the daily loss and the trailing drawdown, red at 90). Every chart here shows the ticket's account. Written only
@@ -3609,6 +3622,8 @@ window.workspace = { get layout() { return layout; }, panels: () => panels.map(p
   fleet: () => (fleetView ? fleetView.state() : null),          // 1.45.0: the Legion tab's state (test/fleet-smoke.mjs)
   leagueGhosts: () => [...LG.overlays.keys()],
   /* 1.37.0: the Multi-Account panel's state (its tab, group, toast), for the smokes */
+  /* 1.47.0: a second Multi-Account panel in any element (the smokes; Legion's lanes are mounted the same way) */
+  lanePanel: (el, key, opts) => mountLanePanel(el, key, AF, opts),
   multi: () => { const v = [...views.values()].find(x => x.panel.type === 'multi' && x.accountPage); return v ? { tab: v.accountPage.state.tab, gid: v.accountPage.state.gid, toast: v.accountPage.state.toast } : null; },
   /* 1.36.0: the Agents strip (read only) and how many times this window read the league */
   agentsStrip: () => { const v = stripViews()[0]; return v ? v.strip.state() : null; },
