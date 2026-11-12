@@ -1141,6 +1141,38 @@ test('answers 25, S2: another group\'s lock covers every trader heard on it (a d
   assert.strictEqual(funded.opts.locked(), F.NOT_KNOWN);
 });
 
+test('answers 33, A28-1: a heard trader the page cannot read makes the lane\'s OWN lock not known too; A28-2: two groups matching a name ignoring case is refused', t => {
+  timers(t);
+  const mounts = [];
+  const lanePanel = (el, key, opts) => { const m = { key, opts, el, destroy() {} }; mounts.push(m); return m; };
+  const P = page(t, { lanePanel });
+  P.fv.showTab(true);
+  P.feed({ type: 'hello', version: '0.6.21' }); P.feed({ type: 'trading', enabled: true }); P.feed(accounts); P.feed(groups);
+  P.feed(evalTrader()); P.feed(fundTrader()); P.replayDone();
+  const funded = mounts.find(m => m.key === 'legion-funded');
+  assert.strictEqual(funded.opts.locked(), '', 'both lanes in Shadow and flat: free');
+  for (const [why, bad] of [['group a string', { group: 'g2' }], ['group id a number', { group: { id: 2 } }], ['account a number', { account: 42 }]]) {
+    P.feed(agent('odd', Object.assign({ mode: 'auto', account: null }, bad)));
+    assert.strictEqual(funded.opts.locked(), F.NOT_KNOWN, why);
+    assert.strictEqual(funded.opts.otherLocked('g1'), F.NOT_KNOWN, why + ': the other lane\'s group too (break B1 at page level)');
+    const sent = [];
+    const AF = { S: { groups: groups.list }, accountGroup: (...x) => { sent.push(x); return true; }, post: m => { sent.push(m); return true; } };
+    const nf = F.laneFeed(AF, funded.opts.locked, 'g2', funded.opts.otherLocked);
+    assert.strictEqual(nf.accountGroup('FUND-A', null), false, why + ': out of the lane refused');
+    assert.strictEqual(nf.post({ type: 'memberBench', account: 'FUND-A', benched: true }), false, why + ': bench refused');
+    assert.deepStrictEqual(sent, [], why + ': 0 sent');
+  }
+  P.feed(agent('odd', { mode: 'shadow', account: null, group: null }));
+  assert.strictEqual(funded.opts.locked(), '', 'readable again: free');
+  // A28-2: two groups list the same name in different case: the account\'s group is not known, so the move is refused
+  const sent = [];
+  const twice = { S: { groups: [{ id: 'g2', members: ['FUND-A'] }, { id: 'g7', members: ['fund-a'] }] }, accountGroup: (...x) => { sent.push(x); return true; } };
+  const nf = F.laneFeed(twice, () => '', 'g2', () => '');
+  assert.strictEqual(nf.accountGroup('FUND-A', null), false);
+  assert.strictEqual(nf.accountGroup('Fund-A', 'g2'), false);
+  assert.deepStrictEqual(sent, []);
+});
+
 test('answers 25, S2, answers 26, R3-4, and answers 28, R4-1 to R4-3: FleetCore.groupLock on its own', () => {
   const tr = (id, gid, more) => Object.assign({ agent: id, mode: 'shadow', owns: false, account: null, group: gid ? { id: gid, name: 'G' } : null }, more || {});
   const gm = { type: 'groups', list: [{ id: 'g1', members: ['ACC-1', 'ACC-2'] }, { id: 'g2', members: ['ACC-3'] }, { id: 'g-odd' }] };
