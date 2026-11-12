@@ -3715,10 +3715,25 @@ both in `AccountStateJson`. No order path file changes.
   that is not in the roster folder or is not served (with the roster's own reason); no roster folder set; **the trader
   in Auto** ("agent <id> is in Auto: the pick changes only while it is not"); **the trader exposed** (a position, a
   working entry or a proposal). The same pick again changes nothing and sends nothing.
-- **Saved** in `agent-<id>-pick.txt` (two lines: a comment, then `pick<TAB><name>`); `null` removes the file. Read at a
-  start. A file that is not one pick line is no pick, and the pages get `pickProblem` on the `agent` message. It stays
-  until it is changed: a restart, the 17:00 reset and the 18:00 roll keep it. ChartBridge keeps the NAME only. A picked
-  file that later leaves the folder stays the pick's name; the runner's own strict reader then refuses to start.
+- **Saved** in `agent-<id>-pick.txt` (two lines: a comment, then `pick<TAB><name>`, written whole through a temp file).
+  `null` ALWAYS removes the file, also when it could not be read or understood at the start, so a cleared pick never
+  comes back at a restart. Read at a start; a file that cannot be opened is tried four times, 250 ms apart, and then the
+  trader starts with NO pick and the pages get `pickProblem` (never the old pick). A file that is not one pick line is no
+  pick, with `pickProblem`. It stays until it is changed: a restart, the 17:00 reset and the 18:00 roll keep it.
+  ChartBridge keeps the NAME; the roster file's bytes are checked when Auto is set and at a restore (below).
+- **The roster file is read outside the trader's placement gate, with a 2 s limit** ("the roster folder did not answer in
+  2 s"), so a file that will not open never holds the kill switch, Kill all or a placement.
+- **`GET /roster`** gives each file it serves its `sha256` (of the file's bytes), after `roster`.
+- **Auto is bound to the pick it was armed with.** `agentMode` takes `pick` and `pickSha` (with `mode` `auto` only). A
+  trader WITH a pick goes to Auto only when `pick` names that pick and `pickSha` is the sha256 of its roster file as it is
+  now (what `GET /roster` gave the page); else refused ("Auto must name it and its file's sha256", "the page showed the
+  pick ...", "... changed since the page read the roster"). A trader with NO pick goes to Auto as before (the Agent tab
+  sends neither key), and may not name one. The saved Auto (`agent-<id>-auto.txt`) gains `pick<TAB><name or ->` and
+  `sha<TAB><sha256 or ->`. After a restart Auto comes back only when the pick then is the same name (or still none), was
+  read cleanly, and its file has the same sha256; otherwise the trader stays in Shadow and the pages are told ("Auto was
+  NOT restored after the restart (its pick is ..., and it was armed with ...)", "(its pick file could not be read)", "(the
+  picked file ... cannot be used now ...)", "(the picked file ... changed since it was armed)", "(its saved Auto does not
+  name the pick it was armed with)").
 - **`welcome`** (to the runner) and **`agent`** (to the pages) carry `"pick": "<name>"` only when a file is picked;
   left out: none. A change sends a fresh `welcome`. A trader with no pick is as in 0.6.20 in every message.
 - The agent channel has no `agentPick` message: a trader can never pick for itself.
@@ -3727,7 +3742,8 @@ both in `AccountStateJson`. No order path file changes.
   the figure "The day's profit stop (0.6.19)" reads: after a late start (ChartBridge started after 18:02 ET) the
   realized part is the LARGER of ChartBridge's own figure and NinjaTrader's, where `pnlToday` and `realizedToday` keep
   the smaller. `null` with `profitWhy` when it is not known (no NinjaTrader realized after a late start, no open P&L, or
-  the second after 18:00 before the day start rolls). They follow the eight numbers, before `src`. A runner reads the
+  the second after 18:00 before the day start rolls). They follow the eight numbers, before `src`, in EVERY `accountState`
+  (picked or not): a runner that checks the message's keys in order must know the two (test/fake-agent.mjs does). A runner reads the
   day's start (for a funded account's size limit) and its day profit stop from this side and its loss limits from
   `pnlToday`; with `profitToday` null it does not size.
 

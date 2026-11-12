@@ -79,7 +79,7 @@ export async function connectAgent({ port, id, secret, name, build, silent, host
 // field order. accountStateProblem(m) says what is wrong with one (null when it follows the contract): every field there, the
 // eight numbers each a number of at most 2 decimals or null, src for each number given and why for each one not.
 export const ACCOUNT_STATE_KEYS = ['type', 'account', 'sim', 'kind', 'group', 'groupId', 'groupSide', 'noHedge', 'accountType', 'rules', 'balance', 'pnlToday', 'realizedToday',
-  'unrealized', 'floor', 'roomFloor', 'roomDaily', 'targetLeft', 'src', 'why', 'session', 'at'];
+  'unrealized', 'floor', 'roomFloor', 'roomDaily', 'targetLeft', 'profitToday', 'profitWhy', 'src', 'why', 'session', 'at'];   // 0.6.21: profitToday, profitWhy (every trader)
 export const ACCOUNT_STATE_NUMBERS = ['balance', 'pnlToday', 'realizedToday', 'unrealized', 'floor', 'roomFloor', 'roomDaily', 'targetLeft'];
 export function accountStateProblem(m) {
   if (!m || m.type !== 'accountState') return 'not an accountState';
@@ -95,6 +95,9 @@ export function accountStateProblem(m) {
   if (m.kind === 'personal' && m.rules !== null && rk !== 'floor,dailyLoss') return 'personal rules ' + rk;   // null: never set by Anthony
   if (m.kind === 'none' && m.rules !== null) return 'rules on None';
   for (const [k, v] of Object.entries(m.rules || {})) if (k !== 'drawdownType' && !(typeof v === 'number' && v >= 0)) return 'rules.' + k + ' must be a number (0 for none), never null';
+  /* 0.6.21: the day's profit side, dollars or null; null always with its why, a number never with one */
+  if (m.profitToday !== null && !(typeof m.profitToday === 'number' && isFinite(m.profitToday) && Math.abs(Math.round(m.profitToday * 100) - m.profitToday * 100) < 1e-6)) return 'profitToday is not dollars';
+  if ((m.profitToday === null) !== (typeof m.profitWhy === 'string' && m.profitWhy.length > 0)) return 'profitWhy is said exactly when profitToday is null';
   for (const k of ACCOUNT_STATE_NUMBERS) {
     const v = m[k];
     if (v !== null && !(typeof v === 'number' && isFinite(v) && Math.abs(Math.round(v * 100) - v * 100) < 1e-6)) return k + ' is not dollars';
