@@ -471,3 +471,13 @@ test('round 2, F8 and F9: a seat that does not say it owns nothing is not flat; 
     assert.match(why, re); assert.doesNotMatch(why, /set up from Praetorian/);
   }
 });
+
+test('round 2, item 3: a leftover position of two kinds is its own case, never "no home" (no move offered)', () => {
+  const a = agent({ account: null, mode: 'auto', owns: false, position: null, seats: [{ account: 'PROP-1', owns: false, position: null }, { account: 'MINE-1', owns: false, position: null }] });
+  const [L, P] = bothGates(accounts(), groups, a);
+  for (const g of [L, P]) {
+    assert.equal(g.noHome('demo'), '', 'not "no home"');
+    assert.match(g.traderWhy('demo'), /a leftover position on more than one kind of account: stop and flatten it first/);
+    assert.match(g.check({ type: 'agentAccount', agent: 'demo', account: null, keepMode: 'shadow' }), /a leftover position/, 'None is not offered as a no-home move');
+  }
+});
