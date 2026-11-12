@@ -63,6 +63,31 @@
   `test/pc-updater.test.js`: the allowed git subcommands, the box job's name, useHttpPath read before the one ask, the
   token only after a 404 or 401 and then through the Actions API, one place that asks for it and one that sends it.
 
+## chart 1.50.0 (2026-11-12): the top tabs and the Colosseum (page only, no F5)
+
+Anthony's direction of 2026-11-11 (the loop, amendment 1, section 5): four top tabs, Chart, Legion, Colosseum and
+Praetorian, and the League tab becomes the Colosseum, research on the live market. The map of what each part reuses is
+`docs/COLOSSEUM_PRAETORIAN_reuse_map.md`. Praetorian (the Agent and Bot tabs as one, for the personal account) comes in
+its own release; until then the Agent and Bot buttons stay in the top bar after the row, unchanged.
+
+- **The top tabs** (`live/index.html`, `live/workspace.js`, `live/workspace.css`): each tab's own button, with its own
+  listener and its own rule for when it is offered, moved into one row in Anthony's order: Chart, Legion, Colosseum.
+  Chart is new and small: it is pressed while no tab covers the grid (it reads the tabs' own body classes, so a tab
+  opened or closed any way moves it) and a click closes whichever tab is open. The row shows only while another tab
+  is offered (alone, Chart would take the top bar's room from the status line and its clock warning at 1366 px). The
+  chosen look's pills, the open one in gold, and the Agent and Bot buttons at the same tighter padding. Nothing animates.
+- **The Colosseum** (`live/league.js`, `live/league.css`): the League tab, renamed, with everything it showed (the
+  shadow league's chart and marks, the seats' day, the spend, the week and month table, the decision log, a past day).
+  Its name in the title font, gold, with what the tab is in one line: "Nothing here sends an order or changes a
+  trader's mode."
+- **The watch** (new, small): ChartBridge's own traders that are in Shadow now (`FleetCore.traders`, read only), each
+  with its build, what it is doing and what it is on. Which bots the loop is watching, and their score against the
+  bar, is not built yet (the loop's step 3), and the box says so; nothing is shown in its place. A trader in Auto or
+  Copilot is not listed, and one whose mode is not known is not guessed at.
+- **Nothing on the Colosseum can send.** The view is handed `{ listen }` and nothing else (frozen): no post, no send,
+  no sendOrder. A test checks the object's keys and that `league.js` calls no post; the smoke checks nothing was sent.
+- **Old links:** `?tab=league` (and `&day=`, The Desk's Agent Stats links) opens the Colosseum on that day; the address
+  then reads `?tab=colosseum`. The hotkey note names the Colosseum tab.
 ## chart 1.49.0 (2026-11-12): Legion Live, assembled from the page's own parts (page only, no F5)
 
 In plain words: Legion's Live page shows the day: four numbers on top, one chart with each lane's fills on it, each lane's

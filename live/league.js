@@ -32,6 +32,12 @@
  * per day, so it is never shown for a past day; a day with no record says so ("not enough data"), never a guess. A past day is
  * never handed to the faint marks or the Agents strip (liveDay()).
  *
+ * The Colosseum (chart 1.50.0; Anthony 2026-11-11, the loop amendment 1 section 5: "research on the live market"): this tab, renamed
+ * and widened. It keeps all of the above and gains the watch: the bots that shadow the live market because the loop wants more
+ * data on them (the loop's station 5). Which bots the loop watches is not built yet (the loop's step 3), so the box shows what
+ * the page already knows, ChartBridge's own traders that are in Shadow now, said as that, and "not built yet" for the rest.
+ * Its connection (o.watch) has one key, listen: nothing on this tab can send a message to ChartBridge, by how it is built.
+ *
  * Two parts, as workspace.js: LeagueCore (pure: Node tests, test/league.test.js) and, in a browser, LeagueOverlay (the marks
  * over a chart) and LeagueView (the tab).
  */
@@ -254,6 +260,23 @@ function chartReach(bars, date) {
   return { reach: i < bars.length && bars[i].t < end ? 'in' : 'missing', first };
 }
 
+/**
+ * The Colosseum's watch box (1.50.0): the traders in Shadow now, from the rows FleetCore.traders makes of ChartBridge's own
+ * `agent` messages (passed in, so this stays pure). -> [{ id, name, build, status, place, trades }]. Only mode 'shadow': a
+ * trader in Auto or Copilot is trading or asking, not being watched, and one whose mode is not known is not guessed at.
+ */
+const KIND_WORDS = { prop: 'on a prop account', propsim: 'on prop and Sim accounts', personal: 'on your personal account', sim: 'on Sim accounts', unlisted: 'on an account NinjaTrader does not list now', mixed: 'on your personal and prop accounts', none: 'on None: no account' };
+function watchRows(traders) {
+  const out = [];
+  for (const t of Array.isArray(traders) ? traders : []) {
+    if (!t || t.mode !== 'shadow' || typeof t.id !== 'string') continue;
+    out.push({ id: str(t.id, 64), name: str(t.name, 40) || str(t.id, 40), build: str(t.build, 40), status: str(t.status, 160),
+      place: KIND_WORDS[t.kind] || 'on an account the page cannot tell yet', trades: isNum(t.trades) ? t.trades : null });
+  }
+  return out;
+}
+const WATCH_LATER = 'Which bots the loop is watching, why, and their score against the bar: not built yet (the loop\'s step 3, the watch of station 5).';
+
 /** The charts whose switch is on, from this browser's copy (never throws). */
 function cleanGhosts(raw) {
   let v = raw;
@@ -263,7 +286,7 @@ function cleanGhosts(raw) {
   return out;
 }
 
-return { SHADOW, SEATS, SEAT, ROOTS, GHOST_KEY, sessionToday, sessionOfBar, checkDay, pastEmpty, emptyText, chartReach, cleanDay, cleanTrade, marksFor, barIndex, decisionRows, seatDays, standingRows, spendText, cleanGhosts };
+return { SHADOW, SEATS, SEAT, ROOTS, GHOST_KEY, watchRows, WATCH_LATER, sessionToday, sessionOfBar, checkDay, pastEmpty, emptyText, chartReach, cleanDay, cleanTrade, marksFor, barIndex, decisionRows, seatDays, standingRows, spendText, cleanGhosts };
 });
 
 /* ======================================================================== the overlay and the view (browser only) */
@@ -354,8 +377,12 @@ function create(o) {
   const S = { shown: false, day: null, raw: null, problem: 'Not read yet.', reach: '', at: 0, timer: 0, chart: null, overlay: null, root: 'NQ', busy: false,
     past: null, dayProblem: '', seq: 0 };   // past: the past session date shown (read only), or null (the live day); dayProblem: a link's bad day, said   // 1.38.1: NQ 1 min (Anthony 2026-10-23), the league trades MNQ
   const q = s => view.querySelector(s);
+  /* the watch (1.50.0): ChartBridge's own messages, read only. W is forgotten when the connection drops */
+  const W = { connected: false, version: '', agents: new Map(), accounts: null };
+  const watchLink = o.watch && typeof o.watch.listen === 'function' ? o.watch : null;
   view.innerHTML =
     '<div class="lg-wrap">' +
+      '<header class="lg-top"><h1 class="lg-word">Colosseum</h1><span class="lg-sub">Research on the live market. Nothing here sends an order or changes a trader\'s mode.</span></header>' +
       '<header class="lg-head">' +
         '<span class="lg-title">Shadow league</span><span class="lg-shadow">' + esc(C.SHADOW) + '</span>' +
         '<span class="lg-legend" aria-label="The seats">' + C.SEATS.map(s => '<span class="lg-key" style="--seat:' + s.color + '"><i aria-hidden="true">' + s.id + '</i>' + s.family + '</span>').join('') + '</span>' +
@@ -366,7 +393,8 @@ function create(o) {
       '<div class="lg-main">' +
         '<section class="lg-chartbox" aria-label="The league\'s chart"><div class="lg-charthead"><span class="lg-cname" data-k="cname" title="The seats trade MNQ: their marks are at their MNQ prices on the NQ candles (the same index)">NQ 1 min (league trades MNQ)</span><span class="lg-fill"></span><span class="lg-cpast" data-k="cpast" hidden></span><span class="lg-cnote">Hollow marks: paper trades only. Circle the fill, diamond the exit, dashed the stop, dotted the target.</span></div>' +
           '<div class="lg-chart" data-k="chart"></div></section>' +
-        '<aside class="lg-side" aria-label="The seats today">' +
+        '<aside class="lg-side" aria-label="The seats today and the watch">' +
+          '<section class="lg-watch" aria-label="The watch"><div class="lg-loghead">The watch: in Shadow on the agent channel now</div><div data-k="watch"></div><p class="lg-mut lg-later">' + esc(C.WATCH_LATER) + '</p></section>' +
           '<div class="lg-seats" data-k="seats"></div>' +
           '<div class="lg-spend" data-k="spend"></div>' +
           '<table class="lg-table" aria-label="Week and month"><thead><tr><th>Seat</th><th>Week</th><th>Month</th><th>With you</th><th>Decision time</th></tr></thead><tbody data-k="table"></tbody></table>' +
@@ -452,8 +480,30 @@ function create(o) {
     q('.lg-table thead th').textContent = past ? 'Seat (as of now)' : 'Seat';
     setHtml(q('[data-k="table"]'), C.standingRows(d && d.league).map(r => '<tr><td><i class="lg-letter sm" style="--seat:' + r.color + '">' + r.seat + '</i></td><td>' + esc(r.week) + '</td><td>' + esc(r.month) + '</td><td>' + esc(r.agreement) + '</td><td>' + esc(r.latency) + '</td></tr>').join(''));
     const rows = C.decisionRows(d && d.decisions, 80);
+    renderWatch();
     setHtml(q('[data-k="log"]'), rows.length ? rows.map(r => '<li class="lg-row k-' + r.kind + '"><span class="mono">' + esc(r.time) + '</span><i class="lg-letter sm" style="--seat:' + C.SEAT[r.seat].color + '">' + r.seat + '</i><span class="lg-text" title="' + esc(r.text + (r.trigger ? ' (look: ' + r.trigger + ')' : '') + (r.latency !== null ? ', ' + r.latency + ' s' : '')) + '">' + esc(r.text) + '</span>' + (r.latency !== null ? '<span class="lg-mut mono">' + esc(r.latency) + ' s</span>' : '') + '</li>').join('') : (past ? '<li class="lg-mut">No decision that day.</li>' : '<li class="lg-mut">No decision yet today.</li>'));
   }
+  function renderWatch() {
+    const el = q('[data-k="watch"]');
+    if (!watchLink) { setHtml(el, '<p class="lg-mut">ChartBridge\'s list of traders is not on this page (no ChartBridge connection here).</p>'); return; }
+    if (!W.connected) { setHtml(el, '<p class="lg-mut">ChartBridge is not connected: its traders are not known now.</p>'); return; }
+    if (!window.FleetCore || typeof window.FleetCore.traders !== 'function') { setHtml(el, '<p class="lg-mut">The page\'s trader list (fleet.js) is not served here.</p>'); return; }
+    const rows = C.watchRows(window.FleetCore.traders([...W.agents.values()], W.accounts, W.version));
+    setHtml(el, rows.length ? '<ul class="lg-wlist">' + rows.map(r => '<li class="lg-wrow" data-id="' + esc(r.id) + '"><div class="lg-sname">' + esc(r.name) + (r.build ? ' <span class="lg-mut">' + esc(r.build) + '</span>' : '') + '</div>' +
+      '<div class="lg-mut">' + esc(r.status) + ' · ' + esc(r.place) + (r.trades !== null ? ' · ' + r.trades + ' trades today' : '') + '</div></li>').join('') + '</ul>'
+      : '<p class="lg-mut">No trader on the agent channel is in Shadow now.</p>');
+  }
+  function onWatch(m) {
+    switch (m && m.type) {
+      case 'hello': W.connected = true; W.version = typeof m.version === 'string' ? m.version : ''; break;
+      case 'accounts': W.accounts = m; break;
+      case 'agent': if (typeof m.agent === 'string') W.agents.set(m.agent, m); break;
+      default: return;
+    }
+    if (S.shown) renderWatch();
+  }
+  function watchLost() { W.connected = false; W.version = ''; W.agents.clear(); W.accounts = null; if (S.shown) renderWatch(); }
+  const unwatch = watchLink ? watchLink.listen({ message: onWatch, closed: watchLost }) : () => {};
   function showTab(on) {
     on = !!on;
     if (on === S.shown) return;
@@ -489,11 +539,12 @@ function create(o) {
     showTab, openDay, shown: () => S.shown, poll, offered: () => S.offered,
     /* read only, for the tests and the console */
     state: () => ({ shown: S.shown, past: S.past, dayProblem: S.dayProblem, empty: !!(S.past && S.day && C.pastEmpty(S.day)), problem: S.problem, reach: S.reach, date: S.day ? S.day.date : '', trades: S.day ? S.day.trades.length : 0, open: S.day ? S.day.open.length : 0,
-      decisions: S.day ? S.day.decisions.length : 0, chart: !!S.chart, marks: S.day ? C.marksFor(S.day, S.root).marks.length : 0 }),
+      decisions: S.day ? S.day.decisions.length : 0, chart: !!S.chart, marks: S.day ? C.marksFor(S.day, S.root).marks.length : 0,
+      watch: { linked: !!watchLink, connected: W.connected, traders: W.agents.size, rows: window.FleetCore && typeof window.FleetCore.traders === 'function' ? C.watchRows(window.FleetCore.traders([...W.agents.values()], W.accounts, W.version)).map(r => r.id) : [] } }),
     day: () => S.day,
     /* the live day only (null while a past day is shown): what the faint marks and the Agents strip may use */
     liveDay: () => (S.past ? null : S.day),
-    destroy() { clearTimeout(S.timer); clearTimeout(S.reachTimer); clearInterval(probeTimer); unmountChart(); },
+    destroy() { clearTimeout(S.timer); clearTimeout(S.reachTimer); clearInterval(probeTimer); unmountChart(); try { unwatch(); } catch (e) { /* gone */ } },
   };
 }
 
