@@ -1,5 +1,5 @@
 'use strict';
-// Chart 1.47.0 (Anthony 2026-11-11, the loop amendment 1 section 5): the top tabs (Chart, Legion, Colosseum) and the
+// Chart 1.50.0 (Anthony 2026-11-11, the loop amendment 1 section 5): the top tabs (Chart, Legion, Colosseum) and the
 // Colosseum, the League tab renamed and widened with the watch (ChartBridge's traders in Shadow, read only). Made-up
 // traders and SIM-A style accounts only. The browser half is test/league-smoke.mjs.
 const test = require('node:test');

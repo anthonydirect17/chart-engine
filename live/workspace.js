@@ -1452,7 +1452,7 @@ const busy = () => !!pop || $('wsDialog').open || !!document.querySelector('.ws-
    proposal it would answer, the Agent tab and the Bot tab (as before this release), and is off under Legion and League.
    Not clearly one or the other, so off under a tab until Anthony rules (the careful side): B/E, Merge, and a strategy's key.
    With no tab open nothing here changes anything. ONE place: both hotkey handlers below go through underTab. */
-/* 1.47.0: the League tab is the Colosseum (its name in the note) */
+/* 1.50.0: the League tab is the Colosseum (its name in the note) */
 const COVERING_TABS = { 'fl-on': 'Legion', 'ag-on': 'Agent', 'bt-on': 'Bot', 'lg-on': 'Colosseum' };
 const coveringTab = () => { for (const c of Object.keys(COVERING_TABS)) if (document.body.classList.contains(c)) return COVERING_TABS[c]; return ''; };
 const LIVE_UNDER_TAB = new Set(['close', 'flattenAll', 'reject']);
@@ -3663,7 +3663,7 @@ function startAgent() {
    the week and month, the decision log and the API spend, read from The Desk's GET /api/chart-league. It hides the grid while
    it is open, as the Bot and Agent views do (?tab=league keeps it on a reload). Nothing in it sends an order. */
 let leagueView = null;
-/* 1.47.0 (the Colosseum's watch box): what ChartBridge says of its traders, to read and nothing else. The object has one key,
+/* 1.50.0 (the Colosseum's watch box): what ChartBridge says of its traders, to read and nothing else. The object has one key,
    listen: no post, no send, no sendOrder, so nothing on the Colosseum can send a message (test/colosseum.test.js proves the
    object's keys and that the view never calls a post it is handed). With no feed (accounts.js not served) it is null and the
    box says ChartBridge's list is not on this page. */
@@ -3677,7 +3677,7 @@ function startLeague() {
     onTab: on => {
       document.body.classList.toggle('lg-on', on);
       if (on) { closePops(); restoreMax(); if (botDesk && botDesk.shown()) botDesk.showTab(false); if (agentDesk && agentDesk.shown()) agentDesk.showTab(false); if (fleetView && fleetView.shown()) fleetView.showTab(false); }
-      tabUrl(on ? 'colosseum' : '');                       // 1.47.0: the Colosseum's own word (?tab=league still opens it)
+      tabUrl(on ? 'colosseum' : '');                       // 1.50.0: the Colosseum's own word (?tab=league still opens it)
       placeTabBtn();                                        // the Bot button in the top bar meanwhile (one click to the Bot)
       if (!on) { if (leagueView.liveDay()) LG.day = leagueView.liveDay(); if (!LG.busy) leaguePoll(); }   // never a past day; the faint marks read on by themselves (a read under way schedules the next itself)
     } });
@@ -3704,7 +3704,7 @@ function startFleet() {
       placeTabBtn();                                        // the Bot button in the top bar meanwhile (one click to the Bot)
     } });
 }
-/* 1.47.0 (the top tabs: Chart, Legion, Colosseum, Praetorian): Chart is pressed while no tab covers the grid, and a click on it
+/* 1.50.0 (the top tabs: Chart, Legion, Colosseum, Praetorian): Chart is pressed while no tab covers the grid, and a click on it
    closes whichever tab is open (the same calls a layout tab makes). It reads the tabs' own body classes, so a tab that opens or
    closes by any way (its button, a link, the Agents strip, a layout) moves it. */
 const TAB_CLASSES = ['bt-on', 'ag-on', 'lg-on', 'fl-on'];
@@ -3779,7 +3779,7 @@ const start = () => {
   if (botDesk && new URLSearchParams(location.search).get('tab') === 'bot') botDesk.showTab(true);
   if (agentDesk && new URLSearchParams(location.search).get('tab') === 'agent') agentDesk.showTab(true);
   if (fleetView && new URLSearchParams(location.search).get('tab') === 'legion') fleetView.showTab(true);   // 1.45.0
-  if (leagueView && ['league', 'colosseum'].includes(new URLSearchParams(location.search).get('tab'))) leagueView.openDay(new URLSearchParams(location.search).get('day'));   // a day checked first: a past one read only; 1.47.0: the old ?tab=league lands on the Colosseum
+  if (leagueView && ['league', 'colosseum'].includes(new URLSearchParams(location.search).get('tab'))) leagueView.openDay(new URLSearchParams(location.search).get('day'));   // a day checked first: a past one read only; 1.50.0: the old ?tab=league lands on the Colosseum
   syncLeagueGhosts(); syncChartTab();
 };
 /* A window that opens (or reloads) with the ticket in its layout takes it when no other window has it (Anthony

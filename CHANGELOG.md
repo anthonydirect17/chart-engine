@@ -63,7 +63,7 @@
   `test/pc-updater.test.js`: the allowed git subcommands, the box job's name, useHttpPath read before the one ask, the
   token only after a 404 or 401 and then through the Actions API, one place that asks for it and one that sends it.
 
-## chart 1.47.0 (2026-11-12): the top tabs and the Colosseum (page only, no F5)
+## chart 1.50.0 (2026-11-12): the top tabs and the Colosseum (page only, no F5)
 
 Anthony's direction of 2026-11-11 (the loop, amendment 1, section 5): four top tabs, Chart, Legion, Colosseum and
 Praetorian, and the League tab becomes the Colosseum, research on the live market. The map of what each part reuses is

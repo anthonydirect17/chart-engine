@@ -32,7 +32,7 @@
  * per day, so it is never shown for a past day; a day with no record says so ("not enough data"), never a guess. A past day is
  * never handed to the faint marks or the Agents strip (liveDay()).
  *
- * The Colosseum (chart 1.47.0; Anthony 2026-11-11, the loop amendment 1 section 5: "research on the live market"): this tab, renamed
+ * The Colosseum (chart 1.50.0; Anthony 2026-11-11, the loop amendment 1 section 5: "research on the live market"): this tab, renamed
  * and widened. It keeps all of the above and gains the watch: the bots that shadow the live market because the loop wants more
  * data on them (the loop's station 5). Which bots the loop watches is not built yet (the loop's step 3), so the box shows what
  * the page already knows, ChartBridge's own traders that are in Shadow now, said as that, and "not built yet" for the rest.
@@ -261,7 +261,7 @@ function chartReach(bars, date) {
 }
 
 /**
- * The Colosseum's watch box (1.47.0): the traders in Shadow now, from the rows FleetCore.traders makes of ChartBridge's own
+ * The Colosseum's watch box (1.50.0): the traders in Shadow now, from the rows FleetCore.traders makes of ChartBridge's own
  * `agent` messages (passed in, so this stays pure). -> [{ id, name, build, status, place, trades }]. Only mode 'shadow': a
  * trader in Auto or Copilot is trading or asking, not being watched, and one whose mode is not known is not guessed at.
  */
@@ -368,7 +368,7 @@ function create(o) {
   const S = { shown: false, day: null, raw: null, problem: 'Not read yet.', reach: '', at: 0, timer: 0, chart: null, overlay: null, root: 'NQ', busy: false,
     past: null, dayProblem: '', seq: 0 };   // past: the past session date shown (read only), or null (the live day); dayProblem: a link's bad day, said   // 1.38.1: NQ 1 min (Anthony 2026-10-23), the league trades MNQ
   const q = s => view.querySelector(s);
-  /* the watch (1.47.0): ChartBridge's own messages, read only. W is forgotten when the connection drops */
+  /* the watch (1.50.0): ChartBridge's own messages, read only. W is forgotten when the connection drops */
   const W = { connected: false, version: '', agents: new Map(), accounts: null };
   const watchLink = o.watch && typeof o.watch.listen === 'function' ? o.watch : null;
   view.innerHTML =

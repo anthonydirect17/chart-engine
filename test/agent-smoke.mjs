@@ -166,7 +166,7 @@ try {
      not connected), so the alert is never hidden */
   check(await page.isVisible('#wsAgentTab') && (!(await page.isVisible('#wsBotTab')) || await page.$eval('#wsBotTab', b => b.classList.contains('bt-alert'))),
     'the Agent tab button is in the top bar (the Bot tab is a panel now; its button is there only with its red alert)');
-  check(await page.evaluate(() => { const a = document.getElementById('wsAgentTab'); return a.previousElementSibling === document.getElementById('wsTopTabs') && a.nextElementSibling === document.getElementById('wsTabSlot'); }), '1.47.0: the Agent button right after the top tabs (Chart, Legion, Colosseum), the Bot\'s slot after it');
+  check(await page.evaluate(() => { const a = document.getElementById('wsAgentTab'); return a.previousElementSibling === document.getElementById('wsTopTabs') && a.nextElementSibling === document.getElementById('wsTabSlot'); }), '1.50.0: the Agent button right after the top tabs (Chart, Legion, Colosseum), the Bot\'s slot after it');
   await control('agent-connect', { agent: 'demo', name: 'Demo Agent', build: 'sample-build-1' });
   await control('agent-connect', { agent: 'demotwo', name: 'Second Demo Agent', build: 'sample-build-7' });
   await page.click('#wsAgentTab');
