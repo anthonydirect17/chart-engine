@@ -95,6 +95,8 @@ lock, all caught), `npm run smoke:multi-account` (51), the accounts smoke (106) 
   with a group and a lock (the whole-feed mount is the two-mounts proof's alone); the panel shows the feed it holds (a test
   checks it is the narrow one by identity); the rows-only mount gets a feed that reads and sends nothing; the ChartBridge gap
   is on the backlog beside N12.
+- **Answers 25, N-b (K16):** a unit test holds that the Account page's rows-only feed passes only the reading functions
+  F8 names and answers false for every other one without calling the page's feed (`test/readonly-feed.test.js`).
 
 ## chart 1.46.0 (2026-11-12): Legion: the two lanes, the pick and the one Armed switch (page only, no F5)
 
