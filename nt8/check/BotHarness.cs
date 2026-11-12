@@ -736,9 +736,11 @@ public static class BotHarness
             File.WriteAllText(Path.Combine(rf, "notes.txt"), "not json, not served");
             File.WriteAllText(Path.Combine(rf, "sub", "deep.json"), ro);
             body = Get(port, "/roster", null, null, out s);
-            Check(s == 200 && body.StartsWith("{\"files\":[{\"name\":\"alpha.json\",\"ok\":true,\"roster\":" + ro + "}") && body.EndsWith("],\"left\":0}") && ChartBridgeBot.JsonValid(body),
+            // 0.6.21 (the review of 93, FIX 2): each served file carries its sha256 after the roster, the one a page names when it arms
+            Func<string, string> shaOf = t => { using (System.Security.Cryptography.SHA256 h = System.Security.Cryptography.SHA256.Create()) return string.Concat(h.ComputeHash(File.ReadAllBytes(Path.Combine(rf, t))).Select(x => x.ToString("x2"))); };
+            Check(s == 200 && body.StartsWith("{\"files\":[{\"name\":\"alpha.json\",\"ok\":true,\"roster\":" + ro + ",\"sha256\":\"" + shaOf("alpha.json") + "\"}") && body.EndsWith("],\"left\":0}") && ChartBridgeBot.JsonValid(body),
                   "/roster: a good file is served as it is, in name order, the answer valid JSON: " + body.Substring(0, Math.Min(200, body.Length)));
-            Check(body.Contains("{\"name\":\"morning.json\",\"ok\":true,\"roster\":" + lu + "}"), "/roster: a lineup file too, its byte order mark and trailing line break taken off");
+            Check(body.Contains("{\"name\":\"morning.json\",\"ok\":true,\"roster\":" + lu + ",\"sha256\":\"" + shaOf("morning.json") + "\"}"), "/roster: a lineup file too, its byte order mark and trailing line break taken off (its sha256 of the file as it is on disk)");
             Check(body.Contains("{\"name\":\"broken.json\",\"ok\":false,\"why\":\"not valid JSON\"}") && body.Contains("{\"name\":\"other.json\",\"ok\":false,\"why\":\"not a roster file") &&
                   body.Contains("{\"name\":\"list.json\",\"ok\":false,\"why\":\"not a roster file") && body.Contains("{\"name\":\"big.json\",\"ok\":false,\"why\":\"over 256 KB\"}") &&
                   body.Contains("{\"name\":\"bad name.json\",\"ok\":false,\"why\":\"not a plain name"),

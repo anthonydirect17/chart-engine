@@ -27,6 +27,7 @@ const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta n
 <button type="button" class="ws-btn fl-tabbtn" id="wsFleetTab" aria-pressed="false" hidden>Legion</button></div>
 <section class="fl-view fl-in-ws" id="flView" aria-label="Legion tab"></section>
 <script src="${pathToFileURL(path.join(root, 'live', 'order-ticket.js'))}"></script>
+<script src="${pathToFileURL(path.join(root, 'live', 'agent-core.js'))}"></script>
 <script src="${pathToFileURL(path.join(root, 'live', 'fleet.js'))}"></script>
 <script>
   window.sent = []; window.subs = []; window.asked = []; window.rosterAnswer = { status: 404 };
@@ -40,9 +41,9 @@ fs.writeFileSync(file, html);
 
 const accounts = { type: 'accounts', personalNamed: true, list: [
   { name: 'SAMPLE-MINE', connection: 'connected', personal: true, prop: false, pnlToday: 40, positions: [] },
-  { name: 'SAMPLE-EVAL-1', connection: 'connected', prop: true, group: 'g1', pnlToday: 310, roomFloor: 3140, targetLeft: 1860, rules: { target: 3000, consistency: 40 }, positions: [{ root: 'MNQ', qty: 4 }] },
-  { name: 'SAMPLE-EVAL-2', connection: 'connected', prop: true, group: 'g1', pnlToday: 1200, roomFloor: 2380, targetLeft: 520, rules: { target: 3000, consistency: 40 }, positions: [] },
-  { name: 'SAMPLE-FUNDED-1', connection: 'connected', prop: true, group: 'g2', pnlToday: -155.5, roomFloor: 2620, targetLeft: null, rules: { target: null, consistency: null }, positions: [{ root: 'MNQ', qty: 2 }] },
+  { name: 'SAMPLE-EVAL-1', connection: 'connected', prop: true, tradable: true, group: 'g1', pnlToday: 310, roomFloor: 3140, targetLeft: 1860, rules: { target: 3000, consistency: 40 }, positions: [{ root: 'MNQ', qty: 4 }] },
+  { name: 'SAMPLE-EVAL-2', connection: 'connected', prop: true, tradable: true, group: 'g1', pnlToday: 1200, roomFloor: 2380, targetLeft: 520, rules: { target: 3000, consistency: 40 }, positions: [] },
+  { name: 'SAMPLE-FUNDED-1', connection: 'connected', prop: true, tradable: true, group: 'g2', pnlToday: -155.5, roomFloor: 2620, targetLeft: null, rules: { target: null, consistency: null }, positions: [{ root: 'MNQ', qty: 2 }] },
   { name: 'SAMPLE-NEW-1', connection: 'connected', prop: true, group: null, pnlToday: 0, rules: null, positions: [] }] };
 const groups = { type: 'groups', list: [{ id: 'g1', name: 'Sample evals', accountType: 'eval' }, { id: 'g2', name: 'Sample funded', accountType: 'funded' }] };
 const agent = (id, more) => Object.assign({ type: 'agent', agent: id, name: id, build: 'sample build', enabled: true, connected: true, mode: 'auto', account: 'SAMPLE-EVAL-1',
@@ -57,7 +58,7 @@ const scored = (ppd, above) => ({ plan: { size: '50K', dll: true },
 const botFile = (bot, live, ppd, above) => Object.assign({ format: 'specrunner.roster/1', bot, spec: { file: bot + '.json', sha256: 'a'.repeat(64) }, runs_live: live, why_not: live ? null : 'a level trigger: the tape is proved whole only from its own first trade',
   record: { run_id: 'sample-run-7', family: 'sample', try: 3, sessions: 240, trades: 198, instrument: 'MNQ', verdict: 'sample verdict: not enough to call' } }, scored(ppd, above));
 const rosterBody = { left: 0, files: [
-  { name: 'sample-alpha.json', ok: true, roster: botFile('sample-alpha', true, 0.62, true) },
+  { name: 'sample-alpha.json', ok: true, roster: botFile('sample-alpha', true, 0.62, true), sha256: 'a'.repeat(64) },
   { name: 'sample-beta.json', ok: true, roster: botFile('sample-beta', false, 0.1, false) },
   { name: 'sample-pair.json', ok: true, roster: Object.assign({ format: 'specrunner.lineup/1', lineup: 'sample-pair', runs_live: false, joined: { sessions: 230, trades: 300, skipped: 12 },
       bots: ['sample-alpha', 'sample-beta'].map((b, i) => Object.assign({ taken: 150, skipped: 6, sessions_left_out: i * 10 }, (({ bot, spec, runs_live, why_not, record }) => ({ bot, spec, runs_live, why_not, record }))(botFile(b, i === 0, 0, false)))) }, scored(0.44, true)) },
@@ -141,6 +142,7 @@ try {
   await feed(agent('germanicus', { rules: { entryFrom: '09:40', entryUntil: '15:00', flatAt: '15:55', marketEntry: true, noTarget: true }, dayStop: 900, owns: true }));
   await feed(agent('manrae', { account: 'SAMPLE-MINE', mode: 'copilot' }));
   await feed(agent('resting', { account: 'SAMPLE-EVAL-2', standDown: "the day's profit stop is reached on SAMPLE-EVAL-2 ($1200, 40% of the profit target (the consistency rule); the day is at $1200, realized plus open): flat, and no new entries for agent resting until 18:00 ET" }));
+  await feed({ type: 'agentStandDowns', list: [] });   // ChartBridge's end of the sign-in replay (answers 25, S1)
 
   check(!(await text('.fl-said')).includes('Sign in') && (await text('.fl-said')).includes('Kill all stops every trader on a prop account and closes its position there whole'), 'signed in: the reason it was not offered is gone, and the line says what Kill all touches');
   check((await text('.fl-autoline')) === 'In Auto on prop accounts: germanicus', 'the head line names the one trader in Auto on a prop account: ' + await text('.fl-autoline'));
@@ -309,8 +311,12 @@ try {
   const armAsking = () => page.evaluate(() => window.fleet.state().arm.asking);
   await page.evaluate(b => { window.rosterAnswer = { status: 200, body: b }; }, rosterBody);
   await feed({ type: 'hello', version: '0.6.21' }); await feed({ type: 'trading', enabled: true }); await feed(accounts); await feed(groups);
-  await feed(lane1()); await feed(lane2());
+  await feed(lane1()); await feed(lane2()); await feed({ type: 'agentStandDowns', list: [] });   // ChartBridge's end of the sign-in replay (answers 25, S1)
   await page.waitForFunction(() => window.fleet.state().roster.state === 'ok' && window.fleet.state().lanes[0].armable === true);
+  // the review of 94, FIX 2: a trader in Auto on a prop account outside the lanes (germanicus, from above) is named at the switch
+  check((await text('[data-do="arm"]')) === 'Armed: PARTLY' && /Not a lane, so not armed from here: germanicus on a prop account; resting on a prop account in Auto/.test(await text('.fl-armsaid')), 'a trader in Auto outside the lanes: Armed reads PARTLY and names it: ' + await text('.fl-armsaid'));
+  await feed(agent('germanicus', { mode: 'shadow' }));
+  await feed(agent('resting', { mode: 'shadow', account: 'SAMPLE-EVAL-2' }));   // a stood-down trader in Auto counts too (the re-review of 94, R3)
   const laneText = await page.evaluate(() => [...document.querySelectorAll('.fl-lane')].map(e => e.innerText.replace(/\s+/g, ' ')));
   check(laneText.length === 2 && /^Eval lane legion1, group Sample evals SHADOW READY/i.test(laneText[0]) && laneText[0].includes('SAMPLE-EVAL-1') && laneText[0].includes('SAMPLE-EVAL-2'), 'the eval lane: its trader, its group, its mode, its accounts, Ready: ' + laneText[0]);
   check(/^Funded lane legion2, group Sample funded SHADOW NOT READY/i.test(laneText[1]) && laneText[1].includes('No bot is picked for it'), 'the funded lane: not ready, and why: ' + laneText[1]);
@@ -357,7 +363,7 @@ try {
   await feed(lane1({ pnlToday: 7 })); await feed(Object.assign({}, accounts, { tickle: 6 }));
   await page.mouse.up();
   let d2 = await sentD2();
-  check(d2.length === 1 && d2[0].type === 'agentMode' && d2[0].agent === 'legion1' && d2[0].mode === 'auto' && Object.keys(d2[0]).sort().join() === 'agent,cid,mode,type', 'a press on Yes, two messages, a release: exactly one message, Auto for the one ready lane: ' + JSON.stringify(d2));
+  check(d2.length === 1 && d2[0].type === 'agentMode' && d2[0].agent === 'legion1' && d2[0].mode === 'auto' && Object.keys(d2[0]).sort().join() === 'agent,cid,mode,pick,pickSha,type' && d2[0].pick === 'sample-alpha.json' && d2[0].pickSha === 'a'.repeat(64), 'a press on Yes, two messages, a release: exactly one message, Auto for the one ready lane: ' + JSON.stringify(d2));
   check((await text('[data-do="arm"]')) === 'Armed: off', 'the switch does not move by itself: it waits for ChartBridge');
   await feed(lane1({ mode: 'auto' }));
   const onLook = await page.evaluate(() => { const b = document.querySelector('[data-do="arm"]'); return { text: b.textContent, checked: b.getAttribute('aria-checked'), same: b === window.armNode, colour: getComputedStyle(b).color, sel: document.querySelector('#flPick-eval').disabled }; });
@@ -430,7 +436,24 @@ try {
   await page.waitForFunction(() => window.fleet.state().roster.state === 'ok');
   await feed({ type: 'trading', enabled: true }); await feed(accounts); await feed(groups);
   await feed(agent('germanicus', { rules: { entryFrom: '09:40', entryUntil: '15:00', flatAt: '15:55', marketEntry: true, noTarget: true }, dayStop: 900, owns: true }));
+  await feed({ type: 'agentStandDowns', list: [] });   // ChartBridge's end of the sign-in replay (answers 25, S1)
 
+  // the re-review of 94, R1: Armed never moves when the words beside it grow (the longest PARTLY reason), at four widths
+  for (const width of [1440, 700, 390, 320]) {
+    await page.setViewportSize({ width, height: 844 });
+    await sleep(150);
+    const box = () => page.evaluate(() => { const r = document.querySelector('[data-do="arm"]').getBoundingClientRect(); return [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)]; });
+    const before = await box();
+    await page.evaluate(() => { document.querySelector('[data-k="armsaid"]').textContent = 'Eval lane has a trader not in Shadow: twin (Copilot). '.repeat(7); });
+    const after = await box();
+    await page.evaluate(() => { document.querySelector('[data-k="armsaid"]').textContent = ''; });
+    check(JSON.stringify(before) === JSON.stringify(after), 'Armed stays where it is at ' + width + ' px when the words beside it grow: ' + JSON.stringify(before) + ' and ' + JSON.stringify(after));
+    // answers 25, N-c: the same width whatever it says, so its right edge does not move either
+    const widths = await page.evaluate(() => { const b = document.querySelector('[data-do="arm"]'); const was = b.textContent; const out = [];
+      for (const words of ['Armed: off', 'Armed: ON', 'Armed: PARTLY', 'Armed: not known']) { b.textContent = words; out.push(Math.round(b.getBoundingClientRect().width)); }
+      b.textContent = was; return out; });
+    check(new Set(widths).size === 1, 'Armed keeps one width in every state at ' + width + ' px: ' + widths.join(', '));
+  }
   // phone width: one column, no sideways scroll of the page, the buttons big enough to touch
   await page.setViewportSize({ width: 390, height: 844 });
   const m = await page.evaluate(() => ({ sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth,
