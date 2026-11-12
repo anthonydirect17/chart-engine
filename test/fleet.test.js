@@ -999,7 +999,17 @@ test('the narrow feed: what the panel reads, memberBench and accountGroup, and e
   lock = () => { throw new Error('x'); };
   const g = F.laneFeed(AF, () => { throw new Error('broken'); });
   assert.strictEqual(g.post({ type: 'memberBench', account: 'SIM-A', benched: true }), false, 'a lock that cannot be read refuses');
+  // a lock that answers anything but text (null, a number, an object) is "not known", so both sends are refused
+  for (const odd of [null, undefined, 0, 1, {}, true]) {
+    const h = F.laneFeed(AF, () => odd);
+    assert.strictEqual(h.post({ type: 'memberBench', account: 'SIM-A', benched: true }), false, 'lock ' + String(odd));
+    assert.strictEqual(h.accountGroup('SIM-E', 'g1', '', null, 'c5'), false, 'lock ' + String(odd));
+  }
   assert.strictEqual(posted.length, 3);
+  // the bench move's shape under another type is not a bench move: only memberBench passes
+  for (const type of ['groupDelete', 'accountGroup', 'memberRules', 'order', 'MemberBench', undefined])
+    assert.strictEqual(F.laneMaySend({ type, account: 'SIM-A', benched: true }), false, String(type));
+  assert.strictEqual(F.laneMaySend({ type: 'memberBench', account: 'SIM-A', benched: true }), true);
 });
 
 test('a lane\'s lock: moves are free only while its one trader is in Shadow and holds nothing', () => {
