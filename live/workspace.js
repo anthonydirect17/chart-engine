@@ -3681,8 +3681,10 @@ function startLeague() {
    all for the prop accounts (ChartBridge 0.6.17's message, sent by fleet.js alone, asked first). It hides the grid while it is
    open, as the other views do (?tab=legion keeps it on a reload). Beside the Agent, Bot and League tabs: it replaces none of them yet.
    The tab is handed a connection that can do two things only: listen, and post agentKillAllProp (the review of 92, N5). The
-   feed's send and sendOrder never reach it, so "one message" is true by how it is built, not by reading its source. */
-const legionLink = { listen: part => AF.listen(part), post: m => !!m && m.type === 'agentKillAllProp' && Object.keys(m).every(k => k === 'type' || k === 'cid') && AF.post(m) === true };
+   feed's send and sendOrder never reach it, so "one message" is true by how it is built, not by reading its source. With no
+   feed at all (accounts.js not served: AF is null, as the page has allowed since 1.16.0) the tab gets no connection and the
+   page starts exactly as before (the second look at 92, FIX A). */
+const legionLink = AF ? { listen: part => AF.listen(part), post: m => !!m && m.type === 'agentKillAllProp' && Object.keys(m).every(k => k === 'type' || k === 'cid') && AF.post(m) === true } : null;
 let fleetView = null;
 function startFleet() {
   if (!window.FleetView) return;

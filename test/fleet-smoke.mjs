@@ -6,7 +6,7 @@
 // Then the tab inside the whole workspace against the fake bridge (the button, one view at a time, a reload).
 // The review of 92: a double click anywhere on Kill all sends nothing (STOP 1); a press, a message, a release still counts, on
 // Kill all and on Yes, also under a stream of messages (STOP 2); hostile strings run nothing; a roster tag is never a P&L colour.
-// Screenshots: fleet-roster-shut, fleet-desktop, fleet-ask, fleet-answer, fleet-phone, fleet-empty, fleet-workspace (.png in test/out).
+// Screenshots: fleet-roster-shut, fleet-banner, fleet-desktop, fleet-ask, fleet-answer, fleet-phone, fleet-empty, fleet-workspace (.png in test/out).
 import { chromium } from 'playwright';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
@@ -110,7 +110,7 @@ try {
   // one line a card, the detail behind Details (Anthony 2026-11-11: "detail should be there, but expandable when needed")
   const lines = await page.locator('.fl-card').evaluateAll(els => els.map(e => ({ h: e.getBoundingClientRect().height, text: e.innerText.replace(/\s+/g, ' '), more: e.querySelectorAll('.fl-more').length })));
   check(lines.length === 4 && lines.every(l => l.h <= 46 && l.more === 0), 'shut, each card is one line (' + lines.map(l => Math.round(l.h)).join(', ') + ' px high) with no detail drawn');
-  check(/sample-alpha Bot RUNS LIVE In-sample, not confirmed; try 3 EVAL \+0\.62 ABOVE NO EDGE FUNDED \+0\.10 NOT ABOVE NO EDGE Details/i.test(lines[1].text), 'the line: the name, runs live, in-sample and the try count, each stage\'s profit per $1 with its word against no edge: ' + lines[1].text);
+  check(/sample-alpha Bot RUNS LIVE In-sample, not confirmed; try 3 EVAL \+0\.62 per \$1 ABOVE NO EDGE FUNDED \+0\.10 per \$1 NOT ABOVE NO EDGE Details/i.test(lines[1].text), 'the line: the name, runs live, in-sample and the try count, each stage\'s profit per $1 with its word against no edge: ' + lines[1].text);
   const rosterH = (await page.locator('.fl-roster').boundingBox()).height;
   check(rosterH < 330, 'the whole roster, four cards shut, is ' + Math.round(rosterH) + ' px high');
   await page.screenshot({ path: path.join(SHOTS, 'fleet-roster-shut.png') });
@@ -219,6 +219,8 @@ try {
   const badStyle = await page.evaluate(() => { const e = document.querySelector('.fl-answer'), h = document.querySelector('.fl-said'); return { bad: e.classList.contains('bad'), w: +getComputedStyle(e).fontWeight, size: parseFloat(getComputedStyle(e).fontSize), hint: parseFloat(getComputedStyle(h).fontSize), colour: getComputedStyle(e).color, muted: getComputedStyle(h).color }; });
   check(badStyle.bad && badStyle.w >= 600 && badStyle.size > badStyle.hint && badStyle.colour !== badStyle.muted, 'an answer holding NOT STOPPED is marked: heavier, larger and not the muted colour: ' + JSON.stringify(badStyle));
   await page.screenshot({ path: path.join(SHOTS, 'fleet-answer.png') });
+  await page.click('[data-do="ask"]'); await sleep(ARM); await page.click('[data-do="no"]');
+  check(await page.locator('.fl-answer.bad').count() === 1 && (await text('.fl-answer')).includes('NOT STOPPED'), 'and the NOT STOPPED answer is still there after a new question and Cancel');
 
   // ---- STOP 1: a double click anywhere on Kill all sends nothing, at every width
   for (const width of [1440, 1024, 700, 390]) {
@@ -236,14 +238,42 @@ try {
     check(await sentN() === base && stayed === 10, 'at ' + width + ' px: a double click at 10 points across Kill all sent nothing, and the question stayed up for a real answer (' + stayed + ' of 10)');
   }
   await page.setViewportSize({ width: 1440, height: 900 });
-  // each guard by itself: too soon; then the 8 seconds
+  // the Kill all button, Yes and Cancel keep their place whatever the line under the title says (the second look, PROP A)
+  for (const width of [1440, 1024, 700, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    const box = sel => page.evaluate(q => { const r = document.querySelector(q).getBoundingClientRect(); return [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)].join(); }, sel);
+    const k0 = await box('[data-do="ask"]');
+    await page.click('[data-do="ask"]');
+    const y0 = await box('[data-do="yes"]'), c0 = await box('[data-do="no"]');
+    for (const id of ['mixa', 'mixb', 'mixc']) await feed(agent(id, { account: null, group: { id: 'g9', name: 'Sample both' }, seats: [{ account: 'SAMPLE-MINE' }, { account: 'SAMPLE-EVAL-2' }] }));
+    const long = (await text('.fl-autoline')).length;
+    const y1 = await box('[data-do="yes"]'), c1 = await box('[data-do="no"]');
+    await sleep(ARM); await page.click('[data-do="no"]');
+    const k1 = await box('[data-do="ask"]');
+    check(long > 150 && k0 === k1 && y0 === y1 && c0 === c1, 'at ' + width + ' px: a line of ' + long + ' characters under the title moves neither Kill all (' + k0 + ' / ' + k1 + ') nor Yes nor Cancel');
+    for (const id of ['mixa', 'mixb', 'mixc']) await feed(agent(id, { mode: 'shadow', account: null }));
+  }
+  await page.setViewportSize({ width: 1440, height: 900 });
+  // each guard by itself: too soon; then a person in a hurry
   await page.click('[data-do="ask"]');
   const n0 = await sentN();
   await page.click('[data-do="yes"]');
-  check(await sentN() === n0 && await asking(), 'Yes at once after the question opens: nothing sent, the question still up');
+  check(await sentN() === n0 && await asking() && (await text('.fl-said')) === 'Too soon: read the question, then click Yes.', 'Yes at once after the question opens: nothing sent, the question still up, and the tab says why');
   await sleep(ARM); await page.click('[data-do="no"]');
-  check(!(await asking()) && await sentN() === n0, 'Cancel: the question goes, nothing sent');
-  check(await page.locator('.fl-answer.bad').count() === 1 && (await text('.fl-answer')).includes('NOT STOPPED'), 'and the NOT STOPPED answer is still there after a new question and Cancel');
+  // Yes clicked again and again from the moment the question opens (the browser counts them as one multiple click): it sends
+  // once, soon after 600 ms (the second look, FIX B)
+  for (const gap of [150, 250, 400]) {
+    const before = await sentN();
+    await page.click('[data-do="ask"]');
+    const t0 = Date.now(); let at = 0;
+    const [hx, hy] = await centre('[data-do="yes"]');
+    for (let n = 1; n <= 12 && !at; n++) { await sleep(gap); await page.mouse.click(hx, hy, { clickCount: n + 1 }); if (await sentN() > before) at = Date.now() - t0; }
+    check(await sentN() === before + 1 && at >= 600 && at < 600 + gap + 400, 'Yes clicked every ' + gap + ' ms from the moment the question opens: sent once, ' + at + ' ms after it opened');
+    await feed({ type: 'status', level: 'warn', text: 'Kill all (prop accounts): sample answer' });
+  }
+  const n1 = await sentN();
+  await page.click('[data-do="ask"]'); await sleep(ARM); await page.click('[data-do="no"]');
+  check(!(await asking()) && await sentN() === n1, 'Cancel: the question goes, nothing sent');
   // Yes takes a real click only (Anthony 2026-11-11): the keyboard can open the question and cancel it, never confirm it
   await page.locator('[data-do="ask"]').focus(); await page.keyboard.press('Enter');
   check(await asking() && await page.evaluate(() => document.activeElement.dataset.do === 'no'), 'Enter on Kill all opens the question, the focus on Cancel');
@@ -251,16 +281,16 @@ try {
   await page.keyboard.press('Shift+Tab');
   check(await page.evaluate(() => document.activeElement.dataset.do === 'yes'), 'Shift+Tab reaches Yes');
   await page.keyboard.press('Enter'); await page.keyboard.press('Space'); await page.keyboard.press('Enter');
-  check(await sentN() === n0 && await asking() && (await text('.fl-said')).includes('confirmed by a click on Yes only, not by keyboard'), 'Enter and Space on Yes send nothing, and the tab says Yes is a click only');
+  check(await sentN() === n1 && await asking() && (await text('.fl-said')).includes('confirmed by a click on Yes only, not by keyboard'), 'Enter and Space on Yes send nothing, and the tab says Yes is a click only');
   await page.keyboard.press('Escape');
-  check(!(await asking()) && await sentN() === n0, 'Escape cancels');
+  check(!(await asking()) && await sentN() === n1, 'Escape cancels');
   await page.locator('[data-do="ask"]').focus(); await page.keyboard.press('Enter'); await page.keyboard.press('Enter');
-  check(!(await asking()) && await sentN() === n0, 'Enter on Cancel cancels, at once');
+  check(!(await asking()) && await sentN() === n1, 'Enter on Cancel cancels, at once');
   await page.locator('[data-do="ask"]').focus(); await page.keyboard.press('Enter'); await sleep(ARM);
   await page.evaluate(() => document.querySelector('[data-do="yes"]').click());      // a click made by script, as a key's is
-  check(await sentN() === n0, 'a click on Yes made by script sends nothing');
+  check(await sentN() === n1, 'a click on Yes made by script sends nothing');
   await page.click('[data-do="yes"]');
-  check(await sentN() === n0 + 1, 'and a real click on the same question sends');
+  check(await sentN() === n1 + 1, 'and a real click on the same question sends');
   await feed({ type: 'status', level: 'warn', text: 'Kill all (prop accounts): sample answer' });
   // a refusal is shown too
   await page.click('[data-do="ask"]'); await sleep(ARM); await page.click('[data-do="yes"]');
@@ -371,7 +401,69 @@ try {
     check(await page.evaluate(() => !document.body.classList.contains('fl-on') && !/tab=/.test(location.search) && getComputedStyle(document.querySelector('.ws-grid')).display !== 'none'), 'workspace: a second click closes it and the grid is back');
     check(pe.length === 0, 'workspace: no page errors and no browser dialog: ' + pe.join(' | '));
     await page.screenshot({ path: path.join(SHOTS, 'fleet-workspace.png') });
+
+    /* ---- STOP 3 (the second look at 92): the page's alert banner never covers the tab's head. The fake bridge knows nothing of a
+       personal account, so the page is told one is picked (the accounts message, as it arrives), and every frame it sends is kept */
+    const p2 = await ctx.newPage();
+    const pe2 = [];
+    p2.on('pageerror', e => pe2.push(e.message));
+    await p2.addInitScript(() => {
+      window.__frames = [];
+      const send = WebSocket.prototype.send;
+      WebSocket.prototype.send = function (d) { try { const m = JSON.parse(d); if (m && m.type !== 'auth' && m.type !== 'client' && m.type !== 'subscribe') window.__frames.push(m); } catch (e) { /* not JSON */ } return send.call(this, d); };
+      const d = Object.getOwnPropertyDescriptor(WebSocket.prototype, 'onmessage');
+      Object.defineProperty(WebSocket.prototype, 'onmessage', { configurable: true, get() { return d.get.call(this); }, set(fn) {
+        d.set.call(this, fn && function (ev) {
+          let m; try { m = JSON.parse(ev.data); } catch (e) { return fn.call(this, ev); }
+          if (!m || m.type !== 'accounts') return fn.call(this, ev);
+          m.personalNamed = true;
+          return fn.call(this, new MessageEvent('message', { data: JSON.stringify(m) }));
+        });
+      } });
+    });
+    const control = (what, q) => fetch(`http://127.0.0.1:${PORT}/test/${what}?` + new URLSearchParams(q || {}), { method: 'POST' });
+    for (const width of [1600, 1024, 700]) {
+      await p2.setViewportSize({ width, height: 900 });
+      await p2.goto(`http://localhost:${PORT}/live/?layout=Main&tab=legion`);
+      await p2.waitForSelector('.cb-pin-key', { timeout: 15000 }).then(() => enterPin(p2, TEST_PIN)).catch(() => {});
+      await p2.waitForFunction(() => document.body.classList.contains('fl-on') && document.querySelector('[data-do="ask"]') && !document.querySelector('[data-do="ask"]').hasAttribute('aria-disabled'), null, { timeout: 30000 }).catch(() => {});
+      check(await p2.evaluate(() => !document.querySelector('[data-do="ask"]').hasAttribute('aria-disabled')), 'banner, ' + width + ' px: Kill all is offered (signed in, a personal account picked)');
+      await control('status', { level: 'error', text: 'Sample: NOT FLAT? a made-up error line from ChartBridge' });
+      await control('status', { level: 'warn', text: 'Sample: a second made-up line' });
+      await p2.waitForFunction(() => !document.getElementById('wsAlert').hidden, null, { timeout: 8000 }).catch(() => {});
+      const reach = sel => p2.evaluate(q => { const b = document.querySelector(q), r = b.getBoundingClientRect(); let n = 0; for (let i = 0; i < 15; i++) { const e = document.elementFromPoint(r.left + 1 + (r.width - 2) * i / 14, r.top + r.height / 2); if (e && (e === b || b.contains(e))) n++; } return n; }, sel);
+      const overlap = () => p2.evaluate(() => { const a = document.getElementById('wsAlert').getBoundingClientRect(), h = document.querySelector('.fl-top').getBoundingClientRect(); return !(a.bottom <= h.top || a.top >= h.bottom); });
+      check(await p2.isVisible('#wsAlert') && !(await overlap()) && await reach('[data-do="ask"]') === 15, 'banner, ' + width + ' px: with the alert banner up it does not lie on the head, and 15 of 15 points of Kill all reach it (' + await reach('[data-do="ask"]') + ')');
+      const kb = await p2.locator('[data-do="ask"]').boundingBox();
+      await p2.mouse.click(kb.x + kb.width / 2, kb.y + kb.height / 2);
+      check(await p2.evaluate(() => window.workspace.fleet().asking), 'banner, ' + width + ' px: a click on Kill all opens the question');
+      await control('status', { level: 'error', text: 'Sample: another made-up error, arriving while the question is up' });
+      await sleep(700);
+      check(!(await overlap()) && await reach('[data-do="yes"]') === 15 && await reach('[data-do="no"]') === 15, 'banner, ' + width + ' px: an alert that arrives while the question is up covers neither Yes nor Cancel (' + await reach('[data-do="yes"]') + ', ' + await reach('[data-do="no"]') + ' of 15)');
+      const yb = await p2.locator('[data-do="yes"]').boundingBox();
+      await p2.mouse.click(yb.x + yb.width / 2, yb.y + yb.height / 2);
+      const frames = await p2.evaluate(() => window.__frames.filter(m => m.type === 'agentKillAllProp'));
+      check(frames.length === 1 && Object.keys(frames[0]).sort().join() === 'cid,type', 'banner, ' + width + ' px: Kill all then Yes sends, with the banner up: ' + JSON.stringify(frames));
+      if (width === 1600) await p2.screenshot({ path: path.join(SHOTS, 'fleet-banner.png') });
+      await p2.click('#wsAlertClose').catch(() => {});
+    }
+    check(pe2.length === 0, 'banner: no page errors: ' + pe2.join(' | '));
+    await p2.close();
+
+    /* ---- FIX A: with accounts.js not served the page starts exactly as before (its panels, live), and nothing of Legion stops it */
+    const p3 = await ctx.newPage();
+    const pe3 = [];
+    p3.on('pageerror', e => pe3.push(e.message));
+    await p3.route('**/accounts.js', r => r.fulfill({ status: 404, contentType: 'text/plain', body: 'not here' }));
+    await p3.goto(`http://localhost:${PORT}/live/?layout=Main`);
+    await p3.waitForSelector('.cb-pin-key', { timeout: 15000 }).then(() => enterPin(p3, TEST_PIN)).catch(() => {});
+    await p3.waitForFunction(() => document.getElementById('wsConn').classList.contains('live'), null, { timeout: 30000 }).catch(() => {});
+    const started = await p3.evaluate(() => ({ live: document.getElementById('wsConn').classList.contains('live'), panels: window.workspace ? window.workspace.panels().length : 0, feed: !!window.AccountsPage }));
+    check(started.live && started.panels > 0 && !started.feed && pe3.length === 0, 'with accounts.js not served the workspace starts: live, ' + started.panels + ' panels, no page error: ' + pe3.join(' | '));
+    await p3.close();
+
   } finally { if (bridge) bridge.kill(); await b2.close(); }
 }
+for (const e of errors) console.log('  failed: ' + e);
 console.log(errors.length ? `\n${errors.length} of ${checks} checks FAILED` : `\nall ${checks} checks passed`);
 process.exit(errors.length ? 1 : 0);

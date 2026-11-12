@@ -163,7 +163,7 @@ test('legion: the tab is wired into the page beside the other three, with a conn
   assert.strictEqual((ws.match(/fleetView && fleetView\.shown\(\)\) fleetView\.showTab\(false\);/g) || []).length, 5, 'closed by each other tab, a layout tab and a layout change: one view at a time');
   assert.match(ws, /tabUrl\(on \? 'legion' : ''\);/); assert.match(ws, /\.get\('tab'\) === 'legion'\) fleetView\.showTab\(true\);/);
   // N5: the tab is not handed the feed. Its connection is built here and run: it passes agentKillAllProp with a cid and nothing else
-  const m = /const legionLink = (\{[^\n]*\});\n/.exec(ws);
+  const m = /const legionLink = AF \? (\{[^\n]*\}) : null;\n/.exec(ws);
   assert.ok(m, 'the tab\'s own connection is one line in workspace.js');
   assert.match(ws, /tab: \$\('wsFleetTab'\), v3: legionLink, realClick: OT\.realClick, headers:/, 'and it is what the tab gets, not AF');
   const posted = [], heard = [];
@@ -177,6 +177,8 @@ test('legion: the tab is wired into the page beside the other three, with a conn
   assert.deepStrictEqual(posted, [{ type: 'agentKillAllProp', cid: 'c1' }, { type: 'agentKillAllProp' }]);
   link.listen('part'); assert.deepStrictEqual(heard, ['part']);
   assert.strictEqual(link.post.call({ post: () => true }, { type: 'order' }), false);
+  // with no feed at all (accounts.js not served) the tab gets no connection and nothing is called on a null (the second look, FIX A)
+  assert.strictEqual(new Function('AF', 'return AF ? ' + m[1] + ' : null')(null), null);
   // the tab's own file: no browser dialog, nothing stored, no other connection, no long dashes
   const viewSrc = src.slice(src.indexOf('the tab (browser only)'));
   assert.ok(!/confirm\(|alert\(|prompt\(/.test(src), 'no browser dialog');
@@ -352,18 +354,30 @@ test('the question: Yes is not taken in the first moment, from a double click, w
   assert.strictEqual(view_focus(P), 1, 'the focus goes to Cancel');
   assert.strictEqual(P.view.querySelector('[data-do="no"]').style.minWidth, '157px', 'Cancel takes the room the button had');
   P.T += 100; P.click('yes');
-  assert.deepStrictEqual([P.posts, P.fv.state().asking], [[], true], 'Yes 100 ms after the question opened: no answer');
+  assert.deepStrictEqual([P.posts, P.fv.state().asking], [[], true], 'Yes 100 ms after the question opened: no answer, the question stays');
+  assert.match(P.part('hint').textContent, /^Too soon: read the question, then click Yes\.$/, 'and the tab says why nothing happened');
+  P.click('yes', 2); P.click('no', 2);
+  assert.deepStrictEqual([P.posts, P.fv.state().asking], [[], true], 'the second click of the double click that opened it: on Yes or on Cancel, no answer');
   P.T += 499; P.click('yes');
   assert.deepStrictEqual(P.posts, [], 'and at 599 ms');
-  P.T += 200; P.click('yes', 2);
-  assert.deepStrictEqual([P.posts, P.fv.state().asking], [[], true], 'the second click of a double click, even late: no answer');
-  P.click('no', 2);
-  assert.strictEqual(P.fv.state().asking, true, 'nor does it cancel: the question stays for a real answer');
-  P.click('yes');
-  assert.strictEqual(P.posts.length, 1);
+  P.T += 1; P.click('yes', 3);
+  assert.strictEqual(P.posts.length, 1, 'at 600 ms a real click on Yes counts, whatever its click count (the second look, FIX B)');
   assert.deepStrictEqual([Object.keys(P.posts[0]).sort(), P.posts[0].type, typeof P.posts[0].cid, P.fv.state().asking], [['cid', 'type'], 'agentKillAllProp', 'string', false]);
   P.click('yes'); P.click('yes');
   assert.strictEqual(P.posts.length, 1, 'Yes on the old question sends nothing more');
+  // a person in a hurry: Yes clicked again and again from the moment the question opens, the browser counting each as part of
+  // a multiple click: it sends once, at the first click from 600 ms on
+  for (const gap of [150, 250, 400]) {
+    const before = P.posts.length, t0 = P.T;
+    P.click('ask');
+    let sentAt = null;
+    for (let n = 1; n <= 20 && sentAt === null; n++) { P.T += gap; P.click('yes', n + 1); if (P.posts.length > before) sentAt = P.T - t0; }
+    assert.strictEqual(P.posts.length, before + 1, 'every ' + gap + ' ms: sent once');
+    assert.ok(sentAt >= F.ARM_MS && sentAt < F.ARM_MS + gap, 'every ' + gap + ' ms: at the first click from 600 ms on (' + sentAt + ' ms)');
+    for (let n = 0; n < 5; n++) { P.T += gap; P.click('yes', 9); }
+    assert.strictEqual(P.posts.length, before + 1, 'and the clicks after it send nothing more');
+  }
+  P.posts.length = 1;
   // the 8 seconds are compared at the Yes: with the timer held back (a window in the background, a PC that slept) Yes is too late
   P.click('ask'); P.T += F.CONFIRM_MS + 1; P.click('yes');
   assert.deepStrictEqual([P.posts.length, P.fv.state().asking], [1, false], 'Yes after 8 seconds by the clock: nothing sent, the question gone');
@@ -371,8 +385,8 @@ test('the question: Yes is not taken in the first moment, from a double click, w
   P.click('ask'); assert.strictEqual(P.fv.state().asking, true);
   t.mock.timers.tick(F.CONFIRM_MS + 1);
   assert.deepStrictEqual([P.fv.state().asking, P.part('ask').hidden, P.part('kill').hidden], [false, true, false], 'the question times out by itself');
-  // Cancel
-  P.click('ask'); P.T += 700; P.click('no');
+  // Cancel, whatever its click count once the first moment is over
+  P.click('ask'); P.T += 700; P.click('no', 2);
   assert.deepStrictEqual([P.fv.state().asking, P.posts.length], [false, 1]);
 });
 function view_focus(P) { return P.view.querySelector('[data-do="no"]').focused; }
@@ -410,6 +424,10 @@ test('the question: everything is checked again at the Yes; closing the tab or a
   // a session of every kind of message, hellos and reconnects: nothing is posted by itself (no replay)
   P.ready(); P.click('ask'); P.T += 700; P.click('yes');
   assert.strictEqual(P.posts.length, 1);
+  // while that Kill all is still waiting for its answer: a hello, twice, and every other message post nothing (the second look, D4)
+  assert.strictEqual(P.fv.state().pending, true);
+  P.feed({ type: 'hello', version: '0.6.20' }); P.feed({ type: 'hello', version: '0.6.20' }); P.feed({ type: 'trading', enabled: true }); P.feed(accounts); P.feed(agent('germanicus'));
+  assert.deepStrictEqual([P.posts.length, P.fv.state().pending], [1, true], 'a hello while a Kill all is pending sends nothing');
   for (let i = 0; i < 5; i++) { P.subs.closed(); P.ready(); P.feed({ type: 'status', level: 'info', text: 'anything' }); P.feed({ type: 'reject', cid: 'other', reason: 'x' }); }
   t.mock.timers.tick(120_000);
   assert.strictEqual(P.posts.length, 1, 'Kill all is never sent again by a hello, a reconnect or a timer');
@@ -649,4 +667,31 @@ test('hotkeys under a tab (Anthony 2026-11-11 and 2026-11-12): one place, every 
   assert.match(ws, /actions: \{ buy: underTab\('buy', \(\) => keyAct\('buy'\)\), sell: underTab\('sell', \(\) => keyAct\('sell'\)\), be: underTab\('be', \(\) => keyAct\('be'\)\), close: underTab\('close', \(\) => core\.flattenHere\(\)\), flattenAll: underTab\('flattenAll', \(\) => core\.flattenAll\(\)\) \},/);
   assert.match(ws, /run: id => underTab\(id, \(\) => runExtraKey\(id\)\)\(\),/);
   assert.strictEqual((ws.match(/runExtraKey\(/g) || []).length, 2, 'runExtraKey: its definition and the one guarded call');
+});
+
+test('with no connection handed in (accounts.js not served) the tab is made, opens and says ChartBridge is not connected; nothing throws', t => {
+  timers(t);
+  const P = page(t, { v3: null });
+  assert.strictEqual(P.subs, null);
+  P.fv.showTab(true);
+  assert.match(P.part('roster').innerHTML, /ChartBridge is not connected\./);
+  assert.strictEqual(P.part('kill').attrs['aria-disabled'], 'true');
+  P.click('ask');
+  assert.deepStrictEqual([P.fv.state().asking, P.posts], [false, []]);
+  assert.match(P.part('hint').textContent, /ChartBridge is not connected/);
+  P.fv.hello({ type: 'hello', version: '0.6.20' });          // the page still hands it the ticket's hello
+  assert.strictEqual(P.tab.hidden, false);
+});
+
+test('the head: the line under the title has its own row, and each number on a card\'s line says what it is', async t => {
+  timers(t);
+  const P = page(t); P.fv.showTab(true); P.ready(); await P.tick();
+  const skeleton = P.view.innerHTML;
+  const head = /<div class="fl-head">([\s\S]*?)<\/div>\s*<p class="fl-ask"[^>]*>[^<]*<\/p>\s*<p class="fl-autoline"/.exec(skeleton);
+  assert.ok(head, 'the line follows the head row, outside it');
+  assert.ok(!head[1].includes('autoline') && head[1].includes('data-do="ask"') && head[1].includes('data-do="yes"') && head[1].includes('data-do="no"'), 'the head row holds the title and the three buttons only');
+  assert.ok(head[1].indexOf('data-do="yes"') < head[1].indexOf('data-do="no"') && head[1].indexOf('data-do="no"') < head[1].indexOf('data-do="ask"') && !/<(span|p)[^>]*fl-ask/.test(head[1]), 'Yes, then Cancel, then Kill all at the right end; the question\'s words are not in the row');
+  P.answers[0].res({ status: 200, json: () => Promise.resolve({ files: [served('z.json', botFile('zeta'))] }) }); await P.tick(); await P.tick();
+  const line = P.part('roster').innerHTML.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+  assert.match(line, /Eval \+0\.62 per \$1 Above no edge Funded -0\.10 per \$1 Not above no edge/, 'each number on the line is named: ' + line);
 });

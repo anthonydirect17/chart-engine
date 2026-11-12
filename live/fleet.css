@@ -11,18 +11,29 @@ body:not(.fl-on) .fl-view.fl-in-ws { display: none !important; }
 .fl-top { position: sticky; top: 0; z-index: 2; background: var(--ws-bg); display: flex; flex-direction: column; gap: 6px; padding: 8px 0 6px; margin-top: -8px; border-bottom: 1px solid var(--ws-line); }
 .fl-head { display: flex; align-items: center; gap: 12px; min-width: 0; flex-wrap: wrap; }
 .fl-title { font: 600 14px var(--ws-sans); }
-.fl-autoline { font-size: 12px; color: var(--ws-text2); min-width: 0; }
+/* the line under the title has its own row: however long it grows it wraps there, and Kill all, Yes and Cancel never move */
+.fl-autoline { margin: 0; font-size: 12px; color: var(--ws-text2); min-width: 0; overflow-wrap: anywhere; }
+.fl-head { flex-wrap: nowrap; }
+.fl-head > .ws-btn { flex: none; }
+.fl-head { gap: 8px; }
+.fl-title { flex: 0 1 auto; min-width: 0; }
+.fl-per { color: var(--ws-muted); font-size: 11px; }
+/* the page's alert banner (fixed over the top of the grid) would lie on this tab's head: while the tab is open it sits at the
+   bottom of the window instead, so Kill all, Yes and Cancel are never under it and nothing moves when a line arrives (the
+   second look at 92, STOP 3). The tab keeps room at its foot so its last rows can be scrolled clear of it. */
+body.fl-on .ws-alerts { top: auto; bottom: 8px; max-height: 40vh; overflow: auto; }
+body.fl-on .fl-wrap { padding-bottom: 120px; }
 .fl-fill { flex: 1 1 auto; }
 .fl-view .mono { font-family: var(--ws-mono); font-variant-numeric: tabular-nums; }
 .ws-btn.fl-kill { font-weight: 600; border-color: var(--ws-warn); color: var(--ws-warn); min-height: 30px; }
 .ws-btn.fl-kill[aria-disabled="true"] { opacity: .55; cursor: not-allowed; }
-.fl-ask { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; padding: 4px 8px; border: 1px solid var(--ws-warn); border-radius: 6px; }
+.fl-ask { margin: 0; font-size: 13px; font-weight: 600; color: var(--ws-warn); padding: 4px 8px; border: 1px solid var(--ws-warn); border-radius: 6px; }
 .fl-said { margin: 0; font-size: 12px; color: var(--ws-muted); min-height: 16px; }
 .fl-said.bad { color: var(--ws-warn); }
 /* ChartBridge's own answer to Kill all, with its time: kept until the next one; marked when something was NOT stopped */
 .fl-answer { margin: 0; font-size: 12px; color: var(--ws-text2); min-height: 16px; overflow-wrap: anywhere; }
 .fl-answer.bad { color: var(--ws-warn); font-size: 14px; font-weight: 600; border: 1px solid var(--ws-warn); border-radius: 6px; padding: 6px 8px; }
-.fl-ask[hidden], .fl-kill[hidden], .fl-answer[hidden] { display: none !important; }
+.fl-ask[hidden], .fl-kill[hidden], .fl-cancel[hidden], .fl-answer[hidden] { display: none !important; }
 .ws-btn.fl-cancel { min-height: 30px; }
 .fl-tag[data-kind="mixed"], .fl-tag[data-kind="unlisted"] { border-color: var(--ws-warn); color: var(--ws-warn); }
 .fl-verdict { font-style: italic; }

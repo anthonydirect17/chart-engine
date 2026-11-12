@@ -398,9 +398,12 @@ const HINT = 'Kill all stops every trader on a prop account and closes its posit
  * straddle a message still counts. The three sections under it (the roster, the traders, the prop accounts) are each drawn on
  * their own, each in its own try, and only when what they show changed; the roster only when the roster changed.
  *
- * THE QUESTION (STOP 1). A click on Kill all opens it in the same place, with CANCEL where the button was and Yes to its left.
- * No answer is taken for ARM_MS after it opens, and never from the second click of a double click (detail above 1), so a
- * double click anywhere on the button answers nothing. Yes counts only while the question is up and not older than CONFIRM_MS
+ * THE QUESTION (STOP 1). A click on Kill all puts CANCEL in the button's own place (the same box, at every width) with Yes to
+ * its left, where nothing was, and the question's words on their own line under the head. The head row never wraps.
+ * No answer is taken for ARM_MS after it opens, so a double click anywhere on the button answers nothing: its second click
+ * lands inside that moment, and on Cancel. A click on Yes inside that moment is not taken, leaves the question up and says so.
+ * From ARM_MS on, a real click on Yes counts whatever its click count (the second look at 92, FIX B: a person clicking Yes
+ * again and again must get through; the browser counts quick clicks on one spot as a double click). Yes counts only while the question is up and not older than CONFIRM_MS
  * by the clock (a held-back timer does not keep it alive), and everything is checked again at that moment.
  * Yes takes a REAL CLICK ONLY (Anthony 2026-11-11, the review's N10): never Enter, Space or a click made by a key. The test of
  * a real click is the page's one rule, OrderTicket.realClick, handed in by workspace.js (o.realClick), the same function the
@@ -515,7 +518,7 @@ function create(o) {
      it runs live, in-sample and the try count, and each stage's profit per $1 with the file's own word against no edge.
      Everything else (the file, the run, why not, the playbook, the ranges, a lineup's bots) opens under it with Details. */
   function stageShort(st) {
-    return `<span class="fl-short" data-stage="${esc(st.stage)}"><span class="fl-stname">${esc(st.title)}</span> <span class="mono">${esc(C.signed(st.profitPerDollar))}</span> <span class="fl-tag" data-kind="${st.aboveNoEdge ? 'edge' : 'noedge'}">${esc(st.edgeText)}</span></span>`;
+    return `<span class="fl-short" data-stage="${esc(st.stage)}"><span class="fl-stname">${esc(st.title)}</span> <span class="mono">${esc(C.signed(st.profitPerDollar))}</span> <span class="fl-per">per $1</span> <span class="fl-tag" data-kind="${st.aboveNoEdge ? 'edge' : 'noedge'}">${esc(st.edgeText)}</span></span>`;
   }
   function cardHtml(c) {
     const open = S.open.has(c.kind + ':' + c.name);
@@ -558,7 +561,7 @@ function create(o) {
     return `<div class="fl-trow"><h3 class="fl-h">Roster</h3><span class="fl-fill"></span>
         <button type="button" class="ws-btn" data-do="roster"${R.state === 'loading' ? ' aria-disabled="true"' : ''}>Read again</button></div>
       ${body}
-      <p class="fl-note">The number on each line is profit per $1. Every number is from in-sample runs, and none is a promise. "No edge" is what the same trades would show with their edge taken out, so only a number above that range says anything. Details shows the rest.</p>`;
+      <p class="fl-note">The number on each line is profit per $1 spent on accounts. Every number is from in-sample runs, and none is a promise. "No edge" is what the same trades would show with their edge taken out, so only a number above that range says anything. Details shows the rest.</p>`;
   }
 
   function traderHtml(t) {
@@ -605,11 +608,12 @@ function create(o) {
   function build() {
     view.innerHTML = `<div class="fl-wrap">
       <div class="fl-top"><div class="fl-head">
-        <span class="fl-title">Legion</span><span class="fl-autoline" data-k="autoline"></span><span class="fl-fill"></span>
-        <span class="fl-ask" data-k="ask" role="alertdialog" aria-label="Kill all" hidden><span data-k="askText">Close every trader's position on the prop accounts and stop them?</span>
-          <button type="button" class="ws-btn fl-kill" data-do="yes">Yes, kill all</button><button type="button" class="ws-btn fl-cancel" data-do="no">Cancel</button></span>
+        <span class="fl-title">Legion</span><span class="fl-fill"></span>
+        <button type="button" class="ws-btn fl-kill fl-yes" data-do="yes" data-k="yes" hidden>Yes, kill all</button><button type="button" class="ws-btn fl-cancel" data-do="no" data-k="no" hidden>Cancel</button>
         <button type="button" class="ws-btn fl-kill" data-do="ask" data-k="kill">Kill all: flatten and stop</button>
       </div>
+      <p class="fl-ask" data-k="ask" role="alertdialog" aria-label="Kill all" hidden>Close every trader's position on the prop accounts and stop them? Yes, or Cancel, at the top right.</p>
+      <p class="fl-autoline" data-k="autoline"></p>
       <p class="fl-said" data-k="hint" role="status" aria-live="polite"></p>
       <p class="fl-answer" data-k="answer" role="status" aria-live="polite" hidden></p></div>
       <section class="fl-box fl-roster" aria-label="Roster" data-k="roster"></section>
@@ -619,7 +623,7 @@ function create(o) {
       </div>
       <p class="fl-later">Not built yet, so not shown: the pick of which bots run today on the eval accounts and on the funded accounts, the one Armed slider, and each bot's own state from the runner. Until then nothing on this tab starts a bot: a trader's mode is changed on the Agent tab.</p>
     </div>`;
-    for (const k of ['autoline', 'ask', 'kill', 'hint', 'answer', 'roster', 'traders', 'accounts']) el[k] = view.querySelector('[data-k="' + k + '"]');
+    for (const k of ['autoline', 'ask', 'kill', 'yes', 'no', 'hint', 'answer', 'roster', 'traders', 'accounts']) el[k] = view.querySelector('[data-k="' + k + '"]');
     el.cancel = view.querySelector('[data-do="no"]');
     S.built = true; S.drawn = {}; S.rosterDirty = true;
   }
@@ -632,7 +636,7 @@ function create(o) {
   function renderHead(rows) {
     const st = killState(), asking = S.ask > 0;
     setText(el.autoline, C.autoLine(rows));
-    setHidden(el.ask, !asking); setHidden(el.kill, asking);
+    setHidden(el.ask, !asking); setHidden(el.yes, !asking); setHidden(el.no, !asking); setHidden(el.kill, asking);
     if (el.kill) {
       if (st.ok) { el.kill.removeAttribute('aria-disabled'); el.kill.removeAttribute('title'); }
       else { el.kill.setAttribute('aria-disabled', 'true'); el.kill.setAttribute('title', st.why); }
@@ -683,7 +687,10 @@ function create(o) {
     if (age > C.CONFIRM_MS) { endAsk(); render(); return; }                 // the 8 seconds, by the clock (PROP 6)
     if (what === 'no' && !realClick(e)) { endAsk(); hint('', false); render(); return; }   // Cancel by the keyboard: always
     if (what === 'yes' && !realClick(e)) { hint('Kill all is confirmed by a click on Yes only, not by keyboard. Cancel and Escape work from the keyboard.', true); render(); return; }
-    if (e.detail > 1 || age < C.ARM_MS) return;                             // a double click, or too soon: no answer (STOP 1)
+    if (age < C.ARM_MS) {                                                   // too soon: no answer, the question stays (STOP 1)
+      if (what === 'yes') { hint('Too soon: read the question, then click Yes.', true); render(); }
+      return;
+    }
     if (what === 'yes') killAll();
     else { endAsk(); hint('', false); render(); }
   }

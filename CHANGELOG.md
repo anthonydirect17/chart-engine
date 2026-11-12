@@ -71,8 +71,8 @@ none of them. Build answers 7, part D1.
 
 - **The roster.** Every bot and every lineup the Lab has built a roster file for, read from this PC by ChartBridge 0.6.20
   (`GET /roster`). **One line each** (Anthony 2026-11-11: the detail "should be there, but expandable when needed"): the
-  name, whether the runner can run it live, **"In-sample, not confirmed"** with its try count, and its profit per $1 for
-  eval and for funded, each marked above or not above no edge. **Details** on a line opens the rest: why it does not run
+  name, whether the runner can run it live, **"In-sample, not confirmed"** with its try count, and its profit for eval
+  and for funded, each named "per $1" and marked above or not above no edge. **Details** on a line opens the rest: why it does not run
   live, its file, the run its numbers come from, and for the eval stage and the funded stage: the
   playbook it sizes with (risk a trade, the day's loss stop and profit stop, trades a day, the payout mark), its profit
   per $1 with its range, and beside it what the same trades would show with no edge. A number is marked "Above no edge"
@@ -88,8 +88,12 @@ none of them. Build answers 7, part D1.
   contract added by hand on that account and contract included), its kill switch goes on and it drops to Shadow
   (ChartBridge does the work). Your personal account, a trader on Sim accounts only, the bot and the copier are never
   touched. It asks first, on the page:
-  - **A double click sends nothing.** The question opens where the button was with Cancel in the button's place; no answer
-    is taken for the first 600 ms, and never from the second click of a double click.
+  - **A double click sends nothing.** Cancel takes the button's own place and Yes sits to its left, where nothing was; no
+    answer is taken for the first 600 ms. A click on Yes inside that moment leaves the question up and the tab says "Too
+    soon". From 600 ms on a real click on Yes counts, so clicking Yes again and again does get through.
+  - **The alert banner never covers it.** While the tab is open the page's red alert banner sits at the bottom of the
+    window, not over the tab's head. Kill all, Yes and Cancel keep their place whatever arrives or however long the line
+    under the title grows.
   - **Always in sight.** The head of the tab stays at the top however far the tab is scrolled.
   - **A click is never lost.** The head of the tab (Kill all, Yes, Cancel, the lines under them) is built once and kept;
     messages from ChartBridge change its words only. Each part under it is redrawn by itself, the roster only when the
@@ -124,7 +128,8 @@ none of them. Build answers 7, part D1.
 The button shows with ChartBridge 0.6.17 or later; the roster needs 0.6.20. The tab sends one message, `agentKillAllProp`,
 makes one request, `GET /roster` (when it opens, on a hello and on Read again: never on a timer), and builds no order.
 New files `live/fleet.js` and `live/fleet.css` (the tab was drafted as "Fleet"; the file names keep the word);
-`test/fleet.test.js`; `npm run smoke:fleet` (screenshots `test/out/fleet-*.png`) and `npm run smoke:tabkeys`. ChartBridge stays 0.6.20; no recompile.
+`test/fleet.test.js`; `npm run smoke:fleet` (screenshots `test/out/fleet-*.png`) and `npm run smoke:tabkeys`. Review notes
+that did not block are in `docs/BACKLOG_review.md`. The page starts as before when `accounts.js` is not served. ChartBridge stays 0.6.20; no recompile.
 
 ## ChartBridge 0.6.20 and chart 1.44.6 (2026-11-11): the roster, the Lab's files served read only
 
