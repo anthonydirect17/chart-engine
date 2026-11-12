@@ -32,7 +32,8 @@ the focus is while the tab is open).
 
 - N12. The page works out the day stop mark and "reached" itself; ChartBridge owns both. Show ChartBridge's. Not done
   in 1.46.0: ChartBridge does not send either to a page (only the plan's `dayStop` on `agent`), so this needs a
-  ChartBridge change first (the mark and "reached" on each row of `accounts`).
+  ChartBridge change first (the mark and "reached" on each row of `accounts`). Written up for the next ChartBridge
+  change (2026-11-12), with the account-move refusal, the Copilot race and a lane's group through 17:00; not built.
 - The account-move gap (the review of 97, F4; build answers 18, point 3), beside N12 for the next ChartBridge change:
   ChartBridge does not refuse `accountGroup` or `memberBench` by the state of the trader whose group it is (it refuses a
   bench only while that one account is not flat, and a join only for the bot's, the copier's or another agent's own
@@ -45,8 +46,10 @@ the focus is while the tab is open).
   sign-in replay and Legion reads the traders as heard early; the 1.5 s floor covers it until then. Wanted: an explicit
   "replay done" message after the replay (item 7 of the design note
   FROM_BUILD1_2026-11-12_design_next_chartbridge_change.md in TradingApp_Handoff).
-- D2, the second half: an account moved into or out of a lane by drag and drop (`accountGroup`, with the Accounts
-  tab's own join question: the highest close and the account's rules from its type).
+- D2, the second half: done in 1.48.0. Each lane holds the Multi-Account panel itself on its own group, so a move into
+  or out of a lane is that panel's own drag and drop and join question (the narrow feed of 1.47.0: `accountGroup` and
+  `memberBench` only, refused on the page while the lane is in Auto or holds something).
+- T-6 (below): now held by a test (1.49.0).
 - The Armed switch's question and Kill all's question can both be up at once (each has its own buttons and its own
   line). Harmless; one at a time would be tidier.
 - The three sections are set again on every message when their HTML is unchanged only by comparison of the whole

@@ -352,6 +352,7 @@ function page(t, over, opt) {
   P.fv = win.FleetView.create(Object.assign({ view, tab, v3: V3, settleMs: 0, realClick: require('../live/order-ticket.js').realClick, now: () => P.T, fetch: (u, o) => { P.asks.push([u, o]); return new Promise((res, rej) => P.answers.push({ res, rej })); } }, over || {}));
   P.feed = m => P.subs.message(m);
   P.click = (what, detail, card) => listeners.click({ target: { closest: () => ({ dataset: { do: what, card } }) }, detail: detail === undefined ? 1 : detail });
+  P.clickSub = sub => listeners.click({ target: { closest: () => ({ dataset: { do: 'sub', sub } }) }, detail: 1 });
   P.html = () => view.innerHTML + ['lanes', 'lane-eval', 'lane-funded', 'roster', 'traders', 'accounts'].map(k => P.part(k).innerHTML).join('');
   P.change = (agentId, value) => listeners.change({ target: { dataset: { do: 'pick', agent: agentId }, value } });
   P.ready = v => { P.feed({ type: 'hello', version: v || '0.6.20' }); P.feed({ type: 'trading', enabled: true }); P.feed(accounts); P.feed(groups); P.feed(agent('germanicus')); P.replayDone(); };
@@ -601,7 +602,9 @@ test('what the tab draws: one line a card with its detail behind Details; its bu
   assert.strictEqual((html.match(/role="switch"/g) || []).length, 1, 'one Armed switch, for both lanes');
   assert.ok(!/contenteditable|tabindex|onclick|role="(checkbox|slider)"|draggable/i.test(html));
   assert.match(html, /Market now<\/h3><\/div>\s*<p class="fl-empty">Not built yet\./, 'what is not built is said, not faked');
-  assert.match(html, /Legion Live \(the tiles, one chart with each lane's marks, each trader's day, the accounts by group\) is the next change/);
+  /* 1.49.0: Live is built: its four sections, and what it cannot know says so instead of a number */
+  for (const label of ['Today', 'Today on one chart', 'By trader', 'Accounts live']) assert.match(html, new RegExp('<section class="fl-box[^"]*" aria-label="' + label + '">'));
+  assert.doesNotMatch(html, /is the next change/);
   // the lane's hostile strings (the trader's name, its group, its seat, why it is stood down, a pick that is gone) are text
   const lanesHtml = P.part('lane-eval').innerHTML + P.part('lane-funded').innerHTML;
   assert.ok(lanesHtml.includes('It is stood down: &lt;img src=x onerror=1&gt;') && lanesHtml.includes('gone.json (not offered now)'));
@@ -1146,6 +1149,89 @@ test('B4 (1.48.1): the tab reads the helper every 3 s while open, draws each lan
   assert.doesNotMatch(src, /\/on\b|\/off\b|\.on\(|\.off\(|helperClient|createClient/, 'the tab has no way to On or Off');
   assert.match(ws, /return \(\) => client\.status\(\);\n\}\)\(\);/, 'the page hands the status call only, never the client');
   assert.match(ws, /helperStatus: legionHelperStatus,/);
+});
+
+test('Legion Live (1.49.0): the four tiles sum ChartBridge\'s today of the prop accounts, and one not known makes the sum not known', () => {
+  const acc = { type: 'accounts', list: [
+    { name: 'EVAL-A', prop: true, pnlToday: 120.5 }, { name: 'EVAL-B', prop: true, pnlToday: -20 }, { name: 'FUND-A', prop: true, pnlToday: 300 },
+    { name: 'MINE', prop: false, pnlToday: 9999 }, { name: 'ODD', prop: true }] };
+  const ls = [{ stage: 'eval', id: 'legion1', seats: ['EVAL-A', 'eval-b'], benched: [] }, { stage: 'funded', id: '', seats: [], benched: [] }];
+  const t = F.liveTiles(ls, acc);
+  assert.deepStrictEqual(t.map(x => [x.key, x.value]), [['all', null], ['eval', 100.5], ['funded', null], ['business', null]]);
+  assert.match(t[0].text, /^not known: 3 of 4 accounts say today$/, 'the personal account is never counted; one with no number makes the sum not known');
+  assert.match(t[1].text, /^2 accounts, realized plus open$/, 'names match in any letter case');
+  assert.match(t[2].text, /no trader on this lane/);
+  assert.match(t[3].text, /^not built yet: it needs The Desk/);
+  assert.deepStrictEqual(F.todayOf(['EVAL-A', 'FUND-A'], acc), { value: 420.5, known: 2, of: 2 });
+  assert.deepStrictEqual(F.todayOf(['MINE'], acc), { value: null, known: 0, of: 1 }, 'a row not marked prop is not counted');
+  assert.match(F.liveTiles(ls, null)[0].text, /the accounts are not known yet/);
+  assert.match(F.liveTiles([{ stage: 'eval', id: 'x', seats: [], benched: [] }], acc)[1].text, /no account trades with its group/);
+});
+
+test('Legion Live (1.49.0): each lane\'s fills become entry and exit marks in its colour and letter, today only, and nothing else', () => {
+  const ls = [{ stage: 'eval', id: 'legion1', seats: ['EVAL-A'], benched: ['EVAL-B'] }, { stage: 'funded', id: 'legion2', seats: ['FUND-A'], benched: [] }, { stage: 'eval', id: '', seats: ['LOST'], benched: [] }];
+  const f = (id, account, side, qty, p, t, root) => ({ type: 'exec', id, account, side, qty, p, t, root: root || 'MNQ', name: 'MNQ 12-26' });
+  const fills = [
+    f('1', 'EVAL-A', 'buy', 2, 20000, 1000), f('2', 'EVAL-A', 'buy', 1, 20001, 1010), f('3', 'EVAL-A', 'sell', 1, 20005, 1020), f('4', 'EVAL-A', 'sell', 4, 20006, 1030),
+    f('5', 'FUND-A', 'sell', 1, 19990, 1005), f('6', 'FUND-A', 'buy', 1, 19980, 1040),
+    f('7', 'EVAL-B', 'buy', 1, 20010, 1050),
+    f('8', 'MINE', 'buy', 9, 20000, 1060),                                   // not a lane's account
+    f('9', 'EVAL-A', 'buy', 1, 20000, 500),                                  // before the trading day
+    f('10', 'EVAL-A', 'buy', 1, 4800, 1070, 'ES'),                          // another market: kept for the position, not drawn
+    { id: 'x', account: 'EVAL-A', side: 'buy', qty: 1.5, p: 1, t: 1080 }, { id: 'y', account: 'EVAL-A', side: 'hold', qty: 1, p: 1, t: 1090 }, null];
+  const m = F.laneMarks(ls, fills, 900, ['MNQ', 'NQ']);
+  assert.strictEqual(m.kind, 'marks'); assert.deepStrictEqual(m.lines, []);
+  assert.deepStrictEqual(m.marks.map(x => [x.t, x.kind, x.letter, x.color, x.price]), [
+    [1000, 'entry', 'E', '#8FB4E0', 20000], [1005, 'entry', 'F', '#C9A55C', 19990], [1010, 'entry', 'E', '#8FB4E0', 20001],
+    [1020, 'exit', 'E', '#8FB4E0', 20005], [1030, 'exit', 'E', '#8FB4E0', 20006], [1040, 'exit', 'F', '#C9A55C', 19980], [1050, 'entry', 'E', '#8FB4E0', 20010]]);
+  assert.strictEqual(F.laneMarks(ls, fills, null, ['MNQ']).marks.length, 8, 'with no day start, every fill of a lane');
+  assert.strictEqual(F.laneMarks([], fills, null, []).marks.length, 0, 'no lane, no mark');
+  assert.strictEqual(F.cleanFill({ id: 'a', account: 'B', side: 'buy', qty: 0, p: 1, t: 1 }), null);
+});
+
+test('Legion Live (1.49.0): by trader, from ChartBridge\'s agent message and the lane\'s accounts; the live record says it is not read', () => {
+  const acc = { list: [{ name: 'EVAL-A', prop: true, pnlToday: 50 }] };
+  const ls = [{ stage: 'eval', id: 'legion1', name: 'Legion one', modeText: 'Shadow', seats: ['EVAL-A'] }, { stage: 'funded', id: '', seats: [] }];
+  const rows = F.traderDays(ls, [{ agent: 'legion1', trades: 2, owns: true }], acc);
+  assert.deepStrictEqual(rows.map(r => [r.stage, r.id, r.mode, r.today, r.trades, r.inTrade]), [['eval', 'legion1', 'Shadow', 50, 2, true]]);
+  assert.match(rows[0].record, /^not enough data yet/);
+  const unknown = F.traderDays(ls, [{ agent: 'legion1' }], { list: [] })[0];
+  assert.deepStrictEqual([unknown.today, unknown.trades, unknown.inTrade], [null, null, null], 'not said is not known, never 0 or flat');
+});
+
+test('Legion Live (1.49.0): the tab keeps each fill once, draws the tiles and the traders on Live, and mounts the chart and the rows only there', async t => {
+  timers(t);
+  const mounted = [];
+  const P = page(t, {
+    liveChart: el => { mounted.push('chart'); return { chart: null, destroy: () => mounted.push('chart down') }; },
+    accountRows: (el, key, filter) => { mounted.push('rows ' + key + ' ' + [filter({ name: 'EVAL-A' }), filter({ name: 'MINE' }), filter(null)].join(',')); return { destroy: () => mounted.push('rows down') }; },
+    sessionStart: () => 900 });
+  P.fv.showTab(true);
+  P.feed({ type: 'hello', version: '0.6.21' }); P.feed({ type: 'trading', enabled: true });
+  P.feed({ type: 'accounts', personalNamed: true, list: [{ name: 'EVAL-A', prop: true, pnlToday: 75 }, { name: 'MINE', prop: false }] }); P.feed(groups);
+  P.feed(evalTrader());
+  await P.tick();
+  assert.deepStrictEqual(mounted, [], 'nothing of Live is mounted on Setup');
+  listenersClick(P, 'live');
+  assert.deepStrictEqual(mounted, ['chart', 'rows legion-live true,false,false']);
+  assert.match(P.part('tiles').innerHTML, /data-tile="all"/);
+  assert.match(P.part('bytrader').innerHTML, /role="table" aria-label="By trader"/);
+  P.feed({ type: 'execs', list: [{ id: '1', account: 'EVAL-A', side: 'buy', qty: 1, p: 1, t: 1000, root: 'MNQ' }] });
+  P.feed({ type: 'exec', id: '1', account: 'EVAL-A', side: 'buy', qty: 1, p: 1, t: 1000, root: 'MNQ' });
+  assert.strictEqual(P.fv.state().fills, 1, 'execs then exec of the same fill: one');
+  listenersClick(P, 'setup');
+  assert.deepStrictEqual(mounted.slice(2), ['chart down', 'rows down']);
+  listenersClick(P, 'live'); P.fv.showTab(false);
+  assert.deepStrictEqual(mounted.slice(-2), ['chart down', 'rows down'], 'closing the tab takes them down too');
+});
+function listenersClick(P, sub) { P.clickSub(sub); }
+
+test('T-6 of the third look at 92: the head row (Kill all, its Yes and Cancel) never wraps; the last word on it in fleet.css says nowrap', () => {
+  const css = read('live', 'fleet.css').replace(/\/\*[\s\S]*?\*\//g, '');
+  const said = [...css.matchAll(/(^|\n)\.fl-head \{([^}]*)\}/g)].map(m => (/flex-wrap:\s*([a-z]+)/.exec(m[2]) || [])[1]).filter(Boolean);
+  assert.ok(said.length >= 1, 'a flex-wrap is set on .fl-head');
+  assert.strictEqual(said[said.length - 1], 'nowrap', 'the rule that wins is nowrap: ' + said.join(', '));
+  assert.doesNotMatch(css, /@media[^{]*\{[^@]*\.fl-head \{[^}]*flex-wrap:\s*wrap/, 'no width puts the wrap back');
 });
 
 test('answers 25, S2: another group\'s lock covers every trader heard on it (a doubled lane\'s second group, a group of no Type); and no lock is free while signed out', t => {
