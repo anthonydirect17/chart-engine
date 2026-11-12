@@ -61,13 +61,28 @@
        stays here as it was -->
   <!-- 1.36.0: the Bot's own button sits here (as the top bar's tab did), except on a layout with an Agents strip, whose bot card
        opens the Bot; there it comes back here while a view is open or while it carries its red alert -->
-  <span class="ws-tabslot" id="wsTabSlot"></span>
-  <!-- the Agent tab (1.17.0, live/agent.js): shown with a ChartBridge that speaks protocol v3; its agents come with ChartBridge 0.5.0 -->
-  <button type="button" class="ws-btn ag-tabbtn" id="wsAgentTab" aria-pressed="false" hidden>Agent</button>
-  <button type="button" class="ws-btn lg-tabbtn" id="wsLeagueTab" aria-pressed="false" title="The shadow league: H, S, O on paper. SHADOW: no orders" hidden>League</button>
-  <!-- 1.45.0 (build answers 7, part D1; named Legion by Anthony 2026-11-11): the Legion tab (live/fleet.js): the Lab's roster, the traders and the prop accounts, and Kill all.
-       Shown with ChartBridge 0.6.17 or later. Beside the Agent, Bot and League tabs: it replaces none of them yet -->
-  <button type="button" class="ws-btn fl-tabbtn" id="wsFleetTab" aria-pressed="false" title="Legion: the roster, the traders and the prop accounts" hidden>Legion</button>
+  <!-- 1.50.0 (Anthony 2026-11-11, the loop amendment 1 section 5): the top tabs, in his order: Chart, Legion, Colosseum, Praetorian.
+       Each tab's own button, with its own listener, moved into one row; Chart is pressed while no tab covers the grid and closes
+       whichever is open. Praetorian (the Agent and Bot tabs as one, personal accounts only) comes in its own pull request; until
+       then the Agent and Bot buttons stay after the row, unchanged. -->
+  <span class="ws-toptabs" id="wsTopTabs" role="group" aria-label="Tabs" hidden>
+    <button type="button" class="ws-btn ws-charttab" id="wsChartTab" aria-pressed="true" title="Chart: the layout's panels">Chart</button>
+    <!-- 1.45.0 (build answers 7, part D1; named Legion by Anthony 2026-11-11): the Legion tab (live/fleet.js): the Lab's roster, the traders and the prop accounts, and Kill all.
+         Shown with ChartBridge 0.6.17 or later -->
+    <button type="button" class="ws-btn fl-tabbtn" id="wsFleetTab" aria-pressed="false" title="Legion: the roster, the traders and the prop accounts" hidden>Legion</button>
+    <!-- 1.35.0: the League tab (live/league.js); 1.50.0: the Colosseum, research on the live market: the shadow league and the
+         traders in Shadow. SHADOW: no orders -->
+    <button type="button" class="ws-btn lg-tabbtn" id="wsLeagueTab" aria-pressed="false" title="Colosseum: research on the live market. The shadow league on paper and the traders in Shadow. SHADOW: no orders" hidden>Colosseum</button>
+    <!-- 1.51.0 (Anthony 2026-11-11, "Praetorian is good"): Praetorian, the Agent tab and the Bot tab as one tab for the personal
+         account. Its two sides are the two desks' own buttons, with their own listeners, states and the Bot's red alert, so an
+         alert is never hidden behind a closed tab; Praetorian opens the side used last. Shown when either side is offered -->
+    <span class="pr-tabs" id="wsPrGroup" role="group" aria-label="Praetorian: your personal account">
+      <button type="button" class="ws-btn pr-tabbtn" id="wsPraetorianTab" aria-pressed="false" title="Praetorian: your agents and the bot on your personal account (and Sim). A trader on a prop account is run from Legion; here it can only be stopped" hidden>Praetorian</button>
+      <!-- the Agent tab (1.17.0, live/agent.js): shown with a ChartBridge that speaks protocol v3; its agents come with ChartBridge 0.5.0 -->
+      <button type="button" class="ws-btn ag-tabbtn" id="wsAgentTab" aria-pressed="false" hidden>Agent</button>
+      <span class="ws-tabslot" id="wsTabSlot"></span>
+    </span>
+  </span>
   <!-- 1.34.0 (Anthony 2026-10-20): Save these screens / Open my screens (live/screens.js) -->
   <button type="button" class="ws-btn ws-gear ws-scrbtn" id="wsScreens" aria-label="Screens" title="Screens" aria-haspopup="dialog" aria-expanded="false" aria-controls="wsScreensPop"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><rect x="1.5" y="2.5" width="9" height="6.5" rx="1" fill="none" stroke="currentColor" stroke-width="1.3"/><rect x="5.5" y="6.5" width="9" height="6.5" rx="1" fill="var(--ws-field)" stroke="currentColor" stroke-width="1.3"/></svg></button>
   <label class="ws-lbl" for="wsLayout">Layout</label>
@@ -93,8 +108,8 @@
 <section class="bt-view bt-in-ws" id="btView" aria-label="Bot tab"></section>
 <!-- the Agent tab's own layout: the agent strip, its controls, its chart, its proposals and its notes and plans (live/agent.js builds it) -->
 <section class="ag-view ag-in-ws" id="agView" aria-label="Agent tab"></section>
-<!-- 1.35.0: the League tab's own layout (live/league.js builds it) -->
-<section class="lg-view lg-in-ws" id="lgView" aria-label="League tab"></section>
+<!-- 1.35.0: the League tab's own layout; 1.50.0: the Colosseum (live/league.js builds it) -->
+<section class="lg-view lg-in-ws" id="lgView" aria-label="Colosseum tab"></section>
 <!-- 1.45.0: the Legion tab's own layout (live/fleet.js builds it) -->
 <section class="fl-view fl-in-ws" id="flView" aria-label="Legion tab"></section>
 <!-- where the Bot's button waits while it is hidden (no v3 ChartBridge), so the top bar's slot takes no room; shown, it sits in
@@ -270,6 +285,8 @@
 <!-- 1.23.0 (Layout 5): the grid panel's canvas, the one frame loop of the tab (live/agent-grid.js) -->
 <script src="agent-grid.js"></script>
 <script src="agent.js"></script>
+<!-- 1.52.1: Legion's trader desk (live/legion-desk.js, chart-engine 103), after agent.js and bot.js: Legion Setup's Traders fold mounts it -->
+<script src="legion-desk.js"></script>
 <!-- 1.34.0: the Trade tags panel (TradeTagsCore and TradeTags.mount), before workspace.js -->
 <script src="trade-tags.js"></script>
 <!-- 1.35.0: the League tab (the shadow league, read from The Desk; SHADOW: no orders) -->

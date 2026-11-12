@@ -544,6 +544,15 @@ try {
     await page.waitForFunction(() => window.workspace.fleet().roster.state !== 'loading', null, { timeout: 10000 }).catch(() => {});
     const ro = await page.evaluate(() => window.workspace.fleet().roster);
     check(ro.state === 'none' && ro.asked === 1 && /No roster folder is set on this PC/.test(ro.text), 'workspace: the real request: the fake bridge has no roster (404), asked once, and the tab says the folder is not set: ' + JSON.stringify(ro));
+    // 1.52.1: the Traders fold mounts the real Legion trader desk (live/legion-desk.js, loaded by the page) when opened
+    check(await page.locator('#flDesk').isHidden(), 'workspace: the Traders fold is shut until opened');
+    await page.click('[data-do="desk"]');
+    await page.waitForFunction(() => { const d = document.getElementById('flDesk'); return d && !d.hidden && d.querySelector('*') && !/shows here when the page has it/.test(d.textContent); }, null, { timeout: 10000 }).catch(() => {});
+    const desk = await page.evaluate(() => { const d = document.getElementById('flDesk'); return { shown: !d.hidden, kids: d.querySelectorAll('*').length, placeholder: /shows here when the page has it/.test(d.textContent), loaded: !!window.LegionDesk }; });
+    check(desk.loaded && desk.shown && desk.kids > 0 && !desk.placeholder, 'workspace: opened, the Traders fold holds the real Legion trader desk: ' + JSON.stringify(desk));
+    await page.screenshot({ path: path.join(SHOTS, 'fleet-workspace-desk.png') });
+    await page.click('[data-do="desk"]');
+    check(await page.locator('#flDesk').isHidden(), 'workspace: and shuts again');
     await page.click('#wsAgentTab');
     await sleep(300);
     check(await page.evaluate(() => !document.body.classList.contains('fl-on') && document.body.classList.contains('ag-on') && /tab=agent/.test(location.search)), 'workspace: opening the Agent tab closes Legion (one view at a time)');

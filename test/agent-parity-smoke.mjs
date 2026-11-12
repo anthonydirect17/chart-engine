@@ -68,7 +68,7 @@ const agentsNow = async () => (await control('agents')).agents;
 const agentNow = async id => (await agentsNow()).find(a => a.agent === id);
 async function startBridge(flags) {
   port = await freePort();
-  const br = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(port), '--v3', '--trading', '--test-controls', '--test-pin=' + TEST_PIN, '--clock-offset=' + CLOCK_OFFSET_S].concat(flags), { stdio: ['ignore', 'pipe', 'inherit'] });
+  const br = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(port), '--v3', '--trading', '--test-controls', '--test-pin=' + TEST_PIN, '--clock-offset=' + CLOCK_OFFSET_S, '--personal=EVAL-A'].concat(flags), { stdio: ['ignore', 'pipe', 'inherit'] });
   await new Promise((res, rej) => { br.stdout.once('data', res); br.once('exit', c => rej(new Error('bridge exited ' + c))); });
   return br;
 }
@@ -652,7 +652,7 @@ try {
     const before = (await sent()).filter(m => /^agent/.test(m.type)).length;
     await click('LA05-set');
     await until(async () => (await info('LA06')).shown, 'the question');
-    await shows('LA06', async () => /^Agent demo will trade LIVE account EVAL-A in Copilot\. Continue\?$/.test(await text('LA06-text')) && (await P('attr', 'LA06', 'role')) === 'alertdialog' && (await text('LA06-yes')) === 'Continue' && (await text('LA06-no')) === 'Cancel', 'the LIVE question: ' + await text('LA06-text'));
+    await shows('LA06', async () => /^Agent demo will trade LIVE account EVAL-A in Shadow \(nothing is placed until you choose Copilot or Auto\)\. Continue\?$/.test(await text('LA06-text')) && (await P('attr', 'LA06', 'role')) === 'alertdialog' && (await text('LA06-yes')) === 'Continue' && (await text('LA06-no')) === 'Cancel', 'the LIVE question (1.52.0: on Praetorian a move goes in Shadow, so it names Shadow): ' + await text('LA06-text'));
     rule('focus', await P('focused', 'LA06-yes'), 'the LIVE question focuses Continue');
     item('LA06', (await sent()).filter(m => /^agent/.test(m.type)).length === before, 'nothing sent before Continue');
     await click('LA06-no');

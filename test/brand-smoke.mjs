@@ -84,7 +84,9 @@ try {
     check(m.colors.every(c => c === 'rgb(226, 198, 135)'), 'both lines in the wordmark gold #E2C687: ' + m.colors.join(', '));
     const k = contrast(m.colors[0], m.ground);
     check(k >= 7, 'the gold on the bar: ' + k.toFixed(2) + ':1 (at least 7:1 for the small line)');
-    check(m.inCinzel.length === 2 && m.inCinzel.every(t => /ws-mark-(suite|name)/.test(t)), 'nothing but the wordmark is in Cinzel: ' + m.inCinzel.join('; '));
+    /* 1.50.0 (house style V2, the kickoff of 2026-11-12: Cinzel for titles only, never a live value): the Colosseum's name is a title */
+    const titles = m.inCinzel.filter(t => /^h1\.lg-word Colosseum$/.test(t));
+    check(m.inCinzel.length === 2 + titles.length && titles.length <= 1 && m.inCinzel.filter(t => !titles.includes(t)).every(t => /ws-mark-(suite|name)/.test(t)), 'nothing but the wordmark and the Colosseum\'s title is in Cinzel: ' + m.inCinzel.join('; '));
     check(m.live.length >= 4 && m.live.every(f => f === 'IBM Plex Mono'), 'live values stay IBM Plex Mono (' + m.live.length + ' checked): ' + [...new Set(m.live)].join(', '));
     await p.locator('header.ws-top').screenshot({ path: path.join(out, 'brand-topbar-' + vp.w + '.png') });
     await p.screenshot({ path: path.join(out, 'brand-page-' + vp.w + '.png') });

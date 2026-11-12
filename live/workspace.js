@@ -1452,10 +1452,11 @@ const busy = () => !!pop || $('wsDialog').open || !!document.querySelector('.ws-
    proposal it would answer, the Agent tab and the Bot tab (as before this release), and is off under Legion and League.
    Not clearly one or the other, so off under a tab until Anthony rules (the careful side): B/E, Merge, and a strategy's key.
    With no tab open nothing here changes anything. ONE place: both hotkey handlers below go through underTab. */
-const COVERING_TABS = { 'fl-on': 'Legion', 'ag-on': 'Agent', 'bt-on': 'Bot', 'lg-on': 'League' };
+/* 1.50.0: the League tab is the Colosseum (its name in the note); 1.51.0: the Agent and Bot tabs are Praetorian's two sides */
+const COVERING_TABS = { 'fl-on': 'Legion', 'ag-on': 'Praetorian', 'bt-on': 'Praetorian', 'lg-on': 'Colosseum' };
 const coveringTab = () => { for (const c of Object.keys(COVERING_TABS)) if (document.body.classList.contains(c)) return COVERING_TABS[c]; return ''; };
 const LIVE_UNDER_TAB = new Set(['close', 'flattenAll', 'reject']);
-const ACCEPT_SHOWN_ON = new Set(['Agent', 'Bot']);         // the tabs that show the proposal the Accept key answers
+const ACCEPT_SHOWN_ON = new Set(['Praetorian']);         // the tabs that show the proposal the Accept key answers
 const underTab = (id, fn) => () => {
   const t = coveringTab();
   if (t && !LIVE_UNDER_TAB.has(id) && !(id === 'accept' && ACCEPT_SHOWN_ON.has(t))) {
@@ -2639,7 +2640,7 @@ function mountAgentsStrip(v) {
     pv: r => (instruments[r] && +instruments[r].pointValue > 0 ? +instruments[r].pointValue : null),
     bars: () => { const x = quoteOf('NQ'); return x && x.bars.length ? { root: 'NQ', name: x.name, bars: x.bars } : null; },
     mine: () => myEntries(),
-    openLeague: () => { if (leagueView) leagueView.showTab(true); else note('The League tab did not start: reload this window', true); },
+    openLeague: () => { if (leagueView) leagueView.showTab(true); else note('The Colosseum tab did not start: reload this window', true); },
     openAgent: id => { if (agentDesk) { agentDesk.choose(id); agentDesk.showTab(true); } },
     bot: () => (botDesk && botDesk.glance ? botDesk.glance() : null),
     openBot: () => { if (botDesk) botDesk.showTab(true); else note('The Bot tab did not start: reload this window', true); },
@@ -3671,10 +3672,20 @@ window.workspace = { get layout() { return layout; }, panels: () => panels.map(p
 
 /* 1.16.0: the Bot tab, the bot strip and the bot's pop-ups (live/bot.js), on the window's v3 connection (AF); everything bot
    shows only when ChartBridge's bot switch is on. The Bot tab hides the grid while it is open (?tab=bot keeps it on a reload). */
+/* 1.51.0 (Anthony 2026-11-11: the Agent and Bot tabs as one tab, Praetorian, "focused on the personal (not prop business)
+   accounts"): the two desks are handed this connection instead of the page's feed. It passes what AgentCore.praetorianGate
+   passes (a kill switch ON always; any other agent or bot message only for a trader on your personal account or on None, an
+   account change only to your personal account or None) and nothing else; the feed's send and sendOrder never reach it. It
+   also answers why a message would not go (why), and what the desks need to hold a control back (traderWhy, botWhy,
+   accountOk). The gate hears ChartBridge before the desks do (it listens first) and forgets everything when the connection
+   drops. With no gate (agent-core.js not served) the desks get no connection at all: the careful side. The pop-out windows
+   (agent.html, bot.html) build the same link (AgentCore.praetorianLink; the review of 102, F1). test/praetorian.test.js runs it. */
+const praetorianLink = AF && window.AgentCore && typeof window.AgentCore.praetorianLink === 'function'
+  ? window.AgentCore.praetorianLink(AF, m => { if (!m || m.type === 'accounts' || m.type === 'hello') syncPraetorian(); }) : null;   // the review of 102 (F1): one builder, also used by agent.html and bot.html
 let botDesk = null;
 function startBot() {
   if (!window.BotDesk) return;
-  botDesk = window.BotDesk.create({ v3: AF, headers: () => (PIN ? PIN.headers() : {}), feed: hub, storage: store, storagePrefix: PREFIX,
+  botDesk = window.BotDesk.create({ v3: praetorianLink, headers: () => (PIN ? PIN.headers() : {}), feed: hub, storage: store, storagePrefix: PREFIX,
     els: { tab: $('wsBotTab'), view: $('btView'), strip: $('btStrip') }, tradingKeys: () => HK,
     copilotKeys: () => (DS.on && DS.hk ? DS.hk : null),            // The Desk's hotkeys document (its accept and reject), as read here
     charts: () => chartViews().map(v => ({ id: v.panel.id, root: v.panel.root, chart: v.pane.chart })),
@@ -3696,7 +3707,7 @@ function tabUrl(t) {
 let agentDesk = null;
 function startAgent() {
   if (!window.AgentDesk) return;
-  agentDesk = window.AgentDesk.create({ v3: AF, headers: () => (PIN ? PIN.headers() : {}), feed: hub, storage: store, storagePrefix: PREFIX,
+  agentDesk = window.AgentDesk.create({ v3: praetorianLink, headers: () => (PIN ? PIN.headers() : {}), feed: hub, storage: store, storagePrefix: PREFIX,
     els: { tab: $('wsAgentTab'), view: $('agView') }, tradingKeys: () => HK,
     copilotKeys: () => (DS.on && DS.hk ? DS.hk : null),
     openBot: () => { if (botDesk) botDesk.showTab(true); },        // "Bot: 1 proposal" under the agent's proposal: the Bot tab answers it
@@ -3713,16 +3724,21 @@ function startAgent() {
    the week and month, the decision log and the API spend, read from The Desk's GET /api/chart-league. It hides the grid while
    it is open, as the Bot and Agent views do (?tab=league keeps it on a reload). Nothing in it sends an order. */
 let leagueView = null;
+/* 1.50.0 (the Colosseum's watch box): what ChartBridge says of its traders, to read and nothing else. The object has one key,
+   listen: no post, no send, no sendOrder, so nothing on the Colosseum can send a message (test/colosseum.test.js proves the
+   object's keys and that the view never calls a post it is handed). With no feed (accounts.js not served) it is null and the
+   box says ChartBridge's list is not on this page. */
+const colosseumLink = AF ? Object.freeze({ listen: part => AF.listen(part) }) : null;
 function startLeague() {
   if (!window.LeagueView) return;
-  leagueView = window.LeagueView.create({ view: $('lgView'), tab: $('wsLeagueTab'), feed: hub, storagePrefix: PREFIX,
+  leagueView = window.LeagueView.create({ view: $('lgView'), tab: $('wsLeagueTab'), feed: hub, storagePrefix: PREFIX, watch: colosseumLink,
     deskBase: () => window.AccountsPage.deskBase((u, o) => fetch(u, o)), fetch: (u, o) => fetch(u, o),
     /* a past day in the address (?tab=league&day=YYYY-MM-DD, The Desk's Agent Stats links here), so a reload keeps it */
     onDay: d => { const u = new URL(location.href); if (d) u.searchParams.set('day', d); else u.searchParams.delete('day'); history.replaceState(null, '', u.pathname + '?' + u.searchParams.toString() + u.hash); },
     onTab: on => {
       document.body.classList.toggle('lg-on', on);
       if (on) { closePops(); restoreMax(); if (botDesk && botDesk.shown()) botDesk.showTab(false); if (agentDesk && agentDesk.shown()) agentDesk.showTab(false); if (fleetView && fleetView.shown()) fleetView.showTab(false); }
-      tabUrl(on ? 'league' : '');
+      tabUrl(on ? 'colosseum' : '');                       // 1.50.0: the Colosseum's own word (?tab=league still opens it)
       placeTabBtn();                                        // the Bot button in the top bar meanwhile (one click to the Bot)
       if (!on) { if (leagueView.liveDay()) LG.day = leagueView.liveDay(); if (!LG.busy) leaguePoll(); }   // never a past day; the faint marks read on by themselves (a read under way schedules the next itself)
     } });
@@ -3756,6 +3772,56 @@ function startFleet() {
       tabUrl(on ? 'legion' : '');
       placeTabBtn();                                        // the Bot button in the top bar meanwhile (one click to the Bot)
     } });
+}
+/* 1.50.0 (the top tabs: Chart, Legion, Colosseum, Praetorian): Chart is pressed while no tab covers the grid, and a click on it
+   closes whichever tab is open (the same calls a layout tab makes). It reads the tabs' own body classes, so a tab that opens or
+   closes by any way (its button, a link, the Agents strip, a layout) moves it. */
+const TAB_CLASSES = ['bt-on', 'ag-on', 'lg-on', 'fl-on'];
+const tabCovering = () => TAB_CLASSES.some(c => document.body.classList.contains(c));
+function closeTabs() { for (const d of [botDesk, agentDesk, leagueView, fleetView]) if (d && d.shown()) d.showTab(false); }
+/* 1.51.0: Praetorian's button: offered when either side is (the Agent desk's or the Bot desk's own button), pressed while
+   either is open, a click opens the side used last (kept in this browser, a convenience) or closes it; its title says whether
+   a personal account is picked (with none, only Sim and None are offered there) */
+const PR_SIDE_KEY = 'live-praetorian-side-v1';
+const prSide = () => { try { return store.getItem(PR_SIDE_KEY) === 'bot' ? 'bot' : 'agent'; } catch (e) { return 'agent'; } };
+const prOpen = () => document.body.classList.contains('ag-on') || document.body.classList.contains('bt-on');
+function syncPraetorian() {
+  const b = $('wsPraetorianTab'); if (!b) return;
+  const offered = !!(($('wsAgentTab') && !$('wsAgentTab').hidden) || ($('wsBotTab') && !$('wsBotTab').hidden)), on = prOpen();
+  if (b.hidden !== !(offered || on)) b.hidden = !(offered || on);
+  if (b.getAttribute('aria-pressed') !== String(on)) b.setAttribute('aria-pressed', String(on));
+  document.body.classList.toggle('pr-tabs-on', on);
+  if (on) { try { store.setItem(PR_SIDE_KEY, document.body.classList.contains('bt-on') ? 'bot' : 'agent'); } catch (e) { /* blocked */ } }
+  /* no head row of its own (the Agent desk's Layout 5 needs the height): the button's title says what Praetorian reaches now */
+  const t = 'Praetorian: your agents and the bot on your personal account, Sim or None. A trader on a prop account is run from Legion; here it can only be stopped. ' +
+    (!praetorianLink ? 'Not connected to ChartBridge: nothing can be sent from here.' : praetorianLink.named() ? 'Your personal account is picked on the Accounts tab.' : 'No personal account is picked yet: Sim and None only (pick it on the Accounts tab).');
+  if (b.title !== t) b.title = t;
+}
+function openPraetorian() {
+  const agentOk = agentDesk && !$('wsAgentTab').hidden, botOk = botDesk && !$('wsBotTab').hidden;
+  const d = prSide() === 'bot' ? (botOk ? botDesk : agentOk ? agentDesk : null) : (agentOk ? agentDesk : botOk ? botDesk : null);
+  if (d) d.showTab(true);
+}
+if ($('wsPraetorianTab')) {
+  $('wsPraetorianTab').addEventListener('click', e => { e.currentTarget.blur(); closePops(); if (prOpen()) closeTabs(); else openPraetorian(); syncPraetorian(); });
+  if (typeof MutationObserver === 'function') for (const id of ['wsAgentTab', 'wsBotTab']) if ($(id)) new MutationObserver(syncPraetorian).observe($(id), { attributes: true, attributeFilter: ['hidden'] });
+}
+/* the row shows only while another tab is offered: alone, Chart would mean nothing and take the top bar's room (the status
+   line and its clock warning, test/workspace-smoke.mjs at 1366 px) */
+const OTHER_TABS = ['wsFleetTab', 'wsLeagueTab', 'wsAgentTab', 'wsBotTab'];   // 1.51.0: Praetorian is offered when its Agent or Bot side is
+function syncChartTab() {
+  const b = $('wsChartTab'), v = String(!tabCovering());
+  if (b && b.getAttribute('aria-pressed') !== v) b.setAttribute('aria-pressed', v);
+  const row = $('wsTopTabs'), any = OTHER_TABS.some(id => $(id) && !$(id).hidden);
+  if (row && row.hidden !== !any) row.hidden = !any;
+  syncPraetorian();
+}
+if ($('wsChartTab')) {
+  $('wsChartTab').addEventListener('click', e => { e.currentTarget.blur(); closePops(); closeTabs(); syncChartTab(); });
+  if (typeof MutationObserver === 'function') {
+    new MutationObserver(syncChartTab).observe(document.body, { attributes: true, attributeFilter: ['class'] });
+    for (const id of OTHER_TABS) if ($(id)) new MutationObserver(syncChartTab).observe($(id), { attributes: true, attributeFilter: ['hidden'] });
+  }
 }
 /* the league's trades, faint, on the charts whose ⋯ switch is on (kept in this browser, off by default): one read of The Desk
    every 30 seconds while any is on, one overlay per such chart */
@@ -3809,9 +3875,10 @@ const start = () => {
   openLayout(new URLSearchParams(location.search).get('layout') || W.DEFAULT_NAME); tconnect(); autoTake();
   if (botDesk && new URLSearchParams(location.search).get('tab') === 'bot') botDesk.showTab(true);
   if (agentDesk && new URLSearchParams(location.search).get('tab') === 'agent') agentDesk.showTab(true);
+  if (new URLSearchParams(location.search).get('tab') === 'praetorian') openPraetorian();   // 1.51.0: the side used last
   if (fleetView && new URLSearchParams(location.search).get('tab') === 'legion') fleetView.showTab(true);   // 1.45.0
-  if (leagueView && new URLSearchParams(location.search).get('tab') === 'league') leagueView.openDay(new URLSearchParams(location.search).get('day'));   // a day checked first: a past one read only
-  syncLeagueGhosts();
+  if (leagueView && ['league', 'colosseum'].includes(new URLSearchParams(location.search).get('tab'))) leagueView.openDay(new URLSearchParams(location.search).get('day'));   // a day checked first: a past one read only; 1.50.0: the old ?tab=league lands on the Colosseum
+  syncLeagueGhosts(); syncChartTab();
 };
 /* A window that opens (or reloads) with the ticket in its layout takes it when no other window has it (Anthony
    2026-10-01), Armed off. The same `ifAvailable` lock as any take: two windows opening at once give one holder, and a

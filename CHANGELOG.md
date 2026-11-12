@@ -63,6 +63,154 @@
   `test/pc-updater.test.js`: the allowed git subcommands, the box job's name, useHttpPath read before the one ask, the
   token only after a 404 or 401 and then through the Actions API, one place that asks for it and one that sends it.
 
+## chart 1.52.1 (2026-11-12): Legion Setup's Traders fold, Legion's trader desk mounted (page only, no F5)
+
+- **Legion Setup's Traders fold (build answers B4-1, section 3):** one mount of builder 4's Legion trader desk
+  (chart-engine 103, `live/legion-desk.js`) in a folded section under the lanes, closed by default, handed the page's
+  own feed (the desk puts Legion's gate round it). Mounted the first time it is opened, then told it is shown or hidden
+  with the fold (it counts as shown only then: no "seen", no polling while shut), and taken down when the tab closes and
+  on destroy. Until the desk is on the page, the fold says where it will show. It merges together with 102 and 103; the
+  page loads `live/legion-desk.js` and the install copies it (`nt8/install-files.json`).
+- **A trader's accounts are its account and every seat it has** (`FleetCore.traderAccounts`, builder 4's note on 103's
+  review): a seat left over after a move counts in what Kill all and Armed say; a trader whose account fields the page
+  cannot read is "cannot tell", and a lane of it is never armable (`FleetCore.accountsReadable`).
+- **With 103 merged in:** the page loads `live/legion-desk.js` (after agent.js) and the install copies it. Two lines of
+  the Colosseum's tests follow what is merged now: an account of `''` is "the page cannot tell yet", never None (answers
+  28, R4-1, the gates' own reader); builder 1's two box tokens are defined in `workspace.css` since 97 merged.
+
+## chart 1.52.0 (2026-11-12): Legion's trader desk, the Agent and Bot desks behind Praetorian's gate turned round (page only, no F5)
+
+Rule 12. The review of Praetorian (chart-engine 102, F5) found that, once the Agent and Bot desks are behind Praetorian's
+gate, everything they did for prop traders, groups and the bot on a prop account had no home on the page. The decision
+(reuse first): the same two desks, mounted a second time for Legion. No control is written again.
+
+- **Legion's trader desk** (`live/legion-desk.js`, `LegionDesk.mount(el, o)`): the Agent desk and the Bot desk with a
+  two-way switch (Agents, Bot) and one line on what it reaches. Builder 1 places it once, folded, in Legion Setup; this
+  release adds the file and its tests only, nothing on the page loads it yet.
+- **The gate turned round** (`AgentCore.legionGate`, `legionLink`, `live/agent-core.js`): kill switch ON, a trader's
+  Shadow and the two acknowledgements for anyone ChartBridge has described; any other agent or bot message only for a
+  trader on a prop account, on a group whose seats are prop (or prop and Sim), or on None, and the bot on a prop account
+  or None; an account change only to a prop account, such a group, or None; a group's Clear stand-down only for such a
+  group. Refused by name: your personal account, Sim alone, a league seat, a group that holds your personal account, an
+  account the page cannot tell, an undescribed trader, every other type. Prop needs ChartBridge 0.6.16's pick: with
+  none, no account is prop. It hears `groups` too, and forgets everything on a drop. Praetorian and Legion never both
+  pass the same message for a described trader except the stops and a trader on None (a test proves it).
+- **A second copy on one page** (`live/agent.js`, `live/bot.js`): `keys: false` (the copilot keys never reach it) and,
+  for the bot, `floating: false` (its proposal card stays inside the desk, placed after the desk is drawn). The desks'
+  words name the tab they are on; their pickers offer groups only where the gate allows them
+  (`AgentCore.prChoices` and `prBotChoices` take a name, a group test and the words; Praetorian passes none and is
+  unchanged).
+- **Embedded, not a pop-out** (the reviews of 103): `embedded: true` hides Pop out and leaves the page's own things alone
+  (its top bar, the Bot tab's floating card, the corner line, the notes and the alert band). The copy counts as shown only
+  while `LegionDesk.show(true)` says so (builder 1's fold and Legion's tab call it; it starts closed), and a proposal is
+  acknowledged (`agentSeen`, `botSeen`) only while its card is really on screen: a closed fold acknowledges nothing.
+  `keyPrefix` gives it its own browser keys (`legion-...`), so a reload never mixes the two copies; `destroy()` takes the
+  gate off the feed.
+- **What a trader is on** (both gates): every account counts, its own and every seat, a group's or a leftover one; a shape
+  the page cannot read is refused (only the stops go). A group trader is judged by the group as last heard too, so a group
+  that now holds your personal account is refused at once, before ChartBridge moves his seats; a group with no seats now
+  is not None.
+- **No home** (the coordinator's decision): a trader whose accounts fit neither desk (a group that holds your personal
+  account or is Sim only, a mix of kinds, an account the page cannot tell) says so on both desks, in the same words ("no
+  home: ...; stop it, then fix its account or group"). Either desk sends it the stops, and moves it to None only while
+  ChartBridge says it is flat (no position, no working order, no seat holding one); its picker offers None only.
+- **A move goes in Shadow** (the coordinator's decision: None is shared by both desks and a mode must not travel): an
+  account or group change for a trader or the bot not in Shadow is never sent as it is. The link sends Shadow first (a
+  stop), and the change, with keepMode Shadow, only once ChartBridge's own message shows Shadow (forgotten after 10 s or
+  on a drop). The LIVE question names Shadow; Auto or Copilot is set again on the desk the trader now belongs to. This
+  holds on Praetorian too.
+- **Round 2 of the review:** a move the link kept until Shadow and then could not make (refused once Shadow shows, or
+  Shadow not shown within 10 s) is said on the desk ("The move was not made: <why>; <trader> stays in Shadow"), never
+  silent; every move the link posts keeps Shadow; a seat must say it owns nothing for a trader to count as flat; a group
+  trader whose group the page cannot tell yet says "no home yet", never "set up from Praetorian"; the bot's account and a
+  trader's missing account key follow "only null is None" on Legion too; a leftover position is stops only on both desks;
+  "on screen" counts visibility and opacity, and the agent card must be in view like the bot's; the desks' live charts
+  keep their view under Legion's own prefix.
+- **The board on Legion:** Assign hero, a group trader's Start in Shadow and a group's Clear stand-down work there; for a
+  group Legion refuses, Assign hero and Clear stand-down are held back up front with the reason. The words no longer say
+  Legion's trader desk is "being built".
+- **Tests:** `test/legion-desk.test.js` (the gate as Praetorian's is tested; the shapes, a changing group, no home and the
+  flat move, the move in Shadow and the reviewer's sequence; deliberate breaks, each caught);
+  `test/legion-desk-smoke.mjs` (`npm run smoke:legion-desk`, 37 checks: both copies on one page, a prop and a personal
+  trader each way, forced controls, the picker, the bot's card, the copilot key, the fold and the acknowledgements, the
+  bot's Shadow and hold-back on each desk, a move in Shadow); `test/agent-board-smoke.mjs` runs the board's flows on
+  Legion's desk (`test/legion-desk-page.html`, a test page until builder 1's mount is in).
+
+## chart 1.51.0 (2026-11-12): Praetorian, the Agent tab and the Bot tab as one tab for the personal account (page only, no F5)
+
+Anthony's direction of 2026-11-11: "The bot and agent tabs ... should be rolled into ... a way to trade any of these bots
+or agents we are training, on the personal account ... They already have all the rules and safety's built in, so there's
+no need to trash then, but they dont need 2 tabs, they can be one, and focused on the personal (not prop business)
+accounts". The name is his: "Praetorian is good". Rule 12: this changes what the Agent and Bot desks can send. The map is
+`docs/COLOSSEUM_PRAETORIAN_reuse_map.md`.
+
+- **One tab, both desks as they were** (`live/index.html`, `live/workspace.js`, `live/agent.css`): Praetorian in the top
+  tabs, its two sides the Agent desk's and the Bot desk's own buttons (their listeners, their states and the Bot's red
+  alert kept, so an alert is never behind a closed tab). Praetorian opens the side used last (kept in this browser); its
+  title says whether a personal account is picked. No head row of its own: the Agent desk's Layout 5 needs the height
+  (test/agent-l5-smoke.mjs). Every rule and safety of both desks is the same code:
+  Auto's and a release's second click, the LIVE question, Accept sending only the proposal's id, tighten-only rails, R3.
+- **The gate** (`AgentCore.praetorianGate`, `live/agent-core.js`): both desks are handed a connection that posts only what
+  the gate passes, built in one place (`AgentCore.praetorianLink`, frozen, no send or sendOrder) for the page and for both
+  pop-out windows (`agent.html`, `bot.html`, which are Praetorian too). A kill switch ON always goes (it only stops a
+  trader), and so does a trader's or the bot's Shadow (`agentMode` or `botMode` to exactly `shadow`: it places nothing
+  new, so "Flatten and turn off" works on a prop trader, and the bot's Shadow button stays offered when the bot is held
+  back); the two acknowledgements go; any other agent or bot message goes only for a trader (or
+  the bot) on your personal account (ChartBridge 0.6.16's own flag, read by `FleetCore.kindOf`), a Sim account or None,
+  and an account change only to one of those. Refused by name: a group (the prop business), a prop
+  account, a live account the page cannot tell, a trader ChartBridge has not described yet, and every other message type.
+  The gate hears ChartBridge before the desks and forgets everything when the connection drops.
+- **Every account a trader is on counts** (`AgentCore.gateAccounts`, the review of 103): its account and every seat it
+  has, a group's or a leftover one (ChartBridge keeps a seat that still holds its trade when a trader goes to None). A
+  shape the page cannot read (an account that is not null or a name, a group that is not an object, a seat without an
+  account) is "the page cannot tell": only the stops go. Only null is None: a missing account key, for a trader or the
+  bot, is "the page cannot tell" too. A trader on None that still has a seat (a leftover position) is no one's: only the
+  stops go, with "a leftover position on <kind>: stop and flatten it first".
+- **Held back on screen, said in one line:** a trader on a prop account, a group or an account the page cannot tell shows
+  all its readings; its modes, Change account, Change the rules, the helper's On and Auto-On time, and its kill switch's
+  release are off, with "On Praetorian this trader can only be stopped (Kill switch, Off)" and why: "it is set up from
+  Legion's trader desk". Its Kill switch ON, Off and "Flatten and turn off" stay. The bot the same. The
+  board's Assign hero and a group's Clear stand-down are held back (groups are the prop business). The helper's On, its
+  Auto-On time and the board's Start (calls to the PC helper, not ChartBridge messages) are guarded in the desk, and Start
+  and Assign check again right before the helper's On, after the wait for Shadow.
+- **The pickers** (`AgentCore.prChoices`, `prBotChoices`): your personal account, Sim and None offered; a prop account or
+  one the page cannot tell listed with "not on Praetorian"; a group never offered. Never a choice the desk did not offer.
+- **Said as it is:** a message the gate refuses is never reported as "not signed in": each desk shows the gate's reason.
+- **Where the prop controls go:** a prop trader's release, rules, account and Copilot answers, Assign hero, Clear
+  stand-down and the bot on a prop account are set up from Legion's trader desk (the next pull request: these same desks
+  behind the gate turned round). Until it is in, they are not on the page; nobody has prop accounts on it today.
+- **Unchanged:** `?tab=agent` and `?tab=bot`
+  open Praetorian on that side, `?tab=praetorian` on the side used last; the hotkey note names Praetorian, and Accept
+  still answers only under the tab that shows its proposal.
+- **To confirm with Anthony:** Sim accounts are offered on Praetorian (they never reach a prop account, and the Agent and
+  Bot tabs are where a trader is tried on Sim); a trader on a group of Sim accounts is held back like any group.
+
+## chart 1.50.0 (2026-11-12): the top tabs and the Colosseum (page only, no F5)
+
+Anthony's direction of 2026-11-11 (the loop, amendment 1, section 5): four top tabs, Chart, Legion, Colosseum and
+Praetorian, and the League tab becomes the Colosseum, research on the live market. The map of what each part reuses is
+`docs/COLOSSEUM_PRAETORIAN_reuse_map.md`. Praetorian (the Agent and Bot tabs as one, for the personal account) comes in
+its own release; until then the Agent and Bot buttons stay in the top bar after the row, unchanged.
+
+- **The top tabs** (`live/index.html`, `live/workspace.js`, `live/workspace.css`): each tab's own button, with its own
+  listener and its own rule for when it is offered, moved into one row in Anthony's order: Chart, Legion, Colosseum.
+  Chart is new and small: it is pressed while no tab covers the grid (it reads the tabs' own body classes, so a tab
+  opened or closed any way moves it) and a click closes whichever tab is open. The row shows only while another tab
+  is offered (alone, Chart would take the top bar's room from the status line and its clock warning at 1366 px). The
+  chosen look's pills, the open one in gold, and the Agent and Bot buttons at the same tighter padding. Nothing animates.
+- **The Colosseum** (`live/league.js`, `live/league.css`): the League tab, renamed, with everything it showed (the
+  shadow league's chart and marks, the seats' day, the spend, the week and month table, the decision log, a past day).
+  Its name in the title font, gold, with what the tab is in one line: "Nothing here sends an order or changes a
+  trader's mode."
+- **The watch** (new, small): ChartBridge's own traders that are in Shadow now (`FleetCore.traders`, read only), each
+  with its build, what it is doing and what it is on. Which bots the loop is watching, and their score against the
+  bar, is not built yet (the loop's step 3), and the box says so; nothing is shown in its place. A trader in Auto or
+  Copilot is not listed, and one whose mode is not known is not guessed at.
+- **Nothing on the Colosseum can send.** The view is handed `{ listen }` and nothing else (frozen): no post, no send,
+  no sendOrder. A test checks the object's keys and that `league.js` calls no post; the smoke checks nothing was sent.
+- **Old links:** `?tab=league` (and `&day=`, The Desk's Agent Stats links) opens the Colosseum on that day; the address
+  then reads `?tab=colosseum`. The hotkey note names the Colosseum tab.
+
 ## chart 1.48.0 (2026-11-12): Legion Setup, assembled from the page's own panels (page only, no F5)
 
 In plain words: the Legion tab gets two pages, Setup and Live, and Setup is laid out as the approved picture, built from what
@@ -103,16 +251,6 @@ holding the real Multi-Account panel in the page and a move from it sending `mem
   known" (`FleetCore.accountsReadable`, R4-1); a trader seated on one of a group's accounts locks it in any mode,
   Shadow and flat included (R4-2); the narrow feed finds an account's group ignoring letter case, as ChartBridge does
   (R4-4).
-- **Legion Setup's Traders fold (build answers B4-1, section 3):** one mount of builder 4's Legion trader desk
-  (chart-engine 103, `live/legion-desk.js`) in a folded section under the lanes, closed by default, handed the page's
-  own feed (the desk puts Legion's gate round it). Mounted the first time it is opened, then told it is shown or hidden
-  with the fold (it counts as shown only then: no "seen", no polling while shut), and taken down when the tab closes and
-  on destroy. Until the desk is on the page, the fold says where it will show. It merges together with 102 and 103 (the
-  page's script line and the install line come with 103).
-- **A trader's accounts are its account and every seat it has** (`FleetCore.traderAccounts`, builder 4's note on 103's
-  review): a seat left over after a move counts in what Kill all and Armed say; a trader whose account fields the page
-  cannot read is "cannot tell", and a lane of it is never armable (`FleetCore.accountsReadable`).
-
 ## chart 1.47.0 (2026-11-12): three shared panels made ready for Legion (page only, no F5)
 
 In plain words: nothing on screen changes. Three panels the page already has learn to be shown a second time, so Legion

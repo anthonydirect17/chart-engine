@@ -62,6 +62,11 @@ function create(o) {
   const log = BC.createLog(storage), days = BC.createDayTypes(storage);
   const props = BC.createProposals();
   const popout = !!o.popout;
+  /* 1.52.0 (the review of 103, a F-B1 and b F3): a second copy inside the page (Legion's trader desk): no Pop out, shown only
+     when its owner says so, and botSeen only while its card is really on screen (keyPrefix: its own chart key) */
+  const embedded = !popout && !!o.embedded;
+  const chartKey = (embedded && typeof o.keyPrefix === 'string' ? o.keyPrefix : '') + CHART_KEY;
+  const onScreen = el => !!el && el.isConnected && el.getClientRects().length > 0 && (typeof el.checkVisibility !== 'function' || el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true, opacityProperty: true, visibilityProperty: true }));   // round 2, F3: visibility and opacity too
 
   /* ---------------- state */
   const S = {
@@ -79,7 +84,7 @@ function create(o) {
   /* ---------------- the DOM: built once, then written only where it changed */
   const view = els.view, strip = els.strip, tabBtn = els.tab;
   const notes = els.notes || (() => { const d = document.createElement('div'); d.className = 'bt-notes'; d.setAttribute('aria-live', 'polite'); document.body.appendChild(d); return d; })();
-  const propBox = (() => { const d = document.createElement('div'); d.className = 'bt-props'; d.setAttribute('data-no-motion', ''); d.setAttribute('role', 'region'); d.setAttribute('aria-label', 'Copilot proposals'); document.body.appendChild(d); return d; })();
+  const propBox = (() => { const d = document.createElement('div'); d.className = 'bt-props'; d.setAttribute('data-no-motion', ''); d.setAttribute('role', 'region'); d.setAttribute('aria-label', 'Copilot proposals'); if (o.floating !== false) document.body.appendChild(d); return d; })();   // 1.52.0: o.floating false (Legion's trader desk): placed in this desk's own view (placeCorner), never over the page
   const q = sel => view ? view.querySelector(sel) : null;
   if (view) build();
 
@@ -103,7 +108,7 @@ function create(o) {
           '<select class="ws-sel bt-tf" data-k="tf" aria-label="Bars">' + Object.keys(TF_NAMES).map(k => '<option value="' + k + '">' + TF_NAMES[k] + '</option>').join('') + '</select>' +
           '<span class="chart-live ws-lv" data-k="ind"></span>' +
           '<span class="bt-r"><span class="bt-pill bt-legend" title="The bot\'s trades today: triangles in, dots out; its working entry, stop and target as lines. ChartBridge marks the bot\'s orders, so your own orders on its account do not show here.">Bot trades</span>' +
-          (popout ? '' : '<button type="button" class="ws-btn bt-pop" data-act="popout" title="Open the Bot tab in its own window (for a third monitor)">Pop out</button>') + '</span></div>' +
+          (popout || embedded ? '' : '<button type="button" class="ws-btn bt-pop" data-act="popout" title="Open the Bot tab in its own window (for a third monitor)">Pop out</button>') + '</span></div>' +
         '<div class="bt-chart" data-k="chart" data-no-motion></div>' +
       '</section>' +
       /* the bot panel */
@@ -112,7 +117,7 @@ function create(o) {
         '<div class="bt-pb bt-panelb">' +
           '<div class="bt-sec" data-no-motion><span class="bt-cap">Mode <span class="bt-acct" data-k="modeAcct"></span></span>' +
             '<div class="bt-modes" role="group" aria-label="Bot mode" data-k="modes">' + BC.MODES.map(m => '<button type="button" data-mode="' + m + '" aria-pressed="false">' + BC.MODE_NAME[m] + '</button>').join('') + '</div>' +
-            '<p class="bt-why" data-k="modeWhy" hidden></p></div>' +
+            '<p class="bt-why" data-k="modeWhy" hidden></p><p class="bt-why bt-prwhy" data-k="prWhy" role="note" hidden></p></div>' +
           '<div class="bt-kv" data-in=".1,.38">' +
             '<span class="k">Bot</span><span class="v" data-k="name">-</span>' +
             '<span class="k">Size</span><span class="v" data-k="size" title="ChartBridge\'s botRoot in config.txt; at most 1 contract (a rail)">-</span>' +
@@ -155,6 +160,15 @@ function create(o) {
   /* ---------------- the window's v3 connection (o.v3): its messages in, this tab's few out */
   const V3 = o.v3 || null;
   const sendRaw = m => !!V3 && V3.post(m);
+  /* 1.51.0 (Praetorian): the workspace's connection says why a message would not go and whether the bot is held back (on a
+     prop account, or one the page cannot tell); the Bot window's connection (bot.html) has neither, and there nothing changes */
+  const refusal = m => (V3 && typeof V3.why === 'function' ? V3.why(m) || '' : '');
+  const praetorian = !!(V3 && V3.personal === true);
+  /* 1.52.0 (Legion's trader desk): the same desk behind the gate turned round (AgentCore.legionLink), its name in its lines */
+  const gated = praetorian || !!(V3 && typeof V3.accountOk === 'function');
+  const tabName = gated && V3 && typeof V3.name === 'string' && V3.name ? V3.name : 'Praetorian';
+  const heldBot = () => (gated && typeof V3.botWhy === 'function' && S.bot ? V3.botWhy() || '' : '');
+  const botChoices = () => { const l = BC.accountChoices(S.accounts, S.bot); return gated && window.AgentCore && typeof window.AgentCore.prBotChoices === 'function' ? window.AgentCore.prBotChoices(l, n => V3.accountOk(n), praetorian ? undefined : { name: tabName, notHere: V3.notHere }) : l; };
   const cid = () => 'bt' + (++S.cidSeq).toString(36) + Math.random().toString(36).slice(2, 6);
   function lost() {
     S.signedIn = false; S.trading = null; S.orders.clear(); simFills.clear(); ledger.clear();
@@ -192,6 +206,7 @@ function create(o) {
       case 'execs': for (const x of m.list || []) onExec(x, true); renderTrips(); return;
       case 'reject': onReject(m); return;
       case 'status': if (S.on && m.level === 'warn' && typeof m.text === 'string' && /^Bot\b/.test(m.text)) notice({ kind: 'status', level: 'amber', text: m.text }); return;
+      case 'linkMove': if (m.bot === true && typeof m.text === 'string') notice({ kind: 'account', level: 'amber', text: m.text }); return;   // 1.52.0 (round 2, F7): a kept move not made, said
     }
   }
 
@@ -323,6 +338,7 @@ function create(o) {
       }
     }
     const want = x ? [x.el, moreEl] : [];
+    if (o.floating === false && view && propBox.parentElement !== view) view.appendChild(propBox);   // 1.52.0: after the view is drawn (its build replaces its contents)
     if (propBox.children.length !== want.length || want.some((e, i) => propBox.children[i] !== e)) propBox.replaceChildren(...want);
     const more = [...propEls.values()].filter(y => !y.ended && y !== x).length;
     put(moreEl, 'textContent', more ? '+' + more + ' more bot proposal' + (more === 1 ? '' : 's') : '');
@@ -347,6 +363,7 @@ function create(o) {
     if (document.visibilityState === 'hidden') return;
     const at = Date.now(), x = shownCard();           // the card shown (the ones waiting are not shown yet)
     if (!x || x.ended) return;
+    if (embedded && (!S.shown || !onScreen(x.el) || !inView(x.el))) return;   // 1.52.0: a folded, hidden or scrolled-off copy acknowledges nothing
     const seen = props.shown(x.p.id, at);
     if (seen) sendRaw(seen);
   }
@@ -378,6 +395,8 @@ function create(o) {
     const r = props.answer(id, ans, Date.now(), c);
     const msgEl = x.el.querySelector('[data-k="msg"]');
     if (r.error) { put(msgEl, 'textContent', r.error); return false; }
+    const no = refusal(r.msg);
+    if (no) { props.refused(id); put(msgEl, 'textContent', no); return false; }   // 1.51.0: said as it is
     if (!sendRaw(r.msg)) { props.refused(id); put(msgEl, 'textContent', 'Not sent: not connected to ChartBridge.'); return false; }
     S.pending.set(c, { kind: 'answer', id });
     x.waiting = true; syncButtons(x);
@@ -425,8 +444,8 @@ function create(o) {
     if (armed(open) && inView(open.el)) answer(open.p.id, ans);
   }
   const ROUTER = window.AgentCore && window.AgentCore.copilotRouter ? window.AgentCore.copilotRouter(document) : null;
-  const unroute = ROUTER ? ROUTER.add('bot', { open: () => { const x = keyTarget(); return x ? [{ id: x.p.id, shownAt: x.shownAt, ready: armed(x) && inView(x.el), answer: ans => answer(x.p.id, ans) }] : []; } }) : null;
-  if (!ROUTER) document.addEventListener('chart-copilot-key', onCopilotKey);
+  const unroute = ROUTER && o.keys !== false ? ROUTER.add('bot', { open: () => { const x = keyTarget(); return x ? [{ id: x.p.id, shownAt: x.shownAt, ready: armed(x) && inView(x.el), answer: ans => answer(x.p.id, ans) }] : []; } }) : null;
+  if (!ROUTER && o.keys !== false) document.addEventListener('chart-copilot-key', onCopilotKey);   // 1.52.0: o.keys false: no key reaches this copy
   /** the keys shown on the buttons and in Options: what the workspace has (o.copilotKeys), checked as before */
   function loadKeys() {
     if (typeof o.copilotKeys !== 'function') { S.keys = { accept: '', reject: '', notes: [], from: 'window' }; return; }
@@ -716,10 +735,13 @@ function create(o) {
     const ev = q('[data-k="ev"]');
     put(ev, 'hidden', !e);
     if (e) { put(ev, 'textContent', e.shelf === 'research' ? 'Research' : e.evidence); put(ev, 'className', 'bt-badge ' + (e.shelf === 'research' ? 'rs' : BC.evidenceLevel(e.evidence) >= 2 ? 'l2' : '')); }
+    /* 1.51.0 (Praetorian): the bot on a prop account, or one the page cannot tell, can only be stopped here (its kill switch on) */
+    const held = heldBot();
+    const pw = q('[data-k="prWhy"]'); put(pw, 'hidden', !held); put(pw, 'textContent', held ? 'On ' + tabName + ' the bot can only be stopped (Kill switch, Shadow): ' + held + '.' : '');
     for (const btn of q('[data-k="modes"]').children) {
       const m = btn.dataset.mode, a = allowed[m];
       attr(btn, 'aria-pressed', String(b.mode === m));
-      put(btn, 'disabled', !a.ok || !S.signedIn);
+      put(btn, 'disabled', !a.ok || !S.signedIn || (!!held && m !== 'shadow'));   // the coordinator, 03:30: Shadow is a stop, offered for a held bot too
       attr(btn, 'title', a.ok ? (m === 'auto' ? 'ChartBridge places the bot\'s signals on ' + acc.name + (acc.mark ? ' (' + acc.mark + ')' : '') + ' by itself' : m === 'copilot' ? 'Each signal is a proposal for ' + acc.name + ': you accept or reject it' : 'Signals are shown and logged; no orders') : a.why);
       put(btn, 'textContent', m === 'auto' && S.autoConfirm > Date.now() ? 'Confirm' : BC.MODE_NAME[m]);
     }
@@ -730,7 +752,7 @@ function create(o) {
     put(q('[data-k="account"]'), 'textContent', acc.label);
     for (const k of ['accountMark', 'modeAcct']) { const el = q('[data-k="' + k + '"]'); put(el, 'textContent', acc.mark); put(el, 'className', 'bt-acct' + (acc.mark === 'LIVE' ? ' live' : acc.mark ? ' sim' : '')); put(el, 'hidden', !acc.mark); }
     attr(q('[data-k="modeAcct"]'), 'title', acc.mark ? 'The bot trades ' + acc.name + (acc.mark === 'LIVE' ? ', a LIVE account' : ', a Sim account') : null);
-    put(q('[data-k="acctOpen"]'), 'disabled', !S.signedIn || !!(b.position && b.position.qty));   // ChartBridge refuses a change unless the bot is flat
+    put(q('[data-k="acctOpen"]'), 'disabled', !S.signedIn || !!(b.position && b.position.qty) || !!held);   // ChartBridge refuses a change unless the bot is flat
     put(q('[data-k="acctEdit"]'), 'hidden', !S.acctEdit || !!S.acctAsk);
     put(q('[data-k="acctAsk"]'), 'hidden', !S.acctAsk);
     if (S.acctAsk) put(q('[data-k="acctAskText"]'), 'textContent', 'The bot will trade LIVE account ' + S.acctAsk + ' in ' + (BC.MODE_NAME[S.bot && S.bot.mode] || 'Shadow') + '. Continue?');   // 1.18.1: the mode it keeps
@@ -754,12 +776,12 @@ function create(o) {
       put(bar, 'className', x.level === 'ok' ? '' : x.level);
       tog(box, 'amber', x.level === 'amber'); tog(box, 'red', x.level === 'red');
     }
-    put(q('[data-k="railsOpen"]'), 'disabled', !S.signedIn || !isNum(b.maxTrades) || !!(b.position && b.position.qty));   // ChartBridge refuses a change unless the bot is flat
+    put(q('[data-k="railsOpen"]'), 'disabled', !S.signedIn || !isNum(b.maxTrades) || !!(b.position && b.position.qty) || !!held);   // ChartBridge refuses a change unless the bot is flat
     put(q('[data-k="railsEdit"]'), 'hidden', !S.railsEdit);
     const kill = q('[data-k="kill"]');
     put(kill, 'textContent', b.killed ? (S.killConfirm > Date.now() ? 'Release: click again' : 'Kill switch on · Release') : 'Kill switch');
     tog(kill, 'on', !!b.killed);
-    put(kill, 'disabled', !S.signedIn);
+    put(kill, 'disabled', !S.signedIn || (!!b.killed && !!held));   // 1.51.0: on always; the release held back on Praetorian
     attr(kill, 'aria-pressed', String(!!b.killed));
     const cur = days.current();
     for (const btn of q('[data-k="dtype"]').children) attr(btn, 'aria-pressed', String(btn.dataset.dt === cur));
@@ -825,12 +847,14 @@ function create(o) {
       '<p class="bt-help">Less motion shows every scene in its final state. The kill switch, Accept and Reject, the position and P&amp;L never move either way.</p>' +
       '<div class="bt-opt"><span>Copilot keys</span><span>' + keys + '</span></div>' + (k.notes && k.notes.length ? '<p class="bt-help warn">' + esc(k.notes.join('; ')) + '</p>' : '') +
       '<p class="bt-help">Ghost marks: the bot\'s trades, faint, on your own charts. Switch them on per chart from the chart\'s ⋯ menu (off by default).</p>' +
-      (popout ? '' : '<div class="bt-opt"><span>This tab in its own window</span><button type="button" class="ws-btn" data-act="popout">Pop out</button></div>');
+      (popout || embedded ? '' : '<div class="bt-opt"><span>This tab in its own window</span><button type="button" class="ws-btn" data-act="popout">Pop out</button></div>');
   }
 
   /* ---------------- actions */
   function sendBot(m, kind) {
     const c = cid(); m.cid = c;
+    const no = refusal(m);
+    if (no) { notice({ kind: 'refused', level: 'amber', text: no }); return false; }   // 1.51.0: Praetorian's gate, said as it is
     if (!S.signedIn || !sendRaw(m)) { notice({ kind: 'refused', level: 'amber', text: 'Not sent: not signed in to ChartBridge.' }); return false; }
     S.pending.set(c, { kind });
     setTimeout(() => S.pending.delete(c), 15000);
@@ -905,9 +929,9 @@ function create(o) {
     } else if (a === 'railsCancel') { S.railsEdit = false; railsWhy(''); renderPanel(); }
     else if (a === 'acctOpen') {
       S.acctEdit = true; S.acctAsk = ''; acctWhy('');
-      const sel = q('[data-k="acctSel"]'), cur = BC.botAccount(S.bot).name, list = BC.accountChoices(S.accounts, S.bot);
+      const sel = q('[data-k="acctSel"]'), cur = BC.botAccount(S.bot).name, list = botChoices();   // 1.51.0: on Praetorian, your personal account, Sim and None
       // DECISION 2026-10-14e: None first (nothing trades on it)
-      sel.replaceChildren(new Option(BC.NONE_LABEL + ' (nothing trades)' + (cur ? '' : ', now'), ''), ...list.map(c => { const op = new Option(c.name + ' (' + c.mark + ')' + (c.current ? ', now' : c.tradable ? '' : ', not tradable'), c.name); op.disabled = !c.tradable && !c.current; return op; }));
+      sel.replaceChildren(new Option(BC.NONE_LABEL + ' (nothing trades)' + (cur ? '' : ', now'), ''), ...list.map(c => { const op = new Option(c.name + ' (' + c.mark + ')' + (c.current ? ', now' : c.praetorian ? ', ' + c.praetorian : c.tradable ? '' : ', not tradable'), c.name); op.disabled = !c.tradable && !c.current; return op; }));
       sel.value = cur;
       if (!list.some(c => !c.current)) acctWhy('No other account is tradable in ChartBridge now: check one on the Accounts tab.');
       renderPanel();
@@ -934,14 +958,14 @@ function create(o) {
   if (view) {
     view.addEventListener('click', onViewClick);
     view.addEventListener('change', e => {
-      if (e.target.closest('[data-k="tf"]')) { S.chartTf = TF_NAMES[e.target.value] ? e.target.value : 'm1'; try { storage.setItem(CHART_KEY, JSON.stringify({ tf: S.chartTf })); } catch (er) { /* blocked */ } if (S.chart) S.chart.setView({ tf: S.chartTf }); renderChartHead(); }
+      if (e.target.closest('[data-k="tf"]')) { S.chartTf = TF_NAMES[e.target.value] ? e.target.value : 'm1'; try { storage.setItem(chartKey, JSON.stringify({ tf: S.chartTf })); } catch (er) { /* blocked */ } if (S.chart) S.chart.setView({ tf: S.chartTf }); renderChartHead(); }
     });
     view.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.closest('.bt-rails-edit input')) { e.preventDefault(); q('[data-act="railsSave"]').click(); } });
   }
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && S.detail) { e.preventDefault(); closeDetail(); } });
 
   /* ---------------- the Bot tab's chart: a normal live chart on the window's feed (never animated) */
-  try { const v = JSON.parse(storage.getItem(CHART_KEY)); if (v && TF_NAMES[v.tf]) S.chartTf = v.tf; } catch (e) { /* none */ }
+  try { const v = JSON.parse(storage.getItem(chartKey)); if (v && TF_NAMES[v.tf]) S.chartTf = v.tf; } catch (e) { /* none */ }
   const chartHost = {
     pressOff: () => 'The Bot tab\'s chart is for watching: it takes no orders. Its lines are the bot\'s own working orders.',
     place: () => {}, move: () => {}, cancel: () => {},
@@ -951,7 +975,7 @@ function create(o) {
     const body = q('[data-k="chart"]');
     S.chartRoot = botRoot();
     S.chart = window.ChartLive.mount(body, {
-      feed: o.feed, paneId: 'bot', storagePrefix: o.storagePrefix || '', toolbar: false, compact: true, trade: chartHost,
+      feed: o.feed, paneId: 'bot', storagePrefix: (o.storagePrefix || '') + (embedded && typeof o.keyPrefix === 'string' ? o.keyPrefix : ''), toolbar: false, compact: true, trade: chartHost,
       view: { root: S.chartRoot, tf: S.chartTf },
       onStatus: s => { if (s.state === 'live') { S.contract = typeof s.contract === 'string' ? s.contract : ''; renderChartHead(); } },
     });
@@ -1065,7 +1089,7 @@ function create(o) {
     },
     /** the workspace's hotkeys changed (The Desk read): the keys shown on the buttons */
     keysChanged() { loadKeys(); renderPanelTab(); for (const x of propEls.values()) if (!x.ended) { const n = x.el.querySelector('[data-k="msg"]'); const t = n ? n.textContent : ''; x.el.innerHTML = propHtml(x.p); if (t) put(x.el.querySelector('[data-k="msg"]'), 'textContent', t); syncButtons(x); } },
-    showTab, shown: () => S.shown, on: () => S.on,
+    showTab, shown: () => S.shown, on: () => S.on, seenCheck: () => seenNow(),   // 1.52.0: seenCheck: Legion's desk asks again when its fold opens
     /** 1.36.0, read only: what the Agents strip's bot card shows (live/agents-strip.js): whether the Bot is offered (a v3
         ChartBridge), its channel on, the `bot` message, its red alert by the rule above, its status words and strip line. */
     glance: () => ({ offered: S.v3 === true, on: S.on, bot: S.bot ? Object.assign({}, S.bot) : null, alert: !!alertNow(),

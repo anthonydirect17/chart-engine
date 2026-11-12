@@ -62,6 +62,7 @@
     { "from": "live/agent-core.js", "to": "agent-core.js" },
     { "from": "live/agent-helper.js", "to": "agent-helper.js" },
     { "from": "live/agent-grid.js", "to": "agent-grid.js" },
+    { "from": "live/legion-desk.js", "to": "legion-desk.js" },
     { "from": "live/agent.css", "to": "agent.css" },
     { "from": "src/chart-engine.js", "to": "src/chart-engine.js" },
     { "from": "live/fonts/plex.css", "to": "fonts/plex.css" },
