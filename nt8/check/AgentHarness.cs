@@ -205,6 +205,7 @@ public static class AgentHarness
             EntryRules();     // 0.6.18: a trader's rules may allow a market entry and an entry with no target (both off by default)
             Pick();           // 0.6.21: the roster file a trader's runner runs, picked on the page; accountState's profit side
             DayStop();        // 0.6.19: the day's profit stop: the plan's dollar value, and the consistency mark on an account that is not funded
+            DayLoss();        // 0.6.22: the day's loss stop: the plan's dollar value only (answers 31)
             PropAccounts();   // prop accounts: Auto through the 17:00 reset and one restore after a restart; the personal account, Sim and a no-setting install as before
         }
         catch (Exception ex) { Check(false, "agent harness threw: " + ex); }
@@ -5213,6 +5214,79 @@ public static class AgentHarness
         });
     }
 
+    static string WithDayLoss(string plan, string dollars) { return plan.Substring(0, plan.Length - 1) + ",\"dayLossDollars\":" + dollars + "}"; }
+    // 0.6.22 (answers 31): the day's LOSS stop, the mirror of the profit stop: the plan's value only, on the loss side of the day
+    static void DayLoss()
+    {
+        Part("0.6.22 day loss stop: the plan's dollar value, reached on the loss side: flat, stood down, refused until 18:00", () =>
+        {
+            DayStopFresh();   // manrae on SIM-E, auto, 10:00
+            int calls = sime.Calls.Count;
+            foreach (string bad in new[] { "0", "-5", "\"300\"", "true", "1000001", "300.125" })
+            {
+                A(WithDayLoss(Good(NewId()), bad));
+                Check((AgentReject().Contains("dayLossDollars must be dollars above 0") || AgentReject().Contains("dayLossDollars is not a plain value")) && sime.Calls.Count == calls, "0.6.22 day loss: dayLossDollars " + bad + " is refused, nothing sent: " + AgentReject());
+            }
+            Check(!Last(agentOut, "agentState").Contains("dayLoss") && !FileText("agent-manrae-day.txt").Contains("#dayloss"), "0.6.22 day loss: none yet: agentState and the day file as in 0.6.21");
+            // a plan naming only the profit side carries no loss mark (and the other way round)
+            Order p0 = PlacedOn(sime, WithDayStop(Good(NewId()), "600"));
+            Check(p0 != null && !Last(agentOut, "agentState").Contains("dayLoss") && Last(agentOut, "agentState").Contains("\"dayStop\":600"), "0.6.22 day loss: a plan naming only dayStopDollars: no loss mark");
+            if (p0 != null) { p0.OrderState = OrderState.Cancelled; Update(p0); Advance(500); }
+            Order e = DayStopEntry(WithDayLoss(Good(NewId()), "300"));
+            Check(e != null, "0.6.22 day loss: a plan with dayLossDollars 300 is placed: " + AgentReject());
+            if (e == null) return;
+            Check(Last(agentOut, "agentState").Contains("\"dayLoss\":300") && !Last(agentOut, "agentState").Contains("\"dayStop\""), "0.6.22 day loss: agentState carries it (and the last plan named no profit stop): " + Last(agentOut, "agentState"));
+            Check(Regex.IsMatch(FileText("agent-manrae-day.txt"), "#dayloss\t300(\r|\n)"), "0.6.22 day loss: saved in the day file");
+            Check(ChartBridgeAgents.Get("manrae").StripJson().Contains(",\"dayLoss\":300"), "0.6.22 day loss: and the page's agent message");
+            sime.Items[AccountItem.UnrealizedProfitLoss] = -299.99;
+            Advance(2000);
+            Check(Legs(sime, e).Count(IsLive) == 2 && FlatClose(sime) == null && !Last(agentOut, "agentState").Contains("loss stop"), "0.6.22 day loss: one cent short of the mark: nothing happens");
+            Restart(); Mode("manrae", "auto");
+            Advance(2000);
+            Check(Last(agentOut, "agentState").Contains("\"dayLoss\":300") && FlatClose(sime) == null, "0.6.22 day loss: kept through a restart (the day file)");
+            sime.Items[AccountItem.UnrealizedProfitLoss] = -300;
+            Order close = DayStopFlatten(e);
+            Check(close != null && close.OrderType == OrderType.Market && close.OrderAction == OrderAction.Sell && close.Quantity == 1 && !Legs(sime, e).Any(IsLive),
+                  "0.6.22 day loss: at minus the mark (realized plus open): its legs cancelled and the position closed at market");
+            string st = Last(agentOut, "agentState");
+            Check(st.Contains("\"standDown\":\"the day's loss stop is reached on SIM-E ($300, the plan's day loss stop; the day is at -$300, realized plus open): flat"), "0.6.22 day loss: the trader stands down for the session, and says why: " + st);
+            Settle(sime);
+            sime.Items[AccountItem.UnrealizedProfitLoss] = 0;   // the day back over the mark: still refused (the latch)
+            calls = sime.Calls.Count;
+            A(WithDayLoss(Good(NewId()), "5000"));
+            Check(AgentReject().Contains("the day's loss stop is reached") && sime.Calls.Count == calls, "0.6.22 day loss: a new plan the same session is refused, whatever it names: " + AgentReject());
+            Restart(); Mode("manrae", "auto");
+            A(Good(NewId()));
+            Check(AgentReject().Contains("the day's loss stop is reached") && sime.Calls.Count == calls, "0.6.22 day loss: and after a restart: " + AgentReject());
+            Check(FileText("agent-manrae-day.txt").Contains("#daylossreached\tSIM-E\t300"), "0.6.22 day loss: the account's latch is in the day file");
+            sime.Items.Remove(AccountItem.UnrealizedProfitLoss);
+            // the 18:00 roll clears it
+            et = new DateTime(2026, 10, 9, 18, 0, 30);
+            Advance(1500);
+            st = Last(agentOut, "agentState");
+            Check(!st.Contains("loss stop") && !st.Contains("dayLoss") && !FileText("agent-manrae-day.txt").Contains("#dayloss"), "0.6.22 day loss: after the roll: no stand-down, no dayLoss: " + st);
+            ChartBridgeAgents.ForgetDayReachedForCheck();
+        });
+        Part("0.6.22 day loss stop: a plan already past its own mark is refused; not known is said once, never latched", () =>
+        {
+            DayStopFresh();
+            sime.Items[AccountItem.UnrealizedProfitLoss] = -400;   // the account is already down 400 (other trading)
+            int calls = sime.Calls.Count;
+            A(WithDayLoss(Good(NewId()), "300"));
+            Check(AgentReject().Contains("the day's loss stop is reached on SIM-E this session ($300") && sime.Calls.Count == calls, "0.6.22 day loss: a plan whose own loss mark is already passed is refused, nothing sent: " + AgentReject());
+            ChartBridgeAgents.ForgetDayReachedForCheck();
+            DayStopFresh();
+            Order e = PlacedOn(sime, WithDayLoss(Good(NewId()), "300"));
+            if (e != null) Fill(e, 1, 24999);
+            sime.Items[AccountItem.UnrealizedProfitLoss] = double.NaN;   // the day's number not known
+            int s0 = N(page);
+            Advance(6000);
+            Check(e != null && page.Skip(s0).Count(x => x.Contains("the day's loss stop ($300) is NOT checked on SIM-E")) == 1 && FlatClose(sime) == null, "0.6.22 day loss: not known: said once, nothing closed");
+            sime.Items.Remove(AccountItem.UnrealizedProfitLoss);
+            Settle(sime);
+            ChartBridgeAgents.ForgetDayReachedForCheck();
+        });
+    }
     static void DayStop()
     {
         string groups = Path.Combine(Dir, "groups.txt");
