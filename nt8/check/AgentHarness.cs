@@ -206,6 +206,7 @@ public static class AgentHarness
             Pick();           // 0.6.21: the roster file a trader's runner runs, picked on the page; accountState's profit side
             DayStop();        // 0.6.19: the day's profit stop: the plan's dollar value, and the consistency mark on an account that is not funded
             DayLoss();        // 0.6.22: the day's loss stop: the plan's dollar value only (answers 31)
+            Voice();          // 0.6.22: ChartBridge's own voice calls (answers 30): listen and play only
             PropAccounts();   // prop accounts: Auto through the 17:00 reset and one restore after a restart; the personal account, Sim and a no-setting install as before
         }
         catch (Exception ex) { Check(false, "agent harness threw: " + ex); }
@@ -5216,6 +5217,83 @@ public static class AgentHarness
 
     static string WithDayLoss(string plan, string dollars) { return plan.Substring(0, plan.Length - 1) + ",\"dayLossDollars\":" + dollars + "}"; }
     // 0.6.22 (answers 31): the day's LOSS stop, the mirror of the profit stop: the plan's value only, on the loss side of the day
+    // 0.6.22 (answers 30): the voice calls. A stand-in player records what would play; nothing here touches an order.
+    static void Voice()
+    {
+        Part("0.6.22 voice calls: each event its call, one call per decision, off by default, a missing file silent, a stuck player dropped", () =>
+        {
+            ChartBridgeVoice.Reset();
+            List<string> heard = new List<string>();
+            Func<string, bool> rec = path => { lock (heard) heard.Add(Path.GetFileNameWithoutExtension(path)); return true; };
+            Func<int, bool> waitFor = n => { for (int i = 0; i < 200; i++) { lock (heard) if (heard.Count >= n) return true; System.Threading.Thread.Sleep(10); } lock (heard) return heard.Count >= n; };
+            // the mapping
+            Check(ChartBridgeVoice.CallFor("CB#1a2b3c4d s8 t16", true) == "LongFilled" && ChartBridgeVoice.CallFor("CB#1a2b3c4d atm s8 t16", false) == "ShortFilled" &&
+                  ChartBridgeVoice.CallFor("CB#1a2b3c4d ag:manrae s8 t16", true) == "LongFilled", "0.6.22 voice: an entry fill: Long filled or Short filled, by side");
+            Check(ChartBridgeVoice.CallFor("CB#1a2b3c4d stop f1 q1 p24990.25", false) == "StopFilled" && ChartBridgeVoice.CallFor("CB#1a2b3c4d target f1 q1 p24990.25", false) == "TargetFilled" &&
+                  ChartBridgeVoice.CallFor("CB#1a2b3c4d target f1 q1 p24990.25 k1", false) == "TargetOneFilled" && ChartBridgeVoice.CallFor("CB#1a2b3c4d target f1 q1 p24990.25 k2", false) == "TargetTwoFilled" &&
+                  ChartBridgeVoice.CallFor("CB#1a2b3c4d exit f1 q1 p24990.25", false) == "PositionClosed" && ChartBridgeVoice.CallFor("CB#1a2b3c4d ag:manrae flat", false) == "PositionClosed",
+                  "0.6.22 voice: stop, target, T1 and T2, a market exit and an agent's flatten close");
+            Check(ChartBridgeVoice.CallFor("Close", false) == null && ChartBridgeVoice.CallFor("Entry", true) == null && ChartBridgeVoice.CallFor(null, true) == null,
+                  "0.6.22 voice: an order ChartBridge did not place says nothing (NinjaTrader's own sounds are his)");
+            Account va = NewAccount("VOICE-A", Provider.Simulator), vb = NewAccount("VOICE-B", Provider.Simulator);
+            Order entryA = new Order { Name = "CB#0a0a0a0a s8 t16", Account = va, Instrument = mnq }, entryB = new Order { Name = "CB#0b0b0b0b s8 t16", Account = vb, Instrument = mnq };
+            // off by default: nothing plays
+            ChartBridgeVoice.Player = rec;
+            ChartBridgeVoice.OnFill(va, entryA, MarketPosition.Long);
+            System.Threading.Thread.Sleep(100);
+            lock (heard) Check(heard.Count == 0 && !ChartBridgeVoice.On, "0.6.22 voice: off by default (config.txt voice = on turns it on): nothing plays");
+            Check(ChartBridgeVoice.ReadConfig("voice", "on") && ChartBridgeVoice.On && ChartBridgeVoice.ReadConfig("voiceFolder", "C:\\made-up\\sounds") && ChartBridgeVoice.Folder == "C:\\made-up\\sounds",
+                  "0.6.22 voice: voice = on and voiceFolder read from config.txt");
+            ChartBridgeVoice.Player = rec;
+            // one call per decision: a group entry's two member orders share one decision id
+            string dec = ChartBridgeDecisions.NewId();
+            ChartBridgeDecisions.Begin(dec, "VOICE-A"); ChartBridgeDecisions.NoteCreated(va, entryA); ChartBridgeDecisions.End();
+            ChartBridgeDecisions.Begin(dec, "VOICE-B"); ChartBridgeDecisions.NoteCreated(vb, entryB); ChartBridgeDecisions.End();
+            ChartBridgeVoice.OnFill(va, entryA, MarketPosition.Long);
+            ChartBridgeVoice.OnFill(vb, entryB, MarketPosition.Long);
+            ChartBridgeVoice.OnFill(va, entryA, MarketPosition.Long);   // a second fill increment of the same entry
+            Check(waitFor(1), "0.6.22 voice: the call plays");
+            System.Threading.Thread.Sleep(150);
+            lock (heard) Check(heard.Count == 1 && heard[0] == "LongFilled", "0.6.22 voice: a group entry copied to two accounts (one decision) says Long filled once: " + string.Join(",", heard));
+            Order stopA = new Order { Name = "CB#0a0a0a0a stop f1 q1 p25000", Account = va, Instrument = mnq };
+            ChartBridgeVoice.OnFill(va, stopA, MarketPosition.Short);
+            Check(waitFor(2), "0.6.22 voice: the stop's call plays");
+            lock (heard) Check(heard[1] == "StopFilled", "0.6.22 voice: then Stop filled");
+            // break even: a ChartBridge stop moved to its own fill price, once; a trailing move (any other price) says nothing
+            ChartBridgeVoice.OnStopMoved(new Order { Name = "CB#0c0c0c0c stop f1 q1 p25000", Account = va, Instrument = mnq }, 24998);
+            ChartBridgeVoice.OnStopMoved(new Order { Name = "CB#0c0c0c0c stop f1 q1 p25000", Account = va, Instrument = mnq }, 25000);
+            ChartBridgeVoice.OnStopMoved(new Order { Name = "CB#0c0c0c0c stop f1 q1 p25000", Account = va, Instrument = mnq }, 25000);
+            Check(waitFor(3), "0.6.22 voice: the break even call plays");
+            System.Threading.Thread.Sleep(150);
+            lock (heard) Check(heard.Count == 3 && heard[2] == "BreakEvenSet", "0.6.22 voice: the stop moved to its fill price: Break even set, once; a trailing move says nothing: " + string.Join(",", heard));
+            // ChartBridge's Flatten: the close NinjaTrader sends (its own name) says Position closed, within 30 s, once
+            ChartBridgeVoice.NoteFlatten(va, mnq);
+            ChartBridgeVoice.OnFill(va, new Order { Name = "Close", Account = va, Instrument = mnq }, MarketPosition.Short);
+            ChartBridgeVoice.OnFill(va, new Order { Name = "Close", Account = va, Instrument = mnq }, MarketPosition.Short);
+            Check(waitFor(4), "0.6.22 voice: the flatten's close plays");
+            System.Threading.Thread.Sleep(150);
+            lock (heard) Check(heard.Count == 4 && heard[3] == "PositionClosed", "0.6.22 voice: ChartBridge's Flatten: Position closed, once: " + string.Join(",", heard));
+            // a missing file: silent, said once in the Output window
+            ChartBridgeVoice.Player = null;
+            ChartBridgeVoice.Folder = Path.Combine(Dir, "no-such-voice-folder");
+            ChartBridgeVoice.PlayOne("TargetFilled"); ChartBridgeVoice.PlayOne("TargetFilled");
+            Check(NinjaTrader.Code.Output.Lines.Count(x => x.Contains("voice: TargetFilled.wav is not in")) == 1, "0.6.22 voice: a missing file is silent and said once");
+            // a stuck player: the call is dropped after its limit, and the queue goes on; the order path never waits
+            System.Threading.ManualResetEvent stuck = new System.Threading.ManualResetEvent(false);
+            ChartBridgeVoice.PlayTimeoutMs = 200;
+            ChartBridgeVoice.Player = path => { stuck.WaitOne(3000); return true; };
+            long d0 = ChartBridgeVoice.Dropped;
+            DateTime t0 = DateTime.UtcNow;
+            for (int i = 0; i < 12; i++) ChartBridgeVoice.OnFill(va, new Order { Name = "CB#1" + i.ToString("x7") + " s8 t16", Account = va, Instrument = mnq }, MarketPosition.Long);
+            double tookMs = (DateTime.UtcNow - t0).TotalMilliseconds;
+            Check(tookMs < 100, "0.6.22 voice: twelve fills queued in " + tookMs.ToString("0") + " ms: the fill path never waits");
+            System.Threading.Thread.Sleep(600);
+            Check(ChartBridgeVoice.Dropped > d0, "0.6.22 voice: a stuck player and a full queue drop calls (" + (ChartBridgeVoice.Dropped - d0) + " dropped), never block");
+            stuck.Set();
+            ChartBridgeVoice.Reset();
+            Check(!ChartBridgeVoice.On, "0.6.22 voice: (left off)");
+        });
+    }
     static void DayLoss()
     {
         Part("0.6.22 day loss stop: the plan's dollar value, reached on the loss side: flat, stood down, refused until 18:00", () =>

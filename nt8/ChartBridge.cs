@@ -173,6 +173,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 else if (key.StartsWith("contract.")) ContractOverride[key.Substring(9).Trim().ToUpperInvariant()] = val;
                 else if (ChartBridgeStops.ReadConfig(key, val)) { }   // 0.6.6: postStops = true|false (ChartBridgeStops.cs)
                 else if (ChartBridgeOrderRecord.ReadConfig(key, val)) { }   // 0.6.9: postOrders = true|false (ChartBridgeOrderRecord.cs)
+                else if (ChartBridgeVoice.ReadConfig(key, val)) { }   // 0.6.22: voice = on|off (off by default), voiceFolder
                 else if (key == "postFills") PostFills = val.Equals("true", StringComparison.OrdinalIgnoreCase) || val == "1";
                 else if (key == "deskUrl") DeskUrl = val.TrimEnd('/');
                 else if (key == "laneRule") LaneRule = !val.Equals("off", StringComparison.OrdinalIgnoreCase);   // 0.6.22
@@ -6068,6 +6069,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (!FirstTime(ExecKey(name, e.ExecutionId, e.Time, e.Price, e.Quantity, e.OrderId))) return;
                 Interlocked.Increment(ref eventNew);
                 execOrder = e.Execution != null ? e.Execution.Order : null;   // 0.5.0: for the fills "by"
+                ChartBridgeVoice.OnFill(a, execOrder, e.MarketPosition);   // 0.6.22: a call queued (never waits; never throws)
                 try { Deliver(name, inst, e.MarketPosition, e.Quantity, e.Price, e.Time, e.ExecutionId, e.OrderId, null); } finally { execOrder = null; }
                 ChartBridgeDesk.Flush();
             }
@@ -6343,6 +6345,165 @@ namespace NinjaTrader.NinjaScript.AddOns
             uint frac = (uint)Math.Min(TwoTo32 - 1, Math.Floor((s - whole) * TwoTo32));
             b[at] = (byte)(sec >> 24); b[at + 1] = (byte)(sec >> 16); b[at + 2] = (byte)(sec >> 8); b[at + 3] = (byte)sec;
             b[at + 4] = (byte)(frac >> 24); b[at + 5] = (byte)(frac >> 16); b[at + 6] = (byte)(frac >> 8); b[at + 7] = (byte)frac;
+        }
+    }
+    // ------------------------------------------------------------------ 0.6.22: ChartBridge's own voice calls (build answers 30)
+    // Anthony 2026-11-12: ChartBridge says its own fills and break even, in the voice set he picked (voice 4), because NinjaTrader says
+    // "Order filled" for ChartBridge's legs. LISTEN AND PLAY ONLY: nothing here places, moves or cancels an order. A fill or a break-even
+    // move puts one call on a small queue (at most 8; full: the call is dropped); one background thread plays them, each with a 5 s limit
+    // (a stuck player: that call is dropped, the queue goes on). NinjaTrader's thread never waits. One call per decision: a group entry
+    // copied to several accounts (one decision id) speaks once; a single entry once per kind. config.txt voice = on turns it on (OFF by
+    // default: an F5 alone changes nothing he hears); voiceFolder names the folder (default Documents\NinjaTrader 8\sounds_voice4). A
+    // missing folder or file is said once in the Output window and that call is silent.
+    // Calls: entry filled: LongFilled / ShortFilled (by side); ChartBridge's stop leg: StopFilled; its target leg: TargetFilled, or
+    // TargetOneFilled / TargetTwoFilled for a strategy's first and second target; ChartBridge's market exit, an agent's flatten, or a fill
+    // of NinjaTrader's close after ChartBridge's Flatten: PositionClosed; ChartBridge's stop moved to its fill price: BreakEvenSet.
+    public static class ChartBridgeVoice
+    {
+        public static bool On;
+        public static string Folder = DefaultFolder();
+        public static Func<string, bool> Player;          // test hook: plays a file path, true when it played (null: Windows' player)
+        public static int PlayTimeoutMs = 5000;
+        public const int QueueMax = 8;
+        private static readonly object Sync = new object();
+        private static readonly Queue<string> Calls = new Queue<string>();
+        private static readonly Dictionary<string, double> Said = new Dictionary<string, double>();   // call key -> when (UTC ms)
+        private static readonly HashSet<string> Missing = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private static readonly Dictionary<string, double> Flattened = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);   // account|instrument -> when
+        private static Thread worker;
+        private static long dropped, played;
+        private static readonly Regex LegRx = new Regex("^CB#([0-9a-f]{8}) (stop|target|exit) f[0-9]{1,6} q[0-9]{1,6} p([0-9]{1,9}(?:\\.[0-9]{1,8})?)(?: k([1-3])){0,1}$");
+        private static readonly Regex TagRx = new Regex("^CB#([0-9a-f]{8})(?: |$)");
+
+        private static string DefaultFolder()
+        {
+            try { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "NinjaTrader 8", "sounds_voice4"); }
+            catch (Exception) { return "sounds_voice4"; }
+        }
+        public static bool ReadConfig(string key, string val)
+        {
+            if (key == "voice") { On = val.Equals("on", StringComparison.OrdinalIgnoreCase) || val.Equals("true", StringComparison.OrdinalIgnoreCase); return true; }
+            if (key == "voiceFolder") { if (!string.IsNullOrWhiteSpace(val)) Folder = val.Trim(); return true; }
+            return false;
+        }
+        public static void Reset() { lock (Sync) { Calls.Clear(); Said.Clear(); Missing.Clear(); Flattened.Clear(); dropped = 0; played = 0; } On = false; Folder = DefaultFolder(); Player = null; PlayTimeoutMs = 5000; }
+        public static long Dropped { get { lock (Sync) return dropped; } }
+        public static long Played { get { lock (Sync) return played; } }
+        private static double NowMs() { return (DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds; }
+
+        // The call for one fill of a ChartBridge order (its name and side), or null: an order ChartBridge did not place says nothing.
+        public static string CallFor(string orderName, bool buy)
+        {
+            if (string.IsNullOrEmpty(orderName)) return null;
+            Match m = LegRx.Match(orderName);
+            if (m.Success)
+            {
+                string kind = m.Groups[2].Value, k = m.Groups[4].Success ? m.Groups[4].Value : null;
+                if (kind == "stop") return "StopFilled";
+                if (kind == "exit") return "PositionClosed";
+                return k == "1" ? "TargetOneFilled" : k == "2" ? "TargetTwoFilled" : "TargetFilled";
+            }
+            if (!TagRx.IsMatch(orderName)) return null;
+            if (orderName.EndsWith(" flat", StringComparison.Ordinal)) return "PositionClosed";   // an agent's own flatten close
+            return buy ? "LongFilled" : "ShortFilled";   // an entry (every other CB# order is an entry: ticket, bot, agent, strategy, group member)
+        }
+
+        // ChartBridgeOrders' Flatten: a fill of NinjaTrader's own close on that account and instrument in the next 30 s says Position closed.
+        public static void NoteFlatten(Account a, Instrument i)
+        {
+            if (!On || a == null || i == null) return;
+            try { lock (Sync) Flattened[a.Name + "|" + i.FullName] = NowMs(); } catch (Exception) { }
+        }
+
+        // Every fill (ChartBridgeServer.OnExecutionUpdate). Never throws, never waits.
+        public static void OnFill(Account a, Order o, MarketPosition mp)
+        {
+            if (!On || a == null || o == null) return;
+            try
+            {
+                string call = CallFor(o.Name, mp == MarketPosition.Long), key;
+                if (call == null)
+                {
+                    string fk = a.Name + "|" + (o.Instrument != null ? o.Instrument.FullName : "");
+                    double at;
+                    lock (Sync) { if (!Flattened.TryGetValue(fk, out at) || NowMs() - at > 30000) return; Flattened.Remove(fk); }
+                    call = "PositionClosed"; key = "flat|" + fk + "|" + at.ToString("0", CultureInfo.InvariantCulture);
+                }
+                else
+                {
+                    Match t = TagRx.Match(o.Name);
+                    string d = ChartBridgeDecisions.Of(o);
+                    key = (d != null ? "d:" + d : "t:" + (t.Success ? t.Groups[1].Value : o.Name)) + "|" + call;   // one call per decision (or entry) and kind
+                }
+                Enqueue(key, call);
+            }
+            catch (Exception) { }
+        }
+
+        // A ChartBridge stop leg moved (the page's move, or a strategy's): to its own fill price is Break even set. Never throws.
+        public static void OnStopMoved(Order leg, double price)
+        {
+            if (!On || leg == null) return;
+            try
+            {
+                Match m = LegRx.Match(leg.Name ?? "");
+                if (!m.Success || m.Groups[2].Value != "stop") return;
+                double fill;
+                if (!double.TryParse(m.Groups[3].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out fill)) return;
+                double tick = leg.Instrument != null && leg.Instrument.MasterInstrument != null ? leg.Instrument.MasterInstrument.TickSize : 0.25;
+                if (Math.Abs(price - fill) > tick / 2) return;
+                string d = ChartBridgeDecisions.Of(leg);
+                Enqueue((d != null ? "d:" + d : "t:" + m.Groups[1].Value) + "|be", "BreakEvenSet");
+            }
+            catch (Exception) { }
+        }
+
+        private static void Enqueue(string key, string call)
+        {
+            lock (Sync)
+            {
+                double now = NowMs();
+                if (Said.ContainsKey(key)) return;
+                Said[key] = now;
+                if (Said.Count > 500) foreach (string k in Said.Where(kv => now - kv.Value > 3600000).Select(kv => kv.Key).ToList()) Said.Remove(k);
+                if (Calls.Count >= QueueMax) { dropped++; return; }
+                Calls.Enqueue(call);
+                if (worker == null || !worker.IsAlive) { worker = new Thread(Run) { IsBackground = true, Name = "ChartBridge voice" }; worker.Start(); }
+                Monitor.PulseAll(Sync);
+            }
+        }
+
+        private static void Run()
+        {
+            for (;;)
+            {
+                string call;
+                lock (Sync)
+                {
+                    while (Calls.Count == 0) { if (!Monitor.Wait(Sync, 60000)) { worker = null; return; } }
+                    call = Calls.Dequeue();
+                }
+                PlayOne(call);
+            }
+        }
+
+        // Plays one call, at most PlayTimeoutMs; a missing file is said once and is silent.
+        public static void PlayOne(string call)
+        {
+            string path;
+            try { path = Path.Combine(Folder, call + ".wav"); } catch (Exception) { return; }
+            Func<string, bool> p = Player;
+            if (p == null && !File.Exists(path))
+            {
+                bool say; lock (Sync) say = Missing.Add(path);
+                if (say) ChartBridgeServer.Log("voice: " + call + ".wav is not in " + Folder + ": that call is silent (said once)");
+                return;
+            }
+            Task<bool> t = Task.Run(() => { try { if (p != null) return p(path); using (System.Media.SoundPlayer sp = new System.Media.SoundPlayer(path)) sp.PlaySync(); return true; } catch (Exception) { return false; } });
+            bool done = false;
+            try { done = t.Wait(PlayTimeoutMs); } catch (Exception) { }
+            lock (Sync) { if (done && t.Result) played++; else dropped++; }
+            if (!done) ChartBridgeServer.Log("voice: " + call + " did not finish within " + (PlayTimeoutMs / 1000) + " s: dropped");
         }
     }
 }
