@@ -378,6 +378,20 @@ function mount(el, host) {
     render();
   }
 
+  /* Remove a member from the panel's group (a second click on the chip's Remove, or Legion's own list, chart 1.55.0): the
+     same lock, the same send, and the same answer (a refusal by its cid, else the groups message settles it). -> sent */
+  function removeMember(name) {
+    const g = group();
+    if (!g || typeof name !== 'string' || !g.members.includes(name)) return false;
+    const lw = lockWhy(); if (lw) { say(lw, true); render(); return false; }
+    const c2 = cid();
+    let sent = false;
+    if (can() && F.accountGroup(name, null, '', null, c2)) { sent = true; P.pending.set(c2, { at: Date.now(), chip: name, gid: g.id, leave: true, what: name + ' was not removed' }); say('Sent to ChartBridge: ' + name + ' out of ' + g.name + '.'); }
+    else say('Not sent: not connected to ChartBridge, or the page is locked.', true);
+    render();
+    return sent;
+  }
+
   el.addEventListener('click', e => {
     const tab = e.target.closest('.ma-tabs [data-tab]');
     if (tab && FIXED) return;
@@ -399,9 +413,7 @@ function mount(el, host) {
       const name = b.dataset.name;
       if (P.removeAsk !== name) { P.removeAsk = name; render(); return; }
       P.removeAsk = '';
-      const c2 = cid();
-      if (can() && F.accountGroup(name, null, '', null, c2)) { P.pending.set(c2, { at: Date.now(), chip: name, gid: g.id, leave: true, what: name + ' was not removed' }); say('Sent to ChartBridge: ' + name + ' out of ' + g.name + '.'); }
-      else say('Not sent: not connected to ChartBridge, or the page is locked.', true);
+      removeMember(name);
     }
     else if (act === 'settings') { P.settings = !P.settings; P.creating = false; P.delAsk = false; }
     else if (act === 'new') { P.creating = !P.creating; P.settings = false; P.delAsk = false; if (P.creating && !benchNow(g) && !MC.verAtLeast(S.version, MC.BENCH_VERSION)) say('New group needs ChartBridge ' + MC.BENCH_VERSION + ' (a group keeps no rules of its own from then; this PC has ' + (S.version || 'an older one') + ').', true); }
@@ -474,7 +486,11 @@ function mount(el, host) {
   const pickNew = () => { if (FIXED || !P.wantName) return; const g = groups().find(x => x.name.toLowerCase() === P.wantName); if (g) { P.gid = g.id; savePick(g.id); P.wantName = ''; } };
   const renderAll = () => { pickNew(); render(); };
   renderAll();
-  return { render: renderAll, destroy: () => { if (cop) cop.destroy(); }, state: P, get feed() { return F; } };   // the review of 97, F3: what it was handed, read only
+  /* chart 1.55.0 (Legion simpler, D1): Legion's own account list acts through the panel, never around it. bench(name, benched)
+     moves a member of the group on or off the bench (move(): its checks, its send, its answer); remove(name) takes it out of
+     the group (removeMember()). Only for a member of the group: an account outside it is never joined from here. */
+  const benchMember = (name, benched) => { const g = group(); if (!g || typeof name !== 'string' || !g.members.includes(name)) return false; move(name, !benched); return true; };
+  return { render: renderAll, destroy: () => { if (cop) cop.destroy(); }, state: P, get feed() { return F; }, bench: benchMember, remove: removeMember };   // the review of 97, F3: what it was handed, read only
 }
 
 return { mount, PICK_KEY, DEFAULT_TOAST };

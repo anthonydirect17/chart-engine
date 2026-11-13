@@ -1009,11 +1009,57 @@ test('1.54.0 (D): a lane card is the bot, its accounts (a click lists them), a w
   P.listeners.click({ target: { closest: () => ({ dataset: { do: 'lanehelp', stage: 'eval' } }) }, detail: 1 });
   P.listeners.click({ target: { closest: () => ({ dataset: { do: 'laneaccts', stage: 'eval' } }) }, detail: 1 });
   html = P.part('lane-eval').innerHTML;
-  assert.match(html, /<div class="fl-lanehelp">/); assert.match(html, /<div class="fl-lanepanels" data-panel="eval">/);
+  assert.match(html, /<div class="fl-lanehelp">/); assert.match(html, /<div class="fl-lanepanels" data-panel="eval" hidden>/, '1.55.0: the panel itself opens from "Add a Sim account"');
+  assert.match(html, /<ul class="fl-accts" aria-label="Eval lane: its accounts">/, '1.55.0: the click lists the accounts');
   assert.match(html, /data-do="lanehelp" data-stage="eval" aria-expanded="true"/);
   assert.match(P.part('lane-funded').innerHTML, /<div class="fl-lanehelp" hidden>/, 'the other lane stays as it was');
   P.listeners.click({ target: { closest: () => ({ dataset: { do: 'lanehelp', stage: 'nope' } }) }, detail: 1 });
   assert.strictEqual(P.posts.length, 0, 'display only: nothing is sent');
+});
+
+test('1.55.0 (D1, D2, D3): a lane\'s account list: Bench / Trade and a Sim account\'s Remove go through the lane\'s own panel; an account the rule owns says when it leaves', async t => {
+  const calls = [];
+  const lanePanel = (el, key, opts) => ({ key, opts, el, destroy() {}, panel: { state: { toast: { text: 'Sent to ChartBridge: EVAL-B to the bench.', warn: false } }, bench: (n, b) => { calls.push(['bench', n, b]); return true; }, remove: n => { calls.push(['remove', n]); return true; } } });
+  timers(t);
+  const P = page(t, { lanePanel }); P.fv.showTab(true);
+  const acc = { type: 'accounts', personalNamed: true, list: [{ name: 'EVAL-A', prop: true, pnlToday: 120 }, { name: 'EVAL-B', prop: true, pnlToday: -40 }, { name: 'SIM-C', sim: true, pnlToday: 0 }] };
+  P.feed({ type: 'hello', version: '0.6.22' }); P.feed({ type: 'trading', enabled: true }); P.feed(acc);
+  P.feed({ type: 'groups', list: [{ id: 'g1', name: 'Evals', accountType: 'eval', members: ['EVAL-A', 'EVAL-B', 'SIM-C'], benched: ['SIM-C'] }, groups.list[1]] });
+  P.feed(evalTrader({ seats: [{ account: 'EVAL-A' }, { account: 'EVAL-B' }, { account: 'SIM-C' }] })); P.feed(fundTrader());
+  P.replayDone(); await P.tick();
+  const click = (what, more) => P.listeners.click({ target: { closest: () => ({ dataset: Object.assign({ do: what, stage: 'eval' }, more || {}) }) }, detail: 1 });
+  click('laneaccts');
+  let html = P.part('lane-eval').innerHTML;
+  assert.match(html, /<li class="fl-acct" data-acct="EVAL-A"><span class="fl-aname">EVAL-A<\/span>[^]*?Trading[^]*?\+\$120[^]*?data-do="acctbench" data-stage="eval" data-acct="EVAL-A" data-to="bench">Bench<\/button>[^]*?Leaves when The Desk marks it blown, passed or archived/, 'a prop account: trading, today, Bench, and when it leaves (no Remove)');
+  assert.match(html, /<li class="fl-acct" data-acct="SIM-C" data-benched="1">[^]*?Sim<\/span>[^]*?On the bench[^]*?data-to="trade">Trade<\/button>[^]*?data-do="acctremove" data-stage="eval" data-acct="SIM-C">Remove<\/button>/, 'a Sim account on the bench: Trade, and Remove');
+  assert.doesNotMatch(html, /data-do="acctremove"[^>]*data-acct="EVAL-/, 'no Remove for an account the rule owns');
+  assert.match(html, /data-do="addsim" data-stage="eval" aria-expanded="false">Add a Sim account<\/button>/);
+  click('acctbench', { acct: 'EVAL-B', to: 'bench' });
+  assert.deepStrictEqual(calls, [['bench', 'EVAL-B', true]], 'Bench: through the panel');
+  assert.match(P.part('lane-eval').innerHTML, /<p class="fl-line fl-acctsaid" role="status">Sent to ChartBridge: EVAL-B to the bench\.<\/p>/, 'the panel\'s own answer shows under the list');
+  click('acctbench', { acct: 'SIM-C', to: 'trade' });
+  assert.deepStrictEqual(calls[1], ['bench', 'SIM-C', false], 'Trade: off the bench');
+  click('acctremove', { acct: 'EVAL-A' });
+  assert.strictEqual(calls.length, 2, 'the rule\'s account is never removed by hand');
+  click('acctremove', { acct: 'SIM-C' });
+  assert.strictEqual(calls.length, 2, 'Remove asks first');
+  assert.match(P.part('lane-eval').innerHTML, /data-acct="SIM-C">Yes, remove SIM-C<\/button>/);
+  click('acctremove', { acct: 'SIM-C' });
+  assert.deepStrictEqual(calls[2], ['remove', 'SIM-C'], 'the second click removes, through the panel');
+  click('acctbench', { acct: 'NOT-HERE', to: 'bench' });
+  assert.strictEqual(calls.length, 3, 'an account not in the lane: nothing');
+  click('addsim');
+  assert.match(P.part('lane-eval').innerHTML, /<div class="fl-lanepanels" data-panel="eval">/, 'Add a Sim account opens the panel itself');
+  // locked: the lane in Auto: nothing moves, and the list says why
+  P.feed(evalTrader({ mode: 'auto', seats: [{ account: 'EVAL-A' }, { account: 'EVAL-B' }, { account: 'SIM-C' }] })); await P.tick();
+  html = P.part('lane-eval').innerHTML;
+  assert.match(html, /data-acct="EVAL-A" data-to="bench" aria-disabled="true" title="The lane is in Auto: switch Armed off before an account moves\.">/);
+  click('acctbench', { acct: 'EVAL-A', to: 'bench' });
+  assert.strictEqual(calls.length, 3, 'locked: not sent');
+  assert.strictEqual(P.posts.length, 0, 'the tab\'s own connection sent nothing: every move went through the panel');
+  // D3: a stood-down trader reads Stood down
+  P.feed(evalTrader({ mode: 'auto', standDown: "the day's loss stop is reached", seats: [{ account: 'EVAL-A' }, { account: 'EVAL-B' }, { account: 'SIM-C' }] })); await P.tick();
+  assert.match(P.part('lane-eval').innerHTML, /<span class="fl-word" data-word="stooddown">Stood down<\/span>/);
 });
 
 test('the pick: one list a lane, sent as agentPick; locked in Auto and while the trader holds something; a refusal is said and the list goes back', async t => {
