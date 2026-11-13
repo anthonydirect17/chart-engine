@@ -5134,7 +5134,13 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (ChartBridgeBranches.DroppedWhileRetrying("agent:" + Id)) return null;   // 0.6.3 (review round 2, MED A): chosen on the page meanwhile
                 string acct = Account;
                 EndAutoAtReset();   // Anthony 2026-11-11: Auto ends with the trading day, on every kind of account (N4); nothing is kept through the reset
-                if (NoneNow() || ChartBridgeBranches.KeepThroughReset("agent:" + Id, GroupNow() ? KeyNow() : acct)) return null;
+                if (NoneNow()) return null;
+                if (ChartBridgeBranches.KeepThroughReset("agent:" + Id, GroupNow() ? KeyNow() : acct))
+                {
+                    // 0.6.22 (A3): a lane trader stays on its lane group; said once, never silent
+                    if (GroupNow() && ChartBridgeBranches.LaneGroupKept("agent:" + Id, KeyNow())) { string t = "Daily reset (17:00 ET): agent " + Id + " stays on its lane, " + AccountWords() + " (a lane keeps its trader; Auto is off until you arm it)"; Log("agent " + Id + ": " + t); AgentLog(t); }
+                    return null;
+                }
                 if (GroupNow())   // 0.6.0: None only when no seat is exposed and every member is idle; else the words name the accounts holding something
                 {
                     List<string> unk = AllSeats().Select(x => ChartBridgeBranches.UnknownWhy(FindAccount(x.Name), x.Name)).Where(w => w != null).ToList();

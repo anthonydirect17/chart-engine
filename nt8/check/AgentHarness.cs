@@ -2443,6 +2443,35 @@ public static class AgentHarness
             finally { ChartBridgeBranches.ClockUtc = was; ChartBridgeBranches.Forget(); }
         });
 
+        Part("0.6.22 a lane keeps its trader through the 17:00 reset (A3)", () =>
+        {
+            foreach (string type in new[] { "eval", "funded" })
+            {
+                GroupFresh();
+                // the same group, now with its Type (field 12): a lane of Legion
+                File.WriteAllText(GroupsFile, ChartBridgeGroups.Header + "\n#\ngroup\tg1\tLucid\ton\t1000\t2000\tintraday\t3000\t50000\t-\t-\t" + type + "\n" +
+                    string.Join("", new[] { "SIM-A", "SIM-B", "SIM-C" }.Select(m => "member\t" + m + "\tg1\n")));
+                ChartBridgeGroups.StartNow();
+                Check(ChartBridgeGroups.TypeOf("g1") == type && ModeNow() == "auto", "0.6.22 A3: the group's Type is " + type + " and the agent is in Auto before the break: " + ModeNow());
+                Func<DateTime> was = ChartBridgeBranches.ClockUtc;
+                ChartBridgeBranches.Forget();
+                try { Gone(Path.Combine(Dir, "daily-reset.txt")); } catch (Exception) { }
+                ChartBridgeBranches.ClockUtc = () => new DateTime(2026, 10, 12, 21, 5, 0, DateTimeKind.Utc);   // a Monday, 17:05 EDT, every seat flat and idle
+                try
+                {
+                    SettleAll(); SteadyAll(); ChartBridgeBranches.Check();
+                    Check(M.GroupId == "g1" && FileText("agent-manrae-account.txt").Contains("group\tg1"), "0.6.22 A3 (" + type + "): flat and idle, the lane trader stays on its lane group (never None)");
+                    Check(ModeNow() == "shadow", "0.6.22 A3 (" + type + "): Auto still ends at 17:00, so the lane is disarmed: " + ModeNow());
+                    Check(Logged("agent manrae stays on its lane, group Lucid (SIM-A, SIM-B, SIM-C) (a lane keeps its trader; Auto is off until you arm it)"), "0.6.22 A3 (" + type + "): said once, never silent");
+                    Check(ChartBridgeBranches.LaneGroupKept("agent:manrae", "group:g1") && !ChartBridgeBranches.LaneGroupKept("bot", "group:g1") && !ChartBridgeBranches.LaneGroupKept("agent:manrae", "SIM-A"),
+                          "0.6.22 A3: only an agent on a typed group is kept (never the bot, never an account)");
+                }
+                finally { ChartBridgeBranches.ClockUtc = was; ChartBridgeBranches.Forget(); }
+            }
+            WriteGroup("SIM-A", "SIM-B", "SIM-C");   // back to the group with no Type: the 0.6.0 reset part shows it goes to None
+            Check(!ChartBridgeBranches.LaneGroupKept("agent:manrae", "group:g1"), "0.6.22 A3: a group with no Type is not a lane: reset to None as before");
+        });
+
         Part("0.6.0 the copier and the bot", () =>
         {
             GroupFresh();

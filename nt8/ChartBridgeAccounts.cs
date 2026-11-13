@@ -1611,11 +1611,24 @@ namespace NinjaTrader.NinjaScript.AddOns
         // the copier: never. An agent in Shadow or Copilot (no intent saved) goes to None as before.
         public static bool KeepThroughReset(string branch, string account)
         {
+            if (LaneGroupKept(branch, account)) return true;   // 0.6.22: a lane trader keeps its lane group (A3)
             if (!PersonalNamed || branch == null || !branch.StartsWith("agent:", StringComparison.Ordinal)) return false;
             ChartBridgeAgent ag = ChartBridgeAgents.Get(branch.Substring(6));
             if (ag == null) return false;
             List<string> seats = ag.SeatsForProp();
             return seats.Count > 0 && seats.All(x => IsProp(x)) && ag.SavedAutoOn(account);
+        }
+
+        // 0.6.22 (A3, the coordinator's answers of 2026-11-13 and Anthony's standing rule: the lanes run themselves): an agent on a
+        // group whose Type is eval or funded (a lane of Legion) keeps that group through the 17:00 reset, so nobody gives it back by
+        // hand each day. Auto still ends at 17:00 for every agent (EndAutoAtReset runs first), so the lane is disarmed until Anthony
+        // arms it. Any other group, an account, the bot and the copier are reset as before. account is the branch's key ("group:<id>").
+        public static bool LaneGroupKept(string branch, string account)
+        {
+            if (branch == null || !branch.StartsWith("agent:", StringComparison.Ordinal)) return false;
+            if (account == null || !account.StartsWith("group:", StringComparison.Ordinal)) return false;
+            string t = ChartBridgeGroups.TypeOf(account.Substring(6));
+            return t == "eval" || t == "funded";
         }
 
         // Every 2 s (ChartBridge's poll timer) and once at start: the reset once per day, in the break. 0.6.3 (audit C1): when the
