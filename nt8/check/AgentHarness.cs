@@ -6744,6 +6744,47 @@ public static class AgentHarness
                 P("{\"type\":\"accountGroup\",\"cid\":\"p2out\",\"account\":\"PROP-2\",\"group\":null}");   // PROP-2 out of g2 again for the checks below
                 try { Gone(handFile); } catch (Exception) { }
                 ChartBridgeGroups.LaneForget();                                                                  // a clean hand list for them
+                // 0.6.23 (Anthony 2026-11-13, the board 16:05Z and 16:10Z): "I was more referring to me moving an eval onto my group trader
+                // or copier", and "stay out until I add it". A group of his own (no Type) stands in for his Copier here.
+                lanes("group\tg3\tCopier\ton\t-\t-\t-\t-\t-\t-\t-\t-\t-\n");
+                Check(ChartBridgeGroups.GroupsJson().Contains("\"outside\":null"), "0.6.23 outside: null until The Desk's rows are read (not known, never an empty list)");
+                Check(apply(new[] { row("PROP-1", "eval", null, false) }) == 1 && ChartBridgeGroups.GroupOf("PROP-1") == "g1", "0.6.23 own group: (setup) the eval PROP-1 is in the eval lane");
+                P("{\"type\":\"accountGroup\",\"cid\":\"own1\",\"account\":\"PROP-1\",\"group\":\"g3\",\"size\":50000,\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"eod\",\"lockAt\":0,\"target\":3000,\"consistency\":0,\"maxMinis\":4,\"maxMicros\":40,\"typeId\":\"made-up-50k\"}");
+                Check(ChartBridgeGroups.GroupOf("PROP-1") == "g3", "0.6.23 own group: a hand move puts it into his Copier group: " + ChartBridgeGroups.GroupOf("PROP-1") + " " + PageReject());
+                Check(apply(new[] { row("PROP-1", "eval", null, false) }) == 0 && apply(new[] { row("PROP-1", "eval", null, false) }) == 0 && ChartBridgeGroups.GroupOf("PROP-1") == "g3",
+                      "0.6.23 own group: rule passes run and it is still in his Copier group (never moved out, never back to a lane)");
+                string oj = ChartBridgeGroups.GroupsJson();
+                Check(oj.Contains("\"outside\":[{\"account\":\"PROP-1\",\"kind\":\"eval\",\"group\":\"Copier\",\"copier\":null,\"byHand\":false}]"),
+                      "0.6.23 outside: the Unassigned row lists it, marked with the group it is in: " + oj.Substring(Math.Max(0, oj.IndexOf("\"laneRule\""))));
+                P("{\"type\":\"accountGroup\",\"cid\":\"own2\",\"account\":\"PROP-1\",\"group\":null}");
+                Check(ChartBridgeGroups.GroupOf("PROP-1") == null && File.Exists(handFile) && File.ReadAllText(handFile).Contains("out\tPROP-1\t") && File.ReadAllText(handFile).Contains("\tCopier\t-"),
+                      "0.6.23 own group: a hand remove from his Copier group goes on the hand list too: " + (File.Exists(handFile) ? File.ReadAllText(handFile) : "(no file)"));
+                Check(apply(new[] { row("PROP-1", "eval", null, false) }) == 0 && apply(new[] { row("PROP-1", "eval", null, false) }) == 0 && ChartBridgeGroups.GroupOf("PROP-1") == null,
+                      "0.6.23 own group: rule passes run and it is in no group (kept out until he adds it)");
+                oj = ChartBridgeGroups.GroupsJson();
+                Check(oj.Contains("\"handOut\":[{\"account\":\"PROP-1\",\"from\":\"Copier\",\"type\":null,\"at\":") &&
+                      oj.Contains("\"outside\":[{\"account\":\"PROP-1\",\"kind\":\"eval\",\"group\":null,\"copier\":null,\"byHand\":true}]"),
+                      "0.6.23 own group: handOut says the group it left (no Type: type null), and outside marks it kept out by hand: " + oj.Substring(Math.Max(0, oj.IndexOf("\"laneRule\""))));
+                ChartBridgeGroups.LaneForget();   // a restart: the "-" line reads back
+                Check(apply(new[] { row("PROP-1", "eval", null, false) }) == 0 && ChartBridgeGroups.GroupOf("PROP-1") == null && !ChartBridgeGroups.GroupsJson().Contains("lane-hand.txt does not read"),
+                      "0.6.23 own group: a restart keeps it out (the line of a group with no Type reads back)");
+                ChartBridgeSwitches.Note("copier", "on"); ChartBridgeCopier.HarnessManual = true; ChartBridgeCopier.Start();
+                P("{\"type\":\"copierFollower\",\"cid\":\"lcf1\",\"account\":\"PROP-1\",\"on\":false,\"qty\":1,\"size\":\"micro\",\"lossLimit\":null}");
+                apply(new[] { row("PROP-1", "eval", null, false) });
+                oj = ChartBridgeGroups.GroupsJson();
+                Check(oj.Contains("\"outside\":[{\"account\":\"PROP-1\",\"kind\":\"eval\",\"group\":null,\"copier\":\"follower\",\"byHand\":true}]") && ChartBridgeGroups.GroupOf("PROP-1") == null,
+                      "0.6.23 outside: a copier follower (off here) is marked with the copier, and the rule leaves it out: " + PageReject() + " " + oj.Substring(Math.Max(0, oj.IndexOf("\"outside\""))));
+                P("{\"type\":\"copierFollowerRemove\",\"cid\":\"lcf2\",\"account\":\"PROP-1\"}");
+                Check(!PageReject().Contains("lcf2"), "0.6.23 outside: (cleanup) the follower row removed: " + PageReject());
+                ChartBridgeCopier.Stop(); ChartBridgeCopier.HarnessManual = false; ChartBridgeSwitches.Note("copier", "off");
+                P("{\"type\":\"accountGroup\",\"cid\":\"own3\",\"account\":\"PROP-1\",\"group\":\"g1\",\"size\":50000,\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"eod\",\"lockAt\":0,\"target\":3000,\"consistency\":0,\"maxMinis\":4,\"maxMicros\":40,\"typeId\":\"made-up-50k\"}");
+                apply(new[] { row("PROP-1", "eval", null, false) });
+                oj = ChartBridgeGroups.GroupsJson();
+                Check(ChartBridgeGroups.GroupOf("PROP-1") == "g1" && !File.ReadAllText(handFile).Contains("PROP-1") && oj.Contains("\"outside\":[]"),
+                      "0.6.23 own group: his own add to the lane clears it, and it leaves the Unassigned row: " + oj.Substring(Math.Max(0, oj.IndexOf("\"laneRule\""))));
+                try { Gone(handFile); } catch (Exception) { }
+                ChartBridgeGroups.LaneForget();
+                lanes("");                                                                                       // g1 and g2 only, nobody in them, for the checks below
                 // the review of 108, item 1: ANY outcome leaves
                 Check(apply(new[] { row("PROP-2", "eval", null, false) }) == 1 && ChartBridgeGroups.GroupOf("PROP-2") == "g1", "0.6.23: (setup) PROP-2 joins the eval lane");
                 Check(apply(new[] { row("PROP-2", "eval", "passed", false) }) == 1 && ChartBridgeGroups.GroupOf("PROP-2") == null && ChartBridgeGroups.GroupsJson().Contains("removed: PROP-2 (its outcome on The Desk is passed) (rule)"),

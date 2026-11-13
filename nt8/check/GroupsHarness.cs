@@ -302,7 +302,7 @@ public static class GroupsHarness
     // ------------------------------------------------------------ no groups.txt: no groups, every account personal, 0.5.7 exactly
     static void Migration()
     {
-        Check(!File.Exists(Path.Combine(folder, "groups.txt")) && Last("groups") == "{\"type\":\"groups\",\"list\":[],\"error\":null,\"laneRule\":{\"state\":\"on\",\"why\":null,\"handOut\":[]}}", "no groups.txt: the page gets an empty list and no error (0.6.23: and the lane rule's state) (" + Last("groups") + ")");
+        Check(!File.Exists(Path.Combine(folder, "groups.txt")) && Last("groups") == "{\"type\":\"groups\",\"list\":[],\"error\":null,\"laneRule\":{\"state\":\"on\",\"why\":null,\"handOut\":[],\"outside\":null}}", "no groups.txt: the page gets an empty list and no error (0.6.23: and the lane rule's state) (" + Last("groups") + ")");
         Check(ChartBridgeGroups.EntryCheck("page", simA, "MNQ", false, 1, false, false) == null, "no groups: nothing is checked");
         Pos(simA, mnq, 2);
         int b = Submits(simB);
@@ -653,6 +653,8 @@ public static class GroupsHarness
         Flat();
     }
 
+    static string ListPart(string groupsMsg) { int i = groupsMsg == null ? -1 : groupsMsg.IndexOf(",\"laneRule\":", StringComparison.Ordinal); return i < 0 ? groupsMsg ?? "" : groupsMsg.Substring(0, i); }
+
     // ------------------------------------------------------------ groupDelete: its members go to None
     static void Deleting()
     {
@@ -660,7 +662,8 @@ public static class GroupsHarness
         Check(Rejection().Contains("no group g9"), "deleting a group that is not there: refused");
         Clear(); G("groupDelete", "{\"type\":\"groupDelete\",\"cid\":\"d\",\"group\":\"g1\"}");
         Check(Rejection() == "" && ChartBridgeGroups.GroupOf("SIM-A") == null && !FileText().Contains("\tg1\t") && !FileText().Contains("member\tSIM-A"), "Lucid Flex deleted: its members are in no group");
-        Check(!Last("groups").Contains("Lucid Flex") && Entry(Last("accounts"), "SIM-A").Contains("\"group\":null"), "the pages told at once");
+        /* 0.6.23: the hand list (laneRule.handOut) may name the group an account was taken out of by hand; the groups are the list */
+        Check(!ListPart(Last("groups")).Contains("Lucid Flex") && Entry(Last("accounts"), "SIM-A").Contains("\"group\":null"), "the pages told at once");
         Clear(); G("groupSave", Save("", "Topstep", "true", "0", "2000", "eod", "0", "50000", "0"));
         Check(FileText().Contains("group\tg3\tTopstep"), "a new group takes the next id (g3)");
     }
@@ -1047,8 +1050,10 @@ public static class GroupsHarness
         ChartBridgeAccounts.StartNow(ChartBridgeTime.NowUtcMs());
         Check(ChartBridgeGroups.EntryCheck("page", simD, "MNQ", true, 1, true, false) == null && ChartBridgeGroups.GroupOf("SIM-B") == null && FileText() == was, "readable again after a start: as saved");
         Gone(p); Gone(Path.Combine(folder, "account-marks.txt"));
+        Gone(Path.Combine(folder, "lane-hand.txt"));   // 0.6.23: the hand removals made earlier in this harness
+        ChartBridgeGroups.LaneForget();
         ChartBridgeAccounts.StartNow(ChartBridgeTime.NowUtcMs());
-        Check(ChartBridgeGroups.GroupsJson().StartsWith("{\"type\":\"groups\",\"list\":[],\"error\":null,\"laneRule\":{", StringComparison.Ordinal) && ChartBridgeGroups.GroupsJson().EndsWith(",\"handOut\":[]}}", StringComparison.Ordinal), "both files gone: no groups (0.5.7's behaviour)");
+        Check(ChartBridgeGroups.GroupsJson().StartsWith("{\"type\":\"groups\",\"list\":[],\"error\":null,\"laneRule\":{", StringComparison.Ordinal) && ChartBridgeGroups.GroupsJson().EndsWith(",\"handOut\":[],\"outside\":null}}", StringComparison.Ordinal), "both files gone: no groups (0.5.7's behaviour)");
     }
 
     // Anthony's ruling of 2026-10-21: an unreadable groups.txt never blocks the bot, the agents or the copier. They run on the last

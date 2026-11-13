@@ -490,7 +490,19 @@ function mount(el, host) {
      moves a member of the group on or off the bench (move(): its checks, its send, its answer); remove(name) takes it out of
      the group (removeMember()). Only for a member of the group: an account outside it is never joined from here. */
   const benchMember = (name, benched) => { const g = group(); if (!g || typeof name !== 'string' || !g.members.includes(name)) return false; move(name, !benched); return true; };
-  return { render: renderAll, destroy: () => { if (cop) cop.destroy(); }, state: P, get feed() { return F; }, bench: benchMember, remove: removeMember };   // the review of 97, F3: what it was handed, read only
+  /* chart 1.56.0 (the lanes' Unassigned row, Anthony 2026-11-13): Legion's Add opens this panel's own join step for an account in
+     no group that the panel offers (its bench lists its firm's accounts in no group), so the add is his hand add with the
+     panel's checks, plan and Put in. -> '' when the join step is open (or the panel said why on its own line), else why not. */
+  const joinAccount = name => {
+    const g = group();
+    if (!g || typeof name !== 'string' || !name) return 'The lane\'s panel has no group.';
+    if (g.members.includes(name)) return name + ' is in ' + g.name + ' already.';
+    const L = MC.lanes(g, S, typeof host.working === 'function' ? host.working() : []);
+    if (!L.bench.some(c => !c.member && c.name === name)) return name + ' is not offered by ' + g.name + '\'s panel (it lists the accounts of its firm in no group that ChartBridge lists now): put it in the group on the Accounts tab (Group).';
+    move(name, true);
+    return '';
+  };
+  return { render: renderAll, destroy: () => { if (cop) cop.destroy(); }, state: P, get feed() { return F; }, bench: benchMember, remove: removeMember, join: joinAccount };   // the review of 97, F3: what it was handed, read only
 }
 
 return { mount, PICK_KEY, DEFAULT_TOAST };
