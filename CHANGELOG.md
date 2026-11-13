@@ -63,6 +63,71 @@
   `test/pc-updater.test.js`: the allowed git subcommands, the box job's name, useHttpPath read before the one ask, the
   token only after a 404 or 401 and then through the Actions API, one place that asks for it and one that sends it.
 
+## ChartBridge 0.6.23 and chart 1.56.0 (2026-11-13): a hand move is the move
+
+In plain words: when Anthony takes an account out of a lane himself, it stays out; the lane rule no longer puts it back a
+minute later. The same holds for an account he moves from a lane into a group of his own (his Group Trader or Copier) and
+then takes out of it: it stays out until he adds it. Putting it in a group by hand undoes that. Every lane card now says
+whether the lane rule is on, off or not working, even a lane with no trader, and lists the accounts kept out by hand. A third
+row, Unassigned, lists every eval and funded account outside the lanes, marked with where it is. Anthony's rulings of
+2026-11-13: "If I make a move, that's the move"; "stay out until I add it - there should be 3 rows, eval, funded and
+unassigned"; "show them in unassigned marked in copier".
+
+- **ChartBridge 0.6.23** (rule 12; `ChartBridgeGroups.cs`, and one dispatch line in `ChartBridge.cs` for the copier's messages):
+  - A removal from any group by hand (the page's Remove, or Hide) is kept in `lane-hand.txt` (its own file: a ChartBridge
+    before 0.6.23 never sees it): a lane, or a group of his own with no Type (its line's type is `-`). The lane rule skips
+    that account and says so once on the lane. A restart keeps the list.
+  - An account he moves by hand into a group of his own stays there: the rule never moves it into a lane, and a retyped
+    account stays in his group (only a lane follows The Desk's type).
+  - **Deleting a group** is a hand removal of each member: they all go on the hand list.
+  - **The lifecycle rule in his own groups** (Anthony 2026-11-13, "also removed"): a blown, passed or archived account in his
+    Copier or Group Trader group (a group with no Type) leaves it once flat, as from a lane. It is the lifecycle rule, not a
+    hand move, so the hand list is not touched. The flat check now runs under ChangeGate with the leave.
+  - **The copier's accounts are placed:** a copier follower (on or off) or its leader is never joined to a lane, and the lane
+    says so once. Letting one go by hand (a follower row removed, or the leader changed) while it is in no group puts it on
+    the hand list ("from the copier"). Every copier page message (`copierFollower` too) now runs under ChangeGate
+    (`ChartBridgeGroups.CopierMessage`), so a rule join never slips between them. `ChartBridgeCopier.cs` is unchanged.
+  - The lane rule's leave (a lane, or the lifecycle rule in his own group) is decided again inside `AccountGroup`, under
+    GroupEntryLock and PlaceLock, so no group trader's entry goes in between the flat check and the leave (the re-check of 111).
+  - A hand move from a group of his own into a lane happens only when the account is flat with no working order, checked
+    the same way under the same locks (Anthony 2026-11-13, 21:35Z); otherwise it is refused with why.
+  - Putting the account in any group by hand clears it. The rule's own moves never touch the list.
+  - The rule still takes an account out once flat when The Desk marks it blown, passed or archived. Any outcome now leaves
+    (the review of 0.6.22, item 1).
+  - A list that does not read: the rule adds nobody, and says why. A list that cannot be saved reads as an error on every
+    lane card (a restart would forget it).
+  - No race with a hand move (the review of 0.6.23): the rule reads the account's group and the hand list again under
+    ChangeGate before it joins or takes out, so a hand Remove or a hand move that finished a moment before is never undone.
+  - The `groups` message gains `laneRule`: the rule's state (on, off or error, with why), the accounts kept out by hand,
+    and `outside`: every account The Desk types eval or funded that is in no lane, with the group of his it is in, what
+    the copier has it as (a follower or the leader, in the copier's own words; `ChartBridgeCopier.cs` is unchanged), and whether it is kept out by hand (null until The Desk's rows are read).
+- **The page** (chart 1.56.0):
+  - Every lane card, with a trader or without, says "Lane rule: on", "Lane rule: off (why)" or "Lane rule: not working:
+    why", and "Kept out by hand: ..." when there are any. With ChartBridge 0.6.22 it says the bridge does not say; older
+    ones need 0.6.22.
+  - With ChartBridge 0.6.23 every account in a lane's list has Remove, asked once ("Yes, remove X: it stays out until you
+    add it by hand"), through the lane's own panel as before. "Add a Sim account" reads "Add an account by hand".
+  - **Three rows: Eval, Funded and Unassigned.** Unassigned lists `laneRule.outside`, each account marked with where it is
+    ("kept out by hand", "in no group", "in <his group>", "in the copier"). **Add to the eval lane** (or funded) opens the
+    lane's own Multi-Account panel at its join step (the panel's new `join`: its checks, its rules, its highest close and
+    its Put in), so the add is his hand add and clears the hand list. An account in a group of his own has **Move to the
+    eval lane** instead (Anthony 2026-11-13, "1. a"): asked once, naming both groups ("Yes, move X out of Copier into the
+    eval lane"), then one `accountGroup` straight into the lane through the panel's new `moveIn` (the join's checks, its
+    rules from the account's type and its highest close from The Desk's seed or the larger of size and balance; the narrow
+    feed lets it through only when the other group's own lock is free). Only when flat: an account that holds a position is greyed with why ("Holds a
+    position (long 2 MNQ): moves once flat"), and the panel's `moveIn` refuses one with a working order before it sends.
+- **A note on 0.6.22's day loss stop** (its review, item 2): a later plan without `dayLossDollars` turns the loss stop off
+  for the rest of the session, as the profit stop does. Said in PROTOCOL.md.
+
+Checked: `check/AgentHarness.cs` ("0.6.23 hand" and "0.6.23 own group": an eval in a lane moved by hand into his Copier
+group stays there through rule passes; taken out of it by hand it stays in no group, a restart included; `outside` with a
+group, the copier and the hand mark; a deleted group's member on the hand list across a restart; blown and archived
+accounts leave his group once flat, the hand list untouched; a copier follower never joined, and on the hand list once its
+row is removed; copierFollower waits for ChangeGate; a position taken after the leave's early check keeps it; Move refused
+while busy, then made once flat; 4537 checks in all pass, and each new check fails with its fix taken out), `test/fleet.test.js`, `test/fleet-smoke.mjs` (the three
+rows) and `test/lane-panels-smoke.mjs` (the panel's `join`).
+ChartBridge 0.6.23 is a recompile (`-InstallChartBridge`, then F5 while flat).
+
 ## chart 1.55.0 (2026-11-13): a Legion lane's account list, each account benched or traded from it (page only, no F5)
 
 In plain words: a click on a lane's account count lists its accounts, each with Bench or Trade, and Remove for a Sim

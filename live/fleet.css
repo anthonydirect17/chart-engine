@@ -201,3 +201,7 @@ body.fl-on .fl-wrap { padding-bottom: 120px; }
 .fl-acct .fl-pill[aria-disabled="true"] { opacity: .5; cursor: not-allowed; }
 .fl-ruleowned { font-size: 11px; }
 .fl-word[data-word="stooddown"] { color: var(--ws-warn); }
+/* 1.56.0: the lane rule's state on every lane card, and the accounts kept out by hand */
+.fl-lanerule { font: 600 11px var(--ws-mono); letter-spacing: .06em; color: var(--ws-text2); margin: 0; }
+.fl-lanerule[data-rule="on"] { color: var(--ws-gold-text, #E2C687); }
+.fl-lanerule[data-rule="error"] { color: var(--ws-warn); }

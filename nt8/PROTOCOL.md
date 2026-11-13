@@ -1,4 +1,4 @@
-# ChartBridge protocol (v1 market data and fills, v2 orders, v3 accounts, strategies, copier and bot, 0.5.0 agents, 0.5.1 accounts, 0.5.8 prop groups, 0.6.0 group trading, 0.6.1 a group's Type and default hero, 0.6.3 the audit fixes, 0.6.4 the no-trade-record alarm and Merge on an off follower, 0.6.8 the minute book, 0.6.10 the account lifecycle and the NQ tick file, 0.6.11 the bar trail and the narrower 1 second request, 0.6.12 the bar trail follow-ups, 0.6.13 the tick day's morning catch-up and the raw deleted once packed, 0.6.14 the tick day check's rule: short and holes, 0.6.15 the 1 second pull retired: the NQ tick file is the one source, 0.6.16 prop accounts: one Auto restore after a restart (Auto ends at 17:00 ET since 0.6.18), 0.6.17 Kill all for the prop accounts, 0.6.18 entry rules per trader: market entry and no target, 0.6.19 the day's profit stop: a dollar mark per account, 0.6.20 the roster served, 0.6.21 the pick and the day's profit side, 0.6.22 the lanes run themselves, the day's loss stop and the voice calls)
+# ChartBridge protocol (v1 market data and fills, v2 orders, v3 accounts, strategies, copier and bot, 0.5.0 agents, 0.5.1 accounts, 0.5.8 prop groups, 0.6.0 group trading, 0.6.1 a group's Type and default hero, 0.6.3 the audit fixes, 0.6.4 the no-trade-record alarm and Merge on an off follower, 0.6.8 the minute book, 0.6.10 the account lifecycle and the NQ tick file, 0.6.11 the bar trail and the narrower 1 second request, 0.6.12 the bar trail follow-ups, 0.6.13 the tick day's morning catch-up and the raw deleted once packed, 0.6.14 the tick day check's rule: short and holes, 0.6.15 the 1 second pull retired: the NQ tick file is the one source, 0.6.16 prop accounts: one Auto restore after a restart (Auto ends at 17:00 ET since 0.6.18), 0.6.17 Kill all for the prop accounts, 0.6.18 entry rules per trader: market entry and no target, 0.6.19 the day's profit stop: a dollar mark per account, 0.6.20 the roster served, 0.6.21 the pick and the day's profit side, 0.6.22 the lanes run themselves, the day's loss stop and the voice calls, 0.6.23 a hand move is the move)
 
 ChartBridge is a NinjaTrader 8 add-on. It serves the live chart page at `http://localhost:8765/` and
 talks to it over one WebSocket at `ws://localhost:8765/ws`. Everything stays on the local machine.
@@ -3704,6 +3704,41 @@ and the Board's KILL ALL AGENTS (agentKill on to every agent) are unchanged.
 The page's Legion tab sends this message (chart 1.45.0, `live/fleet.js`: asked first on the page; the tab's connection can post nothing else); no other page file names it. Checked in `check/AgentHarness.cs` (`PropAccounts`, the
 "kill all" parts, the review's three scenarios among them) and `test/nt8-agents.test.js`.
 
+### A hand move is the move (0.6.23)
+
+Anthony 2026-11-13: "If I make a move, that's the move". Built in `ChartBridgeGroups.cs` only.
+
+- **A hand removal sticks.** An account taken out of any group by hand, a lane or a group of his own with no Type (the
+  page's `accountGroup` with `group` null, which Remove sends, Hide, or `groupDelete` for every member), or let go by the
+  copier by hand (`copierFollowerRemove`, or `copierSet` with another leader, while it is in no group: "from the copier"), is kept in `lane-hand.txt`. The lane rule never adds it
+  back: it says once on the lane "X was taken out by hand: the rule leaves it out (put it in a group by hand to undo)". The
+  list survives a restart. It is its own file and never a line in `groups.txt`, because a ChartBridge before 0.6.23 would
+  read that file as unreadable. Lines: `out<TAB><account><TAB><unix ms><TAB><the group it left><TAB>eval|funded|-`, under
+  ChartBridge's header line.
+- **A hand add clears it.** Putting the account in any group by hand (`accountGroup` with a group) takes it off the list. The
+  lane rule's own moves never write the list.
+- **The rule still takes an account out once flat** when The Desk marks it blown, passed or archived, or its type is now the
+  other lane's. A blown, passed or archived account also leaves a group of his own (no Type) once flat, as the lifecycle rule
+  (the hand list untouched); a retyped one stays there. A copier follower (on or off) or the copier's leader is never joined.
+  The flat check of every leave is made again inside the change, under GroupEntryLock and PlaceLock. A hand move from a group
+  of his own into a lane is refused while the account holds a position or a working order ("... : it moves from <his group>
+  into <the lane> once flat"). **Any** outcome now leaves, not only `blown` and `promoted` (the review of 0.6.22, item 1).
+- **A list that does not read** (`lane-hand.txt` with a first line that is not ChartBridge's, or a line not in the format):
+  the rule adds no account at all (it cannot tell which ones were taken out by hand), and says so.
+- **The `groups` message gains `laneRule`**, sent always, so a lane card says the rule's state even with no trader:
+  `{"state":"on"|"off"|"error","why":null|"...","handOut":[{"account":"...","from":"<group name>","type":"eval"|"funded"|null,"at":<ms>}],`
+  `"outside":null|[{"account":"...","kind":"eval"|"funded","group":null|"<group name>","copier":null|"follower"|"leader","byHand":true|false}]}`.
+  `handOut` type null: taken out of a group of his own (no Type). `outside` (the page's Unassigned row): every account The
+  Desk's last rows type eval or funded (no outcome, not archived) that is in no lane now, with the group of his it is in,
+  what the copier has it as (its own words: a follower, on or off, or the leader) and whether it is kept out by hand; null until The Desk's rows have been read.
+  `off`: `config.txt` has `laneRule = off`, or no `deskUrl`. `error`: The Desk's lane-accounts cannot be read,
+  `lane-hand.txt` does not read, or it could not be saved (the list then holds in memory only, so a restart would forget it).
+- **No race with a hand move** (the review of 0.6.23): the rule's join and leave take ChangeGate (which every hand move holds
+  through its change and its hand-list entry) and read the account's group and the hand list again inside it, so a hand move
+  that finished a moment before is never undone. Inside the change itself a rule join never takes an account that is in a group.
+
+Checked in `check/AgentHarness.cs` (`PropAccounts`, the lane rule part, "0.6.23 hand") and `check/GroupsHarness.cs`.
+
 ### The lanes run themselves (0.6.22)
 
 Anthony's standing rule (2026-11-13): a new eval account joins the eval lane by itself, always disarmed until he arms it;
@@ -3747,7 +3782,8 @@ Build answers 31 (Anthony 2026-11-12: "not rigid ... can change per playbook"): 
 
 - **`dayLossDollars`** on a `plan` (optional): dollars above 0, at most 1,000,000, at most 2 decimals ("dayLossDollars must
   be dollars above 0, ..." otherwise). The runner's playbook sends it; nobody types it, and ChartBridge has no default.
-  A **placed** plan's value becomes the session's value for that trader; a placed plan without the key clears it. A plan
+  A **placed** plan's value becomes the session's value for that trader; a placed plan without the key clears it, so **a
+  later plan without `dayLossDollars` turns the loss stop off** for the rest of the session (as the profit stop does). A plan
   only logged, proposed or refused changes nothing.
 - **The day's number** is the loss side, `pnlToday` (ChartBridge's smaller realized figure plus open). Not known: no
   check, said once a session.

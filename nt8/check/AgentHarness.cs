@@ -6695,6 +6695,186 @@ public static class AgentHarness
                 Check(apply(new[] { row("PROP-2", null, null, false) }) == 0 && ChartBridgeGroups.GroupOf("PROP-2") == "g2", "0.6.22 lane rule: no type now: left where it is (never a guess)");
                 Check(apply(new[] { row("PROP-2", "funded", "blown", false) }) == 1 && ChartBridgeGroups.GroupOf("PROP-2") == null, "0.6.22 lane rule: blown: it leaves");
                 Check(apply(new[] { row("PROP-1", "funded", null, true) }) == 1 && ChartBridgeGroups.GroupOf("PROP-1") == null, "0.6.22 lane rule: archived on The Desk: it leaves");
+                // 0.6.23 (Anthony 2026-11-13: "If I make a move, that's the move"): a hand removal from a lane sticks; a hand add clears it
+                string handFile = Path.Combine(Dir, "lane-hand.txt");
+                try { Gone(handFile); } catch (Exception) { }
+                ChartBridgeGroups.LaneForget();
+                lanes("");
+                Check(apply(new[] { row("PROP-1", "eval", null, false) }) == 1 && ChartBridgeGroups.GroupOf("PROP-1") == "g1", "0.6.23 hand: (setup) PROP-1 joins the eval lane by the rule");
+                Check(!File.Exists(handFile), "0.6.23 hand: a move by the rule never writes the hand list");
+                P("{\"type\":\"accountGroup\",\"cid\":\"hout\",\"account\":\"PROP-1\",\"group\":null}");
+                Check(ChartBridgeGroups.GroupOf("PROP-1") == null && File.Exists(handFile) && File.ReadAllText(handFile).StartsWith(ChartBridgeGroups.HandHeader, StringComparison.Ordinal) &&
+                      File.ReadAllText(handFile).Contains("out\tPROP-1\t") && File.ReadAllText(handFile).Contains("\tEvals\teval"),
+                      "0.6.23 hand: Remove on the page takes it out and keeps it in lane-hand.txt: " + (File.Exists(handFile) ? File.ReadAllText(handFile) : "(no file)"));
+                Check(apply(new[] { row("PROP-1", "eval", null, false) }) == 0 && ChartBridgeGroups.GroupOf("PROP-1") == null, "0.6.23 hand: the rule leaves it out");
+                string hj = ChartBridgeGroups.GroupsJson();
+                Check(hj.Contains("PROP-1 was taken out by hand: the rule leaves it out (put it in a group by hand to undo)") &&
+                      hj.Contains("\"laneRule\":{\"state\":") && hj.Contains("\"handOut\":[{\"account\":\"PROP-1\",\"from\":\"Evals\",\"type\":\"eval\",\"at\":"),
+                      "0.6.23 hand: said on the lane, and the groups message lists it under laneRule.handOut: " + hj.Substring(Math.Max(0, hj.IndexOf("\"laneRule\""))));
+                ChartBridgeGroups.LaneForget();   // as after a restart: the list comes back from its file
+                Check(apply(new[] { row("PROP-1", "eval", null, false) }) == 0 && ChartBridgeGroups.GroupOf("PROP-1") == null, "0.6.23 hand: a restart keeps it out (read from lane-hand.txt)");
+                P("{\"type\":\"accountGroup\",\"cid\":\"hin\",\"account\":\"PROP-1\",\"group\":\"g1\",\"size\":50000,\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"eod\",\"lockAt\":0,\"target\":3000,\"consistency\":0,\"maxMinis\":4,\"maxMicros\":40,\"typeId\":\"made-up-50k\"}");
+                Check(ChartBridgeGroups.GroupOf("PROP-1") == "g1" && !File.ReadAllText(handFile).Contains("PROP-1") && !ChartBridgeGroups.GroupsJson().Contains("\"handOut\":[{\"account\":\"PROP-1\""),
+                      "0.6.23 hand: putting it in a group by hand clears it: " + ChartBridgeGroups.GroupOf("PROP-1") + " " + AgentReject());
+                Check(apply(new[] { row("PROP-1", "eval", "promoted", false) }) == 1 && ChartBridgeGroups.GroupOf("PROP-1") == null && !File.ReadAllText(handFile).Contains("PROP-1"),
+                      "0.6.23 hand: the rule still takes a passed account out once flat, and that is not a hand removal");
+                // the review of 111: a hand move that lands between the rule's first read and its join is never undone
+                ChartBridgeGroups.LaneRaceHook = who => { P("{\"type\":\"accountGroup\",\"cid\":\"race1\",\"account\":\"" + who + "\",\"group\":\"g1\",\"size\":50000,\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"eod\",\"lockAt\":0,\"target\":3000,\"consistency\":0,\"maxMinis\":4,\"maxMicros\":40,\"typeId\":\"made-up-50k\"}"); P("{\"type\":\"accountGroup\",\"cid\":\"race2\",\"account\":\"" + who + "\",\"group\":null}"); };
+                Check(apply(new[] { row("PROP-1", "eval", null, false) }) == 0 && ChartBridgeGroups.GroupOf("PROP-1") == null && File.ReadAllText(handFile).Contains("out\tPROP-1\t"),
+                      "0.6.23 (the review of 111): a hand Remove that finished after the rule's first read: the rule reads again under ChangeGate and does not join it back");
+                ChartBridgeGroups.LaneRaceHook = who => P("{\"type\":\"accountGroup\",\"cid\":\"race3\",\"account\":\"" + who + "\",\"group\":\"g2\",\"size\":50000,\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"eod\",\"lockAt\":0,\"target\":3000,\"consistency\":0,\"maxMinis\":4,\"maxMicros\":40,\"typeId\":\"made-up-50k\"}");
+                Check(ChartBridgeGroups.GroupOf("PROP-2") == null && apply(new[] { row("PROP-2", "eval", null, false) }) == 0 && ChartBridgeGroups.GroupOf("PROP-2") == "g2",
+                      "0.6.23 (the review of 111): moved by hand into another group meanwhile: left where he put it: " + ChartBridgeGroups.GroupOf("PROP-2"));
+                ChartBridgeGroups.LaneRaceHook = null;
+                // the review of 111, point 2: lane-hand.txt that cannot be saved is an error on every lane card, not only a log line
+                Directory.CreateDirectory(handFile + ".tmp");   // the save's temp file cannot be made
+                try
+                {
+                    P("{\"type\":\"accountGroup\",\"cid\":\"hsin\",\"account\":\"PROP-1\",\"group\":\"g1\",\"size\":50000,\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"eod\",\"lockAt\":0,\"target\":3000,\"consistency\":0,\"maxMinis\":4,\"maxMicros\":40,\"typeId\":\"made-up-50k\"}");
+                    P("{\"type\":\"accountGroup\",\"cid\":\"hsave\",\"account\":\"PROP-1\",\"group\":null}");
+                    string sj = ChartBridgeGroups.GroupsJson();
+                    Check(ChartBridgeGroups.GroupOf("PROP-1") == null && sj.Contains("\"laneRule\":{\"state\":\"error\",\"why\":\"lane-hand.txt could not be saved (") && sj.Contains("a restart would forget the accounts taken out by hand"),
+                          "0.6.23 (the review of 111): a save that fails reads state error with why: " + sj.Substring(Math.Max(0, sj.IndexOf("\"laneRule\""))));
+                    Check(apply(new[] { row("PROP-1", "eval", null, false) }) == 0 && ChartBridgeGroups.GroupOf("PROP-1") == null, "0.6.23: and the list still holds in memory this run");
+                }
+                finally { Directory.Delete(handFile + ".tmp"); }
+                P("{\"type\":\"accountGroup\",\"cid\":\"hback\",\"account\":\"PROP-1\",\"group\":\"g1\",\"size\":50000,\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"eod\",\"lockAt\":0,\"target\":3000,\"consistency\":0,\"maxMinis\":4,\"maxMicros\":40,\"typeId\":\"made-up-50k\"}");
+                P("{\"type\":\"accountGroup\",\"cid\":\"hout2\",\"account\":\"PROP-1\",\"group\":null}");
+                Check(ChartBridgeGroups.GroupsJson().Contains("\"laneRule\":{\"state\":") && !ChartBridgeGroups.GroupsJson().Contains("could not be saved"), "0.6.23: the next save that works clears the error");
+                P("{\"type\":\"accountGroup\",\"cid\":\"p2out\",\"account\":\"PROP-2\",\"group\":null}");   // PROP-2 out of g2 again for the checks below
+                try { Gone(handFile); } catch (Exception) { }
+                ChartBridgeGroups.LaneForget();                                                                  // a clean hand list for them
+                // 0.6.23 (Anthony 2026-11-13, the board 16:05Z and 16:10Z): "I was more referring to me moving an eval onto my group trader
+                // or copier", and "stay out until I add it". A group of his own (no Type) stands in for his Copier here.
+                lanes("group\tg3\tCopier\ton\t-\t-\t-\t-\t-\t-\t-\t-\t-\n");
+                Check(ChartBridgeGroups.GroupsJson().Contains("\"outside\":null"), "0.6.23 outside: null until The Desk's rows are read (not known, never an empty list)");
+                Check(apply(new[] { row("PROP-1", "eval", null, false) }) == 1 && ChartBridgeGroups.GroupOf("PROP-1") == "g1", "0.6.23 own group: (setup) the eval PROP-1 is in the eval lane");
+                P("{\"type\":\"accountGroup\",\"cid\":\"own1\",\"account\":\"PROP-1\",\"group\":\"g3\",\"size\":50000,\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"eod\",\"lockAt\":0,\"target\":3000,\"consistency\":0,\"maxMinis\":4,\"maxMicros\":40,\"typeId\":\"made-up-50k\"}");
+                Check(ChartBridgeGroups.GroupOf("PROP-1") == "g3", "0.6.23 own group: a hand move puts it into his Copier group: " + ChartBridgeGroups.GroupOf("PROP-1") + " " + PageReject());
+                Check(apply(new[] { row("PROP-1", "eval", null, false) }) == 0 && apply(new[] { row("PROP-1", "eval", null, false) }) == 0 && ChartBridgeGroups.GroupOf("PROP-1") == "g3",
+                      "0.6.23 own group: rule passes run and it is still in his Copier group (never moved out, never back to a lane)");
+                string oj = ChartBridgeGroups.GroupsJson();
+                Check(oj.Contains("\"outside\":[{\"account\":\"PROP-1\",\"kind\":\"eval\",\"group\":\"Copier\",\"copier\":null,\"byHand\":false}]"),
+                      "0.6.23 outside: the Unassigned row lists it, marked with the group it is in: " + oj.Substring(Math.Max(0, oj.IndexOf("\"laneRule\""))));
+                P("{\"type\":\"accountGroup\",\"cid\":\"own2\",\"account\":\"PROP-1\",\"group\":null}");
+                Check(ChartBridgeGroups.GroupOf("PROP-1") == null && File.Exists(handFile) && File.ReadAllText(handFile).Contains("out\tPROP-1\t") && File.ReadAllText(handFile).Contains("\tCopier\t-"),
+                      "0.6.23 own group: a hand remove from his Copier group goes on the hand list too: " + (File.Exists(handFile) ? File.ReadAllText(handFile) : "(no file)"));
+                Check(apply(new[] { row("PROP-1", "eval", null, false) }) == 0 && apply(new[] { row("PROP-1", "eval", null, false) }) == 0 && ChartBridgeGroups.GroupOf("PROP-1") == null,
+                      "0.6.23 own group: rule passes run and it is in no group (kept out until he adds it)");
+                oj = ChartBridgeGroups.GroupsJson();
+                Check(oj.Contains("\"handOut\":[{\"account\":\"PROP-1\",\"from\":\"Copier\",\"type\":null,\"at\":") &&
+                      oj.Contains("\"outside\":[{\"account\":\"PROP-1\",\"kind\":\"eval\",\"group\":null,\"copier\":null,\"byHand\":true}]"),
+                      "0.6.23 own group: handOut says the group it left (no Type: type null), and outside marks it kept out by hand: " + oj.Substring(Math.Max(0, oj.IndexOf("\"laneRule\""))));
+                ChartBridgeGroups.LaneForget();   // a restart: the "-" line reads back
+                Check(apply(new[] { row("PROP-1", "eval", null, false) }) == 0 && ChartBridgeGroups.GroupOf("PROP-1") == null && !ChartBridgeGroups.GroupsJson().Contains("lane-hand.txt does not read"),
+                      "0.6.23 own group: a restart keeps it out (the line of a group with no Type reads back)");
+                ChartBridgeSwitches.Note("copier", "on"); ChartBridgeCopier.HarnessManual = true; ChartBridgeCopier.Start();
+                P("{\"type\":\"copierFollower\",\"cid\":\"lcf1\",\"account\":\"PROP-1\",\"on\":false,\"qty\":1,\"size\":\"micro\",\"lossLimit\":null}");
+                apply(new[] { row("PROP-1", "eval", null, false) });
+                oj = ChartBridgeGroups.GroupsJson();
+                Check(oj.Contains("\"outside\":[{\"account\":\"PROP-1\",\"kind\":\"eval\",\"group\":null,\"copier\":\"follower\",\"byHand\":true}]") && ChartBridgeGroups.GroupOf("PROP-1") == null,
+                      "0.6.23 outside: a copier follower (off here) is marked with the copier, and the rule leaves it out: " + PageReject() + " " + oj.Substring(Math.Max(0, oj.IndexOf("\"outside\""))));
+                P("{\"type\":\"copierFollowerRemove\",\"cid\":\"lcf2\",\"account\":\"PROP-1\"}");
+                Check(!PageReject().Contains("lcf2"), "0.6.23 outside: (cleanup) the follower row removed: " + PageReject());
+                ChartBridgeCopier.Stop(); ChartBridgeCopier.HarnessManual = false; ChartBridgeSwitches.Note("copier", "off");
+                P("{\"type\":\"accountGroup\",\"cid\":\"own3\",\"account\":\"PROP-1\",\"group\":\"g1\",\"size\":50000,\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"eod\",\"lockAt\":0,\"target\":3000,\"consistency\":0,\"maxMinis\":4,\"maxMicros\":40,\"typeId\":\"made-up-50k\"}");
+                apply(new[] { row("PROP-1", "eval", null, false) });
+                oj = ChartBridgeGroups.GroupsJson();
+                Check(ChartBridgeGroups.GroupOf("PROP-1") == "g1" && !File.ReadAllText(handFile).Contains("PROP-1") && oj.Contains("\"outside\":[]"),
+                      "0.6.23 own group: his own add to the lane clears it, and it leaves the Unassigned row: " + oj.Substring(Math.Max(0, oj.IndexOf("\"laneRule\""))));
+                // the re-check of 111: deleting his Copier group is a hand removal of each member
+                P("{\"type\":\"accountGroup\",\"cid\":\"own4\",\"account\":\"PROP-1\",\"group\":\"g3\",\"size\":50000,\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"eod\",\"lockAt\":0,\"target\":3000,\"consistency\":0,\"maxMinis\":4,\"maxMicros\":40,\"typeId\":\"made-up-50k\"}");
+                Check(ChartBridgeGroups.GroupOf("PROP-1") == "g3", "0.6.23 group delete: (setup) PROP-1 moved by hand into his Copier group: " + PageReject());
+                P("{\"type\":\"groupDelete\",\"cid\":\"own5\",\"group\":\"g3\"}");
+                Check(ChartBridgeGroups.GroupOf("PROP-1") == null && File.ReadAllText(handFile).Contains("out\tPROP-1\t") && File.ReadAllText(handFile).Contains("\tCopier\t-"),
+                      "0.6.23 group delete: his Copier group deleted: its eval member goes on the hand list: " + File.ReadAllText(handFile));
+                Check(apply(new[] { row("PROP-1", "eval", null, false) }) == 0 && ChartBridgeGroups.GroupOf("PROP-1") == null, "0.6.23 group delete: a rule pass leaves it in no group");
+                ChartBridgeGroups.LaneForget();
+                Check(apply(new[] { row("PROP-1", "eval", null, false) }) == 0 && ChartBridgeGroups.GroupOf("PROP-1") == null, "0.6.23 group delete: and across a restart");
+                // Q-H1 (Anthony 2026-11-13, "also removed"): a blown, passed or archived account leaves his own group once flat, as the lifecycle rule
+                lanes("group\tg3\tCopier\ton\t-\t-\t-\t-\t-\t-\t-\t-\t-\n");
+                P("{\"type\":\"accountGroup\",\"cid\":\"own6\",\"account\":\"PROP-1\",\"group\":\"g3\",\"size\":50000,\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"eod\",\"lockAt\":0,\"target\":3000,\"consistency\":0,\"maxMinis\":4,\"maxMicros\":40,\"typeId\":\"made-up-50k\"}");
+                Check(ChartBridgeGroups.GroupOf("PROP-1") == "g3" && !File.ReadAllText(handFile).Contains("PROP-1"), "0.6.23 lifecycle: (setup) PROP-1 in his Copier group by hand, off the hand list");
+                Check(apply(new[] { row("PROP-1", "funded", null, false) }) == 0 && ChartBridgeGroups.GroupOf("PROP-1") == "g3", "0.6.23 lifecycle: retyped on The Desk, it stays in his own group (only a lane follows the type)");
+                Position held2 = new Position { Instrument = mnq, MarketPosition = MarketPosition.Long, Quantity = 1, AveragePrice = 25000 };
+                prop1.Positions.Add(held2);
+                Check(apply(new[] { row("PROP-1", "eval", "blown", false) }) == 0 && ChartBridgeGroups.GroupOf("PROP-1") == "g3" && ChartBridgeGroups.GroupsJson().Contains("PROP-1 is blown on The Desk: it leaves Copier once flat"),
+                      "0.6.23 lifecycle: blown while it holds a position: it stays in his group until flat, and says so");
+                prop1.Positions.Remove(held2);
+                Check(apply(new[] { row("PROP-1", "eval", "blown", false) }) == 1 && ChartBridgeGroups.GroupOf("PROP-1") == null && !File.ReadAllText(handFile).Contains("PROP-1") && ChartBridgeGroups.GroupsJson().Contains("removed: PROP-1 (blown on The Desk) (rule)"),
+                      "0.6.23 lifecycle: flat, the blown account leaves his Copier group, as the lifecycle rule (not a hand move: the hand list is untouched)");
+                P("{\"type\":\"accountGroup\",\"cid\":\"own7\",\"account\":\"PROP-1\",\"group\":\"g3\",\"size\":50000,\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"eod\",\"lockAt\":0,\"target\":3000,\"consistency\":0,\"maxMinis\":4,\"maxMicros\":40,\"typeId\":\"made-up-50k\"}");
+                Check(apply(new[] { row("PROP-1", "eval", null, true) }) == 1 && ChartBridgeGroups.GroupOf("PROP-1") == null, "0.6.23 lifecycle: archived on The Desk: it leaves his group too");
+                // the re-check of 111: an account the copier has is placed (never joined); let go by hand, it goes on the hand list
+                ChartBridgeSwitches.Note("copier", "on"); ChartBridgeCopier.HarnessManual = true; ChartBridgeCopier.Start();
+                P("{\"type\":\"copierFollower\",\"cid\":\"lcf3\",\"account\":\"PROP-1\",\"on\":true,\"qty\":1,\"size\":\"micro\",\"lossLimit\":null}");
+                Check(!File.ReadAllText(handFile).Contains("PROP-1") && apply(new[] { row("PROP-1", "eval", null, false) }) == 0 && ChartBridgeGroups.GroupOf("PROP-1") == null &&
+                      ChartBridgeGroups.GroupsJson().Contains("PROP-1 is a copier follower: the rule leaves it out"),
+                      "0.6.23 copier: a copier follower in no group (not on the hand list) is placed: the rule never joins it, and says so: " + PageReject());
+                P("{\"type\":\"copierFollower\",\"cid\":\"lcf3b\",\"account\":\"PROP-1\",\"on\":false,\"qty\":1,\"size\":\"micro\",\"lossLimit\":null}");   // off first, as the copier asks
+                Check(!File.ReadAllText(handFile).Contains("PROP-1") && apply(new[] { row("PROP-1", "eval", null, false) }) == 0 && ChartBridgeGroups.GroupOf("PROP-1") == null, "0.6.23 copier: a follower turned off is still the copier's: not joined, and not a hand removal yet");
+                P("{\"type\":\"copierFollowerRemove\",\"cid\":\"lcf4\",\"account\":\"PROP-1\"}");
+                Check(File.ReadAllText(handFile).Contains("out\tPROP-1\t") && File.ReadAllText(handFile).Contains("\tthe copier\t-") && apply(new[] { row("PROP-1", "eval", null, false) }) == 0 && ChartBridgeGroups.GroupOf("PROP-1") == null,
+                      "0.6.23 copier: its follower row removed by hand: on the hand list, and the rule leaves it out: " + PageReject() + " " + File.ReadAllText(handFile));
+                // the re-check of 111, fix 1: every copier message waits for ChangeGate (copierFollower too), so a rule join and the
+                // copier taking the same account never interleave. The hook holds the gate while another thread sends copierFollower.
+                try { Gone(handFile); } catch (Exception) { }
+                ChartBridgeGroups.LaneForget();
+                P("{\"type\":\"copierFollowerRemove\",\"cid\":\"lcf5\",\"account\":\"PROP-2\"}");
+                bool sentEarly = true; System.Threading.Tasks.Task cfTask = null;
+                ChartBridgeGroups.LaneRaceHook = who =>
+                {
+                    cfTask = System.Threading.Tasks.Task.Run(() => OnClient(pc, "{\"type\":\"copierFollower\",\"cid\":\"lcf6\",\"account\":\"" + who + "\",\"on\":false,\"qty\":1,\"size\":\"micro\",\"lossLimit\":null}"));
+                    sentEarly = cfTask.Wait(400);
+                };
+                apply(new[] { row("PROP-2", "eval", null, false) });
+                ChartBridgeGroups.LaneRaceHook = null;
+                bool cfDone = cfTask != null && cfTask.Wait(5000);
+                Check(cfTask != null && !sentEarly && cfDone, "0.6.23 copier (the re-check, fix 1): copierFollower waits for ChangeGate while the lane rule holds it, then runs (sent early: " + sentEarly + ", done: " + cfDone + ")");
+                OnClient(pc, "{\"type\":\"copierFollower\",\"cid\":\"lcf7\",\"account\":\"PROP-2\",\"on\":false,\"qty\":1,\"size\":\"micro\",\"lossLimit\":null}");
+                OnClient(pc, "{\"type\":\"copierFollowerRemove\",\"cid\":\"lcf8\",\"account\":\"PROP-2\"}");
+                if (ChartBridgeGroups.GroupOf("PROP-2") != null) P("{\"type\":\"accountGroup\",\"cid\":\"lcf9\",\"account\":\"PROP-2\",\"group\":null}");
+                ChartBridgeCopier.Stop(); ChartBridgeCopier.HarnessManual = false; ChartBridgeSwitches.Note("copier", "off");
+                try { Gone(handFile); } catch (Exception) { }
+                ChartBridgeGroups.LaneForget();
+                // the re-check of 111, fix 2: the lifecycle leave's flat check is decided again inside AccountGroup, under the entry locks
+                lanes("group\tg3\tCopier\ton\t-\t-\t-\t-\t-\t-\t-\t-\t-\n");
+                P("{\"type\":\"accountGroup\",\"cid\":\"fx1\",\"account\":\"PROP-1\",\"group\":\"g3\",\"size\":50000,\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"eod\",\"lockAt\":0,\"target\":3000,\"consistency\":0,\"maxMinis\":4,\"maxMicros\":40,\"typeId\":\"made-up-50k\"}");
+                Position late = new Position { Instrument = mnq, MarketPosition = MarketPosition.Long, Quantity = 1, AveragePrice = 25000 };
+                ChartBridgeGroups.LaneLeaveHook = who => prop1.Positions.Add(late);   // an entry that went in after the early check
+                Check(ChartBridgeGroups.GroupOf("PROP-1") == "g3" && apply(new[] { row("PROP-1", "eval", "blown", false) }) == 0 && ChartBridgeGroups.GroupOf("PROP-1") == "g3",
+                      "0.6.23 lifecycle (the re-check, fix 2): a position taken after the early flat check: AccountGroup's own check (under GroupEntryLock and PlaceLock) keeps it in his group");
+                ChartBridgeGroups.LaneLeaveHook = null;
+                prop1.Positions.Remove(late);
+                Check(apply(new[] { row("PROP-1", "eval", "blown", false) }) == 1 && ChartBridgeGroups.GroupOf("PROP-1") == null, "0.6.23 lifecycle: once flat, it leaves");
+                // Anthony 2026-11-13 (21:35Z, point 1): Move from his group into a lane only when flat; the bridge refuses it too
+                try { Gone(handFile); } catch (Exception) { }
+                ChartBridgeGroups.LaneForget();
+                P("{\"type\":\"accountGroup\",\"cid\":\"mv1\",\"account\":\"PROP-1\",\"group\":\"g3\",\"size\":50000,\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"eod\",\"lockAt\":0,\"target\":3000,\"consistency\":0,\"maxMinis\":4,\"maxMicros\":40,\"typeId\":\"made-up-50k\"}");
+                Position held3 = new Position { Instrument = mnq, MarketPosition = MarketPosition.Long, Quantity = 1, AveragePrice = 25000 };
+                prop1.Positions.Add(held3);
+                P("{\"type\":\"accountGroup\",\"cid\":\"mv2\",\"account\":\"PROP-1\",\"group\":\"g1\",\"size\":50000,\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"eod\",\"lockAt\":0,\"target\":3000,\"consistency\":0,\"maxMinis\":4,\"maxMicros\":40,\"typeId\":\"made-up-50k\"}");
+                Check(ChartBridgeGroups.GroupOf("PROP-1") == "g3" && PageReject().Contains("it moves from Copier into Evals once flat"),
+                      "0.6.23 Move: a member of his Copier group that holds a position is not moved into the lane, and says why: " + PageReject());
+                prop1.Positions.Remove(held3);
+                P("{\"type\":\"accountGroup\",\"cid\":\"mv3\",\"account\":\"PROP-1\",\"group\":\"g1\",\"size\":50000,\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"eod\",\"lockAt\":0,\"target\":3000,\"consistency\":0,\"maxMinis\":4,\"maxMicros\":40,\"typeId\":\"made-up-50k\"}");
+                Check(ChartBridgeGroups.GroupOf("PROP-1") == "g1", "0.6.23 Move: once flat, it moves from his Copier group into the lane: " + PageReject());
+                P("{\"type\":\"accountGroup\",\"cid\":\"mv4\",\"account\":\"PROP-1\",\"group\":null}");
+                try { Gone(handFile); } catch (Exception) { }
+                ChartBridgeGroups.LaneForget();
+                lanes("");                                                                                       // g1 and g2 only, nobody in them, for the checks below
+                // the review of 108, item 1: ANY outcome leaves
+                Check(apply(new[] { row("PROP-2", "eval", null, false) }) == 1 && ChartBridgeGroups.GroupOf("PROP-2") == "g1", "0.6.23: (setup) PROP-2 joins the eval lane");
+                Check(apply(new[] { row("PROP-2", "eval", "passed", false) }) == 1 && ChartBridgeGroups.GroupOf("PROP-2") == null && ChartBridgeGroups.GroupsJson().Contains("removed: PROP-2 (its outcome on The Desk is passed) (rule)"),
+                      "0.6.23 (the review of 108, item 1): an outcome other than blown or promoted leaves too");
+                // a hand list that does not read: the rule adds nobody (it cannot tell who was taken out), and says so
+                File.WriteAllText(handFile, "not ChartBridge's\n");
+                ChartBridgeGroups.LaneForget();
+                Check(apply(new[] { row("PROP-2", "eval", null, false) }) == 0 && ChartBridgeGroups.GroupOf("PROP-2") == null && ChartBridgeGroups.GroupsJson().Contains("\"laneRule\":{\"state\":\"error\",\"why\":\"lane-hand.txt does not read"),
+                      "0.6.23 hand: lane-hand.txt that does not read: nobody is added, and the lane rule reads error with why");
+                Check(Logged("lane-hand.txt does not read (the first line is not ChartBridge's): the rule adds no account until it does"), "0.6.23 hand: and the Output window says it");
+                try { Gone(handFile); } catch (Exception) { }
+                ChartBridgeGroups.LaneForget();
                 // an account in another group is never taken from it; two groups of one Type: nobody joins, said once
                 File.WriteAllText(GroupsFile, ChartBridgeGroups.Header + "\n#\n" +
                     "group\tg1\tEvals\ton\t-\t-\t-\t-\t-\t-\t-\teval\t-\n" + "group\tg2\tEvals two\ton\t-\t-\t-\t-\t-\t-\t-\teval\t-\n" + "group\tg3\tOther\ton\t-\t-\t-\t-\t-\t-\t-\t-\t-\n" + "member\tPROP-2\tg3\n");
@@ -6711,6 +6891,7 @@ public static class AgentHarness
             finally
             {
                 if (groupsWas != null) File.WriteAllText(GroupsFile, groupsWas); else { try { Gone(GroupsFile); } catch (Exception) { } }
+                try { Gone(Path.Combine(Dir, "lane-hand.txt")); } catch (Exception) { }
                 ChartBridgeGroups.StartNow();
                 ChartBridgeGroups.LaneForget();
             }

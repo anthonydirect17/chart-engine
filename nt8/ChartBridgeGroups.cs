@@ -1616,7 +1616,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                  .Append(",\"tradeOut\":[").Append(string.Join(",", members[g.Id].Select(x => new[] { x, TradeOutWhy(x) }).Where(x => x[1] != null).Select(x => "{\"account\":" + CbJson.Str(x[0]) + ",\"why\":" + CbJson.Str(x[1]) + "}"))).Append("]")   // 0.6.5 (review 4): the members a group entry leaves out
                  .Append(",\"benched\":[").Append(string.Join(",", members[g.Id].Where(x => bench.Contains(x)).Select(x => CbJson.Str(x)))).Append("]}");   // 0.6.7: the members on the bench (members still)
             }
-            b.Append("],\"error\":").Append(err == null ? "null" : CbJson.Str(ReadFailedNow() + " (" + err + ")")).Append('}');
+            b.Append("],\"error\":").Append(err == null ? "null" : CbJson.Str(ReadFailedNow() + " (" + err + ")"));
+            b.Append(",\"laneRule\":").Append(LaneRuleJson()).Append('}');   // 0.6.23: on, off or an error, with why, and the accounts kept out by hand
             NoteSides(sides);
             return b.ToString();
         }
@@ -2210,7 +2211,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             string id = ChartBridgeV3.Str(m, "group");
             if (id == null) return "groupDelete needs group (a plain string)";
-            string name;
+            string name, gtype;
             List<string> left;
             lock (SaveLock)
             {
@@ -2219,6 +2220,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 Group g;
                 if (!next.Groups.TryGetValue(id, out g)) return "no group " + id;
                 name = g.Name;
+                gtype = g.AccountType == "eval" || g.AccountType == "funded" ? g.AccountType : "-";   // 0.6.23: for the hand list
                 left = next.Members.Where(kv => kv.Value == id).Select(kv => kv.Key).ToList();
                 next.Groups.Remove(id);
                 foreach (string a in left) { next.Members.Remove(a); next.Own.Remove(a); next.Benched.Remove(a); }   // 0.6.5: its members' own rules go with it; 0.6.7: the bench too
@@ -2227,6 +2229,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                 try { ChartBridgeAgents.GroupDeleted(id); } catch (Exception ex) { ChartBridgeServer.Log("groups: the stand-downs of group " + id + " not dropped (" + ex.Message + ")"); }   // 0.6.2: under the save, before a later group could take the id
             }
             ForgetHighs(left);
+            // 0.6.23 (the re-check of 111): deleting a group is a hand removal of each member ("stay out until I add it"); this runs under
+            // ChangeGate (the dispatch), so the lane rule never sees a member in no group before it is on the list
+            foreach (string a in left) HandOut(a, name, gtype);
             ChartBridgeServer.Log("groups: group " + id + " (" + name + ") deleted by the page" + (left.Count > 0 ? "; " + string.Join(", ", left) + " now in no group" : ""));
             Changed();
             return null;
@@ -2267,7 +2272,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             // 0.6.0 (group trading): a group an agent trades takes no account that is the bot's, the copier's leader or a follower, or
             // another agent's (asked before the order lock: it reads the copier's and the bot's memory)
             if (id != null) { string taken = ChartBridgeAgents.JoinRefusal(name, id); if (taken != null) return taken; }
-            string said = null;
+            string said = null, leftName = null, leftType = null;   // 0.6.23: the group it left (a hand move out of a lane sticks)
             double seed = 0;
             // no entry passes the check while the membership changes (GroupEntryLock and PlaceLock); groups.txt is written after
             // PlaceLock is let go, so an exit never waits on the disk (review L1), with GroupEntryLock held through it (review L2)
@@ -2277,8 +2282,23 @@ namespace NinjaTrader.NinjaScript.AddOns
                 string cur;
                 next.Members.TryGetValue(name, out cur);
                 if (id == cur) return id == null ? Unchanged : name + " is in " + next.Groups[id].Name + " already";
+                if (by == "the lane rule" && id != null && cur != null) return name + " is in a group now: the lane rule leaves it there";   // 0.6.23 (the review of 111)
+                // 0.6.23 (the re-check of 111, fix 2): the lane rule's leave is decided here, under GroupEntryLock and PlaceLock, so no
+                // entry of a group trader can go in between the flat check and the leave (as the bench move does)
+                if (by == "the lane rule" && id == null && a != null) { string busy = BenchBusyWhy(name, a); if (busy != null) return busy; }
                 Group g = null;
                 if (id != null && !next.Groups.TryGetValue(id, out g)) return "no group " + id;
+                // 0.6.23 (Anthony 2026-11-13, the board 21:35Z): a hand move from a group of his own (no Type) into a lane only when
+                // flat, with no working order: the same check, under the same locks
+                if (by == "the page" && g != null && cur != null && (g.AccountType == "eval" || g.AccountType == "funded"))
+                {
+                    Group from;
+                    if (next.Groups.TryGetValue(cur, out from) && from.AccountType != "eval" && from.AccountType != "funded")
+                    {
+                        string busy = BenchBusyWhy(name, a);
+                        if (busy != null) return busy.Replace(": it moves once it is flat with no working orders", "") + ": it moves from " + from.Name + " into " + g.Name + " once flat";
+                    }
+                }
                 // 0.6.7: a group with no rules of its own takes an account only with its own (from its type on The Desk)
                 if (g != null && own == null && !g.HasRules) return name + " has no account type: set its type on The Desk first (group " + g.Name + " takes each account's rules from its type)";
                 // 0.6.0: again here, under the lock that saves the membership (PlaceLock, then SaveLock; memory only, no file read), so an
@@ -2293,6 +2313,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if (ms == "mixed") return name + " holds both sides (" + HolderText(mine) + "): it cannot join " + g.Name + " (No hedging) until it is one direction";
                     if (ms != null && ts != null && ms != ts) return name + " is " + ms + " (" + HolderText(mine) + ") and " + g.Name + " is " + ts + " (" + HolderText(theirs) + "): joining would hedge the group; prop firms ban hedged accounts";
                 }
+                if (cur != null && next.Groups.ContainsKey(cur)) { leftName = next.Groups[cur].Name; leftType = next.Groups[cur].AccountType; }
                 if (id == null) next.Members.Remove(name); else next.Members[name] = id;
                 next.Benched.Remove(name);   // 0.6.7: a new membership (or none) starts off the bench
                 if (bench && id != null) next.Benched.Add(name);   // 0.6.22: a join by the lane rule starts ON the bench (disarmed)
@@ -2309,6 +2330,14 @@ namespace NinjaTrader.NinjaScript.AddOns
             }, next => HeldWords(name, a), out inEffect);   // a failed write: the account holds something now: the change stays
             if (ReferenceEquals(res, Unchanged)) return null;
             if (!inEffect) return res;
+            // 0.6.23 (Anthony 2026-11-13: "If I make a move, that's the move"): a hand move out of ANY group into no group (a lane,
+            // or a group of his own such as his Group Trader or Copier: "stay out until I add it") keeps the account out of the
+            // lane rule; a hand move into any group clears that. The lane rule's own moves never touch the list.
+            if (by == "the page")
+            {
+                if (id == null && leftName != null) HandOut(name, leftName, leftType == "eval" || leftType == "funded" ? leftType : "-");
+                else if (id != null) HandClear(name);
+            }
             if (id != null)
             {
                 bool flatNow = a == null || IsFlat(a);
@@ -2524,7 +2553,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static readonly Dictionary<string, List<KeyValuePair<long, string>>> LaneLog = new Dictionary<string, List<KeyValuePair<long, string>>>(StringComparer.Ordinal);
         private static readonly HashSet<string> LaneSaid = new HashSet<string>(StringComparer.Ordinal);   // a refusal said once (account|reason)
         private static readonly string[] LaneRuleKeys = { "size", "dailyLoss", "drawdown", "drawdownType", "lockAt", "target", "consistency", "maxMinis", "maxMicros", "typeId" };
-        public static void LaneForget() { lock (LaneLog) LaneLog.Clear(); lock (LaneSaid) LaneSaid.Clear(); }   // the harness: a fresh rule
+        public static void LaneForget() { lock (LaneLog) LaneLog.Clear(); lock (LaneSaid) LaneSaid.Clear(); lock (HandSync) { handLoaded = false; handOut = null; handError = null; handSaveError = null; } LaneRaceHook = null; LaneLeaveHook = null; laneLastError = null; laneTyped = null; }   // the harness: a fresh rule
         private static string LaneLogPart(string gid) { string j = LaneLogJson(gid); return j == "[]" ? "" : ",\"laneLog\":" + j; }
         private static string LaneLogJson(string gid)
         {
@@ -2584,6 +2613,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         // Every 2 s (ChartBridge's poll timer): once a minute, off the timer's thread, GET The Desk's /api/lane-accounts and apply the
         // rule. One read at a time; a failure is said once until it reads again, and nothing moves that minute.
         public static bool LaneHarnessManual;            // test hook: the harness calls LaneApply itself
+        public static Action<string> LaneLeaveHook;       // test hook (0.6.23, the re-check of 111, fix 2): inside ChangeGate, after the leave's early flat check
+        public static Action<string> LaneRaceHook;        // test hook (0.6.23, the review of 111): runs inside ChangeGate before the join's second read
         private static int laneBusy;
         private static double laneNext;
         private static string laneLastError;
@@ -2628,11 +2659,191 @@ namespace NinjaTrader.NinjaScript.AddOns
             });
         }
 
+        // ================================================================== 0.6.23: a hand move is the move
+        // Anthony 2026-11-13: "If I make a move, that's the move". An account he takes out of a group by hand (Remove on the page,
+        // accountGroup with group null, or Hide out of a lane) is kept in lane-hand.txt, and the lane rule never adds it back;
+        // putting it in any group by hand takes it off the list. A lane or a group of his own alike ("stay out until I add it"). The rule still takes a blown, passed or archived account out once flat. Its own
+        // file (never a line in groups.txt: a ChartBridge before 0.6.23 would read that file as unreadable). Lines:
+        //   out<TAB><account><TAB><unix ms><TAB><the group it left><TAB><eval|funded|-> (- : a group with no Type, one of his own)
+        internal const string HandHeader = "# ChartBridge lane hand removals (0.6.23): the lane rule leaves each account here out until it is put in a group by hand";
+        private static readonly object HandSync = new object();
+        private static Dictionary<string, string[]> handOut;   // account -> { ms, group name, type }; under HandSync
+        private static string handError;
+        private static string handSaveError;   // 0.6.23 (the review of 111): the last save failed (null: saved, or nothing to save yet)
+        private static bool handLoaded;
+        private static string HandPath { get { return Path.Combine(ChartBridgeConfig.Folder, "lane-hand.txt"); } }
+        private static void EnsureHandLocked()
+        {
+            if (handLoaded) return;
+            handLoaded = true; handOut = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase); handError = null;
+            string[] lines = null;
+            try
+            {
+                if (File.Exists(HandPath)) { lines = ChartBridgeFiles.ReadAny(HandPath); if (lines == null) { handError = "it cannot be opened"; return; } }
+                else { string[] left = ChartBridgeFiles.LeftOvers(HandPath); if (left.Length > 0) { lines = ChartBridgeFiles.ReadAny(left[0]); if (lines == null) { handError = "its last copy cannot be opened"; return; } } }
+            }
+            catch (Exception ex) { handError = ex.Message; return; }
+            if (lines == null) return;                                  // no file: nobody was taken out by hand
+            if (lines.Length == 0 || lines[0].TrimEnd('\r') != HandHeader) { handError = "the first line is not ChartBridge's"; return; }
+            for (int i = 1; i < lines.Length; i++)
+            {
+                string line = lines[i].TrimEnd('\r');
+                if (line.Length == 0 || line.StartsWith("#", StringComparison.Ordinal)) continue;
+                string[] p = line.Split('\t');
+                long ms;
+                if (p.Length != 5 || p[0] != "out" || p[1].Length == 0 || p[1] != p[1].Trim() || !long.TryParse(p[2], NumberStyles.None, CultureInfo.InvariantCulture, out ms) || (p[4] != "eval" && p[4] != "funded" && p[4] != "-"))
+                { handError = "line " + (i + 1) + " is not a hand line"; handOut.Clear(); return; }
+                handOut[p[1]] = new[] { p[2], p[3], p[4] };
+            }
+        }
+        private static void HandState(string name, out string error, out bool byHand)
+        {
+            lock (HandSync) { EnsureHandLocked(); error = handError; byHand = handError == null && handOut.ContainsKey(name); }
+        }
+        // Saved under HandSync; a write that fails keeps the list in memory (the rule still honours it this run) and says so.
+        private static void SaveHandLocked()
+        {
+            List<string> lines = new List<string> { HandHeader };
+            foreach (KeyValuePair<string, string[]> kv in handOut.OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase))
+                lines.Add("out\t" + kv.Key + "\t" + kv.Value[0] + "\t" + (kv.Value[1] ?? "").Replace("\t", " ") + "\t" + kv.Value[2]);
+            try { ChartBridgeFiles.WriteLines(HandPath, lines); handSaveError = null; }
+            catch (Exception ex)
+            {
+                // 0.6.23 (the review of 111): the list lives only in memory now, so a restart would forget it: said as an error on
+                // every lane card (laneRule.state), not only in the Output window, until a save works again
+                handSaveError = "lane-hand.txt could not be saved (" + ex.Message + "): a restart would forget the accounts taken out by hand";
+                ChartBridgeServer.Log("lane rule: " + handSaveError);
+            }
+        }
+        private static void HandOut(string name, string groupName, string type)
+        {
+            lock (HandSync)
+            {
+                EnsureHandLocked();
+                if (handError != null) { ChartBridgeServer.Log("lane rule: " + name + " was taken out by hand, but lane-hand.txt does not read (" + handError + "): the rule adds no account until it does"); return; }
+                handOut[name] = new[] { ((long)NowMs()).ToString(CultureInfo.InvariantCulture), groupName ?? "", type };
+                SaveHandLocked();
+            }
+            ChartBridgeServer.Log("lane rule: " + name + " was taken out of " + (groupName ?? "its lane") + " by hand: the rule leaves it out until it is put in a group by hand");
+        }
+        private static void HandClear(string name)
+        {
+            bool had;
+            lock (HandSync)
+            {
+                EnsureHandLocked();
+                had = handError == null && handOut.Remove(name);
+                if (had) SaveHandLocked();
+            }
+            if (!had) return;
+            lock (LaneSaid) LaneSaid.RemoveWhere(k => k.StartsWith(name + "|", StringComparison.Ordinal));
+            ChartBridgeServer.Log("lane rule: " + name + " was put in a group by hand: the rule may move it again");
+        }
+        // The groups message's laneRule: { state: on | off | error, why, handOut: [{ account, from, type, at }] }.
+        // 0.6.23: the copier's words when it has name (a follower, on or off, its leader, or a copier.txt that does not read), else null
+        private static string CopierHas(string name)
+        {
+            try { return ChartBridgeCopier.AgentAccountRefusal(name); }
+            catch (Exception ex) { return "the copier could not be asked about " + name + " (" + ex.Message + ")"; }
+        }
+        private static bool CopierHolds(string name)
+        {
+            string w = CopierHas(name);
+            return w != null && (w.EndsWith(" is a copier follower", StringComparison.Ordinal) || w.EndsWith(" is the copier's leader", StringComparison.Ordinal));
+        }
+        private static readonly System.Text.RegularExpressions.Regex LeaderRx = new System.Text.RegularExpressions.Regex("\"leader\":\"((?:[^\"\\\\]|\\\\.)*)\"");
+        // 0.6.23 (the re-check of 111): the copier's page messages run here, under ChangeGate (taken before any other lock, as every
+        // groups change), so the lane rule's join never slips between them. An account the copier lets go by hand (a follower row
+        // removed, or the leader changed) and that is in no group goes on the hand list: "stay out until I add it".
+        internal static void CopierMessage(Action run, string type, string text)
+        {
+            // 0.6.23 (the re-check of 111, fix 1): EVERY copier message under ChangeGate (copierFollower too), so the lane rule's join
+            // never takes an account the copier is taking at that moment; the hand list only for a follower removed or a leader changed
+            if (type != "copierFollowerRemove" && type != "copierSet") { lock (ChangeGate) run(); return; }
+            lock (ChangeGate)
+            {
+                string name = null;
+                try
+                {
+                    if (type == "copierFollowerRemove") name = ChartBridgeOrders.CopierStr(text, "account");
+                    else { System.Text.RegularExpressions.Match lm = LeaderRx.Match(ChartBridgeCopier.StateJson() ?? ""); name = lm.Success ? lm.Groups[1].Value : null; }
+                }
+                catch (Exception) { name = null; }
+                bool held = !string.IsNullOrEmpty(name) && CopierHolds(name);
+                run();
+                if (held && !CopierHolds(name) && GroupOf(name) == null) HandOut(name, "the copier", "-");
+            }
+        }
+
+        private static string LaneRuleJson()
+        {
+            string st, why = null;
+            List<KeyValuePair<string, string[]>> list;
+            string herr;
+            string hsave;
+            lock (HandSync) { EnsureHandLocked(); herr = handError; hsave = handSaveError; list = handOut.OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase).ToList(); }
+            if (!ChartBridgeConfig.LaneRule) { st = "off"; why = "config.txt has laneRule = off"; }
+            else if (string.IsNullOrEmpty(ChartBridgeConfig.DeskUrl)) { st = "off"; why = "config.txt has no deskUrl, so the rule cannot ask The Desk"; }
+            else if (herr != null) { st = "error"; why = "lane-hand.txt does not read (" + herr + "): the rule adds no account until it does"; }
+            else if (hsave != null) { st = "error"; why = hsave; }
+            else if (laneLastError != null) { st = "error"; why = laneLastError; }
+            else st = "on";
+            // outside: every account The Desk types eval or funded that is in no lane now (the page's Unassigned row): in no group, or
+            // in a group of his own (its name), and what the copier has it as (follower, leader); null until The Desk's rows are read
+            List<string[]> typed = laneTyped;
+            string outside = "null";
+            if (typed != null)
+            {
+                HashSet<string> kept = new HashSet<string>(list.Select(kv => kv.Key), StringComparer.OrdinalIgnoreCase);
+                List<string> rows = new List<string>();
+                lock (Mem)
+                    foreach (string[] t in typed)
+                    {
+                        string gid; Group g = null;
+                        if (state.Members.TryGetValue(t[0], out gid)) state.Groups.TryGetValue(gid, out g);
+                        if (g != null && (g.AccountType == "eval" || g.AccountType == "funded")) continue;   // in a lane
+                        rows.Add("{\"account\":" + CbJson.Str(t[0]) + ",\"kind\":" + CbJson.Str(t[1]) + ",\"group\":" + (g == null ? "null" : CbJson.Str(g.Name)) +
+                                 ",\"copier\":" + (t[2] == null ? "null" : CbJson.Str(t[2])) + ",\"byHand\":" + (kept.Contains(t[0]) ? "true" : "false") + "}");
+                    }
+                outside = "[" + string.Join(",", rows) + "]";
+            }
+            return "{\"state\":" + CbJson.Str(st) + ",\"why\":" + (why == null ? "null" : CbJson.Str(why)) + ",\"handOut\":[" +
+                   string.Join(",", list.Select(kv => "{\"account\":" + CbJson.Str(kv.Key) + ",\"from\":" + CbJson.Str(kv.Value[1]) + ",\"type\":" + (kv.Value[2] == "-" ? "null" : CbJson.Str(kv.Value[2])) + ",\"at\":" + kv.Value[0] + "}")) +
+                   "],\"outside\":" + outside + "}";
+        }
+
+        // 0.6.23 (Anthony 2026-11-13: three rows, Eval, Funded and Unassigned; "show them in unassigned marked in copier"): the
+        // accounts The Desk's last rows type eval or funded (no outcome, not archived), each with what the copier has it as
+        // ("follower", "leader" or null), taken by LaneApply on the rule's own thread with no other lock held (the copier's lock is never
+        // taken under the groups' locks). null: no rows read yet. Which group each is in is read when the message is built.
+        private static volatile List<string[]> laneTyped;
+        private static void NoteTyped(List<LaneRow> rows)
+        {
+            List<string[]> typed = new List<string[]>();
+            HashSet<string> seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (LaneRow r in rows)
+            {
+                if (r == null || string.IsNullOrEmpty(r.Account) || r.Kind == null || r.Outcome != null || r.Archived) continue;
+                Account a = Find(r.Account);
+                string name = a != null ? a.Name : r.Account;
+                if (!seen.Add(name)) continue;
+                // the copier's own words (AgentAccountRefusal, on or off, copier.txt read when the copier is off); a copier.txt that
+                // cannot be read says nothing here (null), never a guess
+                string cp = null, cw = null;
+                try { cw = ChartBridgeCopier.AgentAccountRefusal(name); } catch (Exception) { cw = null; }
+                if (cw != null && cw.EndsWith(" is a copier follower", StringComparison.Ordinal)) cp = "follower";
+                else if (cw != null && cw.EndsWith(" is the copier's leader", StringComparison.Ordinal)) cp = "leader";
+                typed.Add(new[] { name, r.Kind, cp });
+            }
+            laneTyped = typed.OrderBy(x => x[0], StringComparer.OrdinalIgnoreCase).ToList();
+        }
+
         // One pass of the rule over The Desk's rows (the poller, or the harness). Returns how many accounts moved.
         public static int LaneApply(List<LaneRow> rows)
         {
             if (rows == null) return 0;
             EnsureLoaded();
+            NoteTyped(rows);
             int moved = 0;
             lock (Mem) if (readError != null) { LaneSay(null, "groups.txt does not read: nothing moves (" + readError + ")", "readError"); return 0; }
             foreach (LaneRow r in rows)
@@ -2656,15 +2867,29 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (cur != null && state.Groups.TryGetValue(cur, out cg)) { curType = cg.AccountType; curName = cg.Name; }
                 lanesOfKind = r.Kind == null ? new List<Group>() : state.Groups.Values.Where(g => g.AccountType == r.Kind).ToList();
             }
-            // LEAVE: a member of a lane group that the rule says no longer belongs there
-            if (cur != null && (curType == "eval" || curType == "funded"))
+            // LEAVE: a member of a lane group that the rule says no longer belongs there; 0.6.23 (Anthony 2026-11-13, Q-H1: "also
+            // removed"): a blown, passed or archived account in a group of his own (no Type: his Copier or Group Trader) leaves it
+            // too, once flat, as the lifecycle rule (never a hand move: the hand list is not touched). A retyped account in his own
+            // group stays where he put it: only a lane follows The Desk's type.
+            bool inLane = curType == "eval" || curType == "funded";
+            if (cur != null)
             {
-                string why = r.Outcome == "blown" ? "blown on The Desk" : r.Outcome == "promoted" ? "passed (promoted) on The Desk" : r.Archived ? "archived on The Desk" :
-                             r.Kind != null && r.Kind != curType ? "its type on The Desk is " + r.Kind + " now" : null;
+                // 0.6.23 (the review of 108, item 1): ANY outcome leaves, not only the two The Desk sends today
+                string why = r.Outcome == "blown" ? "blown on The Desk" : r.Outcome == "promoted" ? "passed (promoted) on The Desk" : r.Outcome != null ? "its outcome on The Desk is " + r.Outcome :
+                             r.Archived ? "archived on The Desk" : inLane && r.Kind != null && r.Kind != curType ? "its type on The Desk is " + r.Kind + " now" : null;
                 if (why == null) return false;
-                if (a != null) { string busy = BenchBusyWhy(name, a); if (busy != null) { LaneSay(cur, name + " is " + why + ": it leaves " + curName + " once flat (" + busy + ")", name + "|wait|" + why); return false; } }
                 string res;
-                lock (ChangeGate) res = AccountGroup(new Dictionary<string, string> { { "account", CbJson.Str(name) }, { "group", "null" } }, "the lane rule", false);
+                lock (ChangeGate)
+                {
+                    // 0.6.23 (the review of 111): read again under ChangeGate, which every hand move holds through its whole change:
+                    // an account moved by hand meanwhile (into another group, or out) is left where he put it
+                    string now; lock (Mem) state.Members.TryGetValue(name, out now);
+                    if (now != cur) return false;
+                    // the flat check under the gate too (the re-check of 111, a note on 0.6.22): nothing placed between it and the leave
+                    if (a != null) { string busy = BenchBusyWhy(name, a); if (busy != null) { LaneSay(cur, name + " is " + why + ": it leaves " + curName + " once flat (" + busy + ")", name + "|wait|" + why); return false; } }
+                    if (LaneLeaveHook != null) LaneLeaveHook(name);   // the harness: something placed after the early check
+                    res = AccountGroup(new Dictionary<string, string> { { "account", CbJson.Str(name) }, { "group", "null" } }, "the lane rule", false);
+                }
                 if (res != null) { LaneSay(cur, name + " is " + why + " but could not leave " + curName + ": " + res, name + "|leavefail|" + res); return false; }
                 LaneSay(cur, "removed: " + name + " (" + why + ") (rule)", null);
                 lock (LaneSaid) LaneSaid.RemoveWhere(k => k.StartsWith(name + "|", StringComparison.Ordinal));
@@ -2672,6 +2897,16 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             // JOIN: a typed, live, prop account in no group, to the one lane of its kind, benched
             if (cur != null || r.Kind == null || r.Outcome != null || r.Archived) return false;
+            // 0.6.23: an account Anthony took out of a lane by hand stays out until he puts it in a group by hand; with the list not
+            // readable the rule adds no account at all (it cannot tell which ones he took out)
+            string handErr; bool byHand;
+            HandState(name, out handErr, out byHand);
+            if (handErr != null) { LaneSay(null, "lane-hand.txt does not read (" + handErr + "): the rule adds no account until it does", "handerr|" + handErr); return false; }
+            if (byHand) { if (lanesOfKind.Count == 1) LaneSay(lanesOfKind[0].Id, name + " was taken out by hand: the rule leaves it out (put it in a group by hand to undo)", name + "|hand"); return false; }
+            // 0.6.23 (the re-check of 111): an account the copier has (a follower, on or off, or its leader) is placed: never joined.
+            // The copier's own words; a copier.txt that does not read says so and the account is not joined either.
+            string cw = CopierHas(name);
+            if (cw != null) { if (lanesOfKind.Count == 1) LaneSay(lanesOfKind[0].Id, cw + ": the rule leaves it out", name + "|copier"); return false; }
             if (a == null || !Up(a)) return false;                        // not listed or not connected now: next minute
             if (!ChartBridgeBranches.IsProp(name)) return false;          // personal, Sim, or no personal pick: never by rule
             if (lanesOfKind.Count != 1) { LaneSay(null, (lanesOfKind.Count == 0 ? "no group has Type " + r.Kind : lanesOfKind.Count + " groups have Type " + r.Kind) + ": " + name + " is not added (make exactly one " + r.Kind + " lane)", "lanes|" + r.Kind + "|" + lanesOfKind.Count); return false; }
@@ -2681,7 +2916,19 @@ namespace NinjaTrader.NinjaScript.AddOns
             Dictionary<string, string> m = new Dictionary<string, string>(StringComparer.Ordinal) { { "account", CbJson.Str(name) }, { "group", CbJson.Str(lane.Id) } };
             foreach (KeyValuePair<string, string> kv in r.Rules) m[kv.Key] = kv.Key == "drawdownType" || kv.Key == "typeId" ? CbJson.Str(kv.Value) : kv.Value;
             string err;
-            lock (ChangeGate) err = AccountGroup(m, "the lane rule", true);
+            lock (ChangeGate)
+            {
+                // 0.6.23 (the review of 111): the first read above was taken without ChangeGate, so a hand Remove (or a hand move into
+                // another group) may have finished since. Every hand move holds ChangeGate through its change AND its hand list
+                // entry, so read both again here: still in no group, still not taken out by hand, the list still readable.
+                if (LaneRaceHook != null) LaneRaceHook(name);   // the harness: a hand move between the first read and this one
+                string now; lock (Mem) state.Members.TryGetValue(name, out now);
+                if (now != null) return false;
+                HandState(name, out handErr, out byHand);
+                if (handErr != null || byHand) return false;
+                if (CopierHas(name) != null) return false;      // the copier took it meanwhile (its messages run under ChangeGate: CopierMessage)
+                err = AccountGroup(m, "the lane rule", true);
+            }
             if (err != null) { LaneSay(lane.Id, name + " is not added to " + lane.Name + ": " + err, name + "|joinfail|" + err); return false; }
             LaneSay(lane.Id, "added: 1 " + r.Kind + " account, " + name + ", on the bench (rule)", null);
             lock (LaneSaid) LaneSaid.RemoveWhere(k => k.StartsWith(name + "|", StringComparison.Ordinal));
@@ -2720,7 +2967,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     return archive();
                 }
                 if (unreadable) return ReadFailedNow() + "; " + member + " is in a group, so it cannot be hidden (it would leave its group) until groups.txt can be read";
-                string gname = null, archived = null;
+                string gname = null, gtype = null, archived = null;
                 bool inEffect;
                 string res = ChangeAndSave(true, next =>
                 {
@@ -2729,11 +2976,13 @@ namespace NinjaTrader.NinjaScript.AddOns
                     string no = hideRefusal();
                     if (no != null) return no;
                     gname = next.Groups.ContainsKey(cur) ? next.Groups[cur].Name : cur;
+                    gtype = next.Groups.ContainsKey(cur) ? next.Groups[cur].AccountType : null;   // 0.6.23
                     next.Members.Remove(member); next.Own.Remove(member); next.Benched.Remove(member);
                     return null;
                 }, next => HeldWords(member, a), out inEffect);
                 if (ReferenceEquals(res, Unchanged)) { if ((why = hideRefusal()) != null) return why; return archive(); }
                 if (!inEffect) return res;
+                HandOut(member, gname, gtype == "eval" || gtype == "funded" ? gtype : "-");   // 0.6.23: Hide out of any group is a hand move
                 // 0.6.10 (review): a change kept after a failed write (something was placed on it during the write): asked again before
                 // it is hidden; holding anything now, it stays out of its group (as kept) but is not hidden, and the page hides it once flat
                 string again = res != null ? hideRefusal() : null;

@@ -128,6 +128,24 @@ try {
   const forced = await p.evaluate(() => { const f = window.fixed.feed; return [f.post({ type: 'groupSave', cid: 'x1', group: 'g1', name: 'Renamed', accountType: 'funded' }), f.post({ type: 'groupDelete', cid: 'x2', group: 'g1' }), f.post({ type: 'accountGroup', cid: 'x3', account: 'SIM-E', group: 'g1' }), window.fixed.refused.slice()]; });
   await wait(800);
   check(forced[0] === false && forced[1] === false && forced[2] === false && JSON.stringify(forced[3]) === '["groupSave","groupDelete","accountGroup"]' && (await groupMsgs()).length === n3, 'groupSave, groupDelete and a bare accountGroup through it are refused by name and never reach ChartBridge: ' + JSON.stringify(forced[3]));
+  // 1.56.0 (the lanes' Unassigned row): Legion's Add asks the panel's own join step; an account the panel does not offer says why
+  const nJ = (await groupMsgs()).length;
+  const joins = await p.evaluate(() => [window.fixed.panel.join('SIM-H'), window.fixed.panel.join('SIM-A'), window.fixed.panel.join('SIM-E')]);
+  await until(async () => !!(await p.$('#laneC .ma-join')), 'the join step shown');
+  check(/SIM-H is not offered by Lucid's panel/.test(joins[0]) && joins[1] === 'SIM-A is in Lucid already.' && joins[2] === '', '1.56.0 join: another firm\'s account is not offered, a member is in already, the firm\'s account in no group opens the join step: ' + JSON.stringify(joins));
+  check(/Put in Lucid/.test(await p.$eval('#laneC .ma-join', e => e.textContent)), '1.56.0 join: the panel\'s own Put in, with its rules and highest close');
+  await p.click('#laneC [data-ma="join-no"]'); await wait(500);
+  /* 1.56.0 ("1. a"): Move straight from another group (one step): the join's own checks first, nothing sent when refused */
+  const moves = await p.evaluate(() => [window.fixed.panel.moveIn('SIM-H'), window.fixed.panel.moveIn('SIM-A')]);
+  await wait(500);
+  check(/Apex/.test(moves[0]) && /a group holds one firm/.test(moves[0]) && moves[1] === 'SIM-A is in Lucid already.', '1.56.0 moveIn: another firm\'s account is refused by the join\'s own check, a member is in already: ' + JSON.stringify(moves));
+  /* Anthony 2026-11-13 (21:35Z): only when flat: an account that holds a position is refused before anything is sent */
+  const nB = (await groupMsgs()).length;
+  const busyMove = await p.evaluate(() => { const acc = window.fixed.feed.S.accounts.find(a => a && a.name === 'SIM-H'), was = acc.positions;
+    acc.positions = [{ root: 'MNQ', qty: 1 }]; try { return window.fixed.panel.moveIn('SIM-H'); } finally { acc.positions = was; } });
+  await wait(400);
+  check(busyMove === 'SIM-H holds long 1 MNQ: it moves once flat.' && (await groupMsgs()).length === nB, '1.56.0 moveIn: a busy account is refused, nothing sent: ' + busyMove);
+  check(!(await p.$('#laneC .ma-join')) && (await groupMsgs()).length === nJ, '1.56.0 join: Cancel sends nothing');
   // the lock: every chip locked, a click and a drag send nothing, the reason is shown
   await p.evaluate(() => { window.lockWhy = 'The lane is in Auto: switch Armed off before an account moves.'; });
   await until(async () => p.evaluate(() => /in Auto/.test((document.querySelector('#laneC [data-ma="lockwhy"]') || {}).textContent || '')), 'the reason shown');
