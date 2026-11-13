@@ -39,7 +39,7 @@ function mount(el, opts) {
       '<span class="ws-seg lgd-seg" role="group" aria-label="Legion\'s trader desk">' +
         '<button type="button" data-side="agent" aria-pressed="true">Agents</button><button type="button" data-side="bot" aria-pressed="false">Bot</button>' +
       '</span>' +
-      '<span class="lgd-note">Prop accounts and groups only. Your personal account and Sim are on Praetorian.</span>' +
+      '<span class="lgd-note">Prop accounts, and groups of prop or Sim accounts. Your personal account and single Sim accounts are on Praetorian.</span>' +
     '</div>' +
     '<section class="ag-view lgd-agent" aria-label="Legion\'s agent desk"></section>' +
     '<section class="bt-view lgd-bot" aria-label="Legion\'s bot desk" hidden></section>';

@@ -745,7 +745,40 @@ function createFeed(env) {
     if (changed2) firmWrite(all);
   }
   const subs = new Set();                                // listen(): the window's other v3 parts
-  const tell = (k, m) => { for (const s of subs) { if (typeof s[k] === 'function') { try { s[k](m); } catch (e) { setTimeout(() => { throw e; }); } } } };
+  /* 1.53.0 (the lanes research, E): the latest of each state message on this connection, handed to a part that listens after
+     it came (Legion's trader desk is mounted when its fold first opens, long after hello and trading): without it a late part
+     waits for a hello that comes only at the next reconnect. Forgotten on a drop. Each trader's last agent message too. */
+  const LAST_KINDS = ['hello', 'trading', 'accounts', 'groups', 'copier', 'agentStandDowns', 'bot'];
+  const last = new Map(), lastAgents = new Map(), gap = new Map();   // gap: a part joining -> the keys it has heard live since
+  let conn = 0;                                          // which connection the kept messages are from
+  const keyOf = m => (m.type === 'agent' ? 'agent:' + m.agent : m.type);
+  const keep = m => {
+    if (LAST_KINDS.includes(m.type)) last.set(m.type, m);
+    else if (m.type === 'agent' && typeof m.agent === 'string' && m.agent) { lastAgents.delete(m.agent); lastAgents.set(m.agent, m); if (lastAgents.size > 200) lastAgents.delete(lastAgents.keys().next().value); }
+  };
+  const forget = () => { last.clear(); lastAgents.clear(); conn++; };
+  const tell = (k, m) => {
+    for (const s of subs) {
+      if (k === 'message' && m && gap.has(s)) gap.get(s).add(keyOf(m));
+      if (typeof s[k] === 'function') { try { s[k](m); } catch (e) { setTimeout(() => { throw e; }); } }
+    }
+  };
+  function listen(part) {
+    subs.add(part);
+    const snap = LAST_KINDS.filter(k => last.has(k)).map(k => last.get(k)).concat([...lastAgents.values()]);
+    if (snap.length && part && typeof part.message === 'function') {
+      const at = conn, heard = new Set();
+      gap.set(part, heard);
+      /* on the next tick, so the part has finished setting itself up; never a message it has heard live since (newer), never
+         one from a connection that has dropped meanwhile */
+      Promise.resolve().then(() => {
+        gap.delete(part);
+        if (!subs.has(part) || at !== conn) return;
+        for (const m of snap) { if (heard.has(keyOf(m)) || !subs.has(part)) continue; try { part.message(m); } catch (e) { setTimeout(() => { throw e; }); } }
+      });
+    }
+    return () => { subs.delete(part); gap.delete(part); };
+  }
 
   function start(features) {
     const v3 = Array.isArray(features) && features.includes('v3');
@@ -762,7 +795,7 @@ function createFeed(env) {
     connect();
   }
   function stop() {
-    started = false; stopped = true; clearTimeout(timer); clearTimeout(deskTimer);
+    started = false; stopped = true; clearTimeout(timer); clearTimeout(deskTimer); forget();
     const s = ws; ws = null; S.open = false; S.signedIn = false; S.enabled = false;
     if (s) { s.onopen = s.onmessage = s.onclose = s.onerror = null; try { s.close(); } catch (e) { /* closed */ } }
   }
@@ -774,13 +807,13 @@ function createFeed(env) {
       try { sock = new WebSocket(url); } catch (e) { retry(); return; }
       ws = sock;
       sock.onopen = () => { if (sock === ws) { tries = 0; S.open = true; } };
-      sock.onmessage = ev => { if (sock !== ws) return; let m; try { m = JSON.parse(ev.data); } catch (e) { return; } if (!m || typeof m !== 'object') return; message(m, sock); tell('message', m); };
+      sock.onmessage = ev => { if (sock !== ws) return; let m; try { m = JSON.parse(ev.data); } catch (e) { return; } if (!m || typeof m !== 'object') return; message(m, sock); keep(m); tell('message', m); };
       sock.onclose = () => {
         if (sock !== ws) return;
         ws = null; S.open = false; S.signedIn = false; S.enabled = false; S.reason = 'Not connected to ChartBridge.'; S.trading = null; S.groups = null; S.groupsError = null; S.heroes.clear();
         if (S.got && S.lostAt === null) S.lostAt = Date.now();   // 1.31.0 (audit C6): the last snapshot is kept but marked stale
         S.switches = Object.fromEntries(SWITCH_KEYS.map(k => [k, false]));      // controls go until ChartBridge names them again
-        changed(); tell('closed'); retry();
+        forget(); changed(); tell('closed'); retry();
       };
       sock.onerror = () => { /* onclose follows */ };
     }, retry);
@@ -1059,7 +1092,7 @@ function createFeed(env) {
     setOutcome, lifecycleTick, reportListed,   // 1.40.0: the account lifecycle; Sunday item A: the listed accounts to The Desk
     /** 1.30.0: an account's type on The Desk ({ id, firm, name, version, status }) or null */
     typeOf: name => { const d = S.desk.get(name); return d && d.accountType ? d.accountType : null; },
-    listen(part) { subs.add(part); return () => subs.delete(part); },
+    listen,   // 1.53.0: a part that listens late is handed the latest state first (E)
     /** a refusal that came back on the order ticket's connection for an action of this page: true when it was one */
     takeReject(m) { if (!m || !m.cid || !mine.has(m.cid)) return false; message(m); return true; },
     /** the limit warning level of an account: '', 'amber' or 'red' */

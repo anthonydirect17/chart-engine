@@ -63,6 +63,27 @@
   `test/pc-updater.test.js`: the allowed git subcommands, the box job's name, useHttpPath read before the one ask, the
   token only after a 404 or 401 and then through the Actions API, one place that asks for it and one that sends it.
 
+## chart 1.53.0 (2026-11-13): Sim lanes on Legion, and the trader desk no longer sits on "Connecting" (page only, no F5)
+
+HOME's evening test of 2026-11-12 stopped on both (FROM_HOME_2026-11-12_evening_plumbing.md); the research is in
+FROM_BUILD4_2026-11-13_lanes_research.md. Rule 12 for the gate change (what Legion lets through to an account change).
+
+- **Sim and prop may share a lane** (Anthony 2026-11-13: "I dont see any downside to sim and prop sharing a lane"):
+  Legion's gate (`AgentCore.lgGroupWhy`, `LG_GROUP_KINDS`) now takes a group of Sim accounts only, as well as prop and
+  prop plus Sim. A group that holds your personal account, or an account the page cannot tell, is still refused, and a
+  single Sim account still belongs to Praetorian. A trader on a Sim-only group is no longer "no home"; one on a group
+  that holds your personal account keeps those words. Praetorian still takes no group; its words now say "groups are
+  on Legion".
+- **Every lane says what it trades** in big plain words: SIM, PROP or PROP + SIM (`lanes()` `kindText`).
+- **A part that listens late is handed the latest state** (live/accounts.js `listen`): the feed keeps the last
+  `hello`, `trading`, `accounts`, `groups`, `copier`, `agentStandDowns`, `bot` and each trader's last `agent` on the
+  connection, and hands them to a part that starts listening after they came, on the next tick, never over a newer one
+  it has heard since, never after a drop. Root cause of the Traders fold's Agents and Bot tabs sitting on "Connecting
+  to ChartBridge...": Legion mounts its desk when the fold first opens, after `hello` and `trading` have gone by, and
+  the desks learn that ChartBridge is there only from them. The fleet smoke now opens the fold late and checks it.
+- The lane's reason for no trader says where a group is given now (Legion's Traders section; New group on the
+  Multi-Account panel), not the Agent tab and Settings.
+
 ## chart 1.52.3 (2026-11-13): each lane card names the files not offered and why (page only, no F5)
 
 - **Legion's lane cards** (`FleetCore.waitingChoices`, live/fleet.js): under the pick list, one line names the roster

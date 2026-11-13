@@ -340,6 +340,46 @@ test('the Account page\'s connection: client v3 right after hello, then auth; it
     off();
   } finally { F.feed.stop(); global.WebSocket = G; if (G === undefined) delete global.WebSocket; }
 });
+test('1.53.0 (E): a part that listens late is handed the latest state first: hello, trading, accounts, groups and each trader, never an older one over a newer, never after a drop', async () => {
+  const F = await loadFeed();
+  const G = global.WebSocket; global.WebSocket = F.FakeSocket;
+  try {
+    F.feed.start(['liveFirst', 'v3']);
+    await F.settle();
+    const s = F.socks[0];
+    s.deliver({ type: 'hello', version: '0.6.21', instruments: [], features: ['v3'] });
+    s.deliver({ type: 'trading', enabled: true, accounts: [], maxQty: {}, switches: {} });
+    s.deliver({ type: 'accounts', list: [], archived: [] });
+    s.deliver({ type: 'groups', list: [{ id: 'g1', name: 'Sample', members: [] }] });
+    s.deliver({ type: 'agent', agent: 'legion1', mode: 'shadow' });
+    s.deliver({ type: 'agent', agent: 'legion1', mode: 'auto' });      // the latest of each trader only
+    s.deliver({ type: 'agent', agent: 'legion2', mode: 'shadow' });
+    s.deliver({ type: 'status', level: 'info', text: 'not state: never replayed' });
+    // the Traders fold opens now: the desk listens late
+    const heard = [];
+    const off = F.feed.listen({ message: m => heard.push(m.type + (m.agent ? ':' + m.agent + ':' + m.mode : '')) });
+    assert.deepEqual(heard, [], 'nothing on the spot: the part finishes setting itself up first');
+    s.deliver({ type: 'agent', agent: 'legion2', mode: 'copilot' });  // heard live before the replay: newer, so never replaced
+    await Promise.resolve();
+    assert.deepEqual(heard, ['agent:legion2:copilot', 'hello', 'trading', 'accounts', 'groups', 'agent:legion1:auto']);
+    off();
+    // after a drop nothing is kept: a part that listens then waits for the next hello
+    s.onclose();
+    const after = [];
+    const off2 = F.feed.listen({ message: m => after.push(m.type) });
+    await Promise.resolve(); await Promise.resolve();
+    assert.deepEqual(after, []);
+    off2();
+    // a part that leaves before the replay gets nothing
+    const s2 = await (async () => { await new Promise(r => setTimeout(r, 600)); return F.socks[F.socks.length - 1]; })();
+    s2.deliver({ type: 'hello', version: '0.6.21', instruments: [], features: ['v3'] });
+    const gone = [];
+    const off3 = F.feed.listen({ message: m => gone.push(m.type) });
+    off3();
+    await Promise.resolve();
+    assert.deepEqual(gone, []);
+  } finally { F.feed.stop(); global.WebSocket = G; if (G === undefined) delete global.WebSocket; }
+});
 test('an older ChartBridge (hello without "v3"): no connection is opened, the page says what it needs', async () => {
   const F = await loadFeed();
   F.feed.start(['liveFirst', 'profile', 'settlement', 'htf', 'weekProfile']);

@@ -31,7 +31,7 @@ test('a trader on None: it may be given your personal account or a Sim account, 
   assert.equal(g.check({ type: 'agentAccount', agent: 'demo', account: 'SIM-A', keepMode: 'shadow' }), '', 'a Sim account (to confirm)');
   assert.equal(g.check({ type: 'agentAccount', agent: 'demo', account: 'SIM-A', league: true, keepMode: 'shadow' }), '', 'a league seat is a Sim account');
   assert.match(g.check({ type: 'agentAccount', agent: 'demo', account: 'PROP-1', league: true, keepMode: 'shadow' }), /PROP-1 is a prop account/);
-  assert.match(g.check({ type: 'agentAccount', agent: 'demo', group: 'g1', keepMode: 'shadow' }), /a group is the prop business/);
+  assert.match(g.check({ type: 'agentAccount', agent: 'demo', group: 'g1', keepMode: 'shadow' }), /groups are on Legion/);
   assert.match(g.check({ type: 'agentAccount', agent: 'demo', account: 'LIVE-X', keepMode: 'shadow' }), /LIVE-X is an account the page cannot tell/);
   assert.match(g.check({ type: 'agentAccount', agent: 'demo', account: 'NOPE', keepMode: 'shadow' }), /NOPE is not in ChartBridge's accounts now/);
 });
@@ -39,7 +39,7 @@ test('a trader on None: it may be given your personal account or a Sim account, 
 test('a trader on a prop account, a group (even of Sim accounts), or an account the page cannot tell: only its kill switch ON gets through', () => {
   const cases = [
     [agent({ account: 'PROP-1' }), /PROP-1 is a prop account: it is set up from Legion's trader desk; from here you can only stop it/],
-    [agent({ account: null, group: { id: 'g1', name: 'Evals' }, seats: [{ account: 'PROP-1' }, { account: 'PROP-2' }] }), /trades a group: groups are the prop business/],
+    [agent({ account: null, group: { id: 'g1', name: 'Evals' }, seats: [{ account: 'PROP-1' }, { account: 'PROP-2' }] }), /trades a group: groups are on Legion/],
     [agent({ account: null, group: { id: 'g2', name: 'Mine' }, seats: [{ account: 'MINE-1' }] }), /trades a group/],
     [agent({ account: null, group: { id: 'g3', name: 'Sims' }, seats: [{ account: 'SIM-A' }] }), /trades a group/],
     [agent({ account: 'LIVE-X' }), /no home: the page cannot tell its account; stop it, then fix its account or group/],
@@ -156,7 +156,7 @@ test('the pickers on Praetorian: never a choice the desk did not offer; a group 
   assert.equal(out.length, list.length);
   const by = v => out.find(c => c.value === v);
   assert.equal(by('').ok, list.find(c => c.value === '').ok, 'None as it was');
-  assert.equal(by('group:g1').ok, false); assert.match(by('group:g1').text, /groups are the prop business/);
+  assert.equal(by('group:g1').ok, false); assert.match(by('group:g1').text, /groups are on Legion/);
   assert.equal(by('PROP-1').ok, false); assert.match(by('PROP-1').text, /not on Praetorian/);
   assert.equal(by('LIVE-X').ok, false);
   assert.equal(by('MINE-1').ok, list.find(c => c.value === 'MINE-1').ok, 'your personal account as the desk had it');
@@ -199,8 +199,8 @@ test('deliberate breaks of the gate, each one a test missed at first (2026-11-12
   for (const t of ['orderSeen', 'botSeenX', 'agentseen', 'Seen']) assert.match(g.check({ type: t, agent: 'demo' }), /it does not send/, t);
   /* an account change: a group key, even empty, is a group; no account key, or an empty one, is not None */
   const p = gateWith(accounts(), agent({ account: 'MINE-1' }), { type: 'bot', account: 'MINE-1', mode: 'shadow' });
-  assert.match(p.check({ type: 'agentAccount', agent: 'demo', group: '', account: null, keepMode: 'shadow' }), /a group is the prop business/);
-  assert.match(p.check({ type: 'agentAccount', agent: 'demo', group: null, account: null, keepMode: 'shadow' }), /a group is the prop business/);
+  assert.match(p.check({ type: 'agentAccount', agent: 'demo', group: '', account: null, keepMode: 'shadow' }), /groups are on Legion/);
+  assert.match(p.check({ type: 'agentAccount', agent: 'demo', group: null, account: null, keepMode: 'shadow' }), /groups are on Legion/);
   for (const m of [{}, { account: '' }, { account: undefined }, { account: 0 }, { account: false }]) {
     assert.notEqual(p.check(Object.assign({ type: 'agentAccount', agent: 'demo', keepMode: 'shadow' }, m)), '', 'agentAccount ' + JSON.stringify(m));
     assert.notEqual(p.check(Object.assign({ type: 'botAccount' }, m)), '', 'botAccount ' + JSON.stringify(m));

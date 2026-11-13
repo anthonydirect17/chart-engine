@@ -180,3 +180,6 @@ body.fl-on .fl-wrap { padding-bottom: 120px; }
 .fl-btrow .r { text-align: right; }
 @media (max-width: 600px) { .fl-chart { height: 260px; } }
 
+/* 1.53.0 (Anthony 2026-11-13): what a lane trades, in big plain words: SIM, PROP or PROP + SIM */
+.fl-lanekind { font: 700 18px var(--ws-mono); letter-spacing: .08em; color: var(--ws-text); margin: 2px 0 4px; }
+.fl-lanekind[data-lanekind="sim"] { color: var(--ws-text2); }
