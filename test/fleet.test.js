@@ -845,14 +845,14 @@ test('the Armed switch: offered only when Kill all is, "not known" until heard, 
   assert.deepStrictEqual(F.pickChoices(null), []);
 });
 
-async function lanePage(t, list) {
+async function lanePage(t, list, more) {
   timers(t);
   const P = page(t); P.fv.showTab(true);
   P.feed({ type: 'hello', version: '0.6.21' }); P.feed({ type: 'trading', enabled: true }); P.feed(accounts); P.feed(groups);
   for (const a of list) P.feed(a);
   P.replayDone();
   await P.tick();
-  P.answers[0].res({ status: 200, json: () => Promise.resolve({ left: 0, files: [served('germ.json', botFile('germ')), served('duo.json', lineupFile('duo', [member('a'), member('b')]))] }) });
+  P.answers[0].res({ status: 200, json: () => Promise.resolve({ left: 0, files: [served('germ.json', botFile('germ')), served('duo.json', lineupFile('duo', [member('a'), member('b')]))].concat(more || []) }) });
   await P.tick(); await P.tick();
   return P;
 }
@@ -941,6 +941,27 @@ test('Armed off: one click or key, no question, Shadow for every lane trader not
   P.key('Escape'); assert.deepStrictEqual([P.fv.state().asking, arm().asking], [false, false]);
 });
 
+test('waitingChoices: the files not offered, each with its own why_not (a sweep build waits for its 10 matching nights)', () => {
+  const sweep = served('sweep-a.json', botFile('sweep-a', { runs_live: false, why_not: 'runs live after 10 matching nights (3 so far)' }));
+  const cards = cardsOf([served('germ.json', botFile('germ')), sweep, served('slow.json', botFile('slow', { runs_live: false, why_not: 'two trades a session' }))]);
+  const w = F.waitingChoices(cards, 5);
+  assert.deepStrictEqual(w.map(x => [x.file, x.text, x.why]), [['slow.json', 'slow', 'two trades a session'], ['sweep-a.json', 'sweep-a', 'runs live after 10 matching nights (3 so far)']]);
+  assert.strictEqual(w.more, 0);
+  assert.deepStrictEqual(F.pickChoices(cards).map(c => c.file), ['germ.json'], 'and the pick list still offers only what runs live');
+  const one = F.waitingChoices(cards, 1);
+  assert.deepStrictEqual([one.length, one.more], [1, 1]);
+  assert.deepStrictEqual([F.waitingChoices(null).length, F.waitingChoices({ ok: false }).more], [0, 0]);
+});
+
+test('a lane card says which files are not offered and why: a sweep build waits for its 10 matching nights (its roster card\'s why_not)', async t => {
+  const P = await lanePage(t, [evalTrader(), fundTrader()], [served('sweep-a.json', botFile('sweep-a', { runs_live: false, why_not: 'runs live after 10 matching nights (3 so far)' }))]);
+  for (const stage of ['eval', 'funded']) {
+    const html = P.part('lane-' + stage).innerHTML;
+    assert.strictEqual((html.match(/<p class="fl-line fl-mutline fl-waiting">Not offered until it runs live: sweep-a \(runs live after 10 matching nights \(3 so far\)\)\.<\/p>/g) || []).length, 1, stage);
+    assert.doesNotMatch(html, /<option value="sweep-a\.json"/, 'and it is not in the pick list');
+  }
+});
+
 test('the pick: one list a lane, sent as agentPick; locked in Auto and while the trader holds something; a refusal is said and the list goes back', async t => {
   const P = await lanePage(t, [evalTrader(), fundTrader()]);
   const lanesHtml = () => P.part('lane-eval').innerHTML + P.part('lane-funded').innerHTML;
@@ -948,6 +969,7 @@ test('the pick: one list a lane, sent as agentPick; locked in Auto and while the
   assert.match(html, /<select class="fl-pick" id="flPick-eval" data-do="pick" data-agent="legion1"><option value="">None<\/option><option value="duo\.json">duo \(lineup of 2\)<\/option><option value="germ\.json" selected>germ<\/option><\/select>/);
   assert.match(html, /<select class="fl-pick" id="flPick-funded" data-do="pick" data-agent="legion2"><option value="" selected>None<\/option>/);
   assert.match(html, /data-stage="eval" data-armable="true"/); assert.match(html, /data-stage="funded" data-armable="false"/);
+  assert.doesNotMatch(html, /fl-waiting/, 'every file runs live: no "not offered" line');
   assert.match(html, /<div class="fl-lanepanels" data-panel="eval">/, 'the lane keeps a place for its own Multi-Account panel (mounted by the page)');
   P.change('legion2', 'gone.json');
   assert.deepStrictEqual(P.posts, [], 'a file the list does not offer is not sent (the review of 94, note 7)');

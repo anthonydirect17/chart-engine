@@ -1,8 +1,9 @@
 {
   "about": "The oldest ChartBridge each page version works with. nt8/update-pc.ps1 installs a page automatically only when the ChartBridge compiled on the PC is this version or newer. Keep it with the CHANGELOG: every release that needs a newer ChartBridge raises minChartBridge (and adds a line to history), and page follows package.json.",
-  "page": "1.52.2",
+  "page": "1.52.3",
   "minChartBridge": "0.6.2",
   "history": [
+    { "page": "1.52.3", "minChartBridge": "0.6.2", "note": "CHANGELOG chart 1.52.3: page only, no F5: each Legion lane card names the roster files the pick list does not offer and why, from each file's own why_not (a sweep build: runs live after 10 matching nights)" },
     { "page": "1.52.2", "minChartBridge": "0.6.2", "note": "CHANGELOG chart 1.52.2: page only, no F5: Flatten and turn off refuses a flatten it cannot tie to a seat (nothing sent, flatten in NinjaTrader); a lane group without its members, or another group trader with no seats listed, is not known, so the lane is not armed; two wording fixes" },
     { "page": "1.52.1", "minChartBridge": "0.6.2", "note": "CHANGELOG chart 1.52.1: page only, no F5: Legion Setup's Traders fold, one mount of Legion's trader desk (live/legion-desk.js, loaded by the page and installed), shown or hidden with the fold; a trader's accounts are its account and every seat it has" },
     { "page": "1.52.0", "minChartBridge": "0.6.2", "note": "CHANGELOG chart 1.52.0: page only, no F5: Legion's trader desk (live/legion-desk.js): the Agent and Bot desks mounted a second time behind Praetorian's gate turned round (prop accounts and prop groups; kill switch ON, Shadow and the acknowledgements for anyone), for builder 1 to place in Legion Setup; a second copy takes no copilot key and keeps its bot proposal card inside it. Prop accounts need ChartBridge 0.6.16" },

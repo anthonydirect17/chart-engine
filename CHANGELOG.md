@@ -63,6 +63,14 @@
   `test/pc-updater.test.js`: the allowed git subcommands, the box job's name, useHttpPath read before the one ask, the
   token only after a 404 or 401 and then through the Actions API, one place that asks for it and one that sends it.
 
+## chart 1.52.3 (2026-11-13): each lane card names the files not offered and why (page only, no F5)
+
+- **Legion's lane cards** (`FleetCore.waitingChoices`, live/fleet.js): under the pick list, one line names the roster
+  files the list does not offer because they do not run live, each with its card's own `why_not`, at most five and then
+  how many more (the Roster says why). A sweep build reads "runs live after 10 matching nights (n so far)" there until
+  its roster card says it runs live (the coordinator's answers of 2026-11-13, 02:00 UTC). The pick list is unchanged:
+  it still offers only what runs live. Display only.
+
 ## chart 1.52.2 (2026-11-13): Flatten and turn off refuses a flatten it cannot tie to a seat; two lane shapes not known (page only, no F5)
 
 Rule 12 (orders): N1. Answers B4-9 and the stack's final review (N1 to N4), opened under the 2026-11-13 freeze.

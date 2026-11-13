@@ -593,6 +593,17 @@ function pickChoices(cards) {
   return cards.lineups.concat(cards.bots).filter(c => c.runsLive && FILE_RX.test(c.file)).slice(0, MAX_CARDS)
     .map(c => ({ file: c.file, text: c.name + (c.kind === 'lineup' ? ' (lineup of ' + c.bots.length + ')' : '') }));
 }
+/** The files the pick list does not offer because they do not run live, each with its card's own why_not (answers of
+ *  2026-11-13 02:00 UTC: a sweep build says "runs live after 10 matching nights (n so far)" on the lane cards). At most
+ *  `max` are listed; .more counts the rest. -> [{ file, text, why }] */
+function waitingChoices(cards, max) {
+  if (!cards || !cards.ok) { const none = []; none.more = 0; return none; }
+  const all = cards.lineups.concat(cards.bots).filter(c => !c.runsLive && FILE_RX.test(c.file));
+  const n = isNum(max) && max >= 0 ? max : 5;
+  const out = all.slice(0, n).map(c => ({ file: c.file, text: c.name + (c.kind === 'lineup' ? ' (lineup of ' + c.bots.length + ')' : ''), why: str(c.whyNot, 300) || 'the file says it does not run live' }));
+  out.more = Math.max(0, all.length - n);
+  return out;
+}
 /** agentPick: a served file's name, or null for none. null when the id or the name is not one ChartBridge takes. */
 function pickMsg(agent, file, cid) {
   if (!ID_RX.test(String(agent || '')) || !(file === null || (typeof file === 'string' && FILE_RX.test(file)))) return null;
@@ -896,7 +907,7 @@ const badAnswer = text => /NOT STOPPED|FAILED|could NOT/.test(String(text || '')
 /** "09:41:07" of a Date (the PC's own clock), for the time in front of a Kill all answer. */
 const clock = d => [d.getHours(), d.getMinutes(), d.getSeconds()].map(x => String(x).padStart(2, '0')).join(':');
 
-return Object.freeze({ modeRulesLoaded, NOT_KNOWN, NOT_READABLE, groupLock, accountsReadable, MAX_FILLS, LANE_COLOR, LANE_LETTER, propRows, todayOf, liveTiles, cleanFill, laneMarks, traderDays, laneRunner, readableName, rosterFamilies, FILTERS, laneLock, laneMaySend, laneFeed, PICK_MIN, STAGES, lanes, outsideAuto, armState, armMsgs, armWords, pickChoices, pickMsg, maySend, KILL_MIN, SWITCH_MIN, DAYSTOP_MIN, ROSTER_MIN, ROSTER_FORMAT, LINEUP_FORMAT, CONFIRM_MS, ARM_MS, ANSWER_WAIT_MS, ROSTER_WAIT_MS, MAX_CARDS, MAX_MEMBERS, MAX_NOT_SHOWN, MODE_NAME, atLeast, usd, signed, stageCard, rosterCards, rosterProblem,
+return Object.freeze({ modeRulesLoaded, NOT_KNOWN, NOT_READABLE, groupLock, accountsReadable, MAX_FILLS, LANE_COLOR, LANE_LETTER, propRows, todayOf, liveTiles, cleanFill, laneMarks, traderDays, laneRunner, readableName, rosterFamilies, FILTERS, laneLock, laneMaySend, laneFeed, PICK_MIN, STAGES, lanes, outsideAuto, armState, armMsgs, armWords, pickChoices, waitingChoices, pickMsg, maySend, KILL_MIN, SWITCH_MIN, DAYSTOP_MIN, ROSTER_MIN, ROSTER_FORMAT, LINEUP_FORMAT, CONFIRM_MS, ARM_MS, ANSWER_WAIT_MS, ROSTER_WAIT_MS, MAX_CARDS, MAX_MEMBERS, MAX_NOT_SHOWN, MODE_NAME, atLeast, usd, signed, stageCard, rosterCards, rosterProblem,
   kindOf, seatsKind, dayMark, traderAccounts, statusText, traders, propAccounts, killAllState, killAllMsg, autoLine, badAnswer, clock });
 });
 
@@ -1403,6 +1414,7 @@ function create(o) {
       <div class="fl-trow"><span class="fl-lanetitle"><span class="fl-dot" data-stage="${esc(l.stage)}"></span>${esc(l.title)}</span><span class="fl-mut">${l.stage === 'eval' ? 'Goal: pass the eval' : 'Goal: reach the payout'}</span>
         <span class="fl-fill"></span>${none ? '' : `<span class="fl-mode" data-mode="${esc(l.mode)}">${esc(l.modeText)}</span>`}<span class="fl-tag" data-kind="${l.armable ? 'live' : 'notlive'}">${l.armable ? 'Ready' : 'Not ready'}</span></div>
       ${none ? '' : `<div class="fl-trow"><span class="fl-mut">${esc(l.name)}, group ${esc(l.groupName)}</span>${l.sim ? '<span class="fl-tag" data-kind="sim">Sim: no money at stake</span>' : ''}</div><div class="fl-trow">${sel}</div>${card}`}
+      ${none ? '' : (w => (w.length ? `<p class="fl-line fl-mutline fl-waiting">Not offered until it runs live: ${w.map(x => `${esc(x.text)} (${esc(x.why)})`).join('; ')}${w.more ? `; and ${w.more} more (the Roster says why)` : ''}.</p>` : ''))(C.waitingChoices(S.roster.cards, 5))}
       ${l.why ? `<p class="fl-line fl-warn fl-lanewhy">${esc(l.why)}</p>` : ''}
       ${!none && l.runnerNote && l.armable ? `<p class="fl-line fl-mutline">${esc(l.runnerNote)}</p>` : ''}
       ${none ? '' : (r => `<p class="fl-line fl-runner" data-tone="${esc(r.tone)}">${esc(r.text)}</p>`)(C.laneRunner(l, S.helper))}
