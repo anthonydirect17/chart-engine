@@ -63,6 +63,20 @@
   `test/pc-updater.test.js`: the allowed git subcommands, the box job's name, useHttpPath read before the one ask, the
   token only after a 404 or 401 and then through the Actions API, one place that asks for it and one that sends it.
 
+## chart 1.52.2 (2026-11-13): Flatten and turn off refuses a flatten it cannot tie to a seat; two lane shapes not known (page only, no F5)
+
+Rule 12 (orders): N1. Answers B4-9 and the stack's final review (N1 to N4), opened under the 2026-11-13 freeze.
+
+- **N1 (defensive):** "Flatten and turn off" for a trader whose message has a seats list where no seat the page can read
+  holds his trade, while his `position` says he holds one, sends nothing: "Which account holds his trade is not known:
+  nothing was sent. Flatten in NinjaTrader, then press Off." Its question says the seats do not say on which account
+  (`AgentHelper.seatsUnclear`). The desk's own Flatten by his account is refused while his message has a seats list.
+- **N2 (test):** the lane's own trader's accounts outside its group (a seat left over) are held by a test.
+- **N3:** a lane whose group came without its `members`, or another group trader whose seats are missing or empty, is
+  not known, so the lane is not armed (as groupLock reads the same shapes).
+- **N4 (words):** a group trader's seat on a lane's account is "a seat" (it may be a leftover one); "Cannot tell its
+  accounts (the page reads EVAL-A, not the rest)".
+
 ## chart 1.52.1 (2026-11-12): Legion Setup's Traders fold, Legion's trader desk mounted (page only, no F5)
 
 - **Legion Setup's Traders fold (build answers B4-1, section 3):** one mount of builder 4's Legion trader desk

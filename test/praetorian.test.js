@@ -305,7 +305,29 @@ test('a None trader with a leftover seat: Off asks, and "Flatten and turn off" f
   assert.match(AH.offQuestion(h1, 'Demo Agent'), /holds long 1 MNQ on PROP-1\./); assert.doesNotMatch(AH.offQuestion(h1, 'Demo Agent'), /MINE-1/);
   const j1 = AH.flatOffStart(h1, 1000).job;
   assert.deepEqual(j1.seats, [{ account: 'PROP-1', root: 'MNQ' }]); assert.equal(j1.account, '', 'nothing for MINE-1');
-  /* his own account alone (no seats list, or seats holding nothing): his own account, as before */
+  /* his own account alone (no seats list, or an empty one): his own account, as before */
   assert.equal(AH.flatOffStart(agent({ account: 'MINE-1', mode: 'shadow', position: { root: 'MNQ', qty: 1 } }), 1000).job.account, 'MINE-1');
-  assert.equal(AH.flatOffStart(agent({ account: 'MINE-1', mode: 'shadow', position: { root: 'MNQ', qty: 1 }, seats: [{ account: 'PROP-1', position: null }] }), 1000).job.account, 'MINE-1');
+  assert.equal(AH.flatOffStart(agent({ account: 'MINE-1', mode: 'shadow', position: { root: 'MNQ', qty: 1 }, seats: [] }), 1000).job.account, 'MINE-1');
+  /* answers B4-9, N1 (the reviewer's probes G and H): a seats list where no seat the page can read holds his trade, while his
+     position says he holds one: which account is not known, so nothing is sent and the question says so */
+  const pos = { root: 'MNQ', qty: 1, avgPrice: 25000 };
+  for (const seats of [[{ account: 'PROP-1', position: null }], [{ account: 'MINE-1', position: null }, { account: 'PROP-1', position: null }], [{ account: 'MINE-1', position: null }, { acct: 'PROP-1', position: pos }]]) {
+    const g = agent({ account: 'MINE-1', mode: 'shadow', position: pos, seats });
+    assert.equal(AH.seatsUnclear(g), true);
+    assert.equal(AH.offStep(g), 'ask', 'he holds a trade: Off does not just go');
+    assert.match(AH.flatOffStart(g, 1000).error, /^Which account holds his trade is not known: nothing was sent\. Flatten in NinjaTrader, then press Off\.$/, JSON.stringify(seats));
+    assert.match(AH.offQuestion(g, 'Demo Agent'), /^Demo Agent holds long 1 MNQ, and his seats do not say on which account\. Flatten it in NinjaTrader, then press Off\.$/);
+  }
+  assert.equal(AH.seatsUnclear(h1), false); assert.equal(AH.seatsUnclear(agent({ account: 'MINE-1', seats: [] })), false);
+});
+
+/* answers B4-9, N1: the desk's own Flatten for a job by his account reads his seats again at the moment it sends: with a
+   seats list there, nothing goes by his own account (source test: the desk runs only in a browser) */
+test('N1: the desk never flattens by his own account while his message carries a seats list', () => {
+  const fs = require('node:fs'), path = require('node:path');
+  const ag = fs.readFileSync(path.join(__dirname, '..', 'live', 'agent.js'), 'utf8');
+  const m = ag.match(/function jobFlatten\(j\) \{[\s\S]*?\n  \}\n/);
+  assert.ok(m, 'jobFlatten found');
+  const acctBranch = m[0].split('\n').find(l => l.includes('a.account !== j.account'));
+  assert.ok(acctBranch && acctBranch.includes('(Array.isArray(a.seats) && a.seats.length > 0)'), 'the account branch refuses a message with seats: ' + acctBranch);
 });

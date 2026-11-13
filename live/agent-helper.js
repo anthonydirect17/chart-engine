@@ -229,6 +229,10 @@ function seatsHeld(a) {
    says: ChartBridge fills his `position` from the first seat holding it without saying which account, so a trader on MINE-1
    with his trade on a PROP-1 seat must flatten PROP-1, never MINE-1 (where Anthony may hold a position of his own) */
 const bySeats = a => onGroup(a) || leftover(a) || seatsHeld(a).length > 0;
+/* the next release (answers B4-9, N1): a seats list is there, yet no seat the page can read holds his trade while his `position`
+   says he holds one: which account holds it is not known, so nothing is flattened by his own account (a seat it cannot read,
+   or a seat ChartBridge has not filled yet, may be the one) */
+const seatsUnclear = a => !!(a && Array.isArray(a.seats) && a.seats.length > 0 && seatsHeld(a).length === 0);
 const heldText = h => (h.qty > 0 ? 'long ' : 'short ') + Math.abs(h.qty) + (h.root ? ' ' + h.root : '') + ' on ' + h.account;
 
 /** Off pressed: 'off' (send it), 'ask' (he holds a position: "Flatten and turn him off?"). a: his `agent` message. A group:
@@ -244,7 +248,9 @@ function offQuestion(a, name) {
   const held = seatsHeld(a);
   if (held.length) return (name || 'He') + ' holds ' + held.map(heldText).join(', ') + '. Flatten and turn him off?';
   const p = (a && a.position) || {};
-  return (name || 'He') + ' holds ' + (p.qty > 0 ? 'long ' : 'short ') + Math.abs(p.qty || 0) + (p.root ? ' ' + p.root : '') + ' on ' + str(a && a.account) + '. Flatten and turn him off?';
+  const pos = (p.qty > 0 ? 'long ' : 'short ') + Math.abs(p.qty || 0) + (p.root ? ' ' + p.root : '');
+  if (seatsUnclear(a)) return (name || 'He') + ' holds ' + pos + ', and his seats do not say on which account. Flatten it in NinjaTrader, then press Off.';
+  return (name || 'He') + ' holds ' + pos + ' on ' + str(a && a.account) + '. Flatten and turn him off?';
 }
 /** What the job flattens, in words: "SIM-A MNQ" or, for a group, "SIM-A MNQ, SIM-B MNQ". */
 const jobWhere = j => (Array.isArray(j.seats) && j.seats.length ? j.seats.map(x => x.account + ' ' + x.root).join(', ') : j.account + ' ' + j.root);
@@ -268,6 +274,7 @@ function flatOffStart(a, now) {
     const gj = { agent: str(x.agent), account: '', root: '', seats: held.map(h => ({ account: h.account, root: h.root })), phase: x.mode === 'shadow' ? 'flatten' : 'shadow', until: now + (x.mode === 'shadow' ? FLAT_WAIT_MS : SHADOW_WAIT_MS) };
     return { job: gj, action: gj.phase };
   }
+  if (seatsUnclear(x)) return { error: 'Which account holds his trade is not known: nothing was sent. Flatten in NinjaTrader, then press Off.' };   // N1
   if (!str(x.account)) return { error: 'His account is not known yet: nothing was sent. Flatten in NinjaTrader, then press Off.' };
   if (!str(p.root)) return { error: 'His position\'s instrument is not known: nothing was sent. Flatten in NinjaTrader, then press Off.' };
   const job = { agent: str(x.agent), account: x.account, root: p.root, phase: x.mode === 'shadow' ? 'flatten' : 'shadow', until: now + (x.mode === 'shadow' ? FLAT_WAIT_MS : SHADOW_WAIT_MS) };
@@ -429,5 +436,5 @@ function createClient(env) {
   };
 }
 
-return { VERSION, PORT, BASE, POLL_MS, TIMEOUT_MS, MISS_GRACE_MS, pollStep, SLOW_TEXT, FLAT_WAIT_MS, SHADOW_WAIT_MS, ASSIGN_WAIT_MS, slotFree, startBegin, startStep, onGate, TIERS, TYPE_NAME, tierOf, tierChip, tierFit, proving, PROVING_OF, heroOptions, preselect, freeSlot, assignStart, assignStep, usd, spendText, stateText, pickerRows, pickerNote, nonHero, modeBlock, accountBlock, offStep, offQuestion, flat, flatOffStart, flatOffStep, seatsHeld, jobWhere, names, settingsBody, createClient };
+return { VERSION, PORT, BASE, POLL_MS, TIMEOUT_MS, MISS_GRACE_MS, pollStep, SLOW_TEXT, FLAT_WAIT_MS, SHADOW_WAIT_MS, ASSIGN_WAIT_MS, slotFree, startBegin, startStep, onGate, TIERS, TYPE_NAME, tierOf, tierChip, tierFit, proving, PROVING_OF, heroOptions, preselect, freeSlot, assignStart, assignStep, usd, spendText, stateText, pickerRows, pickerNote, nonHero, modeBlock, accountBlock, offStep, offQuestion, flat, flatOffStart, flatOffStep, seatsHeld, seatsUnclear, jobWhere, names, settingsBody, createClient };
 });
