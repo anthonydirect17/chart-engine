@@ -72,6 +72,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         public static Dictionary<string, string> ContractOverride = new Dictionary<string, string>();
         public static bool PostFills = false;                       // send fills to The Desk
         public static string DeskUrl = "http://localhost:8800";
+        public static bool LaneRule = true;                         // 0.6.22: the lanes run themselves (laneRule = off stops it; ChartBridgeGroups LanePoll)
         public static List<string> AllowOrigins = new List<string>();   // web pages besides ChartBridge's own that may open the read-only WebSocket
         // 0.4.0: markets served for the Quote board only (ChartBridgeTape.cs, ChartBridgeMarkets): every order for them is refused.
         // A root in both roots and quoteRoots is quote only.
@@ -174,6 +175,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 else if (ChartBridgeOrderRecord.ReadConfig(key, val)) { }   // 0.6.9: postOrders = true|false (ChartBridgeOrderRecord.cs)
                 else if (key == "postFills") PostFills = val.Equals("true", StringComparison.OrdinalIgnoreCase) || val == "1";
                 else if (key == "deskUrl") DeskUrl = val.TrimEnd('/');
+                else if (key == "laneRule") LaneRule = !val.Equals("off", StringComparison.OrdinalIgnoreCase);   // 0.6.22
                 else if (key == "allowOrigins") AllowOrigins = ChartBridgeAccess.ParseOrigins(val);
                 else if (ChartBridgeCopier.ReadConfig(key, val)) { }   // 0.4.0 copier: copier = off turns it off (on by default; ChartBridgeCopier.cs)
                 else if (ChartBridgeBot.ReadConfig(key, val)) { }    // 0.4.0 bot: bot, botRoot, botLibrary (ChartBridgeBot.cs)
@@ -2332,7 +2334,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     try { ChartBridgeOrders.Resume(); } catch (Exception ex) { Log("bracket resume error: " + ex.Message); }   // entries that filled while stopped
                     accountTimer = new System.Threading.Timer(delegate { try { WatchAccounts(); } catch (Exception) { } try { ChartBridgeDesk.Flush(); } catch (Exception) { } try { ChartBridgeStops.Flush(); } catch (Exception) { } try { ChartBridgeOrderRecord.Flush(); } catch (Exception) { } try { ChartBridgeDecisions.SaveIfDirty(); } catch (Exception) { } try { SweepBooks(); } catch (Exception) { } }, null, 10000, 10000);
                     htfTimer = new System.Threading.Timer(delegate { try { HtfPush(); HtfExpire(); } catch (Exception ex) { Log("higher-timeframe push error: " + ex.Message); } try { SettlementTick(); } catch (Exception ex) { Log("settlement error: " + ex.Message); } }, null, HtfPushMs, HtfPushMs);   // 0.3.7
-                    pollTimer = new System.Threading.Timer(delegate { try { PollExecutions(); } catch (Exception) { } try { ChartBridgeOrders.CheckLegs(); } catch (Exception ex) { Log("legs check error: " + ex.Message); } try { ChartBridgeBranches.Poll(); } catch (Exception ex) { Log("daily reset error: " + ex.Message); } }, null, 2000, 2000);   // 0.5.7: the 17:00 ET reset to None
+                    pollTimer = new System.Threading.Timer(delegate { try { PollExecutions(); } catch (Exception) { } try { ChartBridgeOrders.CheckLegs(); } catch (Exception ex) { Log("legs check error: " + ex.Message); } try { ChartBridgeBranches.Poll(); } catch (Exception ex) { Log("daily reset error: " + ex.Message); } try { ChartBridgeGroups.LanePoll(); } catch (Exception ex) { Log("lane rule error: " + ex.Message); } }, null, 2000, 2000);   // 0.5.7: the 17:00 ET reset to None
                     listener = new HttpListener();
                     listener.Prefixes.Add("http://localhost:" + ChartBridgeConfig.Port + "/");
                     StartListening(cts.Token, 0);

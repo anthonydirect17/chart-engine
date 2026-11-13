@@ -6485,6 +6485,85 @@ public static class AgentHarness
             clock += 2000;
             P("{\"type\":\"agentKill\",\"cid\":\"k\",\"agent\":\"manrae\",\"on\":false}");
         });
+        // ---- 0.6.22: the lanes run themselves (the lane rule), against a made-up answer of The Desk's GET /api/lane-accounts
+        Part("0.6.22 the lane rule: a typed prop account joins its lane benched; a passed, blown or retyped one leaves once flat", () =>
+        {
+            ChartBridgeGroups.LaneHarnessManual = true;
+            ChartBridgeGroups.LaneForget();
+            string groupsWas = File.Exists(GroupsFile) ? File.ReadAllText(GroupsFile) : null;
+            PropStart("-", true);   // the personal account picked (MINE-1); manrae on None
+            Action<string> lanes = extra =>
+            {
+                File.WriteAllText(GroupsFile, ChartBridgeGroups.Header + "\n#\n" +
+                    "group\tg1\tEvals\ton\t-\t-\t-\t-\t-\t-\t-\teval\t-\n" +
+                    "group\tg2\tFunded\ton\t-\t-\t-\t-\t-\t-\t-\tfunded\t-\n" + extra);
+                ChartBridgeGroups.StartNow();
+            };
+            Func<string, string, string, bool, string> row = (acct, kind, outcome, archived) =>
+                "{\"account\":\"" + acct + "\",\"kind\":" + (kind == null ? "null" : "\"" + kind + "\"") + ",\"outcome\":" + (outcome == null ? "null" : "\"" + outcome + "\"") +
+                ",\"archived\":" + (archived ? "true" : "false") + ",\"hasRules\":true,\"why\":null,\"size\":50000.0,\"dailyLoss\":1000.0,\"drawdown\":2000.0,\"drawdownType\":\"eod\"," +
+                "\"lockAt\":0.0,\"target\":3000.0,\"consistency\":0.0,\"maxMinis\":4,\"maxMicros\":40,\"typeId\":\"made-up-50k\"}";
+            Func<string[], int> apply = rs =>
+            {
+                string why;
+                List<ChartBridgeGroups.LaneRow> rows = ChartBridgeGroups.LaneRows("{\"v\":1,\"accounts\":[" + string.Join(",", rs) + "],\"asOf\":\"2026-11-13T00:00:00Z\"}", out why);
+                Check(rows != null, "0.6.22 lane rule: the made-up answer reads: " + why);
+                return ChartBridgeGroups.LaneApply(rows);
+            };
+            try
+            {
+                lanes("");
+                // JOIN: PROP-1 (eval) and PROP-2 (funded) join their lanes, benched; the personal account and a Sim account never
+                int n = apply(new[] { row("PROP-1", "eval", null, false), row("PROP-2", "funded", null, false), row("MINE-1", "eval", null, false), row("SIM-E", "eval", null, false), row("NOT-LISTED", "eval", null, false) });
+                Check(n == 2 && ChartBridgeGroups.GroupOf("PROP-1") == "g1" && ChartBridgeGroups.GroupOf("PROP-2") == "g2", "0.6.22 lane rule: each typed prop account joins the one lane of its kind: " + n);
+                Check(ChartBridgeGroups.BenchedOf("g1").Contains("PROP-1") && ChartBridgeGroups.BenchedOf("g2").Contains("PROP-2"), "0.6.22 lane rule: it joins ON the bench (disarmed until Anthony takes it off)");
+                Check(ChartBridgeGroups.GroupOf("MINE-1") == null && ChartBridgeGroups.GroupOf("SIM-E") == null && ChartBridgeGroups.GroupOf("NOT-LISTED") == null,
+                      "0.6.22 lane rule: never the personal account, never a Sim account, never one NinjaTrader does not list");
+                string gj = ChartBridgeGroups.GroupsJson();
+                Check(gj.Contains("\"laneLog\":[{\"at\":") && gj.Contains("added: 1 eval account, PROP-1, on the bench (rule)") && gj.Contains("added: 1 funded account, PROP-2, on the bench (rule)"),
+                      "0.6.22 lane rule: each move is a line on its lane (the groups message's laneLog)");
+                Check(Logged("lane rule: added: 1 eval account, PROP-1"), "0.6.22 lane rule: and in the Output window");
+                Check(apply(new[] { row("PROP-1", "eval", null, false), row("PROP-2", "funded", null, false) }) == 0, "0.6.22 lane rule: the next minute nothing moves again");
+                // LEAVE once flat: PROP-1 passes (promoted) while it holds a position: it stays and says why; flat: it leaves
+                Position held = new Position { Instrument = mnq, MarketPosition = MarketPosition.Long, Quantity = 1, AveragePrice = 25000 };
+                prop1.Positions.Add(held);   // NinjaTrader's list only (no position event: nothing for ChartBridge to remember after this part)
+                Check(apply(new[] { row("PROP-1", "eval", "promoted", false) }) == 0 && ChartBridgeGroups.GroupOf("PROP-1") == "g1" && ChartBridgeGroups.GroupsJson().Contains("PROP-1 is passed (promoted) on The Desk: it leaves Evals once flat"),
+                      "0.6.22 lane rule: a passed eval holding a position stays until flat, and says so");
+                prop1.Positions.Remove(held);
+                Check(apply(new[] { row("PROP-1", "eval", "promoted", false) }) == 1 && ChartBridgeGroups.GroupOf("PROP-1") == null && ChartBridgeGroups.GroupsJson().Contains("removed: PROP-1 (passed (promoted) on The Desk) (rule)"),
+                      "0.6.22 lane rule: flat, the passed eval leaves the eval lane");
+                Check(apply(new[] { row("PROP-1", "eval", "promoted", false) }) == 0 && ChartBridgeGroups.GroupOf("PROP-1") == null, "0.6.22 lane rule: an account with an outcome never joins again");
+                // the same account retyped funded on The Desk (one firm style): it leaves the eval lane, then joins the funded lane, benched
+                apply(new[] { row("PROP-1", "eval", null, false) });
+                Check(ChartBridgeGroups.GroupOf("PROP-1") == "g1", "0.6.22 lane rule: (setup) PROP-1 on the eval lane again");
+                Check(apply(new[] { row("PROP-1", "funded", null, false) }) == 1 && ChartBridgeGroups.GroupOf("PROP-1") == null, "0.6.22 lane rule: retyped funded: it leaves the eval lane first");
+                Check(apply(new[] { row("PROP-1", "funded", null, false) }) == 1 && ChartBridgeGroups.GroupOf("PROP-1") == "g2" && ChartBridgeGroups.BenchedOf("g2").Contains("PROP-1"),
+                      "0.6.22 lane rule: then joins the funded lane, benched");
+                // blown and archived leave; a type taken away (kind null) leaves it where it is
+                Check(apply(new[] { row("PROP-2", null, null, false) }) == 0 && ChartBridgeGroups.GroupOf("PROP-2") == "g2", "0.6.22 lane rule: no type now: left where it is (never a guess)");
+                Check(apply(new[] { row("PROP-2", "funded", "blown", false) }) == 1 && ChartBridgeGroups.GroupOf("PROP-2") == null, "0.6.22 lane rule: blown: it leaves");
+                Check(apply(new[] { row("PROP-1", "funded", null, true) }) == 1 && ChartBridgeGroups.GroupOf("PROP-1") == null, "0.6.22 lane rule: archived on The Desk: it leaves");
+                // an account in another group is never taken from it; two groups of one Type: nobody joins, said once
+                File.WriteAllText(GroupsFile, ChartBridgeGroups.Header + "\n#\n" +
+                    "group\tg1\tEvals\ton\t-\t-\t-\t-\t-\t-\t-\teval\t-\n" + "group\tg2\tEvals two\ton\t-\t-\t-\t-\t-\t-\t-\teval\t-\n" + "group\tg3\tOther\ton\t-\t-\t-\t-\t-\t-\t-\t-\t-\n" + "member\tPROP-2\tg3\n");
+                ChartBridgeGroups.StartNow();
+                Check(apply(new[] { row("PROP-1", "eval", null, false), row("PROP-2", "eval", null, false) }) == 0 && ChartBridgeGroups.GroupOf("PROP-1") == null && ChartBridgeGroups.GroupOf("PROP-2") == "g3",
+                      "0.6.22 lane rule: two eval lanes: nobody is added (which one is not known); an account in another group stays there");
+                Check(Logged("2 groups have Type eval: PROP-1 is not added"), "0.6.22 lane rule: and it says why");
+                // a bad answer moves nothing
+                string bad;
+                Check(ChartBridgeGroups.LaneRows("{\"v\":2,\"accounts\":[]}", out bad) == null && ChartBridgeGroups.LaneRows("{\"v\":1,\"accounts\":[{\"account\":{\"x\":1}}]}", out bad) == null &&
+                      ChartBridgeGroups.LaneRows("{\"v\":1,\"accounts\":[{\"account\":\"PROP-1\"}", out bad) == null && ChartBridgeGroups.LaneRows("", out bad) == null,
+                      "0.6.22 lane rule: an answer that does not read strictly (another version, a nested value, cut off, empty) moves nothing");
+            }
+            finally
+            {
+                if (groupsWas != null) File.WriteAllText(GroupsFile, groupsWas); else { try { Gone(GroupsFile); } catch (Exception) { } }
+                ChartBridgeGroups.StartNow();
+                ChartBridgeGroups.LaneForget();
+            }
+        });
+
         Part("prop: the harness is left as it was", () =>
         {
             try { Gone(AutoFilePath); } catch (Exception) { }

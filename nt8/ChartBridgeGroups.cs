@@ -37,8 +37,10 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Net;
 using System.Text.RegularExpressions;
 using System.Threading;
+using System.Threading.Tasks;
 using NinjaTrader.Cbi;
 #endregion
 
@@ -1599,6 +1601,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                  .Append(",\"consistency\":").Append(None0(g.Consistency))
                  .Append(",\"accountType\":").Append(g.AccountType == null ? "null" : CbJson.Str(g.AccountType)).Append(",\"hero\":").Append(g.Hero == null ? "null" : CbJson.Str(g.Hero))
                  .Append(",\"members\":[").Append(string.Join(",", members[g.Id].Select(x => CbJson.Str(x)))).Append("]")
+                 .Append(LaneLogPart(g.Id))   // 0.6.22: the lane rule's moves on this group, newest last (only when it has any: the message as before)
                  .Append(",\"side\":").Append(side == null ? "null" : CbJson.Str(side)).Append(",\"holders\":[");
                 for (int k = 0; k < held.Count; k++)
                 {
@@ -2235,7 +2238,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             SaveMarks(true);
         }
 
-        private static string AccountGroup(Dictionary<string, string> m)
+        private static string AccountGroup(Dictionary<string, string> m) { return AccountGroup(m, "the page", false); }
+        // 0.6.22: by: who moves it ("the page", or "the lane rule"); bench: a join goes straight onto the group's bench in the same
+        // change (never a moment off the bench between the join and the bench, so a lane in Auto never trades it unarmed)
+        private static string AccountGroup(Dictionary<string, string> m, string by, bool bench)
         {
             string name = ChartBridgeV3.Str(m, "account"), id = ChartBridgeV3.Str(m, "group");
             if (name == null) return "accountGroup needs account (a plain string)";
@@ -2289,6 +2295,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 }
                 if (id == null) next.Members.Remove(name); else next.Members[name] = id;
                 next.Benched.Remove(name);   // 0.6.7: a new membership (or none) starts off the bench
+                if (bench && id != null) next.Benched.Add(name);   // 0.6.22: a join by the lane rule starts ON the bench (disarmed)
                 // 0.6.5: its own rules when the page sent them; none sent (a page before 1.33.0): the group's, so any it had go
                 if (own != null) next.Own[name] = own; else next.Own.Remove(name);
                 if (g != null)
@@ -2320,7 +2327,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 SaveMarks(true);
             }
             else ForgetHighs(new[] { name });
-            ChartBridgeServer.Log("groups: " + said + " (by the page)");
+            ChartBridgeServer.Log("groups: " + said + (bench && id != null ? ", on the bench (it sits out every entry until you take it off)" : "") + " (by " + by + ")");
             Changed();
             return res;
         }
@@ -2498,6 +2505,189 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         // After any change: the groups and the accounts to the pages at once, and each agent its accountState.
+        // ================================================================== 0.6.22: the lanes run themselves (the lane rule)
+        // Anthony 2026-11-13 (a standing rule, SERVER_RULES rule 3, his word): "a new eval account joins the eval lane by itself, always
+        // disarmed until he arms it; a passed eval moves to the funded lane; a blown or removed account leaves". The coordinator's answers
+        // of 2026-11-13: the rule runs here (with no page open); a passed eval leaves the eval lane once flat and a funded account joins the
+        // funded lane when its type says funded; nothing changes an account's type by code; Sim accounts carry no type, so a Sim account
+        // is added by hand as before; Sim and prop may share a lane.
+        // A lane is a group whose Type is eval or funded. Once a minute ChartBridge reads The Desk's GET /api/lane-accounts (each
+        // account's type kind, outcome and the rules a join carries) and, for each account:
+        //  - JOIN: kind eval or funded, no outcome, not archived, rules known; NinjaTrader lists it, connected; prop by ChartBridge's own
+        //    rule (a personal account is picked and this is not it, not Sim); in no group now; exactly one group has that Type. It
+        //    joins that group with its rules, ON THE BENCH (it sits out every entry until Anthony takes it off: the per-account arm).
+        //  - LEAVE: a member of a lane group whose outcome is blown or promoted, or archived, or whose kind is the other lane's: it
+        //    leaves once flat with no working orders (or at once when NinjaTrader no longer lists it).
+        //  Anything else is left as it is. Every move, and every refusal once, is a line on its lane (the groups message's laneLog, the
+        //  Output window); nothing silent. config.txt laneRule = off stops it (default on).
+        public sealed class LaneRow { public string Account, Kind, Outcome; public bool Archived, HasRules; public Dictionary<string, string> Rules; }
+        private static readonly Dictionary<string, List<KeyValuePair<long, string>>> LaneLog = new Dictionary<string, List<KeyValuePair<long, string>>>(StringComparer.Ordinal);
+        private static readonly HashSet<string> LaneSaid = new HashSet<string>(StringComparer.Ordinal);   // a refusal said once (account|reason)
+        private static readonly string[] LaneRuleKeys = { "size", "dailyLoss", "drawdown", "drawdownType", "lockAt", "target", "consistency", "maxMinis", "maxMicros", "typeId" };
+        public static void LaneForget() { lock (LaneLog) LaneLog.Clear(); lock (LaneSaid) LaneSaid.Clear(); }   // the harness: a fresh rule
+        private static string LaneLogPart(string gid) { string j = LaneLogJson(gid); return j == "[]" ? "" : ",\"laneLog\":" + j; }
+        private static string LaneLogJson(string gid)
+        {
+            List<KeyValuePair<long, string>> l;
+            lock (LaneLog) { if (!LaneLog.TryGetValue(gid, out l) || l.Count == 0) return "[]"; l = l.ToList(); }
+            return "[" + string.Join(",", l.Select(x => "{\"at\":" + x.Key.ToString(CultureInfo.InvariantCulture) + ",\"text\":" + CbJson.Str(x.Value) + "}")) + "]";
+        }
+        private static void LaneSay(string gid, string text, string onceKey)
+        {
+            if (onceKey != null) { lock (LaneSaid) { if (!LaneSaid.Add(onceKey)) return; } }
+            ChartBridgeServer.Log("lane rule: " + text);
+            if (gid == null) return;
+            lock (LaneLog)
+            {
+                List<KeyValuePair<long, string>> l;
+                if (!LaneLog.TryGetValue(gid, out l)) LaneLog[gid] = l = new List<KeyValuePair<long, string>>();
+                l.Add(new KeyValuePair<long, string>((long)NowMs(), text));
+                while (l.Count > 20) l.RemoveAt(0);
+            }
+        }
+        // The Desk's answer, read strictly: {"v":1,"accounts":[{flat row}, ...], ...}; each row a flat object read by the bot's strict
+        // reader. Null and why when it does not read (then nothing moves this minute).
+        public static List<LaneRow> LaneRows(string body, out string why)
+        {
+            why = null;
+            if (string.IsNullOrEmpty(body) || body.Length > 4 * 1024 * 1024) { why = "The Desk's lane-accounts answer is empty or too large"; return null; }
+            int at = body.IndexOf("\"accounts\":[", StringComparison.Ordinal);
+            if (at < 0 || !body.TrimStart().StartsWith("{\"v\":1,", StringComparison.Ordinal)) { why = "The Desk's lane-accounts answer is not version 1"; return null; }
+            List<LaneRow> rows = new List<LaneRow>();
+            int i = at + "\"accounts\":[".Length;
+            while (i < body.Length)
+            {
+                while (i < body.Length && (body[i] == ' ' || body[i] == ',' || body[i] == '\n' || body[i] == '\r' || body[i] == '\t')) i++;
+                if (i < body.Length && body[i] == ']') return rows;
+                if (i >= body.Length || body[i] != '{') { why = "The Desk's lane-accounts answer is malformed"; return null; }
+                int end = body.IndexOf('}', i);
+                if (end < 0) { why = "The Desk's lane-accounts answer is cut off"; return null; }
+                string w;
+                Dictionary<string, ChartBridgeBot.Val> d = ChartBridgeBot.Parse(body.Substring(i, end - i + 1), out w);
+                i = end + 1;
+                if (d == null) { why = "a row of The Desk's lane-accounts answer does not read (" + w + ")"; return null; }
+                Func<string, string> S = k => { ChartBridgeBot.Val v; return d.TryGetValue(k, out v) && v.K == 's' ? v.T : null; };
+                Func<string, bool> B = k => { ChartBridgeBot.Val v; return d.TryGetValue(k, out v) && v.K == 'b' && v.T == "true"; };
+                LaneRow r = new LaneRow { Account = S("account"), Kind = S("kind"), Outcome = S("outcome"), Archived = B("archived"), HasRules = B("hasRules") };
+                if (string.IsNullOrEmpty(r.Account)) continue;
+                if (r.Kind != "eval" && r.Kind != "funded") r.Kind = null;
+                if (r.HasRules)
+                {
+                    r.Rules = new Dictionary<string, string>(StringComparer.Ordinal);
+                    foreach (string k in LaneRuleKeys) { ChartBridgeBot.Val v; if (d.TryGetValue(k, out v) && v.K != 'z') r.Rules[k] = v.K == 'd' && v.T.EndsWith(".0", StringComparison.Ordinal) ? v.T.Substring(0, v.T.Length - 2) : v.T; }
+                }
+                rows.Add(r);
+            }
+            why = "The Desk's lane-accounts answer is cut off";
+            return null;
+        }
+        // Every 2 s (ChartBridge's poll timer): once a minute, off the timer's thread, GET The Desk's /api/lane-accounts and apply the
+        // rule. One read at a time; a failure is said once until it reads again, and nothing moves that minute.
+        public static bool LaneHarnessManual;            // test hook: the harness calls LaneApply itself
+        private static int laneBusy;
+        private static double laneNext;
+        private static string laneLastError;
+        public static string LaneStatus { get { return !ChartBridgeConfig.LaneRule ? "off (config.txt laneRule = off)" : laneLastError ?? "on"; } }
+        public static void LanePoll()
+        {
+            if (LaneHarnessManual || !ChartBridgeConfig.LaneRule || string.IsNullOrEmpty(ChartBridgeConfig.DeskUrl)) return;
+            double now = NowMs();
+            if (now < laneNext) return;
+            if (Interlocked.CompareExchange(ref laneBusy, 1, 0) != 0) return;
+            laneNext = now + 60000;
+            Task.Run(async () =>
+            {
+                try
+                {
+                    HttpWebRequest req = (HttpWebRequest)WebRequest.Create(ChartBridgeConfig.DeskUrl + "/api/lane-accounts");
+                    req.Method = "GET";
+                    Task<WebResponse> call = req.GetResponseAsync();
+                    Task first = await Task.WhenAny(call, Task.Delay(10000));
+                    if (first != call)
+                    {
+                        try { req.Abort(); } catch (Exception) { }
+                        Task observed = call.ContinueWith(t => { Exception ignored = t.Exception; }, TaskContinuationOptions.OnlyOnFaulted);
+                        throw new TimeoutException("The Desk did not answer within 10 seconds");
+                    }
+                    string text;
+                    using (HttpWebResponse res = (HttpWebResponse)await call)
+                    using (StreamReader r = new StreamReader(res.GetResponseStream(), Encoding.UTF8)) text = r.ReadToEnd();
+                    string why;
+                    List<LaneRow> rows = LaneRows(text, out why);
+                    if (rows == null) throw new InvalidDataException(why);
+                    if (laneLastError != null) { ChartBridgeServer.Log("lane rule: The Desk's lane-accounts read again"); laneLastError = null; }
+                    LaneApply(rows);
+                }
+                catch (Exception ex)
+                {
+                    string w = "The Desk's lane-accounts could not be read (" + ex.Message + "): no account moves until it can";
+                    if (laneLastError != w) ChartBridgeServer.Log("lane rule: " + w);
+                    laneLastError = w;
+                }
+                finally { Interlocked.Exchange(ref laneBusy, 0); }
+            });
+        }
+
+        // One pass of the rule over The Desk's rows (the poller, or the harness). Returns how many accounts moved.
+        public static int LaneApply(List<LaneRow> rows)
+        {
+            if (rows == null) return 0;
+            EnsureLoaded();
+            int moved = 0;
+            lock (Mem) if (readError != null) { LaneSay(null, "groups.txt does not read: nothing moves (" + readError + ")", "readError"); return 0; }
+            foreach (LaneRow r in rows)
+            {
+                try { if (LaneOne(r)) moved++; }
+                catch (Exception ex) { ChartBridgeServer.Log("lane rule error on " + r.Account + ": " + ex.Message); }
+            }
+            return moved;
+        }
+        private static bool LaneOne(LaneRow r)
+        {
+            string name = r.Account;
+            Account a = Find(name);
+            if (a != null) name = a.Name;
+            string cur, curType = null, curName = null;
+            List<Group> lanesOfKind;
+            lock (Mem)
+            {
+                state.Members.TryGetValue(name, out cur);
+                Group cg;
+                if (cur != null && state.Groups.TryGetValue(cur, out cg)) { curType = cg.AccountType; curName = cg.Name; }
+                lanesOfKind = r.Kind == null ? new List<Group>() : state.Groups.Values.Where(g => g.AccountType == r.Kind).ToList();
+            }
+            // LEAVE: a member of a lane group that the rule says no longer belongs there
+            if (cur != null && (curType == "eval" || curType == "funded"))
+            {
+                string why = r.Outcome == "blown" ? "blown on The Desk" : r.Outcome == "promoted" ? "passed (promoted) on The Desk" : r.Archived ? "archived on The Desk" :
+                             r.Kind != null && r.Kind != curType ? "its type on The Desk is " + r.Kind + " now" : null;
+                if (why == null) return false;
+                if (a != null) { string busy = BenchBusyWhy(name, a); if (busy != null) { LaneSay(cur, name + " is " + why + ": it leaves " + curName + " once flat (" + busy + ")", name + "|wait|" + why); return false; } }
+                string res;
+                lock (ChangeGate) res = AccountGroup(new Dictionary<string, string> { { "account", CbJson.Str(name) }, { "group", "null" } }, "the lane rule", false);
+                if (res != null) { LaneSay(cur, name + " is " + why + " but could not leave " + curName + ": " + res, name + "|leavefail|" + res); return false; }
+                LaneSay(cur, "removed: " + name + " (" + why + ") (rule)", null);
+                lock (LaneSaid) LaneSaid.RemoveWhere(k => k.StartsWith(name + "|", StringComparison.Ordinal));
+                return true;
+            }
+            // JOIN: a typed, live, prop account in no group, to the one lane of its kind, benched
+            if (cur != null || r.Kind == null || r.Outcome != null || r.Archived) return false;
+            if (a == null || !Up(a)) return false;                        // not listed or not connected now: next minute
+            if (!ChartBridgeBranches.IsProp(name)) return false;          // personal, Sim, or no personal pick: never by rule
+            if (lanesOfKind.Count != 1) { LaneSay(null, (lanesOfKind.Count == 0 ? "no group has Type " + r.Kind : lanesOfKind.Count + " groups have Type " + r.Kind) + ": " + name + " is not added (make exactly one " + r.Kind + " lane)", "lanes|" + r.Kind + "|" + lanesOfKind.Count); return false; }
+            Group lane = lanesOfKind[0];
+            if (!r.HasRules || r.Rules == null) { LaneSay(lane.Id, name + " is not added: The Desk has no rules for its type yet", name + "|norules"); return false; }
+            // the message's values in their JSON form, as the page's would arrive (strings quoted, numbers bare)
+            Dictionary<string, string> m = new Dictionary<string, string>(StringComparer.Ordinal) { { "account", CbJson.Str(name) }, { "group", CbJson.Str(lane.Id) } };
+            foreach (KeyValuePair<string, string> kv in r.Rules) m[kv.Key] = kv.Key == "drawdownType" || kv.Key == "typeId" ? CbJson.Str(kv.Value) : kv.Value;
+            string err;
+            lock (ChangeGate) err = AccountGroup(m, "the lane rule", true);
+            if (err != null) { LaneSay(lane.Id, name + " is not added to " + lane.Name + ": " + err, name + "|joinfail|" + err); return false; }
+            LaneSay(lane.Id, "added: 1 " + r.Kind + " account, " + name + ", on the bench (rule)", null);
+            lock (LaneSaid) LaneSaid.RemoveWhere(k => k.StartsWith(name + "|", StringComparison.Ordinal));
+            return true;
+        }
+
         private static void Changed()
         {
             SendGroups(true);
