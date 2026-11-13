@@ -19,6 +19,8 @@
 # 0.6.16: prop accounts: one Auto restore after a restart, prop only, inside the same trading day; since 0.6.18 Auto ends at 17:00 ET for every agent, also when the reset did not run (check/AgentHarness.cs PropAccounts).
 # 0.6.17: Kill all for the prop accounts: flatten, the kill switch, Shadow; agents not on prop accounts, the personal account and other accounts untouched (check/AgentHarness.cs PropAccounts, kill all).
 # 0.6.19: the day's profit stop: a plan's dayStopDollars and the consistency mark on an account that is not funded; reached, the trader's own flatten and a stand-down until the roll; nothing while it holds nothing (check/AgentHarness.cs DayStop).
+# 0.6.22: the lanes run themselves (check/AgentHarness.cs PropAccounts, the lane rule part; a lane trader kept through the reset), the day's loss stop
+# (check/AgentHarness.cs DayLoss) and the voice calls, listen and play only (check/AgentHarness.cs Voice).
 # 0.6.21: the pick (check/AgentHarness.cs Pick), accountState's profitToday, and the roster reader tightened (top-level format, drive-letter
 # path, a 2 MB answer; check/BotHarness.cs Http).
 # 0.6.20: the roster: GET /roster serves the Lab's roster files from rosterFolder, read only, each checked (check/BotHarness.cs Http).
