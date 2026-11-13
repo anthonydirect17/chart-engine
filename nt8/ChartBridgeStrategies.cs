@@ -1284,6 +1284,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if (stop.OrderType == OrderType.StopLimit) stop.LimitPriceChanged = Round(stop.LimitPrice + (d.Value - stop.StopPrice), stop.Instrument.MasterInstrument.TickSize);
                     stop.StopPriceChanged = d.Value;
                     stop.Account.Change(new[] { stop });
+                    ChartBridgeVoice.OnStopMoved(stop, d.Value);   // 0.6.22: listen only (breakeven, never a trailing move: only at its fill price)
                     ChartBridgeServer.Log("strategy stop move sent: " + stop.Name + " from " + CbJson.Num(stop.StopPrice) + " to " + CbJson.Num(d.Value) + " on " + stop.Account.Name);
                 }
                 catch (Exception ex) { MoveFailed(stop, d.Value, "the change could not be sent: " + ex.Message); }

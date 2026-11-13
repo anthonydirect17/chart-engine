@@ -317,7 +317,7 @@ test('0.6.18: entry rules per trader: ChartBridgeOrders.cs differs from 0.6.17 i
    this file does not know now FAILS, so each release re-pins on purpose (add the version below with its listed changes). */
 test('the pin tests know this ChartBridge version (a new release re-pins on purpose)', () => {
   const v = (/public const string Version = "([0-9.]+)";/.exec(read('ChartBridge.cs')) || [])[1];
-  assert.ok(['0.6.19', '0.6.20', '0.6.21'].includes(v), 'ChartBridge ' + v + ' is not pinned here: re-pin test/nt8-record.test.js for it');
+  assert.ok(['0.6.19', '0.6.20', '0.6.21', '0.6.22'].includes(v), 'ChartBridge ' + v + ' is not pinned here: re-pin test/nt8-record.test.js for it');
 });
 
 test('0.6.19: the day\'s profit stop: only ChartBridgeAgents.cs changed; every other add-on file but ChartBridge.cs (its version) is the 0.6.18 file byte for byte, the groups and the order path included', () => {
@@ -392,6 +392,41 @@ test('0.6.19: the day\'s profit stop: only ChartBridgeAgents.cs changed; every o
   for (const [f, h] of Object.entries(harness)) assert.strictEqual(sha(read(f).replace(/\r/g, '')), h, f + ' is the 0.6.18 file');
   // GroupsHarness.cs gains only the checks of the profit side (F6, D2), listed word for word
   assert.strictEqual(sha(undo(read('check/GroupsHarness.cs'), ["        ChartBridgeGroups.Numbers pn = ChartBridgeGroups.Read(\"SIM-B\", simB, false);", "        Check(pn.Realized == -400 && pn.ProfitPnl == -150 && pn.ProfitWhy == null,", "              \"0.6.19 (the review of 88, F6): for a PROFIT stop the larger of the two (-100), plus open (-50): \" + pn.ProfitPnl + \"; the loss side keeps the smaller: \" + pn.Realized);", "        pn = ChartBridgeGroups.Read(\"SIM-B\", simB, false);", "        Check(!pn.ProfitPnl.HasValue && (pn.ProfitWhy ?? \"\").Contains(\"started mid-session\"), \"F6: no NinjaTrader realized after a late start: the profit side is not known, with why: \" + pn.ProfitWhy);", "        // D2 (the review of 88's second look): 18:00:00, before the tick rolls the day start: NinjaTrader's realized may still be", "        // yesterday's, so the profit side is not known (and never latched); the loss side reads as before", "        simB.Items[AccountItem.RealizedProfitLoss] = 700;", "        ClockEt(2026, 10, 16, 18, 0);", "        pn = ChartBridgeGroups.Read(\"SIM-B\", simB, false);", "        Check(!pn.ProfitPnl.HasValue && pn.ProfitWhy == ChartBridgeGroups.Numbers.RollPendingWhy && pn.Realized == 700,", "              \"D2: in the second after 18:00 before the day start rolls: no profit figure (\" + pn.ProfitWhy + \"); the loss side as before: \" + pn.Realized);", "        simB.Items[AccountItem.RealizedProfitLoss] = 0;"].concat(v21 ? ["        Check(st.Contains(\"\\\"pnlToday\\\":-450,\") && st.Contains(\"\\\"profitToday\\\":-150,\\\"profitWhy\\\":null\"),", "              \"0.6.21: accountState carries the profit side (-150) beside the loss side (-450), never the same number after a late start: \" + st);"] : []), [])), 'c9b37698b0c2643a28545b0631d2f820558f06bd8994056d8a10cce08c97a27a', 'check/GroupsHarness.cs: the 0.6.18 file but for the listed checks');
+});
+
+test('0.6.22: the lanes, the day\'s loss stop and the voice calls: the order path gains three listen-only lines, listed word for word; every other pinned file is the 0.6.18 file', () => {
+  if (!/public const string Version = "0\.6\.22";/.test(read('ChartBridge.cs'))) return;   // a later release re-pins on purpose
+  const sha = t => crypto.createHash('sha256').update(t).digest('hex');
+  const same = {
+    'ChartBridgeBars.cs': '7a9de59769499d804767461f67f8442c7a44a04b8b8bfae8cf6f4879b5186664',
+    'ChartBridgeBot.cs': '33ca2af1f1867f14ab188f659ad63210933801b62c951234255972111fef84b1',
+    'ChartBridgeCopier.cs': 'bb90a637610b3b56236c6cfba014c1a1db40110f2b821bbeecf7778f2f4e6e49',
+    'ChartBridgeMerge.cs': '7aa31e37d38c1875eb236e1575d20f49ed31c1e2c08fc9d265d5aa7e0a32952c',
+    'ChartBridgeOrderRecord.cs': 'de33b77a1d774d2ce8d11a5f3a8e927f1ff085c7d8f47259ff6a542d18ccc1f1',
+    'ChartBridgePin.cs': '8c6b28abf30cc716b7175fa3c1fd4e1cb9ca0c9407a19a03357830028481e3eb',
+    'ChartBridgeStops.cs': 'f2d74c58a904a5ba448ca5ebceb05f25b01d55642ddfdf1323b0c7dbf95f5d3c',
+    'ChartBridgeTape.cs': 'b5150cf7dbea2244da11d49511d163b4666a2403b9e21ebd10ea44a25da87fd1',
+    'ChartBridgeTicks.cs': 'def1e998f0e49dda1287d5422a6375ea8152646f62e86bc0c34d34b219cb7851',
+    'ChartBridgeV3.cs': '4ea9774ee3d30e619d1b849965b68565c24eed8f276194deaf93ee23242261dc',
+  };
+  for (const [f, h] of Object.entries(same)) assert.strictEqual(sha(read(f).replace(/\r/g, '')), h, f + ' is the 0.6.18 file');
+  const without = (f, lines) => {
+    let text = read(f).replace(/\r/g, '');
+    for (const l of lines) { assert.strictEqual(text.split(l + '\n').length, 2, f + ': the added line is there once: ' + l.trim().slice(0, 80)); text = text.replace(l + '\n', ''); }
+    return text;
+  };
+  const orders = ['            if (kind == "stop") ChartBridgeVoice.OnStopMoved(o, price);   // 0.6.22: listen only (to its fill price: Break even set)',
+    '            ChartBridgeVoice.NoteFlatten(account, inst);   // 0.6.22: listen only (its close says Position closed)'];
+  const strategies = ['                    ChartBridgeVoice.OnStopMoved(stop, d.Value);   // 0.6.22: listen only (breakeven, never a trailing move: only at its fill price)'];
+  assert.strictEqual(sha(without('ChartBridgeOrders.cs', orders)), '8e15e56a06b1f2597b5ff1ecebccba724b27a019819fa691b9f0a30c16bfaffd', 'ChartBridgeOrders.cs: the 0.6.18 file but for the two voice lines');
+  assert.strictEqual(sha(without('ChartBridgeStrategies.cs', strategies)), '968179e96aa887424b9df26148f8ae65bc3c60238f6f9de90f238e7781ab9193', 'ChartBridgeStrategies.cs: the 0.6.18 file but for the one voice line');
+  // each voice entry the order path calls is off unless config says voice = on, and catches everything it does
+  const main = read('ChartBridge.cs');
+  for (const m of ['NoteFlatten(Account a, Instrument i)', 'OnStopMoved(Order leg, double price)', 'OnFill(Account a, Order o, MarketPosition mp)']) {
+    const at = main.indexOf('public static void ' + m);
+    assert.ok(at > 0, m);
+    assert.match(main.slice(at, at + 400), /\{\s*if \(!On \|\| [^\n]*\) return;\s*try\b/, m + ': off by default, then all of it in a try');
+  }
 });
 
 test('0.6.9: the decision id: the group entry\'s PlaceOrder call unchanged, set and cleared around it, noted before Submit', () => {

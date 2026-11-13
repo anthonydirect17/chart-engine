@@ -205,6 +205,8 @@ public static class AgentHarness
             EntryRules();     // 0.6.18: a trader's rules may allow a market entry and an entry with no target (both off by default)
             Pick();           // 0.6.21: the roster file a trader's runner runs, picked on the page; accountState's profit side
             DayStop();        // 0.6.19: the day's profit stop: the plan's dollar value, and the consistency mark on an account that is not funded
+            DayLoss();        // 0.6.22: the day's loss stop: the plan's dollar value only (answers 31)
+            Voice();          // 0.6.22: ChartBridge's own voice calls (answers 30): listen and play only
             PropAccounts();   // prop accounts: Auto through the 17:00 reset and one restore after a restart; the personal account, Sim and a no-setting install as before
         }
         catch (Exception ex) { Check(false, "agent harness threw: " + ex); }
@@ -2441,6 +2443,35 @@ public static class AgentHarness
                 Check(M.GroupId == null && FileText("agent-manrae-account.txt").Contains("account\t-"), "0.6.0 reset: every seat flat and idle: None");
             }
             finally { ChartBridgeBranches.ClockUtc = was; ChartBridgeBranches.Forget(); }
+        });
+
+        Part("0.6.22 a lane keeps its trader through the 17:00 reset (A3)", () =>
+        {
+            foreach (string type in new[] { "eval", "funded" })
+            {
+                GroupFresh();
+                // the same group, now with its Type (field 12): a lane of Legion
+                File.WriteAllText(GroupsFile, ChartBridgeGroups.Header + "\n#\ngroup\tg1\tLucid\ton\t1000\t2000\tintraday\t3000\t50000\t-\t-\t" + type + "\n" +
+                    string.Join("", new[] { "SIM-A", "SIM-B", "SIM-C" }.Select(m => "member\t" + m + "\tg1\n")));
+                ChartBridgeGroups.StartNow();
+                Check(ChartBridgeGroups.TypeOf("g1") == type && ModeNow() == "auto", "0.6.22 A3: the group's Type is " + type + " and the agent is in Auto before the break: " + ModeNow());
+                Func<DateTime> was = ChartBridgeBranches.ClockUtc;
+                ChartBridgeBranches.Forget();
+                try { Gone(Path.Combine(Dir, "daily-reset.txt")); } catch (Exception) { }
+                ChartBridgeBranches.ClockUtc = () => new DateTime(2026, 10, 12, 21, 5, 0, DateTimeKind.Utc);   // a Monday, 17:05 EDT, every seat flat and idle
+                try
+                {
+                    SettleAll(); SteadyAll(); ChartBridgeBranches.Check();
+                    Check(M.GroupId == "g1" && FileText("agent-manrae-account.txt").Contains("group\tg1"), "0.6.22 A3 (" + type + "): flat and idle, the lane trader stays on its lane group (never None)");
+                    Check(ModeNow() == "shadow", "0.6.22 A3 (" + type + "): Auto still ends at 17:00, so the lane is disarmed: " + ModeNow());
+                    Check(Logged("agent manrae stays on its lane, group Lucid (SIM-A, SIM-B, SIM-C) (a lane keeps its trader; Auto is off until you arm it)"), "0.6.22 A3 (" + type + "): said once, never silent");
+                    Check(ChartBridgeBranches.LaneGroupKept("agent:manrae", "group:g1") && !ChartBridgeBranches.LaneGroupKept("bot", "group:g1") && !ChartBridgeBranches.LaneGroupKept("agent:manrae", "SIM-A"),
+                          "0.6.22 A3: only an agent on a typed group is kept (never the bot, never an account)");
+                }
+                finally { ChartBridgeBranches.ClockUtc = was; ChartBridgeBranches.Forget(); }
+            }
+            WriteGroup("SIM-A", "SIM-B", "SIM-C");   // back to the group with no Type: the 0.6.0 reset part shows it goes to None
+            Check(!ChartBridgeBranches.LaneGroupKept("agent:manrae", "group:g1"), "0.6.22 A3: a group with no Type is not a lane: reset to None as before");
         });
 
         Part("0.6.0 the copier and the bot", () =>
@@ -5184,6 +5215,156 @@ public static class AgentHarness
         });
     }
 
+    static string WithDayLoss(string plan, string dollars) { return plan.Substring(0, plan.Length - 1) + ",\"dayLossDollars\":" + dollars + "}"; }
+    // 0.6.22 (answers 31): the day's LOSS stop, the mirror of the profit stop: the plan's value only, on the loss side of the day
+    // 0.6.22 (answers 30): the voice calls. A stand-in player records what would play; nothing here touches an order.
+    static void Voice()
+    {
+        Part("0.6.22 voice calls: each event its call, one call per decision, off by default, a missing file silent, a stuck player dropped", () =>
+        {
+            ChartBridgeVoice.Reset();
+            List<string> heard = new List<string>();
+            Func<string, bool> rec = path => { lock (heard) heard.Add(Path.GetFileNameWithoutExtension(path)); return true; };
+            Func<int, bool> waitFor = n => { for (int i = 0; i < 200; i++) { lock (heard) if (heard.Count >= n) return true; System.Threading.Thread.Sleep(10); } lock (heard) return heard.Count >= n; };
+            // the mapping
+            Check(ChartBridgeVoice.CallFor("CB#1a2b3c4d s8 t16", true) == "LongFilled" && ChartBridgeVoice.CallFor("CB#1a2b3c4d atm s8 t16", false) == "ShortFilled" &&
+                  ChartBridgeVoice.CallFor("CB#1a2b3c4d ag:manrae s8 t16", true) == "LongFilled", "0.6.22 voice: an entry fill: Long filled or Short filled, by side");
+            Check(ChartBridgeVoice.CallFor("CB#1a2b3c4d stop f1 q1 p24990.25", false) == "StopFilled" && ChartBridgeVoice.CallFor("CB#1a2b3c4d target f1 q1 p24990.25", false) == "TargetFilled" &&
+                  ChartBridgeVoice.CallFor("CB#1a2b3c4d target f1 q1 p24990.25 k1", false) == "TargetOneFilled" && ChartBridgeVoice.CallFor("CB#1a2b3c4d target f1 q1 p24990.25 k2", false) == "TargetTwoFilled" &&
+                  ChartBridgeVoice.CallFor("CB#1a2b3c4d exit f1 q1 p24990.25", false) == "PositionClosed" && ChartBridgeVoice.CallFor("CB#1a2b3c4d ag:manrae flat", false) == "PositionClosed",
+                  "0.6.22 voice: stop, target, T1 and T2, a market exit and an agent's flatten close");
+            Check(ChartBridgeVoice.CallFor("Close", false) == null && ChartBridgeVoice.CallFor("Entry", true) == null && ChartBridgeVoice.CallFor(null, true) == null,
+                  "0.6.22 voice: an order ChartBridge did not place says nothing (NinjaTrader's own sounds are his)");
+            Account va = NewAccount("VOICE-A", Provider.Simulator), vb = NewAccount("VOICE-B", Provider.Simulator);
+            Order entryA = new Order { Name = "CB#0a0a0a0a s8 t16", Account = va, Instrument = mnq }, entryB = new Order { Name = "CB#0b0b0b0b s8 t16", Account = vb, Instrument = mnq };
+            // off by default: nothing plays
+            ChartBridgeVoice.Player = rec;
+            ChartBridgeVoice.OnFill(va, entryA, MarketPosition.Long);
+            System.Threading.Thread.Sleep(100);
+            lock (heard) Check(heard.Count == 0 && !ChartBridgeVoice.On, "0.6.22 voice: off by default (config.txt voice = on turns it on): nothing plays");
+            Check(ChartBridgeVoice.ReadConfig("voice", "on") && ChartBridgeVoice.On && ChartBridgeVoice.ReadConfig("voiceFolder", "C:\\made-up\\sounds") && ChartBridgeVoice.Folder == "C:\\made-up\\sounds",
+                  "0.6.22 voice: voice = on and voiceFolder read from config.txt");
+            ChartBridgeVoice.Player = rec;
+            // one call per decision: a group entry's two member orders share one decision id
+            string dec = ChartBridgeDecisions.NewId();
+            ChartBridgeDecisions.Begin(dec, "VOICE-A"); ChartBridgeDecisions.NoteCreated(va, entryA); ChartBridgeDecisions.End();
+            ChartBridgeDecisions.Begin(dec, "VOICE-B"); ChartBridgeDecisions.NoteCreated(vb, entryB); ChartBridgeDecisions.End();
+            ChartBridgeVoice.OnFill(va, entryA, MarketPosition.Long);
+            ChartBridgeVoice.OnFill(vb, entryB, MarketPosition.Long);
+            ChartBridgeVoice.OnFill(va, entryA, MarketPosition.Long);   // a second fill increment of the same entry
+            Check(waitFor(1), "0.6.22 voice: the call plays");
+            System.Threading.Thread.Sleep(150);
+            lock (heard) Check(heard.Count == 1 && heard[0] == "LongFilled", "0.6.22 voice: a group entry copied to two accounts (one decision) says Long filled once: " + string.Join(",", heard));
+            Order stopA = new Order { Name = "CB#0a0a0a0a stop f1 q1 p25000", Account = va, Instrument = mnq };
+            ChartBridgeVoice.OnFill(va, stopA, MarketPosition.Short);
+            Check(waitFor(2), "0.6.22 voice: the stop's call plays");
+            lock (heard) Check(heard[1] == "StopFilled", "0.6.22 voice: then Stop filled");
+            // break even: a ChartBridge stop moved to its own fill price, once; a trailing move (any other price) says nothing
+            ChartBridgeVoice.OnStopMoved(new Order { Name = "CB#0c0c0c0c stop f1 q1 p25000", Account = va, Instrument = mnq }, 24998);
+            ChartBridgeVoice.OnStopMoved(new Order { Name = "CB#0c0c0c0c stop f1 q1 p25000", Account = va, Instrument = mnq }, 25000);
+            ChartBridgeVoice.OnStopMoved(new Order { Name = "CB#0c0c0c0c stop f1 q1 p25000", Account = va, Instrument = mnq }, 25000);
+            Check(waitFor(3), "0.6.22 voice: the break even call plays");
+            System.Threading.Thread.Sleep(150);
+            lock (heard) Check(heard.Count == 3 && heard[2] == "BreakEvenSet", "0.6.22 voice: the stop moved to its fill price: Break even set, once; a trailing move says nothing: " + string.Join(",", heard));
+            // ChartBridge's Flatten: the close NinjaTrader sends (its own name) says Position closed, within 30 s, once
+            ChartBridgeVoice.NoteFlatten(va, mnq);
+            ChartBridgeVoice.OnFill(va, new Order { Name = "Close", Account = va, Instrument = mnq }, MarketPosition.Short);
+            ChartBridgeVoice.OnFill(va, new Order { Name = "Close", Account = va, Instrument = mnq }, MarketPosition.Short);
+            Check(waitFor(4), "0.6.22 voice: the flatten's close plays");
+            System.Threading.Thread.Sleep(150);
+            lock (heard) Check(heard.Count == 4 && heard[3] == "PositionClosed", "0.6.22 voice: ChartBridge's Flatten: Position closed, once: " + string.Join(",", heard));
+            // a missing file: silent, said once in the Output window
+            ChartBridgeVoice.Player = null;
+            ChartBridgeVoice.Folder = Path.Combine(Dir, "no-such-voice-folder");
+            ChartBridgeVoice.PlayOne("TargetFilled"); ChartBridgeVoice.PlayOne("TargetFilled");
+            Check(NinjaTrader.Code.Output.Lines.Count(x => x.Contains("voice: TargetFilled.wav is not in")) == 1, "0.6.22 voice: a missing file is silent and said once");
+            // a stuck player: the call is dropped after its limit, and the queue goes on; the order path never waits
+            System.Threading.ManualResetEvent stuck = new System.Threading.ManualResetEvent(false);
+            ChartBridgeVoice.PlayTimeoutMs = 200;
+            ChartBridgeVoice.Player = path => { stuck.WaitOne(3000); return true; };
+            long d0 = ChartBridgeVoice.Dropped;
+            DateTime t0 = DateTime.UtcNow;
+            for (int i = 0; i < 12; i++) ChartBridgeVoice.OnFill(va, new Order { Name = "CB#1" + i.ToString("x7") + " s8 t16", Account = va, Instrument = mnq }, MarketPosition.Long);
+            double tookMs = (DateTime.UtcNow - t0).TotalMilliseconds;
+            Check(tookMs < 100, "0.6.22 voice: twelve fills queued in " + tookMs.ToString("0") + " ms: the fill path never waits");
+            System.Threading.Thread.Sleep(600);
+            Check(ChartBridgeVoice.Dropped > d0, "0.6.22 voice: a stuck player and a full queue drop calls (" + (ChartBridgeVoice.Dropped - d0) + " dropped), never block");
+            stuck.Set();
+            ChartBridgeVoice.Reset();
+            Check(!ChartBridgeVoice.On, "0.6.22 voice: (left off)");
+        });
+    }
+    static void DayLoss()
+    {
+        Part("0.6.22 day loss stop: the plan's dollar value, reached on the loss side: flat, stood down, refused until 18:00", () =>
+        {
+            DayStopFresh();   // manrae on SIM-E, auto, 10:00
+            int calls = sime.Calls.Count;
+            foreach (string bad in new[] { "0", "-5", "\"300\"", "true", "1000001", "300.125" })
+            {
+                A(WithDayLoss(Good(NewId()), bad));
+                Check((AgentReject().Contains("dayLossDollars must be dollars above 0") || AgentReject().Contains("dayLossDollars is not a plain value")) && sime.Calls.Count == calls, "0.6.22 day loss: dayLossDollars " + bad + " is refused, nothing sent: " + AgentReject());
+            }
+            Check(!Last(agentOut, "agentState").Contains("dayLoss") && !FileText("agent-manrae-day.txt").Contains("#dayloss"), "0.6.22 day loss: none yet: agentState and the day file as in 0.6.21");
+            // a plan naming only the profit side carries no loss mark (and the other way round)
+            Order p0 = PlacedOn(sime, WithDayStop(Good(NewId()), "600"));
+            Check(p0 != null && !Last(agentOut, "agentState").Contains("dayLoss") && Last(agentOut, "agentState").Contains("\"dayStop\":600"), "0.6.22 day loss: a plan naming only dayStopDollars: no loss mark");
+            if (p0 != null) { p0.OrderState = OrderState.Cancelled; Update(p0); Advance(500); }
+            Order e = DayStopEntry(WithDayLoss(Good(NewId()), "300"));
+            Check(e != null, "0.6.22 day loss: a plan with dayLossDollars 300 is placed: " + AgentReject());
+            if (e == null) return;
+            Check(Last(agentOut, "agentState").Contains("\"dayLoss\":300") && !Last(agentOut, "agentState").Contains("\"dayStop\""), "0.6.22 day loss: agentState carries it (and the last plan named no profit stop): " + Last(agentOut, "agentState"));
+            Check(Regex.IsMatch(FileText("agent-manrae-day.txt"), "#dayloss\t300(\r|\n)"), "0.6.22 day loss: saved in the day file");
+            Check(ChartBridgeAgents.Get("manrae").StripJson().Contains(",\"dayLoss\":300"), "0.6.22 day loss: and the page's agent message");
+            sime.Items[AccountItem.UnrealizedProfitLoss] = -299.99;
+            Advance(2000);
+            Check(Legs(sime, e).Count(IsLive) == 2 && FlatClose(sime) == null && !Last(agentOut, "agentState").Contains("loss stop"), "0.6.22 day loss: one cent short of the mark: nothing happens");
+            Restart(); Mode("manrae", "auto");
+            Advance(2000);
+            Check(Last(agentOut, "agentState").Contains("\"dayLoss\":300") && FlatClose(sime) == null, "0.6.22 day loss: kept through a restart (the day file)");
+            sime.Items[AccountItem.UnrealizedProfitLoss] = -300;
+            Order close = DayStopFlatten(e);
+            Check(close != null && close.OrderType == OrderType.Market && close.OrderAction == OrderAction.Sell && close.Quantity == 1 && !Legs(sime, e).Any(IsLive),
+                  "0.6.22 day loss: at minus the mark (realized plus open): its legs cancelled and the position closed at market");
+            string st = Last(agentOut, "agentState");
+            Check(st.Contains("\"standDown\":\"the day's loss stop is reached on SIM-E ($300, the plan's day loss stop; the day is at -$300, realized plus open): flat"), "0.6.22 day loss: the trader stands down for the session, and says why: " + st);
+            Settle(sime);
+            sime.Items[AccountItem.UnrealizedProfitLoss] = 0;   // the day back over the mark: still refused (the latch)
+            calls = sime.Calls.Count;
+            A(WithDayLoss(Good(NewId()), "5000"));
+            Check(AgentReject().Contains("the day's loss stop is reached") && sime.Calls.Count == calls, "0.6.22 day loss: a new plan the same session is refused, whatever it names: " + AgentReject());
+            Restart(); Mode("manrae", "auto");
+            A(Good(NewId()));
+            Check(AgentReject().Contains("the day's loss stop is reached") && sime.Calls.Count == calls, "0.6.22 day loss: and after a restart: " + AgentReject());
+            Check(FileText("agent-manrae-day.txt").Contains("#daylossreached\tSIM-E\t300"), "0.6.22 day loss: the account's latch is in the day file");
+            sime.Items.Remove(AccountItem.UnrealizedProfitLoss);
+            // the 18:00 roll clears it
+            et = new DateTime(2026, 10, 9, 18, 0, 30);
+            Advance(1500);
+            st = Last(agentOut, "agentState");
+            Check(!st.Contains("loss stop") && !st.Contains("dayLoss") && !FileText("agent-manrae-day.txt").Contains("#dayloss"), "0.6.22 day loss: after the roll: no stand-down, no dayLoss: " + st);
+            ChartBridgeAgents.ForgetDayReachedForCheck();
+        });
+        Part("0.6.22 day loss stop: a plan already past its own mark is refused; not known is said once, never latched", () =>
+        {
+            DayStopFresh();
+            sime.Items[AccountItem.UnrealizedProfitLoss] = -400;   // the account is already down 400 (other trading)
+            int calls = sime.Calls.Count;
+            A(WithDayLoss(Good(NewId()), "300"));
+            Check(AgentReject().Contains("the day's loss stop is reached on SIM-E this session ($300") && sime.Calls.Count == calls, "0.6.22 day loss: a plan whose own loss mark is already passed is refused, nothing sent: " + AgentReject());
+            ChartBridgeAgents.ForgetDayReachedForCheck();
+            DayStopFresh();
+            Order e = PlacedOn(sime, WithDayLoss(Good(NewId()), "300"));
+            if (e != null) Fill(e, 1, 24999);
+            sime.Items[AccountItem.UnrealizedProfitLoss] = double.NaN;   // the day's number not known
+            int s0 = N(page);
+            Advance(6000);
+            Check(e != null && page.Skip(s0).Count(x => x.Contains("the day's loss stop ($300) is NOT checked on SIM-E")) == 1 && FlatClose(sime) == null, "0.6.22 day loss: not known: said once, nothing closed");
+            sime.Items.Remove(AccountItem.UnrealizedProfitLoss);
+            Settle(sime);
+            ChartBridgeAgents.ForgetDayReachedForCheck();
+        });
+    }
     static void DayStop()
     {
         string groups = Path.Combine(Dir, "groups.txt");
@@ -6456,6 +6637,85 @@ public static class AgentHarness
             clock += 2000;
             P("{\"type\":\"agentKill\",\"cid\":\"k\",\"agent\":\"manrae\",\"on\":false}");
         });
+        // ---- 0.6.22: the lanes run themselves (the lane rule), against a made-up answer of The Desk's GET /api/lane-accounts
+        Part("0.6.22 the lane rule: a typed prop account joins its lane benched; a passed, blown or retyped one leaves once flat", () =>
+        {
+            ChartBridgeGroups.LaneHarnessManual = true;
+            ChartBridgeGroups.LaneForget();
+            string groupsWas = File.Exists(GroupsFile) ? File.ReadAllText(GroupsFile) : null;
+            PropStart("-", true);   // the personal account picked (MINE-1); manrae on None
+            Action<string> lanes = extra =>
+            {
+                File.WriteAllText(GroupsFile, ChartBridgeGroups.Header + "\n#\n" +
+                    "group\tg1\tEvals\ton\t-\t-\t-\t-\t-\t-\t-\teval\t-\n" +
+                    "group\tg2\tFunded\ton\t-\t-\t-\t-\t-\t-\t-\tfunded\t-\n" + extra);
+                ChartBridgeGroups.StartNow();
+            };
+            Func<string, string, string, bool, string> row = (acct, kind, outcome, archived) =>
+                "{\"account\":\"" + acct + "\",\"kind\":" + (kind == null ? "null" : "\"" + kind + "\"") + ",\"outcome\":" + (outcome == null ? "null" : "\"" + outcome + "\"") +
+                ",\"archived\":" + (archived ? "true" : "false") + ",\"hasRules\":true,\"why\":null,\"size\":50000.0,\"dailyLoss\":1000.0,\"drawdown\":2000.0,\"drawdownType\":\"eod\"," +
+                "\"lockAt\":0.0,\"target\":3000.0,\"consistency\":0.0,\"maxMinis\":4,\"maxMicros\":40,\"typeId\":\"made-up-50k\"}";
+            Func<string[], int> apply = rs =>
+            {
+                string why;
+                List<ChartBridgeGroups.LaneRow> rows = ChartBridgeGroups.LaneRows("{\"v\":1,\"accounts\":[" + string.Join(",", rs) + "],\"asOf\":\"2026-11-13T00:00:00Z\"}", out why);
+                Check(rows != null, "0.6.22 lane rule: the made-up answer reads: " + why);
+                return ChartBridgeGroups.LaneApply(rows);
+            };
+            try
+            {
+                lanes("");
+                // JOIN: PROP-1 (eval) and PROP-2 (funded) join their lanes, benched; the personal account and a Sim account never
+                int n = apply(new[] { row("PROP-1", "eval", null, false), row("PROP-2", "funded", null, false), row("MINE-1", "eval", null, false), row("SIM-E", "eval", null, false), row("NOT-LISTED", "eval", null, false) });
+                Check(n == 2 && ChartBridgeGroups.GroupOf("PROP-1") == "g1" && ChartBridgeGroups.GroupOf("PROP-2") == "g2", "0.6.22 lane rule: each typed prop account joins the one lane of its kind: " + n);
+                Check(ChartBridgeGroups.BenchedOf("g1").Contains("PROP-1") && ChartBridgeGroups.BenchedOf("g2").Contains("PROP-2"), "0.6.22 lane rule: it joins ON the bench (disarmed until Anthony takes it off)");
+                Check(ChartBridgeGroups.GroupOf("MINE-1") == null && ChartBridgeGroups.GroupOf("SIM-E") == null && ChartBridgeGroups.GroupOf("NOT-LISTED") == null,
+                      "0.6.22 lane rule: never the personal account, never a Sim account, never one NinjaTrader does not list");
+                string gj = ChartBridgeGroups.GroupsJson();
+                Check(gj.Contains("\"laneLog\":[{\"at\":") && gj.Contains("added: 1 eval account, PROP-1, on the bench (rule)") && gj.Contains("added: 1 funded account, PROP-2, on the bench (rule)"),
+                      "0.6.22 lane rule: each move is a line on its lane (the groups message's laneLog)");
+                Check(Logged("lane rule: added: 1 eval account, PROP-1"), "0.6.22 lane rule: and in the Output window");
+                Check(apply(new[] { row("PROP-1", "eval", null, false), row("PROP-2", "funded", null, false) }) == 0, "0.6.22 lane rule: the next minute nothing moves again");
+                // LEAVE once flat: PROP-1 passes (promoted) while it holds a position: it stays and says why; flat: it leaves
+                Position held = new Position { Instrument = mnq, MarketPosition = MarketPosition.Long, Quantity = 1, AveragePrice = 25000 };
+                prop1.Positions.Add(held);   // NinjaTrader's list only (no position event: nothing for ChartBridge to remember after this part)
+                Check(apply(new[] { row("PROP-1", "eval", "promoted", false) }) == 0 && ChartBridgeGroups.GroupOf("PROP-1") == "g1" && ChartBridgeGroups.GroupsJson().Contains("PROP-1 is passed (promoted) on The Desk: it leaves Evals once flat"),
+                      "0.6.22 lane rule: a passed eval holding a position stays until flat, and says so");
+                prop1.Positions.Remove(held);
+                Check(apply(new[] { row("PROP-1", "eval", "promoted", false) }) == 1 && ChartBridgeGroups.GroupOf("PROP-1") == null && ChartBridgeGroups.GroupsJson().Contains("removed: PROP-1 (passed (promoted) on The Desk) (rule)"),
+                      "0.6.22 lane rule: flat, the passed eval leaves the eval lane");
+                Check(apply(new[] { row("PROP-1", "eval", "promoted", false) }) == 0 && ChartBridgeGroups.GroupOf("PROP-1") == null, "0.6.22 lane rule: an account with an outcome never joins again");
+                // the same account retyped funded on The Desk (one firm style): it leaves the eval lane, then joins the funded lane, benched
+                apply(new[] { row("PROP-1", "eval", null, false) });
+                Check(ChartBridgeGroups.GroupOf("PROP-1") == "g1", "0.6.22 lane rule: (setup) PROP-1 on the eval lane again");
+                Check(apply(new[] { row("PROP-1", "funded", null, false) }) == 1 && ChartBridgeGroups.GroupOf("PROP-1") == null, "0.6.22 lane rule: retyped funded: it leaves the eval lane first");
+                Check(apply(new[] { row("PROP-1", "funded", null, false) }) == 1 && ChartBridgeGroups.GroupOf("PROP-1") == "g2" && ChartBridgeGroups.BenchedOf("g2").Contains("PROP-1"),
+                      "0.6.22 lane rule: then joins the funded lane, benched");
+                // blown and archived leave; a type taken away (kind null) leaves it where it is
+                Check(apply(new[] { row("PROP-2", null, null, false) }) == 0 && ChartBridgeGroups.GroupOf("PROP-2") == "g2", "0.6.22 lane rule: no type now: left where it is (never a guess)");
+                Check(apply(new[] { row("PROP-2", "funded", "blown", false) }) == 1 && ChartBridgeGroups.GroupOf("PROP-2") == null, "0.6.22 lane rule: blown: it leaves");
+                Check(apply(new[] { row("PROP-1", "funded", null, true) }) == 1 && ChartBridgeGroups.GroupOf("PROP-1") == null, "0.6.22 lane rule: archived on The Desk: it leaves");
+                // an account in another group is never taken from it; two groups of one Type: nobody joins, said once
+                File.WriteAllText(GroupsFile, ChartBridgeGroups.Header + "\n#\n" +
+                    "group\tg1\tEvals\ton\t-\t-\t-\t-\t-\t-\t-\teval\t-\n" + "group\tg2\tEvals two\ton\t-\t-\t-\t-\t-\t-\t-\teval\t-\n" + "group\tg3\tOther\ton\t-\t-\t-\t-\t-\t-\t-\t-\t-\n" + "member\tPROP-2\tg3\n");
+                ChartBridgeGroups.StartNow();
+                Check(apply(new[] { row("PROP-1", "eval", null, false), row("PROP-2", "eval", null, false) }) == 0 && ChartBridgeGroups.GroupOf("PROP-1") == null && ChartBridgeGroups.GroupOf("PROP-2") == "g3",
+                      "0.6.22 lane rule: two eval lanes: nobody is added (which one is not known); an account in another group stays there");
+                Check(Logged("2 groups have Type eval: PROP-1 is not added"), "0.6.22 lane rule: and it says why");
+                // a bad answer moves nothing
+                string bad;
+                Check(ChartBridgeGroups.LaneRows("{\"v\":2,\"accounts\":[]}", out bad) == null && ChartBridgeGroups.LaneRows("{\"v\":1,\"accounts\":[{\"account\":{\"x\":1}}]}", out bad) == null &&
+                      ChartBridgeGroups.LaneRows("{\"v\":1,\"accounts\":[{\"account\":\"PROP-1\"}", out bad) == null && ChartBridgeGroups.LaneRows("", out bad) == null,
+                      "0.6.22 lane rule: an answer that does not read strictly (another version, a nested value, cut off, empty) moves nothing");
+            }
+            finally
+            {
+                if (groupsWas != null) File.WriteAllText(GroupsFile, groupsWas); else { try { Gone(GroupsFile); } catch (Exception) { } }
+                ChartBridgeGroups.StartNow();
+                ChartBridgeGroups.LaneForget();
+            }
+        });
+
         Part("prop: the harness is left as it was", () =>
         {
             try { Gone(AutoFilePath); } catch (Exception) { }

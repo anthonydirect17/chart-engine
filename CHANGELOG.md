@@ -63,6 +63,36 @@
   `test/pc-updater.test.js`: the allowed git subcommands, the box job's name, useHttpPath read before the one ask, the
   token only after a 404 or 401 and then through the Actions API, one place that asks for it and one that sends it.
 
+## ChartBridge 0.6.22 and chart 1.53.1 (2026-11-13): the lanes run themselves, the day's loss stop, the voice calls
+
+In plain words: nothing changes on the chart or for hand trading, and the page is unchanged. ChartBridge learns three
+things: Legion's lanes fill and empty by themselves, a runner can send a day's loss stop with its plan, and ChartBridge can
+say its own fills in the voice Anthony picked. Build answers 30 and 31, and Anthony's rulings of 2026-11-13. Every part is
+in `nt8/PROTOCOL.md` (0.6.22).
+
+- **The lanes run themselves** (Anthony's standing rule, 2026-11-13). Once a minute ChartBridge reads The Desk's
+  `GET /api/lane-accounts` (The Desk's PR for it comes with this release). A prop account whose type on The Desk is eval
+  or funded, with no outcome, not archived and with its rules known, and that is in no group, joins the one group whose
+  Type is the same, **on the bench** (disarmed until Anthony takes it off). A lane member that is blown, passed
+  (promoted), archived or of the other kind now leaves **once flat** with no working orders. Nothing changes an account's
+  type. A Sim account carries no type, so it is added by hand as before; Sim and prop may share a lane. Two lanes of one
+  Type, or none: nothing joins, and that is said. Every move and every refusal is a line in the `groups` message
+  (`laneLog`, only when there is one) and the Output window. `config.txt` `laneRule = off` stops it.
+- **A lane keeps its trader through the 17:00 ET reset**, said once; Auto still ends with the trading day.
+- **The day's loss stop** (answers 31): a plan's optional `dayLossDollars`. Reached (the day at or below minus it,
+  realized plus open), the account takes no new entry from any trader until 18:00 ET, and where the trader holds
+  something there, its own flatten and a stand-down until the roll. The mirror of the 0.6.19 profit stop. A runner that
+  sends none behaves as before; the account's own daily loss limit stays beside it.
+- **The voice calls** (answers 30): `LongFilled`, `ShortFilled`, `StopFilled`, `TargetFilled`, `TargetOneFilled`,
+  `TargetTwoFilled`, `PositionClosed` and `BreakEvenSet`, from `.wav` files in `voiceFolder` (default
+  `Documents\NinjaTrader 8\sounds_voice4`). **Off unless `voice = on`.** Listen and play only: a queue of 8, one
+  background thread, 5 s a call, NinjaTrader's thread never waits.
+- **The order path** gains three listen-only lines (two in `ChartBridgeOrders.cs`, one in `ChartBridgeStrategies.cs`),
+  pinned word for word in `test/nt8-record.test.js`; each entry it calls is off by default and catches everything.
+
+Checked in `check/AgentHarness.cs` (`PropAccounts` lane rule part, `DayLoss`, `Voice`): 4461 checks pass. ChartBridge
+0.6.22 is a recompile (`-InstallChartBridge`, then F5 while flat). The page is unchanged.
+
 ## chart 1.53.0 (2026-11-13): Sim lanes on Legion, and the trader desk no longer sits on "Connecting" (page only, no F5)
 
 HOME's evening test of 2026-11-12 stopped on both (FROM_HOME_2026-11-12_evening_plumbing.md); the research is in

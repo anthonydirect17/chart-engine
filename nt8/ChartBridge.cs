@@ -72,6 +72,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         public static Dictionary<string, string> ContractOverride = new Dictionary<string, string>();
         public static bool PostFills = false;                       // send fills to The Desk
         public static string DeskUrl = "http://localhost:8800";
+        public static bool LaneRule = true;                         // 0.6.22: the lanes run themselves (laneRule = off stops it; ChartBridgeGroups LanePoll)
         public static List<string> AllowOrigins = new List<string>();   // web pages besides ChartBridge's own that may open the read-only WebSocket
         // 0.4.0: markets served for the Quote board only (ChartBridgeTape.cs, ChartBridgeMarkets): every order for them is refused.
         // A root in both roots and quoteRoots is quote only.
@@ -172,8 +173,10 @@ namespace NinjaTrader.NinjaScript.AddOns
                 else if (key.StartsWith("contract.")) ContractOverride[key.Substring(9).Trim().ToUpperInvariant()] = val;
                 else if (ChartBridgeStops.ReadConfig(key, val)) { }   // 0.6.6: postStops = true|false (ChartBridgeStops.cs)
                 else if (ChartBridgeOrderRecord.ReadConfig(key, val)) { }   // 0.6.9: postOrders = true|false (ChartBridgeOrderRecord.cs)
+                else if (ChartBridgeVoice.ReadConfig(key, val)) { }   // 0.6.22: voice = on|off (off by default), voiceFolder
                 else if (key == "postFills") PostFills = val.Equals("true", StringComparison.OrdinalIgnoreCase) || val == "1";
                 else if (key == "deskUrl") DeskUrl = val.TrimEnd('/');
+                else if (key == "laneRule") LaneRule = !val.Equals("off", StringComparison.OrdinalIgnoreCase);   // 0.6.22
                 else if (key == "allowOrigins") AllowOrigins = ChartBridgeAccess.ParseOrigins(val);
                 else if (ChartBridgeCopier.ReadConfig(key, val)) { }   // 0.4.0 copier: copier = off turns it off (on by default; ChartBridgeCopier.cs)
                 else if (ChartBridgeBot.ReadConfig(key, val)) { }    // 0.4.0 bot: bot, botRoot, botLibrary (ChartBridgeBot.cs)
@@ -2267,7 +2270,7 @@ namespace NinjaTrader.NinjaScript.AddOns
     // ------------------------------------------------------------------ the server
     public static class ChartBridgeServer
     {
-        public const string Version = "0.6.21";   // 0.6.21: for the lanes and the runner (build answers 7 part D2 and the review backlog): the pick, the roster file a trader's runner runs, set on the page (agentPick), saved in agent-<id>-pick.txt and sent in welcome and agent, refused in Auto and while exposed; accountState's profitToday and profitWhy, the day's number as the profit stop reads it (the larger realized figure after a late start); the roster reader tightened: the format is the top-level key (D1), rosterFolder a drive-letter full path only (D3), one 2 MB cap for an answer (D4); no order path change. 0.6.20: the Lab's roster files served read only at GET /roster from the folder config.txt's rosterFolder names (build answers 7, part C2; ChartBridgeRoster in ChartBridgeAgents.cs): only by the localhost name, plain *.json files of a plain name directly in that folder, no link, at most 200 files of at most 256 KB, each valid JSON of format specrunner.roster/1 or specrunner.lineup/1, served as it is, a file that is not listed with why; never the folder's path; nothing decided from them. 0.6.19: the day's profit stop (Anthony 2026-11-10, decision 8, and 2026-11-11): a dollar mark per account, realized plus open, for the 18:00 session: the smaller of the day stop a runner sends with its plan (dayStopDollars) and, on an account that is not funded, its consistency percent of its profit target; reached while the trader holds something there, its own flatten starts and it stands down until the roll; once reached the account is refused new entries for the rest of the session by every trader, whatever a later plan names; after a late start the larger realized figure counts, and a day not known is said once (ChartBridgeAgents.cs, and one field in ChartBridgeGroups.cs). The 0.6.18 fix round: an order resting by hand no longer holds back the agent's own close; Kill all puts the kill switch on first and stops a saved Auto that waits with no seats; Auto ends with its trading day on every pass and plan check, for every kind of account. 0.6.18: entry rules per trader (Anthony 2026-11-11: many bots to come, most with a stop and a target): an agent's rules gain marketEntry and noTarget, both off by default and set on the Agent tab; with marketEntry a plan may be kind market (its price within 20 ticks of ChartBridge's own last trade), with noTarget its targetTicks may be 0; a stop is always required; the order path asks the agent's rules for both; a trader with neither behaves as in 0.6.17; 0.6.17: Kill all for the prop accounts (Anthony 2026-11-11): the page message agentKillAllProp flattens what each agent on prop accounts owns (its own flatten), puts its kill switch on and its mode to Shadow, and removes its saved Auto; an agent on the personal account, a Sim account or a group with a member that is not prop, the bot, the copier and manual orders are never touched; refused with no personal account picked; 0.6.16: prop accounts (Anthony 2026-11-10 and 2026-11-11): the personal account is picked once on the chart page (accountPersonal, saved in personal-account.txt), every other account that is not Sim, Backtest or Playback is prop; an agent in Auto on prop accounts kept its account and Auto through the 17:00 ET reset until 0.6.18 ended Auto with the trading day for every agent (agent-<id>-auto.txt) and gets Auto back once after a restart, only when its account is the same, prop, known, flat and idle and the kill switch is off; the accounts message's personalNamed and each row's personal and prop; with no personal account picked nothing is prop and every path is the 0.6.15 one; no order path file changes; 0.6.15: the 1 second pull retired (Anthony 2026-11-03: everything is built from the ticks; The Desk builds its 1 second bars from the master tick day): no 1 second request, no bars1s/ queue and no POST /api/bars-1s; a bars1s or bars1sRoots line does nothing (one Output line per such config line); the files it left are never read, sent or deleted (one Output line a start); /diag bars has no oneSecond; the NQ tick file is unchanged (its window, its time limit and the gate as before), and its final pull no longer waits for a pass where the 1 second pull asked nothing; 0.6.14: the NQ tick file's day check (Anthony 2026-11-03): failed only when history has no trades or under 90 percent of the live trades in the span the live capture covered; a new passing status short (history has fewer in some seconds); holes listed in the check, never failing the day: 60,000 ms or more between two history trades (or from the session's open, or to its close) with a live trade inside more than 1,000 ms from both ends (wider than the measured 4 ms early / 106 ms late skew on purpose), or over a known capture gap (inGap, never at the close), not second-aligned; the whole first to last span when the gaps leave under 600 seconds or 1,000 live trades; a day failed under the old rule with its raw kept checked again (every start lists each failed rule 1 day, tickdays.txt's rule column); a day set aside never resent in a loop; 0.6.13: the NQ tick file's final pull catches up on weekday mornings before 09:15 New York (Anthony 2026-11-03: a request starts before 09:15:00 or not at all, BarsTicket.MayStart asked at the gate, the session still open never pulled), the raw deleted once packed (a stored day not packed yet keeps only its last part, .day.last, sent again at most once a New York day in the final pull's windows until The Desk says packed, then the raw, its state and the part are deleted; /diag tickFile.packWait); 0.6.12: the bar trail follow-ups (an Order Strategy fill's session from its own execution time, NinjaTrader's Execution.Time, an execution of the session before a trade already seen ending the bar trail at once; managed.txt's session: and barEnded only for a bar trail entry); 0.6.11: the bar trail exit option of an Order Strategy (Anthony 2026-11-01: minute or NinjaTrader range bars ChartBridge builds from its live trades, phantom range bars ignored, range bars proven or "not proven yet", the trail ends at the session close, at most 16 bar kinds a market and a 17th refused at placement), the 1 second bars' narrower tick request (12:00 AM of the session's own date, from the open itself when that answer misses the open); 0.6.10: the account lifecycle (Anthony 2026-10-30): remove-only changes for an account NinjaTrader no longer lists (leave its group, a copier follower off then removed, Hide with no stale hold), Hide takes a member out of its group in the same step, a member not in NinjaTrader no longer blocks an agent's group, a group preview sizes only the members gate 2 lets trade, the accounts message's notListed, kept what The Desk rejects inside a 200; also an entry being placed is not a restart (the Placing mark), the NQ tick file to The Desk (ChartBridgeTicks.cs), the 1 second request from the session's open, a tick chart with no history at the open asks again once (historyLate), /diag's pc and every 1 second contract; 0.6.9: the stats suite's Phase 2 (recording only): 1 second bars to The Desk, the order record (every order type, POST /api/order-events), a decision id on a group entry's orders and fills; 0.6.8: the minute book (minute and tick charts' history up to now from every live trade ChartBridge saw), a hole recorded in /diag and history.log (never shown), 20 s limits on a load's minute history and last trades; 0.6.7: the bench (memberBench), no hedging always on, a group's own rules optional and never sizing a member
+        public const string Version = "0.6.22";   // 0.6.22: the lanes run themselves (Anthony 2026-11-13): once a minute The Desk's GET /api/lane-accounts; a typed eval or funded prop account in no group joins the one group of its Type on the bench, a blown, passed or archived member or one of the other kind leaves once flat; each move a line in the groups message's laneLog; laneRule = off stops it; a lane trader kept through the 17:00 reset; the plan's dayLossDollars, the day's loss stop (answers 31); the voice calls, listen and play only, off unless voice = on (answers 30); the order path gains three listen-only lines. 0.6.21: for the lanes and the runner (build answers 7 part D2 and the review backlog): the pick, the roster file a trader's runner runs, set on the page (agentPick), saved in agent-<id>-pick.txt and sent in welcome and agent, refused in Auto and while exposed; accountState's profitToday and profitWhy, the day's number as the profit stop reads it (the larger realized figure after a late start); the roster reader tightened: the format is the top-level key (D1), rosterFolder a drive-letter full path only (D3), one 2 MB cap for an answer (D4); no order path change. 0.6.20: the Lab's roster files served read only at GET /roster from the folder config.txt's rosterFolder names (build answers 7, part C2; ChartBridgeRoster in ChartBridgeAgents.cs): only by the localhost name, plain *.json files of a plain name directly in that folder, no link, at most 200 files of at most 256 KB, each valid JSON of format specrunner.roster/1 or specrunner.lineup/1, served as it is, a file that is not listed with why; never the folder's path; nothing decided from them. 0.6.19: the day's profit stop (Anthony 2026-11-10, decision 8, and 2026-11-11): a dollar mark per account, realized plus open, for the 18:00 session: the smaller of the day stop a runner sends with its plan (dayStopDollars) and, on an account that is not funded, its consistency percent of its profit target; reached while the trader holds something there, its own flatten starts and it stands down until the roll; once reached the account is refused new entries for the rest of the session by every trader, whatever a later plan names; after a late start the larger realized figure counts, and a day not known is said once (ChartBridgeAgents.cs, and one field in ChartBridgeGroups.cs). The 0.6.18 fix round: an order resting by hand no longer holds back the agent's own close; Kill all puts the kill switch on first and stops a saved Auto that waits with no seats; Auto ends with its trading day on every pass and plan check, for every kind of account. 0.6.18: entry rules per trader (Anthony 2026-11-11: many bots to come, most with a stop and a target): an agent's rules gain marketEntry and noTarget, both off by default and set on the Agent tab; with marketEntry a plan may be kind market (its price within 20 ticks of ChartBridge's own last trade), with noTarget its targetTicks may be 0; a stop is always required; the order path asks the agent's rules for both; a trader with neither behaves as in 0.6.17; 0.6.17: Kill all for the prop accounts (Anthony 2026-11-11): the page message agentKillAllProp flattens what each agent on prop accounts owns (its own flatten), puts its kill switch on and its mode to Shadow, and removes its saved Auto; an agent on the personal account, a Sim account or a group with a member that is not prop, the bot, the copier and manual orders are never touched; refused with no personal account picked; 0.6.16: prop accounts (Anthony 2026-11-10 and 2026-11-11): the personal account is picked once on the chart page (accountPersonal, saved in personal-account.txt), every other account that is not Sim, Backtest or Playback is prop; an agent in Auto on prop accounts kept its account and Auto through the 17:00 ET reset until 0.6.18 ended Auto with the trading day for every agent (agent-<id>-auto.txt) and gets Auto back once after a restart, only when its account is the same, prop, known, flat and idle and the kill switch is off; the accounts message's personalNamed and each row's personal and prop; with no personal account picked nothing is prop and every path is the 0.6.15 one; no order path file changes; 0.6.15: the 1 second pull retired (Anthony 2026-11-03: everything is built from the ticks; The Desk builds its 1 second bars from the master tick day): no 1 second request, no bars1s/ queue and no POST /api/bars-1s; a bars1s or bars1sRoots line does nothing (one Output line per such config line); the files it left are never read, sent or deleted (one Output line a start); /diag bars has no oneSecond; the NQ tick file is unchanged (its window, its time limit and the gate as before), and its final pull no longer waits for a pass where the 1 second pull asked nothing; 0.6.14: the NQ tick file's day check (Anthony 2026-11-03): failed only when history has no trades or under 90 percent of the live trades in the span the live capture covered; a new passing status short (history has fewer in some seconds); holes listed in the check, never failing the day: 60,000 ms or more between two history trades (or from the session's open, or to its close) with a live trade inside more than 1,000 ms from both ends (wider than the measured 4 ms early / 106 ms late skew on purpose), or over a known capture gap (inGap, never at the close), not second-aligned; the whole first to last span when the gaps leave under 600 seconds or 1,000 live trades; a day failed under the old rule with its raw kept checked again (every start lists each failed rule 1 day, tickdays.txt's rule column); a day set aside never resent in a loop; 0.6.13: the NQ tick file's final pull catches up on weekday mornings before 09:15 New York (Anthony 2026-11-03: a request starts before 09:15:00 or not at all, BarsTicket.MayStart asked at the gate, the session still open never pulled), the raw deleted once packed (a stored day not packed yet keeps only its last part, .day.last, sent again at most once a New York day in the final pull's windows until The Desk says packed, then the raw, its state and the part are deleted; /diag tickFile.packWait); 0.6.12: the bar trail follow-ups (an Order Strategy fill's session from its own execution time, NinjaTrader's Execution.Time, an execution of the session before a trade already seen ending the bar trail at once; managed.txt's session: and barEnded only for a bar trail entry); 0.6.11: the bar trail exit option of an Order Strategy (Anthony 2026-11-01: minute or NinjaTrader range bars ChartBridge builds from its live trades, phantom range bars ignored, range bars proven or "not proven yet", the trail ends at the session close, at most 16 bar kinds a market and a 17th refused at placement), the 1 second bars' narrower tick request (12:00 AM of the session's own date, from the open itself when that answer misses the open); 0.6.10: the account lifecycle (Anthony 2026-10-30): remove-only changes for an account NinjaTrader no longer lists (leave its group, a copier follower off then removed, Hide with no stale hold), Hide takes a member out of its group in the same step, a member not in NinjaTrader no longer blocks an agent's group, a group preview sizes only the members gate 2 lets trade, the accounts message's notListed, kept what The Desk rejects inside a 200; also an entry being placed is not a restart (the Placing mark), the NQ tick file to The Desk (ChartBridgeTicks.cs), the 1 second request from the session's open, a tick chart with no history at the open asks again once (historyLate), /diag's pc and every 1 second contract; 0.6.9: the stats suite's Phase 2 (recording only): 1 second bars to The Desk, the order record (every order type, POST /api/order-events), a decision id on a group entry's orders and fills; 0.6.8: the minute book (minute and tick charts' history up to now from every live trade ChartBridge saw), a hole recorded in /diag and history.log (never shown), 20 s limits on a load's minute history and last trades; 0.6.7: the bench (memberBench), no hedging always on, a group's own rules optional and never sizing a member
         private static readonly object Gate = new object();
         private static HttpListener listener;
         private static CancellationTokenSource cts;
@@ -2332,7 +2335,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     try { ChartBridgeOrders.Resume(); } catch (Exception ex) { Log("bracket resume error: " + ex.Message); }   // entries that filled while stopped
                     accountTimer = new System.Threading.Timer(delegate { try { WatchAccounts(); } catch (Exception) { } try { ChartBridgeDesk.Flush(); } catch (Exception) { } try { ChartBridgeStops.Flush(); } catch (Exception) { } try { ChartBridgeOrderRecord.Flush(); } catch (Exception) { } try { ChartBridgeDecisions.SaveIfDirty(); } catch (Exception) { } try { SweepBooks(); } catch (Exception) { } }, null, 10000, 10000);
                     htfTimer = new System.Threading.Timer(delegate { try { HtfPush(); HtfExpire(); } catch (Exception ex) { Log("higher-timeframe push error: " + ex.Message); } try { SettlementTick(); } catch (Exception ex) { Log("settlement error: " + ex.Message); } }, null, HtfPushMs, HtfPushMs);   // 0.3.7
-                    pollTimer = new System.Threading.Timer(delegate { try { PollExecutions(); } catch (Exception) { } try { ChartBridgeOrders.CheckLegs(); } catch (Exception ex) { Log("legs check error: " + ex.Message); } try { ChartBridgeBranches.Poll(); } catch (Exception ex) { Log("daily reset error: " + ex.Message); } }, null, 2000, 2000);   // 0.5.7: the 17:00 ET reset to None
+                    pollTimer = new System.Threading.Timer(delegate { try { PollExecutions(); } catch (Exception) { } try { ChartBridgeOrders.CheckLegs(); } catch (Exception ex) { Log("legs check error: " + ex.Message); } try { ChartBridgeBranches.Poll(); } catch (Exception ex) { Log("daily reset error: " + ex.Message); } try { ChartBridgeGroups.LanePoll(); } catch (Exception ex) { Log("lane rule error: " + ex.Message); } }, null, 2000, 2000);   // 0.5.7: the 17:00 ET reset to None
                     listener = new HttpListener();
                     listener.Prefixes.Add("http://localhost:" + ChartBridgeConfig.Port + "/");
                     StartListening(cts.Token, 0);
@@ -6066,10 +6069,171 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (!FirstTime(ExecKey(name, e.ExecutionId, e.Time, e.Price, e.Quantity, e.OrderId))) return;
                 Interlocked.Increment(ref eventNew);
                 execOrder = e.Execution != null ? e.Execution.Order : null;   // 0.5.0: for the fills "by"
+                ChartBridgeVoice.OnFill(a, execOrder, e.MarketPosition);   // 0.6.22: a call queued (never waits; never throws)
                 try { Deliver(name, inst, e.MarketPosition, e.Quantity, e.Price, e.Time, e.ExecutionId, e.OrderId, null); } finally { execOrder = null; }
                 ChartBridgeDesk.Flush();
             }
             catch (Exception ex) { Log("fill error: " + ex.Message); }
+        }
+    }
+
+    // ------------------------------------------------------------------ 0.6.22: ChartBridge's own voice calls (build answers 30)
+    // Anthony 2026-11-12: ChartBridge says its own fills and break even, in the voice set he picked (voice 4), because NinjaTrader says
+    // "Order filled" for ChartBridge's legs. LISTEN AND PLAY ONLY: nothing here places, moves or cancels an order. A fill or a break-even
+    // move puts one call on a small queue (at most 8; full: the call is dropped); one background thread plays them, each with a 5 s limit
+    // (a stuck player: that call is dropped, the queue goes on). NinjaTrader's thread never waits. One call per decision: a group entry
+    // copied to several accounts (one decision id) speaks once; a single entry once per kind. config.txt voice = on turns it on (OFF by
+    // default: an F5 alone changes nothing he hears); voiceFolder names the folder (default Documents\NinjaTrader 8\sounds_voice4). A
+    // missing folder or file is said once in the Output window and that call is silent.
+    // Calls: entry filled: LongFilled / ShortFilled (by side); ChartBridge's stop leg: StopFilled; its target leg: TargetFilled, or
+    // TargetOneFilled / TargetTwoFilled for a strategy's first and second target; ChartBridge's market exit, an agent's flatten, or a fill
+    // of NinjaTrader's close after ChartBridge's Flatten: PositionClosed; ChartBridge's stop moved to its fill price: BreakEvenSet.
+    public static class ChartBridgeVoice
+    {
+        public static bool On;
+        public static string Folder = DefaultFolder();
+        public static Func<string, bool> Player;          // test hook: plays a file path, true when it played (null: Windows' player)
+        public static int PlayTimeoutMs = 5000;
+        public const int QueueMax = 8;
+        private static readonly object Sync = new object();
+        private static readonly Queue<string> Calls = new Queue<string>();
+        private static readonly Dictionary<string, double> Said = new Dictionary<string, double>();   // call key -> when (UTC ms)
+        private static readonly HashSet<string> Missing = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private static readonly Dictionary<string, double> Flattened = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);   // account|instrument -> when
+        private static Thread worker;
+        private static long dropped, played;
+        private static readonly Regex LegRx = new Regex("^CB#([0-9a-f]{8}) (stop|target|exit) f[0-9]{1,6} q[0-9]{1,6} p([0-9]{1,9}(?:\\.[0-9]{1,8})?)(?: k([1-3])){0,1}\\z");
+        private static readonly Regex TagRx = new Regex("^CB#([0-9a-f]{8})(?: |$)");
+
+        private static string DefaultFolder()
+        {
+            try { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "NinjaTrader 8", "sounds_voice4"); }
+            catch (Exception) { return "sounds_voice4"; }
+        }
+        public static bool ReadConfig(string key, string val)
+        {
+            if (key == "voice") { On = val.Equals("on", StringComparison.OrdinalIgnoreCase) || val.Equals("true", StringComparison.OrdinalIgnoreCase); return true; }
+            if (key == "voiceFolder") { if (!string.IsNullOrWhiteSpace(val)) Folder = val.Trim(); return true; }
+            return false;
+        }
+        public static void Reset() { lock (Sync) { Calls.Clear(); Said.Clear(); Missing.Clear(); Flattened.Clear(); dropped = 0; played = 0; } On = false; Folder = DefaultFolder(); Player = null; PlayTimeoutMs = 5000; }
+        public static long Dropped { get { lock (Sync) return dropped; } }
+        public static long Played { get { lock (Sync) return played; } }
+        private static double NowMs() { return (DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds; }
+
+        // The call for one fill of a ChartBridge order (its name and side), or null: an order ChartBridge did not place says nothing.
+        public static string CallFor(string orderName, bool buy)
+        {
+            if (string.IsNullOrEmpty(orderName)) return null;
+            Match m = LegRx.Match(orderName);
+            if (m.Success)
+            {
+                string kind = m.Groups[2].Value, k = m.Groups[4].Success ? m.Groups[4].Value : null;
+                if (kind == "stop") return "StopFilled";
+                if (kind == "exit") return "PositionClosed";
+                return k == "1" ? "TargetOneFilled" : k == "2" ? "TargetTwoFilled" : "TargetFilled";
+            }
+            if (!TagRx.IsMatch(orderName)) return null;
+            if (orderName.EndsWith(" flat", StringComparison.Ordinal)) return "PositionClosed";   // an agent's own flatten close
+            return buy ? "LongFilled" : "ShortFilled";   // an entry (every other CB# order is an entry: ticket, bot, agent, strategy, group member)
+        }
+
+        // ChartBridgeOrders' Flatten: a fill of NinjaTrader's own close on that account and instrument in the next 30 s says Position closed.
+        public static void NoteFlatten(Account a, Instrument i)
+        {
+            if (!On || a == null || i == null) return;
+            try { lock (Sync) Flattened[a.Name + "|" + i.FullName] = NowMs(); } catch (Exception) { }
+        }
+
+        // Every fill (ChartBridgeServer.OnExecutionUpdate). Never throws, never waits.
+        public static void OnFill(Account a, Order o, MarketPosition mp)
+        {
+            if (!On || a == null || o == null) return;
+            try
+            {
+                string call = CallFor(o.Name, mp == MarketPosition.Long), key;
+                if (call == null)
+                {
+                    string fk = a.Name + "|" + (o.Instrument != null ? o.Instrument.FullName : "");
+                    double at;
+                    lock (Sync) { if (!Flattened.TryGetValue(fk, out at) || NowMs() - at > 30000) return; Flattened.Remove(fk); }
+                    call = "PositionClosed"; key = "flat|" + fk + "|" + at.ToString("0", CultureInfo.InvariantCulture);
+                }
+                else
+                {
+                    Match t = TagRx.Match(o.Name);
+                    string d = ChartBridgeDecisions.Of(o);
+                    key = (d != null ? "d:" + d : "t:" + (t.Success ? t.Groups[1].Value : o.Name)) + "|" + call;   // one call per decision (or entry) and kind
+                }
+                Enqueue(key, call);
+            }
+            catch (Exception) { }
+        }
+
+        // A ChartBridge stop leg moved (the page's move, or a strategy's): to its own fill price is Break even set. Never throws.
+        public static void OnStopMoved(Order leg, double price)
+        {
+            if (!On || leg == null) return;
+            try
+            {
+                Match m = LegRx.Match(leg.Name ?? "");
+                if (!m.Success || m.Groups[2].Value != "stop") return;
+                double fill;
+                if (!double.TryParse(m.Groups[3].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out fill)) return;
+                double tick = leg.Instrument != null && leg.Instrument.MasterInstrument != null ? leg.Instrument.MasterInstrument.TickSize : 0.25;
+                if (Math.Abs(price - fill) > tick / 2) return;
+                string d = ChartBridgeDecisions.Of(leg);
+                Enqueue((d != null ? "d:" + d : "t:" + m.Groups[1].Value) + "|be", "BreakEvenSet");
+            }
+            catch (Exception) { }
+        }
+
+        private static void Enqueue(string key, string call)
+        {
+            lock (Sync)
+            {
+                double now = NowMs();
+                if (Said.ContainsKey(key)) return;
+                Said[key] = now;
+                if (Said.Count > 500) foreach (string k in Said.Where(kv => now - kv.Value > 3600000).Select(kv => kv.Key).ToList()) Said.Remove(k);
+                if (Calls.Count >= QueueMax) { dropped++; return; }
+                Calls.Enqueue(call);
+                if (worker == null || !worker.IsAlive) { worker = new Thread(Run) { IsBackground = true, Name = "ChartBridge voice" }; worker.Start(); }
+                Monitor.PulseAll(Sync);
+            }
+        }
+
+        private static void Run()
+        {
+            for (;;)
+            {
+                string call;
+                lock (Sync)
+                {
+                    while (Calls.Count == 0) { if (!Monitor.Wait(Sync, 60000)) { worker = null; return; } }
+                    call = Calls.Dequeue();
+                }
+                PlayOne(call);
+            }
+        }
+
+        // Plays one call, at most PlayTimeoutMs; a missing file is said once and is silent.
+        public static void PlayOne(string call)
+        {
+            string path;
+            try { path = Path.Combine(Folder, call + ".wav"); } catch (Exception) { return; }
+            Func<string, bool> p = Player;
+            if (p == null && !File.Exists(path))
+            {
+                bool say; lock (Sync) say = Missing.Add(path);
+                if (say) ChartBridgeServer.Log("voice: " + call + ".wav is not in " + Folder + ": that call is silent (said once)");
+                return;
+            }
+            Task<bool> t = Task.Run(() => { try { if (p != null) return p(path); using (System.Media.SoundPlayer sp = new System.Media.SoundPlayer(path)) sp.PlaySync(); return true; } catch (Exception) { return false; } });
+            bool done = false;
+            try { done = t.Wait(PlayTimeoutMs); } catch (Exception) { }
+            lock (Sync) { if (done && t.Result) played++; else dropped++; }
+            if (!done) ChartBridgeServer.Log("voice: " + call + " did not finish within " + (PlayTimeoutMs / 1000) + " s: dropped");
         }
     }
 

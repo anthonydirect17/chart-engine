@@ -1,4 +1,4 @@
-# ChartBridge protocol (v1 market data and fills, v2 orders, v3 accounts, strategies, copier and bot, 0.5.0 agents, 0.5.1 accounts, 0.5.8 prop groups, 0.6.0 group trading, 0.6.1 a group's Type and default hero, 0.6.3 the audit fixes, 0.6.4 the no-trade-record alarm and Merge on an off follower, 0.6.8 the minute book, 0.6.10 the account lifecycle and the NQ tick file, 0.6.11 the bar trail and the narrower 1 second request, 0.6.12 the bar trail follow-ups, 0.6.13 the tick day's morning catch-up and the raw deleted once packed, 0.6.14 the tick day check's rule: short and holes, 0.6.15 the 1 second pull retired: the NQ tick file is the one source, 0.6.16 prop accounts: one Auto restore after a restart (Auto ends at 17:00 ET since 0.6.18), 0.6.17 Kill all for the prop accounts, 0.6.18 entry rules per trader: market entry and no target, 0.6.19 the day's profit stop: a dollar mark per account, 0.6.20 the roster served, 0.6.21 the pick and the day's profit side)
+# ChartBridge protocol (v1 market data and fills, v2 orders, v3 accounts, strategies, copier and bot, 0.5.0 agents, 0.5.1 accounts, 0.5.8 prop groups, 0.6.0 group trading, 0.6.1 a group's Type and default hero, 0.6.3 the audit fixes, 0.6.4 the no-trade-record alarm and Merge on an off follower, 0.6.8 the minute book, 0.6.10 the account lifecycle and the NQ tick file, 0.6.11 the bar trail and the narrower 1 second request, 0.6.12 the bar trail follow-ups, 0.6.13 the tick day's morning catch-up and the raw deleted once packed, 0.6.14 the tick day check's rule: short and holes, 0.6.15 the 1 second pull retired: the NQ tick file is the one source, 0.6.16 prop accounts: one Auto restore after a restart (Auto ends at 17:00 ET since 0.6.18), 0.6.17 Kill all for the prop accounts, 0.6.18 entry rules per trader: market entry and no target, 0.6.19 the day's profit stop: a dollar mark per account, 0.6.20 the roster served, 0.6.21 the pick and the day's profit side, 0.6.22 the lanes run themselves, the day's loss stop and the voice calls)
 
 ChartBridge is a NinjaTrader 8 add-on. It serves the live chart page at `http://localhost:8765/` and
 talks to it over one WebSocket at `ws://localhost:8765/ws`. Everything stays on the local machine.
@@ -3075,7 +3075,7 @@ not even the window. A change is saved, logged and sent to the agent in a new `w
 | `agentHello` | `name` (1 to 40), `build` (1 to 40) | first message |
 | `beat` | none | |
 | `subscribe` | `root`, `days`, `tickHours`, `sub` (as the page's) | answered as for a page: `history`, `ticks`, `ready`, then live `tick` for that root (the agent gets live `tick` for every served root anyway) |
-| `plan` | `id` (1 to 40, unique per agent per trading day), `root`, `side` (`buy`/`sell`), `kind` (`limit`/`stopLimit`), `price`, `limitPrice` (stopLimit only, and then required), `qty`, `stopTicks`, `targetTicks`, `expireSec`, `riskDollars`, `setup` (1 to 40), `reason` (1 to 200), `confidence` (0 to 1); 0.6.0: `seatsRev` and `sizes` ("Group trading (0.6.0)"); 0.6.19: `dayStopDollars` (optional: "The day's profit stop (0.6.19)") | one entry plan; checked, then by mode: logged, proposed or placed |
+| `plan` | `id` (1 to 40, unique per agent per trading day), `root`, `side` (`buy`/`sell`), `kind` (`limit`/`stopLimit`), `price`, `limitPrice` (stopLimit only, and then required), `qty`, `stopTicks`, `targetTicks`, `expireSec`, `riskDollars`, `setup` (1 to 40), `reason` (1 to 200), `confidence` (0 to 1); 0.6.0: `seatsRev` and `sizes` ("Group trading (0.6.0)"); 0.6.19: `dayStopDollars` (optional: "The day's profit stop (0.6.19)"), `dayLossDollars` (optional: "The day's loss stop (0.6.22)") | one entry plan; checked, then by mode: logged, proposed or placed |
 | `skip` | `id`, `setup` (optional), `reason` | a decision not to trade; logged and shown |
 | `withdraw` | `id`, `reason` | expires an open proposal, cancels an unfilled entry |
 | `note` | `kind` (`look`, `thinking`, `lesson`, `notebook`, `status`), `text` (1 to 1,000) | display only, never the order path; the last 200 per agent are kept for pages that sign in later |
@@ -3703,6 +3703,84 @@ and the Board's KILL ALL AGENTS (agentKill on to every agent) are unchanged.
 
 The page's Legion tab sends this message (chart 1.45.0, `live/fleet.js`: asked first on the page; the tab's connection can post nothing else); no other page file names it. Checked in `check/AgentHarness.cs` (`PropAccounts`, the
 "kill all" parts, the review's three scenarios among them) and `test/nt8-agents.test.js`.
+
+### The lanes run themselves (0.6.22)
+
+Anthony's standing rule (2026-11-13): a new eval account joins the eval lane by itself, always disarmed until he arms it;
+a passed eval moves to the funded lane; a blown or removed account leaves. His rulings of 2026-11-13: the rule runs in
+ChartBridge (no page needs to be open); a passed eval leaves the eval lane once flat; a funded account joins the funded
+lane when its type on The Desk says funded; nothing changes an account's type by code; Sim and prop may share a lane.
+Built in `ChartBridgeGroups.cs` (the rule) and `ChartBridgeAccounts.cs` (the reset).
+
+- **A lane** is a group whose Type is `eval` or `funded` (0.6.1).
+- **Once a minute** ChartBridge asks The Desk `GET <deskUrl>/api/lane-accounts` (10 s limit; the same guard as fills).
+  The answer is `{"accounts":[{...}, ...]}`, one flat object per account: `account`, `kind` (`eval`, `funded` or
+  `null`), `outcome` (`null`, `blown` or `promoted`), `archived`, `hasRules`, and the rules a join carries (`size`,
+  `dailyLoss`, `drawdown`, `drawdownType`, `lockAt`, `target`, `consistency`, `maxMinis`, `maxMicros`, `typeId`).
+  An answer that does not read moves nothing; that is said once in the Output window until it reads again.
+- **Join.** An account joins a lane only when all of these hold: its kind is `eval` or `funded`, it has no outcome and is
+  not archived, The Desk knows its rules; NinjaTrader lists it and it is connected; it is prop by ChartBridge's own rule (a
+  personal account is picked and this is not it, and it is not Sim); it is in no group now; and exactly one group has
+  that Type. It joins with The Desk's rules **on the bench**: it sits out every entry until Anthony takes it off the
+  bench (the per-account arm). A Sim account carries no type, so it is added by hand as before.
+- **Leave.** A member of a lane whose outcome is `blown` or `promoted`, that is archived, or whose kind is now the other
+  lane's leaves its group **once flat with no working orders** (at once when NinjaTrader no longer lists it). Until
+  then it stays and the wait is said once.
+- **Nothing else moves.** An account the rule does not name stays as it is; a hand-made group stays as it is.
+- **Said, never silent.** Every move and every refusal (said once, until it changes) is a line on its lane: the `groups`
+  message gains `laneLog` on that group, a list of `{"at":<ms>,"text":"..."}`, newest last, only when it has any (a
+  group with none reads as before). Each line also goes to the Output window. Words: `added: 1 eval account, X, on the
+  bench (rule)`, `removed: X (blown on The Desk) (rule)`, `X is passed (promoted) on The Desk: it leaves Evals once flat
+  (...)`, `no group has Type eval: X is not added (make exactly one eval lane)`, `X is not added: The Desk has no rules
+  for its type yet`.
+- **The 17:00 ET reset keeps a lane's trader.** An agent whose account is a lane group stays on it through the reset
+  (Auto still ends with the trading day, as since 0.6.18), said once: "Daily reset (17:00 ET): agent X stays on its
+  lane, ... (a lane keeps its trader; Auto is off until you arm it)".
+- **`config.txt`**: `laneRule = off` stops the rule (default on). With no `deskUrl` it never asks.
+
+Checked in `check/AgentHarness.cs` (`PropAccounts`, the lane rule part) and `test/nt8-agents.test.js`.
+
+### The day's loss stop (0.6.22)
+
+Build answers 31 (Anthony 2026-11-12: "not rigid ... can change per playbook"): the mirror of the day's profit stop
+(0.6.19), on the loss side. Built in `ChartBridgeAgents.cs` only.
+
+- **`dayLossDollars`** on a `plan` (optional): dollars above 0, at most 1,000,000, at most 2 decimals ("dayLossDollars must
+  be dollars above 0, ..." otherwise). The runner's playbook sends it; nobody types it, and ChartBridge has no default.
+  A **placed** plan's value becomes the session's value for that trader; a placed plan without the key clears it. A plan
+  only logged, proposed or refused changes nothing.
+- **The day's number** is the loss side, `pnlToday` (ChartBridge's smaller realized figure plus open). Not known: no
+  check, said once a session.
+- **Reached** (the day at or below minus the mark): the account is latched for the session (every trader on it is
+  refused new entries there until 18:00 ET); where this trader holds a position or a working entry there, its own flatten
+  (its own orders only) and its stand-down until the roll.
+- **At the plan check** (9c, after the profit stop's 9b): a plan is refused on an account latched this session, or whose
+  day is already at or below minus the smaller of the session's mark and the plan's own.
+- `agentState` and the strip carry `dayLoss` only when set. The day file keeps `#dayloss` and `#daylossreached` lines
+  (comments to an older ChartBridge). Cleared at the 18:00 ET roll.
+- The account's own daily loss limit (its group rules, My daily) stays as it is, beside it.
+
+Checked in `check/AgentHarness.cs` (`DayLoss`) and `test/nt8-agents.test.js`.
+
+### The voice calls (0.6.22)
+
+Build answers 30 (Anthony 2026-11-12): ChartBridge says its own fills and break even in the voice set he picked, because
+NinjaTrader says only "Order filled" for ChartBridge's legs. **Listen and play only**: nothing here places, moves or
+cancels an order. The order path gains three lines, each one call that returns at once (`test/nt8-record.test.js`
+lists them word for word).
+
+- **Calls**, each a `.wav` file of that name in the folder: an entry fill `LongFilled` / `ShortFilled`; ChartBridge's
+  stop leg `StopFilled`; its target leg `TargetFilled`, or `TargetOneFilled` / `TargetTwoFilled` for a strategy's first
+  and second target; ChartBridge's market exit, an agent's flatten, or NinjaTrader's close after ChartBridge's Flatten
+  `PositionClosed`; ChartBridge's stop moved to its fill price `BreakEvenSet`.
+- **One call per decision**: a group entry copied to several accounts (one decision id) speaks once.
+- **Never waits**: a queue of at most 8 calls (full: the call is dropped) and one background thread plays them, each with a
+  5 s limit (a stuck player: that call is dropped). A missing folder or file is said once in the Output window and that
+  call is silent.
+- **`config.txt`**: `voice = on` turns it on (**off by default**: a recompile alone changes nothing Anthony hears);
+  `voiceFolder` names the folder (default `Documents\NinjaTrader 8\sounds_voice4`).
+
+Checked in `check/AgentHarness.cs` (`Voice`) and `test/nt8-record.test.js`.
 
 ### The pick, and the day's profit side in accountState (0.6.21)
 

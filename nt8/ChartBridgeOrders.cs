@@ -935,6 +935,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             // it when it moves; a move is never refused for its bracket.
             if (kind == "limit") o.LimitPriceChanged = price; else o.StopPriceChanged = price;
             o.Account.Change(new[] { o });
+            if (kind == "stop") ChartBridgeVoice.OnStopMoved(o, price);   // 0.6.22: listen only (to its fill price: Break even set)
             ChartBridgeServer.Log("order moved: " + (o.Name ?? "") + " to " + CbJson.Num(price) + " on " + o.Account.Name);
             return null;
         }
@@ -1074,6 +1075,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             NoteWeCancelSafe(() => WorkingLegs(account, inst), "flatten");   // the flatten cancels these pairs: not a stop lost with its target
             // 0.4.0 fix1 (F1): a Merge swap on this account and root ends only here, once Flatten passed its gates, in one step with
             // the flatten call (MergeFlattenSend); a refused Flatten leaves the swap to go on or restore as before.
+            ChartBridgeVoice.NoteFlatten(account, inst);   // 0.6.22: listen only (its close says Position closed)
             MergeFlattenSend(account, inst, () => account.Flatten(new[] { inst }));   // cancels working orders for the instrument, then closes the position
             ChartBridgeServer.Log("flatten sent: " + root + " on " + account.Name);
             return null;
