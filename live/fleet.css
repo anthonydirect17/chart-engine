@@ -45,6 +45,7 @@ body.fl-on .fl-wrap { padding-bottom: 120px; }
 .fl-trader[data-tone="killed"], .fl-trader[data-tone="standDown"] { border-color: var(--ws-warn); }
 .fl-trow { display: flex; align-items: baseline; gap: 8px; min-width: 0; flex-wrap: wrap; }
 .fl-tname { font-weight: 600; font-size: 13px; }
+.fl-built { display: block; color: var(--ws-muted); font-size: 11px; font-weight: 400; }   /* 1.54.0 (G): the built name, small beneath Anthony's name */
 .fl-mut { color: var(--ws-muted); font-size: 11px; }
 .fl-k { flex: none; width: 62px; color: var(--ws-muted); font-size: 11px; }
 .fl-v { min-width: 0; flex: 1 1 0; overflow-wrap: anywhere; }
@@ -183,3 +184,12 @@ body.fl-on .fl-wrap { padding-bottom: 120px; }
 /* 1.53.0 (Anthony 2026-11-13): what a lane trades, in big plain words: SIM, PROP or PROP + SIM */
 .fl-lanekind { font: 700 18px var(--ws-mono); letter-spacing: .08em; color: var(--ws-text); margin: 2px 0 4px; }
 .fl-lanekind[data-lanekind="sim"] { color: var(--ws-text2); }
+/* 1.54.0 (D, Legion simpler): a lane's status in a word or two, its "?", its accounts button and the lane rule's lines */
+.fl-word { font: 600 12px var(--ws-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--ws-text2); }
+.fl-word[data-word="trading"], .fl-word[data-word="intrade"] { color: var(--ws-gold-text, #E2C687); }
+.fl-word[data-word="notready"] { color: var(--ws-warn); }
+.fl-help { width: 24px; height: 24px; min-width: 24px; border-radius: 999px; border: 1px solid var(--ws-line); background: transparent; color: var(--ws-text2); font: 600 12px var(--ws-sans); cursor: pointer; padding: 0; }
+.fl-help[aria-expanded="true"] { border-color: var(--ws-gold, #C9A55C); color: var(--ws-gold-text, #E2C687); }
+.fl-lanehelp { display: flex; flex-direction: column; gap: 4px; border-top: 1px solid var(--ws-line); padding-top: 8px; }
+.fl-lanehelp[hidden], .fl-lanepanels[hidden] { display: none; }
+.fl-lanelog { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; font-size: 11px; color: var(--ws-text2); }

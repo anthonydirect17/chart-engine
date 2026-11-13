@@ -348,6 +348,7 @@ function page(t, over, opt) {
   new Function('window', 'document', 'self', read('live', 'fleet.js'))(win, win.document, win);
   const P = { T: 1_800_000_000_000, posts: [], asks: [], answers: [], subs: null, view, tab, part: k => view.querySelector('[data-k="' + k + '"]') };
   const V3 = { listen: h => { P.subs = h; return () => {}; }, post: m => { P.posts.push(m); return P.postOk !== false; } };
+  P.listeners = listeners;
   P.key = key => listeners.keydown({ key, preventDefault() {} });
   P.fv = win.FleetView.create(Object.assign({ view, tab, v3: V3, settleMs: 0, realClick: require('../live/order-ticket.js').realClick, now: () => P.T, fetch: (u, o) => { P.asks.push([u, o]); return new Promise((res, rej) => P.answers.push({ res, rej })); } }, over || {}));
   P.feed = m => P.subs.message(m);
@@ -537,7 +538,7 @@ test('the roster is asked for when the tab opens, on a hello while it is open an
   for (let i = 0; i < 40; i++) { P.feed(agent('germanicus', { owns: i % 2 === 0 })); P.feed(Object.assign({}, accounts, { n: i })); P.feed(groups); P.feed({ type: 'status', level: 'info', text: 's' + i }); P.feed({ type: 'trading', enabled: true }); }
   P.T += 120_000; t.mock.timers.tick(120_000);
   assert.deepStrictEqual([P.asks.length, P.fv.state().draws.roster], [2, drawn], 'no polling, and a trader\'s message never redraws the roster');
-  assert.ok(P.fv.state().draws.traders >= 1, 'the other connections are drawn (folded: their count only)');
+  assert.ok(!P.view.innerHTML.includes('data-k="traders"') && !P.view.innerHTML.includes('Other connections'), '1.54.0 (D): Other connections left Legion (the Colosseum and Praetorian show those traders)');
   // a lost connection forgets the roster; the hello after it asks again
   P.subs.closed();
   assert.deepStrictEqual([P.fv.state().roster.state, P.fv.state().roster.bots], ['idle', []]);
@@ -598,7 +599,7 @@ test('what the tab draws: one line a card with its detail behind Details; its bu
   // Kill all with its Yes and Cancel, the Armed switch with its Yes and Cancel, one pick list a lane that has a trader, Read
   // again and a Details on each card: nothing else can be pressed, typed in or switched
   const pressable = html.match(/<(button|input|select|textarea|a|details|summary)\b[^>]*>/g) || [];
-  assert.deepStrictEqual(pressable.map(x => (/data-do="([a-z]+)"/.exec(x) || [])[1]).sort(), ['arm', 'armno', 'armyes', 'ask', 'desk', 'fam', 'fam', 'filter', 'filter', 'filter', 'filter', 'find', 'more', 'more', 'no', 'others', 'pick', 'roster', 'sub', 'sub', 'yes'], pressable.join(' '));
+  assert.deepStrictEqual(pressable.map(x => (/data-do="([a-z]+)"/.exec(x) || [])[1]).sort(), ['arm', 'armno', 'armyes', 'ask', 'desk', 'fam', 'fam', 'filter', 'filter', 'filter', 'filter', 'find', 'laneaccts', 'lanehelp', 'lanehelp', 'more', 'more', 'no', 'pick', 'roster', 'sub', 'sub', 'yes'], pressable.join(' '));
   assert.ok(pressable.every(x => x.startsWith('<button type="button"') || x.startsWith('<select class="fl-pick"') || x.startsWith('<input type="text" class="ws-in" data-do="find"')));
   assert.strictEqual((html.match(/role="switch"/g) || []).length, 1, 'one Armed switch, for both lanes');
   assert.ok(!/contenteditable|tabindex|onclick|role="(checkbox|slider)"|draggable/i.test(html));
@@ -783,7 +784,7 @@ test('lanes: a lane is the trader on a group of that Type; each reason a lane ca
   assert.strictEqual(why({ connected: false }).armable, true, 'a runner that is not connected does not hold the switch: ChartBridge holds the mode');
   // no trader on a group of that Type, two of them, a trader on one account, a group with no Type: no lane
   [ev, fu] = F.lanes([agent('solo', { account: 'EVAL-A' }), agent('g3er', { account: null, group: { id: 'g3', name: 'New' }, seats: [{ account: 'NOTYPE-1' }] })], groups, accounts, V, cards);
-  assert.match(ev.why, /^No trader is on a group of Type eval\. ChartBridge's 17:00 reset puts a flat trader on None each trading day, so give the trader its group again in Legion's Traders section below each day \(a group with Type eval: New group on the Multi-Account panel\)\.$/, 'FIX 4: the daily step said as it is, where it is done now (HOME 2026-11-12)'); assert.match(fu.why, /^No trader is on a group of Type funded/);
+  assert.match(ev.why, /^No trader is on a group of Type eval\. Give a trader the group in Legion's Traders section below \(a group with Type eval: New group on the Multi-Account panel\)\. From ChartBridge 0\.6\.22 a lane keeps its trader through the 17:00 reset; an older one puts a flat trader on None each trading day\.$/, 'FIX 4, and 1.54.0: the step said as it is now (0.6.22 keeps a lane\'s trader)'); assert.match(fu.why, /^No trader is on a group of Type funded/);
   assert.deepStrictEqual([ev.id, ev.armable, ev.traders], ['', false, []]);
   [ev] = F.lanes([evalTrader(), agent('twin', { mode: 'auto', account: null, group: { id: 'g1', name: 'Evals' }, seats: [] })], groups, accounts, V, cards);
   assert.match(ev.why, /^2 traders are on eval groups \(legion1, twin\): Legion runs one lane a stage/);
@@ -968,6 +969,53 @@ test('a lane card says which files are not offered and why: a sweep build waits 
   assert.match(P.part('lane-eval').innerHTML, /<div class="fl-lanekind" data-lanekind="prop">PROP<\/div>/, '1.53.0: the lane says what it trades in plain words');
 });
 
+test('1.54.0 (G): Anthony\'s name for a bot (display_name) shows on the lane, in the pick list and on the roster, the built name small beneath; a bad one or one on a lineup is not shown, with why', async t => {
+  const got = F.rosterCards({ left: 0, files: [served('owl.json', botFile('owl_r75_v1', { display_name: 'Night Owl' })), served('plain.json', botFile('plain')),
+    served('bad.json', botFile('bad', { display_name: 'Night  Owl' })), served('bad2.json', botFile('bad2', { display_name: '<b>x</b>' })), served('bad3.json', botFile('bad3', { display_name: 7 })),
+    served('bad4.json', botFile('bad4', { display_name: 'x'.repeat(41) })), served('ln.json', lineupFile('ln', [member('a'), member('b')], { display_name: 'Team' }))] });
+  assert.deepStrictEqual(got.bots.map(c => [c.name, c.displayName]), [['owl_r75_v1', 'Night Owl'], ['plain', undefined]]);
+  assert.deepStrictEqual(got.notShown.map(x => x.name).sort(), ['bad.json', 'bad2.json', 'bad3.json', 'bad4.json', 'ln.json']);
+  assert.ok(got.notShown.filter(x => x.name !== 'ln.json').every(x => x.why === 'its display_name is not plain words, 40 at most'));
+  assert.strictEqual(got.notShown.find(x => x.name === 'ln.json').why, "a lineup file carries no display_name (only a bot's own file does)");
+  assert.deepStrictEqual(F.pickChoices(got).map(c => c.text), ['Night Owl (owl_r75_v1)', 'plain'], 'the pick list: his name, the built name beside it');
+  assert.deepStrictEqual([F.shownName(got.bots[0]), F.shownName(got.bots[1])], ['Night Owl', 'plain']);
+  for (const ok of ['Night Owl', "O'Neil 2", 'a.b_c-d', 'x'.repeat(40)]) assert.ok(F.displayNameOk(ok), ok);
+  for (const bad of [' Owl', 'Owl ', 'Night  Owl', '', '-Owl', 'Owl!', null]) assert.ok(!F.displayNameOk(bad), String(bad));
+  const P = await lanePage(t, [evalTrader({ pick: 'owl.json' }), fundTrader()], [served('owl.json', botFile('owl_r75_v1', { display_name: 'Night Owl' }))]);
+  const html = P.part('lane-eval').innerHTML;
+  assert.match(html, /<span class="fl-tname">Night Owl<span class="fl-built">Owl r75 v1<\/span><\/span>/, 'the lane card: his name, the built name small beneath');
+  assert.match(html, /<option value="owl\.json" selected>Night Owl \(owl_r75_v1\)<\/option>/);
+  assert.match(P.part('roster').innerHTML, /<span class="fl-sname">Night Owl<span class="fl-built">Owl r75 v1<\/span> /, 'the roster row too');
+});
+
+test('1.54.0 (D): a lane card is the bot, its accounts (a click lists them), a word or two and the lane rule\'s last lines; the rest behind its "?"', async t => {
+  assert.deepStrictEqual([{}, { id: 'a' }, { id: 'a', pick: 'x.json', auto: true, exposed: true }, { id: 'a', pick: 'x.json', auto: true }, { id: 'a', pick: 'x.json', armable: true }, { id: 'a', pick: 'x.json' }].map(l => F.laneWord(l).text),
+    ['No trader', 'No bot', 'In a trade', 'Trading', 'Off', 'Not ready']);
+  const at = Date.UTC(2026, 10, 13, 15, 5);   // 10:05 New York
+  assert.strictEqual(F.hhmm(at), '10:05');
+  assert.deepStrictEqual(F.laneLogOf({ laneLog: [{ at, text: 'added: 1 eval account, EVAL-C, on the bench (rule)' }, { at: 'x', text: 'no' }, { at, text: '' }, null, { at, text: 7 }] }), [{ at, text: 'added: 1 eval account, EVAL-C, on the bench (rule)' }], 'a line not in the shape is left out');
+  assert.strictEqual(F.laneLogOf({ laneLog: Array.from({ length: 30 }, (_, i) => ({ at: at + i, text: 'line ' + i })) }).length, 20, 'at most 20');
+  assert.deepStrictEqual([F.laneLogOf(null), F.laneLogOf({})], [[], []]);
+  const P = await lanePage(t, [evalTrader(), fundTrader()]);
+  const log = Array.from({ length: 5 }, (_, i) => ({ at: at + i * 60000, text: 'added: 1 eval account, EVAL-' + i + ', on the bench (rule)' }));
+  P.feed({ type: 'groups', list: groups.list.map(g => (g.id === 'g1' ? Object.assign({}, g, { laneLog: log, benched: ['EVAL-B'] }) : g)) });
+  await P.tick();
+  let html = P.part('lane-eval').innerHTML;
+  assert.match(html, /<span class="fl-word" data-word="off">Off<\/span><button type="button" class="fl-help" data-do="lanehelp" data-stage="eval" aria-expanded="false"/, 'a word, then the ?');
+  assert.match(html, /<button type="button" class="fl-pill fl-acctbtn" data-do="laneaccts" data-stage="eval" aria-expanded="false">2 accounts \(1 on the bench\)<\/button>/);
+  assert.match(html, /<div class="fl-lanepanels" data-panel="eval" hidden>/, 'the accounts list is folded');
+  assert.match(html, /<ul class="fl-lanelog" aria-label="What the lane rule did"><li><span class="mono fl-mut">10:09<\/span> added: 1 eval account, EVAL-4, on the bench \(rule\)<\/li><li><span class="mono fl-mut">10:08<\/span>[^]*?10:07[^]*?<\/ul>/, 'the last three, newest first');
+  assert.match(html, /<div class="fl-lanehelp" hidden>[^]*fl-lanelogold[^]*EVAL-1[^]*EVAL-0[^]*A lane is a trader whose account is a group/, 'the earlier lines and the explanation behind the ?');
+  P.listeners.click({ target: { closest: () => ({ dataset: { do: 'lanehelp', stage: 'eval' } }) }, detail: 1 });
+  P.listeners.click({ target: { closest: () => ({ dataset: { do: 'laneaccts', stage: 'eval' } }) }, detail: 1 });
+  html = P.part('lane-eval').innerHTML;
+  assert.match(html, /<div class="fl-lanehelp">/); assert.match(html, /<div class="fl-lanepanels" data-panel="eval">/);
+  assert.match(html, /data-do="lanehelp" data-stage="eval" aria-expanded="true"/);
+  assert.match(P.part('lane-funded').innerHTML, /<div class="fl-lanehelp" hidden>/, 'the other lane stays as it was');
+  P.listeners.click({ target: { closest: () => ({ dataset: { do: 'lanehelp', stage: 'nope' } }) }, detail: 1 });
+  assert.strictEqual(P.posts.length, 0, 'display only: nothing is sent');
+});
+
 test('the pick: one list a lane, sent as agentPick; locked in Auto and while the trader holds something; a refusal is said and the list goes back', async t => {
   const P = await lanePage(t, [evalTrader(), fundTrader()]);
   const lanesHtml = () => P.part('lane-eval').innerHTML + P.part('lane-funded').innerHTML;
@@ -976,7 +1024,7 @@ test('the pick: one list a lane, sent as agentPick; locked in Auto and while the
   assert.match(html, /<select class="fl-pick" id="flPick-funded" data-do="pick" data-agent="legion2"><option value="" selected>None<\/option>/);
   assert.match(html, /data-stage="eval" data-armable="true"/); assert.match(html, /data-stage="funded" data-armable="false"/);
   assert.doesNotMatch(html, /fl-waiting/, 'every file runs live: no "not offered" line');
-  assert.match(html, /<div class="fl-lanepanels" data-panel="eval">/, 'the lane keeps a place for its own Multi-Account panel (mounted by the page)');
+  assert.match(html, /<div class="fl-lanepanels" data-panel="eval" hidden>/, 'the lane keeps a place for its own Multi-Account panel (mounted by the page)');
   P.change('legion2', 'gone.json');
   assert.deepStrictEqual(P.posts, [], 'a file the list does not offer is not sent (the review of 94, note 7)');
   P.change('legion2', 'duo.json');
