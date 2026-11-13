@@ -24,16 +24,11 @@ body:not(.lg-on) .lg-view.lg-in-ws { display: none !important; }
 .lg-fill { flex: 1 1 auto; }
 /* a past day (?tab=league&day=YYYY-MM-DD): the same dashed tint label as SHADOW, and the way back */
 .lg-past { font: 600 11px var(--ws-mono); letter-spacing: .04em; color: var(--ws-soft); border: 1px dashed var(--ws-tint-line); border-radius: 6px; padding: 2px 8px; white-space: nowrap; }
-.lg-cpast { font-size: 11px; color: var(--ws-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .lg-when { font: 11px var(--ws-mono); color: var(--ws-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .lg-problem { margin: 0; font-size: 12px; color: var(--ws-warn); }
-.lg-main { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 420px; gap: 8px; }
-.lg-chartbox { min-width: 0; min-height: 0; display: flex; flex-direction: column; border: 1px solid var(--ws-line); border-radius: 8px; background: var(--ws-panel); }
-.lg-charthead { display: flex; align-items: center; gap: 8px; padding: 4px 8px; border-bottom: 1px solid var(--ws-line); font-size: 12px; min-width: 0; }
-.lg-cname { font: 600 12px var(--ws-sans); white-space: nowrap; }
-.lg-cnote { font-size: 11px; color: var(--ws-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-.lg-chart { flex: 1 1 auto; min-height: 0; position: relative; }
-.lg-side { min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 8px; overflow: auto; }
+/* 1.57.0 (Anthony 2026-11-13: no league chart): the watch, the seats and the decision log side by side, one column when narrow */
+.lg-main { flex: 1 1 auto; min-height: 0; min-width: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 8px; align-items: start; overflow: auto; }
+.lg-seatbox, .lg-logbox { min-width: 0; display: flex; flex-direction: column; gap: 8px; }
 /* 1.50.0: the watch: ChartBridge's traders in Shadow, read only, in the chosen look's raised box (the radius and shadow tokens
    are builder 1's, used with their fallbacks) */
 .lg-watch { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; background: var(--ws-row); border: 1px solid var(--ws-line2); border-radius: var(--ws-box-radius, 18px); box-shadow: var(--ws-box-shadow, 0 16px 36px rgba(0, 0, 0, .6), inset 0 1px 0 rgba(255, 255, 255, .035)); }
@@ -60,8 +55,23 @@ body:not(.lg-on) .lg-view.lg-in-ws { display: none !important; }
 .lg-row .lg-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--ws-text2); }
 .lg-row.k-enter .lg-text, .lg-row.k-rest .lg-text { color: var(--ws-text); }
 .lg-row.k-refused .lg-text, .lg-row.k-failed .lg-text { color: var(--ws-warn); }
-@media (max-width: 1100px) { .lg-main { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(320px, 1fr) auto; } }
 
 /* the Bot's button in the top bar's slot (1.35.0; 1.36.0 removed the Bot panel) */
 .ws-tabslot { display: inline-flex; gap: 6px; flex: none; }
 .ws-tabslot:empty { display: none; }
+/* 1.57.0: the leaderboard (part F): bots and agents mingled, told apart by the BOT and AGENT tags of the other pages */
+.lg-board { border: 1px solid var(--ws-line); border-radius: 10px; padding: 10px 12px; margin: 8px 0; display: flex; flex-direction: column; gap: 6px; }
+.lg-bhead { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.lg-bscroll { overflow-x: auto; }
+.lg-btable { width: 100%; border-collapse: collapse; font-size: 12px; }
+.lg-btable th { text-align: left; font-weight: 500; color: var(--ws-muted); padding: 3px 6px; border-bottom: 1px solid var(--ws-line); white-space: nowrap; }
+.lg-btable td { padding: 4px 6px; border-bottom: 1px solid var(--ws-line); color: var(--ws-text2); vertical-align: top; }
+.lg-bname { background: none; border: 0; padding: 0; color: var(--ws-text); font: 600 12px var(--ws-sans); cursor: pointer; text-align: left; }
+.lg-bname[aria-expanded="true"] { color: var(--ws-gold-text, #E2C687); }
+.lg-who { font: 500 10px var(--ws-mono); letter-spacing: .08em; border: 1px solid var(--ws-line2); border-radius: 4px; padding: 1px 6px; color: var(--ws-text2); }
+.lg-who[data-who="agent"] { color: #7FD3E0; border-color: rgba(95, 201, 216, .6); background: #0C1517; }
+.lg-r { font-family: var(--ws-mono); }
+.lg-btrades { margin: 0; padding-left: 16px; font-size: 11px; }
+.lg-blog summary { cursor: pointer; color: var(--ws-text2); font-size: 11px; }
+.lg-blog ol { margin: 4px 0; padding-left: 18px; font-size: 11px; }
+.lg-bnote { font-size: 11px; margin: 0; }

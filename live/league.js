@@ -38,6 +38,11 @@
  * the page already knows, ChartBridge's own traders that are in Shadow now, said as that, and "not built yet" for the rest.
  * Its connection (o.watch) has one key, listen: nothing on this tab can send a message to ChartBridge, by how it is built.
  *
+ * No chart on the Colosseum (chart 1.57.0; Anthony 2026-11-13, asked whether the league's chart stays beside the leaderboard: "I
+ * dont think its necessary"). The tab is the leaderboard, the watch, the seats' day, the week and month table and the decision
+ * log. The league's marks (LeagueOverlay, below) still go on any NQ or MNQ chart through its ⋯ switch, faint, as before; the
+ * chart part of the view text above is history.
+ *
  * Two parts, as workspace.js: LeagueCore (pure: Node tests, test/league.test.js) and, in a browser, LeagueOverlay (the marks
  * over a chart) and LeagueView (the tab).
  */
@@ -248,17 +253,6 @@ function emptyText(date) {
   return 'No league record for ' + date + ': no paper trade and no decision. Not enough data to show that day.';
 }
 
-/** Whether the chart holds the session `date` (18:00 New York of the day before to 17:00 of the day; bars oldest first, chart
-    seconds): 'none' (no bars yet), 'before' (the history starts after that session), 'missing' (the history spans it but holds
-    no bar of it), 'in' (a bar of that session is there), with the session of the history's first bar. */
-function chartReach(bars, date) {
-  const m = DATE_RE.exec(date || '');
-  if (!m || !bars || !bars.length) return { reach: 'none', first: '' };
-  const day = Date.UTC(+m[1], +m[2] - 1, +m[3]) / 1000, start = day - 6 * 3600, end = day + 17 * 3600, first = sessionOfBar(bars[0].t);
-  if (bars[0].t >= end) return { reach: 'before', first };
-  const i = barIndex(bars, start - 1e-6) + 1;               // the first bar at or after the session's open
-  return { reach: i < bars.length && bars[i].t < end ? 'in' : 'missing', first };
-}
 
 /**
  * The Colosseum's watch box (1.50.0): the traders in Shadow now, from the rows FleetCore.traders makes of ChartBridge's own
@@ -277,6 +271,82 @@ function watchRows(traders) {
 }
 const WATCH_LATER = 'Which bots the loop is watching, why, and their score against the bar: not built yet (the loop\'s step 3, the watch of station 5).';
 
+/* ---------------------------------------------------------------- the leaderboard (chart 1.57.0, part F; Anthony 2026-11-13)
+ * One ranked table of every bot and agent, mingled ("so we see what performs better each day"), told apart by the BOT and AGENT
+ * tags the other pages use. No chart. The rows come from The Desk's GET /api/chart-colosseum (every program that posted a
+ * trading day lately: R per day) and the league's seats from GET /api/chart-league (R per trade, as the league keeps it). The
+ * two measures are never added together: on Multi-day the seats rank after the Desk's rows and show their own numbers. */
+const MODE_WORD = { shadow: 'Shadow', copilot: 'Copilot', auto: 'Auto', sim: 'Sim' };
+const BOARD_EARLY = 5;          // fewer days than this: "too early" instead of a word (Anthony 2026-11-13)
+const r2 = v => Math.round(v * 10000) / 10000;
+/** The Desk's GET /api/chart-colosseum, cleaned: { ok, why, today, programs: [...] }. Never throws; a program not in the shape is left out. */
+function cleanBoard(j) {
+  const out = { ok: false, why: '', today: '', programs: [] };
+  if (!j || typeof j !== 'object' || j.v !== 1 || !Array.isArray(j.programs)) { out.why = 'The Desk\'s leaderboard answer is not one the page reads.'; return out; }
+  out.ok = true; out.today = DATE_RE.test(j.today || '') ? j.today : '';
+  for (const p of j.programs.slice(0, 200)) {
+    if (!p || typeof p !== 'object' || typeof p.id !== 'string' || !p.id || (p.kind !== 'bot' && p.kind !== 'agent') || !Array.isArray(p.days)) continue;
+    const days = p.days.filter(d => d && DATE_RE.test(d.date || '') && isNum(d.r) && isNum(d.trades) && d.trades >= 0).slice(0, 20)
+      .map(d => ({ date: d.date, r: d.r, trades: d.trades, pnl: isNum(d.pnl) ? d.pnl : null, mode: MODE_WORD[d.mode] ? d.mode : '', spent: isNum(d.spent_usd) ? d.spent_usd : null, paper: d.paper === true }));
+    const today = (Array.isArray(p.today) ? p.today : []).filter(t => t && typeof t === 'object').slice(0, 200).map(t => ({
+      n: isNum(t.n) ? t.n : null, setup: str(t.setup, 80), side: str(t.side, 8), root: str(t.root, 8), qty: isNum(t.qty) ? t.qty : null,
+      entry: str(t.entry_time, 8), exit: str(t.exit_time, 8), why: str(t.exit_reason, 40), r: isNum(t.r) ? t.r : null, pnl: isNum(t.pnl) ? t.pnl : null }));
+    out.programs.push({ id: str(p.id, 64), kind: p.kind, source: p.source === 'bots' ? 'bots' : 'agents', build: str(p.build, 60), mode: MODE_WORD[p.mode] ? p.mode : '',
+      lastDay: DATE_RE.test(p.last_day || '') ? p.last_day : '', days, today, diary: str(p.diary, 1000) });
+  }
+  return out;
+}
+/** The pace word (Anthony 2026-11-13: "are they on track, beating or lagging?"): fewer than 5 days "too early"; a bot's backtest
+    pace is not on the roster card yet ("no backtest pace yet", builder 1's fields to come); an agent has none ("no backtest"). */
+function paceWord(kind, days) {
+  if (days < BOARD_EARLY) return 'too early';
+  return kind === 'bot' ? 'no backtest pace yet' : 'no backtest';
+}
+/**
+ * The leaderboard's rows. board: cleanBoard()'s result (or null); day: the league's cleaned day (or null); today: New York's session
+ * date. -> [{ key, name, kind, source, status, todayN, todayR, r5, r20, n5, n20, comparable, pace, cost, decision, trades, log }]
+ */
+function boardRows(board, day, today) {
+  const out = [];
+  for (const p of board && board.ok ? board.programs : []) {
+    const d0 = p.days[0] && p.days[0].date === today ? p.days[0] : null;
+    const take = n => p.days.slice(0, n);
+    const sum = ds => r2(ds.reduce((a, d) => a + d.r, 0));
+    const month = today.slice(0, 7), mDays = p.days.filter(d => d.date.slice(0, 7) === month);
+    const spentToday = d0 ? d0.spent : null, spentMonth = mDays.some(d => d.spent !== null) ? r2(mDays.reduce((a, d) => a + (d.spent || 0), 0)) : null;
+    const mTrades = mDays.reduce((a, d) => a + d.trades, 0);
+    out.push({ key: 'desk:' + p.id, name: p.id, kind: p.kind, source: 'desk',
+      status: (MODE_WORD[p.mode] || 'mode not said') + (d0 ? (d0.paper ? ', paper' : '') + ', reported today' : p.lastDay ? ', last day ' + p.lastDay : ''),
+      todayN: d0 ? d0.trades : 0, todayR: d0 ? d0.r : null,
+      r5: p.days.length ? sum(take(5)) : null, n5: Math.min(5, p.days.length), r20: p.days.length ? sum(take(20)) : null, n20: p.days.length, comparable: true,
+      pace: paceWord(p.kind, p.days.length),
+      cost: p.kind === 'agent' ? { today: spentToday, month: spentMonth, perTrade: spentMonth !== null && mTrades > 0 ? r2(spentMonth / mTrades) : null } : null,
+      decision: p.kind === 'agent' ? 'not reported' : '', trades: d0 ? p.today : [], log: p.diary ? [{ time: '', text: p.diary }] : [] });
+  }
+  if (day && !day.past) {
+    const st = standingRows(day.league), sd = seatDays(day), rows = decisionRows(day.decisions, 200);
+    const same = day.date === today;                      // the league's day is today's session: its results are today's, else none are
+    for (const s of SEATS) {
+      const x = sd.find(y => y.seat === s.id), r = st.find(y => y.seat === s.id);
+      out.push({ key: 'league:' + s.id, name: s.family + ' seat (' + s.id + ')', kind: 'agent', source: 'league',
+        status: 'Shadow league, ' + (!same ? 'its last session ' + (day.date || 'not known') : x ? x.line : 'not reported'),
+        todayN: same && x ? x.n : 0, todayR: same && x ? x.todayR : null, r5: null, r20: null, n5: 0, n20: 0, comparable: false, week: r ? r.week : '', month: r ? r.month : '',
+        pace: 'no backtest', cost: { league: true }, decision: r ? r.latency : 'not reported',
+        trades: (same ? day.trades : []).filter(t => t.seat === s.id).map(t => ({ n: null, setup: '', side: t.side, root: 'MNQ', qty: t.contracts, entry: '', exit: '', why: t.exitReason, r: t.r, pnl: null })),
+        log: same ? rows.filter(y => y.seat === s.id).map(y => ({ time: y.time, text: y.text })) : [] });
+    }
+  }
+  return out;
+}
+/** Ranked: Today by today's R (none last); Multi-day by the last 20 days' R, the league's seats (R per trade, not comparable) after. */
+function rankBoard(rows, view) {
+  const by = (a, b, f) => { const x = f(a), y = f(b); if (x === null && y === null) return 0; if (x === null) return 1; if (y === null) return -1; return y - x; };
+  const name = (a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+  return rows.slice().sort(view === 'multi'
+    ? (a, b) => (a.comparable !== b.comparable ? (a.comparable ? -1 : 1) : by(a, b, x => x.r20) || name(a, b))
+    : (a, b) => by(a, b, x => x.todayR) || name(a, b));
+}
+
 /** The charts whose switch is on, from this browser's copy (never throws). */
 function cleanGhosts(raw) {
   let v = raw;
@@ -286,7 +356,7 @@ function cleanGhosts(raw) {
   return out;
 }
 
-return { SHADOW, SEATS, SEAT, ROOTS, GHOST_KEY, watchRows, WATCH_LATER, sessionToday, sessionOfBar, checkDay, pastEmpty, emptyText, chartReach, cleanDay, cleanTrade, marksFor, barIndex, decisionRows, seatDays, standingRows, spendText, cleanGhosts };
+return { cleanBoard, paceWord, boardRows, rankBoard, BOARD_EARLY, SHADOW, SEATS, SEAT, ROOTS, GHOST_KEY, watchRows, WATCH_LATER, sessionToday, sessionOfBar, checkDay, pastEmpty, emptyText, cleanDay, cleanTrade, marksFor, barIndex, decisionRows, seatDays, standingRows, spendText, cleanGhosts };
 });
 
 /* ======================================================================== the overlay and the view (browser only) */
@@ -374,8 +444,9 @@ function attach(pane, host, get, root, faint) {
  */
 function create(o) {
   const view = o.view, tabBtn = o.tab;
-  const S = { shown: false, day: null, raw: null, problem: 'Not read yet.', reach: '', at: 0, timer: 0, chart: null, overlay: null, root: 'NQ', busy: false,
-    past: null, dayProblem: '', seq: 0 };   // past: the past session date shown (read only), or null (the live day); dayProblem: a link's bad day, said   // 1.38.1: NQ 1 min (Anthony 2026-10-23), the league trades MNQ
+  const S = { shown: false, day: null, raw: null, problem: 'Not read yet.', reach: '', at: 0, timer: 0, root: 'NQ', busy: false,
+    past: null, dayProblem: '', seq: 0,
+    board: null, boardWhy: 'Not read yet.', boardView: 'today', boardOpen: new Set(), boardBusy: false };   // 1.57.0: the leaderboard   // past: the past session date shown (read only), or null (the live day); dayProblem: a link's bad day, said   // 1.38.1: NQ 1 min (Anthony 2026-10-23), the league trades MNQ
   const q = s => view.querySelector(s);
   /* the watch (1.50.0): ChartBridge's own messages, read only. W is forgotten when the connection drops */
   const W = { connected: false, version: '', agents: new Map(), accounts: null };
@@ -389,22 +460,38 @@ function create(o) {
         '<span class="lg-past" data-k="past" hidden></span><button type="button" class="ws-btn lg-today" data-k="today" hidden>Back to today</button>' +
         '<span class="lg-fill"></span><span class="lg-when" data-k="when" role="status"></span>' +
       '</header>' +
+      '<section class="lg-board" aria-label="Leaderboard"><div class="lg-bhead"><span class="lg-title">Leaderboard</span>' +
+        '<span class="lg-mut">Every bot and agent that traded lately, ranked. <span class="lg-who" data-who="bot">BOT</span> fixed rules, <span class="lg-who" data-who="agent">AGENT</span> an AI trader.</span><span class="lg-fill"></span>' +
+        '<span class="ws-seg lg-bview" role="group" aria-label="Rank by"><button type="button" data-do="bview" data-view="today" aria-pressed="true">Today</button><button type="button" data-do="bview" data-view="multi" aria-pressed="false">Multi-day</button></span></div>' +
+        '<p class="lg-mut lg-bsaid" data-k="bsaid" role="status"></p>' +
+        '<div class="lg-bscroll"><table class="lg-btable"><thead><tr><th>#</th><th>Name</th><th>Status</th><th>Today</th><th>Last 5 days</th><th>Last 20 days</th><th>Projected</th><th>API cost</th><th>Decision time</th></tr></thead><tbody data-k="board"></tbody></table></div>' +
+        '<p class="lg-mut lg-bnote">R per day from The Desk\'s trading days; the league\'s seats keep R per trade (week and month means), shown as that and ranked after on Multi-day. Projected is each bot\'s backtest pace for its days: none is on the roster cards yet. Click a row for its trades of the day.</p></section>' +
       '<p class="lg-problem" data-k="problem" role="status" hidden></p>' +
-      '<div class="lg-main">' +
-        '<section class="lg-chartbox" aria-label="The league\'s chart"><div class="lg-charthead"><span class="lg-cname" data-k="cname" title="The seats trade MNQ: their marks are at their MNQ prices on the NQ candles (the same index)">NQ 1 min (league trades MNQ)</span><span class="lg-fill"></span><span class="lg-cpast" data-k="cpast" hidden></span><span class="lg-cnote">Hollow marks: paper trades only. Circle the fill, diamond the exit, dashed the stop, dotted the target.</span></div>' +
-          '<div class="lg-chart" data-k="chart"></div></section>' +
-        '<aside class="lg-side" aria-label="The seats today and the watch">' +
-          '<section class="lg-watch" aria-label="The watch"><div class="lg-loghead">The watch: in Shadow on the agent channel now</div><div data-k="watch"></div><p class="lg-mut lg-later">' + esc(C.WATCH_LATER) + '</p></section>' +
+      /* 1.57.0 (Anthony 2026-11-13: the league's chart is not necessary): no chart; the watch, the seats and the log side by side */
+      '<div class="lg-main lg-side" aria-label="The seats today and the watch">' +
+        '<section class="lg-watch" aria-label="The watch"><div class="lg-loghead">The watch: in Shadow on the agent channel now</div><div data-k="watch"></div><p class="lg-mut lg-later">' + esc(C.WATCH_LATER) + '</p></section>' +
+        '<section class="lg-seatbox" aria-label="The seats">' +
           '<div class="lg-seats" data-k="seats"></div>' +
           '<div class="lg-spend" data-k="spend"></div>' +
           '<table class="lg-table" aria-label="Week and month"><thead><tr><th>Seat</th><th>Week</th><th>Month</th><th>With you</th><th>Decision time</th></tr></thead><tbody data-k="table"></tbody></table>' +
-          '<div class="lg-loghead">Decision log</div><ol class="lg-log" data-k="log"></ol>' +
-        '</aside>' +
+        '</section>' +
+        '<section class="lg-logbox" aria-label="Decision log"><div class="lg-loghead">Decision log</div><ol class="lg-log" data-k="log"></ol></section>' +
       '</div>' +
     '</div>';
 
+  /* 1.57.0: the leaderboard's read, beside the league's (its own error, never the league's); the live day only */
+  function pollBoard() {
+    if (S.boardBusy) return;
+    if (S.past) { S.board = null; S.boardWhy = 'The leaderboard shows the live day only.'; return; }
+    S.boardBusy = true;
+    Promise.resolve().then(() => o.deskBase()).then(url => o.fetch(url + '/api/chart-colosseum', { cache: 'no-store', mode: 'cors', credentials: 'omit' }))
+      .then(r => (r.ok ? r.json() : Promise.reject(new Error(r.status === 404 ? 'The Desk has no leaderboard yet (it needs The Desk of this release).' : 'The Desk answered ' + r.status + ' for the leaderboard.'))))
+      .then(j => { const b = C.cleanBoard(j); S.board = b.ok ? b : null; S.boardWhy = b.ok ? '' : b.why; }, e => { S.board = null; S.boardWhy = e && e.message && /^The Desk/.test(e.message) ? e.message : 'The Desk is not reachable for the leaderboard.'; })
+      .then(() => { S.boardBusy = false; if (S.shown) renderBoard(); });
+  }
   function poll() {
     clearTimeout(S.timer);
+    pollBoard();
     if (S.busy) return;
     S.busy = true;
     const seq = S.seq, past = S.past;                     // a read started for one day never lands on another (Back to today, a new link)
@@ -424,7 +511,7 @@ function create(o) {
         S.raw = j; S.day = d; S.problem = d.problem; S.reach = 'ok'; S.at = Date.now();
       },
         e => { if (seq !== S.seq) return; S.reach = 'down'; S.problem = (e && /answered 404/.test(e.message) ? 'The Desk has no league view yet (it needs The Desk of this release).' : 'The Desk is not reachable: ' + (e && e.message ? e.message : 'no answer')) + (S.day ? ' Showing what it last sent.' : ''); })
-      .then(() => { if (seq !== S.seq) return; S.busy = false; render(); if (S.overlay) S.overlay.redraw(); if (S.shown) S.timer = setTimeout(poll, 15000); });
+      .then(() => { if (seq !== S.seq) return; S.busy = false; render(); if (S.shown) S.timer = setTimeout(poll, 15000); });
   }
   /* the day shown: a past session date (read only) or null (the live day). A change drops what was read for the other day at once */
   function setPast(day) {
@@ -435,16 +522,6 @@ function create(o) {
     return true;
   }
   const today = () => (typeof o.today === 'function' ? o.today() : C.sessionToday());   // review LOW 1: the league's session date
-  function mountChart() {
-    if (S.chart || !window.ChartLive || !o.feed) return;
-    S.chart = window.ChartLive.mount(q('[data-k="chart"]'), { feed: o.feed, paneId: 'league', storagePrefix: o.storagePrefix || '', toolbar: false, compact: true,
-      view: { root: S.root, tf: 'm1' } });
-    S.overlay = attach(S.chart, q('[data-k="chart"]'), () => S.day, () => S.root, false);
-  }
-  function unmountChart() {
-    if (S.overlay) { S.overlay.destroy(); S.overlay = null; }
-    if (S.chart) { try { S.chart.destroy(); if (S.chart.indicators) S.chart.indicators.remove(); if (S.chart.chips) S.chart.chips.remove(); if (S.chart.badge) S.chart.badge.remove(); } catch (e) { /* gone */ } S.chart = null; }
-  }
   const setHtml = (el, html) => { if (el.dataset.html !== html) { el.dataset.html = html; el.innerHTML = html; } };
   function render() {
     const d = S.day, past = S.past;
@@ -458,17 +535,6 @@ function create(o) {
     const st = d && d.status;
     q('[data-k="when"]').textContent = past ? (d && d.day && d.day.closed ? 'day closed' : '') : d && d.date ? d.date + (st && st.now ? ' · ' + st.now + ' ET' : '') + (st && st.feed ? ' · feed ' + st.feed : '') + (d.day && d.day.closed ? ' · day closed, recording to 17:00' : '') : '';
     q('[data-k="when"]').title = !past && d && d.day && d.day.note ? d.day.note : '';
-    /* a past day on the chart: the chart is NQ 1 min with the load it already holds (5 days), so it says whether that reaches the day */
-    const cp = q('[data-k="cpast"]');
-    let cpText = '';
-    if (past) {
-      const r = C.chartReach(S.chart && S.chart.chart ? S.chart.chart.bars() : null, past);
-      cpText = r.reach === 'in' ? past + ' is in the chart\'s history: drag the chart back to it.' : r.reach === 'missing' ? 'The chart holds no bar of the ' + past + ' session: no marks drawn for it.' : r.reach === 'before' ? 'The chart\'s history starts ' + r.first + ', after ' + past + ': no marks drawn for that day.' : '';
-    }
-    cp.hidden = !cpText; cp.textContent = cpText;
-    /* the chart's bars come after the view opens: look again in a second until they have (no read of The Desk for it) */
-    clearTimeout(S.reachTimer);
-    if (past && !cpText && S.shown && S.chart) S.reachTimer = setTimeout(render, 1000);
     setHtml(q('[data-k="seats"]'), C.seatDays(d).map(s => '<div class="lg-seat" style="--seat:' + s.color + '" data-seat="' + s.seat + '"><i class="lg-letter" aria-hidden="true">' + s.seat + '</i>' +
       '<div class="lg-sbody"><div class="lg-sname">' + esc(s.family) + ' <span class="lg-mut">' + esc(s.line) + '</span></div>' +
       '<div class="lg-mut mono">' + (s.account ? esc(s.account) + ' · ' : '') + (s.n ? (past ? 'that day ' : 'today ') + esc((s.todayR >= 0 ? '+' : '') + s.todayR.toFixed(2)) + ' R (n ' + s.n + ')' : past ? 'no closed trade that day' : 'no closed trade today') +
@@ -481,7 +547,31 @@ function create(o) {
     setHtml(q('[data-k="table"]'), C.standingRows(d && d.league).map(r => '<tr><td><i class="lg-letter sm" style="--seat:' + r.color + '">' + r.seat + '</i></td><td>' + esc(r.week) + '</td><td>' + esc(r.month) + '</td><td>' + esc(r.agreement) + '</td><td>' + esc(r.latency) + '</td></tr>').join(''));
     const rows = C.decisionRows(d && d.decisions, 80);
     renderWatch();
+    renderBoard();
     setHtml(q('[data-k="log"]'), rows.length ? rows.map(r => '<li class="lg-row k-' + r.kind + '"><span class="mono">' + esc(r.time) + '</span><i class="lg-letter sm" style="--seat:' + C.SEAT[r.seat].color + '">' + r.seat + '</i><span class="lg-text" title="' + esc(r.text + (r.trigger ? ' (look: ' + r.trigger + ')' : '') + (r.latency !== null ? ', ' + r.latency + ' s' : '')) + '">' + esc(r.text) + '</span>' + (r.latency !== null ? '<span class="lg-mut mono">' + esc(r.latency) + ' s</span>' : '') + '</li>').join('') : (past ? '<li class="lg-mut">No decision that day.</li>' : '<li class="lg-mut">No decision yet today.</li>'));
+  }
+  function renderBoard() {
+    for (const b of view.querySelectorAll('[data-do="bview"]')) b.setAttribute('aria-pressed', String(b.dataset.view === S.boardView));
+    const rows = C.rankBoard(C.boardRows(S.board, S.past ? null : S.day, today()), S.boardView);
+    q('[data-k="bsaid"]').textContent = S.boardWhy || (S.board && !S.board.programs.length ? 'No bot or agent posted a trading day to The Desk lately.' : '');
+    const R = v => (v === null ? '<span class="lg-mut">none</span>' : '<span class="lg-r' + (v > 0 ? ' up' : v < 0 ? ' down' : '') + '">' + esc((v >= 0 ? '+' : '') + v.toFixed(2)) + ' R</span>');
+    const usd = v => (v === null || v === undefined ? 'not reported' : '$' + v.toFixed(2));
+    const cost = r => (!r.cost ? '' : r.cost.league ? 'the league\'s, below' : usd(r.cost.today) + ' today, ' + usd(r.cost.month) + ' month' + (r.cost.perTrade !== null ? ', ' + usd(r.cost.perTrade) + ' a trade' : ''));
+    const html = rows.map((r, i) => {
+      const open = S.boardOpen.has(r.key);
+      const multi5 = r.comparable ? R(r.r5) + (r.n5 ? ' <span class="lg-mut">(' + r.n5 + ' d)</span>' : '') : '<span class="lg-mut">week ' + esc(r.week) + '</span>';
+      const multi20 = r.comparable ? R(r.r20) + (r.n20 ? ' <span class="lg-mut">(' + r.n20 + ' d)</span>' : '') : '<span class="lg-mut">month ' + esc(r.month) + '</span>';
+      const row = '<tr class="lg-brow" data-key="' + esc(r.key) + '" data-kind="' + r.kind + '"><td class="mono">' + (i + 1) + '</td>' +
+        '<td><button type="button" class="lg-bname" data-do="brow" data-key="' + esc(r.key) + '" aria-expanded="' + open + '">' + esc(r.name) + '</button> <span class="lg-who" data-who="' + r.kind + '">' + (r.kind === 'bot' ? 'BOT' : 'AGENT') + '</span></td>' +
+        '<td>' + esc(r.status) + '</td><td>' + (r.todayN ? r.todayN + ' trade' + (r.todayN === 1 ? '' : 's') + ', ' : '') + R(r.todayR) + '</td><td>' + multi5 + '</td><td>' + multi20 + '</td>' +
+        '<td>' + esc(r.pace) + '</td><td>' + esc(cost(r)) + '</td><td>' + esc(r.decision) + '</td></tr>';
+      if (!open) return row;
+      const trades = r.trades.length ? '<ul class="lg-btrades">' + r.trades.map(t => '<li class="mono">' + esc([t.n !== null ? '#' + t.n : '', t.side, t.qty !== null ? t.qty + ' ' + t.root : t.root, t.entry && t.exit ? t.entry + ' to ' + t.exit : '', t.why, t.setup].filter(Boolean).join(' · ')) + ' ' + R(t.r) + '</li>').join('') + '</ul>'
+        : '<p class="lg-mut">No trade today.</p>';
+      const log = r.kind === 'agent' ? '<details class="lg-blog"><summary>Thoughts (' + r.log.length + ')</summary>' + (r.log.length ? '<ol>' + r.log.map(l => '<li>' + (l.time ? '<span class="mono">' + esc(l.time) + '</span> ' : '') + esc(l.text) + '</li>').join('') + '</ol>' : '<p class="lg-mut">None today.</p>') + '</details>' : '';
+      return row + '<tr class="lg-bdetail" data-key="' + esc(r.key) + '"><td></td><td colspan="8">' + trades + log + '</td></tr>';
+    }).join('');
+    setHtml(q('[data-k="board"]'), html || '<tr><td colspan="9" class="lg-mut">Nothing to rank yet.</td></tr>');
   }
   function renderWatch() {
     const el = q('[data-k="watch"]');
@@ -510,7 +600,7 @@ function create(o) {
     S.shown = on;
     if (tabBtn) { tabBtn.setAttribute('aria-pressed', String(on)); if (on) tabBtn.hidden = false; }
     if (typeof o.onTab === 'function') o.onTab(on);
-    if (on) { mountChart(); poll(); } else { clearTimeout(S.timer); unmountChart(); if (S.past) setPast(null); S.dayProblem = ''; }   // closed: the next open is the live day
+    if (on) poll(); else { clearTimeout(S.timer); if (S.past) setPast(null); S.dayProblem = ''; }   // closed: the next open is the live day
     render();
   }
   /* the page's address asked for a day (?tab=league&day=YYYY-MM-DD): checked first; a past day opens read only, today or no day the
@@ -520,7 +610,7 @@ function create(o) {
     S.dayProblem = c.problem;
     const changed = setPast(c.day);
     if (!S.shown) showTab(true);
-    else { if (changed) { if (S.overlay) S.overlay.redraw(); poll(); } render(); }
+    else { if (changed) poll(); render(); }
     return c;
   }
   /* the tab is offered once The Desk answers GET /api/chart-league (a Desk of this release, reachable from this PC), asked at the
@@ -531,20 +621,27 @@ function create(o) {
       .then(r => r.ok, () => false).then(ok => { S.offered = ok; if (tabBtn) tabBtn.hidden = !(ok || S.shown); if (typeof o.onOffered === 'function') o.onOffered(ok); });
   }
   if (tabBtn) { tabBtn.hidden = true; tabBtn.addEventListener('click', e => { tabBtn.blur(); showTab(!S.shown); }); }
-  q('[data-k="today"]').addEventListener('click', () => { S.dayProblem = ''; if (setPast(null)) { if (S.overlay) S.overlay.redraw(); poll(); } render(); });
+  /* 1.57.0: the leaderboard's two views and its rows: display only, nothing is sent */
+  q('.lg-board').addEventListener('click', e => {
+    const b = e.target && e.target.closest ? e.target.closest('button[data-do]') : null;
+    if (!b) return;
+    if (b.dataset.do === 'bview' && (b.dataset.view === 'today' || b.dataset.view === 'multi')) { S.boardView = b.dataset.view; renderBoard(); }
+    else if (b.dataset.do === 'brow') { const k = String(b.dataset.key || ''); if (S.boardOpen.has(k)) S.boardOpen.delete(k); else S.boardOpen.add(k); renderBoard(); }
+  });
+  q('[data-k="today"]').addEventListener('click', () => { S.dayProblem = ''; if (setPast(null)) poll(); render(); });
   probe();
   const probeTimer = setInterval(probe, 300000);
   render();
   return {
     showTab, openDay, shown: () => S.shown, poll, offered: () => S.offered,
     /* read only, for the tests and the console */
-    state: () => ({ shown: S.shown, past: S.past, dayProblem: S.dayProblem, empty: !!(S.past && S.day && C.pastEmpty(S.day)), problem: S.problem, reach: S.reach, date: S.day ? S.day.date : '', trades: S.day ? S.day.trades.length : 0, open: S.day ? S.day.open.length : 0,
-      decisions: S.day ? S.day.decisions.length : 0, chart: !!S.chart, marks: S.day ? C.marksFor(S.day, S.root).marks.length : 0,
+    state: () => ({ board: { view: S.boardView, why: S.boardWhy, programs: S.board ? S.board.programs.length : 0, open: [...S.boardOpen] }, shown: S.shown, past: S.past, dayProblem: S.dayProblem, empty: !!(S.past && S.day && C.pastEmpty(S.day)), problem: S.problem, reach: S.reach, date: S.day ? S.day.date : '', trades: S.day ? S.day.trades.length : 0, open: S.day ? S.day.open.length : 0,
+      decisions: S.day ? S.day.decisions.length : 0, chart: false, marks: S.day ? C.marksFor(S.day, S.root).marks.length : 0,   // 1.57.0: no chart on the tab; marks: what a chart's faint switch would draw
       watch: { linked: !!watchLink, connected: W.connected, traders: W.agents.size, rows: window.FleetCore && typeof window.FleetCore.traders === 'function' ? C.watchRows(window.FleetCore.traders([...W.agents.values()], W.accounts, W.version)).map(r => r.id) : [] } }),
     day: () => S.day,
     /* the live day only (null while a past day is shown): what the faint marks and the Agents strip may use */
     liveDay: () => (S.past ? null : S.day),
-    destroy() { clearTimeout(S.timer); clearTimeout(S.reachTimer); clearInterval(probeTimer); unmountChart(); try { unwatch(); } catch (e) { /* gone */ } },
+    destroy() { clearTimeout(S.timer); clearInterval(probeTimer); try { unwatch(); } catch (e) { /* gone */ } },
   };
 }
 

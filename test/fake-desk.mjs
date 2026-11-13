@@ -113,6 +113,11 @@ export async function startDesk(port, seed) {
       desk.log.push({ method: 'GET', which: 'chart-floors' });
       return desk.floors ? send(200, desk.floors) : send(404, { detail: 'Not Found' });
     }
+    if (urlPath === '/api/chart-colosseum' && req.method === 'GET') {
+      /* 1.57.0: the Colosseum's leaderboard (The Desk's colosseum.py): desk.colosseum (SAMPLE), else 404 as an older Desk */
+      desk.log.push({ method: 'GET', which: 'chart-colosseum' });
+      return desk.colosseum ? send(200, desk.colosseum) : send(404, { detail: 'Not Found' });
+    }
     if (urlPath === '/api/chart-league' && req.method === 'GET') {
       /* ?date=YYYY-MM-DD (The Desk's read_day): desk.leagueDays[date] (SAMPLE), else that date with no record, as The Desk answers */
       const date = new URLSearchParams(query || '').get('date');
