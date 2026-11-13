@@ -63,6 +63,29 @@
   `test/pc-updater.test.js`: the allowed git subcommands, the box job's name, useHttpPath read before the one ask, the
   token only after a 404 or 401 and then through the Actions API, one place that asks for it and one that sends it.
 
+## chart 1.54.0 (2026-11-13): Legion simpler, and Anthony's names for his bots (page only, no F5)
+
+In plain words: Legion's two lane cards say less and say it bigger. Each shows the bot picked, a status word, how many
+accounts it has and what the lane rule last did; everything else waits behind a small "?". A bot Anthony named at
+promotion shows his name. Nothing new is sent to ChartBridge. Assignment parts D and G (2026-11-13).
+
+- **A lane card** (Anthony 2026-11-13, "Legion simpler: yes"): the title, one status word (`Trading`, `In a trade`,
+  `Off`, `Not ready`, `No bot`, `No trader`) and its "?"; SIM, PROP or PROP + SIM; the bot picked with today on the
+  lane's accounts; "N accounts (k on the bench)", which opens the lane's own Multi-Account panel in place; and the lane
+  rule's last three lines (ChartBridge 0.6.22's `laneLog`, newest first, New York time). Behind the "?": the goal, the
+  trader, its group and mode, Ready or not and why, the files not offered and why, the runner, the lane rule's earlier
+  lines and how the lanes work. Nothing is dropped, only folded.
+- **Other connections left Legion.** The traders on no lane show on the Colosseum's watch box (those in Shadow) and on
+  Praetorian. One in Auto on a prop account is still named in the line under the title, and Kill all still stops it.
+- **Words for 0.6.22:** the lane with no trader says that from ChartBridge 0.6.22 a lane keeps its trader through the
+  17:00 reset, and Today says accounts join their lane by themselves, on the bench.
+- **Anthony's bot names** (part G): a bot's roster file may carry `display_name` (Bot-Lab's roster format, set at
+  Approve). It shows on the lane card, in the pick list and on the roster, the built name small beneath. A name that
+  breaks Bot-Lab's rule (plain words, 40 at most) is not shown, with why, and neither is a lineup file that carries one
+  (the lineup format has none).
+
+Checked in `test/fleet.test.js`, `test/fleet-smoke.mjs` (174 checks) and `test/lane-panels-smoke.mjs` (29 checks).
+
 ## ChartBridge 0.6.22 and chart 1.53.1 (2026-11-13): the lanes run themselves, the day's loss stop, the voice calls
 
 In plain words: nothing changes on the chart or for hand trading, and the page is unchanged. ChartBridge learns three

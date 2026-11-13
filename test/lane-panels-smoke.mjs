@@ -195,6 +195,10 @@ try {
   const lp = await p.evaluate(() => { const q = x => document.querySelector('#flView .fl-lane[data-stage="eval"] ' + x); return { name: (q('.ma-bar .ma-lname') || {}).textContent, select: !!q('[data-ma="group"]'), settings: !!q('[data-ma="settings"]'),
     chips: [...document.querySelectorAll('#flView .fl-lane[data-stage="eval"] [data-chip]')].map(e => e.dataset.chip) }; });
   check(lp.name === 'Lucid' && !lp.select && !lp.settings && ['SIM-A', 'SIM-B', 'SIM-C'].every(n => lp.chips.includes(n)), 'Legion\'s eval lane holds the Multi-Account panel on Lucid, fixed, with its chips: ' + JSON.stringify(lp));
+  // 1.54.0 (D): the lane's accounts are folded under its account count; a click opens the panel in place
+  check(await p.locator('#flView .fl-lane[data-stage="eval"] .fl-lanepanels').isHidden(), 'the lane\'s accounts are folded at first (1.54.0)');
+  await p.click('#flView .fl-lane[data-stage="eval"] [data-do="laneaccts"]');
+  await until(() => p.evaluate(() => !document.querySelector('#flView .fl-lane[data-stage="eval"] .fl-lanepanels').hidden), 'the account count opens the panel');
   const n6 = (await groupMsgs()).length;
   await p.click('#flView .fl-lane[data-stage="eval"] [data-chip="SIM-D"]');
   await until(async () => ((await groupMsgs()).slice(n6)).some(m => m.type === 'memberBench' && m.account === 'SIM-D'), 'a move from inside Legion');

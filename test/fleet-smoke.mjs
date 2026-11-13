@@ -170,15 +170,9 @@ try {
 
   check(!(await text('.fl-said')).includes('Sign in') && (await text('.fl-said')).includes('Kill all stops every trader on a prop account and closes its position there whole'), 'signed in: the reason it was not offered is gone, and the line says what Kill all touches');
   check((await text('.fl-autoline')) === 'In Auto on prop accounts: germanicus', 'the head line names the one trader in Auto on a prop account: ' + await text('.fl-autoline'));
-  // the traders on no lane are under Other connections, folded
-  check(/Other connections \(3\)/i.test(await text('.fl-others')) && await page.locator('.fl-trader').count() === 0, 'three traders on no lane, folded: ' + (await text('.fl-others')).slice(0, 80));
-  await page.click('[data-do="others"]');
-  const gt = await page.locator('.fl-trader[data-id="germanicus"]').innerText();
-  check(gt.includes('AUTO ON PROP') && !/on duty/i.test(gt) && gt.includes('SAMPLE-EVAL-1') && gt.includes('09:40 to 15:00 New York, flat at 15:55') && gt.includes('In a trade'), 'germanicus: Auto on prop, its account, window and what it is doing');
-  check(gt.includes('Market entry: on') && gt.includes('No target: on') && gt.includes('$900 (from its plan)'), 'its two entry switches are on and shown, and its day stop: ' + gt.replace(/\s+/g, ' '));
-  const mt = await page.locator('.fl-trader[data-id="manrae"]').innerText();
-  check(mt.includes('Market entry: off') && mt.includes('No target: off') && !mt.includes('AUTO ON PROP') && /personal/i.test(mt), 'manrae: both switches off, on the personal account, not counted');
-  check((await page.locator('.fl-trader[data-id="resting"]').getAttribute('data-tone')) === 'standDown' && (await page.locator('.fl-trader[data-id="resting"]').innerText()).includes("Stood down: the day's profit stop is reached"), 'a trader stood down by the day stop says so');
+  // 1.54.0 (D): Other connections left Legion (the Colosseum's watch box and Praetorian show those traders); the line under the
+  // title still names every trader in Auto on a prop account, and Kill all still stops them
+  check(await page.locator('.fl-others').count() === 0 && await page.locator('.fl-trader').count() === 0 && !/Other connections/.test(await text('#flView')), 'no Other connections on Legion');
   // PROP 3: a trader in Auto on a group with the personal account in it is named as the one Kill all will not stop
   await feed(agent('mixed', { account: null, group: { id: 'g9', name: 'Sample both' }, seats: [{ account: 'SAMPLE-MINE' }, { account: 'SAMPLE-EVAL-2' }] }));
   check((await text('.fl-autoline')).includes('In Auto on a group with your personal account in it (Kill all will NOT stop it: stop it on the Agent tab): mixed'), 'the head line names the trader Kill all will not stop: ' + await text('.fl-autoline'));
@@ -200,7 +194,7 @@ try {
   check((await text('.fl-market')).includes('Not built yet.'), 'Market now says it is not built yet, not faked');
   // nothing on the tab can be pressed, typed in or switched but Kill all with its two answers, the Armed switch with its two, Read again and the Details
   const pressable = await page.evaluate(() => [...document.querySelectorAll('#flView button, #flView input, #flView select, #flView textarea, #flView a, #flView [tabindex], #flView [contenteditable], #flView [role="switch"], #flView [role="checkbox"], #flView [role="slider"], #flView label, #flView summary')].map(e => e.tagName + ':' + (e.dataset.do || '?')).sort());
-  check(pressable.join() === 'BUTTON:arm,BUTTON:armno,BUTTON:armyes,BUTTON:ask,BUTTON:desk,BUTTON:fam,BUTTON:fam,BUTTON:filter,BUTTON:filter,BUTTON:filter,BUTTON:filter,BUTTON:more,BUTTON:more,BUTTON:more,BUTTON:more,BUTTON:no,BUTTON:others,BUTTON:roster,BUTTON:sub,BUTTON:sub,BUTTON:yes,INPUT:find,LABEL:?', 'the tab has Kill all, the Armed switch, their Yes and Cancel, Read again and a Details on each card, the Traders fold\'s Show, and no other control: ' + pressable.join());
+  check(pressable.join() === 'BUTTON:arm,BUTTON:armno,BUTTON:armyes,BUTTON:ask,BUTTON:desk,BUTTON:fam,BUTTON:fam,BUTTON:filter,BUTTON:filter,BUTTON:filter,BUTTON:filter,BUTTON:lanehelp,BUTTON:lanehelp,BUTTON:more,BUTTON:more,BUTTON:more,BUTTON:more,BUTTON:no,BUTTON:roster,BUTTON:sub,BUTTON:sub,BUTTON:yes,INPUT:find,LABEL:?', 'the tab has Kill all, the Armed switch, their Yes and Cancel, Read again and a Details on each card, the Traders fold\'s Show, each lane\'s ? (1.54.0; its accounts button once it has a trader), and no other control: ' + pressable.join());
   await page.screenshot({ path: path.join(SHOTS, 'fleet-desktop.png') });
 
   // the head is pinned: scrolled to the bottom of the tab, Kill all is still in sight
@@ -356,12 +350,20 @@ try {
   await feed(agent('germanicus', { mode: 'shadow', account: 'SAMPLE-NEW-1' }));
   await feed(agent('resting', { mode: 'shadow', account: 'SAMPLE-NEW-1' }));   // a stood-down trader in Auto counts too (the re-review of 94, R3)
   const laneText = await page.evaluate(() => [...document.querySelectorAll('.fl-lane')].map(e => e.innerText.replace(/\s+/g, ' ')));
-  check(laneText.length === 2 && /^Eval lane Goal: pass the eval SHADOW READY PROP legion1, group Sample evals Bot /i.test(laneText[0]) && laneText[0].includes('Sample alpha BOT risk $400 a trade Watching +$1,510'), 'the eval lane: its goal, its mode, Ready, PROP (1.53.0), its trader and group, the picked bot with its risk, its state and today on its accounts: ' + laneText[0]);
-  check(/^Funded lane Goal: reach the payout SHADOW NOT READY PROP legion2, group Sample funded Bot /i.test(laneText[1]) && laneText[1].includes('No bot is picked for this lane. A second bot on a lane comes as a lineup file from the Lab.') && laneText[1].includes('No bot is picked for it'), 'the funded lane: not ready, and why: ' + laneText[1]);
+  // 1.54.0 (D): a lane card is the bot, a word, its accounts and its "?"; what it says in full is behind the "?"
+  check(laneText.length === 2 && /^Eval lane OFF \? PROP Bot /i.test(laneText[0]) && laneText[0].includes('Sample alpha BOT +$1,510') && laneText[0].includes('2 accounts') && !laneText[0].includes('Goal:'),
+    'the eval lane: a word (Off: ready, in Shadow), PROP, the picked bot, today on its accounts and its account count; the rest behind its ?: ' + laneText[0]);
+  check(/^Funded lane NO BOT \? PROP Bot /i.test(laneText[1]) && laneText[1].includes('No bot is picked for this lane.') && laneText[1].includes('1 account') && !laneText[1].includes('No bot is picked for it'), 'the funded lane: No bot, the why behind its ?: ' + laneText[1]);
+  await page.click('.fl-lane[data-stage="funded"] [data-do="lanehelp"]');
+  const fundHelp = (await page.locator('.fl-lane[data-stage="funded"] .fl-lanehelp').innerText()).replace(/\s+/g, ' ');
+  check(fundHelp.includes('Goal: reach the payout.') && fundHelp.includes('Trader legion2, group Sample funded, mode SHADOW') && fundHelp.includes('No bot is picked for it') && fundHelp.includes('A second bot on a lane comes as a lineup file from the Lab.'), 'its ? opens what it says in full: ' + fundHelp.slice(0, 300));
+  await page.click('.fl-lane[data-stage="funded"] [data-do="lanehelp"]');
+  check(await page.locator('.fl-lane[data-stage="funded"] .fl-lanehelp').isHidden(), 'and shuts again');
+  await page.screenshot({ path: 'test/out/fleet-lanes-154.png' });
   const offered = await page.evaluate(() => [...document.querySelectorAll('#flPick-eval option')].map(o => o.value + (o.selected ? '*' : '')));
   check(offered.join() === ',sample-alpha.json*', 'the pick list offers None and only the files that run live, with ChartBridge\'s pick chosen: ' + offered.join());
   const order = await page.evaluate(() => [...document.querySelectorAll('#flView [data-k="setup"] > section')].map(e => e.getAttribute('aria-label')));
-  check(order.join() === 'Market now,Today,Traders,Roster,Other connections', 'Setup, top to bottom: Market now, Today (the lanes), Traders (folded), the Roster, Other connections: ' + order.join());
+  check(order.join() === 'Market now,Today,Traders,Roster', 'Setup, top to bottom: Market now, Today (the lanes), Traders (folded), the Roster (1.54.0: Other connections left Legion): ' + order.join());
   // the Traders fold (builder 4's Legion trader desk): closed by default; with no desk on the page it says where it will show
   check(await page.locator('#flDesk').isHidden() && (await page.locator('[data-do="desk"]').getAttribute('aria-expanded')) === 'false', 'the Traders fold is closed by default');
   await page.click('[data-do="desk"]');
@@ -463,7 +465,7 @@ try {
   await feed({ type: 'status', level: 'warn', text: 'Kill all (prop accounts): ' + X });
   await feed({ type: 'agentStandDowns', list: [] });   // the end of the replay: the hostile traders are heard and shown (answers 25, S1)
   const seenSignedIn = await page.evaluate(() => (document.getElementById('flView').innerText.match(/<img src=x/g) || []).length);
-  check(seenSignedIn >= 12, 'signed in, the hostile strings show as text ' + seenSignedIn + ' times');
+  check(seenSignedIn >= 10, 'signed in, the hostile strings show as text ' + seenSignedIn + ' times (1.54.0: no trader cards on Legion now, so fewer places)');
   await feed({ type: 'trading', enabled: false });   // a sign-out forgets the traders (S1); what is left is still text only
   const hostile = await page.evaluate(() => ({ ran: window.ranScript || 0, imgs: document.querySelectorAll('#flView img, #flView script, #flView iframe, #flView [onerror]').length, seen: (document.getElementById('flView').innerText.match(/<img src=x/g) || []).length }));
   check(hostile.ran === 0 && hostile.imgs === 0 && hostile.seen >= 1, 'hostile strings in every roster field, account, group, trader and answer: 0 scripts ran, 0 elements injected, shown as text ' + hostile.seen + ' times');
@@ -476,7 +478,7 @@ try {
   await feed({ type: 'trading', enabled: true }); await feed(accounts); await feed(groups);
   await page.click('[data-do="ask"]'); await sleep(ARM); await page.click('[data-do="yes"]');
   await page.evaluate(() => { for (const h of window.subs) h.closed(); });
-  check((await text('.fl-others .fl-empty')).includes('ChartBridge is not connected') && await page.locator('.fl-table').count() === 0 && await page.locator('.fl-set').count() === 0, 'connection lost: no stale traders, accounts or roster');
+  check(await page.locator('.fl-lane .fl-botcard').count() === 0 && await page.locator('.fl-table').count() === 0 && await page.locator('.fl-set').count() === 0, 'connection lost: no stale lane bots, accounts or roster');
   check((await text('.fl-answer')).includes("Kill all was sent and ChartBridge's answer never came (the connection dropped): look in NinjaTrader now") && await page.locator('.fl-answer.bad').count() === 1, 'and a Kill all that was sent and not answered is said, marked bad');
   await page.evaluate(b => { window.rosterAnswer = { status: 200, body: b }; }, rosterBody);
   await feed({ type: 'hello', version: '0.6.20', features: ['v3'] });
@@ -552,9 +554,7 @@ try {
     const on = await page.evaluate(() => ({ cls: document.body.classList.contains('fl-on'), url: location.search, grid: getComputedStyle(document.querySelector('.ws-grid')).display,
       view: getComputedStyle(document.getElementById('flView')).display, title: (document.querySelector('.fl-title') || {}).textContent }));
     check(on.cls && /tab=legion/.test(on.url) && on.grid === 'none' && on.view !== 'none' && on.title === 'Legion', 'workspace: the tab opens over the grid and the address keeps it: ' + JSON.stringify(on));
-    await page.waitForFunction(() => /Other connections \((\d+)\)/i.test((document.querySelector('.fl-others') || {}).textContent || '') && !/\(0\)/.test(document.querySelector('.fl-others').textContent), null, { timeout: 10000 }).catch(() => {});
-    if (await page.locator('[data-do="others"][aria-expanded="false"]').count()) await page.click('[data-do="others"]');
-    check(await page.locator('.fl-trader[data-id="demo"]').count() === 1, 'workspace: the fake bridge\'s agent is listed as a trader');
+    check(await page.locator('.fl-others').count() === 0, 'workspace: no Other connections on Legion (1.54.0); the fake bridge\'s agent shows on the Colosseum and Praetorian');
     check((await page.locator('.fl-box[aria-label="Accounts live"] .fl-empty').innerText()).includes('No personal account is picked yet'), 'workspace: no pick, so no prop account, and it says how to pick');
     await page.waitForFunction(() => window.workspace.fleet().roster.state !== 'loading', null, { timeout: 10000 }).catch(() => {});
     const ro = await page.evaluate(() => window.workspace.fleet().roster);

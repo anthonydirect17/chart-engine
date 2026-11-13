@@ -1282,7 +1282,7 @@ function create(o) {
       <div class="fl-page" data-k="setup">
         <section class="fl-box fl-market" aria-label="Market now"><div class="fl-btitle"><h3 class="fl-h">Market now</h3></div>
           <p class="fl-empty">Not built yet. The zone (the trend's direction and the volatility, in words) comes from Bot-Lab's plain-code labeler on this PC once it exists. It will suggest; you choose.</p></section>
-        <section class="fl-box fl-today" aria-label="Today"><div class="fl-btitle"><h3 class="fl-h">Today</h3><span class="fl-sub2">Drop an account into a lane. Pick the bot for the lane. Flip Armed.</span></div>
+        <section class="fl-box fl-today" aria-label="Today"><div class="fl-btitle"><h3 class="fl-h">Today</h3><span class="fl-sub2">Accounts join their lane by themselves (ChartBridge 0.6.22), on the bench. Pick the bot for the lane. Flip Armed.</span></div>
           <div class="fl-lanegrid"><div data-k="lane-eval"></div><div data-k="lane-funded"></div></div><div data-k="lanes"></div></section>
         <section class="fl-box fl-desk" aria-label="Traders"><div class="fl-btitle"><h3 class="fl-h">Traders</h3><span class="fl-sub2">Set up a prop trader: its account or group, its rules, its proposals. Closed until you open it.</span>
           <span class="fl-fill"></span><button type="button" class="fl-pill" data-do="desk" data-k="deskbtn" aria-expanded="false" aria-controls="flDesk">Show</button></div>
