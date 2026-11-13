@@ -58,6 +58,15 @@ const FILE_RX = /^[A-Za-z0-9][A-Za-z0-9_-]{0,39}\.json$/;      // a roster file'
 const ID_RX = /^[a-z0-9]{1,12}$/;                              // a trader's id
 const ROSTER_FORMAT = 'specrunner.roster/1', LINEUP_FORMAT = 'specrunner.lineup/1';   // Bot-Lab specrunner/roster.py
 const NAME_RX = /^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$/;
+/* chart 1.54.0 (G): Anthony's name for a bot at promotion, the roster file's optional display_name (Bot-Lab specrunner/roster.py
+   _DISPLAY: plain words, 40 at most, no double space, nothing around it). A label for the pages only: the bot's built name stays
+   what every plan carries, and it shows small beneath. */
+const DISPLAY_RX = /^[A-Za-z0-9][A-Za-z0-9 .'_-]{0,39}$/;
+const displayNameOk = n => typeof n === 'string' && DISPLAY_RX.test(n) && n.indexOf('  ') < 0 && n === n.trim();
+/** The name a card shows: Anthony's display_name when it has one, else the built name. */
+const shownName = c => (c && c.displayName ? c.displayName : c ? c.name : '');
+/** A card in a list of text (the pick list, the Armed question): the shown name, the built name beside it when they differ. */
+const cardText = c => (c.displayName ? c.displayName + ' (' + c.name + ')' : c.name) + (c.kind === 'lineup' ? ' (lineup of ' + c.bots.length + ')' : '');
 const CONFIRM_MS = 8000;         // the Kill all question stays this long (compared at the Yes too, not left to a timer)
 const ARM_MS = 600;              // ... and takes no answer for this long after it opens: a double click answers nothing
 const ANSWER_WAIT_MS = 5000;     // a Kill all sent and not answered in this long is said, marked bad
@@ -249,6 +258,26 @@ function signed(v) { return isNum(v) ? (v > 0 ? '+' : '') + v.toFixed(2) : ''; }
 const pct = v => (Math.round(v * 1000) / 10) + '%';
 const count = v => (Number.isInteger(v) && v >= 0 ? v : null);
 const one = (n, word) => n + ' ' + word + (n === 1 ? '' : 's');
+/* ---------------------------------------------------------------- Legion simpler (chart 1.54.0, part D) */
+const LANE_KEEP_MIN = '0.6.22';   // ChartBridge keeps a lane's trader through the 17:00 reset and runs the lane rule (laneLog)
+/** The lane rule's lines on a group (ChartBridge 0.6.22, the groups message's laneLog): [{ at, text }], oldest first, at most
+ *  20; a line not in that shape is left out. */
+function laneLogOf(g) {
+  const raw = plainObj(g) && Array.isArray(g.laneLog) ? g.laneLog : [];
+  return raw.filter(x => plainObj(x) && isNum(x.at) && x.at > 0 && typeof x.text === 'string' && x.text.length > 0).slice(-20).map(x => ({ at: x.at, text: str(x.text, 300) }));
+}
+/** A time of ChartBridge's (Unix milliseconds) as New York hours and minutes, "14:05". */
+function hhmm(ms) {
+  try { return new Date(ms).toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }); } catch (e) { return ''; }
+}
+/** A lane's status in a word or two (Anthony 2026-11-13: "status in one or two words"); the why is behind the lane's "?". */
+function laneWord(l) {
+  if (!l || !l.id) return { key: 'notrader', text: 'No trader' };
+  if (!l.pick) return { key: 'nobot', text: 'No bot' };
+  if (l.auto) return l.exposed ? { key: 'intrade', text: 'In a trade' } : { key: 'trading', text: 'Trading' };
+  return l.armable ? { key: 'off', text: 'Off' } : { key: 'notready', text: 'Not ready' };
+}
+const LANE_HELP = 'A lane is a trader whose account is a group; the group\'s Type (eval or funded) says which lane. From ChartBridge ' + LANE_KEEP_MIN + ' the lanes fill themselves: an account whose type on The Desk is eval or funded joins its lane on the bench (it trades only once you take it off the bench), and a blown, passed or archived one leaves once flat; every move is a line on the lane. The accounts button opens the lane\'s own Multi-Account panel: drag or click an account in or out, or on and off the bench. No account moves while the lane is in Auto or holds something. Armed sends each ready lane to Auto; off sends every lane to Shadow and closes no position: Kill all does. What shows here is what ChartBridge says, so a mode changed on Praetorian, by Kill all or at 17:00 New York shows here too.';
 const share = v => isNum(v) && v >= 0 && v <= 1;
 
 /**
@@ -334,11 +363,14 @@ function rosterCards(body) {
     const quick = !!d.counts.quick;
     const base = { file: name, quick, planText: planText(d.plan), stages, sha256: typeof f.sha256 === 'string' && /^[0-9a-f]{64}$/.test(f.sha256) ? f.sha256 : '' };   // 0.6.21: the file's sha256, which Armed names
     if (d.format === ROSTER_FORMAT) {
+      if (own(d, 'display_name') && !displayNameOk(d.display_name)) { no('its display_name is not plain words, 40 at most'); continue; }   // 1.54.0 (G): the reader's own rule
+      if (own(d, 'display_name')) base.displayName = d.display_name;
       const b = botPart(d);
       if (!b) { no('its bot, its run or whether it runs live is not in the format\'s shape'); continue; }
       if (quick) { b.whyNot = b.runsLive ? QUICK_WHY : b.whyNot + '; and ' + QUICK_WHY; b.runsLive = false; }
       out.bots.push(Object.assign({ kind: 'bot' }, base, b));
     } else {
+      if (own(d, 'display_name')) { no('a lineup file carries no display_name (only a bot\'s own file does)'); continue; }   // 1.54.0 (G): the lineup format has none
       const parts = Array.isArray(d.bots) ? d.bots.map(x => { const b = botPart(x); return b && Object.assign(b, { taken: count(x.taken), skipped: count(x.skipped), sessionsLeftOut: count(x.sessions_left_out) }); }) : [];
       if (typeof d.lineup !== 'string' || !NAME_RX.test(d.lineup) || parts.length < 2 || parts.some(b => !b || b.taken === null || b.skipped === null || b.sessionsLeftOut === null) || typeof d.runs_live !== 'boolean') { no('its name or its bots are not in the format\'s shape'); continue; }
       if (new Set(parts.map(b => b.name)).size !== parts.length) { no('a bot appears twice in the lineup'); continue; }
@@ -449,20 +481,20 @@ function lanes(agents, groupsMsg, accountsMsg, version, cards) {
     const title = stage === 'eval' ? 'Eval lane' : 'Funded lane';
     const on = list.filter(a => plainObj(a.group) && typeof a.group.id === 'string' && groups.has(a.group.id) && groups.get(a.group.id).accountType === stage);
     const L = { stage, title, traders: on.map(a => a.agent), id: '', name: '', mode: '', modeText: '', auto: on.some(a => a.mode === 'auto'), connected: false, status: '',
-      groupId: '', groupName: '', seats: [], benched: [], sim: false, simCount: 0, kindText: '', pick: '', sha: '', pickKnown: atLeast(version, PICK_MIN), card: null, pickText: '', exposed: false, why: '', armable: false, runnerNote: '',
+      groupId: '', groupName: '', seats: [], benched: [], laneLog: [], sim: false, simCount: 0, kindText: '', pick: '', sha: '', pickKnown: atLeast(version, PICK_MIN), card: null, pickText: '', exposed: false, why: '', armable: false, runnerNote: '',
       /* the re-review of 94, R2: any trader of the lane not said to be in Shadow (Copilot, Auto, or not said), set before any
          early return, so a doubled lane in Copilot is never read as "off" */
       notShadow: on.some(a => a.mode !== 'shadow'), notShadowIds: on.filter(a => a.mode !== 'shadow').map(a => a.agent + ' (' + (own(MODE_NAME, a.mode) ? MODE_NAME[a.mode] : 'not known') + ')') };
     if (!groupsMsg) { L.why = 'Not heard from ChartBridge yet'; return L; }
     if (!on.length) {
-      L.why = 'No trader is on a group of Type ' + stage + '. ChartBridge\'s 17:00 reset puts a flat trader on None each trading day, so give the trader its group again in Legion\'s Traders section below each day (a group with Type ' + stage + ': New group on the Multi-Account panel).';
+      L.why = 'No trader is on a group of Type ' + stage + '. Give a trader the group in Legion\'s Traders section below (a group with Type ' + stage + ': New group on the Multi-Account panel). From ChartBridge ' + LANE_KEEP_MIN + ' a lane keeps its trader through the 17:00 reset; an older one puts a flat trader on None each trading day.';
       return L;
     }
     if (on.length > 1) { L.why = on.length + ' traders are on ' + stage + ' groups (' + on.map(a => a.agent).join(', ') + '): Legion runs one lane a stage. Take all but one off on the Agent tab.'; return L; }
     const a = on[0], g = groups.get(a.group.id);
     L.id = a.agent; L.name = str(a.name, 40) || a.agent; L.mode = own(MODE_NAME, a.mode) ? a.mode : ''; L.modeText = L.mode ? MODE_NAME[L.mode] : 'Not known';
     L.connected = a.connected === true; L.status = laneStatus(a); L.exposed = a.owns === true;
-    L.groupId = a.group.id; L.groupName = str(g.name, 40) || a.group.id;
+    L.groupId = a.group.id; L.groupName = str(g.name, 40) || a.group.id; L.laneLog = laneLogOf(g);
     /* the re-review of 94, N2: the bench is the Multi-Account panel's own rule (MultiAccountCore.lanes, one rule in one place)
        when that file is loaded (the page loads it after this one, so it is asked here, at the call); the same field read here
        otherwise (Node tests, or the panel not served) */
@@ -474,7 +506,7 @@ function lanes(agents, groupsMsg, accountsMsg, version, cards) {
     L.pick = typeof a.pick === 'string' && FILE_RX.test(a.pick) ? a.pick : '';
     L.card = L.pick ? files.get(L.pick) || null : null;
     L.sha = L.card && SHA_RX.test(String(L.card.sha256 || '')) ? L.card.sha256 : '';
-    L.pickText = !L.pick ? 'None' : L.card ? L.card.name + (L.card.kind === 'lineup' ? ' (lineup of ' + L.card.bots.length + ')' : '') : L.pick;
+    L.pickText = !L.pick ? 'None' : L.card ? cardText(L.card) : L.pick;
     const kinds = L.seats.map(n => { const row = idx.get(n.toLowerCase()); return row ? kindOf(row) : ''; });
     L.sim = kinds.length > 0 && kinds.every(k => k === 'sim');
     L.simCount = kinds.filter(k => k === 'sim').length;
@@ -595,7 +627,7 @@ function armWords(ls) {
 function pickChoices(cards) {
   if (!cards || !cards.ok) return [];
   return cards.lineups.concat(cards.bots).filter(c => c.runsLive && FILE_RX.test(c.file)).slice(0, MAX_CARDS)
-    .map(c => ({ file: c.file, text: c.name + (c.kind === 'lineup' ? ' (lineup of ' + c.bots.length + ')' : '') }));
+    .map(c => ({ file: c.file, text: cardText(c) }));
 }
 /** The files the pick list does not offer because they do not run live, each with its card's own why_not (answers of
  *  2026-11-13 02:00 UTC: a sweep build says "runs live after 10 matching nights (n so far)" on the lane cards). At most
@@ -604,7 +636,7 @@ function waitingChoices(cards, max) {
   if (!cards || !cards.ok) { const none = []; none.more = 0; return none; }
   const all = cards.lineups.concat(cards.bots).filter(c => !c.runsLive && FILE_RX.test(c.file));
   const n = isNum(max) && max >= 0 ? max : 5;
-  const out = all.slice(0, n).map(c => ({ file: c.file, text: c.name + (c.kind === 'lineup' ? ' (lineup of ' + c.bots.length + ')' : ''), why: str(c.whyNot, 300) || 'the file says it does not run live' }));
+  const out = all.slice(0, n).map(c => ({ file: c.file, text: cardText(c), why: str(c.whyNot, 300) || 'the file says it does not run live' }));
   out.more = Math.max(0, all.length - n);
   return out;
 }
@@ -664,7 +696,7 @@ function rosterFamilies(cards, ls, filter, find) {
   for (const c of cards.lineups.concat(cards.bots)) {
     const famKey = c.kind === 'lineup' ? 'lineup:' + c.name : 'bot:' + (c.family || String(c.name).split(/[_-]/)[0]).toLowerCase();
     const ev = c.stages[0], fu = c.stages[1];
-    const row = { card: c, file: c.file, name: c.name, readable: readableName(c.name), kind: c.kind, runsLive: c.runsLive,
+    const row = { card: c, file: c.file, name: c.name, readable: readableName(c.name), display: c.displayName || '', kind: c.kind, runsLive: c.runsLive,
       ppd: ev.profitPerDollar, range: ev.range, stagesDiffer: ev.profitPerDollar !== fu.profitPerDollar, evalPass: ev.evalPass, paid: fu.paidPerFunded,
       riskEval: ev.risk, riskFunded: fu.risk, aboveEval: ev.aboveNoEdge, aboveFunded: fu.aboveNoEdge,
       where: (where.get(c.file) || []).join(' and '),
@@ -679,13 +711,13 @@ function rosterFamilies(cards, ls, filter, find) {
     if (f === 'evals') list = list.filter(r => r.runsLive && r.aboveEval).sort((a, b) => b.evalPass - a.evalPass);
     else if (f === 'funded') list = list.filter(r => r.runsLive && r.aboveFunded).sort((a, b) => b.paid - a.paid);
     else list = list.slice().sort((a, b) => b.ppd - a.ppd);
-    if (q) list = list.filter(r => (r.readable + ' ' + fam.name + ' ' + r.file).toLowerCase().includes(q));
+    if (q) list = list.filter(r => (r.display + ' ' + r.readable + ' ' + fam.name + ' ' + r.file).toLowerCase().includes(q));
     if (!list.length) continue;
     out.shown += list.length;
     out.families.push({ key: fam.key, kind: fam.kind, name: fam.name, settings: list, count: fam.settings.length,
       best: Math.max.apply(null, list.map(r => r.ppd)), bestPass: Math.max.apply(null, list.map(r => (isNum(r.evalPass) ? r.evalPass : -1))),
       bestPaid: Math.max.apply(null, list.map(r => (isNum(r.paid) ? r.paid : -1))),
-      where: list.filter(r => r.where).map(r => r.readable + ': ' + r.where).join('; ') });
+      where: list.filter(r => r.where).map(r => (r.display || r.readable) + ': ' + r.where).join('; ') });
   }
   const by = f === 'evals' ? (a, b) => b.bestPass - a.bestPass : f === 'funded' ? (a, b) => b.bestPaid - a.bestPaid : (a, b) => b.best - a.best;
   out.families.sort(by);
@@ -911,7 +943,7 @@ const badAnswer = text => /NOT STOPPED|FAILED|could NOT/.test(String(text || '')
 /** "09:41:07" of a Date (the PC's own clock), for the time in front of a Kill all answer. */
 const clock = d => [d.getHours(), d.getMinutes(), d.getSeconds()].map(x => String(x).padStart(2, '0')).join(':');
 
-return Object.freeze({ modeRulesLoaded, NOT_KNOWN, NOT_READABLE, groupLock, accountsReadable, MAX_FILLS, LANE_COLOR, LANE_LETTER, propRows, todayOf, liveTiles, cleanFill, laneMarks, traderDays, laneRunner, readableName, rosterFamilies, FILTERS, laneLock, laneMaySend, laneFeed, PICK_MIN, STAGES, lanes, outsideAuto, armState, armMsgs, armWords, pickChoices, waitingChoices, pickMsg, maySend, KILL_MIN, SWITCH_MIN, DAYSTOP_MIN, ROSTER_MIN, ROSTER_FORMAT, LINEUP_FORMAT, CONFIRM_MS, ARM_MS, ANSWER_WAIT_MS, ROSTER_WAIT_MS, MAX_CARDS, MAX_MEMBERS, MAX_NOT_SHOWN, MODE_NAME, atLeast, usd, signed, stageCard, rosterCards, rosterProblem,
+return Object.freeze({ displayNameOk, shownName, cardText, LANE_KEEP_MIN, laneLogOf, hhmm, laneWord, LANE_HELP, one, modeRulesLoaded, NOT_KNOWN, NOT_READABLE, groupLock, accountsReadable, MAX_FILLS, LANE_COLOR, LANE_LETTER, propRows, todayOf, liveTiles, cleanFill, laneMarks, traderDays, laneRunner, readableName, rosterFamilies, FILTERS, laneLock, laneMaySend, laneFeed, PICK_MIN, STAGES, lanes, outsideAuto, armState, armMsgs, armWords, pickChoices, waitingChoices, pickMsg, maySend, KILL_MIN, SWITCH_MIN, DAYSTOP_MIN, ROSTER_MIN, ROSTER_FORMAT, LINEUP_FORMAT, CONFIRM_MS, ARM_MS, ANSWER_WAIT_MS, ROSTER_WAIT_MS, MAX_CARDS, MAX_MEMBERS, MAX_NOT_SHOWN, MODE_NAME, atLeast, usd, signed, stageCard, rosterCards, rosterProblem,
   kindOf, seatsKind, dayMark, traderAccounts, statusText, traders, propAccounts, killAllState, killAllMsg, autoLine, badAnswer, clock });
 });
 
@@ -949,7 +981,7 @@ function create(o) {
   const S = { shown: false, built: false, version: '', connected: false, signedIn: false, accounts: null, groups: null, agents: new Map(), firstAgentAt: null, signInAt: null, replayDone: false, settleTimer: 0,
     ask: 0, askTimer: 0, hint: '', hintBad: false, hintState: false, answer: '', answerBad: false, cidSeq: 0, pending: '', pendingAt: 0, waitTimer: 0, sent: 0,
     armAsk: 0, armTimer: 0, armSaid: '', armBad: false, modeSent: new Map(), pickSent: new Map(),
-    helper: null, helperTimer: 0, helperSeq: 0, sub: 'setup', filter: 'all', find: '', famShut: new Set(), othersOpen: false, lanePanels: {}, desk: null, deskOpen: false, deskSent: null,
+    helper: null, helperTimer: 0, helperSeq: 0, sub: 'setup', filter: 'all', find: '', famShut: new Set(), laneHelp: new Set(), laneAccts: new Set(), lanePanels: {}, desk: null, deskOpen: false, deskSent: null,
     roster: { state: 'idle', text: '', cards: null, seq: 0, asked: 0, at: 0, version: '' }, rosterDirty: true, rosterTimer: 0, open: new Set(), drawn: {}, draws: { head: 0, roster: 0, traders: 0, accounts: 0, lanes: 0, 'lane-eval': 0, 'lane-funded': 0, tiles: 0, bytrader: 0 },
     fills: new Map(), pane: null, overlay: null, rows: null };
   const el = {};
@@ -1168,7 +1200,7 @@ function create(o) {
       </div>`;
     }
     return `<li class="fl-set" data-kind="${r.kind}" data-name="${esc(r.name)}"${r.runsLive ? '' : ' data-tone="notlive"'}${open ? ' data-open="1"' : ''}>
-      <div class="fl-srow"><span class="fl-sname">${esc(r.readable)} <span class="fl-mut">risk ${esc(C.usd(r.riskEval))} eval, ${esc(C.usd(r.riskFunded))} funded${r.where ? ' · on the ' + esc(r.where) + ' today' : ''}</span>${live}${c.quick ? '<span class="fl-tag" data-kind="quick">Quick look: never traded</span>' : ''}</span>
+      <div class="fl-srow"><span class="fl-sname">${r.display ? `${esc(r.display)}<span class="fl-built">${esc(r.readable)}</span>` : esc(r.readable)} <span class="fl-mut">risk ${esc(C.usd(r.riskEval))} eval, ${esc(C.usd(r.riskFunded))} funded${r.where ? ' · on the ' + esc(r.where) + ' today' : ''}</span>${live}${c.quick ? '<span class="fl-tag" data-kind="quick">Quick look: never traded</span>' : ''}</span>
         <span class="mono">${esc(C.signed(r.ppd))} <span class="fl-mut">(${esc(C.signed(r.range[0]))} to ${esc(C.signed(r.range[1]))})</span> <span class="fl-tag" data-kind="${r.aboveEval ? 'edge' : 'noedge'}">${r.aboveEval ? 'Above no edge' : 'Not above no edge'}</span></span>
         <span class="mono">${r.evalPass === null ? '' : esc(Math.round(r.evalPass * 1000) / 10 + '%')}</span>
         <span class="fl-mut">not built yet</span>
@@ -1207,22 +1239,6 @@ function create(o) {
     return body + `<p class="fl-note">Profit per $1 is profit per $1 spent on accounts, one number for the eval and its funded account together, with its range. Every number is from in-sample runs, and none is a promise. "No edge" is what the same trades would show with their edge taken out. The two "Good for" filters use only each file's own word. "In this zone" waits for Market now.</p>`;
   }
 
-  function traderHtml(t) {
-    const sw = t.switchesKnown
-      ? `<span class="fl-sw${t.marketEntry ? ' on' : ''}">Market entry: ${t.marketEntry ? 'on' : 'off'}</span><span class="fl-sw${t.noTarget ? ' on' : ''}">No target: ${t.noTarget ? 'on' : 'off'}</span>`
-      : `<span class="fl-sw">Entry switches: need ChartBridge ${esc(C.SWITCH_MIN)}</span>`;
-    const ds = !t.dayStopKnown ? 'needs ChartBridge ' + esc(C.DAYSTOP_MIN) : t.dayStop !== null ? esc(C.usd(t.dayStop)) + ' (from its plan)' : 'none sent with a plan this session';
-    const kind = { prop: 'prop', propsim: 'prop and sim', personal: 'personal', sim: 'sim', unlisted: 'not listed in NinjaTrader now', mixed: 'personal and prop: Kill all will not stop it' }[t.kind] || '';
-    return `<li class="fl-trader" data-id="${esc(t.id)}" data-tone="${esc(t.tone)}">
-      <div class="fl-trow"><span class="fl-tname">${esc(t.name)}</span>${t.build ? `<span class="fl-mut">${esc(t.build)}</span>` : ''}
-        <span class="fl-mode" data-mode="${esc(t.mode)}">${esc(t.modeText)}</span>${t.autoProp ? '<span class="fl-auto">AUTO ON PROP</span>' : ''}</div>
-      <div class="fl-trow"><span class="fl-k">Account</span><span class="fl-v">${esc(t.accountText)}${kind ? ` <span class="fl-tag" data-kind="${esc(t.kind)}">${esc(kind)}</span>` : ''}</span></div>
-      <div class="fl-trow"><span class="fl-k">Window</span><span class="fl-v mono">${t.window ? esc(t.window) + ' New York' + (t.flatAt ? ', flat at ' + esc(t.flatAt) : '') : 'not known'}</span></div>
-      <div class="fl-trow"><span class="fl-k">Now</span><span class="fl-v fl-status">${esc(t.status)}</span></div>
-      <div class="fl-trow"><span class="fl-k">Day stop</span><span class="fl-v mono">${ds}</span></div>
-      <div class="fl-trow fl-sws">${sw}</div>
-    </li>`;
-  }
   function accountHtml(a) {
     const tone = a.today === null ? '' : a.today > 0 ? ' up' : a.today < 0 ? ' down' : '';
     return `<tr data-name="${esc(a.name)}"${a.done ? ' class="fl-done"' : ''}>
@@ -1233,16 +1249,6 @@ function create(o) {
       <td class="mono">${esc(a.markText)}${a.done ? ' <span class="fl-tag" data-kind="done">reached</span>' : ''}</td>
       <td>${esc(a.position)}${a.traders.length ? `<span class="fl-mut">${esc(a.traders.join(', '))}</span>` : '<span class="fl-mut">no trader on it</span>'}</td>
     </tr>`;
-  }
-  /* the traders on no lane (the old runners in Shadow and any other program on the agent channel), folded: a trader on a lane
-     shows on its lane */
-  function tradersHtml(rows, ls) {
-    const onLane = new Set([].concat.apply([], (ls || []).map(l => l.traders)));
-    const rest = rows.filter(t => !onLane.has(t.id));
-    return `<div class="fl-trow"><h3 class="fl-h fl-hsmall">Other connections (${rest.length})</h3><span class="fl-mut">Programs on ChartBridge's agent channel that are on no lane. Kill all still stops those on prop accounts.</span><span class="fl-fill"></span>
-        ${rest.length ? `<button type="button" class="fl-pill" data-do="others" aria-expanded="${S.othersOpen}">${S.othersOpen ? 'Hide' : 'Show'}</button>` : ''}</div>
-      ${!rest.length ? `<p class="fl-empty">${S.connected ? 'None.' : 'ChartBridge is not connected.'}</p>` : S.othersOpen ? `<ul class="fl-traders">${rest.map(traderHtml).join('')}</ul>
-      <p class="fl-note">A trader's mode, account, window and its two entry switches are changed on the Agent tab, by you. Nothing here changes them.</p>` : ''}`;
   }
   function accountsHtml(accts) {
     return `<h3 class="fl-h">Prop accounts</h3>
@@ -1276,7 +1282,7 @@ function create(o) {
       <div class="fl-page" data-k="setup">
         <section class="fl-box fl-market" aria-label="Market now"><div class="fl-btitle"><h3 class="fl-h">Market now</h3></div>
           <p class="fl-empty">Not built yet. The zone (the trend's direction and the volatility, in words) comes from Bot-Lab's plain-code labeler on this PC once it exists. It will suggest; you choose.</p></section>
-        <section class="fl-box fl-today" aria-label="Today"><div class="fl-btitle"><h3 class="fl-h">Today</h3><span class="fl-sub2">Drop an account into a lane. Pick the bot for the lane. Flip Armed.</span></div>
+        <section class="fl-box fl-today" aria-label="Today"><div class="fl-btitle"><h3 class="fl-h">Today</h3><span class="fl-sub2">Accounts join their lane by themselves (ChartBridge 0.6.22), on the bench. Pick the bot for the lane. Flip Armed.</span></div>
           <div class="fl-lanegrid"><div data-k="lane-eval"></div><div data-k="lane-funded"></div></div><div data-k="lanes"></div></section>
         <section class="fl-box fl-desk" aria-label="Traders"><div class="fl-btitle"><h3 class="fl-h">Traders</h3><span class="fl-sub2">Set up a prop trader: its account or group, its rules, its proposals. Closed until you open it.</span>
           <span class="fl-fill"></span><button type="button" class="fl-pill" data-do="desk" data-k="deskbtn" aria-expanded="false" aria-controls="flDesk">Show</button></div>
@@ -1291,7 +1297,6 @@ function create(o) {
             <span class="fl-fill"></span><button type="button" class="fl-pill" data-do="roster">Read again</button>
           </div>
           <div data-k="roster"></div></section>
-        <section class="fl-box fl-others" aria-label="Other connections"><div data-k="traders"></div></section>
       </div>
       <div class="fl-page" data-k="live" hidden>
         <section class="fl-box fl-tilebox" aria-label="Today"><div class="fl-tiles" data-k="tiles"></div></section>
@@ -1302,7 +1307,7 @@ function create(o) {
           <div class="fl-acctrows" data-k="acctrows"></div><div data-k="accounts"></div></section>
       </div>
     </div>`;
-    for (const k of ['autoline', 'ask', 'kill', 'yes', 'no', 'hint', 'answer', 'roster', 'traders', 'accounts', 'lanes', 'lane-eval', 'lane-funded', 'desk', 'deskbtn', 'arm', 'armyes', 'armno', 'armsaid', 'armask', 'setup', 'live', 'allbtn', 'tiles', 'chart', 'chartsaid', 'bytrader', 'acctrows']) el[k] = view.querySelector('[data-k="' + k + '"]');
+    for (const k of ['autoline', 'ask', 'kill', 'yes', 'no', 'hint', 'answer', 'roster', 'accounts', 'lanes', 'lane-eval', 'lane-funded', 'desk', 'deskbtn', 'arm', 'armyes', 'armno', 'armsaid', 'armask', 'setup', 'live', 'allbtn', 'tiles', 'chart', 'chartsaid', 'bytrader', 'acctrows']) el[k] = view.querySelector('[data-k="' + k + '"]');
     el.cancel = view.querySelector('[data-do="no"]');
     if (el.desk) el.desk.hidden = !S.deskOpen;           // the Traders fold: shut until opened (the desk is mounted only then)
     deskButton();
@@ -1402,35 +1407,49 @@ function create(o) {
     for (const n of l.seats) { const r = rows.find(x => x && typeof x.name === 'string' && x.name.toLowerCase() === n.toLowerCase()); if (!r || typeof r.pnlToday !== 'number' || !isFinite(r.pnlToday)) return null; sum += r.pnlToday; }
     return l.seats.length ? Math.round(sum * 100) / 100 : null;
   }
+  /* 1.54.0 (D, Legion simpler; Anthony 2026-11-13): a lane card is the bot picked, how many accounts (a click lists them: the
+     lane's own Multi-Account panel, folded), its status in a word or two and the lane rule's last lines. Every explanation sits
+     behind its "?" (drawn and hidden until opened, so nothing it says is lost). */
+  const laneLine = x => `<li><span class="mono fl-mut">${esc(C.hhmm(x.at))}</span> ${esc(x.text)}</li>`;
   function laneHtml(l, choices) {
-    const none = !l.id;
+    const none = !l.id, helpOpen = S.laneHelp.has(l.stage), acctOpen = S.laneAccts.has(l.stage);
     const opts = [{ file: '', text: 'None' }].concat(choices);
     if (l.pick && !choices.some(c => c.file === l.pick)) opts.push({ file: l.pick, text: l.pickText + ' (not offered now)' });
     const locked = l.auto ? 'Switch Armed off first: the pick changes only while the lane is not in Auto' : l.exposed ? 'The trader holds something: the pick changes once it is flat' : !l.pickKnown ? 'The pick needs ChartBridge ' + C.PICK_MIN : '';
     const sel = none ? '' : `<label class="fl-k" for="flPick-${esc(l.stage)}">Bot</label><select class="fl-pick" id="flPick-${esc(l.stage)}" data-do="pick" data-agent="${esc(l.id)}"${locked ? ` disabled title="${esc(locked)}"` : ''}>${opts.map(c => `<option value="${esc(c.file)}"${c.file === l.pick ? ' selected' : ''}>${esc(c.text)}</option>`).join('')}</select>`;
-    const c = l.card, st = c ? c.stages[l.stage === 'eval' ? 0 : 1] : null, today = none ? null : laneToday(l);
-    const card = none ? '' : c ? `<div class="fl-botcard">
-        <div class="fl-trow"><span class="fl-tname">${esc(C.readableName(c.name))}</span><span class="fl-who" data-who="bot">${c.kind === 'lineup' ? 'LINEUP' : 'BOT'}</span><span class="fl-fill"></span><span class="fl-mut mono">risk ${esc(C.usd(st.risk))} a trade</span></div>
-        <div class="fl-trow"><span class="fl-status">${esc(l.status)}</span><span class="fl-fill"></span>${today === null ? '<span class="fl-mut">today not known</span>' : `<span class="mono fl-pnl${today > 0 ? ' up' : today < 0 ? ' down' : ''}">${esc(C.usd(today, true))}</span>`}</div>
-        ${c.kind === 'lineup' ? `<p class="fl-line fl-mutline">${esc(c.bots.map(b => C.readableName(b.name)).join(', '))}: one open trade at a time, the first listed wins a tie.</p>` : ''}</div>`
-      : '<div class="fl-slot">No bot is picked for this lane. A second bot on a lane comes as a lineup file from the Lab.</div>';
-    return `<div class="fl-lane" data-stage="${esc(l.stage)}" data-armable="${l.armable}"${l.auto ? ' data-auto="1"' : ''}>
-      <div class="fl-trow"><span class="fl-lanetitle"><span class="fl-dot" data-stage="${esc(l.stage)}"></span>${esc(l.title)}</span><span class="fl-mut">${l.stage === 'eval' ? 'Goal: pass the eval' : 'Goal: reach the payout'}</span>
-        <span class="fl-fill"></span>${none ? '' : `<span class="fl-mode" data-mode="${esc(l.mode)}">${esc(l.modeText)}</span>`}<span class="fl-tag" data-kind="${l.armable ? 'live' : 'notlive'}">${l.armable ? 'Ready' : 'Not ready'}</span></div>
-      ${none || !l.kindText ? '' : `<div class="fl-lanekind" data-lanekind="${esc(l.kindText === 'SIM' ? 'sim' : l.kindText === 'PROP' ? 'prop' : 'propsim')}">${esc(l.kindText)}</div>`}
-      ${none ? '' : `<div class="fl-trow"><span class="fl-mut">${esc(l.name)}, group ${esc(l.groupName)}</span>${l.sim ? '<span class="fl-tag" data-kind="sim">Sim: no money at stake</span>' : ''}</div><div class="fl-trow">${sel}</div>${card}`}
-      ${none ? '' : (w => (w.length ? `<p class="fl-line fl-mutline fl-waiting">Not offered until it runs live: ${w.map(x => `${esc(x.text)} (${esc(x.why)})`).join('; ')}${w.more ? `; and ${w.more} more (the Roster says why)` : ''}.</p>` : ''))(C.waitingChoices(S.roster.cards, 5))}
+    const c = l.card, st = c ? c.stages[l.stage === 'eval' ? 0 : 1] : null, today = none ? null : laneToday(l), word = C.laneWord(l);
+    const card = none ? '' : c ? `<div class="fl-botcard"><div class="fl-trow"><span class="fl-tname">${c.displayName ? `${esc(c.displayName)}<span class="fl-built">${esc(C.readableName(c.name))}</span>` : esc(C.readableName(c.name))}</span><span class="fl-who" data-who="bot">${c.kind === 'lineup' ? 'LINEUP' : 'BOT'}</span><span class="fl-fill"></span>${today === null ? '<span class="fl-mut">today not known</span>' : `<span class="mono fl-pnl${today > 0 ? ' up' : today < 0 ? ' down' : ''}">${esc(C.usd(today, true))}</span>`}</div></div>`
+      : '<div class="fl-slot">No bot is picked for this lane.</div>';
+    const n = l.seats.length + l.benched.length;
+    const count = none ? '' : `<div class="fl-trow"><button type="button" class="fl-pill fl-acctbtn" data-do="laneaccts" data-stage="${esc(l.stage)}" aria-expanded="${acctOpen}">${esc(C.one(n, 'account'))}${l.benched.length ? ' (' + l.benched.length + ' on the bench)' : ''}</button></div>`;
+    const log = none || !l.laneLog.length ? '' : `<ul class="fl-lanelog" aria-label="What the lane rule did">${l.laneLog.slice(-3).reverse().map(laneLine).join('')}</ul>`;
+    const help = `<div class="fl-lanehelp"${helpOpen ? '' : ' hidden'}>
+      <p class="fl-line fl-mutline">${l.stage === 'eval' ? 'Goal: pass the eval.' : 'Goal: reach the payout.'}${none ? '' : ` Trader ${esc(l.name)}, group ${esc(l.groupName)}, mode <span class="fl-mode" data-mode="${esc(l.mode)}">${esc(l.modeText)}</span>.`} <span class="fl-tag" data-kind="${l.armable ? 'live' : 'notlive'}">${l.armable ? 'Ready' : 'Not ready'}</span>${l.sim ? ' <span class="fl-tag" data-kind="sim">Sim: no money at stake</span>' : ''}</p>
       ${l.why ? `<p class="fl-line fl-warn fl-lanewhy">${esc(l.why)}</p>` : ''}
+      ${!none && c ? `<p class="fl-line fl-mutline"><span class="fl-status">${esc(l.status)}</span>; risk ${esc(C.usd(st.risk))} a trade.</p>` : ''}
+      ${!none && c && c.kind === 'lineup' ? `<p class="fl-line fl-mutline">${esc(c.bots.map(b => C.readableName(b.name)).join(', '))}: one open trade at a time, the first listed wins a tie.</p>` : ''}
+      ${none ? '' : (w => (w.length ? `<p class="fl-line fl-mutline fl-waiting">Not offered until it runs live: ${w.map(x => `${esc(x.text)} (${esc(x.why)})`).join('; ')}${w.more ? `; and ${w.more} more (the Roster says why)` : ''}.</p>` : ''))(C.waitingChoices(S.roster.cards, 5))}
       ${!none && l.runnerNote && l.armable ? `<p class="fl-line fl-mutline">${esc(l.runnerNote)}</p>` : ''}
       ${none ? '' : (r => `<p class="fl-line fl-runner" data-tone="${esc(r.tone)}">${esc(r.text)}</p>`)(C.laneRunner(l, S.helper))}
-      ${none ? '' : `<div class="fl-lanepanels" data-panel="${esc(l.stage)}">${typeof o.lanePanel === 'function' ? '' : '<p class="fl-mut">The accounts of this lane show here when the page is open with its accounts part.</p>'}</div>`}
+      ${!none && l.laneLog.length > 3 ? `<ul class="fl-lanelog fl-lanelogold" aria-label="The lane rule's earlier lines">${l.laneLog.slice(0, -3).reverse().map(laneLine).join('')}</ul>` : ''}
+      <p class="fl-line fl-mutline">${esc(C.LANE_HELP)} A second bot on a lane comes as a lineup file from the Lab.</p>
+    </div>`;
+    return `<div class="fl-lane" data-stage="${esc(l.stage)}" data-armable="${l.armable}"${l.auto ? ' data-auto="1"' : ''}>
+      <div class="fl-trow"><span class="fl-lanetitle"><span class="fl-dot" data-stage="${esc(l.stage)}"></span>${esc(l.title)}</span>
+        <span class="fl-fill"></span><span class="fl-word" data-word="${esc(word.key)}">${esc(word.text)}</span><button type="button" class="fl-help" data-do="lanehelp" data-stage="${esc(l.stage)}" aria-expanded="${helpOpen}" aria-label="${esc(l.title)}: what it says in full">?</button></div>
+      ${none || !l.kindText ? '' : `<div class="fl-lanekind" data-lanekind="${esc(l.kindText === 'SIM' ? 'sim' : l.kindText === 'PROP' ? 'prop' : 'propsim')}">${esc(l.kindText)}</div>`}
+      ${none ? '' : `<div class="fl-trow">${sel}</div>${card}`}
+      ${count}
+      ${none ? '' : `<div class="fl-lanepanels" data-panel="${esc(l.stage)}"${acctOpen ? '' : ' hidden'}>${typeof o.lanePanel === 'function' ? '' : '<p class="fl-mut">The accounts of this lane show here when the page is open with its accounts part.</p>'}</div>`}
+      ${log}
+      ${help}
     </div>`;
   }
   /* each lane is drawn on its own (the review of 94, note 3): a change in one never takes an open pick list away in the other */
   function lanesHtml(ls) {
     for (const l of ls) lanePanelFor(l);
     for (const stage of Object.keys(S.lanePanels)) { const l = ls.find(x => x.stage === stage); if (!l || !l.groupId) { try { S.lanePanels[stage].mount.destroy(); } catch (e) { /* gone */ } delete S.lanePanels[stage]; } }
-    return `<p class="fl-note">A lane is a trader whose account is a group; the group's Type (eval or funded) says which lane. Its accounts are that group, with the Multi-Account panel's own lanes and bench: drag or click an account in or out. No account moves while the lane is in Auto or holds something. Accounts no bot may touch stay on the bench. Armed sends each ready lane to Auto; off sends every lane to Shadow. What shows here is what ChartBridge says, so a mode changed on the Agent tab, by Kill all or at 17:00 New York shows here too. Off closes no position: Kill all does.</p>`;
+    return '';   // 1.54.0 (D): the lanes' explanation is behind each lane's "?" (FleetCore.LANE_HELP)
   }
   function renderSub() {
     setHidden(el.setup, S.sub !== 'setup'); setHidden(el.live, S.sub !== 'live');
@@ -1479,7 +1498,8 @@ function create(o) {
     try { const choices = C.pickChoices(S.roster.cards); section('lanes', lanesHtml(ls)); for (const l of ls) section('lane-' + l.stage, laneHtml(l, choices)); placeLanePanels(); } catch (e) { section('lanes', '<p class="fl-empty fl-warn">The lanes could not be drawn.</p>'); }
     try { if (S.rosterDirty) { S.rosterDirty = false; section('roster', rosterHtml()); if (el.roster) el.roster.setAttribute('data-state', S.roster.state); } } catch (e) { section('roster', '<p class="fl-empty fl-warn">The roster could not be drawn.</p>'); }
     try { renderSub(); } catch (e) { /* the pages are already there */ }
-    try { section('traders', tradersHtml(rows, ls)); } catch (e) { section('traders', '<p class="fl-empty fl-warn">The traders could not be drawn.</p>'); }
+    /* 1.54.0 (D): "Other connections" left Legion: the traders on no lane show on the Colosseum's watch box (those in Shadow)
+       and on Praetorian; one in Auto on a prop account is named in the line under the title, and Kill all still stops it */
     /* the old Prop accounts table only where the page cannot hand the Accounts tab's own rows (accounts.js not served) */
     try { section('accounts', S.rows ? '' : accountsHtml(C.propAccounts(S.accounts, S.groups, agentList()))); } catch (e) { section('accounts', '<p class="fl-empty fl-warn">The prop accounts could not be drawn.</p>'); }
     if (S.sub === 'live') {
@@ -1497,8 +1517,13 @@ function create(o) {
     if (what === 'sub') { const sub = b.dataset.sub === 'live' ? 'live' : 'setup'; if (sub !== S.sub) { S.sub = sub; render(); } return; }
     if (what === 'filter') { const f = String(b.dataset.filter || ''); if (C.FILTERS.includes(f) && f !== S.filter) { S.filter = f; S.rosterDirty = true; render(); } return; }
     if (what === 'fam') { const k = String(b.dataset.fam || ''); if (S.famShut.has(k)) S.famShut.delete(k); else S.famShut.add(k); S.rosterDirty = true; render(); return; }
-    if (what === 'others') { S.othersOpen = !S.othersOpen; S.drawn.traders = null; render(); return; }
     if (what === 'desk') { if (S.deskOpen) shutDesk(); else openDesk(); return; }
+    if (what === 'lanehelp' || what === 'laneaccts') {                      // 1.54.0 (D): display only, a lane's "?" or its accounts, open or shut
+      const stage = String(b.dataset.stage || ''), set = what === 'lanehelp' ? S.laneHelp : S.laneAccts;
+      if (!C.STAGES.includes(stage)) return;
+      if (set.has(stage)) set.delete(stage); else set.add(stage);
+      render(); return;
+    }
     if (what === 'more') {                                                  // display only: a card's detail open or shut
       const k = String(b.dataset.card || '');
       if (S.open.has(k)) S.open.delete(k); else S.open.add(k);
