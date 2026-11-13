@@ -3709,7 +3709,8 @@ The page's Legion tab sends this message (chart 1.45.0, `live/fleet.js`: asked f
 Anthony 2026-11-13: "If I make a move, that's the move". Built in `ChartBridgeGroups.cs` only.
 
 - **A hand removal sticks.** An account taken out of any group by hand, a lane or a group of his own with no Type (the
-  page's `accountGroup` with `group` null, which Remove sends, or Hide), is kept in `lane-hand.txt`. The lane rule never adds it
+  page's `accountGroup` with `group` null, which Remove sends, Hide, or `groupDelete` for every member), or let go by the
+  copier by hand (`copierFollowerRemove`, or `copierSet` with another leader, while it is in no group: "from the copier"), is kept in `lane-hand.txt`. The lane rule never adds it
   back: it says once on the lane "X was taken out by hand: the rule leaves it out (put it in a group by hand to undo)". The
   list survives a restart. It is its own file and never a line in `groups.txt`, because a ChartBridge before 0.6.23 would
   read that file as unreadable. Lines: `out<TAB><account><TAB><unix ms><TAB><the group it left><TAB>eval|funded|-`, under
@@ -3717,7 +3718,8 @@ Anthony 2026-11-13: "If I make a move, that's the move". Built in `ChartBridgeGr
 - **A hand add clears it.** Putting the account in any group by hand (`accountGroup` with a group) takes it off the list. The
   lane rule's own moves never write the list.
 - **The rule still takes an account out once flat** when The Desk marks it blown, passed or archived, or its type is now the
-  other lane's. **Any** outcome now leaves, not only `blown` and `promoted` (the review of 0.6.22, item 1).
+  other lane's. A blown, passed or archived account also leaves a group of his own (no Type) once flat, as the lifecycle rule
+  (the hand list untouched); a retyped one stays there. A copier follower (on or off) or the copier's leader is never joined. **Any** outcome now leaves, not only `blown` and `promoted` (the review of 0.6.22, item 1).
 - **A list that does not read** (`lane-hand.txt` with a first line that is not ChartBridge's, or a line not in the format):
   the rule adds no account at all (it cannot tell which ones were taken out by hand), and says so.
 - **The `groups` message gains `laneRule`**, sent always, so a lane card says the rule's state even with no trader:

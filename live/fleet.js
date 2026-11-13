@@ -1035,7 +1035,7 @@ function create(o) {
   const S = { shown: false, built: false, version: '', connected: false, signedIn: false, accounts: null, groups: null, agents: new Map(), firstAgentAt: null, signInAt: null, replayDone: false, settleTimer: 0,
     ask: 0, askTimer: 0, hint: '', hintBad: false, hintState: false, answer: '', answerBad: false, cidSeq: 0, pending: '', pendingAt: 0, waitTimer: 0, sent: 0,
     armAsk: 0, armTimer: 0, armSaid: '', armBad: false, modeSent: new Map(), pickSent: new Map(),
-    helper: null, helperTimer: 0, helperSeq: 0, sub: 'setup', filter: 'all', find: '', famShut: new Set(), laneHelp: new Set(), laneAccts: new Set(), laneAdd: new Set(), acctSaid: new Set(), removeAsk: '', unSaid: null, lanePanels: {}, desk: null, deskOpen: false, deskSent: null,
+    helper: null, helperTimer: 0, helperSeq: 0, sub: 'setup', filter: 'all', find: '', famShut: new Set(), laneHelp: new Set(), laneAccts: new Set(), laneAdd: new Set(), acctSaid: new Set(), removeAsk: '', unSaid: null, unAsk: '', lanePanels: {}, desk: null, deskOpen: false, deskSent: null,
     roster: { state: 'idle', text: '', cards: null, seq: 0, asked: 0, at: 0, version: '' }, rosterDirty: true, rosterTimer: 0, open: new Set(), drawn: {}, draws: { head: 0, roster: 0, traders: 0, accounts: 0, lanes: 0, 'lane-eval': 0, 'lane-funded': 0, 'lane-unassigned': 0, tiles: 0, bytrader: 0 },
     fills: new Map(), pane: null, overlay: null, rows: null };
   const el = {};
@@ -1526,18 +1526,18 @@ function create(o) {
     const u = C.unassigned(S.groups, S.version);
     const row = r => {
       const l = ls.find(x => x.stage === r.kind), lane = r.kind === 'eval' ? 'the eval lane' : 'the funded lane';
-      const why = !l || !l.groupId ? 'There is no ' + r.kind + ' lane yet (a trader on a group of Type ' + r.kind + ')'
-        : r.group ? 'It is in ' + r.group + ': take it out of ' + r.group + ' first (its own panel), then add it here'
-        : laneMoveWhy(l);
+      const why = !l || !l.groupId ? 'There is no ' + r.kind + ' lane yet (a trader on a group of Type ' + r.kind + ')' : laneMoveWhy(l);
+      /* Anthony 2026-11-13 ("1. a"): one in a group of his own moves straight into the lane, asked once, naming both groups */
+      const asking = !why && r.group && S.unAsk === r.kind + '|' + r.account;
       return `<li class="fl-acct" data-acct="${esc(r.account)}"><span class="fl-aname">${esc(r.account)}</span><span class="fl-tag" data-kind="${esc(r.kind)}">${esc(r.kindText)}</span>
         <span class="fl-mut fl-where">${esc(r.where)}</span><span class="fl-fill"></span>
-        <button type="button" class="fl-pill" data-do="unadd" data-acct="${esc(r.account)}" data-stage="${esc(r.kind)}"${why ? ` aria-disabled="true" title="${esc(why)}"` : ''}>Add to ${esc(lane)}</button></li>`;
+        <button type="button" class="fl-pill" data-do="unadd" data-acct="${esc(r.account)}" data-stage="${esc(r.kind)}"${why ? ` aria-disabled="true" title="${esc(why)}"` : ''}>${asking ? 'Yes, move ' + esc(r.account) + ' out of ' + esc(r.group) + ' into ' + esc(lane) : (r.group ? 'Move to ' : 'Add to ') + esc(lane)}</button></li>`;
     };
     return `<div class="fl-lane fl-unassigned" data-stage="unassigned">
       <div class="fl-trow"><span class="fl-lanetitle">Unassigned</span><span class="fl-fill"></span><span class="fl-mut">${esc(u.text)}</span></div>
       ${u.rows.length ? `<ul class="fl-accts" aria-label="Unassigned: eval and funded accounts outside the lanes">${u.rows.map(row).join('')}</ul>` : ''}
       ${S.unSaid ? `<p class="fl-line fl-acctsaid${S.unSaid.warn ? ' fl-warn' : ''}" role="status">${esc(S.unSaid.text)}</p>` : ''}
-      <p class="fl-line fl-mutline">Eval and funded accounts on The Desk that are in no lane. An account you took out by hand stays out until you add it; Add opens the lane's own panel, where you check its rules and put it in.</p>
+      <p class="fl-line fl-mutline">Eval and funded accounts on The Desk that are in no lane. An account you took out by hand stays out until you add it; Add opens the lane's own panel, where you check its rules and put it in. One in a group of yours moves straight into the lane, asked once.</p>
     </div>`;
   }
   /* each lane is drawn on its own (the review of 94, note 3): a change in one never takes an open pick list away in the other */
@@ -1627,8 +1627,16 @@ function create(o) {
     if (what === 'unadd') {                                                 // 1.56.0: Unassigned's Add, through the lane's own panel
       const stage = String(b.dataset.stage || ''), name = String(b.dataset.acct || ''), l = laneList().find(x => x.stage === stage);
       const r = C.unassigned(S.groups, S.version).rows.find(x => x.account === name && x.kind === stage);
-      if (!l || !r || !C.STAGES.includes(stage) || !l.groupId || r.group || laneMoveWhy(l)) { render(); return; }   // the reason is on the button
+      if (!l || !r || !C.STAGES.includes(stage) || !l.groupId || laneMoveWhy(l)) { render(); return; }   // the reason is on the button
       const api = lanePanelApi(stage);
+      if (r.group) {                                                        // his own group: one step, asked once (naming both groups)
+        if (S.unAsk !== stage + '|' + name) { S.unAsk = stage + '|' + name; S.unSaid = null; render(); return; }
+        S.unAsk = '';
+        const no = api && typeof api.moveIn === 'function' ? api.moveIn(name) : 'The lane\'s panel cannot move an account on this page.';
+        S.unSaid = no ? { text: no, warn: true } : { text: 'Sent to ChartBridge: ' + name + ' out of ' + r.group + ' into the ' + stage + ' lane.', warn: false };
+        render(); return;
+      }
+      S.unAsk = '';
       S.laneAccts.add(stage); S.laneAdd.add(stage);                          // the lane's panel open, where the join step shows
       const no = api && typeof api.join === 'function' ? api.join(name) : 'The lane\'s panel cannot add an account on this page.';
       S.unSaid = no ? { text: no, warn: true } : { text: name + ': check its rules and its highest close in the ' + stage + ' lane\'s panel, then Put in.', warn: false };

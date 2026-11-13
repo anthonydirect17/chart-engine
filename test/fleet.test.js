@@ -1118,7 +1118,7 @@ test('1.56.0 (Anthony 2026-11-13: "3 rows, eval, funded and unassigned", "show t
     ['EVAL-A', 'Eval', 'in the copier, kept out by hand'], ['EVAL-B', 'Eval', 'kept out by hand'], ['EVAL-C', 'Eval', 'in Copier'], ['FUND-B', 'Funded', 'in no group']],
     'eval first, by name; each marked with where ChartBridge says it is; a malformed row is left out');
   const calls = [];
-  const lanePanel = (el, key, opts) => ({ key, opts, el, destroy() {}, panel: { state: {}, bench: () => true, remove: () => true, join: n => { calls.push(['join', key, n]); return n === 'EVAL-B' ? 'EVAL-B is not offered by Evals\'s panel' : ''; } } });
+  const lanePanel = (el, key, opts) => ({ key, opts, el, destroy() {}, panel: { state: {}, bench: () => true, remove: () => true, join: n => { calls.push(['join', key, n]); return n === 'EVAL-B' ? 'EVAL-B is not offered by Evals\'s panel' : ''; }, moveIn: n => { calls.push(['moveIn', key, n]); return ''; } } });
   timers(t);
   const P = page(t, { lanePanel }); P.fv.showTab(true);
   P.feed({ type: 'hello', version: '0.6.23' }); P.feed({ type: 'trading', enabled: true });
@@ -1131,12 +1131,18 @@ test('1.56.0 (Anthony 2026-11-13: "3 rows, eval, funded and unassigned", "show t
   let html = P.part('lane-unassigned').innerHTML;
   assert.match(html, /<span class="fl-lanetitle">Unassigned<\/span><span class="fl-fill"><\/span><span class="fl-mut">4 accounts outside the lanes<\/span>/);
   assert.match(html, /data-do="unadd" data-acct="EVAL-A" data-stage="eval">Add to the eval lane<\/button>/, 'an account in no group: Add');
-  assert.match(html, /data-do="unadd" data-acct="EVAL-C" data-stage="eval" aria-disabled="true" title="It is in Copier: take it out of Copier first \(its own panel\), then add it here">/, 'one in his own group stays there');
+  assert.match(html, /data-do="unadd" data-acct="EVAL-C" data-stage="eval">Move to the eval lane<\/button>/, 'one in his own group: Move (Anthony 2026-11-13, "1. a")');
   assert.match(html, /data-do="unadd" data-acct="FUND-B" data-stage="funded" aria-disabled="true" title="There is no funded lane yet/);
   const click = (what, more) => P.listeners.click({ target: { closest: () => ({ dataset: Object.assign({ do: what }, more || {}) }) }, detail: 1 });
-  click('unadd', { acct: 'EVAL-C', stage: 'eval' });
   click('unadd', { acct: 'FUND-B', stage: 'funded' });
   assert.strictEqual(calls.length, 0, 'a disabled Add asks nothing');
+  click('unadd', { acct: 'EVAL-C', stage: 'eval' });
+  assert.match(P.part('lane-unassigned').innerHTML, />Yes, move EVAL-C out of Copier into the eval lane<\/button>/, 'asked once, naming both groups');
+  assert.strictEqual(calls.length, 0, 'nothing sent at the first click');
+  click('unadd', { acct: 'EVAL-C', stage: 'eval' });
+  assert.deepStrictEqual(calls, [['moveIn', 'legion-eval', 'EVAL-C']], 'the second click: one step through the eval lane\'s own panel');
+  assert.match(P.part('lane-unassigned').innerHTML, /Sent to ChartBridge: EVAL-C out of Copier into the eval lane\./);
+  calls.length = 0;
   click('unadd', { acct: 'EVAL-A', stage: 'eval' });
   assert.deepStrictEqual(calls, [['join', 'legion-eval', 'EVAL-A']], 'through the eval lane\'s own panel (its join step: his hand add)');
   assert.match(P.part('lane-unassigned').innerHTML, /EVAL-A: check its rules and its highest close in the eval lane&#39;s panel, then Put in\./);

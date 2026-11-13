@@ -515,9 +515,12 @@ try {
   await feed({ type: 'agentStandDowns', list: [] });
   await page.waitForFunction(() => /3 accounts outside the lanes/.test((document.querySelector('.fl-unassigned') || {}).textContent || ''));
   const un = (await text('.fl-unassigned')).replace(/\s+/g, ' ');
-  check(/SAMPLE-EVAL-3 Eval kept out by hand Add to the eval lane/i.test(un) && /SAMPLE-EVAL-4 Eval in Sample copier Add to the eval lane/i.test(un) && /SAMPLE-FUNDED-2 Funded in the copier Add to the funded lane/i.test(un),
+  check(/SAMPLE-EVAL-3 Eval kept out by hand Add to the eval lane/i.test(un) && /SAMPLE-EVAL-4 Eval in Sample copier Move to the eval lane/i.test(un) && /SAMPLE-FUNDED-2 Funded in the copier Add to the funded lane/i.test(un),
     '1.56.0: Unassigned lists every eval and funded account outside the lanes, marked with where it is: ' + un);
-  check(await page.locator('.fl-unassigned [data-acct="SAMPLE-EVAL-4"] [data-do="unadd"][aria-disabled="true"]').count() === 1, '1.56.0: one in a group of his own is not added from here (it stays where he put it)');
+  check(/Move to the eval lane/i.test(await page.locator('.fl-unassigned [data-acct="SAMPLE-EVAL-4"] [data-do="unadd"]').innerText()), '1.56.0: one in a group of his own offers Move (one step, asked once)');
+  /* this page has no accounts part (no lane panel), so every Add and Move is greyed with the reason; the ask is in test/fleet.test.js */
+  const unTitles = await page.$$eval('.fl-unassigned [data-do="unadd"]', bs => bs.map(b => b.getAttribute('aria-disabled') + ' ' + b.getAttribute('title')));
+  check(unTitles.length === 3 && unTitles.every(t => /^true \S/.test(t)), '1.56.0: with no lane panel here (or no funded lane), each Add and Move is greyed with why: ' + JSON.stringify(unTitles));
   await page.evaluate(() => { document.getElementById('flView').scrollTop = 0; });
   await page.screenshot({ path: path.join(SHOTS, 'fleet-three-rows.png') });
   // phone width: one column, no sideways scroll of the page, the buttons big enough to touch

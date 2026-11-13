@@ -135,6 +135,10 @@ try {
   check(/SIM-H is not offered by Lucid's panel/.test(joins[0]) && joins[1] === 'SIM-A is in Lucid already.' && joins[2] === '', '1.56.0 join: another firm\'s account is not offered, a member is in already, the firm\'s account in no group opens the join step: ' + JSON.stringify(joins));
   check(/Put in Lucid/.test(await p.$eval('#laneC .ma-join', e => e.textContent)), '1.56.0 join: the panel\'s own Put in, with its rules and highest close');
   await p.click('#laneC [data-ma="join-no"]'); await wait(500);
+  /* 1.56.0 ("1. a"): Move straight from another group (one step): the join's own checks first, nothing sent when refused */
+  const moves = await p.evaluate(() => [window.fixed.panel.moveIn('SIM-H'), window.fixed.panel.moveIn('SIM-A')]);
+  await wait(500);
+  check(/Apex/.test(moves[0]) && /a group holds one firm/.test(moves[0]) && moves[1] === 'SIM-A is in Lucid already.', '1.56.0 moveIn: another firm\'s account is refused by the join\'s own check, a member is in already: ' + JSON.stringify(moves));
   check(!(await p.$('#laneC .ma-join')) && (await groupMsgs()).length === nJ, '1.56.0 join: Cancel sends nothing');
   // the lock: every chip locked, a click and a drag send nothing, the reason is shown
   await p.evaluate(() => { window.lockWhy = 'The lane is in Auto: switch Armed off before an account moves.'; });
