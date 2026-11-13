@@ -502,7 +502,29 @@ function mount(el, host) {
     move(name, true);
     return '';
   };
-  return { render: renderAll, destroy: () => { if (cop) cop.destroy(); }, state: P, get feed() { return F; }, bench: benchMember, remove: removeMember, join: joinAccount };   // the review of 97, F3: what it was handed, read only
+  /* chart 1.56.0 (Anthony 2026-11-13, "1. a": Add on an account in his own Copier or Group Trader group moves it straight into the
+     lane, one step, his hand move; Legion asks once, naming both groups): the same plan as the join step (its rules from its type
+     on The Desk, its highest close prefilled from The Desk's seed or the larger of its size and balance) sent as one accountGroup
+     into this group; the narrow feed lets it through only when the other group's own lock is free. -> '' when sent, else why not. */
+  const moveIn = name => {
+    const g = group();
+    if (!g || typeof name !== 'string' || !name) return 'The lane\'s panel has no group.';
+    if (g.members.includes(name)) return name + ' is in ' + g.name + ' already.';
+    const lw = lockWhy(); if (lw) return lw;
+    if (!benchNow(g)) return 'Moving an account into ' + g.name + ' needs ChartBridge ' + MC.BENCH_VERSION + ' (this PC has ' + (S.version || 'an older one') + ').';
+    const acc = (S.accounts || []).find(a => a && a.name === name) || null;
+    if (!acc || acc.state === 'gone') return name + ' is not in NinjaTrader now.';
+    const no = F.joinRefusal(name, g); if (no) return no;
+    const plan = F.joinPlan(name, g, acc);
+    if (plan.mode !== 'auto') return name + ' cannot move from here: ' + (plan.why || 'its rules are not known') + '. Move it on the Accounts tab (Group), where its rules can be typed.';
+    const c2 = cid();
+    if (!F.accountGroup(name, g.id, plan.prefill, plan.rules, c2)) { const w = 'Not sent: not connected to ChartBridge, or ' + name + '\'s own group is locked now (its lane is in Auto or holds something).'; say(w, true); render(); return w; }
+    P.pending.set(c2, { at: Date.now(), chip: name, gid: g.id, join: true, what: name + ' did not move' });
+    say('Sent to ChartBridge: ' + name + ' into ' + g.name + ' (its rules from ' + plan.from + ', highest close ' + plan.prefill + ').');
+    render();
+    return '';
+  };
+  return { render: renderAll, destroy: () => { if (cop) cop.destroy(); }, state: P, get feed() { return F; }, bench: benchMember, remove: removeMember, join: joinAccount, moveIn };   // the review of 97, F3: what it was handed, read only
 }
 
 return { mount, PICK_KEY, DEFAULT_TOAST };

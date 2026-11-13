@@ -6782,6 +6782,41 @@ public static class AgentHarness
                 oj = ChartBridgeGroups.GroupsJson();
                 Check(ChartBridgeGroups.GroupOf("PROP-1") == "g1" && !File.ReadAllText(handFile).Contains("PROP-1") && oj.Contains("\"outside\":[]"),
                       "0.6.23 own group: his own add to the lane clears it, and it leaves the Unassigned row: " + oj.Substring(Math.Max(0, oj.IndexOf("\"laneRule\""))));
+                // the re-check of 111: deleting his Copier group is a hand removal of each member
+                P("{\"type\":\"accountGroup\",\"cid\":\"own4\",\"account\":\"PROP-1\",\"group\":\"g3\",\"size\":50000,\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"eod\",\"lockAt\":0,\"target\":3000,\"consistency\":0,\"maxMinis\":4,\"maxMicros\":40,\"typeId\":\"made-up-50k\"}");
+                Check(ChartBridgeGroups.GroupOf("PROP-1") == "g3", "0.6.23 group delete: (setup) PROP-1 moved by hand into his Copier group: " + PageReject());
+                P("{\"type\":\"groupDelete\",\"cid\":\"own5\",\"group\":\"g3\"}");
+                Check(ChartBridgeGroups.GroupOf("PROP-1") == null && File.ReadAllText(handFile).Contains("out\tPROP-1\t") && File.ReadAllText(handFile).Contains("\tCopier\t-"),
+                      "0.6.23 group delete: his Copier group deleted: its eval member goes on the hand list: " + File.ReadAllText(handFile));
+                Check(apply(new[] { row("PROP-1", "eval", null, false) }) == 0 && ChartBridgeGroups.GroupOf("PROP-1") == null, "0.6.23 group delete: a rule pass leaves it in no group");
+                ChartBridgeGroups.LaneForget();
+                Check(apply(new[] { row("PROP-1", "eval", null, false) }) == 0 && ChartBridgeGroups.GroupOf("PROP-1") == null, "0.6.23 group delete: and across a restart");
+                // Q-H1 (Anthony 2026-11-13, "also removed"): a blown, passed or archived account leaves his own group once flat, as the lifecycle rule
+                lanes("group\tg3\tCopier\ton\t-\t-\t-\t-\t-\t-\t-\t-\t-\n");
+                P("{\"type\":\"accountGroup\",\"cid\":\"own6\",\"account\":\"PROP-1\",\"group\":\"g3\",\"size\":50000,\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"eod\",\"lockAt\":0,\"target\":3000,\"consistency\":0,\"maxMinis\":4,\"maxMicros\":40,\"typeId\":\"made-up-50k\"}");
+                Check(ChartBridgeGroups.GroupOf("PROP-1") == "g3" && !File.ReadAllText(handFile).Contains("PROP-1"), "0.6.23 lifecycle: (setup) PROP-1 in his Copier group by hand, off the hand list");
+                Check(apply(new[] { row("PROP-1", "funded", null, false) }) == 0 && ChartBridgeGroups.GroupOf("PROP-1") == "g3", "0.6.23 lifecycle: retyped on The Desk, it stays in his own group (only a lane follows the type)");
+                Position held2 = new Position { Instrument = mnq, MarketPosition = MarketPosition.Long, Quantity = 1, AveragePrice = 25000 };
+                prop1.Positions.Add(held2);
+                Check(apply(new[] { row("PROP-1", "eval", "blown", false) }) == 0 && ChartBridgeGroups.GroupOf("PROP-1") == "g3" && ChartBridgeGroups.GroupsJson().Contains("PROP-1 is blown on The Desk: it leaves Copier once flat"),
+                      "0.6.23 lifecycle: blown while it holds a position: it stays in his group until flat, and says so");
+                prop1.Positions.Remove(held2);
+                Check(apply(new[] { row("PROP-1", "eval", "blown", false) }) == 1 && ChartBridgeGroups.GroupOf("PROP-1") == null && !File.ReadAllText(handFile).Contains("PROP-1") && ChartBridgeGroups.GroupsJson().Contains("removed: PROP-1 (blown on The Desk) (rule)"),
+                      "0.6.23 lifecycle: flat, the blown account leaves his Copier group, as the lifecycle rule (not a hand move: the hand list is untouched)");
+                P("{\"type\":\"accountGroup\",\"cid\":\"own7\",\"account\":\"PROP-1\",\"group\":\"g3\",\"size\":50000,\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"eod\",\"lockAt\":0,\"target\":3000,\"consistency\":0,\"maxMinis\":4,\"maxMicros\":40,\"typeId\":\"made-up-50k\"}");
+                Check(apply(new[] { row("PROP-1", "eval", null, true) }) == 1 && ChartBridgeGroups.GroupOf("PROP-1") == null, "0.6.23 lifecycle: archived on The Desk: it leaves his group too");
+                // the re-check of 111: an account the copier has is placed (never joined); let go by hand, it goes on the hand list
+                ChartBridgeSwitches.Note("copier", "on"); ChartBridgeCopier.HarnessManual = true; ChartBridgeCopier.Start();
+                P("{\"type\":\"copierFollower\",\"cid\":\"lcf3\",\"account\":\"PROP-1\",\"on\":true,\"qty\":1,\"size\":\"micro\",\"lossLimit\":null}");
+                Check(!File.ReadAllText(handFile).Contains("PROP-1") && apply(new[] { row("PROP-1", "eval", null, false) }) == 0 && ChartBridgeGroups.GroupOf("PROP-1") == null &&
+                      ChartBridgeGroups.GroupsJson().Contains("PROP-1 is a copier follower: the rule leaves it out"),
+                      "0.6.23 copier: a copier follower in no group (not on the hand list) is placed: the rule never joins it, and says so: " + PageReject());
+                P("{\"type\":\"copierFollower\",\"cid\":\"lcf3b\",\"account\":\"PROP-1\",\"on\":false,\"qty\":1,\"size\":\"micro\",\"lossLimit\":null}");   // off first, as the copier asks
+                Check(!File.ReadAllText(handFile).Contains("PROP-1") && apply(new[] { row("PROP-1", "eval", null, false) }) == 0 && ChartBridgeGroups.GroupOf("PROP-1") == null, "0.6.23 copier: a follower turned off is still the copier's: not joined, and not a hand removal yet");
+                P("{\"type\":\"copierFollowerRemove\",\"cid\":\"lcf4\",\"account\":\"PROP-1\"}");
+                Check(File.ReadAllText(handFile).Contains("out\tPROP-1\t") && File.ReadAllText(handFile).Contains("\tthe copier\t-") && apply(new[] { row("PROP-1", "eval", null, false) }) == 0 && ChartBridgeGroups.GroupOf("PROP-1") == null,
+                      "0.6.23 copier: its follower row removed by hand: on the hand list, and the rule leaves it out: " + PageReject() + " " + File.ReadAllText(handFile));
+                ChartBridgeCopier.Stop(); ChartBridgeCopier.HarnessManual = false; ChartBridgeSwitches.Note("copier", "off");
                 try { Gone(handFile); } catch (Exception) { }
                 ChartBridgeGroups.LaneForget();
                 lanes("");                                                                                       // g1 and g2 only, nobody in them, for the checks below

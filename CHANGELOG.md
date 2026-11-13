@@ -99,12 +99,20 @@ row, Unassigned, lists every eval and funded account outside the lanes, marked w
 2026-11-13: "If I make a move, that's the move"; "stay out until I add it - there should be 3 rows, eval, funded and
 unassigned"; "show them in unassigned marked in copier".
 
-- **ChartBridge 0.6.23** (rule 12; only `ChartBridgeGroups.cs` changes):
+- **ChartBridge 0.6.23** (rule 12; `ChartBridgeGroups.cs`, and one dispatch line in `ChartBridge.cs` for the copier's messages):
   - A removal from any group by hand (the page's Remove, or Hide) is kept in `lane-hand.txt` (its own file: a ChartBridge
     before 0.6.23 never sees it): a lane, or a group of his own with no Type (its line's type is `-`). The lane rule skips
     that account and says so once on the lane. A restart keeps the list.
-  - An account he moves by hand into a group of his own stays there: the rule never takes it out of that group or into a
-    lane (it takes accounts out of lanes only).
+  - An account he moves by hand into a group of his own stays there: the rule never moves it into a lane, and a retyped
+    account stays in his group (only a lane follows The Desk's type).
+  - **Deleting a group** is a hand removal of each member: they all go on the hand list.
+  - **The lifecycle rule in his own groups** (Anthony 2026-11-13, "also removed"): a blown, passed or archived account in his
+    Copier or Group Trader group (a group with no Type) leaves it once flat, as from a lane. It is the lifecycle rule, not a
+    hand move, so the hand list is not touched. The flat check now runs under ChangeGate with the leave.
+  - **The copier's accounts are placed:** a copier follower (on or off) or its leader is never joined to a lane, and the lane
+    says so once. Letting one go by hand (a follower row removed, or the leader changed) while it is in no group puts it on
+    the hand list ("from the copier"). The copier's page messages now run under ChangeGate (`ChartBridgeGroups.CopierMessage`),
+    so a rule join never slips between them. `ChartBridgeCopier.cs` is unchanged.
   - Putting the account in any group by hand clears it. The rule's own moves never touch the list.
   - The rule still takes an account out once flat when The Desk marks it blown, passed or archived. Any outcome now leaves
     (the review of 0.6.22, item 1).
@@ -124,14 +132,19 @@ unassigned"; "show them in unassigned marked in copier".
   - **Three rows: Eval, Funded and Unassigned.** Unassigned lists `laneRule.outside`, each account marked with where it is
     ("kept out by hand", "in no group", "in <his group>", "in the copier"). **Add to the eval lane** (or funded) opens the
     lane's own Multi-Account panel at its join step (the panel's new `join`: its checks, its rules, its highest close and
-    its Put in), so the add is his hand add and clears the hand list. An account in a group of his own is not added from
-    here: its button says to take it out of that group first.
+    its Put in), so the add is his hand add and clears the hand list. An account in a group of his own has **Move to the
+    eval lane** instead (Anthony 2026-11-13, "1. a"): asked once, naming both groups ("Yes, move X out of Copier into the
+    eval lane"), then one `accountGroup` straight into the lane through the panel's new `moveIn` (the join's checks, its
+    rules from the account's type and its highest close from The Desk's seed or the larger of size and balance; the narrow
+    feed lets it through only when the other group's own lock is free).
 - **A note on 0.6.22's day loss stop** (its review, item 2): a later plan without `dayLossDollars` turns the loss stop off
   for the rest of the session, as the profit stop does. Said in PROTOCOL.md.
 
 Checked: `check/AgentHarness.cs` ("0.6.23 hand" and "0.6.23 own group": an eval in a lane moved by hand into his Copier
 group stays there through rule passes; taken out of it by hand it stays in no group, a restart included; `outside` with a
-group, the copier and the hand mark; 4508 checks in all pass), `test/fleet.test.js`, `test/fleet-smoke.mjs` (the three
+group, the copier and the hand mark; a deleted group's member on the hand list across a restart; blown and archived
+accounts leave his group once flat, the hand list untouched; a copier follower never joined, and on the hand list once its
+row is removed; 4529 checks in all pass), `test/fleet.test.js`, `test/fleet-smoke.mjs` (the three
 rows) and `test/lane-panels-smoke.mjs` (the panel's `join`).
 ChartBridge 0.6.23 is a recompile (`-InstallChartBridge`, then F5 while flat).
 

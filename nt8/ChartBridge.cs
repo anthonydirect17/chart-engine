@@ -2653,7 +2653,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             else if (type == "client" || type == "accountTrade" || type == "accountArchive" || type == "accountUnarchive" || type == "accountPersonal")   // 0.6.16: accountPersonal, the one-time pick of the personal account
                 ChartBridgeAccounts.OnMessage(client, type, text);   // 0.4.0 accounts: v3 page, the checkmark and Archive (ChartBridgeAccounts.cs; no order calls)
             else if (type == "merge") ChartBridgeOrders.OnMessage(client, type, text);   // 0.4.0 B4: Merge stops and targets (ChartBridgeMerge.cs)
-            else if (type.StartsWith("copier", StringComparison.Ordinal)) ChartBridgeCopier.OnMessage(client, type, text);   // 0.4.0 copier: copier*
+            else if (type.StartsWith("copier", StringComparison.Ordinal)) ChartBridgeGroups.CopierMessage(() => ChartBridgeCopier.OnMessage(client, type, text), type, text);   // 0.4.0 copier: copier*; 0.6.23: a copier account let go by hand goes on the lane rule's hand list
             else if (type.StartsWith("bot", StringComparison.Ordinal)) ChartBridgeBot.OnPageMessage(client, type, text);   // 0.4.0 bot: botMode, botKill, botSeen, botAnswer, botRails
             else if (type.StartsWith("agent", StringComparison.Ordinal)) ChartBridgeAgents.OnPageMessage(client, type, text);   // 0.5.0 agents: agentMode, agentKill, agentSeen, agentAnswer, agentAccount, agentRules
         }
