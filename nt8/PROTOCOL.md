@@ -3722,8 +3722,11 @@ Anthony 2026-11-13: "If I make a move, that's the move". Built in `ChartBridgeGr
   the rule adds no account at all (it cannot tell which ones were taken out by hand), and says so.
 - **The `groups` message gains `laneRule`**, sent always, so a lane card says the rule's state even with no trader:
   `{"state":"on"|"off"|"error","why":null|"...","handOut":[{"account":"...","from":"<group name>","type":"eval"|"funded","at":<ms>}]}`.
-  `off`: `config.txt` has `laneRule = off`, or no `deskUrl`. `error`: The Desk's lane-accounts cannot be read, or
-  `lane-hand.txt` does not read.
+  `off`: `config.txt` has `laneRule = off`, or no `deskUrl`. `error`: The Desk's lane-accounts cannot be read,
+  `lane-hand.txt` does not read, or it could not be saved (the list then holds in memory only, so a restart would forget it).
+- **No race with a hand move** (the review of 0.6.23): the rule's join and leave take ChangeGate (which every hand move holds
+  through its change and its hand-list entry) and read the account's group and the hand list again inside it, so a hand move
+  that finished a moment before is never undone. Inside the change itself a rule join never takes an account that is in a group.
 
 Checked in `check/AgentHarness.cs` (`PropAccounts`, the lane rule part, "0.6.23 hand") and `check/GroupsHarness.cs`.
 

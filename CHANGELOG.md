@@ -77,7 +77,10 @@ move, that's the move".
   - Putting the account in any group by hand clears it. The rule's own moves never touch the list.
   - The rule still takes an account out once flat when The Desk marks it blown, passed or archived. Any outcome now leaves
     (the review of 0.6.22, item 1).
-  - A list that does not read: the rule adds nobody, and says why.
+  - A list that does not read: the rule adds nobody, and says why. A list that cannot be saved reads as an error on every
+    lane card (a restart would forget it).
+  - No race with a hand move (the review of 0.6.23): the rule reads the account's group and the hand list again under
+    ChangeGate before it joins or takes out, so a hand Remove or a hand move that finished a moment before is never undone.
   - The `groups` message gains `laneRule`: the rule's state (on, off or error, with why) and the accounts kept out by hand.
 - **The page** (chart 1.56.0):
   - Every lane card, with a trader or without, says "Lane rule: on", "Lane rule: off (why)" or "Lane rule: not working:

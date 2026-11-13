@@ -6718,6 +6718,32 @@ public static class AgentHarness
                       "0.6.23 hand: putting it in a group by hand clears it: " + ChartBridgeGroups.GroupOf("PROP-1") + " " + AgentReject());
                 Check(apply(new[] { row("PROP-1", "eval", "promoted", false) }) == 1 && ChartBridgeGroups.GroupOf("PROP-1") == null && !File.ReadAllText(handFile).Contains("PROP-1"),
                       "0.6.23 hand: the rule still takes a passed account out once flat, and that is not a hand removal");
+                // the review of 111: a hand move that lands between the rule's first read and its join is never undone
+                ChartBridgeGroups.LaneRaceHook = who => { P("{\"type\":\"accountGroup\",\"cid\":\"race1\",\"account\":\"" + who + "\",\"group\":\"g1\",\"size\":50000,\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"eod\",\"lockAt\":0,\"target\":3000,\"consistency\":0,\"maxMinis\":4,\"maxMicros\":40,\"typeId\":\"made-up-50k\"}"); P("{\"type\":\"accountGroup\",\"cid\":\"race2\",\"account\":\"" + who + "\",\"group\":null}"); };
+                Check(apply(new[] { row("PROP-1", "eval", null, false) }) == 0 && ChartBridgeGroups.GroupOf("PROP-1") == null && File.ReadAllText(handFile).Contains("out\tPROP-1\t"),
+                      "0.6.23 (the review of 111): a hand Remove that finished after the rule's first read: the rule reads again under ChangeGate and does not join it back");
+                ChartBridgeGroups.LaneRaceHook = who => P("{\"type\":\"accountGroup\",\"cid\":\"race3\",\"account\":\"" + who + "\",\"group\":\"g2\",\"size\":50000,\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"eod\",\"lockAt\":0,\"target\":3000,\"consistency\":0,\"maxMinis\":4,\"maxMicros\":40,\"typeId\":\"made-up-50k\"}");
+                Check(ChartBridgeGroups.GroupOf("PROP-2") == null && apply(new[] { row("PROP-2", "eval", null, false) }) == 0 && ChartBridgeGroups.GroupOf("PROP-2") == "g2",
+                      "0.6.23 (the review of 111): moved by hand into another group meanwhile: left where he put it: " + ChartBridgeGroups.GroupOf("PROP-2"));
+                ChartBridgeGroups.LaneRaceHook = null;
+                // the review of 111, point 2: lane-hand.txt that cannot be saved is an error on every lane card, not only a log line
+                Directory.CreateDirectory(handFile + ".tmp");   // the save's temp file cannot be made
+                try
+                {
+                    P("{\"type\":\"accountGroup\",\"cid\":\"hsin\",\"account\":\"PROP-1\",\"group\":\"g1\",\"size\":50000,\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"eod\",\"lockAt\":0,\"target\":3000,\"consistency\":0,\"maxMinis\":4,\"maxMicros\":40,\"typeId\":\"made-up-50k\"}");
+                    P("{\"type\":\"accountGroup\",\"cid\":\"hsave\",\"account\":\"PROP-1\",\"group\":null}");
+                    string sj = ChartBridgeGroups.GroupsJson();
+                    Check(ChartBridgeGroups.GroupOf("PROP-1") == null && sj.Contains("\"laneRule\":{\"state\":\"error\",\"why\":\"lane-hand.txt could not be saved (") && sj.Contains("a restart would forget the accounts taken out by hand"),
+                          "0.6.23 (the review of 111): a save that fails reads state error with why: " + sj.Substring(Math.Max(0, sj.IndexOf("\"laneRule\""))));
+                    Check(apply(new[] { row("PROP-1", "eval", null, false) }) == 0 && ChartBridgeGroups.GroupOf("PROP-1") == null, "0.6.23: and the list still holds in memory this run");
+                }
+                finally { Directory.Delete(handFile + ".tmp"); }
+                P("{\"type\":\"accountGroup\",\"cid\":\"hback\",\"account\":\"PROP-1\",\"group\":\"g1\",\"size\":50000,\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"eod\",\"lockAt\":0,\"target\":3000,\"consistency\":0,\"maxMinis\":4,\"maxMicros\":40,\"typeId\":\"made-up-50k\"}");
+                P("{\"type\":\"accountGroup\",\"cid\":\"hout2\",\"account\":\"PROP-1\",\"group\":null}");
+                Check(ChartBridgeGroups.GroupsJson().Contains("\"laneRule\":{\"state\":") && !ChartBridgeGroups.GroupsJson().Contains("could not be saved"), "0.6.23: the next save that works clears the error");
+                P("{\"type\":\"accountGroup\",\"cid\":\"p2out\",\"account\":\"PROP-2\",\"group\":null}");   // PROP-2 out of g2 again for the checks below
+                try { Gone(handFile); } catch (Exception) { }
+                ChartBridgeGroups.LaneForget();                                                                  // a clean hand list for them
                 // the review of 108, item 1: ANY outcome leaves
                 Check(apply(new[] { row("PROP-2", "eval", null, false) }) == 1 && ChartBridgeGroups.GroupOf("PROP-2") == "g1", "0.6.23: (setup) PROP-2 joins the eval lane");
                 Check(apply(new[] { row("PROP-2", "eval", "passed", false) }) == 1 && ChartBridgeGroups.GroupOf("PROP-2") == null && ChartBridgeGroups.GroupsJson().Contains("removed: PROP-2 (its outcome on The Desk is passed) (rule)"),

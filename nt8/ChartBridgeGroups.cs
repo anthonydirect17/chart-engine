@@ -2278,6 +2278,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 string cur;
                 next.Members.TryGetValue(name, out cur);
                 if (id == cur) return id == null ? Unchanged : name + " is in " + next.Groups[id].Name + " already";
+                if (by == "the lane rule" && id != null && cur != null) return name + " is in a group now: the lane rule leaves it there";   // 0.6.23 (the review of 111)
                 Group g = null;
                 if (id != null && !next.Groups.TryGetValue(id, out g)) return "no group " + id;
                 // 0.6.7: a group with no rules of its own takes an account only with its own (from its type on The Desk)
@@ -2533,7 +2534,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static readonly Dictionary<string, List<KeyValuePair<long, string>>> LaneLog = new Dictionary<string, List<KeyValuePair<long, string>>>(StringComparer.Ordinal);
         private static readonly HashSet<string> LaneSaid = new HashSet<string>(StringComparer.Ordinal);   // a refusal said once (account|reason)
         private static readonly string[] LaneRuleKeys = { "size", "dailyLoss", "drawdown", "drawdownType", "lockAt", "target", "consistency", "maxMinis", "maxMicros", "typeId" };
-        public static void LaneForget() { lock (LaneLog) LaneLog.Clear(); lock (LaneSaid) LaneSaid.Clear(); lock (HandSync) { handLoaded = false; handOut = null; handError = null; } laneLastError = null; }   // the harness: a fresh rule
+        public static void LaneForget() { lock (LaneLog) LaneLog.Clear(); lock (LaneSaid) LaneSaid.Clear(); lock (HandSync) { handLoaded = false; handOut = null; handError = null; handSaveError = null; } LaneRaceHook = null; laneLastError = null; }   // the harness: a fresh rule
         private static string LaneLogPart(string gid) { string j = LaneLogJson(gid); return j == "[]" ? "" : ",\"laneLog\":" + j; }
         private static string LaneLogJson(string gid)
         {
@@ -2593,6 +2594,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // Every 2 s (ChartBridge's poll timer): once a minute, off the timer's thread, GET The Desk's /api/lane-accounts and apply the
         // rule. One read at a time; a failure is said once until it reads again, and nothing moves that minute.
         public static bool LaneHarnessManual;            // test hook: the harness calls LaneApply itself
+        public static Action<string> LaneRaceHook;        // test hook (0.6.23, the review of 111): runs inside ChangeGate before the join's second read
         private static int laneBusy;
         private static double laneNext;
         private static string laneLastError;
@@ -2647,6 +2649,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static readonly object HandSync = new object();
         private static Dictionary<string, string[]> handOut;   // account -> { ms, group name, type }; under HandSync
         private static string handError;
+        private static string handSaveError;   // 0.6.23 (the review of 111): the last save failed (null: saved, or nothing to save yet)
         private static bool handLoaded;
         private static string HandPath { get { return Path.Combine(ChartBridgeConfig.Folder, "lane-hand.txt"); } }
         private static void EnsureHandLocked()
@@ -2683,8 +2686,14 @@ namespace NinjaTrader.NinjaScript.AddOns
             List<string> lines = new List<string> { HandHeader };
             foreach (KeyValuePair<string, string[]> kv in handOut.OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase))
                 lines.Add("out\t" + kv.Key + "\t" + kv.Value[0] + "\t" + (kv.Value[1] ?? "").Replace("\t", " ") + "\t" + kv.Value[2]);
-            try { ChartBridgeFiles.WriteLines(HandPath, lines); }
-            catch (Exception ex) { ChartBridgeServer.Log("lane-hand.txt could not be saved (" + ex.Message + "): the rule keeps the list until ChartBridge stops"); }
+            try { ChartBridgeFiles.WriteLines(HandPath, lines); handSaveError = null; }
+            catch (Exception ex)
+            {
+                // 0.6.23 (the review of 111): the list lives only in memory now, so a restart would forget it: said as an error on
+                // every lane card (laneRule.state), not only in the Output window, until a save works again
+                handSaveError = "lane-hand.txt could not be saved (" + ex.Message + "): a restart would forget the accounts taken out by hand";
+                ChartBridgeServer.Log("lane rule: " + handSaveError);
+            }
         }
         private static void HandOut(string name, string groupName, string type)
         {
@@ -2716,10 +2725,12 @@ namespace NinjaTrader.NinjaScript.AddOns
             string state, why = null;
             List<KeyValuePair<string, string[]>> list;
             string herr;
-            lock (HandSync) { EnsureHandLocked(); herr = handError; list = handOut.OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase).ToList(); }
+            string hsave;
+            lock (HandSync) { EnsureHandLocked(); herr = handError; hsave = handSaveError; list = handOut.OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase).ToList(); }
             if (!ChartBridgeConfig.LaneRule) { state = "off"; why = "config.txt has laneRule = off"; }
             else if (string.IsNullOrEmpty(ChartBridgeConfig.DeskUrl)) { state = "off"; why = "config.txt has no deskUrl, so the rule cannot ask The Desk"; }
             else if (herr != null) { state = "error"; why = "lane-hand.txt does not read (" + herr + "): the rule adds no account until it does"; }
+            else if (hsave != null) { state = "error"; why = hsave; }
             else if (laneLastError != null) { state = "error"; why = laneLastError; }
             else state = "on";
             return "{\"state\":" + CbJson.Str(state) + ",\"why\":" + (why == null ? "null" : CbJson.Str(why)) + ",\"handOut\":[" +
@@ -2763,7 +2774,14 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (why == null) return false;
                 if (a != null) { string busy = BenchBusyWhy(name, a); if (busy != null) { LaneSay(cur, name + " is " + why + ": it leaves " + curName + " once flat (" + busy + ")", name + "|wait|" + why); return false; } }
                 string res;
-                lock (ChangeGate) res = AccountGroup(new Dictionary<string, string> { { "account", CbJson.Str(name) }, { "group", "null" } }, "the lane rule", false);
+                lock (ChangeGate)
+                {
+                    // 0.6.23 (the review of 111): read again under ChangeGate, which every hand move holds through its whole change:
+                    // an account moved by hand meanwhile (into another group, or out) is left where he put it
+                    string now; lock (Mem) state.Members.TryGetValue(name, out now);
+                    if (now != cur) return false;
+                    res = AccountGroup(new Dictionary<string, string> { { "account", CbJson.Str(name) }, { "group", "null" } }, "the lane rule", false);
+                }
                 if (res != null) { LaneSay(cur, name + " is " + why + " but could not leave " + curName + ": " + res, name + "|leavefail|" + res); return false; }
                 LaneSay(cur, "removed: " + name + " (" + why + ") (rule)", null);
                 lock (LaneSaid) LaneSaid.RemoveWhere(k => k.StartsWith(name + "|", StringComparison.Ordinal));
@@ -2786,7 +2804,18 @@ namespace NinjaTrader.NinjaScript.AddOns
             Dictionary<string, string> m = new Dictionary<string, string>(StringComparer.Ordinal) { { "account", CbJson.Str(name) }, { "group", CbJson.Str(lane.Id) } };
             foreach (KeyValuePair<string, string> kv in r.Rules) m[kv.Key] = kv.Key == "drawdownType" || kv.Key == "typeId" ? CbJson.Str(kv.Value) : kv.Value;
             string err;
-            lock (ChangeGate) err = AccountGroup(m, "the lane rule", true);
+            lock (ChangeGate)
+            {
+                // 0.6.23 (the review of 111): the first read above was taken without ChangeGate, so a hand Remove (or a hand move into
+                // another group) may have finished since. Every hand move holds ChangeGate through its change AND its hand list
+                // entry, so read both again here: still in no group, still not taken out by hand, the list still readable.
+                if (LaneRaceHook != null) LaneRaceHook(name);   // the harness: a hand move between the first read and this one
+                string now; lock (Mem) state.Members.TryGetValue(name, out now);
+                if (now != null) return false;
+                HandState(name, out handErr, out byHand);
+                if (handErr != null || byHand) return false;
+                err = AccountGroup(m, "the lane rule", true);
+            }
             if (err != null) { LaneSay(lane.Id, name + " is not added to " + lane.Name + ": " + err, name + "|joinfail|" + err); return false; }
             LaneSay(lane.Id, "added: 1 " + r.Kind + " account, " + name + ", on the bench (rule)", null);
             lock (LaneSaid) LaneSaid.RemoveWhere(k => k.StartsWith(name + "|", StringComparison.Ordinal));
