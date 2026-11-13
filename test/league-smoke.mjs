@@ -12,7 +12,7 @@
 // stays in the top bar (it does on every layout) and the strip's bot card opens the Bot view; the button stays in reach while a
 // view is open and while it carries its red alert (review 2), and is still there when the strip goes; nothing sends an order.
 // 1.38.1 (Anthony 2026-10-23: his only MNQ chart is a 40-range execution chart, every other chart is NQ): the layout's chart is NQ
-// 1 min; the League chart is NQ 1 min too ("NQ 1 min (league trades MNQ)"), so opening the tab sends no new NQ subscribe and no MNQ
+// 1 min (1.57.0: the Colosseum has no chart now, Anthony 2026-11-13; opening it sends no subscribe at all), so opening the tab sends no new NQ subscribe and no MNQ
 // minute subscribe (it joins the NQ line's load); the Agents panel's Drone sky reads NQ bars. The sample marks are at the NQ
 // sample's prices (the league's MNQ prices are the same index).
 // Next release (Anthony's task "League view opens a given past day"): ?tab=league&day=YYYY-MM-DD opens that day read only, labelled,
@@ -138,13 +138,12 @@ try {
   check(/sample thoughts: waited for the open to settle/.test(await p.$eval('#lgView .lg-bdetail[data-key="desk:sample-agent-beta"]', r => r.innerText)), 'the thoughts open under the row');
   await p.click('#lgView [data-do="bview"][data-view="today"]');
   await p.screenshot({ path: path.join(root, 'test', 'out', 'colosseum-board-157.png') });
-  const lgBars = await until(() => p.evaluate(() => { const c = document.querySelector('#lgView .lg-chart'); return c && c.querySelector('canvas') ? true : null; }), 'the League chart', 5000);
+  /* 1.57.0 (Anthony 2026-11-13, the league's chart: "I dont think its necessary"): no chart on the Colosseum, so opening it
+     subscribes to nothing */
   await wait(1500);
   const newSubs = await p.evaluate(n => window.__subs.slice(n), subs0);
-  check(!!lgBars && !newSubs.some(m => m.root === 'NQ') && !newSubs.some(m => m.root === 'MNQ' && !(m.tickHours > 0)),
-    '1.38.1: opening the League tab with an NQ 1 min chart open sends no new NQ subscribe and no MNQ minute subscribe (' + JSON.stringify(newSubs) + ')');
-  check((await p.textContent('#lgView [data-k="cname"]')) === 'NQ 1 min (league trades MNQ)', '1.38.1: the League chart says NQ 1 min (league trades MNQ)');
-  check(await until(() => p.evaluate(() => { const b = document.querySelector('#lgView .ch-badge [id$="bConn"]'); return !b || b.hidden || !/LOADING/.test(b.textContent); }), 'the League chart live at once', 3000), '1.38.1: the League chart is not left LOADING');
+  check(!(await p.$('#lgView canvas')) && !(await p.$('#lgView .lg-chart')) && newSubs.length === 0 && (await p.evaluate(() => window.workspace.league().chart)) === false,
+    '1.57.0: no chart on the Colosseum, and opening it sends no subscribe (' + JSON.stringify(newSubs) + ')');
   check(new URL(p.url()).searchParams.get('tab') === 'colosseum', '1.50.0: ?tab=colosseum in the address');
   /* 1.50.0 the Colosseum: its name, the watch box (ChartBridge's traders in Shadow, read only, "not built yet" for the loop's own
      list), the Chart tab; a mode change of the made-up agent moves it in and out of the box (another page's change) */
@@ -173,12 +172,8 @@ try {
   check(/\$3\.00 of \$9\.50 today/.test(text) && /\$12\.25 of \$200\.00 this month/.test(text), 'the API spend against the caps');
   const log = await p.$$eval('.lg-log .lg-row', rs => rs.map(r => r.className + ' ' + r.textContent));
   check(log.length === 3 && /k-refused/.test(log[0]) && /k-pass/.test(log[1]) && /k-enter/.test(log[2]) && /short 5 MNQ, stop 15 pt, target 30 pt at VWAP/.test(log[2]) && /\(with you\)/.test(log[2]), 'the decision log, newest first: ' + log.length + ' rows');
-  const ink = await until(async () => { const n = await inked(p, '#lgView .lg-overlay'); return n > 200 ? n : null; }, 'the marks drawn', 10000);
-  check(!!ink, 'the league chart carries the marks on its overlay (' + ink + ' pixels)');
-  check((await p.evaluate(() => window.workspace.league().marks)) === 5, 'five marks: three fills and two exits');
+  check((await p.evaluate(() => window.workspace.league().marks)) === 5, 'five marks for a chart\'s faint switch: three fills and two exits');
   await p.screenshot({ path: path.join(out, 'league-1366.png') });
-  const box = await p.$eval('#lgView .lg-chartbox', e => { const r = e.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; });
-  await p.screenshot({ path: path.join(out, 'league-chart.png'), clip: box });
   check(await p.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'no sideways scroll at 1366');
   for (const [w, h] of [[1600, 900], [1920, 1080]]) {
     await p.setViewportSize({ width: w, height: h }); await wait(600);
@@ -353,9 +348,7 @@ try {
   check(/made up for the past-day smoke/.test(ptext) && !/made up: no edge at the level/.test(ptext), 'the decision log is the past day\'s only');
   check(new URL(p.url()).searchParams.get('day') === pastDate && new URL(p.url()).searchParams.get('tab') === 'colosseum', 'the old ?tab=league&day= link lands on the Colosseum and the address keeps the day: ?tab=colosseum&day=' + pastDate);
   if (pt(20)) {
-    check((await p.evaluate(() => window.workspace.league().marks)) === 2, 'the past day\'s marks for the chart: one fill, one exit (the chart opens at its live edge; the day is to its left)');
-    const cpast = await until(() => p.$eval('#lgView [data-k="cpast"]', e => (!e.hidden && e.textContent ? e.textContent : null)), 'the chart\'s past-day note', 10000);
-    check(cpast === pastDate + ' is in the chart\'s history: drag the chart back to it.', 'the chart says the day is in its history: ' + cpast);
+    check((await p.evaluate(() => window.workspace.league().marks)) === 2, 'the past day\'s marks: one fill, one exit');
   } else console.log('  note: the sample bars hold no earlier date; the past-day marks were not checked');
   check((await p.evaluate(() => window.workspace.leagueGhostTrades())) !== 1, 'the past day is never the faint marks\' day');
   await p.screenshot({ path: path.join(out, 'league-past-1366.png') });

@@ -162,17 +162,16 @@ test('a past day: the live status is left out (it is today\'s, never that day\'s
   assert.equal(L.emptyText('2026-10-19'), 'No league record for 2026-10-19: no paper trade and no decision. Not enough data to show that day.');
 });
 
-test('a past day on the chart: in the chart only if a bar of that session (18:00 of the day before to 17:00) is there', () => {
+test('1.57.0 (Anthony 2026-11-13, "I dont think its necessary"): no chart on the Colosseum; the marks still go on a chart through its faint switch', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'live', 'league.js'), 'utf8');
+  const view = src.slice(src.indexOf('function create(o)'));
+  assert.doesNotMatch(view, /ChartLive\.mount|lg-chart|data-k="cname"|chartReach/, 'the tab mounts no chart and says nothing of one');
+  assert.match(src, /window\.LeagueOverlay = \{ attach \}/, 'the overlay stays for the faint switch on any chart');
+  assert.equal(L.chartReach, undefined);
   const s = (y, m, d, h) => Date.UTC(y, m - 1, d, h) / 1000;
-  const bars = [{ t: s(2026, 10, 26, 18) }, { t: s(2026, 10, 30, 15) }];   // the first bar opens the 10-27 session
-  assert.deepEqual(L.chartReach(bars, '2026-10-22'), { reach: 'before', first: '2026-10-27' });
-  assert.deepEqual(L.chartReach(bars, '2026-10-26'), { reach: 'before', first: '2026-10-27' }, 'review LOW 3: a bar at 18:00 on the 26th is the 27th\'s session, not the 26th\'s');
-  assert.deepEqual(L.chartReach(bars, '2026-10-27'), { reach: 'in', first: '2026-10-27' });
-  assert.deepEqual(L.chartReach(bars, '2026-10-28'), { reach: 'missing', first: '2026-10-27' }, 'no bar of that session in the history');
-  assert.deepEqual(L.chartReach(bars, '2026-10-30'), { reach: 'in', first: '2026-10-27' });
-  assert.deepEqual(L.chartReach([{ t: s(2026, 10, 29, 17) }, { t: s(2026, 10, 29, 18) }], '2026-10-29'), { reach: 'before', first: '2026-10-30' }, 'a bar in the 17:00 break belongs to the next session');
-  assert.deepEqual(L.chartReach([], '2026-10-28'), { reach: 'none', first: '' });
-  assert.deepEqual(L.chartReach(bars, 'x'), { reach: 'none', first: '' });
+  assert.equal(L.sessionOfBar(s(2026, 10, 26, 18)), '2026-10-27', 'review LOW 3: a bar at 18:00 on the 26th is the 27th\'s session (the faint marks\' sessions)');
+  assert.equal(L.sessionOfBar(s(2026, 10, 29, 17)), '2026-10-30', 'a bar in the 17:00 break belongs to the next session');
+  assert.equal(L.sessionOfBar(s(2026, 10, 30, 15)), '2026-10-30');
 });
 
 test('a past day: the page wiring (the address, read only, never on the live charts)', () => {

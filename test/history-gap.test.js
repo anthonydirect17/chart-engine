@@ -23,11 +23,10 @@ test('1.38.1: the page says a LOADING that waits, shows no hole notice (Anthony:
     assert.doesNotMatch(read(f), /[\u2013\u2014]/, f + ': no em or en dashes');
 });
 
-test('1.38.1 (Anthony 2026-10-23): the League chart and the Drone sky are NQ 1 min; the seats\' MNQ prices drawn unconverted', () => {
+test('1.38.1 (Anthony 2026-10-23): the Drone sky is NQ 1 min; the seats\' MNQ prices drawn unconverted (1.57.0: no League chart now)', () => {
   const lg = read('live/league.js');
   assert.match(lg, /root: 'NQ', busy: false[,}]/);
-  assert.match(lg, />NQ 1 min \(league trades MNQ\)</);
-  assert.match(lg, /view: \{ root: S\.root, tf: 'm1' \}/, 'the League chart keeps the 1 min view: 5 days, no ticks (LivePrefs.daysFor)');
+  assert.doesNotMatch(lg, /ChartLive\.mount/, '1.57.0 (Anthony 2026-11-13): the Colosseum has no chart of its own');
   assert.equal(LP.daysFor('m1'), 5);
   assert.match(lg, /const ROOTS = \['MNQ', 'NQ'\];/, 'the marks draw on NQ and MNQ charts at their own prices');
   const sky = read('live/agents-sky.js');

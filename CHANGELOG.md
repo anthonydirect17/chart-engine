@@ -80,7 +80,10 @@ pages. Assignment part F (Anthony 2026-11-13) and the coordinator's answers F1 t
   builder 1's fields to come); an agent has none ("no backtest").
 - **A click on a row** opens its trades of the day and, for an agent, its thoughts in a fold (an agent's diary, or a league
   seat's decision log).
-- No chart in the leaderboard. The league's chart, seat cards and log stay below it. Nothing on it sends anything.
+- **No chart on the Colosseum** (Anthony 2026-11-13, asked whether the league's chart stays: "I dont think its necessary").
+  The tab is the leaderboard, then the watch, the seats' day with the week and month table, and the decision log, side by
+  side (one column when narrow). Opening it subscribes to nothing. The league's marks still go on any NQ or MNQ chart through
+  that chart's ⋯ switch ("League trades (faint)"), as before. Nothing on the tab sends anything.
 - The league view keeps its rule of no green or red: R shows with its sign.
 
 Checked in `test/league.test.js` and `test/league-smoke.mjs` (sample programs on the stand-in Desk). Needs The Desk's PR for
