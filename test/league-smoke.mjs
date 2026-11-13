@@ -87,6 +87,17 @@ try {
   await p.waitForFunction(() => document.getElementById('wsConn').classList.contains('live'), null, { timeout: 40000 });
   const bars = await until(() => p.evaluate(() => { const c = window.workspace.chart('c1'); const b = c && c.bars(); return b && b.length > 60 ? b.map(x => ({ t: x.t, c: x.c })) : null; }), 'the NQ chart\'s bars', 20000);
   desk.league = sampleDay(bars);
+  /* 1.57.0: the leaderboard's SAMPLE programs (made-up names, made-up days), in The Desk's colosseum.py shape */
+  {
+    const today = await p.evaluate(() => window.LeagueCore.sessionToday());
+    const back = n => { const d = new Date(today + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() - n); return d.toISOString().slice(0, 10); };
+    const dd = (n, r, more) => Object.assign({ date: back(n), trades: 1, r, pnl: 10, mode: 'shadow', spent_usd: null, paper: true }, more || {});
+    desk.colosseum = { v: 1, today, since: back(28), programs: [
+      { id: 'sample-bot-alpha', source: 'agents', kind: 'bot', build: 'spec runner:sample', mode: 'shadow', last_day: today, diary: '',
+        days: [0, 1, 2, 3, 4, 5].map(i => dd(i, 0.5)), today: [{ n: 1, setup: 'sample setup', side: 'buy', root: 'MNQ', qty: 1, entry_time: '09:45:00', exit_time: '10:02:00', exit_reason: 'target', r: 0.5, pnl: 10 }] },
+      { id: 'sample-agent-beta', source: 'agents', kind: 'agent', build: 'sample', mode: 'copilot', last_day: today, diary: 'sample thoughts: waited for the open to settle',
+        days: [dd(0, 1.5, { mode: 'copilot', paper: false, spent_usd: 0.4 }), dd(1, -1, { spent_usd: 0.2 })], today: [] }] };
+  }
   /* the made-up bot connected, so it carries no alert of its own until the test raises one (review 2) */
   await fetch(`http://127.0.0.1:${PORT}/test/bot-connect?name=Demo%20Opening%20Fade`, { method: 'POST' });
   await until(() => p.$eval('#wsBotTab', b => !b.classList.contains('bt-alert')), 'the made-up bot connected: no alert', 10000);
@@ -107,6 +118,26 @@ try {
   await p.click('#wsLeagueTab');
   await until(() => p.evaluate(() => document.body.classList.contains('lg-on') && window.workspace.league().trades === 2), 'the League tab with the sample day', 15000);
   check(await p.$eval('#wsGrid', g => getComputedStyle(g).display === 'none'), 'the League tab hides the grid');
+  /* 1.57.0 (part F): the leaderboard, bots and agents mingled, ranked; nothing on it sends */
+  await until(() => p.evaluate(() => window.workspace.league().board.programs === 2), 'the leaderboard read', 15000);
+  const lb = await p.evaluate(() => [...document.querySelectorAll('#lgView .lg-brow')].map(r => [r.dataset.key, r.dataset.kind, r.querySelector('.lg-who').textContent]));
+  check(lb.map(x => x[0]).join() === 'desk:sample-agent-beta,desk:sample-bot-alpha,league:H,league:O,league:S' && lb.filter(x => x[0].startsWith('league:')).every(x => x[1] === 'agent'),
+    'Today: by today\'s R (+1.50, +0.50); the league\'s sample day is an older session, so its seats have no today and come after, as agents: ' + JSON.stringify(lb));
+  check(lb[0][2] === 'AGENT' && lb[1][2] === 'BOT' && lb[2][2] === 'AGENT', 'told apart by the BOT and AGENT tags');
+  check(/its last session 2026-10-22/.test(await p.$eval('#lgView .lg-brow[data-key="league:H"]', r => r.innerText)), 'a seat says its last session, not today');
+  const rowText = await p.$eval('#lgView .lg-brow[data-key="desk:sample-agent-beta"]', r => r.innerText.replace(/\s+/g, ' '));
+  check(/Copilot, reported today/.test(rowText) && /\+1\.50 R/.test(rowText) && /too early/.test(rowText) && /\$0\.40 today, \$0\.60 month/.test(rowText) && /not reported/.test(rowText), 'an agent\'s row: status, today, too early, API cost, decision time: ' + rowText);
+  check(/no backtest pace yet/.test(await p.$eval('#lgView .lg-brow[data-key="desk:sample-bot-alpha"]', r => r.innerText)), 'a bot with 6 days: no backtest pace yet');
+  await p.click('#lgView [data-do="bview"][data-view="multi"]');
+  const multi = await p.evaluate(() => [...document.querySelectorAll('#lgView .lg-brow')].map(r => r.dataset.key));
+  check(multi[0] === 'desk:sample-bot-alpha' && multi[1] === 'desk:sample-agent-beta', 'Multi-day: by the last 20 days (+3.00 over +0.50), the seats after: ' + multi.join());
+  await p.click('#lgView .lg-bname[data-key="desk:sample-agent-beta"]');
+  const detail = await p.$eval('#lgView .lg-bdetail[data-key="desk:sample-agent-beta"]', r => r.innerText.replace(/\s+/g, ' '));
+  check(/No trade today/.test(detail) && /Thoughts \(1\)/.test(detail), 'a click opens the row: its trades and its thoughts, folded: ' + detail);
+  await p.click('#lgView .lg-bdetail[data-key="desk:sample-agent-beta"] summary');
+  check(/sample thoughts: waited for the open to settle/.test(await p.$eval('#lgView .lg-bdetail[data-key="desk:sample-agent-beta"]', r => r.innerText)), 'the thoughts open under the row');
+  await p.click('#lgView [data-do="bview"][data-view="today"]');
+  await p.screenshot({ path: path.join(root, 'test', 'out', 'colosseum-board-157.png') });
   const lgBars = await until(() => p.evaluate(() => { const c = document.querySelector('#lgView .lg-chart'); return c && c.querySelector('canvas') ? true : null; }), 'the League chart', 5000);
   await wait(1500);
   const newSubs = await p.evaluate(n => window.__subs.slice(n), subs0);

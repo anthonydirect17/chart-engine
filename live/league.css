@@ -65,3 +65,19 @@ body:not(.lg-on) .lg-view.lg-in-ws { display: none !important; }
 /* the Bot's button in the top bar's slot (1.35.0; 1.36.0 removed the Bot panel) */
 .ws-tabslot { display: inline-flex; gap: 6px; flex: none; }
 .ws-tabslot:empty { display: none; }
+/* 1.57.0: the leaderboard (part F): bots and agents mingled, told apart by the BOT and AGENT tags of the other pages */
+.lg-board { border: 1px solid var(--ws-line); border-radius: 10px; padding: 10px 12px; margin: 8px 0; display: flex; flex-direction: column; gap: 6px; }
+.lg-bhead { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.lg-bscroll { overflow-x: auto; }
+.lg-btable { width: 100%; border-collapse: collapse; font-size: 12px; }
+.lg-btable th { text-align: left; font-weight: 500; color: var(--ws-muted); padding: 3px 6px; border-bottom: 1px solid var(--ws-line); white-space: nowrap; }
+.lg-btable td { padding: 4px 6px; border-bottom: 1px solid var(--ws-line); color: var(--ws-text2); vertical-align: top; }
+.lg-bname { background: none; border: 0; padding: 0; color: var(--ws-text); font: 600 12px var(--ws-sans); cursor: pointer; text-align: left; }
+.lg-bname[aria-expanded="true"] { color: var(--ws-gold-text, #E2C687); }
+.lg-who { font: 500 10px var(--ws-mono); letter-spacing: .08em; border: 1px solid var(--ws-line2); border-radius: 4px; padding: 1px 6px; color: var(--ws-text2); }
+.lg-who[data-who="agent"] { color: #7FD3E0; border-color: rgba(95, 201, 216, .6); background: #0C1517; }
+.lg-r { font-family: var(--ws-mono); }
+.lg-btrades { margin: 0; padding-left: 16px; font-size: 11px; }
+.lg-blog summary { cursor: pointer; color: var(--ws-text2); font-size: 11px; }
+.lg-blog ol { margin: 4px 0; padding-left: 18px; font-size: 11px; }
+.lg-bnote { font-size: 11px; margin: 0; }

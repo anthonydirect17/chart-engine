@@ -186,3 +186,48 @@ test('a past day: the page wiring (the address, read only, never on the live cha
   assert.match(ws, /const leagueGhostDay = \(\) => \(leagueView && leagueView\.shown\(\) && leagueView\.liveDay\(\)\) \|\| LG\.day;/);
   assert.doesNotMatch(ws, /LG\.day = leagueView\.day\(\)/, 'a past day never becomes the faint marks\' day');
 });
+
+/* ---------------------------------------------------------------- 1.57.0: the leaderboard (part F) */
+const board = (programs, today) => L.cleanBoard({ v: 1, today: today || '2026-11-13', since: '2026-10-16', programs });
+const prog = (id, kind, days, more) => Object.assign({ id, kind, source: 'agents', build: kind === 'bot' ? 'spec runner:ab' : 'b1', mode: 'shadow', last_day: days[0] ? days[0].date : '', days, today: [], diary: '' }, more || {});
+const dayOf = (date, r, trades, more) => Object.assign({ date, r, trades: trades === undefined ? 1 : trades, pnl: 10, mode: 'shadow', spent_usd: null, paper: true }, more || {});
+
+test('leaderboard: The Desk\'s answer is read strictly; a program not in the shape is left out', () => {
+  assert.strictEqual(L.cleanBoard(null).ok, false);
+  assert.strictEqual(L.cleanBoard({ v: 2, programs: [] }).ok, false);
+  const b = board([prog('a', 'agent', [dayOf('2026-11-13', 1)]), { id: 'x', kind: 'robot', days: [] }, { id: '', kind: 'bot', days: [] }, prog('b', 'bot', [dayOf('bad', 1), dayOf('2026-11-12', 'x'), dayOf('2026-11-11', 2)])]);
+  assert.deepStrictEqual(b.programs.map(p => [p.id, p.days.map(d => d.date)]), [['a', ['2026-11-13']], ['b', ['2026-11-11']]]);
+});
+
+test('leaderboard: rows mingle bots and agents; Today ranks by today\'s R, Multi-day by 20 days, the league\'s seats after; the pace word', () => {
+  const days = (n, r) => Array.from({ length: n }, (_, i) => dayOf('2026-11-' + String(13 - i).padStart(2, '0'), r, 1, { spent_usd: 0.1 }));
+  const b = board([
+    prog('bot-up', 'bot', days(6, 1)),                                                  // 6 days, +1 a day, today +1
+    prog('agent-flat', 'agent', [dayOf('2026-11-13', 2, 2, { spent_usd: 0.5 }), dayOf('2026-11-12', -3, 1, { spent_usd: 0.25 })], { diary: 'made-up thoughts' }),
+    prog('bot-old', 'bot', [dayOf('2026-11-10', 9)]),                                     // no day today
+  ]);
+  const rows = L.boardRows(b, null, '2026-11-13');
+  const by = Object.fromEntries(rows.map(r => [r.name, r]));
+  assert.deepStrictEqual([by['bot-up'].todayR, by['bot-up'].r5, by['bot-up'].n5, by['bot-up'].r20, by['bot-up'].n20, by['bot-up'].pace], [1, 5, 5, 6, 6, 'no backtest pace yet']);
+  assert.deepStrictEqual([by['agent-flat'].todayR, by['agent-flat'].r20, by['agent-flat'].pace], [2, -1, 'too early'], 'under 5 days: too early');
+  assert.deepStrictEqual(by['agent-flat'].cost, { today: 0.5, month: 0.75, perTrade: 0.25 }, 'API cost today, this month, and a trade');
+  assert.deepStrictEqual(by['agent-flat'].log, [{ time: '', text: 'made-up thoughts' }]);
+  assert.strictEqual(by['bot-up'].cost, null, 'a bot has no API cost');
+  assert.deepStrictEqual([by['bot-old'].todayR, by['bot-old'].todayN, by['bot-old'].status], [null, 0, 'Shadow, last day 2026-11-10']);
+  assert.deepStrictEqual(L.rankBoard(rows, 'today').map(r => r.name), ['agent-flat', 'bot-up', 'bot-old'], 'Today: by today\'s R, no trade today last');
+  assert.deepStrictEqual(L.rankBoard(rows, 'multi').map(r => r.name), ['bot-old', 'bot-up', 'agent-flat'], 'Multi-day: by the last 20 days');
+  assert.deepStrictEqual([0, 4, 5, 20].map(n => L.paceWord('bot', n)), ['too early', 'too early', 'no backtest pace yet', 'no backtest pace yet']);
+  assert.strictEqual(L.paceWord('agent', 9), 'no backtest');
+});
+
+test('leaderboard: the league\'s seats join as agents with R per trade, never added to the Desk\'s R per day; a past day has none', () => {
+  const day = L.cleanDay({ date: '2026-11-13', folder: { ok: true }, status: { seats: {} }, league: { enough_n: 20, seats: { H: { rolling: { week: { n: 3 } } } } }, trades: [], open: [], decisions: [] }, false);
+  const rows = L.boardRows(board([prog('bot-up', 'bot', [dayOf('2026-11-13', 1)])]), day, '2026-11-13');
+  const seats = rows.filter(r => r.source === 'league');
+  assert.deepStrictEqual(seats.map(r => [r.name, r.kind, r.comparable, r.pace]), [['Haiku seat (H)', 'agent', false, 'no backtest'], ['Sonnet seat (S)', 'agent', false, 'no backtest'], ['Opus seat (O)', 'agent', false, 'no backtest']]);
+  assert.match(seats[0].week, /not enough data yet \(n 3 of 20\)/);
+  assert.deepStrictEqual(L.rankBoard(rows, 'multi').map(r => r.source), ['desk', 'league', 'league', 'league'], 'the seats after on Multi-day');
+  assert.strictEqual(L.boardRows(null, Object.assign({}, day, { past: true }), '2026-11-13').length, 0, 'a past day: no seats on the board');
+  const older = L.boardRows(null, Object.assign({}, day, { date: '2026-11-12', trades: [{ seat: 'H', r: 2, crashCut: false, side: 'long', contracts: 1 }] }), '2026-11-13');
+  assert.deepStrictEqual([older[0].todayR, older[0].todayN, older[0].trades.length, older[0].status], [null, 0, 0, 'Shadow league, its last session 2026-11-12'], 'the league\'s day is not today\'s: none of it counts as today');
+});

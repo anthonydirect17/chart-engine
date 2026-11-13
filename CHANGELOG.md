@@ -63,6 +63,29 @@
   `test/pc-updater.test.js`: the allowed git subcommands, the box job's name, useHttpPath read before the one ask, the
   token only after a 404 or 401 and then through the Actions API, one place that asks for it and one that sends it.
 
+## chart 1.57.0 (2026-11-13): the Colosseum's leaderboard, bots and agents mingled (page only, no F5)
+
+In plain words: the Colosseum opens with one ranked table of every bot and every agent that traded lately, so Anthony sees
+what performs better each day. Bots and agents sit in the same table, told apart by the BOT and AGENT tags used on the other
+pages. Assignment part F (Anthony 2026-11-13) and the coordinator's answers F1 to F4.
+
+- **The rows:** every program that posted a trading day to The Desk lately (The Desk's new `GET /api/chart-colosseum`:
+  agent days and the trading add-on's bot records), and the shadow league's three seats.
+- **Columns:** name and kind, status, today's trades and R, the last 5 and last 20 days' R, projected, the API cost (an
+  agent's today, this month and per trade) and decision time.
+- **Today / Multi-day:** Today ranks everyone by today's R. Multi-day ranks by the last 20 days' R. The league's seats keep R
+  per trade (week and month means), so on Multi-day they rank after the Desk's rows and show their own numbers, labelled;
+  the two measures are never added together. A seat's results count as today's only when the league's day is today's session.
+- **Projected:** "too early" under 5 days; a bot's backtest pace is not on the roster cards yet ("no backtest pace yet",
+  builder 1's fields to come); an agent has none ("no backtest").
+- **A click on a row** opens its trades of the day and, for an agent, its thoughts in a fold (an agent's diary, or a league
+  seat's decision log).
+- No chart in the leaderboard. The league's chart, seat cards and log stay below it. Nothing on it sends anything.
+- The league view keeps its rule of no green or red: R shows with its sign.
+
+Checked in `test/league.test.js` and `test/league-smoke.mjs` (sample programs on the stand-in Desk). Needs The Desk's PR for
+`/api/chart-colosseum`; with an older Desk the table says so and the league's seats still show.
+
 ## ChartBridge 0.6.23 and chart 1.56.0 (2026-11-13): a hand move is the move
 
 In plain words: when Anthony takes an account out of a lane himself, it stays out; the lane rule no longer puts it back a
