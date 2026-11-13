@@ -1101,6 +1101,51 @@ test('1.56.0 (ChartBridge 0.6.23, "If I make a move, that\'s the move"): every a
   assert.strictEqual(P.posts.length, 0);
 });
 
+test('1.56.0 (Anthony 2026-11-13: "3 rows, eval, funded and unassigned", "show them in unassigned marked in copier"): the Unassigned row from laneRule.outside, Add through the lane\'s own panel', async t => {
+  const out = outside => ({ laneRule: { state: 'on', why: null, handOut: [], outside } });
+  assert.strictEqual(F.unassigned({ laneRule: { state: 'on', handOut: [] } }, '0.6.23').key, 'none', 'a ChartBridge without outside: not offered');
+  assert.strictEqual(F.unassigned(out([]), '0.6.22').key, 'none');
+  assert.deepStrictEqual(F.unassigned(out(null), '0.6.23'), { key: 'unknown', text: 'Not known yet: ChartBridge has not read The Desk\'s accounts (the lane rule reads them once a minute while it is on)', rows: [] }, 'null is not known, never "none outside"');
+  assert.strictEqual(F.unassigned(out([]), '0.6.23').text, 'Every eval and funded account is in its lane.');
+  const u = F.unassigned(out([
+    { account: 'FUND-B', kind: 'funded', group: null, copier: null, byHand: false },
+    { account: 'EVAL-C', kind: 'eval', group: 'Copier', copier: null, byHand: false },
+    { account: 'EVAL-A', kind: 'eval', group: null, copier: 'follower', byHand: true },
+    { account: 'EVAL-B', kind: 'eval', group: null, copier: null, byHand: true },
+    { account: 'X', kind: 'other' }, { account: 7, kind: 'eval' }]), '0.6.23');
+  assert.strictEqual(u.text, '4 accounts outside the lanes');
+  assert.deepStrictEqual(u.rows.map(r => [r.account, r.kindText, r.where]), [
+    ['EVAL-A', 'Eval', 'in the copier, kept out by hand'], ['EVAL-B', 'Eval', 'kept out by hand'], ['EVAL-C', 'Eval', 'in Copier'], ['FUND-B', 'Funded', 'in no group']],
+    'eval first, by name; each marked with where ChartBridge says it is; a malformed row is left out');
+  const calls = [];
+  const lanePanel = (el, key, opts) => ({ key, opts, el, destroy() {}, panel: { state: {}, bench: () => true, remove: () => true, join: n => { calls.push(['join', key, n]); return n === 'EVAL-B' ? 'EVAL-B is not offered by Evals\'s panel' : ''; } } });
+  timers(t);
+  const P = page(t, { lanePanel }); P.fv.showTab(true);
+  P.feed({ type: 'hello', version: '0.6.23' }); P.feed({ type: 'trading', enabled: true });
+  P.feed({ type: 'accounts', personalNamed: true, list: [{ name: 'EVAL-A', prop: true }, { name: 'EVAL-B', prop: true }, { name: 'EVAL-C', prop: true }, { name: 'EVAL-D', prop: true }] });
+  P.feed(Object.assign({ type: 'groups', list: [{ id: 'g1', name: 'Evals', accountType: 'eval', members: ['EVAL-D'] }, { id: 'g3', name: 'Copier', accountType: null, members: ['EVAL-C'] }] },
+    out([{ account: 'EVAL-A', kind: 'eval', group: null, copier: null, byHand: true }, { account: 'EVAL-B', kind: 'eval', group: null, copier: null, byHand: false },
+      { account: 'EVAL-C', kind: 'eval', group: 'Copier', copier: null, byHand: false }, { account: 'FUND-B', kind: 'funded', group: null, copier: null, byHand: false }])));
+  P.feed(evalTrader({ seats: [{ account: 'EVAL-D' }] }));
+  P.replayDone(); await P.tick();
+  let html = P.part('lane-unassigned').innerHTML;
+  assert.match(html, /<span class="fl-lanetitle">Unassigned<\/span><span class="fl-fill"><\/span><span class="fl-mut">4 accounts outside the lanes<\/span>/);
+  assert.match(html, /data-do="unadd" data-acct="EVAL-A" data-stage="eval">Add to the eval lane<\/button>/, 'an account in no group: Add');
+  assert.match(html, /data-do="unadd" data-acct="EVAL-C" data-stage="eval" aria-disabled="true" title="It is in Copier: take it out of Copier first \(its own panel\), then add it here">/, 'one in his own group stays there');
+  assert.match(html, /data-do="unadd" data-acct="FUND-B" data-stage="funded" aria-disabled="true" title="There is no funded lane yet/);
+  const click = (what, more) => P.listeners.click({ target: { closest: () => ({ dataset: Object.assign({ do: what }, more || {}) }) }, detail: 1 });
+  click('unadd', { acct: 'EVAL-C', stage: 'eval' });
+  click('unadd', { acct: 'FUND-B', stage: 'funded' });
+  assert.strictEqual(calls.length, 0, 'a disabled Add asks nothing');
+  click('unadd', { acct: 'EVAL-A', stage: 'eval' });
+  assert.deepStrictEqual(calls, [['join', 'legion-eval', 'EVAL-A']], 'through the eval lane\'s own panel (its join step: his hand add)');
+  assert.match(P.part('lane-unassigned').innerHTML, /EVAL-A: check its rules and its highest close in the eval lane&#39;s panel, then Put in\./);
+  assert.match(P.part('lane-eval').innerHTML, /aria-expanded="true">1 account<\/button>/, 'the lane\'s accounts are open, where the join step shows');
+  click('unadd', { acct: 'EVAL-B', stage: 'eval' });
+  assert.match(P.part('lane-unassigned').innerHTML, /class="fl-line fl-acctsaid fl-warn" role="status">EVAL-B is not offered by Evals&#39;s panel<\/p>/, 'the panel\'s why, said');
+  assert.strictEqual(P.posts.length, 0, 'the row sent nothing itself');
+});
+
 test('the pick: one list a lane, sent as agentPick; locked in Auto and while the trader holds something; a refusal is said and the list goes back', async t => {
   const P = await lanePage(t, [evalTrader(), fundTrader()]);
   const lanesHtml = () => P.part('lane-eval').innerHTML + P.part('lane-funded').innerHTML;

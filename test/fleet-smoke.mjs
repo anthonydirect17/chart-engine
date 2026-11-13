@@ -351,9 +351,10 @@ try {
   await feed(agent('resting', { mode: 'shadow', account: 'SAMPLE-NEW-1' }));   // a stood-down trader in Auto counts too (the re-review of 94, R3)
   const laneText = await page.evaluate(() => [...document.querySelectorAll('.fl-lane')].map(e => e.innerText.replace(/\s+/g, ' ')));
   // 1.54.0 (D): a lane card is the bot, a word, its accounts and its "?"; what it says in full is behind the "?"
-  check(laneText.length === 2 && /^Eval lane OFF \? Lane rule: needs ChartBridge 0\.6\.22 \(this one is 0\.6\.21\) PROP Bot /i.test(laneText[0]) && laneText[0].includes('Sample alpha BOT +$1,510') && laneText[0].includes('2 accounts') && !laneText[0].includes('Goal:'),
+  check(laneText.length === 3 && /^Eval lane OFF \? Lane rule: needs ChartBridge 0\.6\.22 \(this one is 0\.6\.21\) PROP Bot /i.test(laneText[0]) && laneText[0].includes('Sample alpha BOT +$1,510') && laneText[0].includes('2 accounts') && !laneText[0].includes('Goal:'),
     'the eval lane: a word (Off: ready, in Shadow), the lane rule\'s state (1.56.0), PROP, the picked bot, today on its accounts and its account count; the rest behind its ?: ' + laneText[0]);
   check(/^Funded lane NO BOT \? Lane rule: needs ChartBridge 0\.6\.22 \(this one is 0\.6\.21\) PROP Bot /i.test(laneText[1]) && laneText[1].includes('No bot is picked for this lane.') && laneText[1].includes('1 account') && !laneText[1].includes('No bot is picked for it'), 'the funded lane: No bot, the why behind its ?: ' + laneText[1]);
+  check(/^Unassigned Needs ChartBridge 0\.6\.23 or later \(this one is 0\.6\.21\)/i.test(laneText[2]), '1.56.0: the third row, Unassigned, says what it needs on an older ChartBridge: ' + laneText[2]);
   await page.click('.fl-lane[data-stage="funded"] [data-do="lanehelp"]');
   const fundHelp = (await page.locator('.fl-lane[data-stage="funded"] .fl-lanehelp').innerText()).replace(/\s+/g, ' ');
   check(fundHelp.includes('Goal: reach the payout.') && fundHelp.includes('Trader legion2, group Sample funded, mode SHADOW') && fundHelp.includes('No bot is picked for it') && fundHelp.includes('A second bot on a lane comes as a lineup file from the Lab.'), 'its ? opens what it says in full: ' + fundHelp.slice(0, 300));
@@ -503,6 +504,22 @@ try {
       b.textContent = was; return out; });
     check(new Set(widths).size === 1, 'Armed keeps one width in every state at ' + width + ' px: ' + widths.join(', '));
   }
+  // 1.56.0 (Anthony 2026-11-13): the three rows, Eval, Funded and Unassigned, with ChartBridge 0.6.23's laneRule.outside
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await feed({ type: 'hello', version: '0.6.23', features: ['v3'] }); await feed({ type: 'trading', enabled: true }); await feed(accounts);
+  await feed(Object.assign({}, groups, { list: groups.list.concat([{ id: 'g3', name: 'Sample copier', accountType: null, members: ['SAMPLE-EVAL-4'] }]),
+    laneRule: { state: 'on', why: null, handOut: [{ account: 'SAMPLE-EVAL-3', from: 'Sample evals', type: 'eval', at: 1 }],
+      outside: [{ account: 'SAMPLE-EVAL-3', kind: 'eval', group: null, copier: null, byHand: true }, { account: 'SAMPLE-EVAL-4', kind: 'eval', group: 'Sample copier', copier: null, byHand: false },
+        { account: 'SAMPLE-FUNDED-2', kind: 'funded', group: null, copier: 'follower', byHand: false }] } }));
+  await feed(agent('legion1', { mode: 'shadow', account: null, group: { id: 'g1', name: 'Sample evals' }, seats: [{ account: 'SAMPLE-EVAL-1' }, { account: 'SAMPLE-EVAL-2' }], rules: laneRules, pick: 'sample-alpha.json' }));
+  await feed({ type: 'agentStandDowns', list: [] });
+  await page.waitForFunction(() => /3 accounts outside the lanes/.test((document.querySelector('.fl-unassigned') || {}).textContent || ''));
+  const un = (await text('.fl-unassigned')).replace(/\s+/g, ' ');
+  check(/SAMPLE-EVAL-3 Eval kept out by hand Add to the eval lane/i.test(un) && /SAMPLE-EVAL-4 Eval in Sample copier Add to the eval lane/i.test(un) && /SAMPLE-FUNDED-2 Funded in the copier Add to the funded lane/i.test(un),
+    '1.56.0: Unassigned lists every eval and funded account outside the lanes, marked with where it is: ' + un);
+  check(await page.locator('.fl-unassigned [data-acct="SAMPLE-EVAL-4"] [data-do="unadd"][aria-disabled="true"]').count() === 1, '1.56.0: one in a group of his own is not added from here (it stays where he put it)');
+  await page.evaluate(() => { document.getElementById('flView').scrollTop = 0; });
+  await page.screenshot({ path: path.join(SHOTS, 'fleet-three-rows.png') });
   // phone width: one column, no sideways scroll of the page, the buttons big enough to touch
   await page.setViewportSize({ width: 390, height: 844 });
   const m = await page.evaluate(() => ({ sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth,

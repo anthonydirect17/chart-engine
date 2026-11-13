@@ -89,29 +89,47 @@ Checked in `test/league.test.js` and `test/league-smoke.mjs` (sample programs on
 ## ChartBridge 0.6.23 and chart 1.56.0 (2026-11-13): a hand move is the move
 
 In plain words: when Anthony takes an account out of a lane himself, it stays out; the lane rule no longer puts it back a
-minute later. Putting it in a group by hand undoes that. Every lane card now says whether the lane rule is on, off or not
-working, even a lane with no trader, and lists the accounts kept out by hand. Anthony's ruling of 2026-11-13: "If I make a
-move, that's the move".
+minute later. The same holds for an account he moves from a lane into a group of his own (his Group Trader or Copier) and
+then takes out of it: it stays out until he adds it. Putting it in a group by hand undoes that. Every lane card now says
+whether the lane rule is on, off or not working, even a lane with no trader, and lists the accounts kept out by hand. A third
+row, Unassigned, lists every eval and funded account outside the lanes, marked with where it is. Anthony's rulings of
+2026-11-13: "If I make a move, that's the move"; "stay out until I add it - there should be 3 rows, eval, funded and
+unassigned"; "show them in unassigned marked in copier".
 
 - **ChartBridge 0.6.23** (rule 12; only `ChartBridgeGroups.cs` changes):
-  - A removal from an eval or funded group by hand (the page's Remove, or Hide) is kept in `lane-hand.txt` (its own file:
-    a ChartBridge before 0.6.23 never sees it). The lane rule skips that account and says so once on the lane. A restart
-    keeps the list.
+  - A removal from any group by hand (the page's Remove, or Hide) is kept in `lane-hand.txt` (its own file: a ChartBridge
+    before 0.6.23 never sees it): a lane, or a group of his own with no Type (its line's type is `-`). The lane rule skips
+    that account and says so once on the lane. A restart keeps the list.
+  - An account he moves by hand into a group of his own stays there: the rule never takes it out of that group or into a
+    lane (it takes accounts out of lanes only).
   - Putting the account in any group by hand clears it. The rule's own moves never touch the list.
   - The rule still takes an account out once flat when The Desk marks it blown, passed or archived. Any outcome now leaves
     (the review of 0.6.22, item 1).
-  - A list that does not read: the rule adds nobody, and says why.
-  - The `groups` message gains `laneRule`: the rule's state (on, off or error, with why) and the accounts kept out by hand.
+  - A list that does not read: the rule adds nobody, and says why. A list that cannot be saved reads as an error on every
+    lane card (a restart would forget it).
+  - No race with a hand move (the review of 0.6.23): the rule reads the account's group and the hand list again under
+    ChangeGate before it joins or takes out, so a hand Remove or a hand move that finished a moment before is never undone.
+  - The `groups` message gains `laneRule`: the rule's state (on, off or error, with why), the accounts kept out by hand,
+    and `outside`: every account The Desk types eval or funded that is in no lane, with the group of his it is in, what
+    the copier has it as (a follower or the leader, in the copier's own words; `ChartBridgeCopier.cs` is unchanged), and whether it is kept out by hand (null until The Desk's rows are read).
 - **The page** (chart 1.56.0):
   - Every lane card, with a trader or without, says "Lane rule: on", "Lane rule: off (why)" or "Lane rule: not working:
     why", and "Kept out by hand: ..." when there are any. With ChartBridge 0.6.22 it says the bridge does not say; older
     ones need 0.6.22.
   - With ChartBridge 0.6.23 every account in a lane's list has Remove, asked once ("Yes, remove X: it stays out until you
     add it by hand"), through the lane's own panel as before. "Add a Sim account" reads "Add an account by hand".
+  - **Three rows: Eval, Funded and Unassigned.** Unassigned lists `laneRule.outside`, each account marked with where it is
+    ("kept out by hand", "in no group", "in <his group>", "in the copier"). **Add to the eval lane** (or funded) opens the
+    lane's own Multi-Account panel at its join step (the panel's new `join`: its checks, its rules, its highest close and
+    its Put in), so the add is his hand add and clears the hand list. An account in a group of his own is not added from
+    here: its button says to take it out of that group first.
 - **A note on 0.6.22's day loss stop** (its review, item 2): a later plan without `dayLossDollars` turns the loss stop off
   for the rest of the session, as the profit stop does. Said in PROTOCOL.md.
 
-Checked: `check/AgentHarness.cs` (19 new checks, "0.6.23 hand"; 4480 checks in all pass), `test/fleet.test.js`.
+Checked: `check/AgentHarness.cs` ("0.6.23 hand" and "0.6.23 own group": an eval in a lane moved by hand into his Copier
+group stays there through rule passes; taken out of it by hand it stays in no group, a restart included; `outside` with a
+group, the copier and the hand mark; 4508 checks in all pass), `test/fleet.test.js`, `test/fleet-smoke.mjs` (the three
+rows) and `test/lane-panels-smoke.mjs` (the panel's `join`).
 ChartBridge 0.6.23 is a recompile (`-InstallChartBridge`, then F5 while flat).
 
 ## chart 1.55.0 (2026-11-13): a Legion lane's account list, each account benched or traded from it (page only, no F5)

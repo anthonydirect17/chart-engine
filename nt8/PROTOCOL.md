@@ -3708,11 +3708,11 @@ The page's Legion tab sends this message (chart 1.45.0, `live/fleet.js`: asked f
 
 Anthony 2026-11-13: "If I make a move, that's the move". Built in `ChartBridgeGroups.cs` only.
 
-- **A hand removal from a lane sticks.** An account taken out of a group whose Type is eval or funded by hand (the page's
-  `accountGroup` with `group` null, which Remove sends, or Hide) is kept in `lane-hand.txt`. The lane rule never adds it
+- **A hand removal sticks.** An account taken out of any group by hand, a lane or a group of his own with no Type (the
+  page's `accountGroup` with `group` null, which Remove sends, or Hide), is kept in `lane-hand.txt`. The lane rule never adds it
   back: it says once on the lane "X was taken out by hand: the rule leaves it out (put it in a group by hand to undo)". The
   list survives a restart. It is its own file and never a line in `groups.txt`, because a ChartBridge before 0.6.23 would
-  read that file as unreadable. Lines: `out<TAB><account><TAB><unix ms><TAB><the group it left><TAB>eval|funded`, under
+  read that file as unreadable. Lines: `out<TAB><account><TAB><unix ms><TAB><the group it left><TAB>eval|funded|-`, under
   ChartBridge's header line.
 - **A hand add clears it.** Putting the account in any group by hand (`accountGroup` with a group) takes it off the list. The
   lane rule's own moves never write the list.
@@ -3721,9 +3721,16 @@ Anthony 2026-11-13: "If I make a move, that's the move". Built in `ChartBridgeGr
 - **A list that does not read** (`lane-hand.txt` with a first line that is not ChartBridge's, or a line not in the format):
   the rule adds no account at all (it cannot tell which ones were taken out by hand), and says so.
 - **The `groups` message gains `laneRule`**, sent always, so a lane card says the rule's state even with no trader:
-  `{"state":"on"|"off"|"error","why":null|"...","handOut":[{"account":"...","from":"<group name>","type":"eval"|"funded","at":<ms>}]}`.
-  `off`: `config.txt` has `laneRule = off`, or no `deskUrl`. `error`: The Desk's lane-accounts cannot be read, or
-  `lane-hand.txt` does not read.
+  `{"state":"on"|"off"|"error","why":null|"...","handOut":[{"account":"...","from":"<group name>","type":"eval"|"funded"|null,"at":<ms>}],`
+  `"outside":null|[{"account":"...","kind":"eval"|"funded","group":null|"<group name>","copier":null|"follower"|"leader","byHand":true|false}]}`.
+  `handOut` type null: taken out of a group of his own (no Type). `outside` (the page's Unassigned row): every account The
+  Desk's last rows type eval or funded (no outcome, not archived) that is in no lane now, with the group of his it is in,
+  what the copier has it as (its own words: a follower, on or off, or the leader) and whether it is kept out by hand; null until The Desk's rows have been read.
+  `off`: `config.txt` has `laneRule = off`, or no `deskUrl`. `error`: The Desk's lane-accounts cannot be read,
+  `lane-hand.txt` does not read, or it could not be saved (the list then holds in memory only, so a restart would forget it).
+- **No race with a hand move** (the review of 0.6.23): the rule's join and leave take ChangeGate (which every hand move holds
+  through its change and its hand-list entry) and read the account's group and the hand list again inside it, so a hand move
+  that finished a moment before is never undone. Inside the change itself a rule join never takes an account that is in a group.
 
 Checked in `check/AgentHarness.cs` (`PropAccounts`, the lane rule part, "0.6.23 hand") and `check/GroupsHarness.cs`.
 
