@@ -317,7 +317,7 @@ test('0.6.18: entry rules per trader: ChartBridgeOrders.cs differs from 0.6.17 i
    this file does not know now FAILS, so each release re-pins on purpose (add the version below with its listed changes). */
 test('the pin tests know this ChartBridge version (a new release re-pins on purpose)', () => {
   const v = (/public const string Version = "([0-9.]+)";/.exec(read('ChartBridge.cs')) || [])[1];
-  assert.ok(['0.6.19', '0.6.20', '0.6.21', '0.6.22'].includes(v), 'ChartBridge ' + v + ' is not pinned here: re-pin test/nt8-record.test.js for it');
+  assert.ok(['0.6.19', '0.6.20', '0.6.21', '0.6.22', '0.6.23'].includes(v), 'ChartBridge ' + v + ' is not pinned here: re-pin test/nt8-record.test.js for it');
 });
 
 test('0.6.19: the day\'s profit stop: only ChartBridgeAgents.cs changed; every other add-on file but ChartBridge.cs (its version) is the 0.6.18 file byte for byte, the groups and the order path included', () => {
@@ -395,7 +395,7 @@ test('0.6.19: the day\'s profit stop: only ChartBridgeAgents.cs changed; every o
 });
 
 test('0.6.22: the lanes, the day\'s loss stop and the voice calls: the order path gains three listen-only lines, listed word for word; every other pinned file is the 0.6.18 file', () => {
-  if (!/public const string Version = "0\.6\.22";/.test(read('ChartBridge.cs'))) return;   // a later release re-pins on purpose
+  if (!/public const string Version = "0\.6\.2[23]";/.test(read('ChartBridge.cs'))) return;   // 0.6.23 holds the same pins (only ChartBridgeGroups.cs changes); a later release re-pins on purpose
   const sha = t => crypto.createHash('sha256').update(t).digest('hex');
   const same = {
     'ChartBridgeBars.cs': '7a9de59769499d804767461f67f8442c7a44a04b8b8bfae8cf6f4879b5186664',

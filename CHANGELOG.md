@@ -63,6 +63,34 @@
   `test/pc-updater.test.js`: the allowed git subcommands, the box job's name, useHttpPath read before the one ask, the
   token only after a 404 or 401 and then through the Actions API, one place that asks for it and one that sends it.
 
+## ChartBridge 0.6.23 and chart 1.56.0 (2026-11-13): a hand move is the move
+
+In plain words: when Anthony takes an account out of a lane himself, it stays out; the lane rule no longer puts it back a
+minute later. Putting it in a group by hand undoes that. Every lane card now says whether the lane rule is on, off or not
+working, even a lane with no trader, and lists the accounts kept out by hand. Anthony's ruling of 2026-11-13: "If I make a
+move, that's the move".
+
+- **ChartBridge 0.6.23** (rule 12; only `ChartBridgeGroups.cs` changes):
+  - A removal from an eval or funded group by hand (the page's Remove, or Hide) is kept in `lane-hand.txt` (its own file:
+    a ChartBridge before 0.6.23 never sees it). The lane rule skips that account and says so once on the lane. A restart
+    keeps the list.
+  - Putting the account in any group by hand clears it. The rule's own moves never touch the list.
+  - The rule still takes an account out once flat when The Desk marks it blown, passed or archived. Any outcome now leaves
+    (the review of 0.6.22, item 1).
+  - A list that does not read: the rule adds nobody, and says why.
+  - The `groups` message gains `laneRule`: the rule's state (on, off or error, with why) and the accounts kept out by hand.
+- **The page** (chart 1.56.0):
+  - Every lane card, with a trader or without, says "Lane rule: on", "Lane rule: off (why)" or "Lane rule: not working:
+    why", and "Kept out by hand: ..." when there are any. With ChartBridge 0.6.22 it says the bridge does not say; older
+    ones need 0.6.22.
+  - With ChartBridge 0.6.23 every account in a lane's list has Remove, asked once ("Yes, remove X: it stays out until you
+    add it by hand"), through the lane's own panel as before. "Add a Sim account" reads "Add an account by hand".
+- **A note on 0.6.22's day loss stop** (its review, item 2): a later plan without `dayLossDollars` turns the loss stop off
+  for the rest of the session, as the profit stop does. Said in PROTOCOL.md.
+
+Checked: `check/AgentHarness.cs` (19 new checks, "0.6.23 hand"; 4480 checks in all pass), `test/fleet.test.js`.
+ChartBridge 0.6.23 is a recompile (`-InstallChartBridge`, then F5 while flat).
+
 ## chart 1.55.0 (2026-11-13): a Legion lane's account list, each account benched or traded from it (page only, no F5)
 
 In plain words: a click on a lane's account count lists its accounts, each with Bench or Trade, and Remove for a Sim

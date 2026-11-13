@@ -6695,6 +6695,41 @@ public static class AgentHarness
                 Check(apply(new[] { row("PROP-2", null, null, false) }) == 0 && ChartBridgeGroups.GroupOf("PROP-2") == "g2", "0.6.22 lane rule: no type now: left where it is (never a guess)");
                 Check(apply(new[] { row("PROP-2", "funded", "blown", false) }) == 1 && ChartBridgeGroups.GroupOf("PROP-2") == null, "0.6.22 lane rule: blown: it leaves");
                 Check(apply(new[] { row("PROP-1", "funded", null, true) }) == 1 && ChartBridgeGroups.GroupOf("PROP-1") == null, "0.6.22 lane rule: archived on The Desk: it leaves");
+                // 0.6.23 (Anthony 2026-11-13: "If I make a move, that's the move"): a hand removal from a lane sticks; a hand add clears it
+                string handFile = Path.Combine(Dir, "lane-hand.txt");
+                try { Gone(handFile); } catch (Exception) { }
+                ChartBridgeGroups.LaneForget();
+                lanes("");
+                Check(apply(new[] { row("PROP-1", "eval", null, false) }) == 1 && ChartBridgeGroups.GroupOf("PROP-1") == "g1", "0.6.23 hand: (setup) PROP-1 joins the eval lane by the rule");
+                Check(!File.Exists(handFile), "0.6.23 hand: a move by the rule never writes the hand list");
+                P("{\"type\":\"accountGroup\",\"cid\":\"hout\",\"account\":\"PROP-1\",\"group\":null}");
+                Check(ChartBridgeGroups.GroupOf("PROP-1") == null && File.Exists(handFile) && File.ReadAllText(handFile).StartsWith(ChartBridgeGroups.HandHeader, StringComparison.Ordinal) &&
+                      File.ReadAllText(handFile).Contains("out\tPROP-1\t") && File.ReadAllText(handFile).Contains("\tEvals\teval"),
+                      "0.6.23 hand: Remove on the page takes it out and keeps it in lane-hand.txt: " + (File.Exists(handFile) ? File.ReadAllText(handFile) : "(no file)"));
+                Check(apply(new[] { row("PROP-1", "eval", null, false) }) == 0 && ChartBridgeGroups.GroupOf("PROP-1") == null, "0.6.23 hand: the rule leaves it out");
+                string hj = ChartBridgeGroups.GroupsJson();
+                Check(hj.Contains("PROP-1 was taken out by hand: the rule leaves it out (put it in a group by hand to undo)") &&
+                      hj.Contains("\"laneRule\":{\"state\":") && hj.Contains("\"handOut\":[{\"account\":\"PROP-1\",\"from\":\"Evals\",\"type\":\"eval\",\"at\":"),
+                      "0.6.23 hand: said on the lane, and the groups message lists it under laneRule.handOut: " + hj.Substring(Math.Max(0, hj.IndexOf("\"laneRule\""))));
+                ChartBridgeGroups.LaneForget();   // as after a restart: the list comes back from its file
+                Check(apply(new[] { row("PROP-1", "eval", null, false) }) == 0 && ChartBridgeGroups.GroupOf("PROP-1") == null, "0.6.23 hand: a restart keeps it out (read from lane-hand.txt)");
+                P("{\"type\":\"accountGroup\",\"cid\":\"hin\",\"account\":\"PROP-1\",\"group\":\"g1\",\"size\":50000,\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"eod\",\"lockAt\":0,\"target\":3000,\"consistency\":0,\"maxMinis\":4,\"maxMicros\":40,\"typeId\":\"made-up-50k\"}");
+                Check(ChartBridgeGroups.GroupOf("PROP-1") == "g1" && !File.ReadAllText(handFile).Contains("PROP-1") && !ChartBridgeGroups.GroupsJson().Contains("\"handOut\":[{\"account\":\"PROP-1\""),
+                      "0.6.23 hand: putting it in a group by hand clears it: " + ChartBridgeGroups.GroupOf("PROP-1") + " " + AgentReject());
+                Check(apply(new[] { row("PROP-1", "eval", "promoted", false) }) == 1 && ChartBridgeGroups.GroupOf("PROP-1") == null && !File.ReadAllText(handFile).Contains("PROP-1"),
+                      "0.6.23 hand: the rule still takes a passed account out once flat, and that is not a hand removal");
+                // the review of 108, item 1: ANY outcome leaves
+                Check(apply(new[] { row("PROP-2", "eval", null, false) }) == 1 && ChartBridgeGroups.GroupOf("PROP-2") == "g1", "0.6.23: (setup) PROP-2 joins the eval lane");
+                Check(apply(new[] { row("PROP-2", "eval", "passed", false) }) == 1 && ChartBridgeGroups.GroupOf("PROP-2") == null && ChartBridgeGroups.GroupsJson().Contains("removed: PROP-2 (its outcome on The Desk is passed) (rule)"),
+                      "0.6.23 (the review of 108, item 1): an outcome other than blown or promoted leaves too");
+                // a hand list that does not read: the rule adds nobody (it cannot tell who was taken out), and says so
+                File.WriteAllText(handFile, "not ChartBridge's\n");
+                ChartBridgeGroups.LaneForget();
+                Check(apply(new[] { row("PROP-2", "eval", null, false) }) == 0 && ChartBridgeGroups.GroupOf("PROP-2") == null && ChartBridgeGroups.GroupsJson().Contains("\"laneRule\":{\"state\":\"error\",\"why\":\"lane-hand.txt does not read"),
+                      "0.6.23 hand: lane-hand.txt that does not read: nobody is added, and the lane rule reads error with why");
+                Check(Logged("lane-hand.txt does not read (the first line is not ChartBridge's): the rule adds no account until it does"), "0.6.23 hand: and the Output window says it");
+                try { Gone(handFile); } catch (Exception) { }
+                ChartBridgeGroups.LaneForget();
                 // an account in another group is never taken from it; two groups of one Type: nobody joins, said once
                 File.WriteAllText(GroupsFile, ChartBridgeGroups.Header + "\n#\n" +
                     "group\tg1\tEvals\ton\t-\t-\t-\t-\t-\t-\t-\teval\t-\n" + "group\tg2\tEvals two\ton\t-\t-\t-\t-\t-\t-\t-\teval\t-\n" + "group\tg3\tOther\ton\t-\t-\t-\t-\t-\t-\t-\t-\t-\n" + "member\tPROP-2\tg3\n");
@@ -6711,6 +6746,7 @@ public static class AgentHarness
             finally
             {
                 if (groupsWas != null) File.WriteAllText(GroupsFile, groupsWas); else { try { Gone(GroupsFile); } catch (Exception) { } }
+                try { Gone(Path.Combine(Dir, "lane-hand.txt")); } catch (Exception) { }
                 ChartBridgeGroups.StartNow();
                 ChartBridgeGroups.LaneForget();
             }

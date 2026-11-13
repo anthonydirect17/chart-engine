@@ -285,16 +285,35 @@ function laneWord(l) {
  * (ChartBridge 0.6.22) adds and takes out by its type on The Desk, so the page offers no Remove for it (a hand remove would
  * be undone within a minute); a Sim account carries no type, so it is added and removed by hand.
  */
-function laneAccounts(l, accountsMsg) {
+function laneAccounts(l, accountsMsg, version) {
   if (!plainObj(l) || !Array.isArray(l.seats) || !Array.isArray(l.benched)) return [];
-  const idx = accountIndex(accountsMsg);
+  const idx = accountIndex(accountsMsg), handKept = atLeast(version, HAND_MIN);
+  /* 1.56.0 (Anthony 2026-11-13: "If I make a move, that's the move"): from ChartBridge 0.6.23 a hand Remove sticks (the rule skips
+     it), so every account has Remove; with an older one a removal of an account the rule owns would come back within a minute */
   const row = (name, benched) => {
     const r = idx.get(String(name).toLowerCase()), sim = !!(r && r.sim === true);
-    return { name, benched, sim, today: r && isNum(r.pnlToday) ? r.pnlToday : null, ruleOwned: !sim };
+    return { name, benched, sim, today: r && isNum(r.pnlToday) ? r.pnlToday : null, ruleOwned: !sim && !handKept };
   };
   return l.seats.map(n => row(n, false)).concat(l.benched.map(n => row(n, true)));
 }
 const RULE_OWNED_WORDS = 'Leaves when The Desk marks it blown, passed or archived';
+const HAND_MIN = '0.6.23';   // ChartBridge keeps a hand removal out of the lane rule and says the rule's state (laneRule)
+/**
+ * The lane rule's state as a lane card says it (chart 1.56.0), from the groups message's laneRule (ChartBridge 0.6.23), for
+ * one stage. -> { key: on | off | error | unknown | none, text, kept: [{ account, from }] } where kept are the accounts taken out
+ * of a lane of this stage by hand (the rule leaves them out until they are put in a group by hand).
+ */
+function laneRuleOf(groupsMsg, version, stage) {
+  const lr = plainObj(groupsMsg) && plainObj(groupsMsg.laneRule) ? groupsMsg.laneRule : null;
+  const kept = lr && Array.isArray(lr.handOut) ? lr.handOut.filter(x => plainObj(x) && typeof x.account === 'string' && x.account && x.type === stage).slice(0, 50).map(x => ({ account: str(x.account, 60), from: str(x.from, 40) })) : [];
+  if (!atLeast(version, LANE_KEEP_MIN)) return { key: 'none', text: 'Lane rule: needs ChartBridge ' + LANE_KEEP_MIN + ' (this one is ' + (version || 'not known') + ')', kept };
+  if (!lr) return { key: 'unknown', text: 'Lane rule: ChartBridge ' + (version || '') + ' does not say; it runs unless config.txt has laneRule = off (ChartBridge ' + HAND_MIN + ' says)', kept };
+  const why = typeof lr.why === 'string' && lr.why ? str(lr.why, 300) : '';
+  if (lr.state === 'on') return { key: 'on', text: 'Lane rule: on', kept };
+  if (lr.state === 'off') return { key: 'off', text: 'Lane rule: off' + (why ? ' (' + why + ')' : ''), kept };
+  if (lr.state === 'error') return { key: 'error', text: 'Lane rule: not working' + (why ? ': ' + why : ''), kept };
+  return { key: 'unknown', text: 'Lane rule: not known', kept };
+}
 const LANE_HELP = 'A lane is a trader whose account is a group; the group\'s Type (eval or funded) says which lane. From ChartBridge ' + LANE_KEEP_MIN + ' the lanes fill themselves: an account whose type on The Desk is eval or funded joins its lane on the bench (it trades only once you take it off the bench), and a blown, passed or archived one leaves once flat; every move is a line on the lane. The accounts button opens the lane\'s own Multi-Account panel: drag or click an account in or out, or on and off the bench. No account moves while the lane is in Auto or holds something. Armed sends each ready lane to Auto; off sends every lane to Shadow and closes no position: Kill all does. What shows here is what ChartBridge says, so a mode changed on Praetorian, by Kill all or at 17:00 New York shows here too.';
 const share = v => isNum(v) && v >= 0 && v <= 1;
 
@@ -961,7 +980,7 @@ const badAnswer = text => /NOT STOPPED|FAILED|could NOT/.test(String(text || '')
 /** "09:41:07" of a Date (the PC's own clock), for the time in front of a Kill all answer. */
 const clock = d => [d.getHours(), d.getMinutes(), d.getSeconds()].map(x => String(x).padStart(2, '0')).join(':');
 
-return Object.freeze({ displayNameOk, shownName, cardText, LANE_KEEP_MIN, laneLogOf, hhmm, laneWord, LANE_HELP, one, laneAccounts, RULE_OWNED_WORDS, modeRulesLoaded, NOT_KNOWN, NOT_READABLE, groupLock, accountsReadable, MAX_FILLS, LANE_COLOR, LANE_LETTER, propRows, todayOf, liveTiles, cleanFill, laneMarks, traderDays, laneRunner, readableName, rosterFamilies, FILTERS, laneLock, laneMaySend, laneFeed, PICK_MIN, STAGES, lanes, outsideAuto, armState, armMsgs, armWords, pickChoices, waitingChoices, pickMsg, maySend, KILL_MIN, SWITCH_MIN, DAYSTOP_MIN, ROSTER_MIN, ROSTER_FORMAT, LINEUP_FORMAT, CONFIRM_MS, ARM_MS, ANSWER_WAIT_MS, ROSTER_WAIT_MS, MAX_CARDS, MAX_MEMBERS, MAX_NOT_SHOWN, MODE_NAME, atLeast, usd, signed, stageCard, rosterCards, rosterProblem,
+return Object.freeze({ displayNameOk, shownName, cardText, LANE_KEEP_MIN, laneLogOf, hhmm, laneWord, LANE_HELP, one, laneAccounts, RULE_OWNED_WORDS, HAND_MIN, laneRuleOf, modeRulesLoaded, NOT_KNOWN, NOT_READABLE, groupLock, accountsReadable, MAX_FILLS, LANE_COLOR, LANE_LETTER, propRows, todayOf, liveTiles, cleanFill, laneMarks, traderDays, laneRunner, readableName, rosterFamilies, FILTERS, laneLock, laneMaySend, laneFeed, PICK_MIN, STAGES, lanes, outsideAuto, armState, armMsgs, armWords, pickChoices, waitingChoices, pickMsg, maySend, KILL_MIN, SWITCH_MIN, DAYSTOP_MIN, ROSTER_MIN, ROSTER_FORMAT, LINEUP_FORMAT, CONFIRM_MS, ARM_MS, ANSWER_WAIT_MS, ROSTER_WAIT_MS, MAX_CARDS, MAX_MEMBERS, MAX_NOT_SHOWN, MODE_NAME, atLeast, usd, signed, stageCard, rosterCards, rosterProblem,
   kindOf, seatsKind, dayMark, traderAccounts, statusText, traders, propAccounts, killAllState, killAllMsg, autoLine, badAnswer, clock });
 });
 
@@ -1436,15 +1455,15 @@ function create(o) {
   function lanePanelApi(stage) { const lp = S.lanePanels[stage], p = lp && lp.mount ? lp.mount.panel : null; return p && typeof p.bench === 'function' && typeof p.remove === 'function' ? p : null; }
   function laneMoveWhy(l) { return C.laneLock(l, heard()) || (!S.connected ? 'ChartBridge is not connected' : '') || (lanePanelApi(l.stage) ? '' : 'An account moves only when the page is open with its accounts part.'); }
   function laneAcctsHtml(l) {
-    const accts = C.laneAccounts(l, S.accounts), why = laneMoveWhy(l), dis = why ? ` aria-disabled="true" title="${esc(why)}"` : '', api = lanePanelApi(l.stage);
+    const accts = C.laneAccounts(l, S.accounts, S.version), why = laneMoveWhy(l), dis = why ? ` aria-disabled="true" title="${esc(why)}"` : '', api = lanePanelApi(l.stage);
     const said = S.acctSaid.has(l.stage) && api && api.state && api.state.toast ? api.state.toast : null;
     const row = a => `<li class="fl-acct" data-acct="${esc(a.name)}"${a.benched ? ' data-benched="1"' : ''}><span class="fl-aname">${esc(a.name)}</span>${a.sim ? '<span class="fl-tag" data-kind="sim">Sim</span>' : ''}
         <span class="fl-mut">${a.benched ? 'On the bench' : 'Trading'}</span><span class="fl-fill"></span>${a.today === null ? '<span class="fl-mut">today not known</span>' : `<span class="mono fl-pnl${a.today > 0 ? ' up' : a.today < 0 ? ' down' : ''}">${esc(C.usd(a.today, true))}</span>`}
         <button type="button" class="fl-pill" data-do="acctbench" data-stage="${esc(l.stage)}" data-acct="${esc(a.name)}" data-to="${a.benched ? 'trade' : 'bench'}"${dis}>${a.benched ? 'Trade' : 'Bench'}</button>
-        ${a.ruleOwned ? `<span class="fl-mut fl-ruleowned">${esc(C.RULE_OWNED_WORDS)}</span>` : `<button type="button" class="fl-pill fl-remove" data-do="acctremove" data-stage="${esc(l.stage)}" data-acct="${esc(a.name)}"${dis}>${S.removeAsk === l.stage + '|' + a.name ? 'Yes, remove ' + esc(a.name) : 'Remove'}</button>`}</li>`;
+        ${a.ruleOwned ? `<span class="fl-mut fl-ruleowned">${esc(C.RULE_OWNED_WORDS)}</span>` : `<button type="button" class="fl-pill fl-remove" data-do="acctremove" data-stage="${esc(l.stage)}" data-acct="${esc(a.name)}"${dis}>${S.removeAsk === l.stage + '|' + a.name ? 'Yes, remove ' + esc(a.name) + (a.sim ? '' : ': it stays out until you add it by hand') : 'Remove'}</button>`}</li>`;
     return `<ul class="fl-accts" aria-label="${esc(l.title)}: its accounts">${accts.length ? accts.map(row).join('') : '<li class="fl-mut">No account in this lane yet.</li>'}</ul>
       ${why ? `<p class="fl-line fl-mutline fl-acctwhy">${esc(why)}</p>` : ''}${said ? `<p class="fl-line fl-acctsaid${said.warn ? ' fl-warn' : ''}" role="status">${esc(said.text)}</p>` : ''}
-      <div class="fl-trow"><button type="button" class="fl-pill" data-do="addsim" data-stage="${esc(l.stage)}" aria-expanded="${S.laneAdd.has(l.stage)}">Add a Sim account</button></div>`;
+      <div class="fl-trow"><button type="button" class="fl-pill" data-do="addsim" data-stage="${esc(l.stage)}" aria-expanded="${S.laneAdd.has(l.stage)}">${C.atLeast(S.version, C.HAND_MIN) ? 'Add an account by hand' : 'Add a Sim account'}</button></div>`;
   }
   function laneHtml(l, choices) {
     const none = !l.id, helpOpen = S.laneHelp.has(l.stage), acctOpen = S.laneAccts.has(l.stage);
@@ -1473,6 +1492,7 @@ function create(o) {
     return `<div class="fl-lane" data-stage="${esc(l.stage)}" data-armable="${l.armable}"${l.auto ? ' data-auto="1"' : ''}>
       <div class="fl-trow"><span class="fl-lanetitle"><span class="fl-dot" data-stage="${esc(l.stage)}"></span>${esc(l.title)}</span>
         <span class="fl-fill"></span><span class="fl-word" data-word="${esc(word.key)}">${esc(word.text)}</span><button type="button" class="fl-help" data-do="lanehelp" data-stage="${esc(l.stage)}" aria-expanded="${helpOpen}" aria-label="${esc(l.title)}: what it says in full">?</button></div>
+      ${(r => `<p class="fl-line fl-lanerule" data-rule="${esc(r.key)}">${esc(r.text)}</p>${r.kept.length ? `<p class="fl-line fl-mutline fl-kept">Kept out by hand: ${r.kept.map(k => esc(k.account) + (k.from ? ' (from ' + esc(k.from) + ')' : '')).join(', ')}. The rule leaves ${r.kept.length === 1 ? 'it' : 'them'} out until put in a group by hand.</p>` : ''}`)(C.laneRuleOf(S.groups, S.version, l.stage))}
       ${none || !l.kindText ? '' : `<div class="fl-lanekind" data-lanekind="${esc(l.kindText === 'SIM' ? 'sim' : l.kindText === 'PROP' ? 'prop' : 'propsim')}">${esc(l.kindText)}</div>`}
       ${none ? '' : `<div class="fl-trow">${sel}</div>${card}`}
       ${count}
@@ -1557,9 +1577,9 @@ function create(o) {
     if (what === 'desk') { if (S.deskOpen) shutDesk(); else openDesk(); return; }
     if (what === 'acctbench' || what === 'acctremove') {                   // 1.55.0 (D1): through the lane's own panel, never around it
       const stage = String(b.dataset.stage || ''), name = String(b.dataset.acct || ''), l = laneList().find(x => x.stage === stage);
-      if (!l || !C.STAGES.includes(stage) || !name || !C.laneAccounts(l, S.accounts).some(a => a.name === name)) return;
+      if (!l || !C.STAGES.includes(stage) || !name || !C.laneAccounts(l, S.accounts, S.version).some(a => a.name === name)) return;
       if (laneMoveWhy(l)) { render(); return; }                             // the reason is on the list already
-      const api = lanePanelApi(stage), a = C.laneAccounts(l, S.accounts).find(x => x.name === name);
+      const api = lanePanelApi(stage), a = C.laneAccounts(l, S.accounts, S.version).find(x => x.name === name);
       if (what === 'acctbench') { S.removeAsk = ''; api.bench(name, b.dataset.to === 'bench'); }
       else if (a.ruleOwned) return;                                          // the rule owns it: no hand remove (it would come back)
       else if (S.removeAsk !== stage + '|' + name) { S.removeAsk = stage + '|' + name; render(); return; }

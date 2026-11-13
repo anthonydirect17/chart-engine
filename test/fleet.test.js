@@ -1062,6 +1062,45 @@ test('1.55.0 (D1, D2, D3): a lane\'s account list: Bench / Trade and a Sim accou
   assert.match(P.part('lane-eval').innerHTML, /<span class="fl-word" data-word="stooddown">Stood down<\/span>/);
 });
 
+test('1.56.0 (ChartBridge 0.6.23, "If I make a move, that\'s the move"): every account has Remove; each lane card says the lane rule\'s state, with no trader too, and the accounts kept out by hand', async t => {
+  const lr = (state, why, handOut) => ({ laneRule: { state, why, handOut: handOut || [] } });
+  assert.strictEqual(F.laneRuleOf({}, '0.6.21', 'eval').text, 'Lane rule: needs ChartBridge 0.6.22 (this one is 0.6.21)');
+  assert.strictEqual(F.laneRuleOf({}, '0.6.22', 'eval').key, 'unknown');
+  assert.match(F.laneRuleOf({}, '0.6.22', 'eval').text, /does not say; it runs unless config\.txt has laneRule = off/);
+  assert.deepStrictEqual(F.laneRuleOf(lr('on', null), '0.6.23', 'eval'), { key: 'on', text: 'Lane rule: on', kept: [] });
+  assert.strictEqual(F.laneRuleOf(lr('off', 'config.txt has laneRule = off'), '0.6.23', 'eval').text, 'Lane rule: off (config.txt has laneRule = off)');
+  assert.strictEqual(F.laneRuleOf(lr('error', 'The Desk did not answer'), '0.6.23', 'eval').text, 'Lane rule: not working: The Desk did not answer');
+  assert.strictEqual(F.laneRuleOf(lr('weird', null), '0.6.23', 'eval').text, 'Lane rule: not known');
+  const kept = lr('on', null, [{ account: 'EVAL-Z', from: 'Evals', type: 'eval', at: 1 }, { account: 'FUND-Z', from: 'Funded', type: 'funded', at: 1 }, { account: 7, type: 'eval' }]);
+  assert.deepStrictEqual(F.laneRuleOf(kept, '0.6.23', 'eval').kept, [{ account: 'EVAL-Z', from: 'Evals' }], 'only this stage\'s, only well formed');
+  assert.deepStrictEqual(F.laneAccounts({ seats: ['P-1'], benched: [] }, { list: [{ name: 'P-1', prop: true }] }, '0.6.23').map(a => a.ruleOwned), [false], '0.6.23: a prop account may be removed by hand');
+  assert.deepStrictEqual(F.laneAccounts({ seats: ['P-1'], benched: [] }, { list: [{ name: 'P-1', prop: true }] }, '0.6.22').map(a => a.ruleOwned), [true], 'older: it would come back, so no Remove');
+  const calls = [];
+  const lanePanel = (el, key, opts) => ({ key, opts, el, destroy() {}, panel: { state: { toast: { text: 'Sent to ChartBridge: EVAL-A out of Evals.', warn: false } }, bench: (n, b) => { calls.push(['bench', n, b]); return true; }, remove: n => { calls.push(['remove', n]); return true; } } });
+  timers(t);
+  const P = page(t, { lanePanel }); P.fv.showTab(true);
+  P.feed({ type: 'hello', version: '0.6.23' }); P.feed({ type: 'trading', enabled: true });
+  P.feed({ type: 'accounts', personalNamed: true, list: [{ name: 'EVAL-A', prop: true, pnlToday: 10 }, { name: 'EVAL-B', prop: true, pnlToday: 0 }] });
+  P.feed(Object.assign({ type: 'groups', list: [{ id: 'g1', name: 'Evals', accountType: 'eval', members: ['EVAL-A', 'EVAL-B'] }] }, lr('off', 'config.txt has laneRule = off', [{ account: 'EVAL-Z', from: 'Evals', type: 'eval', at: 1 }])));
+  P.feed(evalTrader({ seats: [{ account: 'EVAL-A' }, { account: 'EVAL-B' }] }));
+  P.replayDone(); await P.tick();
+  let html = P.part('lane-eval').innerHTML;
+  assert.match(html, /<p class="fl-line fl-lanerule" data-rule="off">Lane rule: off \(config\.txt has laneRule = off\)<\/p><p class="fl-line fl-mutline fl-kept">Kept out by hand: EVAL-Z \(from Evals\)\. The rule leaves it out until put in a group by hand\.<\/p>/);
+  assert.match(P.part('lane-funded').innerHTML, /<p class="fl-line fl-lanerule" data-rule="off">Lane rule: off/, 'a lane with no trader says it too');
+  const click = (what, more) => P.listeners.click({ target: { closest: () => ({ dataset: Object.assign({ do: what, stage: 'eval' }, more || {}) }) }, detail: 1 });
+  click('laneaccts');
+  html = P.part('lane-eval').innerHTML;
+  assert.match(html, /data-do="acctremove" data-stage="eval" data-acct="EVAL-A">Remove<\/button>/, 'a prop account has Remove');
+  assert.doesNotMatch(html, /Leaves when The Desk marks it/);
+  assert.match(html, />Add an account by hand<\/button>/);
+  click('acctremove', { acct: 'EVAL-A' });
+  assert.match(P.part('lane-eval').innerHTML, />Yes, remove EVAL-A: it stays out until you add it by hand<\/button>/, 'asked first, saying it sticks');
+  assert.strictEqual(calls.length, 0);
+  click('acctremove', { acct: 'EVAL-A' });
+  assert.deepStrictEqual(calls, [['remove', 'EVAL-A']], 'through the lane\'s own panel');
+  assert.strictEqual(P.posts.length, 0);
+});
+
 test('the pick: one list a lane, sent as agentPick; locked in Auto and while the trader holds something; a refusal is said and the list goes back', async t => {
   const P = await lanePage(t, [evalTrader(), fundTrader()]);
   const lanesHtml = () => P.part('lane-eval').innerHTML + P.part('lane-funded').innerHTML;

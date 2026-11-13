@@ -351,9 +351,9 @@ try {
   await feed(agent('resting', { mode: 'shadow', account: 'SAMPLE-NEW-1' }));   // a stood-down trader in Auto counts too (the re-review of 94, R3)
   const laneText = await page.evaluate(() => [...document.querySelectorAll('.fl-lane')].map(e => e.innerText.replace(/\s+/g, ' ')));
   // 1.54.0 (D): a lane card is the bot, a word, its accounts and its "?"; what it says in full is behind the "?"
-  check(laneText.length === 2 && /^Eval lane OFF \? PROP Bot /i.test(laneText[0]) && laneText[0].includes('Sample alpha BOT +$1,510') && laneText[0].includes('2 accounts') && !laneText[0].includes('Goal:'),
-    'the eval lane: a word (Off: ready, in Shadow), PROP, the picked bot, today on its accounts and its account count; the rest behind its ?: ' + laneText[0]);
-  check(/^Funded lane NO BOT \? PROP Bot /i.test(laneText[1]) && laneText[1].includes('No bot is picked for this lane.') && laneText[1].includes('1 account') && !laneText[1].includes('No bot is picked for it'), 'the funded lane: No bot, the why behind its ?: ' + laneText[1]);
+  check(laneText.length === 2 && /^Eval lane OFF \? Lane rule: needs ChartBridge 0\.6\.22 \(this one is 0\.6\.21\) PROP Bot /i.test(laneText[0]) && laneText[0].includes('Sample alpha BOT +$1,510') && laneText[0].includes('2 accounts') && !laneText[0].includes('Goal:'),
+    'the eval lane: a word (Off: ready, in Shadow), the lane rule\'s state (1.56.0), PROP, the picked bot, today on its accounts and its account count; the rest behind its ?: ' + laneText[0]);
+  check(/^Funded lane NO BOT \? Lane rule: needs ChartBridge 0\.6\.22 \(this one is 0\.6\.21\) PROP Bot /i.test(laneText[1]) && laneText[1].includes('No bot is picked for this lane.') && laneText[1].includes('1 account') && !laneText[1].includes('No bot is picked for it'), 'the funded lane: No bot, the why behind its ?: ' + laneText[1]);
   await page.click('.fl-lane[data-stage="funded"] [data-do="lanehelp"]');
   const fundHelp = (await page.locator('.fl-lane[data-stage="funded"] .fl-lanehelp').innerText()).replace(/\s+/g, ' ');
   check(fundHelp.includes('Goal: reach the payout.') && fundHelp.includes('Trader legion2, group Sample funded, mode SHADOW') && fundHelp.includes('No bot is picked for it') && fundHelp.includes('A second bot on a lane comes as a lineup file from the Lab.'), 'its ? opens what it says in full: ' + fundHelp.slice(0, 300));

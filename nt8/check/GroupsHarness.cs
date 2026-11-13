@@ -302,7 +302,7 @@ public static class GroupsHarness
     // ------------------------------------------------------------ no groups.txt: no groups, every account personal, 0.5.7 exactly
     static void Migration()
     {
-        Check(!File.Exists(Path.Combine(folder, "groups.txt")) && Last("groups") == "{\"type\":\"groups\",\"list\":[],\"error\":null}", "no groups.txt: the page gets an empty list and no error (" + Last("groups") + ")");
+        Check(!File.Exists(Path.Combine(folder, "groups.txt")) && Last("groups") == "{\"type\":\"groups\",\"list\":[],\"error\":null,\"laneRule\":{\"state\":\"on\",\"why\":null,\"handOut\":[]}}", "no groups.txt: the page gets an empty list and no error (0.6.23: and the lane rule's state) (" + Last("groups") + ")");
         Check(ChartBridgeGroups.EntryCheck("page", simA, "MNQ", false, 1, false, false) == null, "no groups: nothing is checked");
         Pos(simA, mnq, 2);
         int b = Submits(simB);
@@ -1048,7 +1048,7 @@ public static class GroupsHarness
         Check(ChartBridgeGroups.EntryCheck("page", simD, "MNQ", true, 1, true, false) == null && ChartBridgeGroups.GroupOf("SIM-B") == null && FileText() == was, "readable again after a start: as saved");
         Gone(p); Gone(Path.Combine(folder, "account-marks.txt"));
         ChartBridgeAccounts.StartNow(ChartBridgeTime.NowUtcMs());
-        Check(ChartBridgeGroups.GroupsJson() == "{\"type\":\"groups\",\"list\":[],\"error\":null}", "both files gone: no groups (0.5.7's behaviour)");
+        Check(ChartBridgeGroups.GroupsJson().StartsWith("{\"type\":\"groups\",\"list\":[],\"error\":null,\"laneRule\":{", StringComparison.Ordinal) && ChartBridgeGroups.GroupsJson().EndsWith(",\"handOut\":[]}}", StringComparison.Ordinal), "both files gone: no groups (0.5.7's behaviour)");
     }
 
     // Anthony's ruling of 2026-10-21: an unreadable groups.txt never blocks the bot, the agents or the copier. They run on the last
