@@ -63,7 +63,9 @@
   `test/pc-updater.test.js`: the allowed git subcommands, the box job's name, useHttpPath read before the one ask, the
   token only after a 404 or 401 and then through the Actions API, one place that asks for it and one that sends it.
 
-## Next chart release (collected, not yet released; its number to be given by the coordinator): answers B4-9, N1 to N4
+## chart 1.52.2 (2026-11-13): Flatten and turn off refuses a flatten it cannot tie to a seat; two lane shapes not known (page only, no F5)
+
+Rule 12 (orders): N1. Answers B4-9 and the stack's final review (N1 to N4), opened under the 2026-11-13 freeze.
 
 - **N1 (defensive):** "Flatten and turn off" for a trader whose message has a seats list where no seat the page can read
   holds his trade, while his `position` says he holds one, sends nothing: "Which account holds his trade is not known:
