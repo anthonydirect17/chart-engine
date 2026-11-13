@@ -198,7 +198,19 @@ try {
   // 1.54.0 (D): the lane's accounts are folded under its account count; a click opens the panel in place
   check(await p.locator('#flView .fl-lane[data-stage="eval"] .fl-lanepanels').isHidden(), 'the lane\'s accounts are folded at first (1.54.0)');
   await p.click('#flView .fl-lane[data-stage="eval"] [data-do="laneaccts"]');
-  await until(() => p.evaluate(() => !document.querySelector('#flView .fl-lane[data-stage="eval"] .fl-lanepanels').hidden), 'the account count opens the panel');
+  // 1.55.0 (D1, D2): the count lists the accounts; Bench / Trade on the list goes through the lane's own panel, to ChartBridge
+  await until(() => p.evaluate(() => document.querySelectorAll('#flView .fl-lane[data-stage="eval"] .fl-acct').length >= 4), 'the account count lists the lane\'s accounts');
+  const listed = await p.evaluate(() => [...document.querySelectorAll('#flView .fl-lane[data-stage="eval"] .fl-acct')].map(e => e.dataset.acct));
+  check(['SIM-A', 'SIM-B', 'SIM-C', 'SIM-D'].every(n => listed.includes(n)) && await p.locator('#flView .fl-lane[data-stage="eval"] .fl-lanepanels').isHidden(), 'the list shows the lane\'s accounts, the panel stays folded: ' + listed.join());
+  const nList = (await groupMsgs()).length;
+  await p.click('#flView .fl-lane[data-stage="eval"] .fl-acct[data-acct="SIM-A"] [data-do="acctbench"]');
+  await until(async () => ((await groupMsgs()).slice(nList)).some(m => m.type === 'memberBench' && m.account === 'SIM-A' && m.benched === true), 'Bench on the list sends memberBench through the panel');
+  check(((await groupMsgs()).slice(nList)).every(m => m.type === 'memberBench'), 'and nothing else');
+  await p.waitForFunction(() => /SIM-A/.test((document.querySelector('#flView .fl-lane[data-stage="eval"] .fl-acctsaid') || {}).textContent || ''), null, { timeout: 5000 }).catch(() => {});
+  check(/SIM-A/.test(await p.locator('#flView .fl-lane[data-stage="eval"] .fl-acctsaid').innerText()), 'the panel\'s own answer shows under the list: ' + await p.locator('#flView .fl-lane[data-stage="eval"] .fl-acctsaid').innerText());
+  await p.screenshot({ path: path.join(out, 'legion-lane-accounts-155.png') });
+  await p.click('#flView .fl-lane[data-stage="eval"] [data-do="addsim"]');
+  await until(() => p.evaluate(() => !document.querySelector('#flView .fl-lane[data-stage="eval"] .fl-lanepanels').hidden), 'Add a Sim account opens the panel');
   const n6 = (await groupMsgs()).length;
   await p.click('#flView .fl-lane[data-stage="eval"] [data-chip="SIM-D"]');
   await until(async () => ((await groupMsgs()).slice(n6)).some(m => m.type === 'memberBench' && m.account === 'SIM-D'), 'a move from inside Legion');

@@ -63,6 +63,28 @@
   `test/pc-updater.test.js`: the allowed git subcommands, the box job's name, useHttpPath read before the one ask, the
   token only after a 404 or 401 and then through the Actions API, one place that asks for it and one that sends it.
 
+## chart 1.55.0 (2026-11-13): a Legion lane's account list, each account benched or traded from it (page only, no F5)
+
+In plain words: a click on a lane's account count lists its accounts, each with Bench or Trade, and Remove for a Sim
+account. New accounts join a lane on the bench (ChartBridge 0.6.22), and this is where Anthony takes one off it. The
+coordinator's answers on D1 to D3 (2026-11-13).
+
+- **The list** (D1, D2): each account shows Trading or On the bench, its today, and a **Bench / Trade** toggle (the
+  per-account arm). A **Sim account** (added by hand: Sim carries no type) has **Remove**, asked once ("Yes, remove
+  ..."). An account the lane rule owns (one that is not Sim) has no Remove: its line says "Leaves when The Desk marks it
+  blown, passed or archived", because a hand remove would come back within a minute. A remove that sticks is on Anthony's
+  list for ChartBridge 0.6.23 if he wants it.
+- **Every move goes through the lane's own Multi-Account panel** (its new `bench` and `remove`, which run its own checks,
+  its lock, its narrow feed and its answer). The list sends nothing itself, and the tab's own connection still passes only
+  its three messages. While the lane is in Auto, holds something, or is not known, each button is greyed with the reason,
+  and a click sends nothing.
+- **Add a Sim account** opens the panel itself, in place, for a join by hand.
+- **Stood down** (D3): a lane whose trader is stood down (a day stop or a loss stop reached) says so as its status word.
+
+Checked in `test/fleet.test.js` (with a stand-in panel: what is sent and what is never sent) and
+`test/lane-panels-smoke.mjs` (32 checks, the real panel: Bench on the list reaches ChartBridge as `memberBench`, nothing
+else).
+
 ## chart 1.54.0 (2026-11-13): Legion simpler, and Anthony's names for his bots (page only, no F5)
 
 In plain words: Legion's two lane cards say less and say it bigger. Each shows the bot picked, a status word, how many
