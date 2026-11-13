@@ -3719,7 +3719,10 @@ Anthony 2026-11-13: "If I make a move, that's the move". Built in `ChartBridgeGr
   lane rule's own moves never write the list.
 - **The rule still takes an account out once flat** when The Desk marks it blown, passed or archived, or its type is now the
   other lane's. A blown, passed or archived account also leaves a group of his own (no Type) once flat, as the lifecycle rule
-  (the hand list untouched); a retyped one stays there. A copier follower (on or off) or the copier's leader is never joined. **Any** outcome now leaves, not only `blown` and `promoted` (the review of 0.6.22, item 1).
+  (the hand list untouched); a retyped one stays there. A copier follower (on or off) or the copier's leader is never joined.
+  The flat check of every leave is made again inside the change, under GroupEntryLock and PlaceLock. A hand move from a group
+  of his own into a lane is refused while the account holds a position or a working order ("... : it moves from <his group>
+  into <the lane> once flat"). **Any** outcome now leaves, not only `blown` and `promoted` (the review of 0.6.22, item 1).
 - **A list that does not read** (`lane-hand.txt` with a first line that is not ChartBridge's, or a line not in the format):
   the rule adds no account at all (it cannot tell which ones were taken out by hand), and says so.
 - **The `groups` message gains `laneRule`**, sent always, so a lane card says the rule's state even with no trader:

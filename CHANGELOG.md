@@ -85,8 +85,12 @@ unassigned"; "show them in unassigned marked in copier".
     hand move, so the hand list is not touched. The flat check now runs under ChangeGate with the leave.
   - **The copier's accounts are placed:** a copier follower (on or off) or its leader is never joined to a lane, and the lane
     says so once. Letting one go by hand (a follower row removed, or the leader changed) while it is in no group puts it on
-    the hand list ("from the copier"). The copier's page messages now run under ChangeGate (`ChartBridgeGroups.CopierMessage`),
-    so a rule join never slips between them. `ChartBridgeCopier.cs` is unchanged.
+    the hand list ("from the copier"). Every copier page message (`copierFollower` too) now runs under ChangeGate
+    (`ChartBridgeGroups.CopierMessage`), so a rule join never slips between them. `ChartBridgeCopier.cs` is unchanged.
+  - The lane rule's leave (a lane, or the lifecycle rule in his own group) is decided again inside `AccountGroup`, under
+    GroupEntryLock and PlaceLock, so no group trader's entry goes in between the flat check and the leave (the re-check of 111).
+  - A hand move from a group of his own into a lane happens only when the account is flat with no working order, checked
+    the same way under the same locks (Anthony 2026-11-13, 21:35Z); otherwise it is refused with why.
   - Putting the account in any group by hand clears it. The rule's own moves never touch the list.
   - The rule still takes an account out once flat when The Desk marks it blown, passed or archived. Any outcome now leaves
     (the review of 0.6.22, item 1).
@@ -110,7 +114,8 @@ unassigned"; "show them in unassigned marked in copier".
     eval lane** instead (Anthony 2026-11-13, "1. a"): asked once, naming both groups ("Yes, move X out of Copier into the
     eval lane"), then one `accountGroup` straight into the lane through the panel's new `moveIn` (the join's checks, its
     rules from the account's type and its highest close from The Desk's seed or the larger of size and balance; the narrow
-    feed lets it through only when the other group's own lock is free).
+    feed lets it through only when the other group's own lock is free). Only when flat: an account that holds a position is greyed with why ("Holds a
+    position (long 2 MNQ): moves once flat"), and the panel's `moveIn` refuses one with a working order before it sends.
 - **A note on 0.6.22's day loss stop** (its review, item 2): a later plan without `dayLossDollars` turns the loss stop off
   for the rest of the session, as the profit stop does. Said in PROTOCOL.md.
 
@@ -118,7 +123,8 @@ Checked: `check/AgentHarness.cs` ("0.6.23 hand" and "0.6.23 own group": an eval 
 group stays there through rule passes; taken out of it by hand it stays in no group, a restart included; `outside` with a
 group, the copier and the hand mark; a deleted group's member on the hand list across a restart; blown and archived
 accounts leave his group once flat, the hand list untouched; a copier follower never joined, and on the hand list once its
-row is removed; 4529 checks in all pass), `test/fleet.test.js`, `test/fleet-smoke.mjs` (the three
+row is removed; copierFollower waits for ChangeGate; a position taken after the leave's early check keeps it; Move refused
+while busy, then made once flat; 4537 checks in all pass, and each new check fails with its fix taken out), `test/fleet.test.js`, `test/fleet-smoke.mjs` (the three
 rows) and `test/lane-panels-smoke.mjs` (the panel's `join`).
 ChartBridge 0.6.23 is a recompile (`-InstallChartBridge`, then F5 while flat).
 

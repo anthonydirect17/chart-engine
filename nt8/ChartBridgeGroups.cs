@@ -2283,8 +2283,22 @@ namespace NinjaTrader.NinjaScript.AddOns
                 next.Members.TryGetValue(name, out cur);
                 if (id == cur) return id == null ? Unchanged : name + " is in " + next.Groups[id].Name + " already";
                 if (by == "the lane rule" && id != null && cur != null) return name + " is in a group now: the lane rule leaves it there";   // 0.6.23 (the review of 111)
+                // 0.6.23 (the re-check of 111, fix 2): the lane rule's leave is decided here, under GroupEntryLock and PlaceLock, so no
+                // entry of a group trader can go in between the flat check and the leave (as the bench move does)
+                if (by == "the lane rule" && id == null && a != null) { string busy = BenchBusyWhy(name, a); if (busy != null) return busy; }
                 Group g = null;
                 if (id != null && !next.Groups.TryGetValue(id, out g)) return "no group " + id;
+                // 0.6.23 (Anthony 2026-11-13, the board 21:35Z): a hand move from a group of his own (no Type) into a lane only when
+                // flat, with no working order: the same check, under the same locks
+                if (by == "the page" && g != null && cur != null && (g.AccountType == "eval" || g.AccountType == "funded"))
+                {
+                    Group from;
+                    if (next.Groups.TryGetValue(cur, out from) && from.AccountType != "eval" && from.AccountType != "funded")
+                    {
+                        string busy = BenchBusyWhy(name, a);
+                        if (busy != null) return busy.Replace(": it moves once it is flat with no working orders", "") + ": it moves from " + from.Name + " into " + g.Name + " once flat";
+                    }
+                }
                 // 0.6.7: a group with no rules of its own takes an account only with its own (from its type on The Desk)
                 if (g != null && own == null && !g.HasRules) return name + " has no account type: set its type on The Desk first (group " + g.Name + " takes each account's rules from its type)";
                 // 0.6.0: again here, under the lock that saves the membership (PlaceLock, then SaveLock; memory only, no file read), so an
@@ -2539,7 +2553,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static readonly Dictionary<string, List<KeyValuePair<long, string>>> LaneLog = new Dictionary<string, List<KeyValuePair<long, string>>>(StringComparer.Ordinal);
         private static readonly HashSet<string> LaneSaid = new HashSet<string>(StringComparer.Ordinal);   // a refusal said once (account|reason)
         private static readonly string[] LaneRuleKeys = { "size", "dailyLoss", "drawdown", "drawdownType", "lockAt", "target", "consistency", "maxMinis", "maxMicros", "typeId" };
-        public static void LaneForget() { lock (LaneLog) LaneLog.Clear(); lock (LaneSaid) LaneSaid.Clear(); lock (HandSync) { handLoaded = false; handOut = null; handError = null; handSaveError = null; } LaneRaceHook = null; laneLastError = null; laneTyped = null; }   // the harness: a fresh rule
+        public static void LaneForget() { lock (LaneLog) LaneLog.Clear(); lock (LaneSaid) LaneSaid.Clear(); lock (HandSync) { handLoaded = false; handOut = null; handError = null; handSaveError = null; } LaneRaceHook = null; LaneLeaveHook = null; laneLastError = null; laneTyped = null; }   // the harness: a fresh rule
         private static string LaneLogPart(string gid) { string j = LaneLogJson(gid); return j == "[]" ? "" : ",\"laneLog\":" + j; }
         private static string LaneLogJson(string gid)
         {
@@ -2599,6 +2613,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // Every 2 s (ChartBridge's poll timer): once a minute, off the timer's thread, GET The Desk's /api/lane-accounts and apply the
         // rule. One read at a time; a failure is said once until it reads again, and nothing moves that minute.
         public static bool LaneHarnessManual;            // test hook: the harness calls LaneApply itself
+        public static Action<string> LaneLeaveHook;       // test hook (0.6.23, the re-check of 111, fix 2): inside ChangeGate, after the leave's early flat check
         public static Action<string> LaneRaceHook;        // test hook (0.6.23, the review of 111): runs inside ChangeGate before the join's second read
         private static int laneBusy;
         private static double laneNext;
@@ -2742,7 +2757,9 @@ namespace NinjaTrader.NinjaScript.AddOns
         // removed, or the leader changed) and that is in no group goes on the hand list: "stay out until I add it".
         internal static void CopierMessage(Action run, string type, string text)
         {
-            if (type != "copierFollowerRemove" && type != "copierSet") { run(); return; }
+            // 0.6.23 (the re-check of 111, fix 1): EVERY copier message under ChangeGate (copierFollower too), so the lane rule's join
+            // never takes an account the copier is taking at that moment; the hand list only for a follower removed or a leader changed
+            if (type != "copierFollowerRemove" && type != "copierSet") { lock (ChangeGate) run(); return; }
             lock (ChangeGate)
             {
                 string name = null;
@@ -2870,6 +2887,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if (now != cur) return false;
                     // the flat check under the gate too (the re-check of 111, a note on 0.6.22): nothing placed between it and the leave
                     if (a != null) { string busy = BenchBusyWhy(name, a); if (busy != null) { LaneSay(cur, name + " is " + why + ": it leaves " + curName + " once flat (" + busy + ")", name + "|wait|" + why); return false; } }
+                    if (LaneLeaveHook != null) LaneLeaveHook(name);   // the harness: something placed after the early check
                     res = AccountGroup(new Dictionary<string, string> { { "account", CbJson.Str(name) }, { "group", "null" } }, "the lane rule", false);
                 }
                 if (res != null) { LaneSay(cur, name + " is " + why + " but could not leave " + curName + ": " + res, name + "|leavefail|" + res); return false; }

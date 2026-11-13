@@ -1522,11 +1522,20 @@ function create(o) {
   /* 1.56.0 (Anthony 2026-11-13): the third row, Unassigned. Add goes through the lane's own Multi-Account panel (its join step:
      its checks, its rules, its highest close and its Put in), so the add is his hand add and ChartBridge takes the account off
      the hand list; this row sends nothing itself. An account in a group of his own stays there until he takes it out. */
+  function heldText(name) {
+    const row = (S.accounts && Array.isArray(S.accounts.list) ? S.accounts.list : []).find(x => x && typeof x.name === 'string' && x.name.toLowerCase() === String(name).toLowerCase());
+    return (row && Array.isArray(row.positions) ? row.positions : []).filter(p => p && typeof p.qty === 'number' && p.qty !== 0)
+      .map(p => (p.qty > 0 ? 'long ' : 'short ') + Math.abs(p.qty) + ' ' + String(p.root || p.name || '').slice(0, 12)).join(', ');
+  }
   function unassignedHtml(ls) {
     const u = C.unassigned(S.groups, S.version);
     const row = r => {
       const l = ls.find(x => x.stage === r.kind), lane = r.kind === 'eval' ? 'the eval lane' : 'the funded lane';
-      const why = !l || !l.groupId ? 'There is no ' + r.kind + ' lane yet (a trader on a group of Type ' + r.kind + ')' : laneMoveWhy(l);
+      /* Anthony 2026-11-13 (21:35Z): Move from his group only when flat; the position as ChartBridge sends it (a working order
+         is checked by the lane's panel, and ChartBridge refuses either) */
+      const held = r.group ? heldText(r.account) : '';
+      const why = !l || !l.groupId ? 'There is no ' + r.kind + ' lane yet (a trader on a group of Type ' + r.kind + ')'
+        : laneMoveWhy(l) || (held ? 'Holds a position (' + held + '): moves once flat' : '');
       /* Anthony 2026-11-13 ("1. a"): one in a group of his own moves straight into the lane, asked once, naming both groups */
       const asking = !why && r.group && S.unAsk === r.kind + '|' + r.account;
       return `<li class="fl-acct" data-acct="${esc(r.account)}"><span class="fl-aname">${esc(r.account)}</span><span class="fl-tag" data-kind="${esc(r.kind)}">${esc(r.kindText)}</span>
@@ -1627,7 +1636,7 @@ function create(o) {
     if (what === 'unadd') {                                                 // 1.56.0: Unassigned's Add, through the lane's own panel
       const stage = String(b.dataset.stage || ''), name = String(b.dataset.acct || ''), l = laneList().find(x => x.stage === stage);
       const r = C.unassigned(S.groups, S.version).rows.find(x => x.account === name && x.kind === stage);
-      if (!l || !r || !C.STAGES.includes(stage) || !l.groupId || laneMoveWhy(l)) { render(); return; }   // the reason is on the button
+      if (!l || !r || !C.STAGES.includes(stage) || !l.groupId || laneMoveWhy(l) || (r.group && heldText(name))) { render(); return; }   // the reason is on the button
       const api = lanePanelApi(stage);
       if (r.group) {                                                        // his own group: one step, asked once (naming both groups)
         if (S.unAsk !== stage + '|' + name) { S.unAsk = stage + '|' + name; S.unSaid = null; render(); return; }
