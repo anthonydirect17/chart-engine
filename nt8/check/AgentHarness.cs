@@ -6816,7 +6816,50 @@ public static class AgentHarness
                 P("{\"type\":\"copierFollowerRemove\",\"cid\":\"lcf4\",\"account\":\"PROP-1\"}");
                 Check(File.ReadAllText(handFile).Contains("out\tPROP-1\t") && File.ReadAllText(handFile).Contains("\tthe copier\t-") && apply(new[] { row("PROP-1", "eval", null, false) }) == 0 && ChartBridgeGroups.GroupOf("PROP-1") == null,
                       "0.6.23 copier: its follower row removed by hand: on the hand list, and the rule leaves it out: " + PageReject() + " " + File.ReadAllText(handFile));
+                // the re-check of 111, fix 1: every copier message waits for ChangeGate (copierFollower too), so a rule join and the
+                // copier taking the same account never interleave. The hook holds the gate while another thread sends copierFollower.
+                try { Gone(handFile); } catch (Exception) { }
+                ChartBridgeGroups.LaneForget();
+                P("{\"type\":\"copierFollowerRemove\",\"cid\":\"lcf5\",\"account\":\"PROP-2\"}");
+                bool sentEarly = true; System.Threading.Tasks.Task cfTask = null;
+                ChartBridgeGroups.LaneRaceHook = who =>
+                {
+                    cfTask = System.Threading.Tasks.Task.Run(() => OnClient(pc, "{\"type\":\"copierFollower\",\"cid\":\"lcf6\",\"account\":\"" + who + "\",\"on\":false,\"qty\":1,\"size\":\"micro\",\"lossLimit\":null}"));
+                    sentEarly = cfTask.Wait(400);
+                };
+                apply(new[] { row("PROP-2", "eval", null, false) });
+                ChartBridgeGroups.LaneRaceHook = null;
+                bool cfDone = cfTask != null && cfTask.Wait(5000);
+                Check(cfTask != null && !sentEarly && cfDone, "0.6.23 copier (the re-check, fix 1): copierFollower waits for ChangeGate while the lane rule holds it, then runs (sent early: " + sentEarly + ", done: " + cfDone + ")");
+                OnClient(pc, "{\"type\":\"copierFollower\",\"cid\":\"lcf7\",\"account\":\"PROP-2\",\"on\":false,\"qty\":1,\"size\":\"micro\",\"lossLimit\":null}");
+                OnClient(pc, "{\"type\":\"copierFollowerRemove\",\"cid\":\"lcf8\",\"account\":\"PROP-2\"}");
+                if (ChartBridgeGroups.GroupOf("PROP-2") != null) P("{\"type\":\"accountGroup\",\"cid\":\"lcf9\",\"account\":\"PROP-2\",\"group\":null}");
                 ChartBridgeCopier.Stop(); ChartBridgeCopier.HarnessManual = false; ChartBridgeSwitches.Note("copier", "off");
+                try { Gone(handFile); } catch (Exception) { }
+                ChartBridgeGroups.LaneForget();
+                // the re-check of 111, fix 2: the lifecycle leave's flat check is decided again inside AccountGroup, under the entry locks
+                lanes("group\tg3\tCopier\ton\t-\t-\t-\t-\t-\t-\t-\t-\t-\n");
+                P("{\"type\":\"accountGroup\",\"cid\":\"fx1\",\"account\":\"PROP-1\",\"group\":\"g3\",\"size\":50000,\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"eod\",\"lockAt\":0,\"target\":3000,\"consistency\":0,\"maxMinis\":4,\"maxMicros\":40,\"typeId\":\"made-up-50k\"}");
+                Position late = new Position { Instrument = mnq, MarketPosition = MarketPosition.Long, Quantity = 1, AveragePrice = 25000 };
+                ChartBridgeGroups.LaneLeaveHook = who => prop1.Positions.Add(late);   // an entry that went in after the early check
+                Check(ChartBridgeGroups.GroupOf("PROP-1") == "g3" && apply(new[] { row("PROP-1", "eval", "blown", false) }) == 0 && ChartBridgeGroups.GroupOf("PROP-1") == "g3",
+                      "0.6.23 lifecycle (the re-check, fix 2): a position taken after the early flat check: AccountGroup's own check (under GroupEntryLock and PlaceLock) keeps it in his group");
+                ChartBridgeGroups.LaneLeaveHook = null;
+                prop1.Positions.Remove(late);
+                Check(apply(new[] { row("PROP-1", "eval", "blown", false) }) == 1 && ChartBridgeGroups.GroupOf("PROP-1") == null, "0.6.23 lifecycle: once flat, it leaves");
+                // Anthony 2026-11-13 (21:35Z, point 1): Move from his group into a lane only when flat; the bridge refuses it too
+                try { Gone(handFile); } catch (Exception) { }
+                ChartBridgeGroups.LaneForget();
+                P("{\"type\":\"accountGroup\",\"cid\":\"mv1\",\"account\":\"PROP-1\",\"group\":\"g3\",\"size\":50000,\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"eod\",\"lockAt\":0,\"target\":3000,\"consistency\":0,\"maxMinis\":4,\"maxMicros\":40,\"typeId\":\"made-up-50k\"}");
+                Position held3 = new Position { Instrument = mnq, MarketPosition = MarketPosition.Long, Quantity = 1, AveragePrice = 25000 };
+                prop1.Positions.Add(held3);
+                P("{\"type\":\"accountGroup\",\"cid\":\"mv2\",\"account\":\"PROP-1\",\"group\":\"g1\",\"size\":50000,\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"eod\",\"lockAt\":0,\"target\":3000,\"consistency\":0,\"maxMinis\":4,\"maxMicros\":40,\"typeId\":\"made-up-50k\"}");
+                Check(ChartBridgeGroups.GroupOf("PROP-1") == "g3" && PageReject().Contains("it moves from Copier into Evals once flat"),
+                      "0.6.23 Move: a member of his Copier group that holds a position is not moved into the lane, and says why: " + PageReject());
+                prop1.Positions.Remove(held3);
+                P("{\"type\":\"accountGroup\",\"cid\":\"mv3\",\"account\":\"PROP-1\",\"group\":\"g1\",\"size\":50000,\"dailyLoss\":1000,\"drawdown\":2000,\"drawdownType\":\"eod\",\"lockAt\":0,\"target\":3000,\"consistency\":0,\"maxMinis\":4,\"maxMicros\":40,\"typeId\":\"made-up-50k\"}");
+                Check(ChartBridgeGroups.GroupOf("PROP-1") == "g1", "0.6.23 Move: once flat, it moves from his Copier group into the lane: " + PageReject());
+                P("{\"type\":\"accountGroup\",\"cid\":\"mv4\",\"account\":\"PROP-1\",\"group\":null}");
                 try { Gone(handFile); } catch (Exception) { }
                 ChartBridgeGroups.LaneForget();
                 lanes("");                                                                                       // g1 and g2 only, nobody in them, for the checks below

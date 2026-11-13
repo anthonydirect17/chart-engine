@@ -139,6 +139,12 @@ try {
   const moves = await p.evaluate(() => [window.fixed.panel.moveIn('SIM-H'), window.fixed.panel.moveIn('SIM-A')]);
   await wait(500);
   check(/Apex/.test(moves[0]) && /a group holds one firm/.test(moves[0]) && moves[1] === 'SIM-A is in Lucid already.', '1.56.0 moveIn: another firm\'s account is refused by the join\'s own check, a member is in already: ' + JSON.stringify(moves));
+  /* Anthony 2026-11-13 (21:35Z): only when flat: an account that holds a position is refused before anything is sent */
+  const nB = (await groupMsgs()).length;
+  const busyMove = await p.evaluate(() => { const acc = window.fixed.feed.S.accounts.find(a => a && a.name === 'SIM-H'), was = acc.positions;
+    acc.positions = [{ root: 'MNQ', qty: 1 }]; try { return window.fixed.panel.moveIn('SIM-H'); } finally { acc.positions = was; } });
+  await wait(400);
+  check(busyMove === 'SIM-H holds long 1 MNQ: it moves once flat.' && (await groupMsgs()).length === nB, '1.56.0 moveIn: a busy account is refused, nothing sent: ' + busyMove);
   check(!(await p.$('#laneC .ma-join')) && (await groupMsgs()).length === nJ, '1.56.0 join: Cancel sends nothing');
   // the lock: every chip locked, a click and a drag send nothing, the reason is shown
   await p.evaluate(() => { window.lockWhy = 'The lane is in Auto: switch Armed off before an account moves.'; });

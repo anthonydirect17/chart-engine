@@ -1143,6 +1143,11 @@ test('1.56.0 (Anthony 2026-11-13: "3 rows, eval, funded and unassigned", "show t
   assert.deepStrictEqual(calls, [['moveIn', 'legion-eval', 'EVAL-C']], 'the second click: one step through the eval lane\'s own panel');
   assert.match(P.part('lane-unassigned').innerHTML, /Sent to ChartBridge: EVAL-C out of Copier into the eval lane\./);
   calls.length = 0;
+  // Anthony 2026-11-13 (21:35Z): Move only when flat
+  P.feed({ type: 'accounts', personalNamed: true, list: [{ name: 'EVAL-A', prop: true }, { name: 'EVAL-B', prop: true }, { name: 'EVAL-C', prop: true, positions: [{ root: 'MNQ', qty: 2 }] }, { name: 'EVAL-D', prop: true }] }); await P.tick();
+  assert.match(P.part('lane-unassigned').innerHTML, /data-acct="EVAL-C" data-stage="eval" aria-disabled="true" title="Holds a position \(long 2 MNQ\): moves once flat">Move to the eval lane/, 'a member of his group that holds a position: greyed with why');
+  click('unadd', { acct: 'EVAL-C', stage: 'eval' }); click('unadd', { acct: 'EVAL-C', stage: 'eval' });
+  assert.strictEqual(calls.length, 0, 'nothing asked, nothing sent');
   click('unadd', { acct: 'EVAL-A', stage: 'eval' });
   assert.deepStrictEqual(calls, [['join', 'legion-eval', 'EVAL-A']], 'through the eval lane\'s own panel (its join step: his hand add)');
   assert.match(P.part('lane-unassigned').innerHTML, /EVAL-A: check its rules and its highest close in the eval lane&#39;s panel, then Put in\./);

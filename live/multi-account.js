@@ -514,6 +514,9 @@ function mount(el, host) {
     if (!benchNow(g)) return 'Moving an account into ' + g.name + ' needs ChartBridge ' + MC.BENCH_VERSION + ' (this PC has ' + (S.version || 'an older one') + ').';
     const acc = (S.accounts || []).find(a => a && a.name === name) || null;
     if (!acc || acc.state === 'gone') return name + ' is not in NinjaTrader now.';
+    /* Anthony 2026-11-13 (the board 21:35Z): only when flat, with no working order; ChartBridge 0.6.23 refuses it too */
+    const busy = MC.busyWords(acc, typeof host.working === 'function' ? host.working() : []);
+    if (busy) return name + ' holds ' + busy + ': it moves once flat.';
     const no = F.joinRefusal(name, g); if (no) return no;
     const plan = F.joinPlan(name, g, acc);
     if (plan.mode !== 'auto') return name + ' cannot move from here: ' + (plan.why || 'its rules are not known') + '. Move it on the Accounts tab (Group), where its rules can be typed.';
