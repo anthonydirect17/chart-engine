@@ -764,6 +764,11 @@ test('lanes: a lane is the trader on a group of that Type; each reason a lane ca
   const simAcc = Object.assign({}, accounts, { list: accounts.list.concat([{ name: 'SIM-L1', sim: true, connection: 'connected', personal: false, prop: false, tradable: true, positions: [] }]) });
   const sim = why({ seats: [{ account: 'SIM-L1' }] }, { accounts: simAcc });
   assert.deepStrictEqual([sim.armable, sim.sim], [true, true], 'a lane of Sim accounts is allowed (the first Sim sessions), and said as such');
+  // 1.53.0 (Anthony 2026-11-13): SIM, PROP or PROP + SIM on every lane; '' while an account is neither
+  assert.strictEqual(sim.kindText, 'SIM');
+  assert.strictEqual(why({}).kindText, 'PROP');
+  assert.strictEqual(why({ seats: [{ account: 'EVAL-A' }, { account: 'SIM-L1' }] }, { accounts: simAcc }).kindText, 'PROP + SIM');
+  assert.strictEqual(why({ seats: [{ account: 'EVAL-A' }, { account: 'NOBODY-9' }] }).kindText, '');
   assert.match(F.armWords([sim]), /on 1 Sim account/);
   // FIX 6: Auto as the Agent tab would offer it (AgentCore.modesAllowed with groupTradable)
   const untradable = Object.assign({}, accounts, { list: accounts.list.map(a => (a.name.startsWith('EVAL') ? Object.assign({}, a, { tradable: false }) : a)) });
@@ -778,7 +783,7 @@ test('lanes: a lane is the trader on a group of that Type; each reason a lane ca
   assert.strictEqual(why({ connected: false }).armable, true, 'a runner that is not connected does not hold the switch: ChartBridge holds the mode');
   // no trader on a group of that Type, two of them, a trader on one account, a group with no Type: no lane
   [ev, fu] = F.lanes([agent('solo', { account: 'EVAL-A' }), agent('g3er', { account: null, group: { id: 'g3', name: 'New' }, seats: [{ account: 'NOTYPE-1' }] })], groups, accounts, V, cards);
-  assert.match(ev.why, /^No trader is on a group of Type eval\. ChartBridge's 17:00 reset puts a flat trader on None each trading day, so give the trader its group again on the Agent tab each day/, 'FIX 4: the daily step said as it is'); assert.match(fu.why, /^No trader is on a group of Type funded/);
+  assert.match(ev.why, /^No trader is on a group of Type eval\. ChartBridge's 17:00 reset puts a flat trader on None each trading day, so give the trader its group again in Legion's Traders section below each day \(a group with Type eval: New group on the Multi-Account panel\)\.$/, 'FIX 4: the daily step said as it is, where it is done now (HOME 2026-11-12)'); assert.match(fu.why, /^No trader is on a group of Type funded/);
   assert.deepStrictEqual([ev.id, ev.armable, ev.traders], ['', false, []]);
   [ev] = F.lanes([evalTrader(), agent('twin', { mode: 'auto', account: null, group: { id: 'g1', name: 'Evals' }, seats: [] })], groups, accounts, V, cards);
   assert.match(ev.why, /^2 traders are on eval groups \(legion1, twin\): Legion runs one lane a stage/);
@@ -960,6 +965,7 @@ test('a lane card says which files are not offered and why: a sweep build waits 
     assert.strictEqual((html.match(/<p class="fl-line fl-mutline fl-waiting">Not offered until it runs live: sweep-a \(runs live after 10 matching nights \(3 so far\)\)\.<\/p>/g) || []).length, 1, stage);
     assert.doesNotMatch(html, /<option value="sweep-a\.json"/, 'and it is not in the pick list');
   }
+  assert.match(P.part('lane-eval').innerHTML, /<div class="fl-lanekind" data-lanekind="prop">PROP<\/div>/, '1.53.0: the lane says what it trades in plain words');
 });
 
 test('the pick: one list a lane, sent as agentPick; locked in Auto and while the trader holds something; a refusal is said and the list goes back', async t => {

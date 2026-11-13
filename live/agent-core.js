@@ -1350,7 +1350,7 @@ function copilotRouter(doc) {
  *   - the two acknowledgements (agentSeen, botSeen): they change nothing;
  *   - every other agent or bot message only when the trader (or the bot) is on your personal account, a Sim account or None,
  *     and an account change only to one of those (a league seat is a Sim account, and ChartBridge checks Sim again).
- * Everything else is refused by name: a group (groups are the prop business), a prop account, a live account the page cannot
+ * Everything else is refused by name: a group (groups are on Legion), a prop account, a live account the page cannot
  * tell, a trader ChartBridge has not described yet, and every message type not named above. Sim is offered because it can
  * never reach a prop account and the Agent and Bot tabs are where a trader is tried on Sim (to confirm).
  * Personal is ChartBridge's own flag (0.6.16: personal: true on the one account picked on the Accounts tab, with
@@ -1431,7 +1431,7 @@ function noHomeWhy(agentMsg, accountsMsg, groupsMsg) {
   const k = FC.seatsKind(kinds);
   if (isGroup ? LG_GROUP_KINDS.has(k) : k === 'prop' || k === 'personal' || k === 'sim') return '';
   if (kinds.some(x => x === '' || x === 'unlisted')) return 'no home: the page cannot tell ' + (isGroup ? 'an account in its group' : 'its account') + NO_HOME_TAIL;
-  if (isGroup && (k === 'personal' || k === 'sim')) return 'no home: its group holds only your personal account or Sim accounts, and Praetorian takes no group' + NO_HOME_TAIL;
+  if (isGroup && k === 'personal') return 'no home: its group holds your personal account, and Praetorian takes no group' + NO_HOME_TAIL;
   return 'no home: its account mixes kinds' + NO_HOME_TAIL;
 }
 /** ChartBridge says the trader is flat: it owns nothing (owns exactly false), no position, and no seat owns or holds one. */
@@ -1489,7 +1489,7 @@ function prTraderWhy(agentMsg, accountsMsg, groupsMsg) {
   if (!plainObj(agentMsg)) return 'ChartBridge has not described this trader yet';
   const name = typeof agentMsg.name === 'string' && agentMsg.name ? agentMsg.name : String(agentMsg.agent || 'this trader');
   const home = noHomeWhy(agentMsg, accountsMsg, groupsMsg);
-  if (plainObj(agentMsg.group)) return name + (home ? ': ' + home : ' trades a group: groups are the prop business, ' + PR_WHERE);
+  if (plainObj(agentMsg.group)) return name + (home ? ': ' + home : ' trades a group: groups are on Legion, ' + PR_WHERE);
   const accts = gateAccounts(agentMsg);
   if (!accts) return name + ': ' + GATE_SHAPE;
   const left = leftoverWhy(agentMsg, accountsMsg);
@@ -1537,7 +1537,7 @@ function prCheck(m, st) {
     if (why) return 'Not sent from Praetorian: ' + why + '.';
     if (t === 'agentAccount') {
       if (!s.preMove && a.mode !== 'shadow') return 'Not sent from Praetorian: an account or group change goes only while the trader is in Shadow (the page sends Shadow first, then the change).';
-      if (m.group !== undefined) return 'Not sent from Praetorian: a group is the prop business, ' + PR_WHERE + '.';
+      if (m.group !== undefined) return 'Not sent from Praetorian: groups are on Legion, ' + PR_WHERE + '.';
       if (m.account !== null && !prIsPersonal(m.account, s.accounts)) return 'Not sent from Praetorian: ' + prNotPersonalWhy(m.account, s.accounts) + '.';
     }
     return '';
@@ -1568,7 +1568,7 @@ function prChoices(list, ok, opts) {
     if (!c.ok && !c.current) return c;   // not offered by the desk already: its own reason stands (a league seat on a LIVE account, a taken account)
     if (c.kind === 'group') {
       if (typeof x.groupOk === 'function' && x.groupOk(c.id) === true) return c;
-      return Object.assign({}, c, { ok: false, text: c.label + (c.current ? ', now' : '') + ', not on ' + name + ': ' + (typeof x.groupOk === 'function' ? 'a group that is not all prop accounts' : 'groups are the prop business, ' + PR_WHERE) });
+      return Object.assign({}, c, { ok: false, text: c.label + (c.current ? ', now' : '') + ', not on ' + name + ': ' + (typeof x.groupOk === 'function' ? 'a group that holds your personal account or an account the page cannot tell' : 'groups are on Legion, ' + PR_WHERE) });
     }
     if (typeof ok === 'function' && ok(c.name) === true) return c;
     return Object.assign({}, c, { ok: false, text: (c.kind === 'league' ? 'League seat: ' : '') + c.name + (c.mark ? ' (' + c.mark + ')' : '') + (c.current ? ', now' : '') + ', not on ' + name + ': ' + notHere });
@@ -1682,8 +1682,10 @@ function praetorianGate() {
  * every other message type. "Prop" is ChartBridge's own flag (0.6.16), read by FleetCore.kindOf, and needs a personal pick
  * (with none, no account is prop: nothing but the stops goes). Its tests: test/legion-desk.test.js.
  */
-const LG_WHERE = 'it is set up from Praetorian (your personal account and Sim); from here you can only stop it';
-const LG_GROUP_KINDS = new Set(['prop', 'propsim']);
+const LG_WHERE = 'it is set up from Praetorian (your personal account and single Sim accounts); from here you can only stop it';
+/* 1.53.0 (Anthony 2026-11-13: "I dont see any downside to sim and prop sharing a lane"): a group of prop accounts, of Sim accounts
+   only (HOME's blocker), or of both. Never one that holds your personal account or an account the page cannot tell. */
+const LG_GROUP_KINDS = new Set(['prop', 'propsim', 'sim']);
 const lgRows = accountsMsg => (plainObj(accountsMsg) && Array.isArray(accountsMsg.list) ? accountsMsg.list : []);
 /** Whether Legion's desk may reach the account `name`: a prop account, by ChartBridge's own flag (with a pick made). */
 function lgAccountOk(name, accountsMsg) {
@@ -1698,7 +1700,7 @@ function lgKind(names, accountsMsg) {
   if (!FC || typeof FC.kindOf !== 'function' || typeof FC.seatsKind !== 'function' || !plainObj(accountsMsg) || accountsMsg.personalNamed !== true) return '';
   return FC.seatsKind(names.map(n => { const row = lgRows(accountsMsg).find(r => plainObj(r) && r.name === n); return row ? FC.kindOf(row) : 'unlisted'; }));
 }
-/** A group (by id, from the `groups` message) Legion's desk may reach: it has accounts and every one is prop or Sim, at least one prop. */
+/** A group (by id, from the `groups` message) Legion's desk may reach: it has accounts and every one is prop or Sim (1.53.0: Sim only too). */
 function lgGroupWhy(id, groupsMsg, accountsMsg) {
   if (!plainObj(groupsMsg)) return 'ChartBridge has not listed its groups yet';
   const g = (plainObj(groupsMsg) && Array.isArray(groupsMsg.list) ? groupsMsg.list : []).find(x => plainObj(x) && x.id === id) || null;

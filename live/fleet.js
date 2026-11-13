@@ -449,13 +449,13 @@ function lanes(agents, groupsMsg, accountsMsg, version, cards) {
     const title = stage === 'eval' ? 'Eval lane' : 'Funded lane';
     const on = list.filter(a => plainObj(a.group) && typeof a.group.id === 'string' && groups.has(a.group.id) && groups.get(a.group.id).accountType === stage);
     const L = { stage, title, traders: on.map(a => a.agent), id: '', name: '', mode: '', modeText: '', auto: on.some(a => a.mode === 'auto'), connected: false, status: '',
-      groupId: '', groupName: '', seats: [], benched: [], sim: false, simCount: 0, pick: '', sha: '', pickKnown: atLeast(version, PICK_MIN), card: null, pickText: '', exposed: false, why: '', armable: false, runnerNote: '',
+      groupId: '', groupName: '', seats: [], benched: [], sim: false, simCount: 0, kindText: '', pick: '', sha: '', pickKnown: atLeast(version, PICK_MIN), card: null, pickText: '', exposed: false, why: '', armable: false, runnerNote: '',
       /* the re-review of 94, R2: any trader of the lane not said to be in Shadow (Copilot, Auto, or not said), set before any
          early return, so a doubled lane in Copilot is never read as "off" */
       notShadow: on.some(a => a.mode !== 'shadow'), notShadowIds: on.filter(a => a.mode !== 'shadow').map(a => a.agent + ' (' + (own(MODE_NAME, a.mode) ? MODE_NAME[a.mode] : 'not known') + ')') };
     if (!groupsMsg) { L.why = 'Not heard from ChartBridge yet'; return L; }
     if (!on.length) {
-      L.why = 'No trader is on a group of Type ' + stage + '. ChartBridge\'s 17:00 reset puts a flat trader on None each trading day, so give the trader its group again on the Agent tab each day (a group with Type ' + stage + ': Settings, Account groups).';
+      L.why = 'No trader is on a group of Type ' + stage + '. ChartBridge\'s 17:00 reset puts a flat trader on None each trading day, so give the trader its group again in Legion\'s Traders section below each day (a group with Type ' + stage + ': New group on the Multi-Account panel).';
       return L;
     }
     if (on.length > 1) { L.why = on.length + ' traders are on ' + stage + ' groups (' + on.map(a => a.agent).join(', ') + '): Legion runs one lane a stage. Take all but one off on the Agent tab.'; return L; }
@@ -478,6 +478,10 @@ function lanes(agents, groupsMsg, accountsMsg, version, cards) {
     const kinds = L.seats.map(n => { const row = idx.get(n.toLowerCase()); return row ? kindOf(row) : ''; });
     L.sim = kinds.length > 0 && kinds.every(k => k === 'sim');
     L.simCount = kinds.filter(k => k === 'sim').length;
+    /* 1.53.0 (Anthony 2026-11-13: Sim and prop may share a lane): what the lane trades, in plain words on its card; '' while any
+       account is not prop or Sim (the lane is then not armable and says why) */
+    const propCount = kinds.filter(k => k === 'prop').length;
+    L.kindText = !kinds.length || propCount + L.simCount !== kinds.length ? '' : propCount && L.simCount ? 'PROP + SIM' : propCount ? 'PROP' : 'SIM';
     /* answers B4-8, F2 (rule 12, A28-1's rule for Armed too): no lane is armed while ANY other trader holds, or may hold, one of
        its accounts (the group's members and every account of its own trader), in any mode: a trader the page cannot read may be
        on any of them. The reason names the trader and the place, never the account. */
@@ -1413,6 +1417,7 @@ function create(o) {
     return `<div class="fl-lane" data-stage="${esc(l.stage)}" data-armable="${l.armable}"${l.auto ? ' data-auto="1"' : ''}>
       <div class="fl-trow"><span class="fl-lanetitle"><span class="fl-dot" data-stage="${esc(l.stage)}"></span>${esc(l.title)}</span><span class="fl-mut">${l.stage === 'eval' ? 'Goal: pass the eval' : 'Goal: reach the payout'}</span>
         <span class="fl-fill"></span>${none ? '' : `<span class="fl-mode" data-mode="${esc(l.mode)}">${esc(l.modeText)}</span>`}<span class="fl-tag" data-kind="${l.armable ? 'live' : 'notlive'}">${l.armable ? 'Ready' : 'Not ready'}</span></div>
+      ${none || !l.kindText ? '' : `<div class="fl-lanekind" data-lanekind="${esc(l.kindText === 'SIM' ? 'sim' : l.kindText === 'PROP' ? 'prop' : 'propsim')}">${esc(l.kindText)}</div>`}
       ${none ? '' : `<div class="fl-trow"><span class="fl-mut">${esc(l.name)}, group ${esc(l.groupName)}</span>${l.sim ? '<span class="fl-tag" data-kind="sim">Sim: no money at stake</span>' : ''}</div><div class="fl-trow">${sel}</div>${card}`}
       ${none ? '' : (w => (w.length ? `<p class="fl-line fl-mutline fl-waiting">Not offered until it runs live: ${w.map(x => `${esc(x.text)} (${esc(x.why)})`).join('; ')}${w.more ? `; and ${w.more} more (the Roster says why)` : ''}.</p>` : ''))(C.waitingChoices(S.roster.cards, 5))}
       ${l.why ? `<p class="fl-line fl-warn fl-lanewhy">${esc(l.why)}</p>` : ''}

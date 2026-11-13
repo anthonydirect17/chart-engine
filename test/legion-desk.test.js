@@ -13,7 +13,7 @@ const accounts = o => Object.assign({ type: 'accounts', personalNamed: true, lis
   { name: 'SIM-A', sim: true, tradable: true }, { name: 'LIVE-X', tradable: true }, { name: 'PROP-1', prop: true, tradable: true }, { name: 'PROP-2', prop: true, tradable: true },
   { name: 'MINE-1', personal: true, tradable: true }] }, o || {});
 const groups = { type: 'groups', list: [{ id: 'g1', name: 'Evals', members: ['PROP-1', 'PROP-2'] }, { id: 'g2', name: 'Prop and Sim', members: ['PROP-1', 'SIM-A'] },
-  { id: 'g3', name: 'Mixed', members: ['PROP-1', 'MINE-1'] }, { id: 'g4', name: 'Sims', members: ['SIM-A'] }, { id: 'g5', name: 'Empty', members: [] }, { id: 'g6', name: 'Unknown', members: ['LIVE-X'] }] };
+  { id: 'g3', name: 'Mixed', members: ['PROP-1', 'MINE-1'] }, { id: 'g4', name: 'Sims', members: ['SIM-A'] }, { id: 'g5', name: 'Empty', members: [] }, { id: 'g6', name: 'Unknown', members: ['LIVE-X'] }, { id: 'g7', name: 'Mine only', members: ['MINE-1'] }] };
 const agent = o => Object.assign({ type: 'agent', agent: 'demo', name: 'Demo Agent', mode: 'shadow', enabled: true, connected: true, account: 'PROP-1' }, o || {});
 const gateWith = (...msgs) => { const g = AC.legionGate(); for (const m of msgs) g.hear(m); return g; };
 const AGENT_MSGS = id => [
@@ -21,25 +21,28 @@ const AGENT_MSGS = id => [
   { type: 'agentRules', agent: id, maxTrades: 2 }, { type: 'agentAnswer', agent: id, id: 'p1', answer: 'accept' }, { type: 'agentAccount', agent: id, account: null, keepMode: 'shadow' }];
 const BOT_MSGS = [{ type: 'botMode', mode: 'auto' }, { type: 'botKill', on: false }, { type: 'botRails', maxTrades: 1 }, { type: 'botAnswer', id: 'p1', answer: 'accept' }, { type: 'botAccount', account: null }];
 
-test('a trader on a prop account, a prop group (or prop and Sim) or None: everything the Agent desk sends goes', () => {
+test('a trader on a prop account, a prop group, a prop and Sim group, a Sim-only group (1.53.0) or None: everything the Agent desk sends goes', () => {
   for (const a of [agent(), agent({ account: null, group: { id: 'g1', name: 'Evals' }, seats: [{ account: 'PROP-1' }, { account: 'PROP-2' }] }),
-    agent({ account: null, group: { id: 'g2', name: 'Prop and Sim' }, seats: [{ account: 'PROP-1' }, { account: 'SIM-A' }] }), agent({ account: null })]) {
+    agent({ account: null, group: { id: 'g2', name: 'Prop and Sim' }, seats: [{ account: 'PROP-1' }, { account: 'SIM-A' }] }),
+    agent({ account: null, group: { id: 'g4', name: 'Sims' }, seats: [{ account: 'SIM-A' }] }), agent({ account: null })]) {
     const g = gateWith(accounts(), groups, a);
     for (const m of AGENT_MSGS('demo')) assert.equal(g.check(m), '', JSON.stringify(a.group || a.account) + ' ' + m.type);
     assert.equal(g.check({ type: 'agentAccount', agent: 'demo', account: 'PROP-2', keepMode: 'shadow' }), '');
     assert.equal(g.check({ type: 'agentAccount', agent: 'demo', group: 'g1', keepMode: 'shadow' }), '', 'a lane\'s trader gets its group here');
     assert.equal(g.check({ type: 'agentAccount', agent: 'demo', group: 'g2', keepMode: 'shadow' }), '');
+    assert.equal(g.check({ type: 'agentAccount', agent: 'demo', group: 'g4', keepMode: 'shadow' }), '', 'Anthony 2026-11-13: a Sim-only group is a lane too (HOME\'s blocker)');
   }
 });
 
-test('the targets: a prop account, a prop group or None; never personal, Sim alone, a league seat, a mixed or unknown group', () => {
+test('the targets: a prop account, a group of prop or Sim accounts, or None; never personal, a single Sim account, a league seat, a mixed or unknown group', () => {
   const g = gateWith(accounts(), groups, agent({ account: null }));
   assert.match(g.check({ type: 'agentAccount', agent: 'demo', account: 'MINE-1', keepMode: 'shadow' }), /MINE-1 is not a prop account: it is set up from Praetorian/);
   assert.match(g.check({ type: 'agentAccount', agent: 'demo', account: 'SIM-A', keepMode: 'shadow' }), /SIM-A is not a prop account/);
   assert.match(g.check({ type: 'agentAccount', agent: 'demo', account: 'LIVE-X', keepMode: 'shadow' }), /LIVE-X is not a prop account/);
   assert.match(g.check({ type: 'agentAccount', agent: 'demo', account: 'SIM-A', league: true, keepMode: 'shadow' }), /a league seat is a Sim account/);
   assert.match(g.check({ type: 'agentAccount', agent: 'demo', group: 'g3', keepMode: 'shadow' }), /group Mixed holds your personal account/);
-  assert.match(g.check({ type: 'agentAccount', agent: 'demo', group: 'g4', keepMode: 'shadow' }), /group Sims is Sim accounts only/);
+  assert.equal(g.check({ type: 'agentAccount', agent: 'demo', group: 'g4', keepMode: 'shadow' }), '', '1.53.0: a Sim-only group goes');
+  assert.match(g.check({ type: 'agentAccount', agent: 'demo', group: 'g7', keepMode: 'shadow' }), /group Mine only holds your personal account/);
   assert.match(g.check({ type: 'agentAccount', agent: 'demo', group: 'g5', keepMode: 'shadow' }), /group Empty has no accounts/);
   assert.match(g.check({ type: 'agentAccount', agent: 'demo', group: 'g6', keepMode: 'shadow' }), /group Unknown holds an account the page cannot tell/);
   assert.match(g.check({ type: 'agentAccount', agent: 'demo', group: 'nope', keepMode: 'shadow' }), /there is no group nope/);
@@ -54,7 +57,7 @@ test('a trader on your personal account, Sim, a mixed group, a league seat or an
     [agent({ account: 'LIVE-X' }), /no home: the page cannot tell its account; stop it, then fix its account or group/],
     [agent({ account: 'SIM-A', league: true }), /league seat/],
     [agent({ account: null, group: { id: 'g3', name: 'Mixed' }, seats: [{ account: 'PROP-1' }, { account: 'MINE-1' }] }), /no home: its account mixes kinds; stop it, then fix its account or group/],
-    [agent({ account: null, group: { id: 'g4', name: 'Sims' }, seats: [{ account: 'SIM-A' }] }), /no home: its group holds only your personal account or Sim accounts, and Praetorian takes no group/],
+    [agent({ account: null, group: { id: 'g7', name: 'Mine only' }, seats: [{ account: 'MINE-1' }] }), /no home: its group holds your personal account, and Praetorian takes no group/],
     [agent({ account: null, group: { id: 'g6', name: 'Unknown' }, seats: [{ account: 'LIVE-X' }] }), /no home: the page cannot tell an account in its group/],
   ];
   for (const [a, rx] of cases) {
@@ -88,11 +91,11 @@ test('the page cannot tell: no pick, no accounts message, an undescribed trader,
   assert.equal(g.check(null), 'Not a message.');
 });
 
-test('a group\'s Clear stand-down: only for a prop group; Praetorian never sends it', () => {
+test('a group\'s Clear stand-down: only for a group Legion takes (prop, prop and Sim, Sim only); Praetorian never sends it', () => {
   const g = gateWith(accounts(), groups, agent());
   assert.equal(g.check({ type: 'agentStandDownClear', build: 'sample-build-2', group: 'g1' }), '');
   assert.match(g.check({ type: 'agentStandDownClear', build: 'sample-build-2', group: 'g3' }), /holds your personal account/);
-  assert.match(g.check({ type: 'agentStandDownClear', build: 'sample-build-2', group: 'g4' }), /Sim accounts only/);
+  assert.equal(g.check({ type: 'agentStandDownClear', build: 'sample-build-2', group: 'g4' }), '', '1.53.0: a Sim-only group too');
   assert.notEqual(g.check({ type: 'agentStandDownClear', build: 'sample-build-2' }), '');
   const p = AC.praetorianGate(); p.hear(accounts()); p.hear(agent({ account: 'MINE-1' }));
   assert.match(p.check({ type: 'agentStandDownClear', build: 'sample-build-2', group: 'g1' }), /it does not send agentStandDownClear/);
@@ -270,7 +273,7 @@ test('item 5: a trader with no home says so on both desks; either moves him to N
   const flat = { owns: false, position: null };
   const homeless = [
     [agent(Object.assign({ account: null, group: { id: 'g3', name: 'Mixed' }, seats: [{ account: 'PROP-1', owns: false, position: null }, { account: 'MINE-1', owns: false, position: null }] }, flat)), /no home: its account mixes kinds; stop it, then fix its account or group/],
-    [agent(Object.assign({ account: null, group: { id: 'g4', name: 'Sims' }, seats: [{ account: 'SIM-A', owns: false, position: null }] }, flat)), /no home: its group holds only your personal account or Sim accounts/],
+    [agent(Object.assign({ account: null, group: { id: 'g7', name: 'Mine only' }, seats: [{ account: 'MINE-1', owns: false, position: null }] }, flat)), /no home: its group holds your personal account, and Praetorian takes no group/],
     [agent(Object.assign({ account: null, group: { id: 'g6', name: 'Unknown' }, seats: [{ account: 'LIVE-X', owns: false, position: null }] }, flat)), /no home: the page cannot tell an account in its group/],
     [agent(Object.assign({ account: 'LIVE-X' }, flat)), /no home: the page cannot tell its account/],
     [agent(Object.assign({ account: 'GONE-9' }, flat)), /no home: the page cannot tell its account/],

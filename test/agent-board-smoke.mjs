@@ -15,7 +15,7 @@
 //     amber stand-down row with its why, kind and time, and Clear stand-down (agentStandDownClear, one click).
 //   - 1.52.0 (answers B4-2 item 7): Assign hero, a group trader's Start in Shadow and a group's Clear stand-down run end to end
 //     on Legion's trader desk (test/legion-desk-page.html; --personal=EVAL-A makes SIM-D prop, so Group B is Legion's), and a
-//     group Legion refuses (Group A, Sim only) is held back there with the reason; on Praetorian they are held back.
+//     group of Sim accounts only (Group A) is Legion's since 1.53.0; on Praetorian they are held back.
 // Screenshots: agent-board, agent-board-legion-assigned, agent-board-assign-ask, agent-board-assigned, agent-board-off, agent-board-standdown, agent-board-killed, agent-board-picker (.png in test/out).
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
@@ -128,7 +128,7 @@ try {
      on Legion's trader desk further down (1.52.0). Their checks here are the hold-backs. */
   console.log('  Assign hero and a group trader\'s Start in Shadow run on Legion\'s trader desk (below); here they are held back');
   const asg = await page.$eval('#agView [data-act="bAssign"][data-gid="g2"]', b => ({ d: b.disabled, t: b.title }));
-  check(asg.d && /Not on Praetorian: a group is the prop business/.test(asg.t), '1.51.0: in the Agent window too (F1), Assign hero is held back with the reason: ' + JSON.stringify(asg));
+  check(asg.d && /Not on Praetorian: groups are on Legion/.test(asg.t), '1.51.0: in the Agent window too (F1), Assign hero is held back with the reason: ' + JSON.stringify(asg));
   const before = (await sent()).length;
   await page.evaluate(() => { const b = document.querySelector('#agView [data-act="bAssign"][data-gid="g2"]'); b.disabled = false; b.click(); });
   await sleep(300);
@@ -161,7 +161,7 @@ try {
   }
   /* 1.51.0 Praetorian on the page: Assign hero held back with the reason; a group's Clear stand-down refused by the gate */
   const assign = await mp.$('#agView [data-act="bAssign"]');
-  if (assign) check(await assign.evaluate(b => b.disabled && /Not on Praetorian: a group is the prop business/.test(b.title)), '1.51.0: on the page, Assign hero is held back with the reason');
+  if (assign) check(await assign.evaluate(b => b.disabled && /Not on Praetorian: groups are on Legion/.test(b.title)), '1.51.0: on the page, Assign hero is held back with the reason');
   await mp.close();
   await page.setViewportSize({ width: 1440, height: 900 }); await sleep(400);
 
@@ -206,7 +206,7 @@ try {
   /* ---------------- answers B4-2 item 7 (the review of 103, a F-B2): the flows held back on Praetorian run end to end on
      Legion's trader desk: test/legion-desk-page.html mounts LegionDesk on the window's own connection, as Legion Setup will
      (builder 1's mount). --personal=EVAL-A (ChartBridge 0.6.16's pick, made up): every other live account reads as prop, so
-     Group B (SIM-C Sim, SIM-D prop) is Legion's; Group A (Sim only) has no home and is held back there too (a F-B7). */
+     Group B (SIM-C Sim, SIM-D prop) is Legion's; Group A (Sim only) is Legion's too since 1.53.0 (it had no home before, a F-B7). */
   console.log('Legion\'s trader desk: Assign hero, Start in Shadow and Clear stand-down end to end');
   const lp = await ctx.newPage();
   lp.on('pageerror', e => fail('page error: ' + e.message));
@@ -219,7 +219,7 @@ try {
   await lp.click(LG + ' [data-act="board"]');
   await until(() => lp.isVisible(LG + ' [data-k="board"]'), 'the board on Legion\'s desk');
   const sdA = await lp.$eval(LG + ' [data-act="bSdClear"][data-gid="' + gidA + '"]', b => ({ d: b.disabled, t: b.title }));
-  check(sdA.d && /Not on Legion: a group that is not all prop accounts/.test(sdA.t), 'a F-B7: on Legion, Group A (Sim only) has its Clear stand-down held back with the reason: ' + JSON.stringify(sdA));
+  check(!sdA.d && /^Clear it: /.test(sdA.t), '1.53.0 (Anthony 2026-11-13, Sim and prop may share a lane): on Legion, Group A (Sim only) is a lane group now, so its Clear stand-down is offered: ' + JSON.stringify(sdA));
   /* Assign hero with no free slot: the words, nothing sent */
   helper.status.demothree.on = true;
   await sleep(3500);

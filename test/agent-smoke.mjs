@@ -674,15 +674,11 @@ try {
      the picker's order (None, the groups, single accounts) is test/agent.test.js's, and the Agent window (Pop out) keeps it */
   const held = await page.evaluate(() => ({ why: document.querySelector('#agView [data-k="prWhy"]').textContent, acct: document.querySelector('#agView [data-k="acctOpen"]').disabled,
     rules: document.querySelector('#agView [data-k="rulesOpen"]').disabled, modes: [...document.querySelectorAll('#agView [data-k="modes"] button')].every(b => b.disabled), kill: document.querySelector('#agView [data-k="kill"]').disabled }));
-  /* 1.52.0 (answers B4-2, item 5): a group of Sim accounts fits neither desk: "no home", held back, but Change account stays
-     offered with None only (the gate lets None go only while ChartBridge says he is flat) */
-  check(/no home: its group holds only your personal account or Sim accounts, and Praetorian takes no group; stop it, then fix its account or group/.test(held.why) && !held.acct && held.rules && held.modes && !held.kill,
-    '1.51.0 Praetorian: a trader on a group is held back (rules, modes off; Kill switch on); 1.52.0: with no home, Change account offers None only: ' + JSON.stringify(held));
-  await page.click('#agView [data-act="acctOpen"]');
-  const homeless = await page.$eval('#agView [data-k="acctSel"]', sel => [...sel.options].filter(x => !x.disabled && x.value !== sel.value).map(x => x.value));   // its own group stays listed, as now
-  check(homeless.length === 1 && homeless[0] === '' && /It has no home: only None is offered here/.test(await text('#agView [data-k="acctWhy"]')),
-    '1.52.0: no home: the picker offers None only, and says so: ' + JSON.stringify(homeless) + ' ' + await text('#agView [data-k="acctWhy"]'));
-  await page.click('#agView [data-act="acctCancel"]');
+  /* 1.53.0 (Anthony 2026-11-13, Sim and prop may share a lane): a group of Sim accounts is Legion's now, so on Praetorian it is
+     held back like every group: only stopped here (Kill switch), no Change account, no rules, no modes (1.52.0 called it "no
+     home" and offered None) */
+  check(/Demo Agent trades a group: groups are on Legion, it is set up from Legion's trader desk; from here you can only stop it/.test(held.why) && held.acct && held.rules && held.modes && !held.kill,
+    '1.51.0 Praetorian: a trader on a group is held back (rules, modes, Change account off; Kill switch on); 1.53.0: a Sim group is Legion\'s: ' + JSON.stringify(held));
   await control('agent-group', { agent: 'demo', on: '0' });
   await page.close();
   await bridge.kill(); bridge = null;

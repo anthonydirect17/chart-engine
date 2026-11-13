@@ -356,8 +356,8 @@ try {
   await feed(agent('germanicus', { mode: 'shadow', account: 'SAMPLE-NEW-1' }));
   await feed(agent('resting', { mode: 'shadow', account: 'SAMPLE-NEW-1' }));   // a stood-down trader in Auto counts too (the re-review of 94, R3)
   const laneText = await page.evaluate(() => [...document.querySelectorAll('.fl-lane')].map(e => e.innerText.replace(/\s+/g, ' ')));
-  check(laneText.length === 2 && /^Eval lane Goal: pass the eval SHADOW READY legion1, group Sample evals Bot /i.test(laneText[0]) && laneText[0].includes('Sample alpha BOT risk $400 a trade Watching +$1,510'), 'the eval lane: its goal, its mode, Ready, its trader and group, the picked bot with its risk, its state and today on its accounts: ' + laneText[0]);
-  check(/^Funded lane Goal: reach the payout SHADOW NOT READY legion2, group Sample funded Bot /i.test(laneText[1]) && laneText[1].includes('No bot is picked for this lane. A second bot on a lane comes as a lineup file from the Lab.') && laneText[1].includes('No bot is picked for it'), 'the funded lane: not ready, and why: ' + laneText[1]);
+  check(laneText.length === 2 && /^Eval lane Goal: pass the eval SHADOW READY PROP legion1, group Sample evals Bot /i.test(laneText[0]) && laneText[0].includes('Sample alpha BOT risk $400 a trade Watching +$1,510'), 'the eval lane: its goal, its mode, Ready, PROP (1.53.0), its trader and group, the picked bot with its risk, its state and today on its accounts: ' + laneText[0]);
+  check(/^Funded lane Goal: reach the payout SHADOW NOT READY PROP legion2, group Sample funded Bot /i.test(laneText[1]) && laneText[1].includes('No bot is picked for this lane. A second bot on a lane comes as a lineup file from the Lab.') && laneText[1].includes('No bot is picked for it'), 'the funded lane: not ready, and why: ' + laneText[1]);
   const offered = await page.evaluate(() => [...document.querySelectorAll('#flPick-eval option')].map(o => o.value + (o.selected ? '*' : '')));
   check(offered.join() === ',sample-alpha.json*', 'the pick list offers None and only the files that run live, with ChartBridge\'s pick chosen: ' + offered.join());
   const order = await page.evaluate(() => [...document.querySelectorAll('#flView [data-k="setup"] > section')].map(e => e.getAttribute('aria-label')));
@@ -565,6 +565,10 @@ try {
     await page.waitForFunction(() => { const d = document.getElementById('flDesk'); return d && !d.hidden && d.querySelector('*') && !/shows here when the page has it/.test(d.textContent); }, null, { timeout: 10000 }).catch(() => {});
     const desk = await page.evaluate(() => { const d = document.getElementById('flDesk'); return { shown: !d.hidden, kids: d.querySelectorAll('*').length, placeholder: /shows here when the page has it/.test(d.textContent), loaded: !!window.LegionDesk }; });
     check(desk.loaded && desk.shown && desk.kids > 0 && !desk.placeholder, 'workspace: opened, the Traders fold holds the real Legion trader desk: ' + JSON.stringify(desk));
+    // 1.53.0 (E, HOME 2026-11-12): mounted late, after hello and trading went by, the desk is handed them and leaves "Connecting"
+    await page.waitForFunction(() => !/Connecting to ChartBridge/.test(document.getElementById('flDesk').textContent), null, { timeout: 5000 }).catch(() => {});
+    const conn = await page.evaluate(() => /Connecting to ChartBridge/.test(document.getElementById('flDesk').textContent));
+    check(!conn, 'workspace: the desk mounted late is not stuck on "Connecting to ChartBridge..." (the feed hands it the latest state)');
     await page.screenshot({ path: path.join(SHOTS, 'fleet-workspace-desk.png') });
     await page.click('[data-do="desk"]');
     check(await page.locator('#flDesk').isHidden(), 'workspace: and shuts again');
