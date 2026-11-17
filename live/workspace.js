@@ -78,7 +78,10 @@ function parseRange(v) { const n = typeof v === 'string' && v.trim() !== '' ? Nu
    into this"): a saved layout that had one opens without it (cleanPanel drops a type it does not know). */
 /* 1.37.0 (Anthony 2026-10-22): the Multi-Account panel (live/multi-account.js): the groups' chips and bench, and the copier; at most one
    per layout */
-const TYPES = ['chart', 'tape', 'ticket', 'account', 'quotes', 'databox', 'accounts', 'tags', 'agents', 'multi'];
+/* Release 1 (the lock of 2026-11-15, topic 2): the old Account panel (1.15.0, offered no more since 1.34.0) is removed: a saved
+   layout that still holds one opens without it, quietly (cleanPanel drops a type it does not know, as the Bot panel of 1.35.0).
+   The Account page (live/accounts.js) has its figures. */
+const TYPES = ['chart', 'tape', 'ticket', 'quotes', 'databox', 'accounts', 'tags', 'agents', 'multi'];
 const ONE_EACH = ['ticket', 'agents', 'multi'];
 /* 1.16.0 (Anthony 2026-10-07): the rows a Quote board hides, saved with its panel. Any root name ChartBridge could list (NQ,
    ES, or a quote-only market from hello, such as YM or 6E): kept as typed by the menu, so a root hello no longer lists is
@@ -981,7 +984,6 @@ function renderOrders() {
   if (holds() && TK.bar) { TK.bar.render(); renderTicketExtras(); publish(); }
   renderCharts();
   renderLimits();                                        // 1.16.0: the ticket's account may have changed
-  renderAccounts();                                      // 1.15.0: the Account panels
   renderTags();                                          // 1.34.0: the Trade tags panels
   renderFlat();
   syncTitle();
@@ -2031,8 +2033,7 @@ function addView(p) {
     mid = '<span class="ws-name">Time and Sales</span><select class="ws-sel" data-act="root" aria-label="Time and Sales instrument">' +
       W.ROOTS.map(r => `<option value="${r}">${r}</option>`).join('') + '</select><span class="ws-fill"></span>' +
       '<button type="button" class="ws-ic" data-act="gear" aria-label="Time and Sales settings: large prints and colors" title="Large prints and colors" aria-expanded="false">⚙</button>';
-  } else if (p.type === 'account') mid = '<span class="ws-name">Account</span><span class="ws-acct" title="The order ticket\'s account"></span><span class="ws-fill"></span>';
-  else if (p.type === 'quotes') mid = '<span class="ws-name">Quote board</span><span class="ws-fill"></span>' +
+  } else if (p.type === 'quotes') mid = '<span class="ws-name">Quote board</span><span class="ws-fill"></span>' +
     '<button type="button" class="ws-ic ws-more" data-act="qbrows" aria-haspopup="true" aria-expanded="false" aria-label="Markets shown on this Quote board" title="Markets shown on this board">⋯</button>';
   else if (p.type === 'databox') mid = '<span class="ws-name">Data Box</span><span class="ws-db-src" title="The chart it follows: the one under the mouse, else the last one"></span><span class="ws-fill"></span>';
   else if (p.type === 'accounts') mid = '<span class="ws-name">Account page</span><span class="ws-fill"></span>';
@@ -2051,7 +2052,6 @@ function addView(p) {
   views.set(p.id, v);
   if (p.type === 'chart') mountChart(v);
   else if (p.type === 'tape') mountTape(v);
-  else if (p.type === 'account') mountAccount(v);        // 1.15.0
   else if (p.type === 'quotes') mountQuotes(v);
   else if (p.type === 'databox') mountDataBox(v);        // 1.16.0
   else if (p.type === 'accounts') mountAccountsPage(v);  // 1.16.0
@@ -2141,7 +2141,7 @@ function addPanel(type) {
   if (type === 'multi' && panels.some(q => q.type === type)) { note('This layout has its Multi-Account panel already', true); return; }
   const r = W.largestFree(panels);
   if (!r) { note('No free space: close or shrink a panel', true); return; }
-  const base = type === 'tape' ? { type: 'tape', root: 'MNQ' } : ['ticket', 'account', 'quotes', 'databox', 'accounts', 'tags', 'agents', 'multi'].includes(type) ? { type } : { type: 'chart', root: 'MNQ', tf: 'm1' };
+  const base = type === 'tape' ? { type: 'tape', root: 'MNQ' } : ['ticket', 'quotes', 'databox', 'accounts', 'tags', 'agents', 'multi'].includes(type) ? { type } : { type: 'chart', root: 'MNQ', tf: 'm1' };
   const p = Object.assign({ id: W.newId() }, base, r);
   panels.push(p);
   addView(p);
@@ -2552,11 +2552,6 @@ function fitPanel(v, classes) {
   return () => ro.disconnect();
 }
 
-/* ---------------- the Account panel: a summary strip for the ticket's account, then Positions, Orders and Fills */
-/* The tabs, in order. A fourth, "Accounts" (the copier, after the cruise: a row per account with its position, P&L and
-   copy on or off), goes here as one more entry with its own render; it is not built. */
-const ACCOUNT_TABS = [{ id: 'pos', name: 'Positions' }, { id: 'ord', name: 'Orders' }, { id: 'fil', name: 'Fills' }];
-const accountViews = () => [...views.values()].filter(v => v.account);
 /* ---------------- 1.34.0 (Anthony 2026-10-21): Trade tags (live/trade-tags.js): one-click chips for what he entered on, with their
    phase from the ticket's account and instrument; records to The Desk. Clicks only; nothing here sends an order. */
 const tagViews = () => [...views.values()].filter(v => v.tags);
@@ -2653,124 +2648,6 @@ setInterval(() => { for (const v of stripViews()) v.strip.render(); }, 1000);   
 var tagsRaf = 0;                                          // var: renderOrders may run before this line
 function renderTags() { if (!tagsRaf && tagViews().length) tagsRaf = requestAnimationFrame(() => { tagsRaf = 0; for (const v of tagViews()) v.tags.render(); }); }
 setInterval(renderTags, 1000);                            // the session's start and the Desk's answers
-const SIDE_WORD = { buy: 'Buy', sell: 'Sell' };
-function orderTypeName(o) {
-  if (o.plan) return 'Planned ' + (o.plan.role === 'stop' ? 'stop' : 'target');
-  const kind = o.role === 'target' ? 'target' : o.role === 'stop' ? 'stop' : o.kind === 'limit' ? 'limit' : o.kind === 'stop' ? 'stop' : o.kind === 'stopLimit' ? 'stop limit' : o.kind === 'mit' ? 'MIT' : o.kind === 'market' ? 'market' : String(o.kind || 'order');
-  return SIDE_WORD[o.side] + ' ' + kind;
-}
-function mountAccount(v) {
-  v.body.innerHTML = `<div class="ac">
-    <div class="ac-sum" role="group" aria-label="Today on the ticket's account">
-      <div title="Open P&amp;L of the positions now"><span>Open</span><b data-a="open"></b></div><div title="Realized today, from the fills (before commissions)"><span><span class="lb-full">Realized</span><span class="lb-short">Real.</span></span><b data-a="real"></b></div>
-      <div title="Realized and open together"><span>Day</span><b data-a="day"></b></div><div title="Trades today, flat to flat"><span>Trades</span><b data-a="trades"></b></div></div>
-    <div class="ac-tabs" role="tablist" aria-label="Account">${ACCOUNT_TABS.map((t, i) => `<button type="button" role="tab" class="ac-tab" data-tab="${t.id}" aria-selected="${i === 0}">${t.name}<span class="ac-ct" data-ct="${t.id}"></span></button>`).join('')}</div>
-    <div class="ac-list" data-list role="tabpanel"></div>
-    <p class="ac-foot" data-a="foot" title="Close works with Armed off. × needs Armed, as on the chart.">Close works with Armed off. × needs Armed, as on the chart.</p>
-  </div>`;
-  const q = sel => v.body.querySelector(sel);
-  const A = v.account = { tab: 'pos', keys: {}, offs: new Map(), render: null };
-  v.state = 'live';
-  q('.ac-tabs').addEventListener('click', e => {
-    const b = e.target.closest('button[data-tab]'); if (!b) return;
-    b.blur();                                            // the hotkeys work at once (handBack)
-    A.tab = b.dataset.tab;
-    for (const t of v.body.querySelectorAll('.ac-tab[data-tab]')) t.setAttribute('aria-selected', String(t === b));
-    A.keys.list = ''; A.render();
-  });
-  q('[data-list]').addEventListener('click', e => {
-    const b = e.target.closest('button[data-close], button[data-cancel]'); if (!b) return;
-    b.blur();
-    if (e.detail === 0) { note('Order buttons work by click only, not by keyboard.', true); return; }
-    if (b.dataset.close) core.flattenHere(b.dataset.close);                          // the ticket's "Also open" Close
-    /* Anthony (1.15.0): the x cancels an order of ANY instrument: TradeCore's own cancel (needs Armed, the order on the
-       ticket's account and still working), in the ticket's window or forwarded to it as the chart's x is */
-    else chartAction({ kind: 'cancelAny', id: b.dataset.cancel, root: b.dataset.root });
-  });
-  const put = (k, el, text, cls) => { const key = text + '|' + cls; if (A.keys[k] === key) return; A.keys[k] = key; el.textContent = text; el.className = cls || ''; };
-  A.render = () => {
-    const TR = core.TR, acct = ticketAccount(), on = TR.enabled && !!acct, now = etNowSec();
-    /* the prices of the instruments with a position (their open P&L): watched while open */
-    const roots = on ? W.ROOTS.filter(r => { const p = TR.positions.get(acct + '|' + r); return p && p.qty; }) : [];
-    for (const r of roots) if (!A.offs.has(r)) A.offs.set(r, watchQuote(r));
-    for (const [r, off] of A.offs) if (!roots.includes(r)) { off(); A.offs.delete(r); }
-    const pv = r => (instruments[r] || {}).pointValue || 0;
-    let open = 0, openKnown = true;
-    const posRows = roots.map(r => {
-      const p = TR.positions.get(acct + '|' + r), qq = quoteOf(r), last = qq && qq.last !== null ? qq.last : r === ticketRoot() ? ticketPrice(r) : null;
-      const pn = last !== null && last !== undefined ? U.openPnl(p.qty, p.avgPrice, last, pv(r)) : null;
-      if (pn && pn.dollars !== null) open += pn.dollars; else openKnown = false;
-      return { r, p, pn };
-    });
-    const today = on ? W.fillsToday([...tfills.values()], acct, now).map(f => Object.assign({}, f, { qty: +f.qty, p: +f.p, t: +f.t })) : [];
-    /* each instrument's position before today's first fill: what it is now less today's fills (not flat: that first
-       trade began before today and its P&L is not known) */
-    const start = {};
-    for (const r of W.ROOTS) {
-      const p = on ? TR.positions.get(acct + '|' + r) : null, net = today.filter(f => f.root === r).reduce((a, f) => a + (f.side === 'buy' ? 1 : -1) * f.qty, 0);
-      start[r] = (p ? p.qty : 0) - net;
-    }
-    const rt = W.roundTrips(today, pv, start);
-    const day = rt.realized !== null && openKnown ? rt.realized + open : null;
-    const pc = x => (x > 0.004 ? 'up' : x < -0.004 ? 'dn' : '');
-    put('open', q('[data-a="open"]'), !on ? '-' : openKnown ? W.fmtUsd(open) : 'waiting', on && openKnown ? pc(open) : '');
-    put('real', q('[data-a="real"]'), !on ? '-' : rt.realized === null ? 'n/a' : W.fmtUsd(rt.realized), on ? pc(rt.realized) : '');
-    put('day', q('[data-a="day"]'), !on || day === null ? '-' : W.fmtUsd(day), on && day !== null ? pc(day) : '');
-    put('trades', q('[data-a="trades"]'), on ? String(rt.trades) : '-', '');
-    const orders = on ? W.ROOTS.flatMap(r => core.chartOrders(acct, r).map(o => (o.root ? o : Object.assign({}, o, { root: r })))) : [];   // a planned line has no root of its own
-    const counts = { pos: posRows.length, ord: orders.length, fil: today.length };
-    for (const t of ACCOUNT_TABS) put('ct-' + t.id, q(`[data-ct="${t.id}"]`), String(counts[t.id]), 'ac-ct');
-    put('acct', v.el.querySelector('.ws-acct'), acct || 'No account', 'ws-acct');
-    /* the list of the tab shown */
-    /* rows as small grids (as the Quote board): on a narrow panel each pair (.pr) stacks in one cell.
-       1.15.0 (orders review: a Close replaced between press and release lost the click): the rows are built only when the
-       set of rows changes (instruments, order ids, fills); a price or P&L change writes only the text of its cell, so a
-       button is never replaced under the mouse. */
-    const vals = [];
-    const row = (k, cells) => `<div class="gr-row" role="row" data-k="${esc(k)}">${cells}</div>`, head = cells => `<div class="gr-row gr-h" role="row">${cells}</div>`;
-    const c = (text, cls, tip) => `<span role="cell" data-c="${vals.push({ text, cls: cls || '', tip: tip || '' }) - 1}"></span>`;   // a cell whose text changes
-    const pr = (a, b, cls) => `<span class="pr${cls ? ' ' + cls : ''}">${a}${b}</span>`;
-    const st = (html, cls) => `<span class="${cls || ''}" role="cell">${html}</span>`;           // a fixed cell (a button)
-    const h = (text, cls) => `<span class="${cls || ''}" role="columnheader">${text}</span>`;
-    let html;
-    if (!on) html = `<p class="ac-empty">${esc(core.TR.reason || 'Not connected to ChartBridge yet.')}</p>`;
-    else if (A.tab === 'pos') html = !posRows.length ? '<p class="ac-empty">Flat on every instrument.</p>' : '<div class="gr gr-pos" role="table" aria-label="Positions">' +
-      head(pr(h('Inst'), h('Qty', 'r')) + h('Avg', 'r') + pr(h('Open pt', 'r'), h('Open $', 'r'), 'r') + h('<span class="visually-hidden">Close</span>')) +
-      posRows.map(({ r, p, pn }) => row(r, pr(c(r, 'b'), c((p.qty > 0 ? '+' : '-') + Math.abs(p.qty), 'r ' + (p.qty > 0 ? 'up' : 'dn'))) + c(U.fmtPrice(p.avgPrice, precisionOf(r)), 'r') +
-        pr(c(pn ? W.fmtSignedNum(pn.points, precisionOf(r)) : '', 'r ' + (pn ? pc(pn.points) : '')), c(pn && pn.dollars !== null ? W.fmtUsd(pn.dollars) : '', 'r ' + (pn ? pc(pn.dollars) : '')), 'r') +
-        st(`<button type="button" class="ac-btn ac-close" data-close="${r}" title="Close ${r}: cancel its orders and close its position at market on ${esc(acct)}. Works with Armed off.">Close</button>`, 'r'))).join('') + '</div>';
-    else if (A.tab === 'ord') html = !orders.length ? '<p class="ac-empty">No working orders.</p>' : '<div class="gr gr-ord" role="table" aria-label="Working orders">' +
-      head(pr(h('Inst'), h('Qty', 'r')) + pr(h('Order'), h('Price', 'r'), 'r2') + h('<span class="visually-hidden">Cancel</span>')) +
-      orders.map(o => row(o.id, pr(c(o.root || '', 'b'), c(String(Math.max(0, (+o.qty || 0) - (+o.filled || 0))), 'r')) +
-        pr(c(orderTypeName(o), o.side === 'sell' ? 'dn' : 'up'), c(typeof o.price === 'number' ? U.fmtPrice(o.price, precisionOf(o.root)) : '', 'r'), 'r2') +
-        st(`<button type="button" class="ac-x" data-cancel="${esc(o.id)}" data-root="${esc(o.root || '')}" aria-label="Cancel this ${esc(o.root || '')} order" title="Cancel it (needs Armed, as the chart's x), on any instrument">×</button>`, 'r'))).join('') + '</div>';
-    else html = !today.length ? '<p class="ac-empty">No fills today.</p>' : '<div class="gr gr-fil" role="table" aria-label="Today\'s fills">' +
-      head(pr(h('Time'), h('Inst')) + pr(h('Side', 'r'), h('Price', 'r'), 'r') + h('Trade', 'r')) +
-      today.slice().sort((a, b) => b.t - a.t).map(f => {
-        const x = rt.byFill.get(f.id), trade = !x ? '' : x.open ? 'open' : x.pnl === null ? 'n/a' : W.fmtUsd(x.pnl), cls = !x || x.open || x.pnl === null ? 'mut' : pc(x.pnl);
-        const tip = x && x.pnl === null && !x.open ? 'This trade began before today: its first fills are not in today\'s list' : '';
-        return row(f.account + '|' + f.id, pr(c(W.fmtClock(f.t), 'mut'), c(f.root, 'b')) + pr(c((f.side === 'buy' ? 'B ' : 'S ') + f.qty, 'r ' + (f.side === 'buy' ? 'up' : 'dn')), c(U.fmtPrice(f.p, precisionOf(f.root)), 'r'), 'r') +
-          c(trade, 'r ' + cls, tip));
-      }).join('') + '</div>';
-    const el = q('[data-list]');
-    if (A.keys.list !== html) { A.keys.list = html; const top = el.scrollTop; el.innerHTML = html; el.scrollTop = top; A.cells = [...el.querySelectorAll('[data-c]')]; A.rebuilt = (A.rebuilt || 0) + 1; }
-    const cells = A.cells || [];
-    for (let i = 0; i < vals.length && i < cells.length; i++) {
-      const e = cells[i], x = vals[i];
-      if (e.textContent !== x.text) e.textContent = x.text;
-      if (e.className !== x.cls) e.className = x.cls;
-      if ((e.title || '') !== x.tip) e.title = x.tip;
-    }
-  };
-  A.render();
-  quoteSubs.add(A.render);
-  const unfit = fitPanel(v, (w, h) => ({ 'gr-narrow': w < 360, 'gr-short': h < 170 }));
-  v.destroy = () => { unfit(); quoteSubs.delete(A.render); for (const off of A.offs.values()) off(); A.offs.clear(); };
-}
-/* order events, fills and positions: the Account panels again, once in the next animation frame */
-let accountRaf = 0;
-function renderAccounts() { if (!accountRaf && accountViews().length) accountRaf = requestAnimationFrame(() => { accountRaf = 0; for (const v of accountViews()) v.account.render(); }); }
-setInterval(renderAccounts, 1000);                       // the clock (a new trading day) and the prices without a trade
 
 /* ---------------- the Account page (1.16.0, live/accounts.js): every account ChartBridge watches, on the window's one v3 connection (AF, shared with the ticket's 0.4.0 parts and the Bot tab).
    Its figures follow the feed (accounts at most once a second) and the prices (quoteSubs, at most 4 times a second). */

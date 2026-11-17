@@ -199,8 +199,11 @@ test('quote board (1.16.0, Anthony 2026-10-05): rows for NQ and ES only; the cha
   for (const r of W.QUOTE_ROOTS) assert.ok(W.ROOTS.includes(r), r + ' is a configured root');
 });
 
-test('the workspace keeps an Account panel and a Quote board in its layouts (no instrument)', () => {
-  assert.deepEqual(W.cleanPanel({ id: 'a', type: 'account', root: 'NQ', x: 10, y: 3, w: 2, h: 2 }), { id: 'a', type: 'account', x: 10, y: 3, w: 2, h: 2 });
+test('the workspace keeps a Quote board in its layouts (no instrument); release 1: the old Account panel is dropped quietly', () => {
+  assert.equal(W.cleanPanel({ id: 'a', type: 'account', root: 'NQ', x: 10, y: 3, w: 2, h: 2 }), null, 'release 1: the old Account panel is gone');
+  const l = W.cleanLayout({ panels: [{ id: 'c', type: 'chart', root: 'MNQ', tf: 'm1', x: 0, y: 0, w: 10, h: 6 }, { id: 'a', type: 'account', x: 10, y: 3, w: 2, h: 2 }, { id: 't', type: 'ticket', x: 10, y: 0, w: 2, h: 3 }] });
+  assert.deepEqual(l.panels.map(p => p.id + ':' + p.type), ['c:chart', 't:ticket'], 'a saved layout that holds one opens without it, the rest as it was');
+  assert.deepEqual(W.cleanStore(JSON.stringify({ v: 1, layouts: { Main: { panels: [{ id: 'a', type: 'account', x: 0, y: 0, w: 2, h: 2 }] } } })).layouts.Main.panels, [], 'and the store reads with no error');
   assert.deepEqual(W.cleanPanel({ id: 'q', type: 'quotes', x: 10, y: 5, w: 2, h: 1 }), { id: 'q', type: 'quotes', x: 10, y: 5, w: 2, h: 1 });
   assert.deepEqual(W.cleanPanel({ id: 'c', type: 'chart', root: 'MNQ', tf: 'h4', x: 0, y: 0, w: 2, h: 1 }), { id: 'c', type: 'chart', root: 'MNQ', tf: 'h4', x: 0, y: 0, w: 2, h: 1 });
   assert.equal(W.cleanPanel({ id: 'c', type: 'chart', tf: 'h4', x: 0, y: 0, w: 2, h: 1 }), null, 'a chart still needs its instrument');

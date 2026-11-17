@@ -28,7 +28,7 @@ const bridge = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs
 await new Promise(r => bridge.stdout.once('data', r));
 const LAYOUT = { V2: { panels: [
   { id: 'c1', type: 'chart', root: 'MNQ', tf: 'm1', x: 0, y: 0, w: 6, h: 6 }, { id: 'tk', type: 'ticket', x: 6, y: 0, w: 3, h: 4 },
-  { id: 'tp', type: 'tape', root: 'MNQ', x: 9, y: 0, w: 3, h: 3 }, { id: 'ac', type: 'account', x: 6, y: 4, w: 3, h: 2 }] } };   // the quote board is added from the menu
+  { id: 'tp', type: 'tape', root: 'MNQ', x: 9, y: 0, w: 3, h: 3 }, { id: 'ac', type: 'accounts', x: 6, y: 4, w: 3, h: 2 }] } };   // the quote board is added from the menu; release 1: the Account page in the old Account panel's place
 function spies(layout) {
   window.__sent = [];
   const send = WebSocket.prototype.send;
@@ -49,7 +49,7 @@ const movers = (p, sels) => p.evaluate(list => {
   return bad;
 }, sels);
 const LIVE = ['.ws-panel[data-type="ticket"] .chart-live.tk', '[data-tk-id="buyMkt"]', '[data-tk-id="sellMkt"]', '[data-tk-id="armBtn"]', '[data-tk-id="flattenBtn"]',
-  '#wsFlat', '#wsFlatEvery', '.ws-panel[data-type="tape"] .tp-row', '.ws-panel[data-type="quotes"] .gr-row', '.ws-panel[data-type="account"] .ac-sum b',
+  '#wsFlat', '#wsFlatEvery', '.ws-panel[data-type="tape"] .tp-row', '.ws-panel[data-type="quotes"] .gr-row', '.ws-panel[data-type="accounts"] .gr-row',
   '.ws-panel[data-type="chart"] .ce-canvas', '.ws-panel[data-type="chart"] .chart-live', '#wsNoStopSend', '#wsNoStopCancel'];
 
 const browser = ticketOnSim101(await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {}));

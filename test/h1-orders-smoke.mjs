@@ -1,10 +1,8 @@
 // Chart 1.15.0, the orders review's probes as a smoke (workspace, fake bridge with trading, sample data; nothing reaches a
 // broker), in Chromium:
-//   - clicks: 60 human-speed presses (down, 120 ms, up) on the Account panel's Close and 60 on an Orders x, while the prices
-//     move and the P&L changes: every one reaches its button (the rows are never replaced under the mouse);
+//   - release 1: the old Account panel is removed, so its clicks test and its x on any instrument went with it; a saved layout
+//     that still holds one opens without it, with no error;
 //   - a Shift drag after a drawing tool's first click (Trend line, Zone) sends nothing and draws nothing;
-//   - the Account panel's x cancels an order on ANY instrument (Anthony): nothing disarmed, cancelled while Armed, and from a
-//     window without the ticket through the ticket's window;
 //   - switching a panel to 1 hour (a deeper load of the instrument's line) never blanks the other charts of it: the armed
 //     5 min chart keeps its bars and order lines, the 4 hour chart its bars;
 //   - a header shows the bar's change without its percent;
@@ -35,7 +33,7 @@ const LAYOUTS = {
   A: { panels: [
     { id: 'a1', type: 'chart', root: 'MNQ', tf: 'm5', x: 0, y: 0, w: 6, h: 6 }, { id: 'a2', type: 'chart', root: 'MNQ', tf: 'h4', x: 6, y: 0, w: 4, h: 3 },
     { id: 'a3', type: 'chart', root: 'MNQ', tf: 'm1', x: 6, y: 3, w: 4, h: 3 },
-    { id: 'tk', type: 'ticket', x: 10, y: 0, w: 2, h: 3 }, { id: 'ac', type: 'account', x: 10, y: 3, w: 2, h: 3 }] },
+    { id: 'tk', type: 'ticket', x: 10, y: 0, w: 2, h: 3 }, { id: 'ac', type: 'account', x: 10, y: 3, w: 2, h: 3 }] },   // release 1: 'ac' is an old Account panel, dropped quietly
   B: { panels: [{ id: 'b1', type: 'chart', root: 'MNQ', tf: 'm5', x: 0, y: 0, w: 8, h: 6 }, { id: 'bac', type: 'account', x: 8, y: 0, w: 4, h: 6 }] },
 };
 function seed(layouts) {
@@ -44,13 +42,6 @@ function seed(layouts) {
     setInterval(() => { const b = document.querySelector('.nostop-ask:not([hidden]) .nostop-send'); if (b) b.click(); }, 30);
     window.__notes = [];
     const iv = setInterval(() => { const el = document.getElementById('wsNote'); if (!el) return; clearInterval(iv); new MutationObserver(() => window.__notes.push(el.textContent)).observe(el, { childList: true, characterData: true, subtree: true }); }, 20);
-    // the clicks test: each click on the Account panel recorded and stopped before its handler (nothing sent), when asked
-    window.__clicks = []; window.__stopClicks = false;
-    window.addEventListener('click', e => {
-      if (!window.__stopClicks || !e.target.closest || !e.target.closest('.ws-panel.account') || e.target.closest('.ac-tabs')) return;
-      window.__clicks.push(e.target.closest('button[data-close],button[data-cancel]') ? 'button' : 'missed');
-      e.stopImmediatePropagation(); e.preventDefault();
-    }, true);
   } catch (e) { /* blocked */ }
 }
 async function openWs(ctx, layout) {
@@ -93,28 +84,9 @@ try {
   for (const d of [-30, -40]) { await A.keyboard.down('Shift'); await A.mouse.click(cb.x + cb.width * 0.4, cb.y + await y(L + d)); await A.keyboard.up('Shift'); await A.waitForTimeout(500); }
   await until(async () => (await state()).orders.length === 4, 'two buy limits', 5000);
 
-  /* ---------------- 60 presses on Close and on an x while the prices move */
-  await setArmed(false);
-  await A.evaluate(() => { window.__stopClicks = true; });
-  let walk = true;
-  (async () => { let k = 0; while (walk) { await control('price', { root: 'MNQ', p: L + ((k++ % 8) - 4) * 0.25 }).catch(() => {}); await wait(90); } })();
-  for (const [tab, sel] of [['pos', '.ws-panel.account [data-close="MNQ"]'], ['ord', '.ws-panel.account [data-cancel]']]) {
-    await A.click(`.ws-panel.account .ac-tab[data-tab="${tab}"]`);
-    await A.waitForTimeout(400);
-    const r0 = await A.evaluate(() => { window.__clicks.length = 0; const el = document.querySelector('.ws-panel.account [data-list]'); window.__mut = 0; const mo = new MutationObserver(() => window.__mut++); mo.observe(el, { childList: true }); window.__mo = mo; return true; });
-    void r0;
-    for (let i = 0; i < 60; i++) {
-      const b = await A.evaluate(s => { const e = document.querySelector(s); if (!e) return null; const r = e.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; }, sel);
-      if (!b) { fail('no button for ' + tab); break; }
-      await A.mouse.move(b.x, b.y); await A.mouse.down(); await wait(120); await A.mouse.up();
-      await wait(120 + Math.random() * 150);
-    }
-    const r = await A.evaluate(() => { window.__mo.disconnect(); return { ok: window.__clicks.filter(c => c === 'button').length, n: window.__clicks.length, mut: window.__mut }; });
-    check(r.ok === 60, `${tab === 'pos' ? 'Positions Close' : 'Orders x'}: 60 of 60 presses reached the button while prices moved (${r.ok}; the list rebuilt ${r.mut} times)`);
-  }
-  walk = false;
-  await A.evaluate(() => { window.__stopClicks = false; });
-  await control('price', { root: 'MNQ', p: L });
+  /* ---------------- release 1: the saved layouts hold an old Account panel each; both open without it, quietly */
+  check(!(await A.$('.ws-panel.account, .ws-panel[data-type="account"]')) && !(await A.evaluate(() => window.workspace.panels().some(p => p.type === 'account'))), 'release 1: layout A opens without its old Account panel');
+  check((await A.evaluate(() => window.workspace.panels().map(p => p.id).join(','))) === 'a1,a2,a3,tk', 'release 1: the rest of layout A as it was saved');
 
   /* ---------------- a Shift drag after a tool's first click */
   for (const t of ['trend', 'zone']) {
@@ -132,31 +104,11 @@ try {
     await A.evaluate(() => window.workspace.chart('a1').setTool(null));
   }
 
-  /* ---------------- the x cancels an order on any instrument (Anthony) */
-  await control('elsewhere', { account: 'Sim101', root: 'NQ', side: 'buy', kind: 'limit', qty: 1, p: (await state('NQ')).last - 50 });
-  const nqOrder = await until(async () => (await state('NQ')).orders.find(o => o.root === 'NQ'), 'an NQ order placed in NinjaTrader', 5000);
-  await A.click('.ws-panel.account .ac-tab[data-tab="ord"]');
-  await until(() => A.$(`.ws-panel.account [data-cancel="${nqOrder.id}"]`), 'the NQ order in the Orders tab', 5000);
-  check((await A.evaluate(() => window.workspace.ticket().root)) === 'MNQ', 'the ticket is on MNQ');
-  await setArmed(false);
-  await A.click(`.ws-panel.account [data-cancel="${nqOrder.id}"]`);
-  await A.waitForTimeout(600);
-  check((await state('NQ')).orders.some(o => o.id === nqOrder.id), 'x on the NQ order with Armed off: nothing sent');
-  await setArmed(true);
-  await A.click(`.ws-panel.account [data-cancel="${nqOrder.id}"]`);
-  await until(async () => !(await state('NQ')).orders.some(o => o.id === nqOrder.id), 'the NQ order cancelled', 5000);
-  check(!(await state('NQ')).orders.some(o => o.id === nqOrder.id), 'x on the NQ order while Armed (ticket on MNQ): cancelled');
-  // from a window without the ticket: forwarded to the ticket's window
-  await control('elsewhere', { account: 'Sim101', root: 'NQ', side: 'buy', kind: 'limit', qty: 1, p: (await state('NQ')).last - 60 });
-  const nq2 = await until(async () => (await state('NQ')).orders.find(o => o.root === 'NQ'), 'a second NQ order', 5000);
+  /* ---------------- window B (no ticket) */
   const B = await openWs(ctx, 'B');
   await B.waitForTimeout(1500);
   check(!(await B.evaluate(() => window.workspace.ticket().held)), 'window B has no ticket');
-  await B.click('.ws-panel.account .ac-tab[data-tab="ord"]');
-  await until(() => B.$(`.ws-panel.account [data-cancel="${nq2.id}"]`), 'the NQ order in B', 5000);
-  await B.click(`.ws-panel.account [data-cancel="${nq2.id}"]`);
-  await until(async () => !(await state('NQ')).orders.some(o => o.id === nq2.id), 'the NQ order cancelled from B', 5000);
-  check(!(await state('NQ')).orders.some(o => o.id === nq2.id), 'x in window B (no ticket), Armed in A: forwarded and cancelled');
+  check(!(await B.$('.ws-panel.account, .ws-panel[data-type="account"]')) && (await B.evaluate(() => window.workspace.panels().map(p => p.id).join(','))) === 'b1', 'release 1: layout B opens without its old Account panel');
 
   /* ---------------- a deeper load of the line never blanks the other charts of the instrument */
   await A.bringToFront();                                   // window A in front (a hidden tab draws no frames)

@@ -764,13 +764,9 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   older one). No RTH shading or delta pane on them; VWAP (the session's, from the 1-minute bars) and levels on 4h; on 1D and
   1W no VWAP, levels or profile, and the chart's note says so. Daily labels as for daily bars.
 - **History (1.15.0):** a 1 hour chart loads 30 days of 1-minute history, a 15 minute chart 10, the rest 5.
-- **Account panel (1.15.0, Anthony's consolidated form):** a 28 px header (Account and the ticket's account in 500 11px mono),
-  a summary strip of four (Open, Realized, Day in 600 14px mono in the buy green or sell red, Trades), tabs (600 11px,
-  the selected one with a 2 px accent underline and a count badge), the rows (12px mono, a hairline `#121922` between, the
-  only scroll), a quiet foot. Positions with a Close (the sell red border), Orders with an x, Fills with each flat-to-flat
-  trade's P&L on the fill that went flat ("open", or "n/a" for a trade begun before today); its x cancels an order of any
-  instrument (Armed). On a narrow panel (under 360 px)
-  the summary goes two by two and each pair of columns stacks in one cell, so nothing is cut at 1366 px.
+- **Account panel (1.15.0; removed in release 1):** the old Account panel (today's figures, Positions with Close, Orders
+  with x, Fills on the ticket's account) is gone; it had not been offered since 1.34.0, and a saved layout that still holds
+  one opens without it, quietly. The Account page has its figures.
 - **Quote board (1.15.0):** NQ and ES (1.16.0, Anthony 2026-10-05: the MNQ and MES rows went; display only): last, change and % from the prior settlement (buy green or sell red; blank
   without one), the session's high and low, in the same rows; under 400 px the change and %, and the high and low,
   stack; a 2 x 1 board shows the last, change and % (at 1366 px the last and %), the rest in the row's tooltip.
@@ -882,7 +878,7 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
 - **Screens (1.35.0):** when the browser hides where its windows are (Brave's Shields), or Window management is blocked or not
   offered, or the pop-ups were blocked, the Screens pop-up (380 px) starts with a numbered list of what to allow, in a box
   with an amber edge.
-- **Text panels never cost the charts (Anthony's ruling for 1.15.0):** the Quote board's and the Account panel's figures
+- **Text panels never cost the charts (Anthony's ruling for 1.15.0):** the Quote board's and the Account page's figures
   are written at most 4 times a second, in one animation frame, only the cells that changed; a trade only notes the price.
 
 ## Honesty rules

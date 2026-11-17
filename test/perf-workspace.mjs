@@ -16,7 +16,7 @@
 // callback, main-thread busy % (Chromium's TaskDuration over the window, and its script and layout parts), long tasks, the JS heap at the end (and after a
 // forced GC), and the WebSockets open. --variant opens the workspace with part of the default layout (to see what each
 // part costs): no-tape (the 4 charts), main-only (the main chart alone, in its own cells), main-tape (it and the tape);
-// panels (1.15.0): every panel of the default layout plus the Account panel and the Quote board (the ES chart and the tape
+// panels (1.15.0): every panel of the default layout plus the Quote board (release 1: the old Account panel is gone) (the ES chart and the tape
 // a row shorter for them; the board watches MES too, a fourth instrument at --live-rate); databox (1.16.0): the default
 // layout with a Data Box in the tape's cells, following the main chart (its newest bar changes with every trade: the most
 // the Data Box can cost); accounts (1.16.0): the default layout with the Account page in the tape's cells, against the fake's
@@ -91,7 +91,7 @@ async function run(mode) {
       let panels = W.defaultLayout().panels.filter(keep);
       if (VARIANT === 'panels') {
         panels = panels.map(p => (p.type === 'tape' ? Object.assign({}, p, { h: 1 }) : p.root === 'ES' ? Object.assign({}, p, { h: 2 }) : p));
-        panels.push({ id: 'perfAcct', type: 'account', x: 10, y: 4, w: 2, h: 2 }, { id: 'perfQuotes', type: 'quotes', x: 7, y: 5, w: 3, h: 1 });
+        panels.push({ id: 'perfQuotes', type: 'quotes', x: 7, y: 5, w: 3, h: 1 });   // release 1: the old Account panel is gone (the accounts variant has the Account page)
       }
       if (VARIANT === 'accounts') panels = panels.map(p => (p.type === 'tape' ? { id: 'perfAp', type: 'accounts', x: p.x, y: p.y, w: p.w, h: p.h } : p));
       if (VARIANT === 'databox') {
