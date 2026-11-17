@@ -17,7 +17,7 @@ Grade NQ (or ES) liquidity sweeps on our own charts, blind, so your reads can be
 Instead of a starter file per grading set, the Studio can run once in the background with a **work folder** of staged items
 and open any of them from its **Work** list (top left) or from a link, such as The Desk's Studio screen.
 
-1. **Stage an item** (a set's job does this, once): `py -3 tools\markup_work.py add --work=E:\SchwabDesk_bulk\studio_work
+1. **Stage an item** (a set's job does this, once): `py -3 tools\markup_work.py add --work=C:\Data\Studio\work
    --id=label-approach --title="Label set 1: approach" --marks=E:\SchwabDesk_bulk\marks_label_approach --bot=PATH
    --trade-queue=PATH --trade-variant=A80-STP --trade-target=30 --trade-labels-only --created=2026-10-06`. The item is
    `<work>/<id>.json`; it carries the same settings as the command line flags (`--marks`, `--symbol`, `--bot`, `--trade-*`,
@@ -34,7 +34,8 @@ and open any of them from its **Work** list (top left) or from a link, such as T
 4. **Leaving an item is refused while a grade is open in it** (a blind candidate or a trade not yet graded: the same lock as
    Free and the Bot tab) or while Run all is running; the page says why and keeps the item open. Grade it (or skip it) first.
 5. **Start it at logon, no window**: `powershell -NoProfile -ExecutionPolicy Bypass -File tools\studio-service\install-studio-task.ps1
-   -Work DIR [-AllowOrigin https://desk.example.com]` registers the scheduled task "Markup Studio" for the signed-in user
+   -Work DIR [-AllowOrigin https://desk.example.com]` (the work folder on HOME is `C:\Data\Studio\work` since 2026-11-15)
+   registers the scheduled task "Markup Studio" for the signed-in user
    (pythonw, `--log=<work>\_studio.log`, restart on failure, one instance), starts it and checks it answers.
    `-Uninstall` removes the task. After a `git pull` of this folder, restart it: `schtasks /End /TN "Markup Studio"` then
    `schtasks /Run /TN "Markup Studio"`.
