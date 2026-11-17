@@ -9,6 +9,11 @@ script, no dependencies, no build.
 
 Nothing in this version moves an existing screen onto the kit. Each screen moves over in its own branch.
 
+**Not installed (release 1, the lock of 2026-11-15):** the kit is kept in this repo as the design reference for Legion, and
+is off the install list (`nt8/install-files.json`): no trading PC gets `kit.css`, `kit.js` or `kit.html`, and no installed
+page loads them. Open the gallery from a checkout of this repo. A page that wants the kit puts it back on the list in the
+same change.
+
 ## No explanatory labelling (Anthony's principle)
 
 A product screen carries only what is needed to understand and use it: section titles, field names, values, buttons, and
@@ -36,7 +41,7 @@ only things that fade are the light's colour and the panel glow.
 
 | Page | How |
 |---|---|
-| Chart page and workspace | `<link rel="stylesheet" href="fonts/plex.css">`, `<link rel="stylesheet" href="fonts/agent-fonts.css">`, `<link rel="stylesheet" href="kit.css">` and `<script src="kit.js"></script>`. All of them, the font files and `kit.html` are in `nt8/install-files.json`, so the PC updater ships them. |
+| Chart page and workspace | `<link rel="stylesheet" href="fonts/plex.css">`, `<link rel="stylesheet" href="fonts/agent-fonts.css">`, `<link rel="stylesheet" href="kit.css">` and `<script src="kit.js"></script>`. The font files are in `nt8/install-files.json`; `kit.css`, `kit.js` and `kit.html` are not (release 1), so a page that loads the kit adds them to the list in the same change. |
 | The Desk | Vendor `kit.css` and `kit.js` next to the chart files (`public/vendor/chart-engine/`), from the same chart-engine commit, **with the same font files beside them** in `public/vendor/chart-engine/fonts/`: `plex.css`, `agent-fonts.css`, every `.woff2` they name, `OFL.txt` and `OFL-agent.txt`. Load the two font stylesheets, then `kit.css` with `<link>`, and `kit.js` with `<script defer>`. The script sets `window.ChartKit`. From an ES module: `import '/vendor/chart-engine/kit.js'` then use `window.ChartKit`. |
 | Markup Studio | The same four lines as the chart page (the Studio serves `live/`, fonts included). |
 | Node (tests) | `require('./live/kit.js')`. Nothing touches a page at require time. |
@@ -53,8 +58,8 @@ inside a `.kit` root, so the kit never leaks into the rest of a page.
 | `--kit-mono` | JetBrains Mono | every number, with tabular digits (`.kit-num`): a number inside a chip or a tag, a numeric field (`.kit-field.kit-num`) |
 
 Every font comes from the page's own folder, never the internet: ChartBridge's pages load nothing from the internet
-(the 1.16.0 offline rule, `test/offline.test.js`, which reads every file in the www list, `kit.html` and `kit.css`
-included), and The Desk vendors the same files.
+(the 1.16.0 offline rule, `test/offline.test.js`, which reads every file in the www list; `test/kit.test.js` checks the
+kit's own files the same way now that they are off the list), and The Desk vendors the same files.
 
 | File | Faces |
 |---|---|
@@ -233,8 +238,8 @@ and only one trade panel lit), the armed outline with the light, the motion sett
 setting the motion kit's Less motion, reduced motion, the tokens against the chart's
 locked palette (`test/theme.test.js` LOCKED and the engine's `buildTheme()`), contrast for every text token on every
 surface, no transition or animation on numbers, chips, buttons and the rest, or on the drawer (R3), the fonts of chips
-and fields, no em or en dashes, no account name but Sim101, and the files installed, with the fonts it loads and no
-internet address.
+and fields, no em or en dashes, no account name but Sim101, and the kit files off the install list (no installed page loads them), with the fonts it
+loads installed and no internet address.
 
 `npm run smoke:kit` (Chromium, `test/kit-smoke.mjs` on `live/kit.html`): the gallery loads with no console error and
 nothing from the internet; no horizontal scroll at 390, 1366 and 1920 px; the light circles only while lit, at 9 s in a

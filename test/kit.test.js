@@ -473,15 +473,19 @@ test('plain words: no em or en dash, no AI model name, and no account name but S
   }
 });
 
-test('installed: kit.css, kit.js and kit.html are in the www list, and the gallery loads only installed files', () => {
+/* Release 1 (the lock of 2026-11-15, topic 2): ChartKit is kept as the design reference for Legion, off the install list. The
+   PC updater drops the three files from a PC's www at its next page install (files the new build no longer lists go). */
+test('not installed: kit.css, kit.js and kit.html are off the www list, no installed page loads them, and the gallery loads only files beside it', () => {
   const www = JSON.parse(read('nt8/install-files.json')).www;
-  for (const f of ['kit.css', 'kit.js', 'kit.html']) assert.ok(www.some(x => x.from === 'live/' + f && x.to === f), f + ' is installed');
+  for (const f of ['kit.css', 'kit.js', 'kit.html']) assert.ok(!www.some(x => x.from === 'live/' + f || x.to === f), f + ' is not installed');
+  for (const x of www) if (/\.(html|js|css)$/.test(x.from)) assert.doesNotMatch(read(x.from), /(?:src|href)="(?:\.\/)?kit\.(?:js|css|html)"/, x.from + ' loads the kit');
   const to = www.map(x => x.to);
   const html = read('live/kit.html');
   const refs = [...html.matchAll(/<(?:script|link)[^>]+(?:src|href)="([^"]+)"/g)].map(m => m[1]);
   assert.deepStrictEqual(refs, ['fonts/plex.css', 'fonts/agent-fonts.css', 'kit.css', 'kit.js']);
-  for (const r of refs) assert.ok(to.includes(r), r + ' is installed');
-  assert.ok(!/https?:\/\//.test(html + read('live/kit.css') + read('live/kit.js')), 'nothing from the internet in the installed kit files');
+  for (const r of refs) assert.ok(fs.existsSync(path.join(root, 'live', r)), r + ' is beside the gallery');
+  for (const r of refs.filter(x => x.startsWith('fonts/'))) assert.ok(to.includes(r), r + ' is installed (the Agent tab and the chart page use it)');
+  assert.ok(!/https?:\/\//.test(html + read('live/kit.css') + read('live/kit.js')), 'nothing from the internet in the kit files');
   for (const f of KIT_FILES) assert.ok(!/fonts\.(googleapis|gstatic)\.com/.test(read(f)), f + ' has a web font address');
   // the fonts: the Agent tab's files, every face installed, and only the weights they have
   const faces = [...read('live/fonts/agent-fonts.css').matchAll(/font-family: "([^"]+)"; font-style: normal; font-weight: (\d+);[^}]*url\("([^"]+)"\)/g)].map(m => ({ family: m[1], weight: +m[2], file: m[3] }));
