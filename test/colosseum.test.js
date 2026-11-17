@@ -68,7 +68,8 @@ test('the top tabs: Chart, Legion, Colosseum in one row, each its own button; ol
   assert.equal((html.match(/id="wsLeagueTab"/g) || []).length, 1); assert.equal((html.match(/id="wsFleetTab"/g) || []).length, 1);
   assert.match(html, /aria-label="Colosseum tab"/);
   const ws = read('live/workspace.js');
-  assert.match(ws, /\['league', 'colosseum'\]\.includes\(new URLSearchParams\(location\.search\)\.get\('tab'\)\)\) leagueView\.openDay\(/, 'the old ?tab=league and the new ?tab=colosseum both open it, the day checked first');
+  assert.match(ws, /const tab = new URLSearchParams\(location\.search\)\.get\('tab'\);/);
+  assert.match(ws, /if \(leagueView && \['league', 'colosseum'\]\.includes\(tab\)\) startGuard\('Colosseum tab', \(\) => leagueView\.openDay\(/, 'the old ?tab=league and the new ?tab=colosseum both open it, the day checked first (release 1: inside its guard)');
   assert.match(ws, /tabUrl\(on \? 'colosseum' : ''\);/);
   assert.match(ws, /const TAB_CLASSES = \['bt-on', 'ag-on', 'lg-on', 'fl-on'\];/);
   // every body class a tab sets is one the Chart tab reads: a later tab that forgets it fails here

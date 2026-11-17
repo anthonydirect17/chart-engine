@@ -162,9 +162,11 @@ test('legion: the tab is wired into the page beside the other three, with a conn
   const files = JSON.parse(read('nt8', 'install-files.json'));
   assert.ok(files.www.some(x => x.from === 'live/fleet.js' && x.to === 'fleet.js') && files.www.some(x => x.from === 'live/fleet.css' && x.to === 'fleet.css'), 'installed on the PCs with the page');
   for (const id of ['wsAgentTab', 'wsLeagueTab', 'wsBotTab']) assert.ok(html.includes('id="' + id + '"'), id + ' is still there: Legion replaces none of them (Anthony 2026-11-11: keep both tabs)');
-  assert.match(ws, /startBot\(\); startAgent\(\); startLeague\(\); startFleet\(\);/);
-  assert.strictEqual((ws.match(/fleetView && fleetView\.shown\(\)\) fleetView\.showTab\(false\);/g) || []).length, 5, 'closed by each other tab, a layout tab and a layout change: one view at a time');
-  assert.match(ws, /tabUrl\(on \? 'legion' : ''\);/); assert.match(ws, /\.get\('tab'\) === 'legion'\) fleetView\.showTab\(true\);/);
+  /* release 1 (the start guard): each tab started inside its own guard, after the charts and the ticket (test/start-guard.test.js) */
+  for (const s of ["startGuard('Bot tab', () => { startBot();", "startGuard('Agent tab', () => { startAgent();", "startGuard('Colosseum tab', startLeague, 'wsLeagueTab');", "startGuard('Legion tab', startFleet, 'wsFleetTab');"]) assert.ok(ws.includes(s), s);
+  assert.strictEqual((ws.match(/fleetView && fleetView\.shown\(\)\) fleetView\.showTab\(false\);/g) || []).length, 4, 'closed by each other tab and a layout tab: one view at a time');
+  assert.match(ws, /if \(fleetView\) startGuard\('Legion tab', \(\) => \{ if \(fleetView\.shown\(\)\) fleetView\.showTab\(false\); \}\);/, 'and by a layout change (release 1: inside its guard)');
+  assert.match(ws, /tabUrl\(on \? 'legion' : ''\);/); assert.match(ws, /if \(fleetView && tab === 'legion'\) startGuard\('Legion tab', \(\) => fleetView\.showTab\(true\)\);/);
   // N5: the tab is not handed the feed. Its connection is built here and run: it passes what FleetCore.maySend passes and nothing else
   /* the review of 94, note 5: the gate is captured once from a frozen FleetCore, never read from an open object at each post */
   assert.match(ws, /const legionGate = window\.FleetCore && Object\.isFrozen\(window\.FleetCore\) \? window\.FleetCore\.maySend : null;\n/);
@@ -1365,7 +1367,7 @@ test('B4 (1.48.1): the tab reads the helper every 3 s while open, draws each lan
   assert.strictEqual(calls.length, 2, 'no read while the tab is shut');
   const src = read('live', 'fleet.js'), ws = read('live', 'workspace.js');
   assert.doesNotMatch(src, /\/on\b|\/off\b|\.on\(|\.off\(|helperClient|createClient/, 'the tab has no way to On or Off');
-  assert.match(ws, /return \(\) => client\.status\(\);\n\}\)\(\);/, 'the page hands the status call only, never the client');
+  assert.match(ws, /return \(\) => client\.status\(\);\n  \}\)\(\);/, 'the page hands the status call only, never the client');
   assert.match(ws, /helperStatus: legionHelperStatus,/);
 });
 

@@ -893,9 +893,10 @@ function tmessage(m) {
       if (AF) AF.start(bridgeFeatures);                  // 1.16.0: the window's v3 connection (only when ChartBridge speaks v3)
       for (const v of views.values()) if (v.quotes && v.quotes.sync) v.quotes.sync();   // the quote-only markets hello lists
       renderOrders();
-      if (botDesk) botDesk.hello(m);                      // 1.16.0: the Bot tab says what an older ChartBridge lacks
-      if (agentDesk) agentDesk.hello(m);                  // 1.17.0: the Agent tab too (agents need ChartBridge 0.5.0)
-      if (fleetView) fleetView.hello(m);                  // 1.45.0: the Legion tab shows with ChartBridge 0.6.17
+      /* release 1: the ticket has its hello above; each tab hears it inside its own guard */
+      if (botDesk) startGuard('Bot tab', () => botDesk.hello(m));        // 1.16.0: the Bot tab says what an older ChartBridge lacks
+      if (agentDesk) startGuard('Agent tab', () => agentDesk.hello(m));  // 1.17.0: the Agent tab too (agents need ChartBridge 0.5.0)
+      if (fleetView) startGuard('Legion tab', () => fleetView.hello(m)); // 1.45.0: the Legion tab shows with ChartBridge 0.6.17
       return;
     case 'execs': tfills.clear(); for (const f of m.list || []) if (f && f.id) tfills.set(f.account + '|' + f.id, f); renderOrders(); return;
     case 'pcClock': pcClock = pcClockOf(m); syncStats(); return;   // 1.24.0: a new check of this PC's clock (every 5 minutes)
@@ -3474,10 +3475,11 @@ function openLayout(name) {
   setUrl(); syncSelect(); syncConn(); placeColors(); syncAddMenu();
   if (holds() && !panels.some(p => p.type === 'ticket')) releaseTicket();   // a layout without the ticket lets it go
   renderOrders();
-  if (botDesk) { botDesk.layoutChanged(layout); botDesk.chartsChanged(); }   // 1.16.0: the strip on Main only; ghost marks
-  if (agentDesk) agentDesk.layoutChanged(layout);                             // 1.17.0: a layout closes the Agent tab
-  if (leagueView && leagueView.shown()) leagueView.showTab(false);            // 1.35.0: and the League tab
-  if (fleetView && fleetView.shown()) fleetView.showTab(false);              // 1.45.0: and the Legion tab
+  /* release 1: each tab told inside its own guard, after the charts and the ticket are placed */
+  if (botDesk) startGuard('Bot tab', () => { botDesk.layoutChanged(layout); botDesk.chartsChanged(); });   // 1.16.0: the strip on Main only; ghost marks
+  if (agentDesk) startGuard('Agent tab', () => agentDesk.layoutChanged(layout));                          // 1.17.0: a layout closes the Agent tab
+  if (leagueView) startGuard('Colosseum tab', () => { if (leagueView.shown()) leagueView.showTab(false); });   // 1.35.0: and the League tab
+  if (fleetView) startGuard('Legion tab', () => { if (fleetView.shown()) fleetView.showTab(false); });         // 1.45.0: and the Legion tab
 }
 
 /* Another window changed something this page uses. Its open layouts stay its own. */
@@ -3557,8 +3559,30 @@ window.workspace = { get layout() { return layout; }, panels: () => panels.map(p
    accountOk). The gate hears ChartBridge before the desks do (it listens first) and forgets everything when the connection
    drops. With no gate (agent-core.js not served) the desks get no connection at all: the careful side. The pop-out windows
    (agent.html, bot.html) build the same link (AgentCore.praetorianLink; the review of 102, F1). test/praetorian.test.js runs it. */
-const praetorianLink = AF && window.AgentCore && typeof window.AgentCore.praetorianLink === 'function'
-  ? window.AgentCore.praetorianLink(AF, m => { if (!m || m.type === 'accounts' || m.type === 'hello') syncPraetorian(); }) : null;   // the review of 102 (F1): one builder, also used by agent.html and bot.html
+/* Release 1 (the start guard, the lock of 2026-11-15, topic 2): the charts and the order ticket start first, and each automation
+   tab (the Bot, the Agent, the Colosseum, Legion, Praetorian's button) starts inside its own guard, so one tab that throws
+   cannot stop the charts, the ticket or another tab. A tab that failed is named in the note line (with any other that failed)
+   and once in the console, its top bar button is hidden, and the rest of the page runs on. The same guard wraps each call the page makes into a tab later
+   (a layout opened, ChartBridge's hello), so one tab that throws there leaves the others and the charts as they are.
+   test/start-guard.test.js runs it. */
+const START_FAILED = new Map();                           // a tab's name -> what it threw, the first time
+function startGuard(name, fn, btnId) {
+  try { fn(); return true; } catch (e) {
+    if (!START_FAILED.has(name)) {
+      START_FAILED.set(name, String(e && e.message ? e.message : e));
+      try { console.error('chart page: the ' + name + ' did not start', e); } catch (x) { /* no console */ }
+      const all = [...START_FAILED.keys()], said = all.length > 1 ? all.slice(0, -1).join(', ') + ' and ' + all[all.length - 1] : all[0];   // every part that failed so far
+      try { note('The ' + said + ' did not start: the charts and the ticket work; reload this window to try it again.', true, 12000); } catch (x) { /* no note line */ }
+    }
+    try { const b = btnId ? $(btnId) : null; if (b) b.hidden = true; } catch (x) { /* no button */ }
+    return false;
+  }
+}
+let praetorianLink = null;
+startGuard('Praetorian link', () => {
+  praetorianLink = AF && window.AgentCore && typeof window.AgentCore.praetorianLink === 'function'
+    ? window.AgentCore.praetorianLink(AF, m => { if (!m || m.type === 'accounts' || m.type === 'hello') syncPraetorian(); }) : null;   // the review of 102 (F1): one builder, also used by agent.html and bot.html
+});   // a link that throws leaves the desks with no connection (null): the careful side, as when agent-core.js is not served
 let botDesk = null;
 function startBot() {
   if (!window.BotDesk) return;
@@ -3634,12 +3658,15 @@ const legionLink = AF && legionGate ? { listen: part => AF.listen(part), post: m
 let fleetView = null;
 /* 1.48.1 (B4): Legion reads the PC helper's GET /status for the lanes' runners, and only that: the client's status call is
    handed over, never the client, so On and Off cannot be reached from the tab */
-const legionHelperStatus = (() => {
-  const AH = window.AgentHelper;
-  if (!AH || typeof AH.createClient !== 'function' || typeof fetch !== 'function') return null;
-  const client = AH.createClient({ fetch: (u, i) => fetch(u, i), headers: () => (PIN ? PIN.headers() : {}) });
-  return () => client.status();
-})();
+let legionHelperStatus = null;
+startGuard('Legion helper link', () => {                 // release 1: a helper client that throws leaves Legion with no runner reads
+  legionHelperStatus = (() => {
+    const AH = window.AgentHelper;
+    if (!AH || typeof AH.createClient !== 'function' || typeof fetch !== 'function') return null;
+    const client = AH.createClient({ fetch: (u, i) => fetch(u, i), headers: () => (PIN ? PIN.headers() : {}) });
+    return () => client.status();
+  })();
+});
 function startFleet() {
   if (!window.FleetView) return;
   fleetView = window.FleetView.create({ view: $('flView'), tab: $('wsFleetTab'), v3: legionLink, realClick: OT.realClick, headers: () => (PIN ? PIN.headers() : {}),
@@ -3761,15 +3788,22 @@ function leaguePoll() {
 }
 setInterval(syncLeagueGhosts, 3000);                      // a chart's instrument changed, a layout opened: the overlays follow
 window.addEventListener('storage', e => { if (e.key && e.key.endsWith(LG_GHOST_KEY)) syncLeagueGhosts(); });
+/* release 1 (the start guard): the charts and the order ticket first (the layout, the ticket's connection, the ticket taken),
+   then each automation tab inside its own guard, told the layout the charts opened on; then the tab in the address, each in
+   its tab's guard */
 const start = () => {
-  startBot(); startAgent(); startLeague(); startFleet();
   openLayout(new URLSearchParams(location.search).get('layout') || W.DEFAULT_NAME); tconnect(); autoTake();
-  if (botDesk && new URLSearchParams(location.search).get('tab') === 'bot') botDesk.showTab(true);
-  if (agentDesk && new URLSearchParams(location.search).get('tab') === 'agent') agentDesk.showTab(true);
-  if (new URLSearchParams(location.search).get('tab') === 'praetorian') openPraetorian();   // 1.51.0: the side used last
-  if (fleetView && new URLSearchParams(location.search).get('tab') === 'legion') fleetView.showTab(true);   // 1.45.0
-  if (leagueView && ['league', 'colosseum'].includes(new URLSearchParams(location.search).get('tab'))) leagueView.openDay(new URLSearchParams(location.search).get('day'));   // a day checked first: a past one read only; 1.50.0: the old ?tab=league lands on the Colosseum
-  syncLeagueGhosts(); syncChartTab();
+  startGuard('Bot tab', () => { startBot(); if (botDesk) { botDesk.layoutChanged(layout); botDesk.chartsChanged(); } }, 'wsBotTab');
+  startGuard('Agent tab', () => { startAgent(); if (agentDesk) agentDesk.layoutChanged(layout); }, 'wsAgentTab');
+  startGuard('Colosseum tab', startLeague, 'wsLeagueTab');
+  startGuard('Legion tab', startFleet, 'wsFleetTab');
+  const tab = new URLSearchParams(location.search).get('tab');
+  if (botDesk && tab === 'bot') startGuard('Bot tab', () => botDesk.showTab(true));
+  if (agentDesk && tab === 'agent') startGuard('Agent tab', () => agentDesk.showTab(true));
+  if (tab === 'praetorian') startGuard('Praetorian button', openPraetorian);   // 1.51.0: the side used last
+  if (fleetView && tab === 'legion') startGuard('Legion tab', () => fleetView.showTab(true));   // 1.45.0
+  if (leagueView && ['league', 'colosseum'].includes(tab)) startGuard('Colosseum tab', () => leagueView.openDay(new URLSearchParams(location.search).get('day')));   // a day checked first: a past one read only; 1.50.0: the old ?tab=league lands on the Colosseum
+  startGuard('Colosseum marks', syncLeagueGhosts); startGuard('Praetorian button', syncChartTab);
 };
 /* A window that opens (or reloads) with the ticket in its layout takes it when no other window has it (Anthony
    2026-10-01), Armed off. The same `ifAvailable` lock as any take: two windows opening at once give one holder, and a
