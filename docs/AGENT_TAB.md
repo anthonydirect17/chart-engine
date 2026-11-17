@@ -30,7 +30,7 @@ every one again.
 | `test/perf-agent.mjs` | `npm run perf:agent`: the light's (and the grid canvas's) cost in a trade over a busy chart (`docs/MOTION.md` R5) |
 | `test/agent-l5-smoke.mjs` | `npm run smoke:agent-l5` (also run by `smoke:agent`): what Layout 5 adds (below), and its screenshots `test/out/agent-l5-*.png` |
 | `test/agent-parity.json`, `test/agent-parity-smoke.mjs` | the parity list (128 items, made before Layout 5, held by it) and `npm run smoke:agent-parity` (also run by `smoke:agent`): every item asserted through its `data-parity` hook (below) |
-| `live/kits/agent-board-f/` | board F saved as a kit (main commit `a90c3c4`): opens on its own against the fake; never installed, never loaded by the page (`test/agent-kit.test.js`); its `README.md` says how to put it back |
+| (removed in release 1) | board F's snapshot (`live/kits/agent-board-f/`, never installed, never loaded by the page) was removed after the tag `pre-release1-f-snapshot`; `git checkout pre-release1-f-snapshot -- live/kits/agent-board-f test/agent-kit.test.js` brings it back |
 
 Shared code changed (each change small and tested): `live/bot.js` hands its open proposals to the one copilot-key router
 instead of owning the `chart-copilot-key` event; `live/bot-core.js` `botFillLedger(mark)` takes an optional mark (the
