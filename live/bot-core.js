@@ -675,6 +675,13 @@ function stripModel(bot, fmtPrice) {
     trades: r.trades, losses: r.losses, level: r.level, state,
   };
 }
+/** Anthony's ruling B (2026-11-18, ChartBridge's owner guard): the Bot tab's standing line while the guard blocks entries (copilot
+ * and auto only; ChartBridge sends `ownerWait` then, else null). '' when there is none. */
+function ownerWaitText(b) {
+  if (!b || typeof b.ownerWait !== 'string' || !b.ownerWait || b.mode === 'shadow') return '';
+  const w = b.ownerWait.slice(0, 300);
+  return w.charAt(0).toUpperCase() + w.slice(1) + '. The bot makes no entry until it is clear.';
+}
 /** The status words for the panel: what the bot is doing. */
 function statusText(b) {
   if (!b || !b.enabled) return 'Off: the bot channel is off in ChartBridge';
@@ -694,6 +701,6 @@ return {
   etClock, etClockSec, tradeDay,
   createLog, createDayTypes, readGhosts, setGhost, readOptions, setOption,
   answerKeys, noticesFrom, signalLine, trips,
-  fmtR, fmtPct, fmtUsd, positionText, stripModel, statusText,
+  fmtR, fmtPct, fmtUsd, positionText, stripModel, statusText, ownerWaitText,
 };
 });

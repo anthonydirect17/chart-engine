@@ -31,9 +31,12 @@
 //     bot-day.txt until 18:00 ET and the mode drops to Shadow; Anthony arms it again himself, never ChartBridge;
 //   bot only (release 1, decision 3a, 2026-11-18): the bot shares the personal account with Anthony, so its day stop and its own
 //     flatten close only its own share (its own stop, target and entry cancelled first, then one market close of what its ledger
-//     follows and its legs prove) and never touch Anthony's contracts or orders there; the bot's ledger counts only its own share;
+//     follows and its legs prove) and never touch Anthony's contracts or orders there; the bot's ledger follows its own share
+//     (a sell of Anthony's beyond his own contracts closes the bot's: his ruling 1 of 2026-11-18); a close that cannot go for 15 s
+//     is an error and a voice call, again every 60 s (his ruling 3);
 //   the owner guard (release 1, decision 3b): no new bot entry while Anthony holds his own position or working orders on the
-//     bot's account and root, named; copilot and auto stay armed; Shadow is unaffected;
+//     bot's account and root, named; copilot and auto stay armed; Shadow is unaffected; a bot entry resting then is cancelled
+//     (his ruling A) and the Bot tab says it waits (ruling B);
 //   heartbeat: any bot message counts; 5 s of silence cancels the bot's unfilled entries, keeps any bot position's stop and
 //     target, and tells the pages. ChartBridge never closes the bot's position by itself, except at a day stop (above).
 // Written in C# 5 syntax (NinjaTrader 8 compiles NinjaScript as C# 5).
@@ -142,7 +145,19 @@ namespace NinjaTrader.NinjaScript.AddOns
         // Release 1 (decision 3a, 2026-11-18, "bot only"): the bot shares the personal account with Anthony, so ChartBridge closes only
         // the bot's own contracts (CloseShare) and follows only the bot's own share of the position (OnExec).
         private static int handQty;                       // Anthony's own contracts on the bot's contract, signed, from the executions that are not the bot's (0 at each bot entry: the owner guard)
-        private static int closeProof;                    // the bot's contracts its own working stops (else targets) showed while it was being closed, the most seen; 0 when none
+        // R12 of decision 3, finding 1: the proof is a budget for the whole close of a trade. Each pair of its own legs on the closing side
+        // (its OCO id, or the leg alone) is kept with the most contracts it was seen for and the most of them filled; the bot's own
+        // closes' fills add to closeUsed. The close never passes the pairs' contracts minus what its legs and its closes already
+        // closed. Both start over when the trade is flat and when it is followed again after a restart.
+        private class ProofUnit { public int Qty, Filled; }
+        private static readonly Dictionary<object, ProofUnit> ProofUnits = new Dictionary<object, ProofUnit>();
+        private static int closeUsed;                     // the bot's own closes' fills on the closing side since the trade was followed
+        private static double closeWaitSinceMs = -1;      // finding 3: since when the bot's close waits or is refused while it holds (-1: not waiting)
+        private static double closeErrMs = -1;            // finding 3: the last error (and voice call) for a close still not done
+        private static int closeErrN;                     // finding 3: how many of those (the voice call's key)
+        private static double pauseSinceMs = -1;          // ruling A: since when Anthony's own exposure is seen with a bot entry resting
+        private static readonly HashSet<string> Replayed = new HashSet<string>();   // finding 2: executions already there when this run began watching (their effect is in bot-day.txt and the restore)
+        private static readonly HashSet<string> RunTags = new HashSet<string>();    // finding 2: the tags of the bot's entries placed this run (their fills are never fenced)
         private static double closeTryMs = -1;            // the last close of the bot's share sent (-1: none yet since the day stop or the bot's flatten), reserved under Sync
         private static bool closeAsked;                   // the bot's own flatten (auto) asked for its share to be closed: kept until the bot is flat
         private static string closeShortSaid;             // the proof was short of the followed size: said once a trade
@@ -184,6 +199,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         public static Func<double> ClockMs;
         public static Func<DateTime> ClockEt;
         public static Action ModeArmChecked;              // runs in SetMode after ArmProblem, before the lock (the race of review R12 finding 2)
+        public static Action PlaceGuardChecked;           // runs in Place after the rails and the owner guard, before the order is sent (R12 of decision 3, finding 5)
         private static double Now() { Func<double> f = ClockMs; return f != null ? f() : ChartBridgeTime.NowUtcMs(); }
         private static DateTime NowEt() { Func<DateTime> f = ClockEt; return f != null ? f() : ChartBridgeTime.NowEastern(); }
 
@@ -237,6 +253,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             LoadAccount();
             LoadDay();
             RestoreOpenTrade();   // review R12 round 2: a bot trade open in bot-day.txt is followed again from NinjaTrader's position
+            List<Account> all;
+            lock (NinjaTrader.Cbi.Account.All) all = NinjaTrader.Cbi.Account.All.ToList();
+            foreach (Account x in all) NoteWatched(x);   // R12 of decision 3, finding 2: the replay fence
             double? kill = ChartBridgeFiles.KillSince(KillFile);   // 0.6.3 (audit C5): the kill switch survives a restart until the page releases it
             lock (Sync) { noBotSinceMs = Now(); killed = kill.HasValue; killedAt = Math.Max(0, kill ?? 0); killReadPending = kill == -1; }
             if (kill == -1) Log("bot-kill.txt is there but could not be read yet (held open): the kill switch is on; ChartBridge reads it again");
@@ -263,7 +282,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 bot = null; claimed = false; helloed = false; botName = null; lastMsgMs = 0; noBotSinceMs = 0; lastStripMs = 0;
                 mode = "shadow"; killed = false; size = 0; maxTrades = 0; maxLosses = 0; dayLoss = 0; dayProfit = 0; railRoot = null; railsBroken = null; dayBroken = null;
                 dayStopKind = null; dayStopDay = 0; stopFlattenTryMs = -1; stopFlattenWhy = null; stopFlattenWait = null; openUnknownSaid = false;
-                handQty = 0; closeProof = 0; closeTryMs = -1; closeAsked = false; closeShortSaid = null;
+                handQty = 0; ProofUnits.Clear(); closeUsed = 0; closeTryMs = -1; closeAsked = false; closeShortSaid = null; closeWaitSinceMs = -1; closeErrMs = -1; closeErrN = 0; pauseSinceMs = -1; Replayed.Clear(); RunTags.Clear();
                 account = DefaultAccount; accountBroken = null;
                 secret = null; secretState = "missing"; session = null; Trades.Clear(); SignalIds.Clear(); openTag = null; restoreWait = null; ledQty = 0; ledCash = 0; ledAvg = 0; ledPrior = 0; ledPv = 0;
                 OpenSaved.Clear(); untoldTag = null; untoldWhy = null;
@@ -691,6 +710,34 @@ namespace NinjaTrader.NinjaScript.AddOns
                    ": copilot, auto and new bot entries are refused until it is followed again (or 18:00 ET)";
         }
 
+        // R12 of decision 3, finding 2 (the replay fence): NinjaTrader keeps an account's executions of the session across a NinjaScript
+        // recompile, and ChartBridge delivers them all again when it starts watching the account (ChartBridgeServer.CatchUp), after
+        // the bot's start has already followed its open trade again from bot-day.txt and its legs. So every execution already in the
+        // account when this run begins (the bot's start, for every account NinjaTrader lists then), or when an account is first watched
+        // (ChartBridgeServer.WatchAccounts, just before its catch-up), is noted, and OnExec never counts it: its effect is already in
+        // bot-day.txt and the restore. Never fenced: a fill of an order the bot placed in this run (its tag in RunTags).
+        public static void NoteWatched(Account a)
+        {
+            if (!Enabled || a == null) return;
+            List<Execution> list;
+            lock (a.Executions) list = a.Executions.ToList();
+            if (list.Count == 0) return;
+            List<Order> orders;
+            lock (a.Orders) orders = a.Orders.ToList();
+            HashSet<string> run;
+            lock (Sync) run = new HashSet<string>(RunTags);
+            List<string> keys = new List<string>();
+            foreach (Execution x in list)
+            {
+                if (x == null) continue;
+                Order o = x.Order ?? (string.IsNullOrEmpty(x.OrderId) ? null : orders.FirstOrDefault(y => y != null && y.OrderId == x.OrderId));
+                string t = o != null ? TagOf(o.Name) : null;
+                if (t != null && run.Contains(t)) continue;
+                keys.Add(ChartBridgeServer.ExecKey(a.Name, x.ExecutionId, x.Time, x.Price, x.Quantity, x.OrderId));
+            }
+            lock (Sync) foreach (string k in keys) Replayed.Add(k);
+        }
+
         // A leg's side by its name (Sell, SellShort): read only, so this file never names an order action it could build.
         private static bool SellsLeg(Order o) { string side = Convert.ToString(o.OrderAction, CultureInfo.InvariantCulture); return side == "Sell" || side == "SellShort"; }
 
@@ -780,7 +827,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                         OpenSaved.Remove(tag);
                     }
                     openTag = tag; ledQty = q; ledAvg = avg; ledCash = -q * avg; ledPrior = prior; ledPv = pv;
-                    handQty = pos - q; closeProof = 0; closeShortSaid = null;   // decision 3a: the rest of NinjaTrader's position there is Anthony's own
+                    handQty = pos - q; ProofUnits.Clear(); closeUsed = 0; closeShortSaid = null;   // decision 3a: the rest of NinjaTrader's position there is Anthony's own
                     Tags.Add(tag);   // its legs' updates reach the bot again
                     done = true;
                 }
@@ -1332,7 +1379,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 // decision 3a: only the bot's own share (CloseShare), never Anthony's contracts or orders; it goes on every 500 ms until
                 // the bot is flat (closeAsked)
-                lock (Sync) { closeAsked = true; closeTryMs = -1; stopFlattenWait = null; stopFlattenWhy = null; }
+                lock (Sync) { closeAsked = true; closeTryMs = -1; stopFlattenWait = null; stopFlattenWhy = null; closeWaitSinceMs = -1; closeErrMs = -1; }
                 int kind, qty;
                 string w = CloseShare(root, out kind, out qty);
                 if (kind == CloseRefused) why = w;
@@ -1351,9 +1398,13 @@ namespace NinjaTrader.NinjaScript.AddOns
             placed = null;
             lock (PlaceGate)
             {
+                int handBase;
+                lock (Sync) handBase = handQty;   // R12 of decision 3, finding 5: Anthony's fills from here on count; the guard below finds none before
                 string root, acct = BotAccount;
                 string rootWhy = RootProblem(out root);
                 string why = RailsProblem() ?? AccountProblem(false) ?? rootWhy;
+                Action hook = PlaceGuardChecked;
+                if (hook != null) hook();
                 if (why == null && forAccount != null && forAccount != acct) why = "the bot's account changed from " + forAccount + " to " + acct + " after this proposal: nothing placed";
                 int qty;
                 lock (Sync) qty = size;
@@ -1365,7 +1416,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                               ",\"bracket\":{\"stop\":" + s.StopTicks.ToString(CultureInfo.InvariantCulture) + ",\"target\":" + s.TargetTicks.ToString(CultureInfo.InvariantCulture) + "}}";
                 why = ChartBridgeOrders.PlaceBotEntry(text, out placed);
                 if (why != null) { lock (Sync) nRefused++; placed = null; return why; }
-                lock (Sync) { Placed.Add(placed); Tags.Add(TagOf(placed.Name)); nPlaced++; handQty = 0; }   // decision 3b: the owner guard found nothing of Anthony's there
+                lock (Sync) { Placed.Add(placed); Tags.Add(TagOf(placed.Name)); RunTags.Add(TagOf(placed.Name)); nPlaced++; handQty -= handBase; }   // decision 3b: the owner guard found nothing of Anthony's there, so his share is only his fills since (finding 5: a fill between the guard's read and here is kept)
             }
             BotLog("placed " + s.Side + " " + SizeFor(EffectiveRoot()) + " " + EffectiveRoot() + " " + s.Kind + (s.PriceText != null ? " @ " + s.PriceText : "") + " stop " + s.StopTicks + " target " + s.TargetTicks + " on " + BotAccount + (SimNow() ? " (Sim)" : " (LIVE)") + " (signal " + s.Id + ")");
             return null;
@@ -1398,6 +1449,14 @@ namespace NinjaTrader.NinjaScript.AddOns
         // the order lock, so a page order cannot slip in between. Reads NinjaTrader: never under Sync. Null when the bot may enter.
         public static string OwnerGuard(Account a, string root)
         {
+            string own = OwnerExposure(a, root, false);
+            return own == null ? null : own + ": no bot entry while Anthony holds his own position or working orders on the bot's account and root (the owner guard; copilot and auto stay armed and enter once it is clear)";
+        }
+
+        // What on the bot's account and root is Anthony's own, in words, or null. strict: a position counts only when both readings
+        // agree (ruling A's cancel and the Bot tab's line; the entries' guard counts either reading, the careful side).
+        private static string OwnerExposure(Account a, string root, bool strict)
+        {
             if (!Enabled || a == null || string.IsNullOrEmpty(root)) return null;
             int q;
             HashSet<string> tags;
@@ -1405,8 +1464,43 @@ namespace NinjaTrader.NinjaScript.AddOns
             List<Order> listed;
             lock (a.Orders) listed = a.Orders.ToList();
             foreach (Order o in listed) if (IsBotEntry(o)) tags.Add(TagOf(o.Name));   // after a restart, the bot's entries NinjaTrader still lists
-            string own = ChartBridgeOrders.BotOwnerExposure(a, root, q, o => { string t = TagOf(o.Name); return IsBotEntry(o) || (t != null && tags.Contains(t)); });
-            return own == null ? null : own + ": no bot entry while Anthony holds his own position or working orders on the bot's account and root (the owner guard; copilot and auto stay armed and enter once it is clear)";
+            return ChartBridgeOrders.BotOwnerExposure(a, root, q, o => { string t = TagOf(o.Name); return IsBotEntry(o) || (t != null && tags.Contains(t)); }, strict);
+        }
+
+        // Anthony's ruling A (2026-11-18, "pause and cancel"): when his own position or working order is on the bot's account and root
+        // (both readings agreeing, seen for 1 s so a fill whose position update is late is not taken for his), every bot entry still
+        // resting there is cancelled (a part filled entry: its rest). The bot's filled position and its stop and target are never
+        // touched. Every 500 ms (Check). Copilot and auto stay armed; the owner guard then refuses new entries until it is clear.
+        private static void PauseForOwner()
+        {
+            List<Order> working = WorkingEntries();
+            if (working.Count == 0) { lock (Sync) pauseSinceMs = -1; return; }
+            string own = OwnerExposure(FindAccount(), EffectiveRoot(), true);
+            bool due;
+            lock (Sync)
+            {
+                double now = Now();
+                if (own == null) { pauseSinceMs = -1; return; }
+                if (pauseSinceMs < 0) pauseSinceMs = now;
+                due = now - pauseSinceMs >= 1000;
+            }
+            if (!due) return;
+            int n = 0;
+            foreach (Order o in working) if (Cancel(o)) n++;
+            if (n == 0) return;
+            string w = "Bot: " + own + ": Anthony's own position or order is there, so the bot's resting entr" + (n == 1 ? "y is" : "ies are") + " cancelled (Anthony's ruling of 2026-11-18, pause and cancel); its filled position and its stop and target are untouched";
+            Log(w); BotLog(w); ToPages(StatusJson("warn", w)); Notify();
+        }
+
+        // Anthony's ruling B (2026-11-18): the Bot tab's standing line while the owner guard blocks entries (copilot and auto only), in
+        // the strip as ownerWait. Reads NinjaTrader: never under Sync.
+        private static string OwnerWait()
+        {
+            string m;
+            lock (Sync) m = mode;
+            if (m == "shadow") return null;
+            string own = OwnerExposure(FindAccount(), EffectiveRoot(), true);
+            return own == null ? null : "waiting: you hold your own position or order (" + own + ")";
         }
 
         // The bot's account (Anthony 2026-10-07: the one he chose, Sim or live; no Sim lock): it is in NinjaTrader under that exact
@@ -1570,9 +1664,11 @@ namespace NinjaTrader.NinjaScript.AddOns
         // Release 1 (1.6b, review R12 finding 1): a fill of a bot entry whose trade has already closed (the rest of a part filled
         // entry filling after its stop, or after a day stop's flatten) reopens that trade: it is followed again, and at its close
         // the new dollars are added to what it closed with before, so the trades, the losing trades and the day stops count them.
-        public static void OnExec(string account, Instrument inst, MarketPosition side, int qty, double price, string orderId, string json)
+        public static void OnExec(string account, Instrument inst, MarketPosition side, int qty, double price, string orderId, string json) { OnExec(account, inst, side, qty, price, orderId, json, null); }
+        public static void OnExec(string account, Instrument inst, MarketPosition side, int qty, double price, string orderId, string json, string execKey)
         {
             if (!Enabled || account != BotAccount || inst == null || qty <= 0) return;
+            if (execKey != null) lock (Sync) if (Replayed.Contains(execKey)) return;   // R12 of decision 3, finding 2: already counted before this run (NoteWatched)
             string root = ChartBridgeServer.RootFor(inst);
             if (root == null || root != EffectiveRoot()) return;
             Order o = FindOrder(orderId);
@@ -1603,11 +1699,13 @@ namespace NinjaTrader.NinjaScript.AddOns
                     openTag = entryTag; ledQty = 0; ledCash = 0; ledAvg = 0; ledPrior = 0;
                     if (!Trades.ContainsKey(entryTag)) { Trades[entryTag] = double.NaN; opened = entryTag; }   // a trade (counted once, also after a restart)
                 }
-                // Release 1 (decision 3a, 2026-11-18): the bot follows only its own share. Its own executions (its entry, its stop and target,
-                // its close: its tag) are its share. Any other execution on its contract is Anthony's own (his hand order, or a close of the
-                // whole position such as Flatten): it changes the bot's share only where NinjaTrader's position can no longer hold it, so
-                // Anthony's own contracts go first and his trades never enter the bot's ledger, its dollars or its day stops. Before
-                // 3a every execution there counted as the bot's: right only while the bot alone held the contract.
+                // Release 1 (decision 3a, 2026-11-18): the bot follows its own share. Its own executions (its entry, its stop and target, its
+                // close: its tag) are its share. Any other execution on its contract (Anthony's hand order, or a close of the whole position
+                // such as Flatten or Cut half) changes the bot's share only where NinjaTrader's position can no longer hold it: Anthony's own
+                // contracts there go first. When he holds fewer than he sells (Anthony's ruling 1 of 2026-11-18: he sells 1 by hand while the
+                // bot alone is long 2), the rest of his sell closes the bot's contracts: the bot then holds 1, its stop and target follow 1
+                // (the legs check), and its day counts that contract closed at his price. A hand order on the bot's own side only adds to
+                // Anthony's share. Before 3a every execution there counted as the bot's.
                 int signed = side == MarketPosition.Long ? qty : -qty, part = signed;
                 if (!mine)
                 {
@@ -1621,6 +1719,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     changed = true;   // R12 (the day file): every execution of the followed trade is saved, part exits too
                     ledPv = inst.MasterInstrument.PointValue;
                     int n = Math.Abs(part);
+                    if (mine && IsBotClose(o) && ledQty != 0 && Math.Sign(part) != Math.Sign(ledQty)) closeUsed += Math.Min(n, Math.Abs(ledQty));   // finding 1: the proof's budget used
                     if (ledQty == 0 || Math.Sign(part) == Math.Sign(ledQty)) ledAvg = (ledAvg * Math.Abs(ledQty) + price * n) / (Math.Abs(ledQty) + n);
                     ledQty += part;
                     ledCash -= part * price;
@@ -1629,7 +1728,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                         pnl = Math.Round(ledPrior + ledCash * inst.MasterInstrument.PointValue, 2);   // ledPrior: what a reopened trade had closed with
                         Trades[openTag] = pnl;
                         closedTag = openTag; openTag = null; ledAvg = 0; ledPrior = 0;
-                        closeProof = 0; closeAsked = false; closeShortSaid = null;   // decision 3a: the bot is flat: its close is done
+                        ProofUnits.Clear(); closeUsed = 0; closeAsked = false; closeShortSaid = null; closeWaitSinceMs = -1; closeErrMs = -1;   // decision 3a: the bot is flat: its close is done
                     }
                 }
                 c = helloed ? bot : null;
@@ -1662,7 +1761,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             Account a = FindAccount();
             if (a != null) lock (a.Orders) foreach (Order o in a.Orders) if (o.OrderId == orderId) return o;
             lock (Sync) foreach (Order o in Placed.Concat(CloseOrders)) if (o.OrderId == orderId) return o;   // decision 3a: its own close too
-            return null;
+            return ChartBridgeOrders.BotOursById(a, orderId);   // R12 of decision 3, finding 5: a bot order ChartBridge just sent that NinjaTrader does not list yet
         }
 
         // ChartBridgeServer.OnPositionUpdate: the bot's position (its account, its root) to the bot.
@@ -1739,7 +1838,12 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             if (dayStopKind == null) return null;
             string mark = dayStopKind == "loss" ? "the day's loss stop ($" + Dollars(dayLoss) + ")" : "the day's profit stop ($" + Dollars(dayProfit) + ")";
-            return mark + " was reached today (the day at " + (dayStopDay < 0 ? "-$" : "$") + Dollars(Math.Abs(dayStopDay)) + ", realized plus open): the bot's own contracts were closed and it was set to Shadow; no bot entries until 18:00 ET, then Anthony arms it again";
+            // R12 of decision 3, finding 3: the words say what is true now: being closed while the bot holds, NOT closed after a refusal
+            // (or a trade not followed), closed only once the bot is flat
+            string closed = openTag != null && ledQty != 0 ? (stopFlattenWhy != null ? "the bot's own contracts were NOT closed (" + stopFlattenWhy + ")" : "the bot's own contracts are being closed")
+                          : OpenNotFollowedLocked() != null ? "the bot's own contracts were NOT closed (its open trade is not followed, so nothing proves its size)"
+                          : "the bot's own contracts were closed";
+            return mark + " was reached today (the day at " + (dayStopDay < 0 ? "-$" : "$") + Dollars(Math.Abs(dayStopDay)) + ", realized plus open): " + closed + " and it was set to Shadow; no bot entries until 18:00 ET, then Anthony arms it again";
         }
 
         private static void HitDayStop(string kind, double day, string root)
@@ -1753,6 +1857,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 dayStopKind = kind; dayStopDay = day; old = mode; mode = "shadow";
                 stopFlattenTryMs = Now();   // the cancel again of a lost cancel: 5 s from here
                 closeTryMs = -1;            // decision 3a: the first close of the bot's share goes as soon as nothing of its own can fill
+                closeWaitSinceMs = -1; closeErrMs = -1;   // finding 3: the 15 s for an error count from here
                 expired = ExpireOpenLocked();
                 words = DayStopWordsLocked();
                 holds = openTag != null;
@@ -1815,15 +1920,27 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (Sync) foreach (Order o in Placed.Concat(CloseOrders)) if (!orders.Contains(o)) orders.Add(o);
             List<Order> legs = orders.Where(o => o != null && TagOf(o.Name) == tag && !IsBotEntry(o) && !IsBotClose(o) && SameContract(o.Instrument, inst) && MayStillFill(o)).ToList();
             List<Order> entries = orders.Where(o => IsBotEntry(o) && MayStillFill(o)).ToList();
-            // 2. the proof
-            List<Order> live = legs.Where(o => ChartBridgeOrders.IsWorking(o.OrderState) && SellsLeg(o) == (q > 0)).ToList();
-            List<Order> stops = live.Where(o => o.OrderType == OrderType.StopMarket || o.OrderType == OrderType.StopLimit).ToList();
-            List<Order> sized = stops.Count > 0 ? stops : live.Where(o => o.OrderType == OrderType.Limit).ToList();
-            int proofNow = sized.Sum(o => Math.Max(0, o.Quantity - o.Filled)), proof;
+            // 2. the proof, a budget for the whole close (R12 of decision 3, finding 1): each pair of its own legs on the closing side
+            // that is working (its OCO id, or the leg alone) is kept with the most contracts and the most filled seen, also once it is
+            // done; the close never passes the pairs' contracts minus what they filled and what its own closes filled (closeUsed)
+            List<Order> mineLegs = orders.Where(o => o != null && TagOf(o.Name) == tag && !IsBotEntry(o) && !IsBotClose(o) && SameContract(o.Instrument, inst) && SellsLeg(o) == (q > 0)).ToList();
+            int proof, used;
             lock (Sync)
             {
                 if (openTag != tag) { kind = CloseNothing; return null; }
-                closeProof = Math.Max(closeProof, proofNow); proof = closeProof;
+                foreach (Order o in mineLegs)
+                {
+                    object key = string.IsNullOrEmpty(o.Oco) ? (object)o : o.Oco;
+                    ProofUnit u;
+                    if (!ProofUnits.TryGetValue(key, out u))
+                    {
+                        if (!ChartBridgeOrders.IsWorking(o.OrderState)) continue;   // a leg already done before it was seen working proves nothing
+                        ProofUnits[key] = u = new ProofUnit();
+                    }
+                    u.Qty = Math.Max(u.Qty, o.Quantity); u.Filled = Math.Max(u.Filled, o.Filled);
+                }
+                proof = ProofUnits.Values.Sum(u => u.Qty);
+                used = ProofUnits.Values.Sum(u => u.Filled) + closeUsed;
             }
             // 3. a close on its way
             Func<Instrument, bool> onRoot = i => i != null && ((i.MasterInstrument != null && string.Equals(i.MasterInstrument.Name, root, StringComparison.OrdinalIgnoreCase)) || ChartBridgeServer.RootFor(i) == root);
@@ -1853,22 +1970,25 @@ namespace NinjaTrader.NinjaScript.AddOns
                 return "its own stop and target (" + legs.Count + " order" + (legs.Count == 1 ? "" : "s") + ") are cancelled first, so none can fill after its close";
             }
             // 5. the size, and the close
-            int dir = Math.Sign(q), cover = ChartBridgeOrders.BotCover(a, inst, dir);
+            int dir = Math.Sign(q), cover = ChartBridgeOrders.BotCover(a, inst, dir), left = proof - used;
             if (proof <= 0) return "no stop or target of bot trade " + tag + " proves its size, so ChartBridge closes none of it (Anthony's own contracts are never touched): act in NinjaTrader";
-            qty = Math.Min(Math.Min(proof, Math.Abs(q)), cover);
+            if (left <= 0) return "bot trade " + tag + "'s own stop and target proved " + Contracts(proof) + " and all of them are closed, yet the bot still follows " + Math.Abs(q) + " that cannot be told apart from Anthony's own contracts, so ChartBridge closes nothing more: act in NinjaTrader";   // finding 1: never again
+            qty = Math.Min(Math.Min(left, Math.Abs(q)), cover);
             if (qty <= 0) { kind = CloseWait; return "NinjaTrader's " + root + " position on " + a.Name + " holds nothing on the bot's side by both readings (only its executions are late)"; }
             bool due;
             lock (Sync) { double now = Now(); due = closeTryMs < 0 || now - closeTryMs >= 5000; if (due) closeTryMs = now; }
             if (!due) { kind = CloseWait; return "its last close was sent less than 5 s ago"; }
             Order sent;
-            string why = ChartBridgeOrders.BotCloseSend(a, inst, tag, dir, qty, out sent);
+            string over;
+            string why = ChartBridgeOrders.BotCloseSend(a, inst, tag, dir, qty, out sent, out over);
             if (why != null) return why;
+            if (over != null) { string w = "Bot: the bot's own " + Contracts(qty) + " on " + a.Name + " " + root + " closed at market, and " + over; Log(w); BotLog(w); ToPages(StatusJson("error", w)); }   // finding 4 (Anthony's ruling 2): close and warn
             kind = CloseSent;
             string shortWhy = null;
             lock (Sync)
             {
                 if (sent != null) CloseOrders.Add(sent);   // its own close, known before NinjaTrader lists it (step 3, and its fill is the bot's: FindOrder)
-                if (proof < Math.Abs(q) && closeShortSaid != tag) { closeShortSaid = tag; shortWhy = "bot trade " + tag + " follows " + Contracts(Math.Abs(q)) + " but its own stop and target prove only " + proof + ": ChartBridge closed those " + proof + " and none of the rest, which cannot be told apart from Anthony's own contracts; act in NinjaTrader"; }
+                if (left < Math.Abs(q) && closeShortSaid != tag) { closeShortSaid = tag; shortWhy = "bot trade " + tag + " follows " + Contracts(Math.Abs(q)) + " but its own stop and target prove only " + left + " still open: ChartBridge closed those " + left + " and none of the rest, which cannot be told apart from Anthony's own contracts; act in NinjaTrader"; }
             }
             if (shortWhy != null) { string w = "Bot: " + shortWhy; Log(w); BotLog(w); ToPages(StatusJson("error", w)); }
             return null;
@@ -1882,11 +2002,33 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             int qty;
             string why = CloseShare(root, out kind, out qty), was, where = BotAccount + " " + root;
-            if (kind == CloseNothing) return "the bot holds nothing on " + where;
+            if (kind == CloseNothing) { lock (Sync) { closeWaitSinceMs = -1; closeErrMs = -1; } return "the bot holds nothing on " + where; }
             string words = kind == CloseSent ? "the bot's own " + Contracts(qty) + " on " + where + " closed at market (only the bot's: Anthony's own contracts and orders are untouched)"
                          : kind == CloseWait ? "the bot's own contracts on " + where + " are closed once nothing of its own can fill: " + why
                          : "the bot's own contracts on " + where + " were not closed: " + why + " (looked at again every 500 ms)";
-            lock (Sync) { was = kind == CloseRefused ? stopFlattenWhy : stopFlattenWait; if (kind == CloseRefused) stopFlattenWhy = why; else if (kind == CloseWait) stopFlattenWait = why; else { stopFlattenWait = null; stopFlattenWhy = null; } }
+            // R12 of decision 3, finding 3: a close that waits or is refused for 15 s while the bot still holds is an error to the pages,
+            // named, again every 60 s until the bot is flat, and (Anthony's ruling 3 of 2026-11-18) a voice call each time (BotNotClosed)
+            string stuck = null;
+            int call = 0;
+            lock (Sync)
+            {
+                was = kind == CloseRefused ? stopFlattenWhy : stopFlattenWait;
+                if (kind == CloseRefused) { stopFlattenWhy = why; stopFlattenWait = null; }
+                else if (kind == CloseWait) { stopFlattenWait = why; stopFlattenWhy = null; }
+                else { stopFlattenWait = null; stopFlattenWhy = null; }
+                double now = Now();
+                if (kind == CloseSent) { closeWaitSinceMs = -1; closeErrMs = -1; }
+                else
+                {
+                    if (closeWaitSinceMs < 0) closeWaitSinceMs = now;
+                    if (now - closeWaitSinceMs >= 15000 && (closeErrMs < 0 || now - closeErrMs >= 60000))
+                    {
+                        closeErrMs = now; call = ++closeErrN;
+                        stuck = "Bot: " + what + ": the bot's own contracts on " + where + " are still NOT closed after " + ((now - closeWaitSinceMs) / 1000).ToString("0", CultureInfo.InvariantCulture) + " s: " + why + "; act in NinjaTrader if you need to (said again every 60 s while the bot holds them)";
+                    }
+                }
+            }
+            if (stuck != null) { Log(stuck); BotLog(stuck); ToPages(StatusJson("error", stuck)); ChartBridgeVoice.Say("bot-not-closed|" + call, "BotNotClosed"); }
             if (quiet) return words;
             if (kind == CloseSent) { string w = "Bot: " + what + ": " + words; Log(w); BotLog(w); ToPages(StatusJson("warn", w)); }
             else if (why != was) { string w = "Bot: " + what + ": " + words; Log(w); BotLog(w); if (kind == CloseRefused) ToPages(StatusJson("error", w)); }
@@ -1925,6 +2067,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             RollDay();
             RestoreOpenTrade();   // review R12 round 2: until it is followed again, no arming and no entry (OpenNotFollowedLocked)
             CheckDayStops();   // release 1 (1.6b): the day's loss and profit stops, realized plus open
+            PauseForOwner();   // Anthony's ruling A (2026-11-18): a bot entry resting while his own position or order is there is cancelled
             double now = Now();
             ChartBridgeClient silent = null;
             bool noBot, strip = false;
@@ -2330,6 +2473,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             StringBuilder b = new StringBuilder("{\"type\":\"bot\"");
             bool simNow = SimNow();   // read before the lock (NinjaTrader's account list has its own)
+            string ownerWait = OwnerWait();   // ruling B: read before the lock (NinjaTrader's orders and positions)
             lock (Sync)
             {
                 double now = Now();
@@ -2360,6 +2504,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                  .Append(",\"killed\":").Append(killed ? "true" : "false")
                  .Append(",\"killedAt\":").Append(killed && killedAt > 0 ? Ms(killedAt) : "null")   // 0.6.3 (audit C5)
                  .Append(",\"standDown\":").Append(sd != null ? CbJson.Str(sd) : "null")
+                 .Append(",\"ownerWait\":").Append(ownerWait != null ? CbJson.Str(ownerWait) : "null")   // Anthony's ruling B (2026-11-18): the Bot tab's standing line
                  .Append(",\"lastBeatMs\":").Append(bot != null ? Ms(Math.Max(0, now - lastMsgMs)) : "null")
                  .Append(",\"lastSignal\":").Append(lastSignalJson ?? "null");
             }
