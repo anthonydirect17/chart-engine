@@ -1459,13 +1459,14 @@ Object.assign(OrderDeskV3.prototype, {
   do_agentStopAll() { this.broadcastV3({ type: 'status', level: 'warn', text: 'Stop all automation: no bot or agent is on a prop account: nothing was done (the fake bridge knows no prop account and no ledger)' }); },
   check_agentKillAllProp() { return null; },
   do_agentKillAllProp() { this.broadcastV3({ type: 'status', level: 'warn', text: 'Kill all (prop accounts): no agent is on prop accounts: nothing was done (the fake bridge knows no prop account)' }); },
-  /* plan step 3.2: Shadow, its unfilled entries cancelled, its Copilot proposals expired; the fake holds no agent position of its own to flatten */
+  /* plan step 3.2: Shadow, its unfilled entries cancelled, its Copilot proposals expired, then its own flatten (as ChartBridge) */
   check_agentFlattenOff() { return null; },
   do_agentFlattenOff(m) {
     const a = this.agents.get(m.agent), was = a.mode;
     a.mode = 'shadow';
     this.agentCancelEntries(a, 'expired', 'Flatten and turn off');
     this.agentExpireProposals(a, 'not answered', 'Flatten and turn off');
+    this.agentFlatten(a, 'Flatten and turn off');
     this.broadcastV3({ type: 'status', level: 'warn', text: 'Agent ' + a.id + ': Flatten and turn off: mode shadow' + (was !== 'shadow' ? ' (was ' + was + ')' : '') });
     this.agentToAgent(a, this.agentWelcome(a));
     this.agentNotify(a);

@@ -89,20 +89,20 @@ try {
   const page = await ctx.newPage();
   page.on('pageerror', e => fail('page error: ' + e.message));
   page.on('dialog', d => { fail('a browser dialog: ' + d.message()); d.dismiss(); });
-  await page.goto(`http://localhost:${PORT}/live/?layout=Main`);
+  await page.goto(`http://localhost:${PORT}/live/legion.html?tab=cohorts&sub=legion`);   // plan step 3.2: Praetorian's Agent desk is on Legion
   await page.waitForSelector('.cb-pin-key', { timeout: 15000 });
   await enterPin(page, TEST_PIN);
-  await page.waitForFunction(() => document.getElementById('wsConn').classList.contains('live'), null, { timeout: 30000 });
+  await page.waitForFunction(() => document.getElementById('lxConn').dataset.state === 'on', null, { timeout: 30000 });
   const sent = () => page.evaluate(() => window.__sent);
   const text = sel => page.evaluate(s => { const e = document.querySelector(s); return e ? e.textContent.replace(/\s+/g, ' ').trim() : null; }, sel);
   await control('price', { root: 'MNQ', p: 25400 });
   await control('agent-connect', { agent: 'demo', name: 'Demo Agent', build: 'sample-build-1' });
   await control('agent-connect', { agent: 'demotwo', name: 'Second Demo Agent', build: 'sample-build-7' });
-  await page.click('#wsAgentTab');
-  await until(() => page.evaluate(() => window.workspace.agent().shown && window.workspace.agent().agents.length === 2), 'the Agent tab open with both agents');
+  await page.click('[data-lx-sub="praetorian"]');
+  await until(() => page.evaluate(() => window.legion.agent().shown && window.legion.agent().agents.length === 2), 'the Agent tab open with both agents');
   for (const [id, acct] of [['demotwo', 'SIM-AG2'], ['demo', 'SIM-AG1']]) {
     await page.selectOption('#agView [data-k="pick"]', id);
-    await until(async () => (await page.evaluate(() => window.workspace.agent().chosen)) === id, id + ' shown');
+    await until(async () => (await page.evaluate(() => window.legion.agent().chosen)) === id, id + ' shown');
     await page.click('#agView [data-act="acctOpen"]'); await page.selectOption('#agView [data-k="acctSel"]', acct); await page.click('#agView [data-act="acctSave"]');
     await until(async () => (await agentsNow()).find(a => a.agent === id).account === acct, id + ' trades ' + acct);
     await page.click('#agView [data-mode="copilot"]');
@@ -133,8 +133,9 @@ try {
   await until(() => page.isVisible('.ag-plist .ag-prop[data-id="pa"]'), 'demo\'s proposal in the tab');
   const BOTH = 'Bot: 1 proposal · Second Demo Agent: 1';
   await until(async () => (await others(page)).text === BOTH, 'the line counts the bot\'s and the second agent\'s proposals');
-  check(await page.evaluate(() => !!document.querySelector('.bt-prop[data-id="b1"]') && getComputedStyle(document.querySelector('.bt-props')).display === 'none' && !document.querySelector('.ag-prop[data-id="q2"]') && document.querySelector('.ag-cornerline').hidden),
-    'the bot\'s card exists (the Bot tab\'s corner), hidden with its corner while the Agent tab is shown; the second agent\'s is no card, and the corner\'s line is hidden too');
+  /* plan step 3.2: the Agent desk is on Legion; the bot's card is the chart page's (its Bot tab), never on Legion */
+  check(await page.evaluate(() => !document.querySelector('.bt-prop[data-id="b1"]') && !document.querySelector('.ag-prop[data-id="q2"]') && document.querySelector('.ag-cornerline').hidden),
+    'on Legion no bot card at all (the Bot tab is the chart page\'s); the second agent\'s is no card, and the corner\'s line is hidden too');
   const TAB = '#agView .ag-plist .ag-prop[data-id="pa"] [data-agans]';
   for (const [w, h] of SIZES) {
     await page.setViewportSize({ width: w, height: h });
@@ -164,7 +165,7 @@ try {
     const where = await page.evaluate(() => {
       const narrow = innerWidth <= 1100, all = [...document.querySelectorAll('.ag-note')];
       if (!narrow) { const c = document.querySelector('#agView [data-panel="chart"]').getBoundingClientRect(); const out = all.filter(n => { const r = n.getBoundingClientRect(); return r.height > 0 && !(r.left >= c.left - 1 && r.right <= c.right + 1 && r.top >= c.top - 1 && r.bottom <= c.bottom + 1); }); return { ok: !out.length, why: out.length ? out.length + ' notices outside the chart panel' : '' }; }
-      const tray = document.querySelector('#agView [data-k="tray"]'), t = tray.getBoundingClientRect(), bar = document.querySelector('.ws-top').getBoundingClientRect();
+      const tray = document.querySelector('#agView [data-k="tray"]'), t = tray.getBoundingClientRect(), bar = document.querySelector('.lx-head').getBoundingClientRect();   // plan step 3.2: Legion's header
       const outside = all.filter(n => !tray.contains(n)).length, seen = all.some(n => { const r = n.getBoundingClientRect(); return r.height > 0 && r.top < t.bottom - 8 && r.bottom > t.top + 8; });
       const height = Math.round(t.height), want = innerWidth <= 720 ? 96 : 66;
       const ok = !outside && seen && Math.abs(t.top - bar.bottom) <= 1 && t.bottom <= innerHeight && height === want;
@@ -319,44 +320,49 @@ try {
   const q3 = await twoNew();
   await until(async () => (await others(page)).text === 'Bot: 1 proposal · Second Demo Agent: 1', 'both counted');
   await page.click(LINE + ' [data-goto="agent:demotwo"]');
-  await until(async () => (await page.evaluate(() => window.workspace.agent().chosen)) === 'demotwo', 'the second agent shown');
+  await until(async () => (await page.evaluate(() => window.legion.agent().chosen)) === 'demotwo', 'the second agent shown');
   await until(() => page.isVisible('#agView .ag-plist .ag-prop[data-agent="demotwo"][data-id="' + q3 + '"]'), 'its proposal in the slot');
   const o2 = await others(page);
   check(o2.text === 'Bot: 1 proposal · Demo Agent: 1' && !(await strays(page)).length && !(await hitTest(page, '#agView .ag-plist .ag-prop[data-id="' + q3 + '"] [data-agans]', true)).length,
     'the second agent\'s name shows it in the tab: its proposal in the slot, the line now counts the first agent\'s: "' + o2.text + '"');
   await page.click(LINE + ' [data-goto="agent:demo"]');
-  await until(async () => (await page.evaluate(() => window.workspace.agent().chosen)) === 'demo', 'the first agent shown again');
+  await until(async () => (await page.evaluate(() => window.legion.agent().chosen)) === 'demo', 'the first agent shown again');
   check((await others(page)).text === 'Bot: 1 proposal · Second Demo Agent: 1' && await page.isVisible('#agView .ag-plist .ag-prop[data-id="' + own + '"]'), 'and its name brings the first agent back, its proposal in the slot');
-  await page.click(LINE + ' [data-goto="bot"]');
-  await until(() => page.evaluate(() => window.workspace.bot().shown && !window.workspace.agent().shown), 'the Bot tab opens and the Agent tab closes');
-  await sleep(300);
-  const botCard = '.bt-prop[data-id="' + b2 + '"] [data-ans]';
-  const onBot = await page.evaluate(sel => ({ corner: getComputedStyle(document.querySelector('.bt-props')).display !== 'none', btns: [...document.querySelectorAll(sel)].filter(b => b.getClientRects().length).length }), botCard);
-  const botBad = await hitTest(page, botCard, true);
+  /* plan step 3.2: the Bot tab stays on the chart page: on Legion the line's "Bot" opens it there, in its own window */
+  const [cp] = await Promise.all([page.context().waitForEvent('page'), page.click(LINE + ' [data-goto="bot"]')]);
+  cp.on('pageerror', e => fail('page error (the chart page): ' + e.message));
+  await cp.waitForLoadState();
+  check(/\/live\/\?tab=bot$/.test(cp.url()), 'the line\'s Bot opens the chart page\'s Bot tab in its own window: ' + cp.url());
+  if (await cp.waitForSelector('.cb-pin-key', { timeout: 8000 }).catch(() => null)) await enterPin(cp, TEST_PIN);
+  await cp.waitForFunction(() => document.getElementById('wsConn').classList.contains('live'), null, { timeout: 30000 });
+  await until(() => cp.evaluate(() => !!window.workspace.bot() && window.workspace.bot().shown), 'the Bot tab opens on the chart page');
+  await cp.setViewportSize({ width: 1366, height: 768 }); await sleep(600);
+  const b3 = await botNew();                                                           // a window opened now hears the proposals from now on
+  const botCard = '.bt-prop[data-id="' + b3 + '"] [data-ans]';
+  await until(() => cp.evaluate(sel => [...document.querySelectorAll(sel)].filter(b => b.getClientRects().length).length === 2, botCard), 'the bot\'s card on the chart page', 8000);
+  const onBot = await cp.evaluate(sel => ({ corner: getComputedStyle(document.querySelector('.bt-props')).display !== 'none', btns: [...document.querySelectorAll(sel)].filter(b => b.getClientRects().length).length,
+    cards: [...document.querySelectorAll('.bt-prop')].map(c => c.dataset.id + (c.getClientRects().length ? '' : ':hidden')) }), botCard);
+  const botBad = await hitTest(cp, botCard, true);
   check(onBot.corner && onBot.btns === 2 && !botBad.length, 'the Bot tab: the bot\'s proposal in its corner as before, its Accept and Reject the buttons themselves' + (botBad.length ? ': ' + botBad.slice(0, 3).join('; ') : ' ' + JSON.stringify(onBot)));
-  await page.evaluate(() => document.getElementById('wsAgentTab').click());          // three tall cards in the corner reach the top bar here
-  await until(() => page.evaluate(() => window.workspace.agent().shown && !window.workspace.bot().shown), 'the Agent tab again');
+  check(await page.evaluate(() => window.legion.agent().shown), 'Legion\'s Agent desk stays shown in its own window');
 
-  /* ---------------------------------------------------------------- the keys answer the shown agent only */
-  console.log('the copilot keys with the Agent tab open: the shown agent\'s proposal only, never a hidden one');
+  /* ---------------------------------------------------------------- the keys on Legion: none (plan step 3.2) */
+  console.log('Legion has no copilot keys (the chart page keeps them for the bot): Accept and Reject are the desk\'s buttons');
   await page.setViewportSize({ width: 1440, height: 1000 }); await sleep(400);
   for (const id of await ownOpen()) await control('agent-withdraw', { agent: 'demo', id });
   await until(async () => !(await ownOpen()).length, 'none of the shown agent\'s open');
-  await sleep(1200);                                                                    // the bot's and the second agent's on screen 1 s (were they shown)
   const answers = async () => (await sent()).filter(m => m.type === 'agentAnswer' || m.type === 'botAnswer');
   const n0 = (await answers()).length;
-  await page.click('#agView .ag-loghead');
-  await page.keyboard.press('Alt+KeyY'); await sleep(400); await page.keyboard.press('Alt+KeyN'); await sleep(700);
-  const k1 = (await answers()).slice(n0);
-  check(!k1.length && /keys answer only demo's proposals/.test(await page.textContent('#wsNote')), 'with none of the shown agent\'s open, Accept and Reject keys answer nothing (the bot\'s and the second agent\'s are hidden) and say so: ' + JSON.stringify(k1));
   const mineK = await ownNew();
   await sleep(1200);
   await page.click('#agView .ag-loghead');
-  await page.keyboard.press('Alt+KeyN');
-  await until(async () => (await answers()).slice(n0).length >= 1, 'a key answer');
+  await page.keyboard.press('Alt+KeyY'); await sleep(400); await page.keyboard.press('Alt+KeyN'); await sleep(700);
+  check(!(await answers()).slice(n0).length, 'on Legion the Accept and Reject keys answer nothing, the shown agent\'s proposal included');
+  await page.click('#agView .ag-plist .ag-prop[data-id="' + mineK + '"] [data-agans="reject"]');
+  await until(async () => (await answers()).slice(n0).length >= 1, 'a button answer');
   await sleep(500);
   const k2 = (await answers()).slice(n0);
-  check(k2.length === 1 && k2[0].type === 'agentAnswer' && k2[0].agent === 'demo' && k2[0].id === mineK && k2[0].answer === 'reject', 'the Reject key answers the shown agent\'s proposal, and nothing else: ' + JSON.stringify(k2.map(m => (m.agent || 'bot') + ':' + m.id + ':' + m.answer)));
+  check(k2.length === 1 && k2[0].type === 'agentAnswer' && k2[0].agent === 'demo' && k2[0].id === mineK && k2[0].answer === 'reject', 'its Reject button answers the shown agent\'s proposal, and nothing else: ' + JSON.stringify(k2.map(m => (m.agent || 'bot') + ':' + m.id + ':' + m.answer)));
   check(botOpen.has(b2) && (await control('v3')).proposals.find(p => p.id === b2).state === 'open' && (await agentsNow()).find(a => a.agent === 'demotwo').proposals.find(p => p.id === q3).state === 'open', 'the bot\'s and the second agent\'s proposals still open');
 
   /* ---------------------------------------------------------------- ChartBridge's errors in sight at narrow widths */
@@ -390,10 +396,10 @@ try {
     await page.setViewportSize({ width: w, height: h }); await sleep(600);
     await toTop(page);
     const r = await page.evaluate(() => {
-      const acc = () => Math.round(document.querySelector('#agView .ag-plist [data-agans="accept"]').getBoundingClientRect().top), bar = () => Math.round(document.querySelector('.ws-top').getBoundingClientRect().height);
-      const L = document.getElementById('wsLocal'), F = document.getElementById('wsFps'), keep = [L.textContent, F.textContent], out = [];
-      for (const e of [F, L.parentElement]) { e.hidden = false; if (e.previousElementSibling) e.previousElementSibling.hidden = false; }   // as workspace.js shows them
-      for (const [l, f] of [['13 ms', '60 fps'], ['13 ms (p95 297 ms)', '60 fps'], ['13 ms', 'idle'], ['1,234 ms (p95 12,345 ms)', '60 fps'], ['-', '-']]) { L.textContent = l; F.textContent = f; out.push(acc() + '/' + bar()); }
+      /* plan step 3.2: on Legion the header's own changing texts (the clock, ChartBridge's state) */
+      const acc = () => Math.round(document.querySelector('#agView .ag-plist [data-agans="accept"]').getBoundingClientRect().top), bar = () => Math.round(document.querySelector('.lx-head').getBoundingClientRect().height);
+      const L = document.getElementById('lxConn'), F = document.getElementById('lxClock'), keep = [L.textContent, F.textContent], out = [];
+      for (const [l, f] of [['ChartBridge 0.6.25: on', '09:30:00'], ['ChartBridge: not connected', '23:59:59'], ['ChartBridge 0.6.25: not signed in', '00:00:01'], ['ChartBridge fake-0.5.2: on', '12:00:00']]) { L.textContent = l; F.textContent = f; out.push(acc() + '/' + bar()); }
       [L.textContent, F.textContent] = keep;
       return out;
     });
@@ -406,7 +412,8 @@ try {
   for (const id of [...botOpen]) await botGone(id);
   await sleep(3500);                                                                    // the ended cards gone
   await page.setViewportSize({ width: 1366, height: 768 }); await sleep(400);
-  const tabShown = async on => { if ((await page.evaluate(() => window.workspace.agent().shown)) !== on) await page.evaluate(() => document.getElementById('wsAgentTab').click()); await until(async () => (await page.evaluate(() => window.workspace.agent().shown)) === on, 'the Agent tab ' + (on ? 'shown' : 'closed')); };
+  /* plan step 3.2: "off the Agent tab" is Legion on another tab (Castra); the bot's corner and the copilot keys are the chart page's (cp) */
+  const tabShown = async on => { if ((await page.evaluate(() => window.legion.agent().shown)) !== on) await page.evaluate(o => window.LegionApp.show(o ? 'cohorts' : 'castra', o ? 'praetorian' : ''), on); await until(async () => (await page.evaluate(() => window.legion.agent().shown)) === on, 'the Agent tab ' + (on ? 'shown' : 'closed')); };
   await tabShown(false);
   await control('agent-plan', { agent: 'demo', id: 'oa', side: 'buy', kind: 'limit', p: 25390, qty: 1, stop: 16, target: 32, expire: 900, setup: 'Sample O', reason: LONG, confidence: 0.6 });
   const oq = await twoNew();
@@ -415,7 +422,7 @@ try {
   await until(async () => (await text(CORNER_LINE)) === AGENTS_LINE, 'the corner\'s line counts both agents\' proposals');
   /* the bot's corner as it shows: one card (its id, whole under the top bar, its name and side, size and root lines and
      its buttons themselves), the line under it, and nothing over the top bar */
-  const corner = () => page.evaluate(() => {
+  const corner = () => cp.evaluate(() => {
     const box = document.querySelector('.bt-props'), bar = document.querySelector('.ws-top').getBoundingClientRect();
     const cards = [...box.querySelectorAll('.bt-prop')].filter(c => c.getClientRects().length), c = cards[0], more = box.querySelector('.bt-more');
     const self = el => { const r = el.getBoundingClientRect(), h = document.elementFromPoint(r.left + Math.min(30, r.width / 2), r.top + r.height / 2); return r.height > 0 && !!h && (h === el || el.contains(h)); };
@@ -427,10 +434,12 @@ try {
       head: !!c && self(c.querySelector('.bt-prop-h')) && self(c.querySelector('.bt-prop-big')), btns: c ? [...c.querySelectorAll('[data-ans]')].map(b => (b.disabled ? 'off' : self(b) ? 'on' : 'covered')) : [],
       acc: acc ? [Math.round(acc.left + acc.width / 2), Math.round(acc.top + acc.height / 2)] : null };
   });
-  const agentButtons = () => page.evaluate(() => [...document.querySelectorAll('[data-agans]')].filter(b => b.getClientRects().length).map(b => (b.closest('.ag-prop') || {}).dataset.id + ':' + b.dataset.agans));
-  const press = async key => { await page.evaluate(() => { if (document.activeElement) document.activeElement.blur(); }); await page.keyboard.press(key); };
+  const agentButtons = async () => { const f = () => [...document.querySelectorAll('[data-agans]')].filter(b => b.getClientRects().length).map(b => (b.closest('.ag-prop') || {}).dataset.id + ':' + b.dataset.agans); return (await page.evaluate(f)).concat(await cp.evaluate(f)); };
+  const press = async key => { await cp.bringToFront(); await cp.evaluate(() => { if (document.activeElement) document.activeElement.blur(); }); await cp.keyboard.press(key); };
+  const answersCp = async () => (await cp.evaluate(() => window.__sent)).filter(m => m.type === 'agentAnswer' || m.type === 'botAnswer');
+  await cp.evaluate(() => document.getElementById('wsChartTab').click());             // the chart page's grid: the Bot tab closed, its corner shows
   for (const [w, h] of [[1366, 768], [1920, 1080]]) {
-    await page.setViewportSize({ width: w, height: h }); await sleep(500);
+    await page.setViewportSize({ width: w, height: h }); await cp.setViewportSize({ width: w, height: h }); await sleep(500);
     for (const id of [...botOpen]) await botGone(id);
     await until(async () => (await corner()).n === 0, 'at ' + w + ' x ' + h + ' the bot\'s corner empty', 8000);
     const seven = [];
@@ -448,39 +457,40 @@ try {
     const c1 = await corner();
     check(c1.id === c0.id && JSON.stringify(c1.acc) === JSON.stringify(c0.acc), 'at ' + w + ' x ' + h + ' a new bot proposal moves nothing: the card shown stays, its Accept at ' + JSON.stringify(c1.acc));
     /* Alt+Y answers the card shown, and only it */
-    const n0 = (await answers()).length;
+    const n0 = (await answersCp()).length;
     await press('Alt+KeyY');
-    await until(async () => (await answers()).length > n0, 'the key answer', 4000);
+    await until(async () => (await answersCp()).length > n0, 'the key answer', 4000);
     await sleep(300);
-    const k1 = (await answers()).slice(n0);
+    const k1 = (await answersCp()).slice(n0);
     check(k1.length === 1 && k1[0].type === 'botAnswer' && k1[0].id === c0.id && k1[0].answer === 'accept', 'at ' + w + ' x ' + h + ' Alt+Y answers the card shown (' + c0.id + ') and nothing else: ' + JSON.stringify(k1.map(m => m.type + ':' + m.id + ':' + m.answer)));
     /* its time up, the next card takes its place, disarmed for 1 s: a key press and a click on its Accept then do nothing */
-    await page.waitForFunction(id => { const c = document.querySelector('.bt-props .bt-prop'); return !!c && c.dataset.id !== id; }, c0.id, { polling: 'raf', timeout: 8000 });
+    await cp.waitForFunction(id => { const c = document.querySelector('.bt-props .bt-prop'); return !!c && c.dataset.id !== id; }, c0.id, { polling: 'raf', timeout: 8000 });
     const c2 = await corner();
-    const atOld = await page.evaluate(([x, y]) => { const h = document.elementFromPoint(x, y), b = h && h.closest('.bt-prop button'); return b ? b.dataset.ans : ''; }, c0.acc);
+    const atOld = await cp.evaluate(([x, y]) => { const h = document.elementFromPoint(x, y), b = h && h.closest('.bt-prop button'); return b ? b.dataset.ans : ''; }, c0.acc);
     await press('Alt+KeyY');
-    if (atOld) await page.mouse.click(c0.acc[0], c0.acc[1]);
+    if (atOld) await cp.mouse.click(c0.acc[0], c0.acc[1]);
     await sleep(400);
-    const k2 = (await answers()).slice(n0 + 1);
+    const k2 = (await answersCp()).slice(n0 + 1);
     check(c2.id === seven[1] && c2.arming && c2.btns.join() === 'off,off' && !k2.length && c2.more === '+6 more bot proposals',
       'at ' + w + ' x ' + h + ' the next card (' + c2.id + ') takes its place disarmed (its buttons off at once), and a key press' + (atOld ? ' and a click where the last Accept was' : '') + ' within its first second answer nothing: ' + JSON.stringify({ c2, k2 }));
     await sleep(900);
     const c3 = await corner();
     await press('Alt+KeyN');
-    await until(async () => (await answers()).length > n0 + 1, 'the key answer after the second', 4000);
+    await until(async () => (await answersCp()).length > n0 + 1, 'the key answer after the second', 4000);
     await sleep(400);
-    const k3 = (await answers()).slice(n0 + 1);
+    const k3 = (await answersCp()).slice(n0 + 1);
     check(c3.btns.join() === 'on,on' && !c3.arming && k3.length === 1 && k3[0].type === 'botAnswer' && k3[0].id === seven[1] && k3[0].answer === 'reject', 'at ' + w + ' x ' + h + ' after its second it is armed and Alt+N answers it, once: ' + JSON.stringify(k3.map(m => m.type + ':' + m.id + ':' + m.answer)));
     for (const id of [seven[0], seven[1]]) botOpen.delete(id);
   }
   for (const id of [...botOpen]) await botGone(id);
+  await page.bringToFront();
   /* the line's names open the Agent tab on that agent */
   for (const [w, h, id, pid] of [[1366, 768, 'demotwo', oq], [1920, 1080, 'demo', 'oa']]) {
     await page.setViewportSize({ width: w, height: h }); await sleep(400);
     await tabShown(false);
     await until(() => page.isVisible(CORNER_LINE), 'the corner\'s line');
     await page.click(CORNER_LINE + ' [data-goto="agent:' + id + '"]');
-    const landed = await until(async () => { const st = await page.evaluate(() => ({ shown: window.workspace.agent().shown, chosen: window.workspace.agent().chosen })); return st.shown && st.chosen === id && await page.isVisible('#agView .ag-plist .ag-prop[data-agent="' + id + '"][data-id="' + pid + '"]'); }, 'the Agent tab on ' + id);
+    const landed = await until(async () => { const st = await page.evaluate(() => ({ shown: window.legion.agent().shown, chosen: window.legion.agent().chosen })); return st.shown && st.chosen === id && await page.isVisible('#agView .ag-plist .ag-prop[data-agent="' + id + '"][data-id="' + pid + '"]'); }, 'the Agent tab on ' + id);
     check(!!landed && !(await page.isVisible(CORNER_LINE)), 'at ' + w + ' x ' + h + ' the corner\'s "' + id + '" opens the Agent tab on it, its proposal in the slot, the corner\'s line gone');
   }
   await tabShown(true);

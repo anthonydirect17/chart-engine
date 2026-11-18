@@ -1,10 +1,12 @@
 // Release 1 (the start guard, the lock of 2026-11-15, topic 2): the real workspace against the fake bridge (sample data; nothing
 // reaches a broker), in Chromium, with automation tabs broken on purpose (each tab's create made to throw, the rest of its file
 // as served):
-//   - none broken: the charts go live, the ticket is enabled, the Bot, Agent and Legion buttons show, nothing is said;
-//   - all four broken (Bot, Agent, Colosseum, Legion): the charts still go live, the ticket still sends a Buy MKT to the fake,
-//     no page error, the note line names the four, and their buttons stay hidden after ChartBridge's hello;
-//   - only the Bot broken, opened on ?tab=agent: the Agent tab still opens, Legion's button still shows.
+//   - none broken: the charts go live, the ticket is enabled, the Bot button and the Legion link show, nothing is said;
+//   - the chart page's two parts broken (the Bot tab, the Agent desk): the charts still go live, the ticket still sends a Buy MKT
+//     to the fake, no page error, the note line names both, the Bot's button stays hidden after ChartBridge's hello;
+//   - plan step 3.2: Legion's own page (legion.html) with the Colosseum and Legion's cohorts broken: Stop all automation and the
+//     other tabs still work, and the page names what did not start;
+//   - an old address of a tab that moved (?tab=agent) opens Legion's page on that tab.
 // Screenshots in test/out/start-guard-*.png.
 //   npm run smoke:start-guard        (CHROMIUM_PATH=/path/to/chrome; START_GUARD_SMOKE_PORT)
 import { chromium } from 'playwright';
@@ -65,22 +67,23 @@ try {
   let ch = await chartsLive(o.page);
   check(ch.length === 2 && ch.every(x => /:live:[1-9]/.test(x)), 'the charts are live with bars: ' + ch.join(', '));
   check(await o.page.evaluate(() => !!document.querySelector('.ws-panel[data-type="ticket"] [data-tk-id="buyMkt"]')), 'the ticket is on the page');
-  for (const id of ['wsBotTab', 'wsAgentTab', 'wsFleetTab']) check(await shown(o.page, id), id + ' shows');
+  for (const id of ['wsBotTab', 'wsLegion']) check(await shown(o.page, id), id + ' shows');
+  check(!(await o.page.evaluate(() => ['wsAgentTab', 'wsFleetTab', 'wsLeagueTab', 'wsPraetorianTab'].some(i => document.getElementById(i)))), 'plan step 3.2: no Legion, Colosseum or Agent tab on the chart page');
   check(!/did not start/.test(await failNote(o.page)), 'nothing said');
   check(!o.pe.length, 'no page error' + (o.pe.length ? ': ' + o.pe.join(' | ') : ''));
   await o.page.screenshot({ path: path.join(out, 'start-guard-ok.png') });
   await o.ctx.close();
 
-  console.log('all four tabs broken');
-  o = await open(['bot', 'agent', 'league', 'fleet']);
+  console.log('the Bot tab and the Agent desk broken');
+  o = await open(['bot', 'agent']);
   ch = await chartsLive(o.page);
   check(ch.length === 2 && ch.every(x => /:live:[1-9]/.test(x)), 'the charts are live with bars all the same: ' + ch.join(', '));
   check(!o.pe.length, 'no page error' + (o.pe.length ? ': ' + o.pe.join(' | ') : ''));
   const note = await failNote(o.page);
-  check(note === 'The Bot tab, Agent tab, Colosseum tab and Legion tab did not start: the charts and the ticket work; reload this window to try it again.', 'the note line names the four: "' + note + '"');
-  check(o.logged.filter(t => /did not start/.test(t)).length === 4, 'each broken tab named in the console (' + o.logged.filter(t => /did not start/.test(t)).length + ')');
-  for (const id of ['wsBotTab', 'wsAgentTab', 'wsLeagueTab', 'wsFleetTab']) check(!(await shown(o.page, id)), id + ' stays hidden after the hello');
-  check(await o.page.evaluate(() => window.workspace.bot() === null && window.workspace.agent() === null && window.workspace.league() === null && window.workspace.fleet() === null), 'no tab object on the page');
+  check(note === 'The Bot tab and Agent desk did not start: the charts and the ticket work; reload this window to try it again.', 'the note line names both: "' + note + '"');
+  check(o.logged.filter(t => /did not start/.test(t)).length === 2, 'each broken part named in the console (' + o.logged.filter(t => /did not start/.test(t)).length + ')');
+  check(!(await shown(o.page, 'wsBotTab')), 'wsBotTab stays hidden after the hello');
+  check(await o.page.evaluate(() => window.workspace.bot() === null && window.workspace.agent() === null), 'no desk object on the page');
   await o.page.screenshot({ path: path.join(out, 'start-guard-broken.png') });
   /* the ticket works: Armed, Buy MKT, the fake gets the order (sample data, the fake's Sim101) */
   const before = ((await control('received')).types || {}).order || 0;
@@ -98,15 +101,48 @@ try {
   await o.page.waitForTimeout(1000);
   await o.ctx.close();
 
-  console.log('only the Bot broken, ?tab=agent');
-  o = await open(['bot'], '&tab=agent');
-  ch = await chartsLive(o.page);
-  check(ch.every(x => /:live:[1-9]/.test(x)), 'the charts are live: ' + ch.join(', '));
-  check(await o.page.evaluate(() => document.body.classList.contains('ag-on')), 'the Agent tab opened from the address');
-  check(await shown(o.page, 'wsFleetTab') && !(await shown(o.page, 'wsBotTab')), 'Legion\'s button shows; the Bot\'s stays hidden');
-  check(!o.pe.length, 'no page error' + (o.pe.length ? ': ' + o.pe.join(' | ') : ''));
-  await o.page.screenshot({ path: path.join(out, 'start-guard-bot-broken-agent.png') });
-  await o.ctx.close();
+  console.log('Legion: the cohorts and the Colosseum broken');
+  {
+    const ctx = await browser.newContext({ viewport: { width: 1600, height: 900 }, deviceScaleFactor: 1 });
+    for (const f of ['league', 'fleet']) {
+      await ctx.route(new RegExp('/live/' + f + '\\.js(\\?|$)'), async r => {
+        const res = await r.fetch();
+        await r.fulfill({ response: res, body: (await res.text()) + `\n;window.${FILES[f]} = Object.assign({}, window.${FILES[f]}, { create() { throw new Error('start-guard smoke: ${f}.js broken on purpose'); } });\n` });
+      });
+    }
+    const page = await ctx.newPage(), pe = [];
+    page.on('pageerror', e => pe.push(e.message));
+    await page.goto(`http://localhost:${PORT}/live/legion.html?tab=cohorts`);
+    await page.waitForSelector('.cb-pin-key', { timeout: 15000 }); await enterPin(page, TEST_PIN);
+    await page.waitForFunction(() => document.getElementById('lxConn').dataset.state === 'on', null, { timeout: 30000 });
+    const st = await page.evaluate(() => window.LegionApp.state());
+    check(JSON.stringify(st.failed) === JSON.stringify(['the cohorts', 'the Colosseum']) && st.mounted.join() === 'praetorian', 'Legion names the two that did not start; Praetorian still mounted: ' + JSON.stringify(st));
+    check(/the cohorts, the Colosseum did not start: Stop all automation and the other tabs work/.test(await page.textContent('#lxFailed')), 'and says so on the page');
+    await page.click('#lxStop');
+    check((await page.evaluate(() => window.LegionApp.state())).asking, 'Stop all automation still asks');
+    await page.click('#lxStopNo');
+    await page.click('[data-lx-sub="praetorian"]'); await page.waitForTimeout(500);
+    check(await page.evaluate(() => !!window.legion.agent() && window.legion.agent().shown === true), 'Praetorian still opens');
+    check(!pe.length, 'no page error' + (pe.length ? ': ' + pe.join(' | ') : ''));
+    await page.screenshot({ path: path.join(out, 'start-guard-legion-broken.png') });
+    await ctx.close();
+  }
+
+  console.log('an old address of a tab that moved: ?tab=agent');
+  {
+    const ctx = await browser.newContext({ viewport: { width: 1600, height: 900 }, deviceScaleFactor: 1 });
+    const page = await ctx.newPage(), pe = [];
+    page.on('pageerror', e => pe.push(e.message));
+    await page.goto(`http://localhost:${PORT}/live/?layout=Main&tab=agent`);
+    await page.waitForURL(/\/live\/legion\.html\?layout=Main&tab=agent/, { timeout: 10000 }).catch(() => {});
+    check(/\/live\/legion\.html\?layout=Main&tab=agent$/.test(page.url()), 'the chart page forwards it to Legion: ' + page.url());
+    await page.waitForSelector('.cb-pin-key', { timeout: 15000 }); await enterPin(page, TEST_PIN);
+    await page.waitForFunction(() => document.getElementById('lxConn').dataset.state === 'on', null, { timeout: 30000 });
+    const st = await page.evaluate(() => window.LegionApp.state());
+    check(st.tab === 'cohorts' && st.sub === 'praetorian', 'Legion opens Cohorts, Praetorian: ' + st.tab + '|' + st.sub);
+    check(!pe.length, 'no page error' + (pe.length ? ': ' + pe.join(' | ') : ''));
+    await ctx.close();
+  }
 } catch (e) {
   errors.push(String(e && e.stack || e));
 } finally {

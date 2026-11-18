@@ -2,9 +2,10 @@
 // open or add to a position does nothing and says so; Close and Flatten all work as on the bare chart. In the whole workspace
 // against the fake bridge (sample data; nothing reaches a broker), with the real hotkey handlers and the real tabs:
 //   - on the bare chart every key sends what it sends today (Buy, Sell, Close, Flatten all);
-//   - under each tab (Legion, Agent, Bot, League): Buy, Sell, B/E and Merge send nothing and the top bar says why; Close and
-//     Flatten all send exactly what they send on the bare chart; Reject is not switched off; Accept (Anthony 2026-11-12:
-//     "On where shown") is off under Legion and League and as before on the Agent and the Bot tab, which show its proposal;
+//   - under the Bot tab (plan step 3.2: the one tab left on the chart page; Legion, the Colosseum and Praetorian's Agent side are
+//     Legion's own page now): Buy, Sell, B/E and Merge send nothing and the top bar says why; Close and Flatten all send exactly
+//     what they send on the bare chart; Reject is not switched off; Accept (Anthony 2026-11-12: "On where shown") is as before
+//     on the Bot tab, which shows its proposal;
 //   - with the tab closed again the keys are as before.
 //   npm run smoke:tabkeys        (CHROMIUM_PATH=/path/to/chrome to use a preinstalled browser)
 import { chromium } from 'playwright';
@@ -78,12 +79,9 @@ try {
 
   // ---- under each tab
   const tabs = [
-    { name: 'Legion', cls: 'fl-on', toggle: () => page.click('#wsFleetTab') },
-    { name: 'Agent', tab: 'Praetorian', cls: 'ag-on', toggle: () => page.click('#wsAgentTab') },   // 1.51.0: Praetorian's two sides
-    { name: 'Bot', tab: 'Praetorian', cls: 'bt-on', toggle: () => toggleTab(page, 'bot') },
-    { name: 'Colosseum', cls: 'lg-on', toggle: () => page.click('#wsLeagueTab') },   // 1.50.0: the League tab is the Colosseum
+    { name: 'Bot', cls: 'bt-on', toggle: () => toggleTab(page, 'bot') },   // plan step 3.2: the one tab left on the chart page
   ];
-  await page.waitForFunction(() => !document.getElementById('wsFleetTab').hidden && !document.getElementById('wsAgentTab').hidden && !document.getElementById('wsLeagueTab').hidden, null, { timeout: 20000 }).catch(() => {});
+  check(await page.evaluate(() => ['wsFleetTab', 'wsAgentTab', 'wsLeagueTab', 'wsPraetorianTab'].every(i => !document.getElementById(i))), 'no Legion, Agent or Colosseum tab on the chart page (plan step 3.2)');
   for (const t of tabs) {
     for (const urgent of ['close', 'flattenAll']) {
       // a position opened on the bare chart, then the tab over it
@@ -93,7 +91,7 @@ try {
       const on = await page.evaluate(c => document.body.classList.contains(c) && getComputedStyle(document.querySelector('.ws-grid')).display === 'none', t.cls);
       check(on, t.name + ': the tab is open and covers the chart grid');
       await sentNow();
-      const shown = t.name === 'Agent' || t.name === 'Bot';       // the tabs that show the proposal the Accept key answers
+      const shown = t.name === 'Bot';                             // the tab that shows the proposal the Accept key answers
       const why = 'Hotkey ignored: the ' + (t.tab || t.name) + ' tab covers the chart. Only Flatten, Cut half, Flatten all and Reject work under ' + (shown ? 'it, and Accept for a proposal shown on it.' : 'a tab.');
       if (urgent === 'close') for (const id of ['buy', 'sell', 'be', 'merge'].concat(shown ? [] : ['accept'])) {
         const got = await press(id);
@@ -113,7 +111,7 @@ try {
       }
       const got = await press(urgent);
       check(shape(got) === shape(bare[urgent]), t.name + ': the ' + urgent + ' key sends exactly what it sends on the bare chart: ' + shape(got));
-      if (t.name === 'Legion' && urgent === 'close') await page.screenshot({ path: path.join(out, 'tab-hotkeys-legion.png') });
+      if (t.name === 'Bot' && urgent === 'close') await page.screenshot({ path: path.join(out, 'tab-hotkeys-legion.png') });
       await t.toggle(); await wait(500);
       check(await page.evaluate(c2 => !document.body.classList.contains(c2), t.cls), t.name + ': closed again');
     }

@@ -147,7 +147,7 @@ try {
   const st = await until(async () => { const s = await sky(); return s && s.drones.length === 5 && s.drones[1].trade && s.bars > 20 ? s : null; }, 'five drones (H, S, O, the Demo Agent, the bot) over NQ bars', 40000);
   if (st) {
     check(st.drones.map(d => d.key).join(',') === 'seat:H,seat:S,seat:O,agent:demo,bot', 'left to right: ' + st.drones.map(d => d.key).join(', '));
-    check(st.drones.slice(0, 3).map(d => d.color).join(',') === '#FFC266,#5DE0F0,#B69CFF' && st.drones.slice(3).every(d => d.color === '#9AA8B8'), 'H amber, S cyan, O violet as the League; the live agent and the bot in the strip\'s own colour: ' + st.drones.map(d => d.color).join(', '));
+    check(st.drones.slice(0, 3).map(d => d.color).join(',') === '#FFC266,#5DE0F0,#B07A3C' && st.drones.slice(3).every(d => d.color === '#9AA8B8'), 'H amber, S cyan, O violet as the League; the live agent and the bot in the strip\'s own colour: ' + st.drones.map(d => d.color).join(', '));
     check(st.drones.every(d => d.ring === 'dashed' && d.mode === 'SHADOW'), 'SHADOW everywhere here: dashed rings (a LIVE one would be solid)');
     check(st.drones[2].state === 'look cap' && st.drones[2].looks === 31, 'O keeps the strip\'s state word on its text block: look cap (31 counted looks)');
     const s = st.drones[1].trade;

@@ -35,11 +35,11 @@
 })(typeof self !== 'undefined' ? self : this, function () {
 'use strict';
 
-/* the seats as the League tab shows them (live/league.js LeagueCore.SEATS: H Haiku amber, S Sonnet cyan, O Opus violet) */
+/* the seats as the Colosseum shows them (live/league.js LeagueCore.SEATS: H Haiku amber, S Sonnet cyan, O Opus bronze since plan step 3.2) */
 const SEATS = [
   { id: 'H', family: 'Haiku', color: '#FFC266' },
   { id: 'S', family: 'Sonnet', color: '#5DE0F0' },
-  { id: 'O', family: 'Opus', color: '#B69CFF' },
+  { id: 'O', family: 'Opus', color: '#B07A3C' },
 ];
 /* the league's look cap: at most 30 counted looks in any 60 minutes a seat (Bot-Lab league/config.py LOOKS_PER_HOUR, league/runner.py
    _cap_ok). A look at Anthony's new entry is never counted (Amendment 7: runner.py _look_kind says "mentor"). The league logs the
@@ -352,7 +352,7 @@ function idleLine(names) {
    part: who flies today, what each drone shows and what each one did, all from the very data the strip's cards read. */
 
 /** A live agent's and the bot's drone colour: the strip's own for them (their letter in the second text colour); the seats keep
-    the League's amber, cyan and violet. */
+    the League's amber, cyan and bronze. */
 const AGENT_COLOR = '#9AA8B8';
 
 /**

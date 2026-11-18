@@ -43,7 +43,7 @@ const etNowSec = () => (U && typeof U.zoneSeconds === 'function' ? U.zoneSeconds
 function mount(env) {
   const { AF, hub, store, PREFIX, PIN, realClick, hooks, mounted, guard, say } = env;
   const headers = () => (PIN ? PIN.headers() : {});
-  const note = (t, w) => { if (w) say(t, true); };
+  const note = (t, w) => say(t, !!w);   // the panels' notes in Legion's one line, as the chart page's note line shows them
   /* the redraw loop of the panels mounted from here (the chart page's renderAccountPages): each second, and at each change */
   const panels = new Map();
   let raf = 0;
@@ -59,14 +59,20 @@ function mount(env) {
   guard('the cohorts', () => {
     if (!window.FleetView || !$('flView')) return;
     const FC = window.FleetCore;
-    const gate = FC && Object.isFrozen(FC) ? FC.maySend : null;
-    const legionLink = AF && gate ? { listen: part => AF.listen(part), post: m => gate(m) === true && AF.post(m) === true } : null;
-    const AH = window.AgentHelper;
-    const helper = AH && typeof AH.createClient === 'function' && typeof fetch === 'function' ? AH.createClient({ fetch: (u, i) => fetch(u, i), headers }) : null;
+    /* the chart page's own lines (the review of 92, N5; of 94, note 5): the gate captured once from a frozen FleetCore */
+    const legionGate = window.FleetCore && Object.isFrozen(window.FleetCore) ? window.FleetCore.maySend : null;
+    const legionLink = AF && legionGate ? { listen: part => AF.listen(part), post: m => legionGate(m) === true && AF.post(m) === true } : null;
+    /* the PC helper's GET /status for the lanes' runners, and only that: the status call is handed over, never the client */
+    const legionHelperStatus = (() => {
+      const AH = window.AgentHelper;
+      if (!AH || typeof AH.createClient !== 'function' || typeof fetch !== 'function') return null;
+      const client = AH.createClient({ fetch: (u, i) => fetch(u, i), headers });
+      return () => client.status();
+    })();
     const lanes = new Map();
     $('flView').innerHTML = '';
     fleet = window.FleetView.create({ view: $('flView'), tab: null, v3: legionLink, realClick, headers,
-      helperStatus: helper ? () => helper.status() : null,
+      helperStatus: legionHelperStatus,
       liveChart: el => (window.ChartLive && hub ? window.ChartLive.mount(el, { feed: hub, paneId: 'legion', storagePrefix: PREFIX, toolbar: false, compact: true, view: { root: 'MNQ', tf: 'm1' } }) : null),
       accountRows: (el, key, filter) => {
         if (!AF || !window.AccountsPage || !el || typeof filter !== 'function' || panels.has(key)) return null;
@@ -100,8 +106,17 @@ function mount(env) {
     const AC = window.AgentCore;
     const link = AF && AC && typeof AC.praetorianLink === 'function' ? AC.praetorianLink(AF) : null;   // no gate: no connection (the careful side)
     $('agView').innerHTML = '';
-    praetorian = window.AgentDesk.create({ embedded: true, keyPrefix: '', keys: false, v3: link, headers, feed: hub, storage: store, storagePrefix: PREFIX,
-      els: { view: $('agView') } });
+    /* the desk exactly as the chart page built it (its Pop out, its proposals' corner line, the chart page's own browser keys, ''),
+       with Legion's Cohorts side as its tab: shown while that side is, and a corner line's click opens that side. Its
+       "Bot: 1 proposal" link opens the chart page's Bot tab (the Bot tab stays on the chart page) */
+    /* its tab button is Legion's Praetorian side button, as the chart page handed it its own: the desk keeps its pressed state and
+       its marks (an agent waiting or in trouble) and a click opens or closes it (closed: the cohorts' side) */
+    const prBtn = document.querySelector('[data-lx-sub="praetorian"]');
+    if (prBtn) prBtn.dataset.lxOwn = '1';
+    praetorian = window.AgentDesk.create({ v3: link, headers, feed: hub, storage: store, storagePrefix: '',
+      els: { view: $('agView'), tab: prBtn },
+      openBot: () => { try { window.open('./?tab=bot', 'chart'); } catch (e) { /* blocked */ } },
+      onTab: on => { if (window.LegionApp && typeof window.LegionApp.show === 'function') { const st = window.LegionApp.state(); if (on) window.LegionApp.show('cohorts', 'praetorian'); else if (st.tab === 'cohorts' && st.sub === 'praetorian') window.LegionApp.show('cohorts', 'legion'); } } });
     mounted.praetorian = true;
   });
 
@@ -132,6 +147,39 @@ function mount(env) {
   });
   window.LegionTabs.state = () => ({ cohorts: fleet ? fleet.state() : null, praetorian: praetorian ? praetorian.state() : null, colosseum: league ? league.state() : null });
   window.LegionTabs.parts = { fleet, praetorian, league };
+  /* read hooks for the smokes, as the chart page's window.workspace had them (nothing here sends) */
+  const lanes = new Map();
+  window.legion = {
+    agent: () => (praetorian ? praetorian.state() : null),
+    fleet: () => (fleet ? fleet.state() : null),
+    league: () => (league ? league.state() : null),
+    /* the Account page's own rows for the accounts filter() passes, read only, in any element (Legion Live's rows; the smokes) */
+    accountRows: (el, key, filter) => {
+      if (!AF || !window.AccountsPage || !el || typeof filter !== 'function' || panels.has(key)) return null;
+      const body = document.createElement('div'); el.appendChild(body);
+      const ap = window.AccountsPage.mount({ el, body, head: document.createElement('div') }, Object.assign({ feed: readOnlyFeed(AF), rows: { filter } }, host));
+      panels.set(key, ap); redraw();
+      return { destroy: () => { if (panels.get(key) === ap) { panels.delete(key); ap.destroy(); } } };
+    },
+    /* a lane panel in any element (test/lane-panels-smoke.mjs): one fixed group on the narrow feed; the whole panel on the whole
+       feed only for the two-mounts proof, never by leaving the group out (the review of 97, F7) */
+    lanePanel: (el, key, opts) => {
+      const o = opts || {}, FC = window.FleetCore;
+      if (!window.MultiAccount || !el || panels.has(key)) return null;
+      const AC = window.AccountsCore, working = feed => () => [...feed.S.orders.values()].filter(x => (AC && typeof AC.isWorking === 'function' ? AC.isWorking(x) : true));
+      if (!o.group) {
+        if (o.twoMountsProof !== true || !AF) return null;
+        const ma = window.MultiAccount.mount(el, { feed: AF, panelId: key, note, working: working(AF) });
+        panels.set(key, ma); redraw();
+        return { panel: ma, destroy: () => { if (panels.get(key) === ma) { panels.delete(key); ma.destroy(); } } };
+      }
+      if (!FC || !AF || typeof o.locked !== 'function') return null;                // no lock, no panel (F1)
+      const feed = FC.laneFeed(AF, o.locked, o.group, o.otherLocked);
+      const ma = window.MultiAccount.mount(el, { feed, panelId: key, note, group: o.group, locked: o.locked, working: working(feed) });
+      panels.set(key, ma); lanes.set(key, ma); redraw();
+      return { panel: ma, refused: feed.refused, feed, destroy: () => { if (panels.get(key) === ma) { panels.delete(key); lanes.delete(key); ma.destroy(); } } };
+    },
+  };
 }
 
 window.LegionTabs = { mount, readOnlyFeed };

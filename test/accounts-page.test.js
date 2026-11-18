@@ -413,7 +413,7 @@ test('the Account page is a workspace panel: its type, the Add menu, its files i
   // one v3 connection per window, shared: the Bot tab opens no WebSocket of its own, and gets the workspace's one
   assert.doesNotMatch(bot, /new WebSocket\(/);
   assert.match(ws, /window\.BotDesk\.create\(\{ v3: praetorianLink,/);   // 1.51.0: the same one connection, through Praetorian's gate
-  assert.match(ws, /praetorianLink = AF && window\.AgentCore && typeof window\.AgentCore\.praetorianLink === 'function'\n    \? window\.AgentCore\.praetorianLink\(AF, /);   // the review of 102 (F1): one builder (release 1: built inside its guard)
+  assert.match(ws, /praetorianLink = AF && window\.AgentCore && typeof window\.AgentCore\.praetorianLink === 'function'\n    \? window\.AgentCore\.praetorianLink\(AF\)/);   // the review of 102 (F1): one builder (release 1: built inside its guard)
   assert.match(read('live/bot.html'), /src="accounts\.js"/);
   // one source for The Desk's address: ChartBridge's deskUrl (/diag), nothing kept per browser
   for (const t of [ws, bot, read('live/order-strategies.js')]) assert.doesNotMatch(t, /live-desk-url-v1/);

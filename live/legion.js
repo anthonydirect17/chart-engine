@@ -196,7 +196,8 @@ function renderHead() {
   }
   if (ask) ask.hidden = !S.ask;
   const words = S.said || (!p.ok ? p.why : p.note);
-  if (line) { if (line.textContent !== words) line.textContent = words; line.hidden = !words; line.classList.toggle('bad', !!(S.said ? S.saidBad : !p.ok)); }
+  if (line) { if (line.textContent !== words) line.textContent = words; line.hidden = !words; line.classList.toggle('bad', !!(S.said ? S.saidBad : !p.ok)); line.classList.toggle('note', !S.said); }   // a standing line (not an answer): Praetorian's compact chrome keeps it in the button's title
+  fitDesk();
 }
 function say(text, bad) { S.said = String(text || ''); S.saidBad = !!bad; renderHead(); }
 function endAsk() { S.ask = 0; clearTimeout(S.askTimer); S.askTimer = 0; }
@@ -235,9 +236,37 @@ function onHeadMessage(m) {
   if (!m || typeof m !== 'object') return;
   if (m.type === 'hello') { S.version = typeof m.version === 'string' ? m.version : ''; S.connected = true; }
   if (m.type === 'trading') S.signedIn = !!m.enabled;
+  if (m.type === 'status' && typeof m.text === 'string' && (m.level === 'warn' || m.level === 'error') && !C.stopAnswer(m, '')) alertLoud(m.text, m.level !== 'error');
   const a = C.stopAnswer(m, S.pending);
   if (a && (S.pending || m.type === 'status')) { if (S.pending) { S.pending = ''; clearTimeout(S.waitTimer); } say(a.text, a.bad); }
   renderHead();
+}
+
+/* ---------------- Praetorian's Agent desk: one screen (its Layout 5), the window below Legion's compact chrome */
+function fitDesk() {
+  const on = S.tab === 'cohorts' && S.sub === 'praetorian', v = $('agView');
+  document.body.classList.toggle('lx-pr', on);
+  const sub = $('lxSub'), slot = $('lxSubSlot'), home = $('lx-cohorts');
+  if (sub && slot && home) { if (on && sub.parentNode !== slot) slot.appendChild(sub); else if (!on && sub.parentNode !== home) home.insertBefore(sub, home.firstChild); }
+  if (!v) return;
+  if (!on) { if (v.style.height) v.style.height = ''; return; }
+  const h = Math.max(320, Math.floor(window.innerHeight - v.getBoundingClientRect().top - window.scrollY));
+  if (v.style.height !== h + 'px') v.style.height = h + 'px';
+}
+window.addEventListener('resize', () => fitDesk());
+
+/* ---------------- ChartBridge's warnings and errors (the chart page's alert line): the newest three until dismissed, red once an
+   error is in it. Stop all's own answer is the header's line, not here. */
+const alerts = [];
+let alertErr = false;
+function alertLoud(text, warn) {
+  const box = $('wsAlert'), t = $('wsAlertText');
+  if (!box || !t || !text) return;
+  if (alerts.length && alerts[alerts.length - 1].endsWith('  ' + text)) return;   // the same line twice in a row: once
+  alerts.push(new Date().toLocaleTimeString() + '  ' + text); while (alerts.length > 3) alerts.shift();
+  if (!warn) alertErr = true;
+  t.textContent = alerts.join('\n'); box.hidden = false; box.classList.toggle('warn', !alertErr);
+  fitDesk();
 }
 
 /* ---------------- the tabs */
@@ -252,6 +281,7 @@ function showTab(tab, sub, keepUrl) {
   for (const b of document.querySelectorAll('[data-lx-sub]')) b.setAttribute('aria-selected', String(b.dataset.lxSub === S.sub));
   for (const v of document.querySelectorAll('[data-lx-subview]')) v.hidden = v.dataset.lxSubview !== S.sub;
   if (!keepUrl) { try { history.replaceState(null, '', location.pathname + C.tabSearch(location.search, S.tab, S.sub) + location.hash); } catch (e) { /* file: */ } }
+  fitDesk();
   for (const fn of HOOKS.tab) { try { fn(S.tab, S.sub); } catch (e) { failed('the ' + S.tab + ' tab', e); } }
   const t = C.TABS.find(x => x.id === tab);
   document.title = (t ? t.name + ' · ' : '') + 'Legion · Imperium';
@@ -278,16 +308,18 @@ function guard(name, fn) { try { return fn(); } catch (e) { failed(name, e); ret
 
 /* the parts each tab mounts register here (slice 2: the moved tabs); the header never waits for them */
 const HOOKS = { tab: [], message: [] };
-window.LegionApp = { hooks: HOOKS, guard, state: () => ({ tab: S.tab, sub: S.sub, version: S.version, connected: S.connected, signedIn: S.signedIn, asking: S.ask > 0, said: S.said, saidBad: S.saidBad, pending: !!S.pending, failed: [...FAILED.keys()], mounted: Object.keys(S.mounted).filter(k => S.mounted[k]) }),
+window.LegionApp = { hooks: HOOKS, guard, show: (tab, sub) => { if (S.tab !== tab || S.sub !== (sub || '')) showTab(tab, sub); }, state: () => ({ tab: S.tab, sub: S.sub, version: S.version, connected: S.connected, signedIn: S.signedIn, asking: S.ask > 0, said: S.said, saidBad: S.saidBad, pending: !!S.pending, failed: [...FAILED.keys()], mounted: Object.keys(S.mounted).filter(k => S.mounted[k]) }),
   feeds: () => ({ AF, hub }), store, PREFIX, PIN, realClick };
 
 function start() {
   tick(); setInterval(tick, 1000);
   const nav = $('lxNav');
   if (nav) { nav.addEventListener('click', e => { const b = e.target.closest('[data-lx-tab]'); if (b) showTab(b.dataset.lxTab, ''); }); nav.addEventListener('keydown', onNavKey); }
-  for (const b of document.querySelectorAll('[data-lx-sub]')) b.addEventListener('click', () => showTab('cohorts', b.dataset.lxSub));
+  /* a side button a part owns (data-lx-own: Praetorian's, handed to its desk as its tab button) is opened and closed by that part */
+  for (const b of document.querySelectorAll('[data-lx-sub]')) b.addEventListener('click', () => { if (b.dataset.lxOwn !== '1') showTab('cohorts', b.dataset.lxSub); });
   const head = $('lxHead'); if (head) head.addEventListener('click', onStopClick);
   const ask = $('lxStopAsk'); if (ask) ask.addEventListener('click', onStopClick);
+  const ac = $('wsAlertClose'); if (ac) ac.addEventListener('click', () => { alerts.length = 0; alertErr = false; $('wsAlert').hidden = true; fitDesk(); });
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && S.ask) { endAsk(); say('', false); e.preventDefault(); } }, true);
   /* the window's two connections, as the chart page and agent.html open them: the chart feed (prices, for a chart inside a tab)
      and the v3 connection (ChartBridge's accounts, groups and traders; every message a tab sends goes through its own gate) */
@@ -304,7 +336,8 @@ function start() {
   const want = C.tabFrom(location.search);
   showTab(want.tab, want.sub, false);
   renderHead();
-  if (AF) AF.startAny();
+  /* as the chart page starts it (its own hello still checks v3), so The Desk's account types and limits are read too */
+  if (AF) AF.start(['v3']);
 }
 if (PIN) PIN.gate().then(start); else start();
 })();

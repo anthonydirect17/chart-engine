@@ -121,7 +121,7 @@ function sampleDay() {
 
 test('the seats\' cards: one flat at the look cap, one with an open paper trade, one with a closed loss; what is not there says not reported', () => {
   const cards = A.seatCards(sampleDay(), { nowMs: min(5), last: 24010, pv: 2 });
-  assert.deepEqual(cards.map(c => c.letter + ' ' + c.name + ' ' + c.color), ['H Haiku #FFC266', 'S Sonnet #5DE0F0', 'O Opus #B69CFF']);
+  assert.deepEqual(cards.map(c => c.letter + ' ' + c.name + ' ' + c.color), ['H Haiku #FFC266', 'S Sonnet #5DE0F0', 'O Opus #B07A3C']);
   assert.ok(cards.every(c => c.mode.word === 'SHADOW'));
   const [h, s, o] = cards;
   assert.equal(h.state.word, 'look cap'); assert.match(h.state.why, /next look 10:35.*worked out on this page/);
@@ -229,13 +229,13 @@ test('the page: Agents in + Add panel, one a layout, installed, read only, no da
   assert.doesNotMatch(src, /\.send\(|\.post\(|fetch\(|method: ?'(POST|PUT)'|type: ?'(order|change|cancel|flatten|plan|agent[A-Z]\w*)'/, 'reads only: no request and no message of its own');
   assert.doesNotMatch(src, /setInterval|setTimeout/, 'no poller of its own');
   const ws = read('live/workspace.js');
-  assert.match(ws, /day: \(\) => leagueGhostDay\(\)/, 'the strip reads the workspace\'s one league read');
-  assert.equal((ws.match(/'\/api\/chart-league'/g) || []).length, 1, 'the workspace still asks The Desk for the league in one place');
-  /* review: one fills read a tick for every agent; the league read gives up after 10 s; the League view's close never starts a second read */
+  /* plan step 3.2: the chart page's league poll went with the Colosseum to Legion; the strip's league card says where it is */
+  assert.match(ws, /day: \(\) => null,\s*reach: \(\) => \(\{ problem: 'The league is on Legion\\'s Colosseum now/, 'the strip has no league read on the chart page');
+  assert.equal((ws.match(/chart-league/g) || []).length, 0, 'the chart page no longer asks The Desk for the league');
+  assert.match(ws, /openLeague: \(\) => openLegion\('colosseum', ''\)/, 'its league card opens Legion\'s Colosseum');
+  /* review: one fills read a tick for every agent */
   assert.match(ws, /agents: \(\) => \(agentDesk && agentDesk\.glances \? agentDesk\.glances\(\)/, 'the strip asks for every agent\'s glance at once');
   assert.match(read('live/agent.js'), /glances: \(\) => \{ const f = fillsDay\(\), r = risksDay\(\); return agents\.ids\(\)\.map\(id => glanceOf\(id, f, r\)\)/, 'one read of the day\'s fills for all');
-  assert.match(ws, /const LG_TIMEOUT_MS = 10000;/); assert.match(ws, /Promise\.race\(\[limit, /); assert.match(ws, /clearTimeout\(giveUp\); LG\.busy = false;/);
-  assert.match(ws, /if \(!on\) \{ if \(leagueView\.liveDay\(\)\) LG\.day = leagueView\.liveDay\(\); if \(!LG\.busy\) leaguePoll\(\); \}/, 'the League view\'s close guarded by busy (and never a past day: next release)');
   /* 1.38.0: the Drone sky (live/agents-sky.js): loaded after the cards, installed, read only, its own frame loop and nothing else */
   assert.ok(html.indexOf('<script src="agents-strip.js"></script>') < html.indexOf('<script src="agents-sky.js"></script>') && html.indexOf('<script src="agents-sky.js"></script>') < html.indexOf('<script src="workspace.js"></script>'));
   assert.ok(files.www.some(x => x.from === 'live/agents-sky.js' && x.to === 'agents-sky.js'), 'agents-sky.js installed');

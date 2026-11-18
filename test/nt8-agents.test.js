@@ -329,9 +329,9 @@ test('0.6.17 Kill all for the prop accounts: only agents whose every account is 
   // connection workspace.js builds for it; since 1.46.0 the gate on that connection is FleetCore.maySend (fleet.js), so
   // workspace.js names the message once, in its comment, and builds nothing; no other page file names it
   for (const f of fsx.readdirSync(path.join(__dirname, '..', 'live')).filter(f => f.endsWith('.js')))
-    assert.strictEqual(fsx.readFileSync(path.join(__dirname, '..', 'live', f), 'utf8').includes('agentKillAllProp'), f === 'fleet.js' || f === 'workspace.js' || f === 'legion.js', f);   // plan step 3.2: Legion's header with an older ChartBridge (LegionCore.stopMaySend)
-  assert.strictEqual((fsx.readFileSync(path.join(__dirname, '..', 'live', 'workspace.js'), 'utf8').match(/agentKillAllProp/g) || []).length, 1, 'workspace.js: one comment, nothing that builds the message');
-  assert.match(fsx.readFileSync(path.join(__dirname, '..', 'live', 'workspace.js'), 'utf8'), /post: m => legionGate\(m\) === true && AF\.post\(m\) === true \}/, 'and the gate (captured once from the frozen FleetCore) is in front of every post');
+    assert.strictEqual(fsx.readFileSync(path.join(__dirname, '..', 'live', f), 'utf8').includes('agentKillAllProp'), f === 'fleet.js' || f === 'legion.js', f);   // plan step 3.2: Legion's header with an older ChartBridge (LegionCore.stopMaySend)
+  assert.strictEqual((fsx.readFileSync(path.join(__dirname, '..', 'live', 'legion-tabs.js'), 'utf8').match(/agentKillAllProp/g) || []).length, 0, 'plan step 3.2: Legion mounts the tab; legion-tabs.js builds no message');
+  assert.match(fsx.readFileSync(path.join(__dirname, '..', 'live', 'legion-tabs.js'), 'utf8'), /post: m => legionGate\(m\) === true && AF\.post\(m\) === true \}/, 'and the gate (captured once from the frozen FleetCore) is in front of every post');
 });
 
 test('0.6.19 the day\'s profit stop: the plan\'s dayStopDollars, the smaller of it and the consistency mark off a funded account, the trader\'s own flatten, a stand-down until the roll', () => {

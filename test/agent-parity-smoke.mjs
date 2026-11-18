@@ -83,7 +83,7 @@ async function newContext(browser) {
   await ctx.addInitScript(() => {
     /* every message the page sends; window.__dropFlatten keeps the page's flatten from ChartBridge (Off in a trade, held) */
     const Real = window.WebSocket; window.__sent = []; window.__dropFlatten = false;
-    function Spy(u, p) { const s = p === undefined ? new Real(u) : new Real(u, p); const send = s.send.bind(s); s.send = d => { let m = null; try { m = JSON.parse(d); m.__at = Date.now(); window.__sent.push(m); } catch (e) { /* not JSON */ } if (m && m.type === 'flatten' && window.__dropFlatten) return; return send(d); }; return s; }
+    function Spy(u, p) { const s = p === undefined ? new Real(u) : new Real(u, p); const send = s.send.bind(s); s.send = d => { let m = null; try { m = JSON.parse(d); m.__at = Date.now(); window.__sent.push(m); } catch (e) { /* not JSON */ } if (m && (m.type === 'flatten' || m.type === 'agentFlattenOff') && window.__dropFlatten) return; return send(d); }; return s; }
     Spy.prototype = Real.prototype; for (const k of ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED']) Spy[k] = Real[k];
     window.WebSocket = Spy;
     /* the Agent tab's chart (its lines and its trades) and the AgentDesk instances, as the page hands them over */
@@ -183,14 +183,14 @@ async function openPage(ctx, url, ready) {
   if (ready) await page.waitForFunction(ready, null, { timeout: 30000 });
   return page;
 }
-const workspaceReady = () => document.getElementById('wsConn').classList.contains('live');
+const workspaceReady = () => document.getElementById('lxConn').dataset.state === 'on';   // plan step 3.2: Praetorian's Agent desk is on Legion
 
 /* the page's side of the checks */
 function tools(page) {
   const P = (fn, ...a) => page.evaluate(([fn, a]) => window.__P[fn](...a), [fn, a]);
   const info = id => P('info', id);
   const text = async id => (await info(id)).text;
-  const A = () => page.evaluate(() => window.workspace ? window.workspace.agent() : window.agentDesk.state());
+  const A = () => page.evaluate(() => window.legion ? window.legion.agent() : window.workspace ? window.workspace.agent() : window.agentDesk.state());
   const sent = () => page.evaluate(() => window.__sent);
   /* an item that shows: present and in sight, its words as wanted, R3 (when the item says so) and under data-no-motion (when
      its rules say so) */
@@ -213,7 +213,7 @@ try {
     console.log('phase 1: --agents=demo, no PC helper');
     bridge = await startBridge(['--agents=demo', '--agent-any-time', '--max-qty=MNQ:20,NQ:2']);   // config.txt's cap holds for agents
     const ctx = await newContext(browser);
-    const page = await openPage(ctx, `http://localhost:${port}/live/?layout=Main`, workspaceReady);
+    const page = await openPage(ctx, `http://localhost:${port}/live/legion.html?tab=cohorts&sub=legion`, workspaceReady);
     const { P, info, text, A, sent, shows, click } = tools(page);
     await control('price', { root: 'MNQ', p: 25400 });
     await control('agent-connect', { agent: 'demo', name: 'Demo Agent', build: 'sample-build-1' });
@@ -424,8 +424,9 @@ try {
     await shows('P09', /^16 ticks \(25,386\.00\)$/); await shows('P10', /^32 ticks \(25,398\.00\)$/); await shows('P11', /^\$16\.00, reward 2\.00 to 1$/);
     await shows('P12', /^\d\d:\d\d:\d\d ET$/); await shows('P13', /^SIM-AG1 SIM$/);
     await shows('P14', async () => (await P('box', 'P14')).height >= 15, 'ChartBridge\'s words: a line reserved even empty');
-    await shows('P15', /^Accept\s*Alt\+Y$/, 'Accept with its key'); await shows('P16', /^Reject\s*Alt\+N$/, 'Reject with its key');
-    await shows('K02', async x => x.texts.join() === 'Alt+Y,Alt+N', 'the keycaps: The Desk\'s Accept and Reject keys');
+    /* plan step 3.2: on Legion, as in the pop-out window, Accept and Reject are the buttons: no copilot keys (the chart page keeps them for the bot) */
+    await shows('P15', /^Accept$/, 'Accept (on Legion the button, no key)'); await shows('P16', /^Reject$/, 'Reject (on Legion the button, no key)');
+    item('K02', (await info('K02')).n === 0, 'no keycaps on Legion (no keys there, as the pop-out)');
     await shows('P19', /^1 open$/);
     item('P02', !(await info('P02-empty')).shown, 'with a proposal "None open" goes; the slot keeps its height');
     await until(async () => (await sent()).some(m => m.type === 'agentSeen' && m.id === 'cp1'), 'agentSeen');
@@ -587,12 +588,13 @@ try {
     await sleep(1200);
     const n0 = (await answers()).length;
     await click('C01');
-    await page.keyboard.press('Alt+KeyN');
-    await until(async () => (await answers()).length > n0, 'the Reject key');
+    await page.keyboard.press('Alt+KeyN'); await sleep(700);
+    item('K01', (await answers()).length === n0, 'on Legion the Reject key answers nothing (no copilot keys here, as the pop-out)');
+    await click('P16');
+    await until(async () => (await answers()).length > n0, 'the Reject button');
     await sleep(500);
     const k1 = (await answers()).slice(n0);
-    item('K01', k1.length === 1 && k1[0].agent === 'demo' && k1[0].id === 'k1' && k1[0].answer === 'reject', 'the Reject key (The Desk\'s Alt+N) answers the shown agent\'s proposal, once: ' + JSON.stringify(k1.map(m => m.id + ':' + m.answer)));
-    rule('keys', k1.length === 1, 'the copilot keys through the one router');
+    rule('keys', k1.length === 1 && k1[0].agent === 'demo' && k1[0].id === 'k1' && k1[0].answer === 'reject', 'its Reject button answers the shown agent\'s proposal, once: ' + JSON.stringify(k1.map(m => m.id + ':' + m.answer)));
     await until(async () => !(await info('P03')).n, 'k1 gone', 5000);
     await control('agent-plan', { agent: 'demo', id: 'k2', side: 'buy', kind: 'limit', p: 25390, qty: 1, stop: 12, target: 24, expire: 900 });
     await until(async () => (await info('P03')).shown, 'k2');
@@ -602,7 +604,7 @@ try {
     await until(async () => (await info('CO01')).shown, 'the corner\'s line');
     await shows('CO01', /^Demo Agent: 1 proposal$/, 'off the tab, one line in the corner counts his proposals');
     item('CO01', Math.round((await P('box', 'CO01')).height) === 30 && (await P('attr', 'CO01', 'role')) === 'region', 'the line: 30 px, a region');
-    item('CO03', await page.evaluate(() => { const b = document.querySelector('.bt-props'); return !!b && getComputedStyle(b).getPropertyValue('--bt-corner-bottom').trim() === '56px'; }), 'agents known, the tab closed: the bot\'s corner keeps the room of the agents\' line');
+    item('CO03', await page.evaluate(() => !document.querySelector('.bt-props')), 'plan step 3.2: no bot corner on Legion (the bot\'s is the chart page\'s) [was: agents known, the tab closed: the bot\'s corner keeps the room of the agents\' line');
     rule('cards', !(await page.evaluate(() => [...document.querySelectorAll('[data-agans]')].some(b => b.getClientRects().length))), 'off the tab no agent Accept or Reject anywhere');
     const n1 = (await answers()).length;
     await page.mouse.click(800, 450);
@@ -616,8 +618,9 @@ try {
     await until(async () => !(await info('P03')).n, 'k2 rejected and gone', 5000);
     await click('W01'); await until(async () => !(await A()).shown, 'the tab closes');
     await page.mouse.click(800, 450);
-    await page.keyboard.press('Alt+KeyN');
-    item('K01', !!(await until(async () => /no copilot proposal to answer here/.test(await page.textContent('#wsNote')), 'the workspace says so')), 'with none open the key says so');
+    const nNone = (await answers()).length;
+    await page.keyboard.press('Alt+KeyN'); await sleep(700);
+    item('K01', (await answers()).length === nNone, 'with none open, the key does nothing on Legion');
     await click('W01'); await until(async () => (await A()).shown, 'the tab again');
 
     /* ---------------------------------------------------------------- the bot's proposals: counted under the slot */
@@ -630,18 +633,21 @@ try {
     await shows('O03', /^Bot: 1 proposal$/, 'a count that rose is marked at once');
     item('O01', Math.round((await P('box', 'O01')).height) === 30, 'the line keeps 30 px');
     item('O03', !(await P('r3', 'O03', true)).length, 'still: no transition or animation (R3)');
-    item('CO02', await page.evaluate(() => { const b = document.querySelector('.bt-props'); return !!b && !!b.querySelector('[data-id="b1"]') && getComputedStyle(b).display === 'none'; }), 'the Bot tab\'s corner (its card for b1) hidden while the Agent tab is shown');
+    item('CO02', await page.evaluate(() => !document.querySelector('.bt-props') && !document.querySelector('[data-id="b1"]')), 'the Bot tab\'s corner (its card for b1) hidden while the Agent tab is shown');
     rule('cards', !(await page.evaluate(() => [...document.querySelectorAll('[data-agans], [data-ans]')].some(b => b.getClientRects().length))), 'with only the bot\'s open, no Accept or Reject on the page');
     await sleep(1100);
     const nb = (await answers()).length;
     await click('C01');
     await page.keyboard.press('Alt+KeyY');
     await sleep(700);
-    item('K01', (await answers()).length === nb && /keys answer only demo's proposals/.test(await page.textContent('#wsNote')), 'with the tab open the keys answer only the shown agent\'s proposals (the bot\'s is hidden), and say so: ' + await page.textContent('#wsNote'));
-    await page.locator(H('O01') + ' ' + H('O02')).first().click();
-    item('O02', !!(await until(() => page.evaluate(() => window.workspace.bot().shown && !window.workspace.agent().shown), 'the Bot tab opens')), 'the bot\'s name opens the Bot tab');
+    item('K01', (await answers()).length === nb, 'on Legion no key answers the bot\'s proposal (no copilot keys here; the bot\'s is the chart page\'s)');
+    /* plan step 3.2: the Bot tab is the chart page's: the bot's name opens it there, in its own window */
+    const [botWin] = await Promise.all([page.context().waitForEvent('page'), page.locator(H('O01') + ' ' + H('O02')).first().click()]);
+    await botWin.waitForLoadState();
+    item('O02', /\/live\/\?tab=bot$/.test(botWin.url()), 'the bot\'s name opens the chart page\'s Bot tab: ' + botWin.url());
+    await botWin.close();
     await control('bot-withdraw', { id: 'b1' });
-    await click('W01'); await until(async () => (await A()).shown, 'the Agent tab again');
+    await until(async () => (await A()).shown, 'the Agent desk still shown on Legion (the Bot tab opened in the chart page\'s window)');
     await until(async () => (await text('O01')) === 'No other proposals', 'none elsewhere');
 
     /* ---------------------------------------------------------------- the LIVE account question */
@@ -753,12 +759,12 @@ try {
   /* ====================================================================== phase 2: two agents and the PC helper */
   if (PHASES.includes(2)) {
     console.log('phase 2: --agents=demo,demotwo and the fake PC helper on 8767');
-    bridge = await startBridge(['--agents=demo,demotwo', '--agent-any-time', '--max-qty=MNQ:20,NQ:2']);
+    bridge = await startBridge(['--agents=demo,demotwo', '--agent-any-time', '--max-qty=MNQ:20,NQ:2', '--version=0.6.25']);   // plan step 3.2: a ChartBridge that knows agentFlattenOff
     helper = await startFakeHelper({ bridgePort: port, agents: ['demo', 'demotwo'] });
     const ctx = await newContext(browser);
     const asks = [];
     ctx.on('request', r => { if (r.url().startsWith('http://localhost:8767/') && r.method() !== 'OPTIONS') asks.push({ url: r.url(), at: Date.now(), unlock: r.headers()['x-chartbridge-unlock'] || '' }); });
-    const page = await openPage(ctx, `http://localhost:${port}/live/?layout=Main`, workspaceReady);
+    const page = await openPage(ctx, `http://localhost:${port}/live/legion.html?tab=cohorts&sub=legion`, workspaceReady);
     const { P, info, text, A, sent, shows, click } = tools(page);
     await control('price', { root: 'MNQ', p: 25400 });
     await until(async () => (await A()).agents.length === 2, 'ChartBridge told of demo and demotwo');
@@ -783,8 +789,9 @@ try {
     item('OH03', !(await P('disabled', 'OH03')) && await P('disabled', 'OH04'), 'On offered, Off not (he is off)');
     /* the helper asked every 3 s while the tab is shown, with the PIN unlock; not while it is closed */
     const k0 = asks.length; await sleep(7000); const k1 = asks.slice(k0);
-    await click('W01'); await until(async () => !(await A()).shown, 'the tab closed'); const k2 = asks.length; await sleep(4000); const k3 = asks.length;
-    await click('W01'); await until(async () => (await A()).shown, 'the tab again');
+    /* plan step 3.2: closed is Legion on Castra (the cohorts' side, where its button leads, reads the helper for the lanes itself) */
+    await page.evaluate(() => window.LegionApp.show('castra', '')); await until(async () => !(await A()).shown, 'the tab closed'); const k2 = asks.length; await sleep(4000); const k3 = asks.length;
+    await page.click('[data-lx-tab="cohorts"]'); await click('W01'); await until(async () => (await A()).shown, 'the tab again');
     item('OH12', k1.length >= 2 && k1.length <= 4 && asks.every(x => /^v1\.[0-9a-f]{32}\.[0-9a-f]{64}$/.test(x.unlock)) && k3 === k2, 'the helper asked every 3 s while the tab is shown (' + k1.length + ' in 7 s), each with the PIN unlock; none while it is closed (' + (k3 - k2) + ')');
     /* On with a build that is not a hero */
     await page.selectOption(H('OH02'), 'sample-build-2');
@@ -849,23 +856,23 @@ try {
     await until(async () => (await A()).orders.some(o => o.by === 'agent:demo' && o.role === 'entry'), 'his entry works');
     await control('price', { root: 'MNQ', p: 25389.75 });
     await until(async () => /Long 1 MNQ/.test(await text('ST09')), 'demo is long 1 MNQ', 15000);
-    const fl0 = (await sent()).filter(m => m.type === 'flatten').length;
+    const fl0 = (await sent()).filter(m => m.type === 'agentFlattenOff').length;
     await click('OH04');
     await until(async () => (await info('OH08')).shown, 'Off in a trade asks');
     await shows('OH08', async () => (await text('OH08-text')) === 'Demo 2 holds long 1 MNQ on SIM-AG1. Flatten and turn him off?' && (await P('attr', 'OH08', 'role')) === 'alertdialog' && (await text('OH08-flat')) === 'Flatten and turn off' && (await text('OH08-no')) === 'Keep him on', 'the question: ' + await text('OH08-text'));
     rule('focus', await P('focused', 'OH08-no'), 'the Off question focuses "Keep him on"');
     await click('OH08-no');
     await sleep(500);
-    item('OH08', !(await info('OH08')).shown && helper.calls.filter(c => c.route === 'POST /off').length === 1 && (await sent()).filter(m => m.type === 'flatten').length === fl0 && (await agentNow('demo')).connected, '"Keep him on": nothing sent, he stays on');
-    /* Flatten and turn off: Shadow first, the page's own Flatten (held here a moment), Off once flat */
+    item('OH08', !(await info('OH08')).shown && helper.calls.filter(c => c.route === 'POST /off').length === 1 && (await sent()).filter(m => m.type === 'agentFlattenOff').length === fl0 && (await agentNow('demo')).connected, '"Keep him on": nothing sent, he stays on');
+    /* Flatten and turn off (plan step 3.2, on Legion): one ChartBridge command (held here a moment), Off once flat */
     await page.evaluate(() => { window.__dropFlatten = true; });
     await click('OH04');
     await until(async () => (await info('OH08')).shown, 'asked again');
     await click('OH08-flat');
-    await until(async () => (await sent()).filter(m => m.type === 'flatten').length === fl0 + 1, 'the Flatten goes after Shadow');
-    const sh = (await sent()).filter(m => m.type === 'agentMode').pop(), fl = (await sent()).filter(m => m.type === 'flatten').pop();
-    await shows('OH09', async () => /^Flatten sent for SIM-AG1 MNQ \(he is in Shadow\): turning him off once flat\.\.\.$/.test(await text('OH07')) && sh.agent === 'demo' && sh.mode === 'shadow' && sh.__at <= fl.__at && fl.account === 'SIM-AG1' && fl.root === 'MNQ' && /Turning him off/.test(await P('attr', 'LM02-copilot', 'title')),
-      'Shadow first, then the page\'s own Flatten {account, root}; the line waits for flat; the modes wait too: ' + await text('OH07'));
+    await until(async () => (await sent()).filter(m => m.type === 'agentFlattenOff').length === fl0 + 1, 'the one command goes');
+    const fl = (await sent()).filter(m => m.type === 'agentFlattenOff').pop();
+    await shows('OH09', async () => /^Flatten sent for SIM-AG1 MNQ \(he is in Shadow\): turning him off once flat\.\.\.$/.test(await text('OH07')) && fl.agent === 'demo' && Object.keys(fl).filter(k => !k.startsWith('__')).sort().join() === 'agent,cid,type' && /Turning him off/.test(await P('attr', 'LM02-copilot', 'title')),
+      'one agentFlattenOff {agent} (ChartBridge puts him in Shadow and flattens what he owns); the line waits for flat; the modes wait too: ' + await text('OH07'));
     await page.evaluate(() => { window.__dropFlatten = false; });
     await control('price', { root: 'MNQ', p: 25399 });                                     // out at the target: flat
     await until(async () => helper.calls.filter(c => c.route === 'POST /off').length === 2, 'Off once he is flat', 20000);

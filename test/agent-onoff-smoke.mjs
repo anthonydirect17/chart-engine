@@ -44,7 +44,7 @@ async function until(fn, what, ms = 10000) {
 const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
 let bridge = null, helper = null;
 try {
-  bridge = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(PORT), '--v3', '--trading', '--test-controls', '--test-pin=' + TEST_PIN, '--agents=demo,demotwo', '--agent-any-time', '--max-qty=MNQ:20,NQ:2', '--personal=EVAL-A'], { stdio: ['ignore', 'pipe', 'inherit'] });
+  bridge = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(PORT), '--v3', '--trading', '--test-controls', '--test-pin=' + TEST_PIN, '--agents=demo,demotwo', '--agent-any-time', '--max-qty=MNQ:20,NQ:2', '--personal=EVAL-A', '--version=0.6.25'], { stdio: ['ignore', 'pipe', 'inherit'] });
   await new Promise((res, rej) => { bridge.stdout.once('data', res); bridge.once('exit', c => rej(new Error('bridge exited ' + c))); });
   helper = await startFakeHelper({ bridgePort: PORT, agents: ['demo', 'demotwo'] });
   const ctx = await browser.newContext({ viewport: { width: 1600, height: 900 }, deviceScaleFactor: 1 });
@@ -56,7 +56,7 @@ try {
     const Real = window.WebSocket, socks = window.__socks = [];
     /* window.__dropFlatten: the page's flatten messages are kept here and never reach ChartBridge (the not-flat path) */
     window.__dropFlatten = false;
-    function Spy(url, p) { const s = p === undefined ? new Real(url) : new Real(url, p); const rec = { url: String(url), msgs: [] }; const send = s.send.bind(s); s.send = d => { let m = null; try { m = JSON.parse(d); m.__at = Date.now(); rec.msgs.push(m); } catch (e) { /* not JSON */ } if (m && m.type === 'flatten' && window.__dropFlatten) { m.__dropped = true; return; } return send(d); }; socks.push(rec); return s; }
+    function Spy(url, p) { const s = p === undefined ? new Real(url) : new Real(url, p); const rec = { url: String(url), msgs: [] }; const send = s.send.bind(s); s.send = d => { let m = null; try { m = JSON.parse(d); m.__at = Date.now(); rec.msgs.push(m); } catch (e) { /* not JSON */ } if (m && (m.type === 'flatten' || m.type === 'agentFlattenOff') && window.__dropFlatten) { m.__dropped = true; return; } return send(d); }; socks.push(rec); return s; }
     Spy.prototype = Real.prototype; for (const k of ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED']) Spy[k] = Real[k];
     window.WebSocket = Spy;
   });
@@ -65,10 +65,11 @@ try {
   const page = await ctx.newPage();
   page.on('pageerror', e => fail('page error: ' + e.message));
   page.on('dialog', d => { fail('a browser dialog: ' + d.message()); d.dismiss(); });
-  await page.goto(`http://localhost:${PORT}/live/?layout=Main`);
+  /* plan step 3.2: Praetorian's Agent desk is on Legion's own page (Cohorts, Praetorian); ChartBridge 0.6.25 knows agentFlattenOff */
+  await page.goto(`http://localhost:${PORT}/live/legion.html?tab=cohorts&sub=praetorian`);
   await page.waitForSelector('.cb-pin-key', { timeout: 15000 });
   await enterPin(page, TEST_PIN);
-  await page.waitForFunction(() => document.getElementById('wsConn').classList.contains('live'), null, { timeout: 30000 });
+  await page.waitForFunction(() => document.getElementById('lxConn').dataset.state === 'on', null, { timeout: 30000 });
   const text = sel => page.evaluate(s => { const e = document.querySelector(s); return e ? e.textContent.replace(/\s+/g, ' ').trim() : null; }, sel);
   const visible = sel => page.evaluate(s => { const e = document.querySelector(s); if (!e) return false; const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0 && !e.closest('[hidden]'); }, sel);
   const options = () => page.evaluate(() => [...document.querySelectorAll('#agView [data-k="hPick"] option')].map(o => o.value));
@@ -77,11 +78,10 @@ try {
   await control('price', { root: 'MNQ', p: 25400 });
 
   console.log('the tab, off: the picker, the spend, On offered');
-  await until(async () => (await page.evaluate(() => window.workspace.agent().agents.length)) === 2, 'ChartBridge told of demo and demotwo');
-  await page.click('#wsAgentTab');
-  await until(async () => (await page.evaluate(() => window.workspace.agent().shown)), 'the tab opens');
+  await until(async () => (await page.evaluate(() => window.legion.agent().agents.length)) === 2, 'ChartBridge told of demo and demotwo');
+  await until(async () => (await page.evaluate(() => window.legion.agent().shown)), 'the tab opens');
   await page.selectOption('#agView [data-k="pick"]', 'demo');
-  await until(async () => (await page.evaluate(() => window.workspace.agent().chosen)) === 'demo', 'demo shown');
+  await until(async () => (await page.evaluate(() => window.legion.agent().chosen)) === 'demo', 'demo shown');
   /* his own account first (Sim101 is the bot's: as built, an agent there stands down) */
   await page.click('#agView [data-act="acctOpen"]');
   await page.selectOption('#agView [data-k="acctSel"]', 'SIM-AG1');
@@ -176,37 +176,39 @@ try {
   await control('agent-plan', { agent: 'demo', id: 'oo1', side: 'buy', kind: 'limit', p: 25390, qty: 1, stop: 12, target: 24, expire: 900 });
   await until(() => page.isVisible('.ag-plist .ag-prop[data-id="oo1"]'), 'the proposal');
   await page.click('.ag-plist .ag-prop[data-id="oo1"] [data-agans="accept"]');
-  await until(async () => (await page.evaluate(() => window.workspace.agent().orders)).some(o => o.by === 'agent:demo' && o.role === 'entry'), 'his entry works');
+  await until(async () => (await page.evaluate(() => window.legion.agent().orders)).some(o => o.by === 'agent:demo' && o.role === 'entry'), 'his entry works');
   await control('price', { root: 'MNQ', p: 25389.75 });
   await until(async () => /Long 1 MNQ/.test(await text('.ag-strip [data-k="sPos"]')), 'demo is long 1 MNQ');
-  const flattensBefore = (await sentAll()).filter(m => m.type === 'flatten').length;
+  const flattensBefore = (await sentAll()).filter(m => m.type === 'agentFlattenOff').length;
   await page.click('#agView [data-onoff="off"]');
   await until(() => visible('#agView [data-k="hAsk"]'), 'Off in a trade asks');
   check((await text('#agView [data-k="hAskText"]')) === 'Demo 2 holds long 1 MNQ on SIM-AG1. Flatten and turn him off?', 'the question: ' + await text('#agView [data-k="hAskText"]'));
-  check(helper.calls.filter(c => c.route === 'POST /off').length === 1 && (await sentAll()).filter(m => m.type === 'flatten').length === flattensBefore, 'asking sends nothing');
+  check(helper.calls.filter(c => c.route === 'POST /off').length === 1 && (await sentAll()).filter(m => m.type === 'agentFlattenOff').length === flattensBefore, 'asking sends nothing');
   await page.screenshot({ path: path.join(SHOTS, 'agent-onoff-ask.png'), clip: { x: 0, y: 0, width: 760, height: 900 } });
   /* the question is for demo only: showing demotwo closes it, and coming back finds it closed (review of 8d59357, 1) */
   await page.selectOption('#agView [data-k="pick"]', 'demotwo');
-  await until(async () => (await page.evaluate(() => window.workspace.agent().chosen)) === 'demotwo', 'demotwo shown');
+  await until(async () => (await page.evaluate(() => window.legion.agent().chosen)) === 'demotwo', 'demotwo shown');
   check(!(await visible('#agView [data-k="hAsk"]')), 'another agent shown: the question is gone');
   await page.selectOption('#agView [data-k="pick"]', 'demo');
-  await until(async () => (await page.evaluate(() => window.workspace.agent().chosen)) === 'demo', 'demo shown again');
-  check(!(await visible('#agView [data-k="hAsk"]')) && (await sentAll()).filter(m => m.type === 'flatten').length === flattensBefore, 'back on demo: the question stays closed; nothing sent');
+  await until(async () => (await page.evaluate(() => window.legion.agent().chosen)) === 'demo', 'demo shown again');
+  check(!(await visible('#agView [data-k="hAsk"]')) && (await sentAll()).filter(m => m.type === 'agentFlattenOff').length === flattensBefore, 'back on demo: the question stays closed; nothing sent');
   await page.click('#agView [data-onoff="off"]');
   await until(() => visible('#agView [data-k="hAsk"]'), 'asked again');
   await page.click('#agView [data-act="hAskNo"]');
   await sleep(600);
-  check(!(await visible('#agView [data-k="hAsk"]')) && (await agentNow()).connected && helper.calls.filter(c => c.route === 'POST /off').length === 1 && (await sentAll()).filter(m => m.type === 'flatten').length === flattensBefore,
+  check(!(await visible('#agView [data-k="hAsk"]')) && (await agentNow()).connected && helper.calls.filter(c => c.route === 'POST /off').length === 1 && (await sentAll()).filter(m => m.type === 'agentFlattenOff').length === flattensBefore,
     '"Keep him on": nothing sent, he stays on and in his trade');
   console.log('Flatten and turn off, not flat in 30 s: Shadow first, he stays on, and the line says so');
-  const flattens = async () => (await sentAll()).filter(m => m.type === 'flatten');
+  const flattens = async () => (await sentAll()).filter(m => m.type === 'agentFlattenOff');   // plan step 3.2: one ChartBridge command
   await page.evaluate(() => { window.__dropFlatten = true; });                         // ChartBridge never gets this Flatten
   await page.click('#agView [data-onoff="off"]');
   await until(() => visible('#agView [data-k="hAsk"]'), 'asked again');
   await page.click('#agView [data-act="hFlatOff"]');
-  await until(async () => (await flattens()).length === flattensBefore + 1, 'the Flatten goes (after Shadow)');
-  const modeSh = (await sentAll()).filter(m => m.type === 'agentMode').pop(), fl1 = (await flattens()).pop();
-  check(modeSh && modeSh.agent === 'demo' && modeSh.mode === 'shadow' && modeSh.__at <= fl1.__at && (await agentNow()).mode === 'shadow', 'Shadow first (agentMode shadow), then the Flatten: ' + JSON.stringify(modeSh));
+  const modesBefore = (await sentAll()).filter(m => m.type === 'agentMode').length;
+  await until(async () => (await flattens()).length === flattensBefore + 1, 'the one command goes');
+  const fl1 = (await flattens()).pop();
+  check(fl1.agent === 'demo' && Object.keys(fl1).filter(k => !k.startsWith('__')).sort().join(',') === 'agent,cid,type' && (await sentAll()).filter(m => m.type === 'agentMode').length === modesBefore,
+    'one agentFlattenOff {type, cid, agent demo}, no Shadow or Flatten of the page\'s own (ChartBridge does both): ' + JSON.stringify(fl1));
   check(/^Flatten sent for SIM-AG1 MNQ \(he is in Shadow\): turning him off once flat\.\.\.$/.test(await text('#agView [data-k="hWhy"]')) && await disabled('#agView [data-onoff="off"]'), 'the line while it waits: ' + await text('#agView [data-k="hWhy"]'));
   await sleep(12000);
   check(/^Flatten sent for SIM-AG1 MNQ/.test(await text('#agView [data-k="hWhy"]')), 'still said after 12 s (it does not fade): ' + await text('#agView [data-k="hWhy"]'));
@@ -222,14 +224,14 @@ try {
   await page.click('#agView [data-onoff="off"]');
   await until(() => visible('#agView [data-k="hAsk"]'), 'asked again');
   await page.click('#agView [data-act="hFlatOff"]');
-  await until(async () => (await flattens()).filter(m => !m.__dropped).length === 1, 'the page\'s own Flatten is sent (he is in Shadow already)');
+  await until(async () => (await flattens()).filter(m => !m.__dropped).length === 1, 'the command reaches ChartBridge');
   const fl = (await flattens()).pop();
-  check(fl.account === 'SIM-AG1' && fl.root === 'MNQ' && Object.keys(fl).filter(k => !k.startsWith('__')).sort().join(',') === 'account,root,type', 'the chart\'s own Flatten message {type, account SIM-AG1, root MNQ}: ' + JSON.stringify(fl));
+  check(fl.agent === 'demo' && Object.keys(fl).filter(k => !k.startsWith('__')).sort().join(',') === 'agent,cid,type', 'agentFlattenOff for demo: ChartBridge puts him in Shadow and flattens what he owns: ' + JSON.stringify(fl));
   const offAt = await until(() => helper.calls.filter(c => c.route === 'POST /off').length === 2 && helper.calls.filter(c => c.route === 'POST /off')[1].at, 'Off once he is flat');
   check(/Flat/.test(await text('.ag-strip [data-k="sPos"]')) && !(await agentNow()).position, 'he is flat');
   await until(async () => !(await agentNow()).connected, 'the helper ended him');
   check((await flattens()).length === flattensBefore + 2, 'one flatten for each press');
-  check(offAt >= fl.__at, 'Off went after the flatten filled');
+  check(offAt >= fl.__at, 'Off went after ChartBridge\'s flatten filled');
   await until(async () => (await text('#agView [data-k="hWhy"]')) === 'Flat. Off: his program ends, no more model calls.', 'the line says flat, then off');
   check(!(await sentAll()).some(m => m.type === 'order' && m.account === 'SIM-AG1'), 'the page built no order for him');
 

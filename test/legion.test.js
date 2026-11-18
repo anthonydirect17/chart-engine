@@ -132,8 +132,8 @@ test('the header sends through its own link only: the two Stop all messages', ()
 
 test('the moved tabs keep the gates the chart page gave them', () => {
   const js = read('live', 'legion-tabs.js');
-  assert.match(js, /const legionLink = AF && gate \? \{ listen: part => AF\.listen\(part\), post: m => gate\(m\) === true && AF\.post\(m\) === true \} : null;/, 'Cohorts: FleetCore.maySend in front');
-  assert.match(js, /const gate = FC && Object\.isFrozen\(FC\) \? FC\.maySend : null;/);
+  assert.match(js, /const legionLink = AF && legionGate \? \{ listen: part => AF\.listen\(part\), post: m => legionGate\(m\) === true && AF\.post\(m\) === true \} : null;/, 'Cohorts: FleetCore.maySend in front');
+  assert.match(js, /const legionGate = window\.FleetCore && Object\.isFrozen\(window\.FleetCore\) \? window\.FleetCore\.maySend : null;/);
   assert.match(js, /const watch = AF \? Object\.freeze\(\{ listen: part => AF\.listen\(part\) \}\) : null;/, 'Colosseum: listen only');
   assert.match(js, /AC\.praetorianLink\(AF\)/, 'Praetorian: its own gate');
   assert.match(js, /FC\.laneFeed\(AF, opts\.locked, opts\.group, opts\.otherLocked\)/, 'a lane: the narrow feed');

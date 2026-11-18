@@ -39,6 +39,8 @@
     <button type="button" role="tab" data-lx-tab="ludus" aria-selected="false" aria-controls="lx-ludus" tabindex="-1"><span class="lx-rn" aria-hidden="true">IV</span>Ludus</button>
     <button type="button" role="tab" data-lx-tab="golive" aria-selected="false" aria-controls="lx-golive" tabindex="-1"><span class="lx-rn" aria-hidden="true">V</span>Go live</button>
   </nav>
+  <!-- while Praetorian is shown, the Cohorts sides sit here so its desk keeps one screen (live/legion.js fitDesk) -->
+  <span class="lx-subslot" id="lxSubSlot"></span>
   <div class="lx-right">
     <span class="lx-clock"><span id="lxClock">--:--:--</span> <span class="lx-et">ET</span></span>
     <span class="lx-pill" id="lxConn" role="status" data-state="off">ChartBridge: not connected</span>
@@ -54,6 +56,11 @@
   <button type="button" class="lx-btn" id="lxStopNo">Cancel</button>
 </div>
 <p class="lx-said" id="lxStopSaid" role="status" aria-live="polite" hidden></p>
+<!-- ChartBridge's warnings and errors, the newest three, until dismissed: the chart page's alert line, the same ids (the Agent desk
+     holds it in its board's tray) -->
+<div class="ws-alerts lx-alerts" id="wsAlerts">
+  <div class="ws-alert" id="wsAlert" role="alert" hidden><b>ChartBridge</b><span id="wsAlertText"></span><button type="button" class="ws-btn" id="wsAlertClose">Dismiss</button></div>
+</div>
 <p class="lx-said bad" id="lxFailed" role="alert" hidden></p>
 
 <main class="lx-main">
@@ -67,9 +74,9 @@
   </section>
   <!-- II Cohorts: the chart page's Legion tab (live/fleet.js) and Praetorian's Agent side, moved here (live/legion-tabs.js) -->
   <section class="lx-view" id="lx-cohorts" role="tabpanel" aria-label="Cohorts" hidden>
-    <div class="lx-sub" role="tablist" aria-label="Cohorts">
+    <div class="lx-sub" id="lxSub" role="tablist" aria-label="Cohorts">
       <button type="button" role="tab" data-lx-sub="legion" aria-selected="true">The cohorts</button>
-      <button type="button" role="tab" data-lx-sub="praetorian" aria-selected="false">Praetorian: your personal account</button>
+      <button type="button" role="tab" data-lx-sub="praetorian" aria-selected="false">Praetorian<span class="lx-sub-long">: your personal account</span></button>
     </div>
     <div data-lx-subview="legion">
       <section class="fl-view lx-fl" id="flView" aria-label="The cohorts"><div class="lx-card lx-todo"><p class="lx-muted">Loading the cohorts...</p></div></section>

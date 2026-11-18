@@ -681,3 +681,6 @@ body.ws-tight .ws-body > .chart-live { padding: 2px 3px 2px; }
 .chart-live .mini-tk .mt-away { font-size: 11px; }
 .chart-live .mini-tk .mt-away:empty { display: none; }
 .chart-live .mini-tk .mt-away.warn { color: var(--warn); }
+/* plan step 3.2: the link to Legion's own page (legion.html) in the top tabs row, drawn as the row's buttons */
+.ws-btn.ws-legionlink { text-decoration: none; display: inline-flex; align-items: center; }
+.ws-btn.ws-legionlink[hidden] { display: none; }

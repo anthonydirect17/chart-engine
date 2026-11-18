@@ -73,7 +73,7 @@ try {
     Spy.prototype = Real.prototype; for (const k of ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED']) Spy[k] = Real[k];
     window.WebSocket = Spy;
     /* 1.51.0: the desk's state on the page (window.workspace) or in the Agent window (window.agentDesk) */
-    window.__st = () => (window.workspace ? window.workspace.agent() : window.agentDesk.state());
+    window.__st = () => (window.workspace ? window.legion.agent() : window.agentDesk.state());
   });
   const page = await ctx.newPage();
   page.on('pageerror', e => fail('page error: ' + e.message));
@@ -145,7 +145,9 @@ try {
   mp.on('pageerror', e => fail('page error: ' + e.message));
   await mp.goto(`http://localhost:${port}/live/?layout=Main&tab=agent`);
   await mp.waitForSelector('.cb-pin-key', { timeout: 15000 }).then(() => enterPin(mp, TEST_PIN), () => {});
-  await mp.waitForFunction(() => document.getElementById('wsConn').classList.contains('live') && window.workspace.agent().agents.length === 3, null, { timeout: 30000 });
+  /* plan step 3.2: the chart page forwards ?tab=agent to Legion's own page, Cohorts, Praetorian (with Legion's alert line) */
+  await mp.waitForURL(/\/live\/legion\.html\?/, { timeout: 10000 }).catch(() => {});
+  await mp.waitForFunction(() => document.getElementById('lxConn').dataset.state === 'on' && window.legion.agent().agents.length === 3, null, { timeout: 30000 });
   await until(() => mp.isVisible('#agView [data-k="board"]') || mp.isVisible('#agView [data-act="board"]'), 'the desk or the board on the page');
   if (!(await mp.isVisible('#agView [data-k="board"]'))) await mp.click('#agView [data-act="board"]');   // the board is kept in this browser: the Agent window may have opened it
   await until(() => mp.isVisible('#agView [data-k="board"]'), 'the board on the page');

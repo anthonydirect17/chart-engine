@@ -3,7 +3,7 @@
  *
  * The price stands as a skyline of light pillars, one per NQ minute bar (1.38.1, Anthony 2026-10-23: his charts are NQ; the
  * seats trade MNQ, the same index, so their entries and stops are drawn at their MNQ prices on the NQ pillars, unconverted), with very faint, slow code rain and drifting dust
- * behind it. Each agent active today hovers above it as a hexagon drone in its colour (the League's H amber, S cyan, O violet; a
+ * behind it. Each agent active today hovers above it as a hexagon drone in its colour (the League's H amber, S cyan, O bronze; a
  * live agent and the bot in the strip's own colour for them), a lens turning inside, a dashed ring for SHADOW and a solid one for
  * LIVE, its text block beside it inside its own slot (name, mode, its one-word state; position, today's R, spend; looks left; the
  * 30-tick look cap). What the data says, the sky shows:

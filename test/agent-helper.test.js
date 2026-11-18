@@ -176,7 +176,11 @@ test('wiring: loaded before agent.js on both pages, installed, the workspace pas
   }
   const to = JSON.parse(read('nt8', 'install-files.json')).www.map(f => f.to);
   assert.ok(to.includes('agent-helper.js'));
-  assert.match(read('live', 'workspace.js'), /flatten: \(account, root\) => core\.flattenAgent\(account, root\)/);
+  /* plan step 3.2: the Agent desk is on Legion (no order ticket there): with a ChartBridge that knows it, "Flatten and turn off"
+     is one ChartBridge command (agentFlattenOff); with an older one the desk says where to flatten. The chart page no longer
+     shows the desk, so it hands it no Flatten */
+  assert.match(read('live', 'agent.js'), /if \(AC\.FLATOFF_MIN && AC\.atLeast\(S\.version, AC\.FLATOFF_MIN\)\) \{/);
+  assert.doesNotMatch(read('live', 'workspace.js'), /core\.flattenAgent\(/);
   assert.match(read('live', 'trade.js'), /function flattenAgent\(account, R\)/);
   for (const f of ['live/agent-helper.js', 'test/agent-helper.test.js']) assert.doesNotMatch(read(f), /[\u2013\u2014]/, f);
   /* the page never builds an order for the agent: the only order On/Off can cause is the page's own Flatten */

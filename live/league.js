@@ -5,7 +5,7 @@
  * default).
  *
  * The shadow league runs on the WORK PC as its own process: three seats identical but for the judge model, H (Haiku, amber),
- * S (Sonnet, cyan), O (Opus, violet), each trading on paper. Nothing here sends an order and nothing here can: the page only
+ * S (Sonnet, cyan), O (Opus, bronze), each trading on paper. Nothing here sends an order and nothing here can: the page only
  * reads The Desk's GET /api/chart-league (TheDesk docs/API.md "Shadow league"), which serves the league's own files read only:
  * status.json, the day's paper trades (closed and open), its decisions, and the standings. "SHADOW: no orders" is on the view.
  *
@@ -53,11 +53,12 @@
 'use strict';
 
 const SHADOW = 'SHADOW: no orders';
-/* Anthony's letters and colours (amber, cyan, violet); the colours appear only in the league's own marks and legend */
+/* Anthony's letters and colours (amber, cyan, bronze); the colours appear only in the league's own marks and legend. Plan step 3.2
+   (house style: no purple): Opus is Legion's bronze #B07A3C, was violet #B69CFF; never a trade side's green or red */
 const SEATS = [
   { id: 'H', family: 'Haiku', color: '#FFC266' },
   { id: 'S', family: 'Sonnet', color: '#5DE0F0' },
-  { id: 'O', family: 'Opus', color: '#B69CFF' },
+  { id: 'O', family: 'Opus', color: '#B07A3C' },
 ];
 const SEAT = Object.fromEntries(SEATS.map(s => [s.id, s]));
 const ROOTS = ['MNQ', 'NQ'];               // the league trades MNQ; NQ is one instrument with it (its prices are the same)

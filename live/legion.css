@@ -60,6 +60,9 @@ body.lx { font: 14px/1.45 "IBM Plex Sans", system-ui, sans-serif; overflow-y: au
 .lx-said { margin: 10px 0 0; padding: 8px 12px; border: 1px solid var(--lx-line2); background: var(--lx-panel); font-size: 12.5px; color: var(--lx-muted); white-space: pre-wrap; overflow-wrap: anywhere; }
 .lx-said.bad { color: var(--lx-fg); border-color: color-mix(in srgb, var(--ws-sell, #E2685D) 45%, transparent); }
 
+/* ChartBridge's alert line (workspace.css draws it): in the page's flow under Legion's header, never over the Stop all question */
+.lx-alerts { position: static; padding: 0; margin-top: 8px; }
+
 /* the tabs' pages: the page scrolls, never a box inside it */
 .lx-main { padding-top: 18px; }
 .lx-view[hidden], [data-lx-subview][hidden] { display: none !important; }
@@ -78,8 +81,22 @@ body.lx { font: 14px/1.45 "IBM Plex Sans", system-ui, sans-serif; overflow-y: au
    page scrolls and nothing inside them does (their own fixed heights and inner scrolls are let go) */
 .lx-fl.fl-view, .lx-lg.lg-view, .lx-ag.ag-view { position: static; inset: auto; height: auto; min-height: 0; max-height: none; overflow: visible; display: block; }
 .lx-fl .fl-scroll, .lx-lg .lg-scroll { overflow: visible; max-height: none; height: auto; }
-/* Praetorian's Agent desk needs its own height (its Layout 5 grid): a full window less the header */
-.lx-ag.ag-view { min-height: calc(100vh - 140px); display: flex; flex-direction: column; }
+/* Praetorian's Agent desk is one screen with no page scroll (its Layout 5, Anthony's rule on the chart page): while it is shown
+   Legion's chrome is compact (body.lx-pr) and the desk takes exactly the window below it (live/legion.js sets its height) */
+.lx-ag.ag-view { display: flex; flex-direction: column; min-height: 0; }
+body.lx-pr .lx-app { padding: 0 6px; }
+body.lx-pr .lx-app > * { max-width: none; }
+body.lx-pr .lx-head { padding: 4px 0; gap: 4px 14px; }
+body.lx-pr .lx-standard, body.lx-pr .lx-word-suite, body.lx-pr .lx-clock { display: none; }
+body.lx-pr .lx-word-name { font-size: 16px; margin-top: 0; }
+body.lx-pr .lx-nav button { padding: 5px 10px; }
+body.lx-pr .lx-btn { padding: 5px 10px; }
+body.lx-pr .lx-main { padding-top: 0; }
+body.lx-pr .lx-sub { margin: 0; flex-wrap: nowrap; }
+body.lx-pr .lx-sub-long, body.lx-pr .lx-pill { display: none; }
+.lx-subslot:empty { display: none; }
+body.lx-pr .lx-sub button { padding: 3px 9px; }
+body.lx-pr .lx-said.note { display: none; }   /* the version note is the Stop button's title meanwhile; an answer still shows */
 
 /* tables in Legion's own content stack on a phone, each cell with its column's name (the mockup's .tbl) */
 @media (max-width: 760px) {
