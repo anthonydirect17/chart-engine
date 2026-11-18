@@ -147,7 +147,15 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static string restoreWait;                // release 1 (1.6c): why the open trade's restore waits for a close on its way, or null
         private static int ledQty;                        // that trade's position, signed, from the executions
         private static double ledCash, ledAvg;            // its cash flow (points times contracts) and average entry
-        private static double ledPrior;                   // the dollars the trade had already closed with when a late entry fill reopened it, else 0
+        private static double ledPrior;                   // the trade's dollars already closed before it was followed (again): what it closed with when a late entry fill reopened it, or bot-day.txt's at a restore; else 0
+        private static double ledPv;                      // the point value of its instrument, so bot-day.txt can keep its dollars closed so far (SaveDay)
+        // Release 1 (R12, the day file): a trade open in bot-day.txt written by this build: its dollars closed so far, its size and its
+        // average price when it was saved. Kept until it is followed again (RestoreOpenTrade), and written back unchanged meanwhile.
+        private class OpenLine { public double Dollars, Avg; public int Qty; }
+        private static readonly Dictionary<string, OpenLine> OpenSaved = new Dictionary<string, OpenLine>();
+        private static string untoldTag;                  // a trade whose size changed while it was not followed (its dollars cannot be told), or null
+        private static string untoldWhy;                  // that, in words, for the refusals
+        private static readonly object SaveGate = new object();   // one bot-day.txt write at a time, each from the newest state (taken before Sync)
         private static readonly Dictionary<string, Proposal> Proposals = new Dictionary<string, Proposal>();
         private static readonly Dictionary<string, Order> EntryOfSignal = new Dictionary<string, Order>();
         private static readonly List<Order> Placed = new List<Order>();   // bot entries sent, until done
@@ -242,7 +250,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                 mode = "shadow"; killed = false; size = 0; maxTrades = 0; maxLosses = 0; dayLoss = 0; dayProfit = 0; railRoot = null; railsBroken = null; dayBroken = null;
                 dayStopKind = null; dayStopDay = 0; stopFlattenTryMs = -1; stopFlattenWhy = null; stopFlattenWait = null; openUnknownSaid = false;
                 account = DefaultAccount; accountBroken = null;
-                secret = null; secretState = "missing"; session = null; Trades.Clear(); SignalIds.Clear(); openTag = null; restoreWait = null; ledQty = 0; ledCash = 0; ledAvg = 0; ledPrior = 0;
+                secret = null; secretState = "missing"; session = null; Trades.Clear(); SignalIds.Clear(); openTag = null; restoreWait = null; ledQty = 0; ledCash = 0; ledAvg = 0; ledPrior = 0; ledPv = 0;
+                OpenSaved.Clear(); untoldTag = null; untoldWhy = null;
                 Proposals.Clear(); EntryOfSignal.Clear(); Placed.Clear(); Tags.Clear(); CancelSent.Clear(); Actions.Clear(); lastSignalJson = null;
                 nSignals = nProposals = nAnswered = nNotAnswered = nPlaced = nRefused = nHeartbeatLost = 0;
             }
@@ -452,13 +461,24 @@ namespace NinjaTrader.NinjaScript.AddOns
         // reached is latched as "stop<TAB>loss|profit<TAB><the day's dollars then>" until 18:00 ET (a ChartBridge before 1.6b does
         // not understand that line and stands the bot down: the careful side). A file that cannot be read stands the bot down for
         // this run (nothing is written over it).
+        // Release 1 (R12, the day file): the trade being followed is kept as "trade<TAB><tag><TAB>open<TAB><its dollars closed so
+        // far><TAB><its size, signed><TAB><its average price>", written again at every execution that changes it (a part exit, a
+        // late entry fill that reopens it, its close), so a restart keeps the dollars of the contracts already closed and a reopened
+        // trade is followed again. The dollars are the ledger's own: (cash flow plus size times average price) times the point
+        // value, plus what it closed with before (ledPrior); no commission, as the ledger. A ChartBridge before this build does not
+        // understand the six field line and stands the bot down (it reads a trade line only with three fields): the careful side.
+        // A three field "open" line (an older build's file) still reads, as 0 dollars closed. "untold<TAB><tag>": that trade's size
+        // changed while ChartBridge was not following it, so its dollars cannot be told: no arming and no entry until 18:00 ET.
+        // A missing file with a copy of today's session left by a cut off save (bot-day.txt.tmp or .bak) stands the bot down as
+        // well, named: the day is never started over from nothing by accident.
         private static string SessionOf(DateTime et) { return (et.Hour >= 18 ? et.Date.AddDays(1) : et.Date).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture); }
 
         private static void LoadDay()
         {
-            string today = SessionOf(NowEt()), fileSession = null, broken = null, stopKind = null;
+            string today = SessionOf(NowEt()), fileSession = null, broken = null, stopKind = null, untold = null, left = null;
             double stopDay = 0;
             Dictionary<string, double> trades = new Dictionary<string, double>();
+            Dictionary<string, OpenLine> saved = new Dictionary<string, OpenLine>();
             try
             {
                 if (File.Exists(DayFile))
@@ -469,43 +489,106 @@ namespace NinjaTrader.NinjaScript.AddOns
                         if (line.Length == 0 || line.StartsWith("#")) continue;
                         string[] p = line.Split('\t');
                         double v;
+                        OpenLine ol;
                         if (p.Length == 2 && p[0] == "session") fileSession = p[1];
                         else if (p.Length == 3 && p[0] == "trade" && Regex.IsMatch(p[1], "^[0-9a-f]{8}$") && p[2] == "open") trades[p[1]] = double.NaN;
+                        else if (p.Length == 6 && p[0] == "trade" && Regex.IsMatch(p[1], "^[0-9a-f]{8}$") && p[2] == "open" && (ol = ReadOpenLine(p[3], p[4], p[5])) != null) { trades[p[1]] = double.NaN; saved[p[1]] = ol; }
                         else if (p.Length == 3 && p[0] == "trade" && Regex.IsMatch(p[1], "^[0-9a-f]{8}$") && double.TryParse(p[2], NumberStyles.Float, CultureInfo.InvariantCulture, out v) && !double.IsNaN(v)) trades[p[1]] = v;
                         else if (p.Length == 3 && p[0] == "stop" && stopKind == null && (p[1] == "loss" || p[1] == "profit") && double.TryParse(p[2], NumberStyles.Float, CultureInfo.InvariantCulture, out v) && !double.IsNaN(v) && !double.IsInfinity(v)) { stopKind = p[1]; stopDay = v; }
+                        else if (p.Length == 2 && p[0] == "untold" && untold == null && Regex.IsMatch(p[1], "^[0-9a-f]{8}$")) untold = p[1];
                         else { broken = "bot-day.txt has a line ChartBridge does not understand"; break; }
                     }
                     if (broken == null && fileSession == null) broken = "bot-day.txt has no session line";
                 }
+                else
+                {
+                    // R12 (the day file): no file, but a copy of today's session left by a save cut off between its steps: never an
+                    // empty day by accident (a copy of an earlier session is a new day, as no file)
+                    foreach (string alt in ChartBridgeFiles.LeftOvers(DayFile))
+                    {
+                        string[] b = ChartBridgeFiles.ReadAny(alt);
+                        string bs = b == null ? null : b.Select(x => x.Trim().Split('\t')).Where(x => x.Length == 2 && x[0] == "session").Select(x => x[1]).FirstOrDefault();
+                        if (b != null && bs != null && bs != today) continue;
+                        left = string.Join(" and ", ChartBridgeFiles.LeftOvers(DayFile).Select(Path.GetFileName));
+                        broken = "bot-day.txt is missing and " + Path.GetFileName(alt) + (b == null ? ", which cannot be read," : " (today's session)") + " is there: a save may have been cut off";
+                        break;
+                    }
+                }
             }
             catch (Exception ex) { broken = "bot-day.txt could not be read (" + ex.Message + ")"; }
+            string fix = left == null ? "delete it to start the day over" : "delete " + left + " to start the day over";
             lock (Sync)
             {
                 session = today;
                 Trades.Clear();
-                if (broken != null) dayBroken = broken + ": no new bot entries this run (delete it to start the day over)";
-                else if (fileSession == today) { foreach (KeyValuePair<string, double> kv in trades) Trades[kv.Key] = kv.Value; dayStopKind = stopKind; dayStopDay = stopDay; }
+                OpenSaved.Clear(); untoldTag = null; untoldWhy = null;
+                if (broken != null) dayBroken = broken + ": no new bot entries this run (" + fix + ")";
+                else if (fileSession == today)
+                {
+                    foreach (KeyValuePair<string, double> kv in trades) Trades[kv.Key] = kv.Value;
+                    foreach (KeyValuePair<string, OpenLine> kv in saved) OpenSaved[kv.Key] = kv.Value;
+                    dayStopKind = stopKind; dayStopDay = stopDay;
+                    if (untold != null) { untoldTag = untold; untoldWhy = UntoldWords(untold, null); }
+                }
             }
-            if (broken != null) Log(broken + ": no new bot entries this run (delete it to start the day over)");
+            if (broken != null) Log(broken + ": no new bot entries this run (" + fix + ")");
+        }
+
+        // The last three fields of an open line written by this build: the dollars closed so far (cents, as the ledger rounds them),
+        // the size (signed, not 0) and the average price (above 0). Anything else: null (not understood, so the bot stands down).
+        private static OpenLine ReadOpenLine(string dollars, string qty, string avg)
+        {
+            double d, a;
+            int q;
+            if (!Regex.IsMatch(dollars, "^-?[0-9]{1,9}(?:\\.[0-9]{1,2})?$") || !double.TryParse(dollars, NumberStyles.Float, CultureInfo.InvariantCulture, out d)) return null;
+            if (!Regex.IsMatch(qty, "^-?[1-9][0-9]{0,5}$") || !int.TryParse(qty, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out q)) return null;
+            if (!Regex.IsMatch(avg, "^[0-9]{1,9}(?:\\.[0-9]{1,12})?$") || !double.TryParse(avg, NumberStyles.Float, CultureInfo.InvariantCulture, out a) || !(a > 0)) return null;
+            return new OpenLine { Dollars = d, Qty = q, Avg = a };
+        }
+
+        // Under Sync: why arming and entries wait for 18:00 ET after a trade's size changed while it was not followed.
+        private static string UntoldWords(string tag, string how)
+        {
+            return "bot trade " + tag + (how ?? " changed size while ChartBridge was not following it (bot-day.txt)") +
+                   ": the dollars of those contracts cannot be told, so copilot, auto and new bot entries are refused until 18:00 ET";
         }
 
         private static void SaveDay()
         {
-            List<string> lines = new List<string> { "# ChartBridge bot day (written by ChartBridge; do not edit)", "# session, then one line per bot trade: tag and open or realized dollars" };
-            lock (Sync)
+            List<string> lines = new List<string> { "# ChartBridge bot day (written by ChartBridge; do not edit)", "# session, then one line per bot trade: tag and open (dollars closed so far, size, average price) or realized dollars" };
+            lock (SaveGate)   // R12 (the day file): one write at a time, each from the state at its turn, so an older state never lands last
             {
-                if (dayBroken != null) return;   // never written over a file that could not be read
-                lines.Add("session\t" + session);
-                foreach (KeyValuePair<string, double> kv in Trades)
-                    lines.Add("trade\t" + kv.Key + "\t" + (double.IsNaN(kv.Value) ? "open" : kv.Value.ToString("0.##", CultureInfo.InvariantCulture)));
-                if (dayStopKind != null) lines.Add("stop\t" + dayStopKind + "\t" + dayStopDay.ToString("0.##", CultureInfo.InvariantCulture));   // release 1 (1.6b): the latch
+                lock (Sync)
+                {
+                    if (dayBroken != null) return;   // never written over a file that could not be read
+                    lines.Add("session\t" + session);
+                    foreach (KeyValuePair<string, double> kv in Trades)
+                    {
+                        OpenLine ol;
+                        if (kv.Key == openTag) ol = FollowedLineLocked();   // R12: the trade being followed, open with its dollars closed so far
+                        else if (!double.IsNaN(kv.Value)) { lines.Add("trade\t" + kv.Key + "\t" + Dollars(kv.Value)); continue; }
+                        else OpenSaved.TryGetValue(kv.Key, out ol);   // open in the file and not followed again yet: written back as it was read
+                        lines.Add("trade\t" + kv.Key + "\topen" + (ol == null ? "" : "\t" + Dollars(ol.Dollars) + "\t" + ol.Qty.ToString(CultureInfo.InvariantCulture) + "\t" + ol.Avg.ToString("0.############", CultureInfo.InvariantCulture)));
+                    }
+                    if (dayStopKind != null) lines.Add("stop\t" + dayStopKind + "\t" + dayStopDay.ToString("0.##", CultureInfo.InvariantCulture));   // release 1 (1.6b): the latch
+                    if (untoldTag != null) lines.Add("untold\t" + untoldTag);   // R12: until 18:00 ET, also across a restart
+                }
+                try
+                {
+                    Directory.CreateDirectory(Folder);
+                    ChartBridgeFiles.WriteLines(DayFile, lines.ToArray());   // 0.6.3 (audit C3): write-through, flushed, the previous copy kept as .bak
+                }
+                catch (Exception ex) { Log("bot-day.txt could not be saved (" + ex.Message + "); a restart would forget today's bot trades"); }
             }
-            try
-            {
-                Directory.CreateDirectory(Folder);
-                ChartBridgeFiles.WriteLines(DayFile, lines.ToArray());   // 0.6.3 (audit C3): write-through, flushed, the previous copy kept as .bak
-            }
-            catch (Exception ex) { Log("bot-day.txt could not be saved (" + ex.Message + "); a restart would forget today's bot trades"); }
+        }
+
+        // Under Sync, for the trade being followed: its dollars closed so far, the ledger's way (the cash flow of its executions plus
+        // the size still held at its average price, times the point value, plus what it closed with before it was followed again),
+        // its size and its average price. Null while it holds nothing (only between a reopen and its fill, never saved then).
+        private static OpenLine FollowedLineLocked()
+        {
+            if (openTag == null || ledQty == 0 || !(ledAvg > 0)) return null;
+            return new OpenLine { Dollars = Math.Round(ledPrior + (ledCash + ledQty * ledAvg) * ledPv, 2), Qty = ledQty, Avg = ledAvg };
         }
 
         // A new trading day at 18:00 ET: trades, losses and signal ids start over. A trade still open goes on into the new day.
@@ -522,6 +605,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                 Trades.Clear();
                 if (open) Trades[openTag] = double.NaN;
                 ledPrior = 0;   // a reopened trade's earlier dollars were yesterday's
+                if (openTag != null) ledCash = -ledQty * ledAvg;   // R12 (the day file): so were the dollars of its contracts closed yesterday (only the size held goes on)
+                OpenSaved.Clear(); untoldTag = null; untoldWhy = null;   // R12: a trade never followed again goes with the day, and so does its refusal
                 SignalIds.Clear();
                 dayStopKind = null; dayStopDay = 0; stopFlattenTryMs = -1; stopFlattenWhy = null; stopFlattenWait = null; openUnknownSaid = false;   // release 1 (1.6b): the day stops' latch ends with the day
                 changed = true;
@@ -549,6 +634,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (missing != null) return missing;
             string unfollowed = OpenNotFollowedLocked();
             if (unfollowed != null) return unfollowed;
+            if (untoldWhy != null) return untoldWhy;   // R12 (the day file): dollars that cannot be told, until 18:00 ET
             if (dayStopKind != null) return DayStopWordsLocked();
             int losses = Trades.Values.Count(v => v < 0);
             if (losses >= maxLosses) return losses + " losing trades today: no new bot entries until 18:00 ET";
@@ -651,22 +737,43 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if (o != null && IsBotEntry(o) && TagOf(o.Name) == tag && o.Account != null && (o.Account == a || o.Account.Name == a.Name) &&
                         o.Instrument != null && (o.Instrument == inst || o.Instrument.FullName == inst.FullName) && o.Filled > 0 && o.AverageFillPrice > 0 && SellsLeg(o) != sells)
                     { entryFilled += o.Filled; entryCost += o.Filled * o.AverageFillPrice; }
-            bool fromEntry = entryFilled > 0;
-            double avg = fromEntry ? entryCost / entryFilled : held.AveragePrice, was;
+            bool fromEntry = entryFilled > 0, fromFile = false;
+            double avg = fromEntry ? entryCost / entryFilled : held.AveragePrice, was, prior = 0;
+            double pv = inst.MasterInstrument.PointValue;
             bool done = false;
+            OpenLine ol = null;
+            string untold = null;
             lock (Sync)
             {
                 if (openTag == null && Trades.TryGetValue(tag, out was) && double.IsNaN(was))
                 {
-                    openTag = tag; ledQty = q; ledAvg = avg; ledCash = -q * avg; ledPrior = 0;
+                    // R12 (the day file): the dollars it had closed so far (its part exits, or what it closed with before a late fill
+                    // reopened it) come back with it; at the size it was saved with, so does its average price, so the day reads as
+                    // before the restart to the cent. A size that changed while it was not followed (a close that filled meanwhile):
+                    // followed all the same (its dollars known so far count, a latched day flattens it), but the rest cannot be told,
+                    // so no arming and no entry until 18:00 ET. A line from an older build (no dollars): 0, as before.
+                    if (OpenSaved.TryGetValue(tag, out ol))
+                    {
+                        prior = ol.Dollars;
+                        if (ol.Qty == q) { avg = ol.Avg; fromFile = true; }
+                        else
+                        {
+                            untoldTag = tag;
+                            untoldWhy = untold = UntoldWords(tag, " held " + ol.Qty + " when it was saved (bot-day.txt) and " + q + " when it was followed again");
+                        }
+                        OpenSaved.Remove(tag);
+                    }
+                    openTag = tag; ledQty = q; ledAvg = avg; ledCash = -q * avg; ledPrior = prior; ledPv = pv;
                     Tags.Add(tag);   // its legs' updates reach the bot again
                     done = true;
                 }
             }
             if (!done) return;
-            string w = "Bot: trade " + tag + " (open in bot-day.txt) is followed again from its " + sized.Count + " open " + (stops.Count > 0 ? "stop" : "target") + (sized.Count == 1 ? "" : "s") + ": " + q + " " + inst.FullName + " at " + avg.ToString("0.##", CultureInfo.InvariantCulture) + (fromEntry ? " (its entry's fill)" : " (NinjaTrader's average)") + " on " + a.Name +
+            string w = "Bot: trade " + tag + " (open in bot-day.txt) is followed again from its " + sized.Count + " open " + (stops.Count > 0 ? "stop" : "target") + (sized.Count == 1 ? "" : "s") + ": " + q + " " + inst.FullName + " at " + avg.ToString("0.##", CultureInfo.InvariantCulture) + (fromFile ? " (its price in bot-day.txt)" : fromEntry ? " (its entry's fill)" : " (NinjaTrader's average)") + " on " + a.Name +
+                       (prior != 0 ? ", with " + (prior < 0 ? "-$" : "$") + Dollars(Math.Abs(prior)) + " already closed" : "") +
                        (Math.Abs(pos) > Math.Abs(q) ? "; NinjaTrader holds " + pos + " there, the rest is not the bot's" : "");
             Log(w); BotLog(w); ToPages(StatusJson("warn", w));
+            if (untold != null) { string u = "Bot stands down: " + untold; Log(u); BotLog(u); ToPages(StatusJson("warn", u)); SaveDay(); }
             Notify();
         }
 
@@ -1416,13 +1523,21 @@ namespace NinjaTrader.NinjaScript.AddOns
             string entryTag = IsBotEntry(o) ? TagOf(o.Name) : null;
             bool mine = o != null && Watching(o);
             RollDay();
-            string closedTag = null, opened = null, reopened = null;
+            string closedTag = null, opened = null, reopened = null, untold = null;
             double pnl = 0;
+            bool changed = false;
             ChartBridgeClient c;
             lock (Sync)
             {
                 double was;
-                if (openTag == null && entryTag != null && Trades.TryGetValue(entryTag, out was) && !double.IsNaN(was))
+                if (openTag == null && entryTag != null && Trades.TryGetValue(entryTag, out was) && double.IsNaN(was))
+                {
+                    // R12 (the day file): an entry fill of a trade open in bot-day.txt and not followed again yet: the restore reads it
+                    // from NinjaTrader's position with the rest; its price cannot be told apart there, so no arming and no entry until
+                    // 18:00 ET (kept in bot-day.txt)
+                    if (untoldTag == null) { untoldTag = entryTag; untoldWhy = untold = UntoldWords(entryTag, "'s entry filled " + qty + " more before it was followed again after a restart"); changed = true; }
+                }
+                else if (openTag == null && entryTag != null && Trades.TryGetValue(entryTag, out was) && !double.IsNaN(was))
                 {
                     openTag = entryTag; ledQty = 0; ledCash = 0; ledAvg = 0; ledPrior = was;   // a late fill: the closed trade is open again (still one trade)
                     reopened = entryTag;
@@ -1434,6 +1549,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                 }
                 if (openTag != null)
                 {
+                    changed = true;   // R12 (the day file): every execution of the followed trade is saved, part exits too
+                    ledPv = inst.MasterInstrument.PointValue;
                     int signed = side == MarketPosition.Long ? qty : -qty;
                     if (ledQty == 0 || Math.Sign(signed) == Math.Sign(ledQty)) ledAvg = (ledAvg * Math.Abs(ledQty) + price * qty) / (Math.Abs(ledQty) + qty);
                     ledQty += signed;
@@ -1448,8 +1565,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                 c = helloed ? bot : null;
             }
             if (mine && c != null && json != null) c.Send(json);
+            if (changed) SaveDay();   // R12 (the day file): a part exit as well as an open, a close or a reopen
+            if (untold != null) { string u = "Bot stands down: " + untold; Log(u); BotLog(u); ToPages(StatusJson("warn", u)); Notify(); }
             if (opened == null && closedTag == null && reopened == null) return;
-            SaveDay();
             if (opened != null) BotLog("trade " + opened + " opened (" + TradesToday() + " today)");
             if (reopened != null && closedTag == null)
             {
@@ -1513,15 +1631,18 @@ namespace NinjaTrader.NinjaScript.AddOns
             string root = EffectiveRoot();
             bool latched, open, held;
             int q;
-            double cash, realized, dl, dp;
+            double cash, realized, prior = 0, dl, dp, was;
             lock (Sync)
             {
                 latched = dayStopKind != null; held = openTag != null; open = held && ledQty != 0; q = ledQty; cash = ledCash;
                 realized = Trades.Values.Where(v => !double.IsNaN(v)).Sum(); dl = dayLoss; dp = dayProfit;
+                // R12 (the day file): the followed trade's dollars closed before it was followed again (bot-day.txt's, at a restore);
+                // a trade reopened in this run already counts them in its closed figure (Trades), so never twice
+                if (held && Trades.TryGetValue(openTag, out was) && double.IsNaN(was)) prior = ledPrior;
             }
             if (latched) { RetryStopFlatten(root, held); return; }
             if (!(dl > 0) || !(dp > 0)) return;   // a rail not set: the bot places nothing (fail closed), so there is no day to stop
-            double day = realized;
+            double day = realized + prior;
             if (open)
             {
                 double last;
@@ -1743,10 +1864,12 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (Sync)
             {
                 if (railsBroken != null) return railsBroken;
+                if (dayBroken != null) return dayBroken;   // R12 (the day file): a day that cannot be read is never armed on
                 string missing = RailsMissingLocked();
                 if (missing != null) return missing;
                 string unfollowed = OpenNotFollowedLocked();
                 if (unfollowed != null) return unfollowed;
+                if (untoldWhy != null) return untoldWhy;   // R12 (the day file)
                 if (dayStopKind != null) return DayStopWordsLocked();
             }
             return null;

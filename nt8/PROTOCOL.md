@@ -2886,7 +2886,28 @@ the made-up bot client `test/fake-bot.mjs` (no real bot's rules anywhere in this
   `session<TAB>yyyy-MM-dd`, then `trade<TAB><entry tag><TAB>open` or `<realized dollars>`, written whole through a temp
   file. Executions replayed after a restart re-open a trade still open and never count one twice. A file that cannot be read
   is never written over and stands the bot down (no new entries) for that run. At 18:00 ET trades, losses and signal ids
-  start over (a trade still open goes on into the new day).
+  start over (a trade still open goes on into the new day; the dollars of its contracts closed before 18:00 stay with the
+  day before).
+- **Release 1 (R12, the day file): a trade open across a restart keeps its dollars.** The trade being followed is written as
+  `trade<TAB><tag><TAB>open<TAB><its dollars closed so far><TAB><its size, signed><TAB><its average price>` at every execution
+  that changes it (a part exit, a Cut half, a late entry fill that reopens a closed trade, its close). The dollars are the
+  ledger's own: the cash flow of its executions plus the size held at its average price, times the point value, plus what it
+  closed with before a reopen; no commission, as the ledger. After a restart the trade is followed again by the same proof as
+  before (its own stop or target on the bot's account and contract, NinjaTrader's position on that side and at least that
+  size), the dollars come back with it and the day stops count them, so a $30 loss stop fires at the true day (long 2 at
+  25000, 1 sold at 24992, a restart: at 24993, not at 24985). At the size it was saved with, its average price comes back as
+  well (a reopened trade's own price, not the entry's average of both fills). A three field `open` line (a file from an
+  older build) still reads, as 0 dollars closed, priced as before (the entry's fill, else NinjaTrader's average).
+  A ChartBridge before this build does not understand the six field line (it reads a trade line only with three fields) and
+  stands the bot down, never writing over the file: the careful side.
+- **What cannot be told stands the bot down, named.** A trade whose size changed while ChartBridge was not following it (a
+  close or a stop that filled while it was down, a Cut half's close that filled while the restore waited for it, an entry
+  fill before it was followed again) is followed with the dollars
+  known, but `copilot`, `auto` and new bot entries are refused until 18:00 ET (`untold<TAB><tag>` in `bot-day.txt`, kept across
+  a restart). A day file that does not read (a line cut short, a number, size or price that does not read, no session line)
+  and a missing `bot-day.txt` with a copy of today's session left by a save cut off (`bot-day.txt.bak` or `.tmp`) refuse
+  `copilot`, `auto` and every entry, named, for that run: the day is never started over from nothing by accident (delete the
+  files the refusal names to start it over). A copy of an earlier session is a new day.
 - **Heartbeat lost** (5 s with no bot message): ChartBridge closes the bot's connection (it reconnects and says hello again),
   cancels its unfilled entries (only `bot` entries: never a stop, a target or another order), and every open proposal expires
   as `not answered` (the bot can no longer withdraw it; lead's default). The mode is kept. Pages get `bot` and a `status`
