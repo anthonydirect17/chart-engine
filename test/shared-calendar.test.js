@@ -3,10 +3,10 @@
 // tests/test_shared_calendar.py); never edit them here.
 //
 // Nothing in chart-engine reads the copy yet. The page's own calendar (goodFriday, nyseHolidays, nyseEarlyCloses,
-// cmeClosures, cmeSessionDay, cmeClosed) is computed by rule and differs from CME's own notice on exactly one day of
-// 2026 and 2027: Good Friday 2026, which CME ran as an abbreviated session with its own trade date. Switching the page
-// (and ChartBridge, its C# twin) changes that day, so it waits for Anthony's ruling. These tests pin the agreement on
-// every other day.
+// cmeClosures, cmeShortSessions, cmeSessionDay, cmeClosed) is computed by rule plus its list of abbreviated sessions,
+// and these tests hold it to the copy on every day the copy covers (2024 to 2027). Good Friday 2026 is CME's
+// abbreviated session to 09:15 on both (Anthony's ruling 2026-11-18, "follow CME"). One day differs and is pinned by
+// name below, never hidden: 2025-01-09 (KNOWN_PAGE_DIFFERENCES).
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
@@ -25,6 +25,13 @@ const PINS = {
 };
 const U = CE.util;
 const DAY_MS = 86400000;
+const sec = hhmm => Number(hhmm.slice(0, 2)) * 3600 + Number(hhmm.slice(3, 5)) * 60;
+
+// The days where the page's CME session close is not the copy's, each pinned by name with both closes (seconds after
+// midnight New York). 2025-01-09, the national day of mourning for former President Carter: CME's Globex equity
+// session closed at 09:30 New York (the copy's row, kind and time checked by CME); the page's rule knows no such day
+// and keeps it a full session to the 17:00 break. A day added here or taken away is a change to review.
+const KNOWN_PAGE_DIFFERENCES = { '2025-01-09': { copyClose: 9 * 3600 + 30 * 60, pageClose: 17 * 3600 } };
 
 function eachDay(cal, fn) {
   for (let t = Date.parse(cal.coveredFrom + 'T00:00:00Z'); t <= Date.parse(cal.coveredTo + 'T00:00:00Z'); t += DAY_MS) {
@@ -58,10 +65,10 @@ test('the loader reads the copy and fails closed outside it', () => {
   assert.deepStrictEqual(Object.keys(S.loadContracts()), ['NQ', 'MNQ', 'ES', 'MES']);
 });
 
-test('the page\'s CME sessions differ from the copy only on Good Friday 2026', () => {
+test('the page\'s CME sessions match the copy on every day', () => {
   const cal = S.loadCalendar(), differ = [];
   eachDay(cal, (iso, d) => { if (U.cmeSessionDay(d) !== cal.isSession(iso)) differ.push(iso); });
-  assert.deepStrictEqual(differ, ['2026-04-03']);
+  assert.deepStrictEqual(differ, []);
 });
 
 test('the page\'s halts (13:00) and early closes (13:15) match the copy on every day', () => {
@@ -70,7 +77,7 @@ test('the page\'s halts (13:00) and early closes (13:15) match the copy on every
     const wd = new Date(d * DAY_MS).getUTCDay();
     const year = Number(iso.slice(0, 4));
     if (wd === 0 || wd === 6) return;
-    const pageHalt = U.nyseHolidays(year).has(d) && U.cmeSessionDay(d);
+    const pageHalt = U.nyseHolidays(year).has(d) && U.cmeSessionDay(d) && !U.cmeShortSessions().has(d);
     const pageEarly = U.nyseEarlyCloses(year).has(d) && U.cmeSessionDay(d);
     const sharedHalt = cal.isHolidayHalt(iso);
     const sharedEarly = cal.isEarlyClose(iso) && cal.closeTime(iso) === '13:15';
@@ -82,6 +89,30 @@ test('the page\'s halts (13:00) and early closes (13:15) match the copy on every
     if (sharedEarly) assert.ok(!U.cmeClosed(d * 86400 + 13 * 3600 + 14 * 60) && U.cmeClosed(d * 86400 + 13 * 3600 + 15 * 60), iso);
   });
   assert.deepStrictEqual(differ, []);
+});
+
+test('the page\'s abbreviated sessions are the copy\'s rows, close for close', () => {
+  const cal = S.loadCalendar(), short = [...U.cmeShortSessions()];
+  assert.ok(short.length > 0);
+  for (const [d, close] of short) {
+    const iso = new Date(d * DAY_MS).toISOString().slice(0, 10);
+    assert.ok(cal.covered(iso) && cal.isEarlyClose(iso), iso + ' is an early row of the copy');
+    assert.strictEqual(close, sec(cal.closeTime(iso)), iso);
+  }
+});
+
+test('the page\'s session close matches the copy\'s on every session day but the pinned differences', () => {
+  const cal = S.loadCalendar(), differ = {};
+  eachDay(cal, (iso, d) => {
+    if (!cal.isSession(iso)) return;
+    const close = sec(cal.closeTime(iso)), t0 = d * 86400;
+    const agrees = !U.cmeClosed(t0 - 6 * 3600) && !U.cmeClosed(t0) && !U.cmeClosed(t0 + close - 60) && U.cmeClosed(t0 + close);
+    if (agrees) return;
+    let pageClose = null;                                         // the page's own close: its first closed minute
+    for (let s = 0; s <= 17 * 3600 && pageClose === null; s += 60) if (U.cmeClosed(t0 + s)) pageClose = s;
+    differ[iso] = { copyClose: close, pageClose };
+  });
+  assert.deepStrictEqual(differ, KNOWN_PAGE_DIFFERENCES);
 });
 
 test('nothing in the engine or the live pages reads the copy yet', () => {

@@ -7,7 +7,8 @@
 // must give exactly the table. Nothing in the engine, the live pages or Legion reads the module yet. The last tests pin
 // where the page's own helpers stand: the league's sessionToday and sessionOfBar agree on every row; tradeDay(t, 18:00)
 // and the bot's tradeDay (18:00, no weekend roll) differ only in the 17:00 to 18:00 break and at weekends; cmeClosed
-// agrees with the calendar's in-session answer on every row but Good Friday 2026 (the step 1.5 difference).
+// agrees with the calendar's in-session answer on every row the calendar covers, Good Friday 2026 included (CME's
+// abbreviated session to 09:15, Anthony's ruling 2026-11-18).
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
@@ -189,8 +190,7 @@ test('the page\'s helpers: the league agrees, the 18:00 rules differ only when n
     assert.strictEqual(trade === c.session_date, !shut(c), 'tradeDay ' + c.label);
     assert.strictEqual(B.tradeDay(c.utc_ms) === c.session_date, !shut(c), 'bot tradeDay ' + c.label);
     if (c.calendar !== 'not covered') {
-      const goodFriday2026 = c.calendar.session_date === '2026-04-03';
-      assert.strictEqual(!U.cmeClosed(c.ny_wall_ms / 1000) === c.calendar.in_session, !goodFriday2026 || !c.calendar.in_session, 'cmeClosed ' + c.label);
+      assert.strictEqual(!U.cmeClosed(c.ny_wall_ms / 1000), c.calendar.in_session, 'cmeClosed ' + c.label);
     }
   }
 });

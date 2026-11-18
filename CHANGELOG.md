@@ -1,11 +1,48 @@
 # Changelog
 
-## Unreleased (2026-11-18): Good Friday 2026 is CME's abbreviated session to 09:15 ET, not a closed day
+## Unreleased (2026-11-18): release 2: the shared CME calendar and New York clock copies, Good Friday 2026 follows CME
 
-No version bump (held for Anthony, release 1 is on other branches). Anthony's ruling 2026-11-18: "Good Friday 2026: follow
-CME, an abbreviated equity session (The Desk's cme_closed and the chart's cmeClosed change to match, each in a reviewed
-change)". CME's Globex equity index session on Good Friday 2026 ran from 18:00 the evening before to 09:15 New York, the
-shared CME calendar's row (market-data `shared/cme_calendar.json`: kind "early", close 09:15).
+No version bump: release 2's numbers are set when it is cut. Three parts, each merged whole into `claude/release2`:
+the shared calendar copy (Bot-Lab plan step 1.5), the shared clock copy (step 1.6), and Good Friday 2026.
+
+**The shared CME calendar and contract values, an exact copy (plan step 1.5).** `shared/` and tests only. `shared/`
+holds market-data's four files byte for byte: `cme_calendar.json` (CME Globex equity index holidays and early closes for
+2024 to 2027, a CME source and a check on every row; the 2024 and 2025 rows from Bot-Lab's build
+`claude/build-1-5-calendar-2024-2025`, byte-identical across the repos), `contracts.json` (NQ, MNQ, ES, MES: point value
+and tick size) and their JS and Python loaders. Never edit them here: market-data holds the originals.
+
+- `test/shared-calendar.test.js` pins the four files by sha256 and proves the page's own calendar (`cmeSessionDay`,
+  `nyseHolidays`, `nyseEarlyCloses`, `cmeShortSessions`, `cmeClosed`) agrees with the copy on every day of 2024 to 2027:
+  the sessions, the 13:00 halts and 13:15 early closes, each abbreviated session's close (`cmeShortSessions` holds the
+  copy's close time for every day it lists), and every session day's close from 18:00 the evening before. One day
+  differs and is pinned by name (`KNOWN_PAGE_DIFFERENCES`), never hidden: 2025-01-09, the national day of mourning, when
+  CME's equity session closed at 09:30 New York and the page keeps a full session to 17:00. Good Friday 2026 now agrees
+  (below).
+- `test/test_markup_shared_contracts.py`: the Markup Studio's instrument table matches the shared contract values.
+
+**The shared New York clock and session date, an exact copy (plan step 1.6).** `shared/` and tests only. `shared/` adds
+market-data's three clock files byte for byte: `ny_clock.js` (one rule: a session runs 18:00 New York the evening before
+to 17:00, from 17:00 a moment is dated the next day, a weekend rolls to Monday; now in New York, the session date, the
+session's start and end, in session, the weekend; the US daylight-saving rules in code, never the browser's own zone),
+its Python twin `ny_clock.py`, and `ny_clock_cases.json`, the table both are proved by (the copy from the same Bot-Lab
+build). Never edit them here: market-data holds the originals. It reads the shared calendar for holiday evenings.
+
+- `test/ny-clock.test.js` pins the three files by sha256, computes every value of the table again through the
+  runtime's own America/New_York zone, and holds the module to it. Nothing in the page, the live pages, Legion or
+  ChartBridge reads it yet. It pins where the page stands: the league's `sessionToday` and `sessionOfBar` agree on every
+  row; `tradeDay(t, 18:00)` and the bot's `tradeDay` (18:00, no weekend roll) differ only in the 17:00 to 18:00 break
+  and at weekends; `cmeClosed` agrees with the calendar's in-session answer on every row it covers, Good Friday 2026
+  included.
+- `test/shared-calendar.test.js`: its file list names the three new files.
+- After its review: every date in the table is chosen clear of both fences (market-data and Bot-Lab test that); a
+  moment must be a whole number of UTC ms from 2007-01-01T00:00Z up to the start of the year 2100 (seconds or
+  microseconds passed as ms are refused), and session dates the same range; the US rules answer from the end of
+  daylight time in 2006, so the first session of 2007 opens as in Python.
+
+**Good Friday 2026 is CME's abbreviated session to 09:15 ET, not a closed day.** Anthony ruled on 2026-11-18: "Good
+Friday 2026: follow CME, an abbreviated equity session (The Desk's cme_closed and the chart's cmeClosed change to match,
+each in a reviewed change)". CME's Globex equity index session on Good Friday 2026 ran from 18:00 the evening before to
+09:15 New York, the shared CME calendar's row (`shared/cme_calendar.json`: kind "early", close 09:15).
 
 - **The page** (`src/chart-engine.js`): `cmeShortSessions()` (new in `util`) lists the sessions the rule gets wrong, one
   row, Good Friday 2026 at 09:15. `cmeClosures(2026)` no longer holds it, `cmeSessionDay` is true for it, and `cmeClosed`
@@ -18,39 +55,6 @@ shared CME calendar's row (market-data `shared/cme_calendar.json`: kind "early",
   `SettledDay` passes over it: no settlement is dated to it, and the prior settlement is Thursday's in that session,
   after it and on Monday (before, on the day itself it was Wednesday's). `nt8/check/DataHarness.cs` follows.
 - Docs: `CHART_STYLE.md` (the overnight range), `nt8/PROTOCOL.md` (closed, the prior settlement).
-
-## Unreleased (Bot-Lab plan step 1.6): the shared New York clock and session date, an exact copy
-
-`shared/` and tests only (no page change, no version bump). `shared/` adds market-data's three clock files byte for byte:
-`ny_clock.js` (one rule: a session runs 18:00 New York the evening before to 17:00, from 17:00 a moment is dated the next
-day, a weekend rolls to Monday; now in New York, the session date, the session's start and end, in session, the
-weekend; the US daylight-saving rules in code, never the browser's own zone), its Python twin `ny_clock.py`, and
-`ny_clock_cases.json`, the table both are proved by. Never edit them here: market-data holds the originals. This
-branch sits on the shared calendar's (plan step 1.5), whose calendar it reads for holiday evenings.
-
-- `test/ny-clock.test.js` pins the three files by sha256, computes every value of the table again through the
-  runtime's own America/New_York zone, and holds the module to it. Nothing in the page, the live pages, Legion or
-  ChartBridge reads it yet. It pins where the page stands: the league's `sessionToday` and `sessionOfBar` agree on every
-  row; `tradeDay(t, 18:00)` and the bot's `tradeDay` (18:00, no weekend roll) differ only in the 17:00 to 18:00 break
-  and at weekends; `cmeClosed` agrees with the calendar's in-session answer but on Good Friday 2026.
-- `test/shared-calendar.test.js`: its file list names the three new files.
-- After its review: every date in the table is chosen clear of both fences (market-data and Bot-Lab test that); a
-  moment must be a whole number of UTC ms from 2007-01-01T00:00Z up to the start of the year 2100 (seconds or
-  microseconds passed as ms are refused), and session dates the same range; the US rules answer from the end of
-  daylight time in 2006, so the first session of 2007 opens as in Python.
-
-## Unreleased (2026-11-18): the shared CME calendar and contract values, an exact copy (Bot-Lab plan step 1.5)
-
-`shared/` and tests only (no page change, no version bump). `shared/` holds market-data's four files byte for byte:
-`cme_calendar.json` (CME Globex equity index holidays and early closes for 2026 and 2027, a CME source and a check on
-every row), `contracts.json` (NQ, MNQ, ES, MES: point value and tick size) and their JS and Python loaders. Never edit
-them here: market-data holds the originals.
-
-- `test/shared-calendar.test.js` pins the four files by sha256 and proves the page's own calendar (`cmeSessionDay`,
-  `nyseHolidays`, `nyseEarlyCloses`, `cmeClosed`) agrees with the copy on every day of 2026 and 2027 but one: Good
-  Friday 2026, which the page treats as closed and CME ran as an abbreviated session with its own trade date. The page
-  and ChartBridge are not switched: that waits for Anthony's ruling.
-- `test/test_markup_shared_contracts.py`: the Markup Studio's instrument table matches the shared contract values.
 
 ## Unreleased (2026-11-04): getting ready to go private: the PC updater accepts the box job and reads a chart-engine token; placeholders
 
