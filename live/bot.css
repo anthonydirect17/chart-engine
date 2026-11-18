@@ -113,6 +113,11 @@ body:not(.bt-on) .bt-view.bt-in-ws { display: none !important; }
 .bt-rails-edit { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; font-size: 12px; color: var(--ws-text2); }
 .bt-rails-edit input { width: 54px; height: 24px; box-sizing: border-box; margin-left: 4px; background: var(--ws-field); color: var(--ws-text); border: 1px solid var(--ws-line2); border-radius: 5px; padding: 0 6px; font: 12px var(--ws-mono); }
 .bt-rails-edit .ws-btn { height: 24px; padding: 0 9px; }
+/* release 1 (1.6b): the day stops under Rails, a rail not set (fail closed) and a day stop reached */
+.bt-railset { margin: 2px 0; }
+.bt-railmiss { color: var(--ws-warn); }
+.bt-daystop { color: var(--ws-sell); }
+.bt-rails-edit input[inputmode="decimal"] { width: 72px; }
 /* the kill switch: never animated, always the same place */
 .bt-kill { border: 1px solid color-mix(in srgb, var(--ws-sell) 60%, transparent); background: var(--ws-sell-ground); color: #FFC9D3; border-radius: 9px; padding: 9px; font: 700 12px var(--ws-sans); letter-spacing: .06em; text-transform: uppercase; width: 100%; cursor: pointer; }
 .bt-kill:hover { border-color: var(--ws-sell); }

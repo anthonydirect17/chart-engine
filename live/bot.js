@@ -30,7 +30,10 @@
  *   - The page never builds an order for the bot. Accept sends `botAnswer` with the proposal's id; ChartBridge places the
  *     order from the proposal's own parameters. The kill switch, the mode, the rails and the answers are the only bot
  *     messages this page sends, and ChartBridge checks every one.
- *   - Rails are tighten-only on the page as well (`botRails`, BotCore.railsChange); ChartBridge refuses a loosening.
+ *   - Rails (release 1, step 1.6b): every rail is set here (`botRails`, BotCore.railsChange) and all are required: the size (up to
+ *     the hard ceiling of the root, 2 minis or 20 micros), trades and losing trades a day, the day's loss and profit stops in
+ *     dollars. Nothing has a default: a rail not set keeps the bot from arming (fail closed). A day stop reached flattens the bot,
+ *     latches the day and drops it to Shadow; it is armed again by hand. The bot trades the personal account only.
  *   - Motion (live/motion.js, docs/MOTION.md) is used for the Bot tab and the Library only. R3: the kill switch, the
  *     mode, Accept and Reject, the position and P&L figures and the pop-ups are marked data-no-motion and are never
  *     animated. R4: a click or a key during a scene finishes it at once and still acts (the kit's rule). The chart in the
@@ -120,7 +123,7 @@ function create(o) {
             '<p class="bt-why" data-k="modeWhy" hidden></p><p class="bt-why bt-prwhy" data-k="prWhy" role="note" hidden></p></div>' +
           '<div class="bt-kv" data-in=".1,.38">' +
             '<span class="k">Bot</span><span class="v" data-k="name">-</span>' +
-            '<span class="k">Size</span><span class="v" data-k="size" title="ChartBridge\'s botRoot in config.txt; at most 1 contract (a rail)">-</span>' +
+            '<span class="k">Size</span><span class="v" data-k="size" title="The size set under Rails: at most the hard ceiling (2 minis or 20 micros); config.txt\'s maxQty does not cap the bot">-</span>' +
             '<span class="k">Status</span><span class="v" data-k="status">-</span>' +
             '<span class="k">Heartbeat</span><span class="v mono" data-k="beat">-</span>' +
           '</div>' +
@@ -130,7 +133,7 @@ function create(o) {
               '<button type="button" class="ws-btn primary" data-act="acctSave">Set</button><button type="button" class="ws-btn" data-act="acctCancel">Cancel</button></div>' +
             '<div class="bt-acct-ask" data-k="acctAsk" role="alertdialog" aria-label="Trade a LIVE account" hidden><span data-k="acctAskText"></span>' +
               '<button type="button" class="ws-btn bt-live-go" data-act="acctYes">Continue</button><button type="button" class="ws-btn" data-act="acctNo">Cancel</button></div>' +
-            '<div class="bt-row"><button type="button" class="ws-btn bt-small" data-act="acctOpen" data-k="acctOpen" title="The account the bot trades: Sim or LIVE, any account ChartBridge says is tradable; only while the bot is flat">Change account</button><span class="bt-why" data-k="acctWhy"></span></div>' +
+            '<div class="bt-row"><button type="button" class="ws-btn bt-small" data-act="acctOpen" data-k="acctOpen" title="The account the bot trades: your personal account only (picked once on the Accounts tab; Sim later); only while the bot is flat">Change account</button><span class="bt-why" data-k="acctWhy"></span></div>' +
           '</div>' +
           '<div class="bt-kv bt-money" data-no-motion>' +
             '<span class="k">Position</span><span class="v mono" data-k="pos">-</span>' +
@@ -139,11 +142,17 @@ function create(o) {
           '<div class="bt-sec" data-in=".16,.44"><span class="bt-cap">Rails <span class="bt-capn">ChartBridge enforces them</span></span>' +
             '<div class="bt-rail" data-k="railT"><div class="top"><span>Trades</span><span class="mono" data-k="railTText">-</span></div><div class="bt-meter"><i data-grow=".2,.6"></i></div></div>' +
             '<div class="bt-rail" data-k="railL"><div class="top"><span>Losing trades</span><span class="mono" data-k="railLText">-</span></div><div class="bt-meter"><i data-grow=".24,.64"></i></div></div>' +
-            '<div class="bt-rails-edit" data-k="railsEdit" hidden><label>Trades <input type="number" min="1" max="5" step="1" inputmode="numeric" data-k="railTIn"></label>' +
-              '<label>Losing trades <input type="number" min="1" max="3" step="1" inputmode="numeric" data-k="railLIn"></label>' +
+            '<div class="bt-kv bt-railset" data-k="railSet"><span class="k">Day loss stop</span><span class="v mono" data-k="railDL">-</span><span class="k">Day profit stop</span><span class="v mono" data-k="railDP">-</span></div>' +
+            '<p class="bt-why bt-railmiss" data-k="railMiss" role="note" hidden></p>' +
+            '<p class="bt-why bt-daystop" data-k="dayStop" role="alert" hidden></p>' +
+            '<div class="bt-rails-edit" data-k="railsEdit" hidden><label>Size <input type="number" min="1" max="20" step="1" inputmode="numeric" data-k="railSIn"></label>' +
+              '<label>Trades <input type="number" min="1" max="100" step="1" inputmode="numeric" data-k="railTIn"></label>' +
+              '<label>Losing trades <input type="number" min="1" max="100" step="1" inputmode="numeric" data-k="railLIn"></label>' +
+              '<label>Day loss stop $ <input type="text" inputmode="decimal" data-k="railDLIn"></label>' +
+              '<label>Day profit stop $ <input type="text" inputmode="decimal" data-k="railDPIn"></label>' +
               '<label>Root <select class="ws-sel" data-k="railRoot" aria-label="The bot\'s root"></select></label>' +
               '<button type="button" class="ws-btn primary" data-act="railsSave">Set</button><button type="button" class="ws-btn" data-act="railsCancel">Cancel</button></div>' +
-            '<div class="bt-row"><button type="button" class="ws-btn bt-small" data-act="railsOpen" data-k="railsOpen" title="At most 5 trades and 3 losing trades a day (ChartBridge\'s own limits), on botRoot or its micro or mini; only while the bot is flat">Change the rails</button><span class="bt-why" data-k="railsWhy"></span></div>' +
+            '<div class="bt-row"><button type="button" class="ws-btn bt-small" data-act="railsOpen" data-k="railsOpen" title="Every rail is yours to set and all are needed: size, trades, losing trades, the day\'s loss and profit stops; on botRoot or its micro or mini; only while the bot is flat">Set the rails</button><span class="bt-why" data-k="railsWhy"></span></div>' +
           '</div>' +
           '<button type="button" class="bt-kill" data-no-motion data-act="kill" data-k="kill">Kill switch</button>' +
           '<div class="bt-sec" data-in=".22,.5"><span class="bt-cap">Day type <span class="bt-capn">every call logged</span></span>' +
@@ -245,7 +254,10 @@ function create(o) {
       log.add({ k: 'acct:' + Date.now(), kind: 'account', text, level: a.mark === 'LIVE' ? 'amber' : '' });
       notice({ kind: 'account', level: a.mark === 'LIVE' ? 'amber' : '', text });
     }
-    if (prev && (prev.maxTrades !== m.maxTrades || prev.maxLosses !== m.maxLosses || prev.root !== m.root)) log.add({ k: 'rails:' + Date.now(), kind: 'rails', text: 'Rails: ' + m.maxTrades + ' trades, ' + m.maxLosses + ' losing trades, ' + m.root });
+    if (prev && (prev.maxTrades !== m.maxTrades || prev.maxLosses !== m.maxLosses || prev.root !== m.root || prev.size !== m.size || prev.dayLoss !== m.dayLoss || prev.dayProfit !== m.dayProfit))
+      log.add({ k: 'rails:' + Date.now(), kind: 'rails', text: 'Rails: size ' + (m.size == null ? 'not set' : m.size) + ', ' + (m.maxTrades == null ? 'trades not set' : m.maxTrades + ' trades') + ', ' + (m.maxLosses == null ? 'losing trades not set' : m.maxLosses + ' losing trades') +
+        ', day stops ' + (m.dayLoss == null ? 'not set' : '-$' + m.dayLoss) + ' and ' + (m.dayProfit == null ? 'not set' : '+$' + m.dayProfit) + ', ' + m.root });
+    if (prev && !prev.dayStop && m.dayStop && m.dayStop.text) log.add({ k: 'daystop:' + Date.now(), kind: 'rails', text: 'Day stop: ' + m.dayStop.text, level: 'red' });   // release 1 (1.6b)
     render();
   }
   function onSignal(s) {
@@ -756,7 +768,16 @@ function create(o) {
     put(q('[data-k="acctEdit"]'), 'hidden', !S.acctEdit || !!S.acctAsk);
     put(q('[data-k="acctAsk"]'), 'hidden', !S.acctAsk);
     if (S.acctAsk) put(q('[data-k="acctAskText"]'), 'textContent', 'The bot will trade LIVE account ' + S.acctAsk + ' in ' + (BC.MODE_NAME[S.bot && S.bot.mode] || 'Shadow') + '. Continue?');   // 1.18.1: the mode it keeps
-    put(q('[data-k="size"]'), 'textContent', (b.root || botRoot()) + ' (' + (MICRO[b.root || botRoot()] || 'contract') + '), 1 contract');
+    const sz = isNum(b.size) ? b.size : null;
+    put(q('[data-k="size"]'), 'textContent', (b.root || botRoot()) + ' (' + (MICRO[b.root || botRoot()] || 'contract') + '), ' + (sz === null ? 'not set' : sz + (sz === 1 ? ' contract' : ' contracts')));
+    put(q('[data-k="railDL"]'), 'textContent', isNum(b.dayLoss) ? BC.fmtUsd(-b.dayLoss) : 'not set');
+    put(q('[data-k="railDP"]'), 'textContent', isNum(b.dayProfit) ? BC.fmtUsd(b.dayProfit) : 'not set');
+    const miss = BC.railsMissingText(b);
+    put(q('[data-k="railMiss"]'), 'textContent', miss ? 'Not set: ' + miss + '. The bot does not trade until every rail is set.' : '');
+    put(q('[data-k="railMiss"]'), 'hidden', !miss);
+    const ds = b.dayStop && typeof b.dayStop.text === 'string' ? b.dayStop.text : '';
+    put(q('[data-k="dayStop"]'), 'textContent', ds ? 'Day stop: ' + ds : '');
+    put(q('[data-k="dayStop"]'), 'hidden', !ds);
     put(q('[data-k="status"]'), 'textContent', BC.statusText(b));
     const beat = q('[data-k="beat"]');
     put(beat, 'textContent', on && isNum(b.lastBeatMs) ? (b.lastBeatMs / 1000).toFixed(1) + ' s ago' : b.enabled ? 'none' : '-');
@@ -776,7 +797,7 @@ function create(o) {
       put(bar, 'className', x.level === 'ok' ? '' : x.level);
       tog(box, 'amber', x.level === 'amber'); tog(box, 'red', x.level === 'red');
     }
-    put(q('[data-k="railsOpen"]'), 'disabled', !S.signedIn || !isNum(b.maxTrades) || !!(b.position && b.position.qty) || !!held);   // ChartBridge refuses a change unless the bot is flat
+    put(q('[data-k="railsOpen"]'), 'disabled', !S.signedIn || typeof b.root !== 'string' || !!(b.position && b.position.qty) || !!held);   // 1.6b: rails not set yet may be set   // ChartBridge refuses a change unless the bot is flat
     put(q('[data-k="railsEdit"]'), 'hidden', !S.railsEdit);
     const kill = q('[data-k="kill"]');
     put(kill, 'textContent', b.killed ? (S.killConfirm > Date.now() ? 'Release: click again' : 'Kill switch on · Release') : 'Kill switch');
@@ -919,21 +940,24 @@ function create(o) {
     } else if (a === 'railsOpen') {
       const b = S.bot || {};
       S.railsEdit = true; railsWhy('');
-      q('[data-k="railTIn"]').max = BC.RAIL_MAX.maxTrades; q('[data-k="railTIn"]').value = b.maxTrades;
-      q('[data-k="railLIn"]').max = BC.RAIL_MAX.maxLosses; q('[data-k="railLIn"]').value = b.maxLosses;
       const rs = q('[data-k="railRoot"]'), r = b.root || botRoot();
+      const val = v => (isNum(v) ? String(v) : '');   // a rail not set opens empty: nothing has a default
+      q('[data-k="railSIn"]').max = BC.HARD_CEILING[r] || 20; q('[data-k="railSIn"]').value = val(b.size);
+      q('[data-k="railTIn"]').max = BC.RAIL_MAX.maxTrades; q('[data-k="railTIn"]').value = val(b.maxTrades);
+      q('[data-k="railLIn"]').max = BC.RAIL_MAX.maxLosses; q('[data-k="railLIn"]').value = val(b.maxLosses);
+      q('[data-k="railDLIn"]').value = val(b.dayLoss); q('[data-k="railDPIn"]').value = val(b.dayProfit);
       rs.replaceChildren(...[r, SIBLING[r]].filter(Boolean).map(x => new Option(x + ' (' + (MICRO[x] || 'contract') + ')', x)));
       rs.value = r;
       renderPanel();
-      q('[data-k="railTIn"]').focus();
+      q('[data-k="railSIn"]').focus();
     } else if (a === 'railsCancel') { S.railsEdit = false; railsWhy(''); renderPanel(); }
     else if (a === 'acctOpen') {
       S.acctEdit = true; S.acctAsk = ''; acctWhy('');
       const sel = q('[data-k="acctSel"]'), cur = BC.botAccount(S.bot).name, list = botChoices();   // 1.51.0: on Praetorian, your personal account, Sim and None
       // DECISION 2026-10-14e: None first (nothing trades on it)
-      sel.replaceChildren(new Option(BC.NONE_LABEL + ' (nothing trades)' + (cur ? '' : ', now'), ''), ...list.map(c => { const op = new Option(c.name + ' (' + c.mark + ')' + (c.current ? ', now' : c.praetorian ? ', ' + c.praetorian : c.tradable ? '' : ', not tradable'), c.name); op.disabled = !c.tradable && !c.current; return op; }));
+      sel.replaceChildren(new Option(BC.NONE_LABEL + ' (nothing trades)' + (cur ? '' : ', now'), ''), ...list.map(c => { const op = new Option(c.name + ' (' + c.mark + ')' + (c.current ? ', now' : c.praetorian ? ', ' + c.praetorian : c.sim ? ', Sim: not for now' : !c.personal ? ', not your personal account' : c.tradable ? '' : ', not tradable'), c.name); op.disabled = (!c.tradable || c.sim || !c.personal) && !c.current; return op; }));   // release 1 (1.6b): the personal account only
       sel.value = cur;
-      if (!list.some(c => !c.current)) acctWhy('No other account is tradable in ChartBridge now: check one on the Accounts tab.');
+      if (!list.some(c => !c.current && c.personal && !c.sim && c.tradable)) acctWhy('The bot trades your personal account only: pick it once on the Accounts tab (and check it there) to choose it here.');
       renderPanel();
       sel.focus();
     } else if (a === 'acctCancel' || a === 'acctNo') { S.acctEdit = false; S.acctAsk = ''; acctWhy(''); renderPanel(); }
@@ -945,9 +969,10 @@ function create(o) {
       sendAccount(name);
     } else if (a === 'acctYes') { if (S.acctAsk) sendAccount(S.acctAsk); }
     else if (a === 'railsSave') {
-      const r = BC.railsChange(S.bot, { maxTrades: q('[data-k="railTIn"]').value, maxLosses: q('[data-k="railLIn"]').value, root: q('[data-k="railRoot"]').value });
+      const r = BC.railsChange(S.bot, { size: q('[data-k="railSIn"]').value, maxTrades: q('[data-k="railTIn"]').value, maxLosses: q('[data-k="railLIn"]').value,
+                                        dayLoss: q('[data-k="railDLIn"]').value, dayProfit: q('[data-k="railDPIn"]').value, root: q('[data-k="railRoot"]').value });
       if (r.error) { railsWhy(r.error); return; }
-      if (sendBot(r.msg, 'rails')) { S.railsEdit = false; railsWhy('Sent. ChartBridge keeps them (bot-rails.txt) until you change them again.'); log.add({ k: 'askrails:' + Date.now(), kind: 'rails', text: 'Asked for ' + r.msg.maxTrades + ' trades, ' + r.msg.maxLosses + ' losing trades, ' + r.msg.root }); }
+      if (sendBot(r.msg, 'rails')) { S.railsEdit = false; railsWhy('Sent. ChartBridge keeps them (bot-rails.txt) until you change them again.'); log.add({ k: 'askrails:' + Date.now(), kind: 'rails', text: 'Asked for size ' + r.msg.size + ', ' + r.msg.maxTrades + ' trades, ' + r.msg.maxLosses + ' losing trades, day stops -$' + r.msg.dayLoss + ' and +$' + r.msg.dayProfit + ', ' + r.msg.root }); }
       renderPanel();
     } else if (a === 'popout') popOut();
   }

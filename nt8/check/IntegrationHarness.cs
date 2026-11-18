@@ -296,12 +296,16 @@ public static class IntegrationHarness
     }
 
     // ------------------------------------------------------------ X4: the bot and the copier
+    // release 1 (1.6b): the bot's size is the Bot tab's (no default: fail closed); here 1, as Anthony would set it. Placed straight
+    // through ChartBridgeOrders.PlaceBotEntry (the order layer), so the personal-account rule (ChartBridgeBot.Place) is not in the way.
+    static void BotSize(int n) { typeof(ChartBridgeBot).GetField("size", PS).SetValue(null, n); }
     static string BotEntry() { return "{\"type\":\"order\",\"account\":\"Sim101\",\"root\":\"MNQ\",\"side\":\"buy\",\"kind\":\"market\",\"qty\":1,\"bracket\":{\"stop\":8,\"target\":16}}"; }
 
     static void BotNeverCopied()
     {
         // the copier on, its leader Sim101 (the bot's account), armed with SIM-F1 on (set in X2)
         ChartBridgeOrders.NoteLast("MNQ", 25000);
+        BotSize(1);
         int leadCalls = lead.Calls.Count, fCalls = f1.Calls.Count;
         Order placed;
         string why = ChartBridgeOrders.PlaceBotEntry(BotEntry(), out placed);
@@ -545,6 +549,7 @@ public static class IntegrationHarness
             Msg("order", StratOrder("Sim101", 1, NoBe));
             Check(Rejected("Group Lucid is short (SIM-L -1 MNQ): a buy on Sim101 would hedge the group") && lead.Calls.Count == n && CopyEntries(f1) == copies, "X14: a strategy entry on the leader while its group is short: refused, nothing sent, nothing copied: " + Last());
             Order placed;
+            BotSize(1);   // release 1 (1.6b): the Bot tab's size, so the group's refusal is the one tried
             string why = ChartBridgeOrders.PlaceBotEntry("{\"type\":\"order\",\"account\":\"Sim101\",\"root\":\"MNQ\",\"side\":\"buy\",\"kind\":\"market\",\"qty\":1,\"bracket\":{\"stop\":8,\"target\":16}}", out placed);
             Check(why != null && why.Contains("Group Lucid is short") && lead.Calls.Count == n, "X14: a bot entry on the group's account: refused the same way: " + why);
             Msg("order", "{\"type\":\"order\",\"cid\":\"x14\",\"account\":\"SIM-L\",\"root\":\"MNQ\",\"side\":\"buy\",\"kind\":\"market\",\"qty\":1}");
@@ -609,6 +614,7 @@ public static class IntegrationHarness
             Check(!Rejected(""), "X10: the copier's leader is SIM-L: " + Last());
             ChartBridgeSwitches.Note("bot", "on");
             typeof(ChartBridgeBot).GetField("account", PS).SetValue(null, "Sim101");   // 0.5.7: None by default; Sim101 chosen for the bot, as Anthony would
+            BotSize(1);
             int leadCalls = lead.Calls.Count;
             Msg("copierFollower", "{\"type\":\"copierFollower\",\"cid\":\"f9\",\"account\":\"Sim101\",\"on\":true,\"qty\":1,\"size\":\"micro\",\"lossLimit\":null}");
             Check(Rejected("Sim101 is the bot's account: it cannot be a copier follower while the bot trades it (choose another account for the bot on the Bot tab first).") && Logged("copier refused Sim101"),
@@ -627,14 +633,30 @@ public static class IntegrationHarness
                   "X10 (review 2 finding 3): Sim101 is a copier follower: a bot entry is refused, in plain words, nothing sent, logged: " + why);
             // Anthony 2026-10-07 (the bot trades the account he chooses): the bot's account can never become a follower that is on,
             // nor the copier's leader: botAccount refuses both, in plain words
-            lock (sent) sent.Clear();
-            ChartBridgeBot.OnPageMessage(page, "botAccount", "{\"type\":\"botAccount\",\"cid\":\"ba1\",\"account\":\"SIM-F1\"}");
-            Check(Rejected("SIM-F1 is a copier follower: the bot does not trade while the copier copies to its account") && ChartBridgeBot.BotAccount == "Sim101",
-                  "X10: botAccount: a copier follower that is on cannot become the bot's account: " + Last());
-            lock (sent) sent.Clear();
-            ChartBridgeBot.OnPageMessage(page, "botAccount", "{\"type\":\"botAccount\",\"cid\":\"ba2\",\"account\":\"SIM-L\"}");
-            Check(Rejected("SIM-L is the copier's leader: the bot cannot trade the leader's account while the copier is on") && ChartBridgeBot.BotAccount == "Sim101",
-                  "X10: botAccount: the copier's leader cannot become the bot's account: " + Last());
+            // release 1 (1.6b): the bot's account is the personal account only, never Sim: each is first made the live personal
+            // account here (made up), so the copier's own refusal is the one tried
+            string pf = Path.Combine(ChartBridgeConfig.Folder, "personal-account.txt");
+            try
+            {
+                f1.Provider = Provider.Rithmic;
+                File.WriteAllLines(pf, new[] { "# made-up", "# test", "account\tSIM-F1" }); ChartBridgeBranches.LoadPersonal();
+                lock (sent) sent.Clear();
+                ChartBridgeBot.OnPageMessage(page, "botAccount", "{\"type\":\"botAccount\",\"cid\":\"ba1\",\"account\":\"SIM-F1\"}");
+                Check(Rejected("SIM-F1 is a copier follower: the bot does not trade while the copier copies to its account") && ChartBridgeBot.BotAccount == "Sim101",
+                      "X10: botAccount: a copier follower that is on cannot become the bot's account: " + Last());
+                f1.Provider = Provider.Simulator; other.Provider = Provider.Rithmic;
+                File.WriteAllLines(pf, new[] { "# made-up", "# test", "account\tSIM-L" }); ChartBridgeBranches.LoadPersonal();
+                lock (sent) sent.Clear();
+                ChartBridgeBot.OnPageMessage(page, "botAccount", "{\"type\":\"botAccount\",\"cid\":\"ba2\",\"account\":\"SIM-L\"}");
+                Check(Rejected("SIM-L is the copier's leader: the bot cannot trade the leader's account while the copier is on") && ChartBridgeBot.BotAccount == "Sim101",
+                      "X10: botAccount: the copier's leader cannot become the bot's account: " + Last());
+                other.Provider = Provider.Simulator;
+                lock (sent) sent.Clear();
+                ChartBridgeBot.OnPageMessage(page, "botAccount", "{\"type\":\"botAccount\",\"cid\":\"ba3\",\"account\":\"SIM-L\"}");
+                Check(Rejected("SIM-L is a Sim account: the bot trades the personal account only") && ChartBridgeBot.BotAccount == "Sim101",
+                      "X10 (release 1, 1.6b): botAccount: a Sim account is refused first, whatever the copier: " + Last());
+            }
+            finally { f1.Provider = Provider.Simulator; other.Provider = Provider.Simulator; try { File.Delete(pf); } catch (Exception) { } ChartBridgeBranches.LoadPersonal(); }
 
             // and the copier copies nothing to Sim101 while the bot is on
             Msg("copierRearm", "{\"type\":\"copierRearm\",\"cid\":\"r10\"}");

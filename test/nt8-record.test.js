@@ -399,7 +399,7 @@ test('0.6.22: the lanes, the day\'s loss stop and the voice calls: the order pat
   const sha = t => crypto.createHash('sha256').update(t).digest('hex');
   const same = {
     'ChartBridgeBars.cs': '7a9de59769499d804767461f67f8442c7a44a04b8b8bfae8cf6f4879b5186664',
-    'ChartBridgeBot.cs': '33ca2af1f1867f14ab188f659ad63210933801b62c951234255972111fef84b1',
+    // ChartBridgeBot.cs: release 1 step 1.6b (unreleased, the personal bot) changed it; its rules are BotHarness's (check:orders)
     'ChartBridgeCopier.cs': 'bb90a637610b3b56236c6cfba014c1a1db40110f2b821bbeecf7778f2f4e6e49',
     'ChartBridgeMerge.cs': '7aa31e37d38c1875eb236e1575d20f49ed31c1e2c08fc9d265d5aa7e0a32952c',
     'ChartBridgeOrderRecord.cs': 'de33b77a1d774d2ce8d11a5f3a8e927f1ff085c7d8f47259ff6a542d18ccc1f1',
@@ -418,7 +418,12 @@ test('0.6.22: the lanes, the day\'s loss stop and the voice calls: the order pat
   const orders = ['            if (kind == "stop") ChartBridgeVoice.OnStopMoved(o, price);   // 0.6.22: listen only (to its fill price: Break even set)',
     '            ChartBridgeVoice.NoteFlatten(account, inst);   // 0.6.22: listen only (its close says Position closed)'];
   const strategies = ['                    ChartBridgeVoice.OnStopMoved(stop, d.Value);   // 0.6.22: listen only (breakeven, never a trailing move: only at its fill price)'];
-  assert.strictEqual(sha(without('ChartBridgeOrders.cs', orders)), '8e15e56a06b1f2597b5ff1ecebccba724b27a019819fa691b9f0a30c16bfaffd', 'ChartBridgeOrders.cs: the 0.6.18 file but for the two voice lines');
+  // release 1 step 1.6b (unreleased, Anthony 2026-11-18 "Bot tab + hard ceiling"): one line of gate 3 changes, the bot's cap only, listed word for word
+  const r1b = ['            if (bot) cap = ChartBridgeBot.EntryCap(root, out capWhy);   // release 1 (1.6b, Anthony 2026-11-18 "Bot tab + hard ceiling"): the bot\'s size and the hard ceiling only, on the order and the position (gate 3\'s own count); config.txt\'s maxQty no longer caps the bot (the ticket\'s and the agents\' caps are unchanged)',
+               '            if (bot) cap = Math.Min(cap, ChartBridgeBot.MaxQty);   // 0.4.0 bot: the 1 contract rail, on the order and the position (gate 3\'s own count)'];
+  const ordersNow = without('ChartBridgeOrders.cs', orders);
+  assert.strictEqual(ordersNow.split(r1b[0] + '\n').length, 2, 'ChartBridgeOrders.cs: the 1.6b gate 3 line is there once');
+  assert.strictEqual(sha(ordersNow.replace(r1b[0] + '\n', r1b[1] + '\n')), '8e15e56a06b1f2597b5ff1ecebccba724b27a019819fa691b9f0a30c16bfaffd', 'ChartBridgeOrders.cs: the 0.6.18 file but for the two voice lines and the 1.6b gate 3 line');
   assert.strictEqual(sha(without('ChartBridgeStrategies.cs', strategies)), '968179e96aa887424b9df26148f8ae65bc3c60238f6f9de90f238e7781ab9193', 'ChartBridgeStrategies.cs: the 0.6.18 file but for the one voice line');
   // each voice entry the order path calls is off unless config says voice = on, and catches everything it does
   const main = read('ChartBridge.cs');

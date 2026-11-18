@@ -77,7 +77,7 @@ export const KEYS = Object.assign({}, V2_KEYS, {
   botKill: ['type', 'cid', 'on'],
   botSeen: ['type', 'id', 'at'],
   botAnswer: ['type', 'cid', 'id', 'answer', 'at'],
-  botRails: ['type', 'cid', 'maxTrades', 'maxLosses', 'root'],   // as ChartBridge 0.4.0 built it (ChartBridgeBot.cs SetRails)
+  botRails: ['type', 'cid', 'size', 'maxTrades', 'maxLosses', 'dayLoss', 'dayProfit', 'root'],   // release 1 (1.6b): ChartBridgeBot.cs SetRails, all required
   botAccount: ['type', 'cid', 'account'],                          // Anthony 2026-10-07: the bot's account (ChartBridgeBot.cs SetAccount)
   // ChartBridge 0.5.0, the agent channel (contract AGENT_CHANNEL v1, section 7): flat keys only
   agentMode: ['type', 'cid', 'agent', 'mode'],
@@ -103,6 +103,12 @@ const SWITCH_OF = { accountTrade: 'accountChecks', accountArchive: null, account
 
 const isInt = v => typeof v === 'number' && Number.isInteger(v);
 const BOT_SIBLING = { MNQ: 'NQ', NQ: 'MNQ', MES: 'ES', ES: 'MES' };   // ChartBridgeBot.cs Sibling
+/* release 1 (1.6b): the bot's size is capped only by the hard ceiling (ChartBridgeAgents.HardCeiling), and the rails a made-up PC
+   already set (the fake starts with them; botRails: null in the options starts with none set, as a fresh ChartBridge does) */
+const BOT_CEILING = { NQ: 2, ES: 2, MNQ: 20, MES: 20 };
+const BOT_RAILS_SET = { size: 1, maxTrades: 5, maxLosses: 3, dayLoss: 500, dayProfit: 500 };
+const BOT_RAIL_WORDS = { size: 'the size', maxTrades: 'the trades a day', maxLosses: 'the losing trades a day', dayLoss: 'the day\'s loss stop', dayProfit: 'the day\'s profit stop' };
+const BOT_MONEY = v => typeof v === 'number' && isFinite(v) && v > 0 && v <= 1000000 && Math.round(v * 100) === v * 100;
 const WORKING = new Set(['working', 'partFilled']);
 const isWorking = o => WORKING.has(o.state);
 const isLeg = o => o.role === 'stop' || o.role === 'target';
@@ -202,7 +208,8 @@ export class OrderDeskV3 extends OrderDesk {
     this.mergedSets = new Map();   // 'account|root' -> { stopId, targetIds } for a multi-target merge
     this.copier = { leader: 'Sim101', mode: 'executions', armed: false, standDownWhy: 'ChartBridge started: press Re-arm', followers: new Map(), drops: [], decisions: 0, skipped: 0, standDowns: 0, leaderMs: [] };
     this.botAccount = o.botAccount || null;      // the bot's account (botAccount; bot-account.txt); null is None (0.5.7: nothing trades until chosen)
-    this.bot = { connected: false, simulated: false, name: null, mode: 'shadow', killed: false, standDown: null, trades: 0, losses: 0, lastBeat: 0, lastSignal: null, conn: null, maxTrades: 5, maxLosses: 3,
+    const rails = o.botRails === null ? { size: null, maxTrades: null, maxLosses: null, dayLoss: null, dayProfit: null } : Object.assign({}, BOT_RAILS_SET, o.botRails || {});
+    this.bot = { connected: false, simulated: false, name: null, mode: 'shadow', killed: false, standDown: null, trades: 0, losses: 0, lastBeat: 0, lastSignal: null, conn: null, ...rails, dayStop: null,
       proposals: new Map(), signals: [], stats: { signals: 0, proposals: 0, answered: 0, notAnswered: 0, placed: 0, refused: 0, heartbeatLost: 0 } };
     this.agentsInit(o);
     this.groupsInit(o);   // 0.5.8
@@ -919,10 +926,29 @@ export class OrderDeskV3 extends OrderDesk {
     const b = this.bot, p = this.pos(this.botAccount, this.botRoot);
     return { type: 'bot', enabled: this.sw.bot, connected: b.connected, name: b.name, mode: b.mode, account: this.botAccount, sim: this.botSim(), root: this.botRoot,
       position: { qty: b.position ? p.qty : 0, avgPrice: b.position && p.qty ? p.avgPrice : null }, pnlToday: +(b.pnl || 0).toFixed(2), trades: b.trades, maxTrades: b.maxTrades,
-      losses: b.losses, maxLosses: b.maxLosses, maxQty: 1, killed: b.killed, standDown: this.botAccount ? b.standDown : BOT_NONE_WHY, lastBeatMs: b.connected ? (b.simulated ? 400 : this.now() - b.lastBeat) : null, lastSignal: b.lastSignal };   // the simulated bot never misses a beat
+      losses: b.losses, maxLosses: b.maxLosses, maxQty: b.size, size: b.size, hardCeiling: BOT_CEILING[this.botRoot] || 0, dayLoss: b.dayLoss, dayProfit: b.dayProfit,
+      railsMissing: this.botMissing(), dayStop: b.dayStop, personal: !!(this.botAccount && this.personalName && this.botAccount === this.personalName),
+      killed: b.killed, standDown: this.botStandDown(), lastBeatMs: b.connected ? (b.simulated ? 400 : this.now() - b.lastBeat) : null, lastSignal: b.lastSignal };   // the simulated bot never misses a beat
+  }
+  /* release 1 (1.6b, ChartBridgeBot.cs): the rails not set (fail closed), and the stand-down's order: None, the personal account (only
+     when the fake names one: --personal; without it the demo keeps its made-up bot account), a rail not set, a day stop, the losses */
+  botMissing() { const b = this.bot; return ['size', 'maxTrades', 'maxLosses', 'dayLoss', 'dayProfit'].filter(k => !(typeof b[k] === 'number' && b[k] > 0)); }
+  botMissingWhy() {
+    const w = this.botMissing().map(k => BOT_RAIL_WORDS[k]);
+    if (!w.length) return null;
+    return 'the bot\'s rails are not set: ' + (w.length === 1 ? w[0] : w.slice(0, -1).join(', ') + ' and ' + w[w.length - 1]) + ' (set ' + (w.length === 1 ? 'it' : 'them') + ' on the Bot tab; until then the bot does not trade)';
+  }
+  botPersonalWhy(name) {
+    if (!name || !this.personalName) return null;
+    if (this.botSim(name)) return name + ' is a Sim account: the bot trades the personal account only (Sim comes back once the WORK check shows Lucid\'s accounts do not read as Simulator)';
+    return name === this.personalName ? null : name + ' is not the personal account: the bot trades the personal account only (choose it on the Bot tab)';
+  }
+  botStandDown() {
+    if (!this.botAccount) return BOT_NONE_WHY;
+    return this.botPersonalWhy(this.botAccount) || this.botMissingWhy() || (this.bot.dayStop ? this.bot.dayStop.text : null) || this.bot.standDown;
   }
   botSim(name) { const a = this.acct.get(name || this.botAccount); return !!(a && a.sim); }
-  botStateMsg() { const b = this.bot; return { type: 'botState', mode: b.mode, killed: b.killed, standDown: this.botAccount ? b.standDown : BOT_NONE_WHY, trades: b.trades, losses: b.losses }; }
+  botStateMsg() { const b = this.bot; return { type: 'botState', mode: b.mode, killed: b.killed, standDown: this.botStandDown(), trades: b.trades, losses: b.losses, dayStop: b.dayStop ? b.dayStop.kind : null }; }
   botNotify() { this.broadcastV3(this.botMsg()); if (this.bot.conn) this.send(this.bot.conn, this.botStateMsg()); }
   botClosed(pts) {
     const b = this.bot; b.pnl = (b.pnl || 0) + pts * this.instruments[this.botRoot].pointValue;
@@ -934,6 +960,7 @@ export class OrderDeskV3 extends OrderDesk {
     if (!['shadow', 'copilot', 'auto'].includes(m.mode)) return 'mode must be shadow, copilot or auto.';
     if (m.mode === 'auto' && !this.botAccount) return 'auto refused: ' + BOT_NONE_WHY;
     if (m.mode === 'auto' && !this.accounts.includes(this.botAccount)) return 'auto refused: ' + this.botAccount + ' may not trade from the chart: the bot needs it tradable';
+    if (m.mode !== 'shadow') { const why = this.botPersonalWhy(this.botAccount) || this.botMissingWhy() || (this.bot.dayStop ? this.bot.dayStop.text : null); if (why) return m.mode + ' refused: ' + why; }   // release 1 (1.6b)
     return null;
   }
   do_botMode(m) { this.bot.mode = m.mode; this.botNotify(); }
@@ -965,24 +992,28 @@ export class OrderDeskV3 extends OrderDesk {
     this.botAnswerToBot(p.id, why ? 'refused' : 'accepted', why || 'placed on ' + p.account);
     if (why) this.broadcastV3({ type: 'status', level: 'warn', text: 'Bot proposal ' + p.id + ' was accepted but refused: ' + why });
   }
-  /* botRails as ChartBridge 0.4.0 built it (ChartBridgeBot.cs SetRails, PROTOCOL.md "The bot channel as built"): maxTrades
-     1 to 5, maxLosses 1 to 3 (ChartBridge's own limits), root botRoot or its micro or mini sibling, all three required;
+  /* botRails (release 1, step 1.6b; ChartBridgeBot.cs SetRails): every rail, all required: size 1 to the hard ceiling of the root,
+     maxTrades and maxLosses 1 to 100, dayLoss and dayProfit dollars above 0 (2 decimals), root botRoot or its micro or mini sibling;
      refused while the bot has a position or a working entry; saved in bot-rails.txt, so a restart and a new day keep them */
   check_botRails(m) {
     const b = this.bot, root = typeof m.root === 'string' ? m.root.toUpperCase() : '', sib = BOT_SIBLING[this.botConfigRoot];
-    if (!isInt(m.maxTrades) || m.maxTrades < 1 || m.maxTrades > 5) return 'maxTrades must be a whole number from 1 to 5';
-    if (!isInt(m.maxLosses) || m.maxLosses < 1 || m.maxLosses > 3) return 'maxLosses must be a whole number from 1 to 3';
     if (root !== this.botConfigRoot && root !== sib) return 'root must be ' + this.botConfigRoot + (sib ? ' or ' + sib : '') + ' (botRoot and its micro/mini sibling)';
     if (!this.instruments[root] || this.instruments[root].quoteOnly) return 'instrument ' + root + ' is not traded by ChartBridge';
+    const ceil = BOT_CEILING[root] || 0;
+    if (!isInt(m.size) || m.size < 1 || m.size > ceil) return 'size must be a whole number from 1 to ' + ceil + ' for ' + root + ' (the hard ceiling: 2 minis or 20 micros, raised only by a new ChartBridge build)';
+    if (!isInt(m.maxTrades) || m.maxTrades < 1 || m.maxTrades > 100) return 'maxTrades must be a whole number from 1 to 100';
+    if (!isInt(m.maxLosses) || m.maxLosses < 1 || m.maxLosses > 100) return 'maxLosses must be a whole number from 1 to 100';
+    if (!BOT_MONEY(m.dayLoss)) return 'dayLoss must be dollars above 0, at most 1000000, at most 2 decimals (the day\'s loss stop, realized plus open)';
+    if (!BOT_MONEY(m.dayProfit)) return 'dayProfit must be dollars above 0, at most 1000000, at most 2 decimals (the day\'s profit stop, realized plus open)';
     if (b.position || [...this.orders.values()].some(o => isWorking(o) && o.by === 'bot' && o.role === 'entry')) return 'the bot has a position or a working entry: change its rails when it is flat';
     return null;
   }
   do_botRails(m) {
     const b = this.bot;
-    b.maxTrades = m.maxTrades; b.maxLosses = m.maxLosses; this.botRoot = m.root.toUpperCase();
+    b.size = m.size; b.maxTrades = m.maxTrades; b.maxLosses = m.maxLosses; b.dayLoss = m.dayLoss; b.dayProfit = m.dayProfit; this.botRoot = m.root.toUpperCase();
     if (b.losses >= b.maxLosses && !b.standDown) b.standDown = b.losses + ' losing trades today: no new bot entries until 18:00 ET';
     if (b.losses < b.maxLosses && b.standDown && /losing trades today/.test(b.standDown)) b.standDown = null;
-    this.logLine('bot', this.botAccount, 'rails set by the page: ' + b.maxTrades + ' trades, ' + b.maxLosses + ' losing trades, ' + this.botRoot);
+    this.logLine('bot', this.botAccount, 'rails set by the page: size ' + b.size + ' ' + this.botRoot + ', ' + b.maxTrades + ' trades, ' + b.maxLosses + ' losing trades, day loss stop $' + b.dayLoss + ', day profit stop $' + b.dayProfit);
     if (b.conn) this.send(b.conn, this.welcomeMsg());   // so the bot knows its root and rails
     this.botNotify();
   }
@@ -995,6 +1026,7 @@ export class OrderDeskV3 extends OrderDesk {
     if (name === null) return exposed() ? 'the bot has a position or a working entry: choose None when it is flat' : null;   // 0.5.7: None
     if (typeof name !== 'string' || !name || name.trim() !== name || name === '-') return 'account must be an account name, or null for None';
     if (/^(Backtest|Playback)/i.test(name)) return name + ' is a Backtest or Playback account: the bot never trades one';
+    { const own = a ? this.botPersonalWhy(name) : null; if (own) return own; }   // release 1 (1.6b): the personal account only (with --personal)
     const ag = this.agentOfAccount && this.chosenAgentOf(name); if (ag) return name + ' is agent ' + ag.id + '\'s account: the bot trades an account of its own';   // 0.5.0, section 6 (a chosen account only)
     if (!a || a.state === 'archived') return name + ' is not in NinjaTrader';
     if (!this.config.trading) return 'trading is off in config.txt';
@@ -1021,19 +1053,20 @@ export class OrderDeskV3 extends OrderDesk {
     const b = this.bot;
     if (!this.botAccount) return BOT_NONE_WHY;   // 0.5.7: None
     if (b.killed) return 'the kill switch is on';
-    if (b.standDown) return b.standDown;
+    { const sd = this.botStandDown(); if (sd) return sd; }   // release 1 (1.6b): the personal account, a rail not set, a day stop
     if (b.trades >= b.maxTrades) return 'The bot has made ' + b.maxTrades + ' trades today (the limit).';
     if (!(s.stopTicks >= 1)) return 'every bot entry needs a stop';
     if (!this.config.trading) return 'Trading is off.';
     const acct = this.botAccount, f = this.copier.followers.get(acct);
     if (this.sw.copier && f && f.on) return acct + ' is a copier follower: the bot does not trade while the copier copies to its account (turn that follower off on the page).';
-    const m = { type: 'order', account: acct, root: this.botRoot, side: s.side, kind: s.kind, qty: 1, bracket: { stop: s.stopTicks, target: s.targetTicks || 0 } };
+    const qty = Math.min(b.size, BOT_CEILING[this.botRoot] || 0);   // release 1 (1.6b): the Bot tab's size, the hard ceiling only
+    const m = { type: 'order', account: acct, root: this.botRoot, side: s.side, kind: s.kind, qty, bracket: { stop: s.stopTicks, target: s.targetTicks || 0 } };
     if (s.kind !== 'market') m.price = s.price;
     this._orderSource = 'bot';                       // the owner lock names the bot's refusal as ChartBridge does
     let why;
     try { why = this.checkEntryAccount(acct) || (this.accounts.includes(acct) ? null : acct + ' may not trade from the chart (tradeAccounts in config.txt)') || this.check_order(m); } finally { this._orderSource = null; }
     if (why) { b.stats.refused++; return why; }
-    const o = this.newOrder({ cid: null, account: acct, root: this.botRoot, side: s.side, kind: s.kind, qty: 1, price: s.kind === 'market' ? null : s.price, role: 'entry', by: 'bot', botId: s.id });
+    const o = this.newOrder({ cid: null, account: acct, root: this.botRoot, side: s.side, kind: s.kind, qty, price: s.kind === 'market' ? null : s.price, role: 'entry', by: 'bot', botId: s.id });
     if (s.kind === 'market') o.bracket = { stop: s.stopTicks, target: s.targetTicks || 0 };
     else o.planned = { stopTicks: s.stopTicks, targetTicks: s.targetTicks || null };
     b.position = true; b.stats.placed++;
@@ -1064,7 +1097,7 @@ export class OrderDeskV3 extends OrderDesk {
       if (b.mode === 'shadow') sig.result = 'shadow';
       else if (b.mode === 'copilot') {
         sig.result = 'proposed'; b.stats.proposals++;
-        b.proposals.set(m.id, { type: 'botProposal', id: m.id, at: sig.at, account: this.botAccount, sim: this.botSim(), root: this.botRoot, side: m.side, kind: m.kind, price: sig.price, qty: 1,
+        b.proposals.set(m.id, { type: 'botProposal', id: m.id, at: sig.at, account: this.botAccount, sim: this.botSim(), root: this.botRoot, side: m.side, kind: m.kind, price: sig.price, qty: b.size,
           stopTicks: m.stopTicks, targetTicks: sig.targetTicks, reason: m.reason, state: 'open', seenAt: null, answeredAt: null });
       } else { const why = this.botPlace(Object.assign({}, m)); sig.result = why ? 'refused: ' + why : 'placed'; if (why && b.conn) this.send(b.conn, { type: 'reject', id: m.id, reason: why }); }
     }
@@ -1077,7 +1110,7 @@ export class OrderDeskV3 extends OrderDesk {
   welcomeMsg() {
     /* as ChartBridgeBot.cs WelcomeJson builds it: the bot's own root only */
     const i = this.instruments[this.botRoot];
-    return { type: 'welcome', version: '0.4.0', mode: this.bot.mode, account: this.botAccount, sim: this.botSim(), root: this.botRoot, rails: { maxQty: 1, maxTrades: this.bot.maxTrades, maxLosses: this.bot.maxLosses },
+    return { type: 'welcome', version: '0.4.0', mode: this.bot.mode, account: this.botAccount, sim: this.botSim(), root: this.botRoot, rails: { maxQty: this.bot.size, size: this.bot.size, maxTrades: this.bot.maxTrades, maxLosses: this.bot.maxLosses, dayLoss: this.bot.dayLoss, dayProfit: this.bot.dayProfit },
       instruments: i ? [{ root: this.botRoot, name: i.name, tick: i.tick, pointValue: i.pointValue, quoteOnly: false }] : [] };
   }
   /** every second: the heartbeat (5 s), the copier's sweep, Gone */
@@ -1321,6 +1354,7 @@ Object.assign(OrderDeskV3.prototype, {
    *  lock's exit) skips the per-order qty check, and the position count is held to the agent's cap (or the position when that is
    *  larger), never below the page's; working orders on that side still count. Anything else: config.txt's cap, as before */
   orderCap(m) {
+    if (this._orderSource === 'bot') return [Math.min(this.bot.size || 0, BOT_CEILING[m.root] || 0), 'the bot\'s size on the Bot tab; the hard ceiling for ' + m.root + ' is ' + (BOT_CEILING[m.root] || 0), false];   // release 1 (1.6b): never config.txt's
     const page = [this.capFor(m.root), 'maxQty.' + m.root + ' in config.txt', false];
     if (!this.agents || !this.agents.size || this._orderSource) return page;
     const owner = this.ownerOf(m.account, m.root), p = this.pos(m.account, m.root).qty;

@@ -2114,10 +2114,14 @@ public static class GroupsHarness
         b0 = Submits(simB);
         Order bo;
         Clear();
+        FieldInfo botSize = typeof(ChartBridgeBot).GetField("size", PS);
+        object botSizeWas = botSize.GetValue(null);
+        botSize.SetValue(null, 1);   // release 1 (1.6b): the bot's size is the Bot tab's (no default: fail closed); 1 here, as Anthony would set it
         string bw = ChartBridgeOrders.PlaceBotEntry("{\"type\":\"order\",\"account\":\"SIM-B\",\"root\":\"NQ\",\"side\":\"buy\",\"kind\":\"market\",\"qty\":1,\"bracket\":{\"stop\":400,\"target\":0}}", out bo);
         Check(bw == "its stop risk $2,000 is more than SIM-B's room to the floor $1,500" && bo == null && Submits(simB) == b0 && RiskAlerts().Contains("Held: the bot's entry on SIM-B"), "LIM bot: the order path holds it, nothing sent, one alert: " + bw);
         bw = ChartBridgeOrders.PlaceBotEntry("{\"type\":\"order\",\"account\":\"SIM-B\",\"root\":\"NQ\",\"side\":\"buy\",\"kind\":\"market\",\"qty\":1,\"bracket\":{\"stop\":20,\"target\":40}}", out bo);
         Check(bw == null && bo != null && Submits(simB) == b0 + 1, "LIM bot: within the room it goes: " + bw);
+        botSize.SetValue(null, botSizeWas);
         Flat();
         ChartBridgeGroups.GapMs = 10000;
         ClockEt(2026, 10, 14, 10, 0);

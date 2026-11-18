@@ -1797,7 +1797,8 @@ long as it's clear that we have a sim account chosen, I do not need the lock or 
   and accepted copilot proposals go to that account through every gate (its checkmark or `tradeAccounts`, Connected, the caps).
   `bot`, `welcome` and `botProposal` say `account` and `sim`, and the page shows SIM or LIVE plainly next to the mode, in the
   strip, the pop-out and on every proposal. The rails are unchanged (1 contract, micro or mini, 5 trades, 3 losing trades, the
-  kill switch, the heartbeat never flattens). One account is never both the bot's account and a copier follower (both
+  kill switch, the heartbeat never flattens). **Release 1, step 1.6b replaces this bullet for the bot**: the personal account only,
+  every rail set on the Bot tab and fail closed, the day stops (see "The personal bot (release 1, step 1.6b)" below). One account is never both the bot's account and a copier follower (both
   directions refused, in plain words).
 - **With every off line written** ChartBridge 0.4.0 is 0.3.8 exactly, as before (the Mono harness's base checks run that way).
 
@@ -2753,7 +2754,8 @@ open proposals as `not answered` (they were for the old account), is logged with
 again. `bot`, `welcome` and `botProposal` carry `account` and `sim` (NinjaTrader's simulator or not: the page's SIM or LIVE
 mark; unknown is `false`, shown LIVE).
 
-**Rails** (enforced in ChartBridge, whatever the bot sends; reset at 18:00 ET): at most **1 contract**, on `botRoot` only
+**Rails** (release 1, step 1.6b: the fixed 1 contract, 5 trades and 3 losing trades below are replaced by the rails Anthony sets on
+the Bot tab, all required; see "The personal bot (release 1, step 1.6b)"; the rest stands) (enforced in ChartBridge, whatever the bot sends; reset at 18:00 ET): at most **1 contract**, on `botRoot` only
 (default MNQ); at most **5 trades a day** (an entry that filled, even partly, is a trade); **stand down after 3 losing
 trades** (a closed bot trade with realized P&L below 0; no new entries until the next session); no dollar limit on Sim; every
 bot entry needs a stop (`stopTicks` 1 or more, lead's default); the **kill switch** on the page (`botKill`); all v2 gates
@@ -2870,6 +2872,67 @@ the made-up bot client `test/fake-bot.mjs` (no real bot's rules anywhere in this
   follower that is on, the copier refuses the bot's account as a follower while the bot is on, and `botAccount` refuses a
   follower that is on or the leader (see the copier's review 2 notes).
 - **Review 2: `by`** (finding 9): bot orders carry `"by": "bot"` on v3 pages only (see "Who placed it" under Orders).
+
+#### The personal bot (release 1, step 1.6b)
+
+Anthony's answers of 2026-11-17 (Q6, Q7) and 2026-11-18, for the bot channel only. Every other bot rule above stands. Built in
+`nt8/ChartBridgeBot.cs` (one line of gate 3 in `nt8/ChartBridgeOrders.cs`); harnessed in `nt8/check/BotHarness.cs` (sections
+Rails, FailClosed, SizeCeiling, DayStops, ChosenAccount).
+
+- **The personal account only** (Q7: "Bot accounts: personal account only (ChartBridge refuses to arm on any prop account)";
+  2026-11-18: "Personal only, Sim later"). The bot trades only the personal account picked once on the chart page's Accounts
+  tab (`accountPersonal`, `personal-account.txt`, 0.6.16). `botAccount` refuses any other account, `botMode` refuses
+  `copilot` and `auto`, and every entry is refused, in plain words: "no personal account is picked (the chart page's Accounts
+  tab): the bot trades the personal account only", "EVAL-A is not the personal account: the bot trades the personal account
+  only (choose it on the Bot tab)". The pick moving away from the bot's account stands the bot down the same way. None is
+  still allowed (nothing trades). **A Sim account is refused for now** (by either Sim test, `ChartBridgeBot.IsSim` or
+  `ChartBridgeAccounts.IsSim`), also when `personal-account.txt` names one: "Sim101 is a Sim account: the bot trades the
+  personal account only (Sim comes back once the WORK check shows Lucid's accounts do not read as Simulator)".
+  **Planned change, not built: Sim later.** Lucid's accounts may read as NinjaTrader's simulator (law item 113, "not sure"), so
+  ChartBridge cannot tell Sim from prop by the provider name. Once the WORK check shows Lucid does not read as `Simulator`,
+  a later ChartBridge allows Sim accounts for the bot again (a code change and a review; nothing in `config.txt` turns it on).
+- **Every rail set on the Bot tab, fail closed** (Q6: "fail closed (all of size, trades, losses, day loss and profit stops set
+  above 0, else no start)"). `botRails` carries `cid` (optional), `size`, `maxTrades`, `maxLosses`, `dayLoss`, `dayProfit` and
+  `root`, all required: `size` a whole number from 1 to the hard ceiling of `root`; `maxTrades` and `maxLosses` 1 to 100 (a
+  bound on what is typed, not a rail); `dayLoss` and `dayProfit` dollars above 0, at most 1,000,000, at most 2 decimals; `root`
+  as before. 0, null, a string or a missing key is refused ("size must be a whole number from 1 to 20 for MNQ (the hard
+  ceiling: 2 minis or 20 micros, raised only by a new ChartBridge build)"). Refused while the bot has a position or a working
+  entry, as before. `bot-rails.txt` holds `size`, `maxTrades`, `maxLosses`, `dayLoss`, `dayProfit` and `root` after its two `#`
+  lines. **Nothing has a default**: no file, or a file without one of the five (a file from before 1.6b has no size and no day
+  stops), leaves that rail not set; a rail not set refuses `copilot`, `auto` and every entry, and the strip's `standDown` names
+  each one ("the bot's rails are not set: the size, the day's loss stop and the day's profit stop (set them on the Bot tab; until
+  then the bot does not trade)"). A line of 0, `none`, a blank, a size above the hard ceiling of its root or anything else
+  ChartBridge does not understand stands the bot down until the page sets the rails again or the file is deleted.
+- **The size: the Bot tab's, capped only by the hard ceiling** (Q6: "hard ceiling in code (2 minis / 20 micros like agents),
+  raised only by a new ChartBridge build"; 2026-11-18: "Bot tab + hard ceiling"). Every bot entry is `size` contracts. Gate 3's
+  cap for a bot entry is `ChartBridgeBot.EntryCap`: the size and `ChartBridgeAgents.HardCeiling` (NQ and ES 2, MNQ and MES 20),
+  on the order and the position as gate 3 always counts them; `config.txt`'s `maxQty.<ROOT>` no longer caps the bot. The
+  ticket's cap (`maxQty.<ROOT>`), the copier's and the agents' are unchanged. The words of a refusal name it: "the cap is 5 (the
+  bot's size on the Bot tab; the hard ceiling for MNQ is 20)". The size is checked against the ceiling again at placement.
+  One trade at a time stays.
+- **The day stops** (Q7: "flatten at once (realized + open; done for the day)"; 2026-11-18: "Drop to Shadow"). The day is the
+  bot's realized dollars today (its closed trades) plus its open trade marked to ChartBridge's last trade on its root, checked
+  every 500 ms and at every close. At or below minus `dayLoss`, or at or above `dayProfit`: the day is **latched** in
+  `bot-day.txt` (`stop<TAB>loss|profit<TAB><the day's dollars>`; a ChartBridge before 1.6b does not understand the line and
+  stands the bot down, the careful side), the mode **drops to Shadow** (open proposals end `not answered`, unfilled bot
+  entries are cancelled) and the bot's position on its account and root is **flattened at once** (`ChartBridgeOrders.FlattenForBot`,
+  the bot's own flatten), even with the kill switch on; a refused flatten is said and tried again every 5 s while the bot holds
+  its trade. Until 18:00 ET `copilot` and `auto` are refused ("the day's loss stop ($30) was reached today (the day at -$30,
+  realized plus open): the bot was flattened and set to Shadow; no bot entries until 18:00 ET, then Anthony arms it again"),
+  and a restart keeps the latch. At 18:00 ET the latch ends with the day and the mode stays Shadow: **ChartBridge never arms
+  the bot by itself**. When the open trade cannot be valued (no fresh last trade), the realized dollars alone are checked,
+  said once a day. This is the one place ChartBridge flattens the bot's position by itself.
+- **Messages.** `bot` adds `size`, `hardCeiling`, `dayLoss`, `dayProfit` (each null when not set), `railsMissing` (the names
+  of the rails not set), `dayStop` (null, or `{kind, day, text}`) and `personal` (the bot's account is the personal one);
+  `maxTrades`, `maxLosses` and `maxQty` (the size) are null when not set. `welcome`'s `rails` is `{maxQty, size, maxTrades,
+  maxLosses, dayLoss, dayProfit}` (null when not set). `botState` adds `dayStop` (`loss`, `profit` or null). A proposal's
+  `qty` is the size.
+- **The page** (`live/bot-core.js`, `live/bot.js`): Set the rails asks for every rail (a rail not set opens empty; nothing has
+  a default) and refuses what ChartBridge refuses; the panel shows the size, both day stops, the rails not set and a day stop
+  reached; Change account offers only the personal account (Sim: "not for now"; others: "not your personal account").
+- **The fake bridge** (`test/fake-v3.mjs`) mirrors the rails, the fail closed rule and the size; it starts with the rails a
+  made-up PC already set (`botRails: null` starts with none set), applies the personal-account rule only when started with a
+  personal account named (`--personal`), and does not simulate the day stops (BotHarness checks them).
 
 ### The order lanes together (0.4.0 integration)
 
@@ -3218,9 +3281,10 @@ Where the contract left a detail open, the safest simple choice was taken and is
   agent at its full plan (20 MNQ) with nothing set by hand. Gate 3's config cap for an agent's MNQ entry is always 20
   (`ChartBridgeAgents.ShippedConfigCap`, through `ChartBridgeOrders.AgentCap`): `config.txt`'s `maxQty.MNQ` is never read
   for agents. The agent's MNQ entry is capped by the smallest of its own rule (Agent tab, default 20), the hard ceiling (20)
-  and that 20. The page's, the bot's and the copier's MNQ caps are as before: the `maxQty.MNQ` line, or 1 with no line.
+  and that 20. The page's and the copier's MNQ caps are as before: the `maxQty.MNQ` line, or 1 with no line (release 1,
+  step 1.6b: the bot's cap is its size from the Bot tab and the hard ceiling only, see "The personal bot").
   Every other root for agents is as before too (`config.txt`'s cap, 1 with no line). With agents on and a `maxQty.MNQ`
-  line, ChartBridge says once at start in the Output window that the line caps the page, the bot and the copier only.
+  line, ChartBridge says once at start in the Output window that the line caps the page and the copier only.
   ChartBridge never writes `config.txt`; nor do the installer and the updater.
 - **A page exit from an agent's position** (0.5.3 review): a page market order that only reduces an agent's position (the
   owner lock's exit: no bracket, no strategy, the other side, at most the smaller reading) skips gate 3's per-order qty

@@ -773,7 +773,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             int posNow = SignedPosition(account, inst), posEff = EffectivePosition(account, inst), pendBuy, pendSell;
             int cap = CapFor(root), pos = isBuyOrder(top) ? Math.Max(posNow, posEff) : Math.Min(posNow, posEff);
             string capWhy = "maxQty." + root + " in config.txt";   // 0.5.3 review: the words name the cap that applied
-            if (bot) cap = Math.Min(cap, ChartBridgeBot.MaxQty);   // 0.4.0 bot: the 1 contract rail, on the order and the position (gate 3's own count)
+            if (bot) cap = ChartBridgeBot.EntryCap(root, out capWhy);   // release 1 (1.6b, Anthony 2026-11-18 "Bot tab + hard ceiling"): the bot's size and the hard ceiling only, on the order and the position (gate 3's own count); config.txt's maxQty no longer caps the bot (the ticket's and the agents' caps are unchanged)
             if (agent != null) cap = AgentEntryCap(agent, root, out capWhy);   // 0.5.0 agents: the agent's maxQty, never above the hard ceiling (minis 2, micros 20), on the order and the position; 0.5.3: MNQ never maxQty.MNQ
             // 0.5.3 review: a page exit from an agent's position skips the per-order qty check (pageReduces: at most the smaller
             // reading, never a flip or an add), and the position count is held to the agent's cap (AgentExitCap), never below the

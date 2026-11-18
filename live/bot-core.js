@@ -4,9 +4,11 @@
  * (test/bot.test.js) run it in Node. One dependency-free file: a plain <script> sets window.BotCore; Node requires it.
  *
  * What lives here:
- *   rails       how close the bot is to each of its limits (trades x of 5, losing trades x of 3): amber from 70%, red from
- *               90%; and the page's change of them (`botRails` as ChartBridge 0.4.0 built it: maxTrades 1 to 5, maxLosses
- *               1 to 3, the root botRoot or its micro or mini, kept by ChartBridge in bot-rails.txt)
+ *   rails       how close the bot is to each of its limits (trades x of n, losing trades x of n): amber from 70%, red from
+ *               90%; and the page's change of them (`botRails`, release 1 step 1.6b: every rail set here and all required,
+ *               fail closed: the size up to the hard ceiling of the root (2 minis, 20 micros), trades and losing trades 1 to
+ *               100, the day's loss and profit stops in dollars, and the root botRoot or its micro or mini; kept by
+ *               ChartBridge in bot-rails.txt)
  *   the bot's   which orders and fills are the bot's: a v3 page's order message says `by: "bot"` for the bot's entries and
  *   orders      the legs it follows (isBotMark); a fill is claimed for the bot against those orders' filled contracts
  *               (botFillLedger), so Anthony's own orders on the bot's account and root are never taken as the bot's
@@ -30,10 +32,15 @@
 'use strict';
 
 const VERSION = '1.0.0';
-/* Rails (PROTOCOL.md "Bot channel"): ChartBridge's defaults; the `bot` message carries the ones in force. */
-const RAILS = Object.freeze({ maxQty: 1, maxTrades: 5, maxLosses: 3 });
-/* The most the page may ask for (ChartBridgeBot.cs MaxTradesLimit, MaxLossesLimit): ChartBridge's own limits. */
-const RAIL_MAX = Object.freeze({ maxTrades: 5, maxLosses: 3 });
+/* Rails (PROTOCOL.md "Bot channel"; release 1, step 1.6b): nothing has a default. The `bot` message carries the ones in force
+   (null: not set) and `railsMissing`; a rail not set refuses arming and every entry (fail closed). */
+const RAIL_NAMES = Object.freeze(['size', 'maxTrades', 'maxLosses', 'dayLoss', 'dayProfit']);
+const RAIL_WORDS = Object.freeze({ size: 'the size', maxTrades: 'the trades a day', maxLosses: 'the losing trades a day', dayLoss: 'the day\'s loss stop', dayProfit: 'the day\'s profit stop' });
+/* The most the page may type for the counts (ChartBridgeBot.cs RailCountMax), and the size's only bound: the hard ceiling of the
+   root (ChartBridgeAgents.HardCeiling: 2 minis, 20 micros; raised only by a new ChartBridge build), never config.txt's maxQty. */
+const RAIL_MAX = Object.freeze({ maxTrades: 100, maxLosses: 100 });
+const HARD_CEILING = Object.freeze({ NQ: 2, ES: 2, MNQ: 20, MES: 20 });
+const DAY_STOP_MAX = 1000000;
 /* The bot's account until Anthony chooses one (ChartBridgeBot.cs DefaultAccount): '' is None, nothing trades (DECISION
    2026-10-14e; was Sim101), and the roots it may trade (botRoot, or its micro or mini: ChartBridgeBot.cs Sibling). */
 const BOT_ACCOUNT = '';
@@ -77,27 +84,40 @@ function rails(bot) {
   const trades = railLevel(b.trades, b.maxTrades), losses = railLevel(b.losses, b.maxLosses);
   return { trades, losses, level: worse(trades.level, losses.level) };
 }
+/** The rails not set, in words ('the size and the day\'s loss stop'), from a `bot` message's railsMissing; '' when every one is set. */
+function railsMissingText(bot) {
+  const m = (bot && Array.isArray(bot.railsMissing) ? bot.railsMissing : []).filter(x => RAIL_WORDS[x]).map(x => RAIL_WORDS[x]);
+  return m.length === 0 ? '' : m.length === 1 ? m[0] : m.slice(0, -1).join(', ') + ' and ' + m[m.length - 1];
+}
 /**
- * The page's change of the rails (`botRails`, as ChartBridge 0.4.0 built it): maxTrades a whole number from 1 to 5,
- * maxLosses from 1 to 3 (ChartBridge's own limits: never above), root the bot's root now or its micro or mini sibling. All
- * three are sent; ChartBridge saves them in bot-rails.txt (they stay over a restart and a new day) and refuses a change
- * while the bot has a position or a working entry. cur is the `bot` message ({ maxTrades, maxLosses, root }); want is
- * what Anthony picked. Returns { msg } (the message to send, with cid) or { error } (said on the page; nothing is sent).
+ * The page's change of the rails (`botRails`, release 1 step 1.6b, ChartBridgeBot.cs SetRails): every rail, all required.
+ * size a whole number from 1 to the hard ceiling of the root; maxTrades and maxLosses 1 to 100; dayLoss and dayProfit dollars
+ * above 0 with at most 2 decimals; root the bot's root now or its micro or mini sibling. Nothing is "no limit": a blank, 0 or
+ * anything else is refused here, as ChartBridge refuses it. ChartBridge saves them in bot-rails.txt and refuses a change while the
+ * bot has a position or a working entry. cur is the `bot` message (its rails may be null: not set yet); want is what Anthony typed.
+ * Returns { msg } (the message to send, with cid) or { error } (said on the page; nothing is sent).
  */
 function railsChange(cur, want, cid) {
   const c = cur || {}, w = want || {};
-  if (!isInt(c.maxTrades) || !isInt(c.maxLosses) || typeof c.root !== 'string' || !c.root) return { error: 'The rails in force are not known yet: nothing was sent.' };
-  const parse = v => (typeof v === 'string' && /^\d{1,9}$/.test(v.trim()) ? Number(v.trim()) : v);
-  const t = parse(w.maxTrades), l = parse(w.maxLosses), r = w.root === undefined ? c.root : w.root;
-  for (const [name, v, max] of [['Trades', t, RAIL_MAX.maxTrades], ['Losing trades', l, RAIL_MAX.maxLosses]]) {
-    if (!isInt(v) || v < 1 || v > max) return { error: name + ' must be a whole number from 1 to ' + max + ' (ChartBridge\'s limit): nothing was sent.' };
-  }
+  if (typeof c.root !== 'string' || !c.root) return { error: 'The rails in force are not known yet: nothing was sent.' };
+  const whole = v => (typeof v === 'string' && /^\d{1,9}$/.test(v.trim()) ? Number(v.trim()) : v);
+  const money = v => (typeof v === 'string' && /^\d{1,7}(\.\d{1,2})?$/.test(v.trim()) ? Number(v.trim()) : typeof v === 'number' && isFinite(v) && Math.round(v * 100) === v * 100 ? v : NaN);
+  const r = w.root === undefined ? c.root : w.root;
   if (r !== c.root && r !== ROOT_SIBLING[c.root]) return { error: 'The root must be ' + c.root + (ROOT_SIBLING[c.root] ? ' or ' + ROOT_SIBLING[c.root] : '') + ': nothing was sent.' };
+  const ceil = HARD_CEILING[r] || 0;
+  const z = whole(w.size), t = whole(w.maxTrades), l = whole(w.maxLosses), dl = money(w.dayLoss), dp = money(w.dayProfit);
+  if (!isInt(z) || z < 1 || z > ceil) return { error: 'Size must be a whole number from 1 to ' + ceil + ' for ' + r + ' (the hard ceiling): nothing was sent.' };
+  for (const [name, v, max] of [['Trades', t, RAIL_MAX.maxTrades], ['Losing trades', l, RAIL_MAX.maxLosses]]) {
+    if (!isInt(v) || v < 1 || v > max) return { error: name + ' must be a whole number from 1 to ' + max + ': nothing was sent.' };
+  }
+  for (const [name, v] of [['The day\'s loss stop', dl], ['The day\'s profit stop', dp]]) {
+    if (!isNum(v) || v <= 0 || v > DAY_STOP_MAX) return { error: name + ' must be dollars above 0, at most 2 decimals: nothing was sent.' };
+  }
   if (plainObj(c.position) && isNum(c.position.qty) && c.position.qty !== 0) return { error: 'The bot has a position: change its rails when it is flat. Nothing was sent.' };
-  if (t === c.maxTrades && l === c.maxLosses && r === c.root) return { error: 'Nothing to change.' };
+  if (z === c.size && t === c.maxTrades && l === c.maxLosses && dl === c.dayLoss && dp === c.dayProfit && r === c.root) return { error: 'Nothing to change.' };
   const msg = { type: 'botRails' };
   if (cid) msg.cid = cid;
-  msg.maxTrades = t; msg.maxLosses = l; msg.root = r;
+  msg.size = z; msg.maxTrades = t; msg.maxLosses = l; msg.dayLoss = dl; msg.dayProfit = dp; msg.root = r;
   return { msg };
 }
 
@@ -194,7 +214,7 @@ function accountChoices(accountsMsg, bot) {
     if (!a || typeof a.name !== 'string' || !a.name) continue;
     const current = a.name === cur;
     if (!current && !(a.tradable === true && a.state !== 'gone')) continue;
-    out.push({ name: a.name, sim: a.sim === true, mark: accountMark(a.sim), tradable: a.tradable === true, current });
+    out.push({ name: a.name, sim: a.sim === true, mark: accountMark(a.sim), tradable: a.tradable === true, current, personal: a.personal === true });   // release 1 (1.6b): the accounts message's personal mark
   }
   return out.sort((x, y) => (x.sim !== y.sim ? (x.sim ? -1 : 1) : x.name < y.name ? -1 : x.name > y.name ? 1 : 0));
 }
@@ -215,6 +235,9 @@ function botAccountChange(bot, name, choices, cid) {
     return { msg: none, live: false, confirm: '' };
   }
   const c = (choices || []).find(x => x.name === name);
+  // release 1 (step 1.6b, Anthony 2026-11-18 "Personal only, Sim later"): the personal account only, never Sim (ChartBridge says the same)
+  if (c && c.sim) return { error: name + ' is a Sim account: the bot trades your personal account only (Sim comes back after the WORK check).' };
+  if (c && !c.personal) return { error: name + ' is not your personal account (picked once on the Accounts tab): the bot trades the personal account only.' };
   if (!c || !c.tradable) return { error: name + ' is not tradable in ChartBridge now (its checkmark on the Accounts tab, Connected).' };
   if (b.position && isNum(b.position.qty) && b.position.qty !== 0) return { error: 'The bot has a position: choose its account when it is flat.' };
   const msg = { type: 'botAccount' };
@@ -663,7 +686,7 @@ function statusText(b) {
 }
 
 return {
-  VERSION, RAILS, RAIL_MAX, BOT_ACCOUNT, NONE_LABEL, ROOT_SIBLING, isBotMark, botFillLedger, AMBER, RED, THIN, MODES, MODE_NAME, DAY_TYPES, PROPOSAL_END, KEYS, LIB_VERSION, SHELVES, COND_KEYS,
+  VERSION, RAIL_NAMES, RAIL_WORDS, RAIL_MAX, HARD_CEILING, DAY_STOP_MAX, railsMissingText, BOT_ACCOUNT, NONE_LABEL, ROOT_SIBLING, isBotMark, botFillLedger, AMBER, RED, THIN, MODES, MODE_NAME, DAY_TYPES, PROPOSAL_END, KEYS, LIB_VERSION, SHELVES, COND_KEYS,
   railLevel, rails, railsChange, worse, CONFIRM_MS, DOUBLE_CLICK_MS, confirmStep,
   modesAllowed, accountTradable, botSwitchOn, accountMark, botAccount, accountChoices, botAccountChange,
   createProposals,

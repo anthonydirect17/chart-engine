@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased (2026-11-18): release 1, step 1.6b: the personal bot (ChartBridge, the Bot tab)
+
+Anthony's answers of 2026-11-17 (Q6, Q7) and 2026-11-18. No version bump yet (the release is cut as chart 1.57.1 with
+ChartBridge 0.6.24). The order path changes for the bot only: one line of gate 3 in `ChartBridgeOrders.cs`; the ticket's,
+the copier's and the agents' caps are unchanged. Full rules: `nt8/PROTOCOL.md`, "The personal bot (release 1, step 1.6b)".
+
+- **The personal account only** ("Personal only, Sim later"): `botAccount`, arming (copilot, auto) and every bot entry are
+  refused unless the bot's account is the personal account picked on the chart page's Accounts tab; with no pick nothing
+  trades. A Sim account is refused for now; Sim comes back only after the WORK check shows Lucid's accounts do not read as
+  Simulator (a planned change in PROTOCOL.md, not built).
+- **Fail closed, every rail on the Bot tab**: `botRails` carries the size, trades, losing trades, the day's loss stop and the
+  day's profit stop, all required. Nothing has a default: a rail not set, 0, none or unreadable refuses arming and every entry,
+  each named. The fixed 1 contract, 5 trades and 3 losing trades are gone.
+- **The size: Bot tab plus the hard ceiling** (2 minis or 20 micros, `ChartBridgeAgents.HardCeiling`, raised only by a new
+  ChartBridge build). `config.txt`'s `maxQty` no longer caps the bot; the Output line about `maxQty.MNQ` says so.
+- **The day stops** (realized plus open): reached, the bot's position is flattened at once (even with the kill switch on), the
+  day is latched in `bot-day.txt` until 18:00 ET and the mode drops to Shadow. Anthony arms it again himself; ChartBridge never
+  re-arms it. A ChartBridge before 1.6b stands the bot down on a latched `bot-day.txt` (it does not understand the line).
+- **The Bot tab**: Set the rails asks for every rail, the panel shows the size, both day stops, the rails not set and a day
+  stop reached; Change account offers the personal account only.
+- Tests: `nt8/check/BotHarness.cs` moves from Sim101 to a made-up live personal account and adds FailClosed, SizeCeiling and
+  DayStops; the agent, integration and groups harnesses set the bot's size or make the account they try the personal pick;
+  `test/bot.test.js`, `test/fake-v3.test.js`, `test/nt8-source.test.js` and `test/nt8-record.test.js` (the one gate 3 line
+  listed word for word) follow.
+
 ## Unreleased (2026-11-17): release 1, first part: the start guard, the old Account panel out, ChartKit off the install list
 
 The non-order parts of release 1 (the lock of 2026-11-15, topic 2). No version bump yet: the release is cut as chart 1.57.1

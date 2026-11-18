@@ -180,7 +180,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (Ids().Count == 0) return;
             int n;
             if (ChartBridgeOrders.MaxQty.TryGetValue("MNQ", out n))
-                ChartBridgeServer.Log("config.txt: maxQty.MNQ = " + n + " caps the page's, the bot's and the copier's MNQ orders only; agents use their own MNQ cap of " +
+                ChartBridgeServer.Log("config.txt: maxQty.MNQ = " + n + " caps the page's and the copier's MNQ orders only (release 1: the bot uses its size from the Bot tab); agents use their own MNQ cap of " +
                                       ShippedConfigCap("MNQ") + " (with the agent's rule and the hard ceiling)");
         }
 

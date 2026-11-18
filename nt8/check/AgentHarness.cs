@@ -133,6 +133,15 @@ public static class AgentHarness
         else if (kind == "submit") Update(o);
     }
 
+    // release 1 (1.6b): the bot trades only the personal account (never Sim): the bot's checks of an agent's account are tried with that
+    // account made the personal pick (personal-account.txt, as the chart page saves it); null takes the pick away
+    static void BotPersonal(string name)
+    {
+        string f = Path.Combine(Dir, "personal-account.txt");
+        if (name == null) { File.Delete(f); File.Delete(f + ".bak"); } else File.WriteAllLines(f, new[] { "# made-up", "# test", "account\t" + name });
+        ChartBridgeBranches.LoadPersonal();
+    }
+
     static Account NewAccount(string name, Provider p)
     {
         Account a = new Account { Name = name, Provider = p, Connection = new Connection { Status = ConnectionStatus.Connected } };
@@ -1230,8 +1239,10 @@ public static class AgentHarness
         // the bot: refuses an agent's account; an agent refuses the bot's
         ChartBridgeSwitches.Note("bot", "on");
         ChartBridgeBot.Start(false);
+        BotPersonal("EVAL-A");   // release 1 (1.6b): the agent's account made the personal pick, so the agent's rule is the one tried
         P("{\"type\":\"botAccount\",\"cid\":\"b1\",\"account\":\"EVAL-A\"}");
         Check(PageReject().Contains("EVAL-A is agent manrae's account: the bot does not trade it"), "botAccount: an agent's account is refused: " + PageReject());
+        BotPersonal(null);
         P(AccountMsg("manrae", "SIM-Z"));
         Check(PageReject().Contains("SIM-Z is the bot's account: an agent never trades it"), "agentAccount: the bot's account is refused");
         ChartBridgeBot.Stop(); ChartBridgeSwitches.Note("bot", "off");
@@ -1576,22 +1587,29 @@ public static class AgentHarness
               "0.5.7: manrae with no account file is on None: it claims no account against anyone");
         Check(M.StripJson().Contains("\"account\":null") && M.StripJson().Contains("\"standDown\":\"agent manrae's account is None: no new entries until an account is chosen on the Agent tab\"") &&
               Last(agentOut, "welcome").Contains("\"account\":null"), "0.5.7: None: the page and the agent see account null, and why nothing trades");
-        P("{\"type\":\"botAccount\",\"cid\":\"b2\",\"account\":\"Sim101\"}");
-        Check(!PageReject().Contains("\"cid\":\"b2\"") && ChartBridgeBot.BotAccount == "Sim101" && M.AccountConflict() == null, "0.5.7: the bot may take Sim101 while the agent is on None: " + PageReject());
+        // release 1 (1.6b): the bot trades only the personal account, never Sim: OWN-A, a made-up live account, is that pick here
+        NewAccount("OWN-A", Provider.Rithmic);
+        ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, EVAL-A, SIM-B, SIM-C, SIM-D, OWN-A");
+        BotPersonal("OWN-A");
+        P("{\"type\":\"botAccount\",\"cid\":\"b2\",\"account\":\"OWN-A\"}");
+        Check(!PageReject().Contains("\"cid\":\"b2\"") && ChartBridgeBot.BotAccount == "OWN-A" && M.AccountConflict() == null, "0.5.7: the bot may take OWN-A while the agent is on None: " + PageReject());
         Mode("manrae", "auto");
         int calls = sim.Calls.Count;
         Last2();
         M.OnMessage(ac, Good(NewId()));
         Check(AgentReject().Contains("agent manrae's account is None: no new entries until an account is chosen on the Agent tab") && sim.Calls.Count == calls, "0.5.7: None: check 2 refuses its plans with that reason: " + AgentReject());
-        // the bot moves away (to a made-up SIM-E); the agent CHOOSES Sim101; then the bot may not have it
+        // the bot moves away (to None); the agent CHOOSES OWN-A; then the bot may not have it
         NewAccount("SIM-E", Provider.Simulator);
-        ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, EVAL-A, SIM-B, SIM-C, SIM-D, SIM-E");
-        P("{\"type\":\"botAccount\",\"cid\":\"b3\",\"account\":\"SIM-E\"}");
-        Check(!PageReject().Contains("\"cid\":\"b3\"") && ChartBridgeBot.BotAccount == "SIM-E", "the bot moves to SIM-E: " + PageReject());
+        ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, EVAL-A, SIM-B, SIM-C, SIM-D, SIM-E, OWN-A");
+        P("{\"type\":\"botAccount\",\"cid\":\"b3\",\"account\":null}");
+        Check(!PageReject().Contains("\"cid\":\"b3\"") && ChartBridgeBot.BotAccount == "-", "the bot moves to None: " + PageReject());
+        P(AccountMsg("manrae", "OWN-A"));
+        Check(M.Chosen && M.Account == "OWN-A" && FileText("agent-manrae-account.txt").Contains("account\tOWN-A"), "manrae chooses OWN-A on the page: it is its own now");
+        P("{\"type\":\"botAccount\",\"cid\":\"b4\",\"account\":\"OWN-A\"}");
+        Check(PageReject().Contains("OWN-A is agent manrae's account: the bot does not trade it") && ChartBridgeBot.BotAccount == "-", "then botAccount OWN-A is refused (the agent's, though it is the personal account)");
+        BotPersonal(null);
         P(AccountMsg("manrae", "Sim101"));
-        Check(M.Chosen && M.Account == "Sim101" && FileText("agent-manrae-account.txt").Contains("account\tSim101"), "manrae chooses Sim101 on the page: it is its own now");
-        P("{\"type\":\"botAccount\",\"cid\":\"b4\",\"account\":\"Sim101\"}");
-        Check(PageReject().Contains("Sim101 is agent manrae's account: the bot does not trade it") && ChartBridgeBot.BotAccount == "SIM-E", "then botAccount Sim101 is refused");
+        Check(M.Chosen && M.Account == "Sim101", "manrae on Sim101 again, for the checks that follow");
         P("{\"type\":\"copierFollower\",\"cid\":\"c9\",\"account\":\"Sim101\",\"on\":true,\"qty\":1,\"size\":\"micro\",\"lossLimit\":null}");
         Check(PageReject().Contains("Sim101 is agent manrae's account: the copier does not trade it"), "and the copier may not take it either");
         // None from the page: account null; saved as account<TAB>-, which a ChartBridge before 0.5.7 reads as an account NinjaTrader
@@ -2499,14 +2517,17 @@ public static class AgentHarness
             ChartBridgeBot.Start(false);
             try
             {
+                // release 1 (1.6b): each made the live personal pick first, so the seat and group rules are the ones tried
+                simb.Provider = Provider.Rithmic; BotPersonal("SIM-B");
                 P("{\"type\":\"botAccount\",\"cid\":\"bt1\",\"account\":\"SIM-B\"}");
                 Check(PageReject().Contains("SIM-B is a seat of agent manrae (group Lucid): the bot does not trade it"), "0.6.0: a seat is never the bot's: " + PageReject());
+                simb.Provider = Provider.Simulator; simd.Provider = Provider.Rithmic; BotPersonal("SIM-D");
                 P("{\"type\":\"botAccount\",\"cid\":\"bt2\",\"account\":\"SIM-D\"}");
                 P("{\"type\":\"accountGroup\",\"cid\":\"bt3\",\"account\":\"SIM-D\",\"group\":\"g1\"}");
                 Check(PageReject().Contains("SIM-D is the bot's account: it cannot join Lucid, which agent manrae trades") && ChartBridgeGroups.GroupOf("SIM-D") == null, "0.6.0: the bot's account cannot join it: " + PageReject());
                 P("{\"type\":\"botAccount\",\"cid\":\"bt4\",\"account\":null}");
             }
-            finally { ChartBridgeBot.Stop(); ChartBridgeSwitches.Note("bot", "off"); }
+            finally { simb.Provider = Provider.Simulator; simd.Provider = Provider.Simulator; BotPersonal(null); ChartBridgeBot.Stop(); ChartBridgeSwitches.Note("bot", "off"); }
         });
 
         Part("0.6.0 restart recovery", () =>
@@ -3083,7 +3104,7 @@ public static class AgentHarness
                 P("{\"type\":\"order\",\"cid\":\"q56\",\"account\":\"Sim101\",\"root\":\"MNQ\",\"side\":\"buy\",\"kind\":\"market\",\"qty\":6,\"bracket\":{\"stop\":8,\"target\":16}}");
                 Check(PageReject().Contains("qty 6 is over the MNQ cap of 5 (maxQty.MNQ in config.txt)") && sim.Calls.Count == calls, "0.5.3: the page is still refused above the line's 5: " + PageReject());
                 ChartBridgeAgents.NoteConfigCaps();
-                Check(Logged("config.txt: maxQty.MNQ = 5 caps the page's, the bot's and the copier's MNQ orders only; agents use their own MNQ cap of 20 (with the agent's rule and the hard ceiling)"),
+                Check(Logged("config.txt: maxQty.MNQ = 5 caps the page's and the copier's MNQ orders only (release 1: the bot uses its size from the Bot tab); agents use their own MNQ cap of 20 (with the agent's rule and the hard ceiling)"),
                       "0.5.3: the line is said in the Output window: it caps the page only");
             }
             finally { ChartBridgeOrders.ReadConfig("maxQty.MNQ", capWas.ToString(CultureInfo.InvariantCulture)); Settle(sime); }

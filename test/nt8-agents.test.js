@@ -141,7 +141,7 @@ test('0.5.3 agents: the shipped MNQ cap of 20 is the agents\' own: maxQty.MNQ ca
   assert.match(place, /" is over the " \+ root \+ " cap of " \+ cap \+ " \(" \+ capWhy \+ "\)"/, 'the words name the cap that applied');
   assert.equal((ocode + acode + ccode).match(/\bAgentCap\(/g).length, 3, 'AgentCap: its definition, AgentEntryCap (gate 3 and plan check 4) and welcome.rules only');
   assert.match(main, /else ChartBridgeServer\.Log\("config\.txt: " \+ key \+ " is not a ChartBridge setting; the line does nothing"\);\s*\}\s*ChartBridgeAgents\.NoteConfigCaps\(\);/, 'said once at config load, after every line is read (0.5.5: after the unknown-key line)');
-  assert.match(bodies(acode, 'NoteConfigCaps'), /if \(Ids\(\)\.Count == 0\) return;[\s\S]*ChartBridgeServer\.Log\("config\.txt: maxQty\.MNQ = " \+ n \+ " caps the page's, the bot's and the copier's MNQ orders only; agents use their own MNQ cap of "/);
+  assert.match(bodies(acode, 'NoteConfigCaps'), /if \(Ids\(\)\.Count == 0\) return;[\s\S]*ChartBridgeServer\.Log\("config\.txt: maxQty\.MNQ = " \+ n \+ " caps the page's and the copier's MNQ orders only \(release 1: the bot uses its size from the Bot tab\); agents use their own MNQ cap of "/);
   assert.ok(!/MaxQty\[|MaxQty\.(Add|Remove|Clear)/.test(bodies(acode, 'NoteConfigCaps') + bodies(acode, 'AgentCap')), 'nothing in config is changed');
 });
 

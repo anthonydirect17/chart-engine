@@ -1103,9 +1103,15 @@ test('0.4.0 bot: on by default, the account Anthony chooses (None until then, 0.
   assert.match(bodyOf(bcode, 'private static string SaveAccount(string name)'), /ChartBridgeFiles\.WriteLines\(AccountFile, /);
   const prob = bodyOf(bcode, 'private static string AccountProblemFor(string name, bool gates)');
   for (const re of [/IsNeverTradable\(name \?\? ""\)/, /if \(gates && !ChartBridgeOrders\.AccountTradable\(name\)\)/, /a\.Connection\.Status != ConnectionStatus\.Connected/]) assert.match(prob, re, 'AccountProblemFor: ' + re);
-  assert.ok(!/IsSim\(/.test(prob), 'no Sim lock');
-  assert.match(bcode, /public const int MaxQty = 1;/);
-  assert.match(bcode, /public const int MaxTradesLimit = 5, MaxLossesLimit = 3;/);
+  // release 1 (1.6b, Anthony 2026-11-18 "Personal only, Sim later"): Sim refused for now, then the personal account only
+  assert.match(prob, /if \(IsSim\(a\) \|\| ChartBridgeAccounts\.IsSim\(a\)\) return name \+ " is a Sim account: the bot trades the personal account only/);
+  assert.match(prob, /string own = PersonalProblem\(name\);/);
+  assert.match(bodyOf(bcode, 'private static string PersonalProblem(string name)'), /if \(!ChartBridgeBranches\.PersonalNamed\) return "no personal account is picked[^"]*";\s*if \(!ChartBridgeBranches\.IsPersonal\(name\)\)/);
+  // release 1 (1.6b, "Bot tab + hard ceiling"): no fixed size, trades or losses; the size is capped only by the hard ceiling
+  assert.ok(!/public const int MaxQty\b|MaxTradesLimit|MaxLossesLimit/.test(bcode), 'no fixed rail left');
+  assert.match(bcode, /public const int RailCountMax = 100;/);
+  assert.match(bodyOf(bcode, 'public static int EntryCap(string root, out string why)'), /return Math\.Min\(z, ceil\);/);
+  assert.match(bodyOf(bcode, 'public static int EntryCap(string root, out string why)'), /int z, ceil = ChartBridgeAgents\.HardCeiling\(root\);/);
   assert.match(bcode, /public const double SilenceMs = 5000/);
   // never places, changes or flattens by itself: the only order calls are a cancel of a bot entry and the two ChartBridgeOrders entry points
   for (const re of [/\.Submit\s*\(/, /\.CreateOrder\s*\(/, /\.Change\s*\(/, /\.Flatten\s*\(/, /OrderAction\./, /\bAtm\w*\./]) assert.ok(!re.test(bcode), 'ChartBridgeBot.cs: ' + re);
@@ -1142,7 +1148,9 @@ test('0.4.0 bot: the hooks in ChartBridge.cs and ChartBridgeOrders.cs', () => {
   assert.match(code, /if \(ChartBridgeBot\.Enabled\) b\.Append\(",\\"bot\\":"\)\.Append\(ChartBridgeBot\.DiagJson\(\)\);/);
   assert.ok(!/SendToV3Traders|IsV3Stub/.test(code), 'the main file has no v3 send of its own (ChartBridgeV3.cs has the one)');
   assert.match(ocode, /new Regex\("\^CB#\(\[0-9a-f\]\{8\}\)\(\?: bot\)\? s/);
-  assert.match(ocode, /if \(bot\) cap = Math\.Min\(cap, ChartBridgeBot\.MaxQty\);/);
+  assert.match(ocode, /if \(bot\) cap = ChartBridgeBot\.EntryCap\(root, out capWhy\);/, 'release 1 (1.6b): the bot\'s cap is its size and the hard ceiling, never config.txt\'s maxQty');
+  assert.match(ocode, /if \(agent != null\) cap = AgentEntryCap\(agent, root, out capWhy\);/, 'the agents\' cap unchanged');
+  assert.match(ocode, /int cap = CapFor\(root\), pos = /, 'the ticket\'s cap unchanged');
   assert.match(ocode, /ChartBridgeBot\.AfterAuth\(client\);/);
   assert.match(ocode, /try \{ if \(ChartBridgeBot\.Watching\(o\)\) ChartBridgeBot\.OnOrderUpdate\(account, o, OrderJson\(o, failed/);
   // PlaceBotEntry reads its own message strictly and runs the quote-only check, then the page's path with bot = true
