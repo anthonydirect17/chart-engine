@@ -1,99 +1,5 @@
 # Changelog
 
-## Unreleased (2026-11-18): release 1, step 1.6c: the mini ticket and Cut half (ChartBridge, the ticket, the charts)
-
-Anthony 2026-11-17 (the mockup, and his answers that night: Cut half only; the smaller part on an odd size; compact by
-default with an arrow; Close renamed Flatten; Cut half with Armed off; no picker when compact; one Armed switch; Merge in
-both views; a hotkey for Cut half). No version bump yet (the release is cut as chart 1.57.1 with ChartBridge 0.6.24). Full
-rules: `nt8/PROTOCOL.md`, "Cut half (release 1, step 1.6c)".
-
-- **Cut half, one new ChartBridge command** (`cutHalf`, one per account; `hello` lists the feature `cutHalf`): half the
-  position closed at market, the smaller part on an odd size (3 closes 1, 5 closes 2), and ChartBridge's stops and targets
-  there shrunk to the size left in the same step: first, by the legs check's own rule (`ShrinkPlan`, taken out of
-  `CheckLegs` unchanged), at once instead of after its 4 seconds, then the close. An exit like Flatten (no checkmark, Armed
-  off works). Refused, nothing sent: under 2 contracts, the position not what the page showed or its two readings apart, a
-  Cut half close still filling, working exits that would pass the position with it, an agent's pair, an active copier
-  follower, a Merge running. A close NinjaTrader rejects after the legs were shrunk raises an error at once.
-- **The ticket**: Cut half beside Flatten (greyed at 1 contract and when flat, never dimmed by Armed); on a group each member
-  is cut on its own size, a member at 1 is left alone and named in the note. **Close is renamed Flatten** (the button, the
-  "Also open" rows and the hotkey; the hotkey's saved id stays `close`, so a key already set keeps working). Flatten all is
-  unchanged. B/E, Flatten, Cut half, Cancel all and Merge sit in a grid of three.
-- **The Cut half hotkey** (Settings, Keys; `cutHalf` in `live-hotkeys-v1` and in The Desk's hotkeys document). Like Buy, Sell
-  and B/E it goes to the ticket's window; it works under a covering tab, as Flatten does (it only reduces). **The Desk must
-  know `cutHalf` first** (thedesk branch `claude/desk-hotkeys-cut-half`): The Desk accepts only its own exact key list, so a
-  hotkey save from this page is refused by an older Desk.
-- **The mini ticket**, an indicator (Indicators, Trades, Mini ticket; listed only on the workspace's charts): dragged anywhere
-  by its grip, its spot kept per chart (`live-mini-ticket-v1`); compact (Armed, Qty, Buy MKT, Sell MKT, Flatten, Cut half,
-  Merge, the position) with an arrow that shows every control of the ticket, the account or group picker included. Not a
-  second ticket: in the ticket's window it is the ticket's own controls wired a second time to the same TradeCore (the same
-  account or group, Armed, Qty, bracket, strategy, order path and checks); in another window its order buttons are forwarded
-  to the ticket's window like the ticket's chart clicks (TicketLink), Flatten goes from that window as the Flatten key does,
-  and Armed, the account, Qty, the bracket and the strategy are shown and set in the ticket's window. On a chart not on the
-  ticket's instrument it says so and sends nothing.
-- Tests: `nt8/check/OrdersHarness.cs` (Cut half: even, odd 3 and 5, a short, pairs per fill, a Merge set, 1 contract and flat,
-  a stale page, readings apart, a second press, working exits, strict keys and the gates, a group's members, a rejected close,
-  trading off), `nt8/check/DataHarness.cs` (the feature); `test/cut-half.test.js`; `test/mini-ticket-smoke.mjs`
-  (`npm run smoke:mini-ticket`); `test/prefs.test.js`, `test/nt8-source.test.js` and the hotkey tests follow the rename.
-- **The R12 review of Cut half.** Every exit on the closing side that Cut half does not shrink now counts (an ATM's or the
-  DOM's bracket, a hand OCO, an agent's legs, not only lone exits): with ChartBridge's legs at the size left and the close they
-  may never close more than the position, or it is refused, nothing sent. A stop or target to shrink that is being changed or
-  not yet accepted refuses it. A shrink NinjaTrader does not make (an error, or the leg back above its planned size) raises an
-  error and is shrunk again at once. A refused cancel or change sends no close; a close whose submit throws changes the shrunk
-  legs back. A copier follower that is off but still holds the copier's position or orders is refused (Merge's rule). The
-  Merge check runs again under the order lock, and a Merge that plans while a Cut half is sent there is refused. The Hotkeys
-  help says Flatten, and that Cut half goes to the ticket's window with Armed off. Tests: `nt8/check/OrdersHarness.cs` (the
-  R12 section), `nt8/check/AgentHarness.cs` (Cut half on an agent's pair).
-
-## Unreleased (2026-11-18): release 1, step 1.6b: the personal bot (ChartBridge, the Bot tab)
-
-Anthony's answers of 2026-11-17 (Q6, Q7) and 2026-11-18. No version bump yet (the release is cut as chart 1.57.1 with
-ChartBridge 0.6.24). The order path changes for the bot only: one line of gate 3 in `ChartBridgeOrders.cs`; the ticket's,
-the copier's and the agents' caps are unchanged. Full rules: `nt8/PROTOCOL.md`, "The personal bot (release 1, step 1.6b)".
-
-- **The personal account only** ("Personal only, Sim later"): `botAccount`, arming (copilot, auto) and every bot entry are
-  refused unless the bot's account is the personal account picked on the chart page's Accounts tab; with no pick nothing
-  trades. A Sim account is refused for now; Sim comes back only after the WORK check shows Lucid's accounts do not read as
-  Simulator (a planned change in PROTOCOL.md, not built).
-- **Fail closed, every rail on the Bot tab**: `botRails` carries the size, trades, losing trades, the day's loss stop and the
-  day's profit stop, all required. Nothing has a default: a rail not set, 0, none or unreadable refuses arming and every entry,
-  each named. The fixed 1 contract, 5 trades and 3 losing trades are gone.
-- **The size: Bot tab plus the hard ceiling** (2 minis or 20 micros, `ChartBridgeAgents.HardCeiling`, raised only by a new
-  ChartBridge build). `config.txt`'s `maxQty` no longer caps the bot; the Output line about `maxQty.MNQ` says so.
-- **The day stops** (realized plus open): reached, the bot's position is flattened at once (even with the kill switch on), the
-  day is latched in `bot-day.txt` until 18:00 ET and the mode drops to Shadow. Anthony arms it again himself; ChartBridge never
-  re-arms it. A ChartBridge before 1.6b stands the bot down on a latched `bot-day.txt` (it does not understand the line).
-- **The Bot tab**: Set the rails asks for every rail, the panel shows the size, both day stops, the rails not set and a day
-  stop reached; Change account offers the personal account only.
-- Tests: `nt8/check/BotHarness.cs` moves from Sim101 to a made-up live personal account and adds FailClosed, SizeCeiling and
-  DayStops; the agent, integration and groups harnesses set the bot's size or make the account they try the personal pick;
-  `test/bot.test.js`, `test/fake-v3.test.js`, `test/nt8-source.test.js` and `test/nt8-record.test.js` (the one gate 3 line
-  listed word for word) follow.
-
-## Unreleased (2026-11-17): release 1, first part: the start guard, the old Account panel out, ChartKit off the install list
-
-The non-order parts of release 1 (the lock of 2026-11-15, topic 2). No version bump yet: the release is cut as chart 1.57.1
-with ChartBridge 0.6.24 once the personal bot and the mini ticket join it. Page and docs only; no ChartBridge change, nothing
-on the order path changed.
-
-- **The start guard** (`live/workspace.js` `startGuard`, `start`): the layout, the ticket's connection and the ticket open
-  first; then the Bot, Agent, Colosseum and Legion tabs start, each inside its own guard, and are told the layout the
-  charts opened on; then the tab in the address. A tab that throws is named in the note line ("The Bot tab did not start:
-  the charts and the ticket work; reload this window to try it again.") and in the console, its top bar button stays
-  hidden, and the charts, the ticket and the other tabs run on. The tabs' share of ChartBridge's hello (after the
-  ticket's), a layout change (after the charts and the ticket are placed), Praetorian's link and Legion's helper status
-  go through the same guard. `test/start-guard.test.js`; `npm run smoke:start-guard` breaks the four tabs' files on
-  purpose and checks the charts go live and the ticket still sends to the fake.
-- **The old Account panel is removed** (1.15.0; not offered since 1.34.0). A saved layout that still holds one opens
-  without it, quietly, the rest as saved. The Account page has its figures. The smokes that used it (h1, h1-orders,
-  noscroll, v2, perf-workspace) now check it is dropped.
-- **ChartKit off the PC install list**: `kit.css`, `kit.js` and `kit.html` leave `nt8/install-files.json` (kept in the
-  repo as the design reference for Legion). The PC updater drops them from a PC's page folder at its next page install.
-  The fonts they name stay installed.
-- **The agent board F snapshot is removed** (`live/kits/agent-board-f/` and `test/agent-kit.test.js`); commit
-  aabb2cb on main (chart 1.57.0) still holds both.
-- **The Studio's work folder** in the examples is `C:\Data\Studio\work` (the task script and `docs/MARKUP_STUDIO.md`; the
-  code sets no default, `--work` is required).
-
 ## Unreleased (2026-11-04): getting ready to go private: the PC updater accepts the box job and reads a chart-engine token; placeholders
 
 `nt8/update-pc.ps1` and docs only (no page change, no version bump, as the 2026-10-23 updater entries). Anthony decided
@@ -156,6 +62,137 @@ on the order path changed.
   verdicts as the check runs path for the same scenarios.
   `test/pc-updater.test.js`: the allowed git subcommands, the box job's name, useHttpPath read before the one ask, the
   token only after a 404 or 401 and then through the Actions API, one place that asks for it and one that sends it.
+
+## ChartBridge 0.6.24 and chart 1.57.1 (2026-11-18): release 1: the start guard, the personal bot, Cut half and the mini ticket, the way back
+
+In plain words: one hand install for the whole of release 1 (Anthony's answer 2 of 2026-11-17: the personal bot and the mini
+ticket ride with the first part). The page starts the charts and the ticket before anything else; the personal bot trades
+only the personal account, only on the limits Anthony sets on the Bot tab; Cut half closes half the position in one step;
+the mini ticket sits on a chart; and the PC updater gains a command that puts the last ChartBridge back. Plan steps 1.1,
+1.6b and 1.6c (Bot-Lab `notes/BUILD_PLAN_2026-11-16_the_move.md`). ChartBridge 0.6.24 is a recompile (`-InstallChartBridge`,
+then F5 while flat).
+
+**Install The Desk's hotkey change first.** The page sends The Desk its whole hotkey list, and The Desk accepts only its own
+exact list. The Desk must know `cutHalf` (thedesk branch `claude/desk-hotkeys-cut-half`, installed by the SERVER session)
+with or before this release, or every hotkey save from the page is refused. The PC updater installs a page by itself once
+`main` is green, so The Desk's change goes in before this release is merged.
+
+### The personal bot (step 1.6b; ChartBridge, the Bot tab)
+
+Anthony's answers of 2026-11-17 (Q6, Q7) and 2026-11-18. The order path changes for the bot only: one line of gate 3 in
+`ChartBridgeOrders.cs`; the ticket's, the copier's and the agents' caps are unchanged. Full rules: `nt8/PROTOCOL.md`, "The
+personal bot (release 1, step 1.6b)".
+
+- **The personal account only** ("Personal only, Sim later"): `botAccount`, arming (copilot, auto) and every bot entry are
+  refused unless the bot's account is the personal account picked on the chart page's Accounts tab; with no pick nothing
+  trades. A prop account is refused. A Sim account is refused for now; Sim comes back only after the WORK check shows Lucid's
+  accounts do not read as Simulator (a planned change in PROTOCOL.md, not built).
+- **Fails closed, every rail on the Bot tab**: `botRails` carries the size, trades, losing trades, the day's loss stop and the
+  day's profit stop, all required. Nothing has a default: a rail not set, 0, none or unreadable refuses arming and every
+  entry, each named. The fixed 1 contract, 5 trades and 3 losing trades are gone.
+- **The hard ceiling**: the size is the Bot tab's, capped only by 2 minis or 20 micros (`ChartBridgeAgents.HardCeiling`),
+  raised only by a new ChartBridge build. `config.txt`'s `maxQty` no longer caps the bot; the Output line about
+  `maxQty.MNQ` says so.
+- **The day stops latch the day** (realized plus open): reached, the bot's position is flattened at once (even with the kill
+  switch on), the day is latched in `bot-day.txt` until 18:00 ET and the mode drops to Shadow. Anthony arms it again
+  himself; ChartBridge never re-arms it, and a day stop reached while the page arms the bot refuses the arming. The flatten
+  is tried again every 5 seconds while the bot still holds a trade, never twice at once and never while a close may still
+  fill. A late fill of a bot entry whose trade had closed is followed again and counted. A ChartBridge before 0.6.24 stands
+  the bot down on a latched `bot-day.txt` (it does not understand the line).
+- **A restart follows a bot trade again only by its own legs**: a trade open in `bot-day.txt` after a restart or a recompile
+  is followed again only while a stop or target named for that trade is still working on the bot's account and contract;
+  its size and side come from those legs, and its price from the bot's own entry fill. A position with no such leg (one
+  Anthony opened by hand) is never taken: copilot, auto and new bot entries stay refused, named, until 18:00 ET. While a Cut
+  half close may still fill there, the restore waits.
+- **The Bot tab**: Set the rails asks for every rail; the panel shows the size, both day stops, the rails not set and a day
+  stop reached; Change account offers the personal account only.
+
+### Cut half and the mini ticket (step 1.6c; ChartBridge, the ticket, the charts)
+
+Anthony 2026-11-17 (the mockup, and his answers that night: Cut half only; the smaller part on an odd size; compact by
+default with an arrow; Close renamed Flatten; Cut half with Armed off; no picker when compact; one Armed switch; Merge in
+both views; a hotkey for Cut half). Full rules: `nt8/PROTOCOL.md`, "Cut half (release 1, step 1.6c)".
+
+- **Cut half, one new ChartBridge command** (`cutHalf`, one per account; `hello` lists the feature `cutHalf`): half the
+  position closed at market, the smaller part on an odd size (3 closes 1, 5 closes 2), and ChartBridge's stops and targets
+  there shrunk to the size left in the same step: first, by the legs check's own rule (`ShrinkPlan`, taken out of
+  `CheckLegs` unchanged), at once instead of after its 4 seconds, then the close. An exit like Flatten (no checkmark, Armed
+  off works). Refused, nothing sent: under 2 contracts, the position not what the page showed or its two readings apart, a
+  Cut half close still filling, working exits that would pass the position with it, an agent's pair, an active copier
+  follower, a Merge running. A close NinjaTrader rejects after the legs were shrunk raises an error at once.
+- **After the R12 review of Cut half**: every exit on the closing side that Cut half does not shrink counts (an ATM's or the
+  DOM's bracket, a hand OCO, an agent's legs): with ChartBridge's legs at the size left and the close they may never close
+  more than the position, or it is refused. A stop or target to shrink that is being changed or not yet accepted refuses it.
+  A shrink NinjaTrader does not make raises an error and is shrunk again at once. A refused cancel or change sends no close;
+  a close whose submit throws changes the shrunk legs back. A copier follower that is off but still holds the copier's
+  position or orders is refused (Merge's rule). The Merge check runs again under the order lock, and a Merge that plans
+  while a Cut half is sent there is refused. A Flatten that cancels a Cut half close still filling raises nothing.
+- **The ticket**: Cut half beside Flatten (greyed at 1 contract and when flat, never dimmed by Armed); on a group each member
+  is cut on its own size, and a member at 1 is left alone and named in the note. B/E, Flatten, Cut half, Cancel all and
+  Merge sit in a grid of three. With an older ChartBridge (no `cutHalf` feature) the button greys and says it needs 0.6.24.
+- **Close is renamed Flatten** (the button, the "Also open" rows and the hotkey; the hotkey's saved id stays `close`, so a key
+  already set keeps working). Flatten all is unchanged.
+- **The Cut half hotkey** (Settings, Keys; `cutHalf` in `live-hotkeys-v1` and in The Desk's hotkeys document). Like Buy, Sell
+  and B/E it goes to the ticket's window; it works under a covering tab, as Flatten does (it only reduces). The Hotkeys help
+  says Flatten, and that Cut half goes to the ticket's window with Armed off.
+- **The mini ticket**, an indicator (Indicators, Trades, Mini ticket; listed only on the workspace's charts): dragged anywhere
+  by its grip, its spot kept per chart (`live-mini-ticket-v1`); compact (Armed, Qty, Buy MKT, Sell MKT, Flatten, Cut half,
+  Merge, the position) with an arrow that shows every control of the ticket, the account or group picker included. Not a
+  second ticket: in the ticket's window it is the ticket's own controls wired a second time to the same TradeCore (the same
+  account or group, Armed, Qty, bracket, strategy, order path and checks); in another window its order buttons are forwarded
+  to the ticket's window like the ticket's chart clicks (TicketLink), Flatten goes from that window as the Flatten key does,
+  and Armed, the account, Qty, the bracket and the strategy are shown and set in the ticket's window. On a chart not on the
+  ticket's instrument it says so and sends nothing.
+
+### The first part (step 1.1; page and docs, nothing on the order path)
+
+The non-order parts of release 1 (the lock of 2026-11-15, topic 2).
+
+- **The start guard** (`live/workspace.js` `startGuard`, `start`): the layout, the ticket's connection and the ticket open
+  first; then the Bot, Agent, Colosseum and Legion tabs start, each inside its own guard, and are told the layout the
+  charts opened on; then the tab in the address. A tab that throws is named in the note line ("The Bot tab did not start:
+  the charts and the ticket work; reload this window to try it again.") and in the console, its top bar button stays
+  hidden, and the charts, the ticket and the other tabs run on. The tabs' share of ChartBridge's hello (after the
+  ticket's), a layout change (after the charts and the ticket are placed), Praetorian's link and Legion's helper status
+  go through the same guard.
+- **The old Account panel is removed** (1.15.0; not offered since 1.34.0). A saved layout that still holds one opens
+  without it, quietly, the rest as saved. The Account page has its figures.
+- **ChartKit off the PC install list**: `kit.css`, `kit.js` and `kit.html` leave `nt8/install-files.json` (kept in the
+  repo as the design reference for Legion). The PC updater drops them from a PC's page folder at its next page install.
+  The fonts they name stay installed.
+- **The agent board F snapshot is removed** (`live/kits/agent-board-f/` and `test/agent-kit.test.js`); commit aabb2cb on
+  main (chart 1.57.0) still holds both.
+- **The Studio's work folder** in the examples is `C:\Data\Studio\work` (the task script and `docs/MARKUP_STUDIO.md`; the
+  code sets no default, `--work` is required).
+
+### The way back: `update-pc.ps1 rollback-chartbridge -Flat` (step 1.1, the audit)
+
+- **What it does**: copies the ChartBridge files the last `-InstallChartBridge` replaced (kept in
+  `updater\previous-addons\<time>\`, as before) back over AddOns, then says to press F5 in the NinjaScript Editor while flat.
+  It uses the install's own all-or-nothing copy: a file that cannot be replaced puts back every file already replaced; a
+  file the install added is taken out, and a file it took out comes back.
+- **Nothing is lost**: the files it replaces are kept first, in a new `previous-addons\` folder with their own record, so
+  running it again goes forward again. The set it goes back to, and the set the last install kept, are never pruned.
+- **Checked first**: every `-InstallChartBridge` now records the set it kept and each file's sha256 in `state.json`
+  (`chartBridge.installed.backup` and `backupHashes`). The rollback refuses, with a plain reason and nothing changed, when no
+  install is recorded, the set has no record (kept by an older updater), the set is gone, a file is missing, or a file does
+  not match its sha256. It never runs over a recorded mix of files (DO NOT press F5).
+- **Flat**: `-Flat` is Anthony's word that he is flat in every account; without it nothing is done. The updater has no check
+  of NinjaTrader's positions that counts while NinjaTrader is closed, so no other check is made for now. Then it asks once
+  (type `y`, or `-Yes`), as `-InstallChartBridge` does. `status` says when a put back ChartBridge waits for F5.
+- The page files are not changed (`update-pc.ps1 rollback` puts the previous page back).
+
+### Tests
+
+`nt8/check/BotHarness.cs` moves from Sim101 to a made-up live personal account and adds FailClosed, SizeCeiling, DayStops,
+LateFill, ReArmRace, OpenAtRestart and CutAtRestart; `nt8/check/OrdersHarness.cs` (Cut half: even, odd 3 and 5, a short,
+pairs per fill, a Merge set, 1 contract and flat, a stale page, readings apart, a second press, working exits, strict keys
+and the gates, a group's members, a rejected close, trading off, and the R12 section), `nt8/check/AgentHarness.cs` (Cut half
+on an agent's pair), `nt8/check/DataHarness.cs` (the feature); `test/start-guard.test.js` and `npm run smoke:start-guard`,
+`test/cut-half.test.js`, `test/mini-ticket-smoke.mjs` (`npm run smoke:mini-ticket`), `test/bot.test.js`,
+`test/fake-v3.test.js`, `test/nt8-source.test.js` and `test/nt8-record.test.js` (each order path change listed word for
+word); `test/pc-updater.tests.ps1` (rollback-chartbridge: the record, -Flat, every refusal, a held file, back and forward
+again) and `test/pc-updater.test.js` (two hand paths only, each asking first).
 
 ## chart 1.57.0 (2026-11-13): the Colosseum's leaderboard, bots and agents mingled (page only, no F5)
 
