@@ -82,6 +82,16 @@ public static class BotHarness
         Update(o);
         Deliver(o.Account.Name, o.Instrument, o.OrderAction == OrderAction.Buy ? MarketPosition.Long : MarketPosition.Short, o.Quantity, price, o.OrderId);
     }
+    // Release 1 (1.6b, review R12 finding 1): the entry fills part way (filled in all so far), then NinjaTrader's execution for qty.
+    static void PartFill(Order o, int filled, int qty, double price)
+    {
+        if (o.OrderId == null) o.OrderId = "NT" + Guid.NewGuid().ToString("N").Substring(0, 8);
+        o.Filled = filled; o.AverageFillPrice = price; o.OrderState = filled >= o.Quantity ? OrderState.Filled : OrderState.PartFilled;
+        Update(o);
+        Deliver(o.Account.Name, o.Instrument, o.OrderAction == OrderAction.Buy ? MarketPosition.Long : MarketPosition.Short, qty, price, o.OrderId);
+    }
+    // An execution that is not the bot's entry (a leg, a flatten), qty the other way from a buy entry.
+    static void Sold(int qty, double price) { Deliver(own.Name, mnq, MarketPosition.Short, qty, price, "X" + Guid.NewGuid().ToString("N").Substring(0, 6)); }
     // The position closes (a leg, or anything else): an execution the other way, then nothing left working or held.
     static void Exit(Order entry, double price)
     {
@@ -133,6 +143,8 @@ public static class BotHarness
             FailClosed();    // release 1 (1.6b): a rail not set, 0, none or unreadable: no arming, no entry
             SizeCeiling();   // release 1 (1.6b): the Bot tab's size, the hard ceiling only (never config.txt's maxQty)
             DayStops();      // release 1 (1.6b): the day's loss and profit stops: flatten, latch, Shadow
+            LateFill();      // review R12 finding 1: an entry's late fill after its trade closed is followed, and flattened again at a day stop
+            ReArmRace();     // review R12 finding 2: a day stop reached while the page arms the bot: refused, never armed by itself
             ChosenAccount();
             NoneAndReset();   // 0.5.7: None (DECISION 2026-10-14e) and the 17:00 ET reset
             V2PageGetsNothing();
@@ -144,7 +156,7 @@ public static class BotHarness
             try { Pick(null); } catch (Exception) { }   // no personal pick left for the harnesses after this one
             ChartBridgeBot.Stop();
             ChartBridgeBot.ResetConfig();
-            ChartBridgeBot.ClockMs = null; ChartBridgeBot.ClockEt = null;
+            ChartBridgeBot.ClockMs = null; ChartBridgeBot.ClockEt = null; ChartBridgeBot.ModeArmChecked = null;
             ChartBridgeOrders.ResetConfig();
             Account.All.Clear(); Account.All.AddRange(accountsWas);
             Named().Clear(); foreach (KeyValuePair<string, Instrument> kv in namedWas) Named()[kv.Key] = kv.Value;
@@ -883,6 +895,125 @@ public static class BotHarness
         ChartBridgeOrders.NoteLast("MNQ", 25000);
         Page(RailsMsg(1, 5, 3, "500", "500", "MNQ"));
         Page("{\"type\":\"botMode\",\"cid\":\"m\",\"mode\":\"shadow\"}");
+    }
+
+    // ------------------------------------------------------------ review R12 finding 1: an entry that fills after its trade closed
+    static void LateFill()
+    {
+        Settle();
+        et = et.AddDays(1); ChartBridgeBot.Check();   // a fresh day
+        ChartBridgeOrders.NoteLast("MNQ", 25000);
+        // without a day stop: 1 of 2 fills, its stop leg closes it, then the other contract fills
+        Page(RailsMsg(2, 5, 3, "500", "500", "MNQ"));
+        Page("{\"type\":\"botMode\",\"cid\":\"m\",\"mode\":\"auto\"}");
+        Order a = AutoTrade("buy");
+        Check(a != null && a.Quantity == 2, "late fill: a 2 contract bot entry (made up)");
+        if (a == null) return;
+        PartFill(a, 1, 1, 25000);
+        Sold(1, 24996);   // its stop leg: -$8
+        string st = ChartBridgeBot.StripJson();
+        Check(st.Contains("\"position\":{\"qty\":0,") && st.Contains("\"trades\":1,") && st.Contains("\"pnlToday\":-8,"), "late fill: the part filled trade closed by its stop leg (-$8): " + st);
+        int s0 = page.Count;
+        PartFill(a, 2, 1, 24996);   // the entry's other contract fills after the trade closed
+        st = ChartBridgeBot.StripJson();
+        Check(st.Contains("\"position\":{\"qty\":1,") && st.Contains("\"trades\":1,"), "late fill: the trade is open again and followed (still one trade): " + st);
+        Check(page.Skip(s0).Any(x => x.Contains("\"level\":\"warn\"") && x.Contains("trade " + Tag(a) + " is open again")), "late fill: the pages are told (status warn)");
+        Bot(Sig(NewId(), Market("buy")));
+        Check(BotReject().Contains("already has a position"), "late fill: the reopened trade is the bot's one trade (a new entry refused)");
+        Sold(1, 24992);   // -$8 more
+        Settle();
+        st = ChartBridgeBot.StripJson();
+        Check(st.Contains("\"position\":{\"qty\":0,") && st.Contains("\"trades\":1,") && st.Contains("\"losses\":1,") && st.Contains("\"pnlToday\":-16,") &&
+              File_("bot-day.txt").Contains("trade\t" + Tag(a) + "\t-16"),
+              "late fill: the late contract's dollars are added to the trade's (-$16, one losing trade, saved in bot-day.txt): " + st);
+
+        // at a day stop (size 2, a $30 loss stop): 1 of 2 fills, the stop flattens it, then the other contract fills
+        et = et.AddDays(1); ChartBridgeBot.Check();
+        ChartBridgeOrders.NoteLast("MNQ", 25000);
+        Page(RailsMsg(2, 5, 3, "30", "40", "MNQ"));
+        Page("{\"type\":\"botMode\",\"cid\":\"m\",\"mode\":\"auto\"}");
+        Order b = AutoTrade("buy");
+        Check(b != null && b.Quantity == 2, "day stop late fill: a 2 contract bot entry");
+        if (b == null) return;
+        PartFill(b, 1, 1, 25000);
+        int m = own.Calls.Count;
+        ChartBridgeOrders.NoteLast("MNQ", 24985);   // open -$30 on the 1 held
+        ChartBridgeBot.Check();
+        double t0 = clock;
+        List<string> c = Calls(own, m);
+        Check(c.Count(x => x == "flatten MNQ 12-26") == 1 && c.Any(x => x.StartsWith("cancel CB#" + Tag(b) + " bot")) && ChartBridgeBot.StripJson().Contains("\"kind\":\"loss\""),
+              "day stop late fill: the loss stop cancels the entry's rest and flattens once: " + string.Join(" | ", c));
+        Sold(1, 24985);   // the flatten closes the 1 held: the trade closes at -$30
+        Check(ChartBridgeBot.StripJson().Contains("\"position\":{\"qty\":0,") && File_("bot-day.txt").Contains("trade\t" + Tag(b) + "\t-30"), "day stop late fill: flat at -$30 after the flatten");
+        // the entry's cancel is lost (it is still working): its cancel is sent again after 5 s, never a flatten (the bot holds nothing)
+        m = own.Calls.Count;
+        for (int i = 0; i < 9; i++) { clock += 350; Bot("{\"type\":\"beat\"}"); ChartBridgeBot.Check(); }
+        Check(Calls(own, m).Count == 0, "day stop late fill: nothing sent again before 5 s: " + string.Join(" | ", Calls(own, m)));
+        clock = t0 + 4850; Bot("{\"type\":\"beat\"}"); ChartBridgeBot.Check();
+        c = Calls(own, m);
+        Check(c.Count == 1 && c[0].StartsWith("cancel CB#" + Tag(b) + " bot"), "day stop late fill: a bot entry still working while latched: its cancel sent again at 5 s, no flatten: " + string.Join(" | ", c));
+        double t1 = clock;
+        s0 = page.Count;
+        PartFill(b, 2, 1, 24985);   // the entry's other contract fills before the cancel lands
+        Check(ChartBridgeBot.StripJson().Contains("\"position\":{\"qty\":1,") && page.Skip(s0).Any(x => x.Contains("trade " + Tag(b) + " is open again")),
+              "day stop late fill: the late contract is followed (NinjaTrader holds it, the strip says so)");
+        m = own.Calls.Count;
+        for (int i = 0; i < 9; i++) { clock += 350; Bot("{\"type\":\"beat\"}"); ChartBridgeBot.Check(); }
+        Check(Calls(own, m).Count == 0, "day stop late fill: at most one try every 5 s: " + string.Join(" | ", Calls(own, m)));
+        clock = t1 + 4850; Bot("{\"type\":\"beat\"}");   // 5 s since the last try: eight checks at once, as overlapping timer callbacks
+        using (Barrier go = new Barrier(8))
+        {
+            Thread[] ts = Enumerable.Range(0, 8).Select(_ => new Thread(() => { go.SignalAndWait(); ChartBridgeBot.CheckDayStops(); })).ToArray();
+            foreach (Thread t in ts) t.Start();
+            foreach (Thread t in ts) t.Join();
+        }
+        c = Calls(own, m);
+        Check(c.Count(x => x == "flatten MNQ 12-26") == 1 && clock - t1 <= 5000,
+              "review R12 finding 1: the late contract is flattened again within 5 s, once, however many checks overlap: " + string.Join(" | ", c));
+        Check(File_("bot.log").Contains("the day stop's flatten sent again: the bot still held its trade on OWN-1 MNQ"), "logged: the flatten sent again");
+        Sold(1, 24980);   // the second flatten: -$10 more
+        Settle();
+        st = ChartBridgeBot.StripJson();
+        Check(st.Contains("\"position\":{\"qty\":0,") && st.Contains("\"trades\":1,") && st.Contains("\"losses\":1,") && st.Contains("\"pnlToday\":-40,") && st.Contains("\"mode\":\"shadow\"") &&
+              File_("bot-day.txt").Contains("trade\t" + Tag(b) + "\t-40") && File_("bot-day.txt").Contains("stop\tloss\t-30"),
+              "day stop late fill: the trade counts -$40, still one losing trade; the latch stays: " + st);
+        m = own.Calls.Count;
+        for (int i = 0; i < 24; i++) { clock += 350; Bot("{\"type\":\"beat\"}"); ChartBridgeBot.Check(); }
+        Check(Calls(own, m).Count == 0, "day stop late fill: flat, nothing working: nothing more sent: " + string.Join(" | ", Calls(own, m)));
+        et = et.AddDays(1); ChartBridgeBot.Check();
+        ChartBridgeOrders.NoteLast("MNQ", 25000);
+        Page(RailsMsg(1, 5, 3, "500", "500", "MNQ"));
+        Page("{\"type\":\"botMode\",\"cid\":\"m\",\"mode\":\"shadow\"}");
+    }
+
+    // ------------------------------------------------------------ review R12 finding 2: a day stop reached while the page arms the bot
+    static void ReArmRace()
+    {
+        Settle();
+        et = et.AddDays(1); ChartBridgeBot.Check();
+        ChartBridgeOrders.NoteLast("MNQ", 25000);
+        Page(RailsMsg(1, 5, 3, "30", "40", "MNQ"));
+        Page("{\"type\":\"botMode\",\"cid\":\"m\",\"mode\":\"auto\"}");
+        Order a = AutoTrade("buy");
+        Check(a != null, "re-arm race: a bot trade");
+        if (a == null) return;
+        FillEntry(a, 25000);
+        Page("{\"type\":\"botMode\",\"cid\":\"m\",\"mode\":\"shadow\"}");
+        ChartBridgeOrders.NoteLast("MNQ", 24985);   // open -$30: the timer's next check reaches the loss stop
+        // the timer's check lands after SetMode's arm check and before it sets the mode
+        ChartBridgeBot.ModeArmChecked = () => { ChartBridgeBot.ModeArmChecked = null; ChartBridgeBot.Check(); };
+        try { Page("{\"type\":\"botMode\",\"cid\":\"m\",\"mode\":\"auto\"}"); }
+        finally { ChartBridgeBot.ModeArmChecked = null; }
+        string st = ChartBridgeBot.StripJson();
+        Check(PageReject().Contains("auto refused: the day's loss stop ($30) was reached today") && st.Contains("\"mode\":\"shadow\"") && st.Contains("\"kind\":\"loss\""),
+              "review R12 finding 2: a day stop reached while the page arms the bot: refused, the mode stays Shadow: " + PageReject());
+        Sold(1, 24985);
+        Settle();
+        et = et.AddDays(1); ChartBridgeBot.Check();   // 18:00 ET: the latch ends
+        st = ChartBridgeBot.StripJson();
+        Check(st.Contains("\"dayStop\":null") && st.Contains("\"mode\":\"shadow\""), "review R12 finding 2: at 18:00 ET the bot is not armed by itself: " + st);
+        ChartBridgeOrders.NoteLast("MNQ", 25000);
+        Page(RailsMsg(1, 5, 3, "500", "500", "MNQ"));
     }
 
     // ------------------------------------------------------------ a v2 page (no "client") gets no v3 message
