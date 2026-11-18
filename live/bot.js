@@ -739,7 +739,7 @@ function create(o) {
   function renderPanel() {
     if (!view || !S.on) return;
     const b = S.bot || {}, e = loadedEntry(), acc = BC.botAccount(b);
-    const allowed = BC.modesAllowed({ entry: e, tradable: BC.accountTradable(S.accounts, S.trading, acc.name), account: acc.name });
+    const allowed = BC.modesAllowed({ entry: e, tradable: BC.accountTradable(S.accounts, S.trading, acc.name), account: acc.name, bot: S.bot });   // release 1: fails closed on a ChartBridge before 0.6.24
     const on = !!(b.enabled && b.connected);
     const oo = q('[data-k="onoff"]');
     put(oo, 'textContent', !b.enabled ? 'Off' : b.killed ? 'Killed' : b.connected ? 'On' : 'Lost');
@@ -772,9 +772,9 @@ function create(o) {
     put(q('[data-k="size"]'), 'textContent', (b.root || botRoot()) + ' (' + (MICRO[b.root || botRoot()] || 'contract') + '), ' + (sz === null ? 'not set' : sz + (sz === 1 ? ' contract' : ' contracts')));
     put(q('[data-k="railDL"]'), 'textContent', isNum(b.dayLoss) ? BC.fmtUsd(-b.dayLoss) : 'not set');
     put(q('[data-k="railDP"]'), 'textContent', isNum(b.dayProfit) ? BC.fmtUsd(b.dayProfit) : 'not set');
-    const miss = BC.railsMissingText(b);
-    put(q('[data-k="railMiss"]'), 'textContent', miss ? 'Not set: ' + miss + '. The bot does not trade until every rail is set.' : '');
-    put(q('[data-k="railMiss"]'), 'hidden', !miss);
+    const old = BC.oldRails(S.bot), miss = old ? '' : BC.railsMissingText(b);   // release 1: a ChartBridge before 0.6.24 sends no railsMissing
+    put(q('[data-k="railMiss"]'), 'textContent', old ? BC.OLD_RAILS + '.' : miss ? 'Not set: ' + miss + '. The bot does not trade until every rail is set.' : '');
+    put(q('[data-k="railMiss"]'), 'hidden', !old && !miss);
     const ds = b.dayStop && typeof b.dayStop.text === 'string' ? b.dayStop.text : '';
     put(q('[data-k="dayStop"]'), 'textContent', ds ? 'Day stop: ' + ds : '');
     put(q('[data-k="dayStop"]'), 'hidden', !ds);

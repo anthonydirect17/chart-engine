@@ -84,6 +84,11 @@ function rails(bot) {
   const trades = railLevel(b.trades, b.maxTrades), losses = railLevel(b.losses, b.maxLosses);
   return { trades, losses, level: worse(trades.level, losses.level) };
 }
+/** Release 1 (the R12 review of the cut): a ChartBridge before 0.6.24 sends no railsMissing, no size and no day stops, and
+ * trades the bot on its old fixed rails. The page then fails closed: copilot and auto are refused with this sentence. */
+const OLD_RAILS = 'This ChartBridge (before 0.6.24) has the old fixed rails (1 contract, 5 trades, 3 losing trades, no day stops): install 0.6.24 to arm the bot';
+/** Whether a `bot` message comes from a ChartBridge before 0.6.24 (it has no railsMissing list). */
+const oldRails = bot => !!bot && typeof bot === 'object' && !Array.isArray(bot.railsMissing);
 /** The rails not set, in words ('the size and the day\'s loss stop'), from a `bot` message's railsMissing; '' when every one is set. */
 function railsMissingText(bot) {
   const m = (bot && Array.isArray(bot.railsMissing) ? bot.railsMissing : []).filter(x => RAIL_WORDS[x]).map(x => RAIL_WORDS[x]);
@@ -250,16 +255,21 @@ function botAccountChange(bot, name, choices, cid) {
 /**
  * Which modes the panel offers: shadow always; copilot unless the loaded build is on the Research shelf; auto only when
  * ChartBridge allows it (the bot's account tradable) and not for a Research build. Returns { shadow, copilot, auto } of
- * { ok, why }. o: { entry, tradable, account }.
+ * { ok, why }. o: { entry, tradable, account, bot }.
+ * Release 1 (the R12 review of the cut): fails closed on the `bot` message. With none yet, or one from a ChartBridge before
+ * 0.6.24 (no railsMissing: the old fixed rails, no day stops), copilot and auto are refused; shadow stays.
  */
 function modesAllowed(o) {
   const x = o || {};
   const research = !!(x.entry && x.entry.shelf === 'research');
   const rs = 'A Research build runs in Shadow only.';
+  const gate = research ? { ok: false, why: rs }
+    : !x.bot || typeof x.bot !== 'object' ? { ok: false, why: 'No word yet from ChartBridge\'s bot channel: the bot is not armed until it answers.' }
+      : oldRails(x.bot) ? { ok: false, why: OLD_RAILS } : null;
   return {
     shadow: { ok: true, why: '' },
-    copilot: research ? { ok: false, why: rs } : { ok: true, why: '' },
-    auto: research ? { ok: false, why: rs } : x.tradable ? { ok: true, why: '' } : !x.account ? { ok: false, why: 'The bot\'s account is None: choose its account first (nothing trades on None).' } : { ok: false, why: 'Auto needs ' + x.account + ' to be tradable in ChartBridge.' },
+    copilot: gate || { ok: true, why: '' },
+    auto: gate || (x.tradable ? { ok: true, why: '' } : !x.account ? { ok: false, why: 'The bot\'s account is None: choose its account first (nothing trades on None).' } : { ok: false, why: 'Auto needs ' + x.account + ' to be tradable in ChartBridge.' }),
   };
 }
 /** Whether an account can trade now: the v3 `accounts` list (tradable) or the `trading` answer's accounts. None: never. */
@@ -686,7 +696,7 @@ function statusText(b) {
 }
 
 return {
-  VERSION, RAIL_NAMES, RAIL_WORDS, RAIL_MAX, HARD_CEILING, DAY_STOP_MAX, railsMissingText, BOT_ACCOUNT, NONE_LABEL, ROOT_SIBLING, isBotMark, botFillLedger, AMBER, RED, THIN, MODES, MODE_NAME, DAY_TYPES, PROPOSAL_END, KEYS, LIB_VERSION, SHELVES, COND_KEYS,
+  VERSION, RAIL_NAMES, RAIL_WORDS, RAIL_MAX, HARD_CEILING, DAY_STOP_MAX, railsMissingText, OLD_RAILS, oldRails, BOT_ACCOUNT, NONE_LABEL, ROOT_SIBLING, isBotMark, botFillLedger, AMBER, RED, THIN, MODES, MODE_NAME, DAY_TYPES, PROPOSAL_END, KEYS, LIB_VERSION, SHELVES, COND_KEYS,
   railLevel, rails, railsChange, worse, CONFIRM_MS, DOUBLE_CLICK_MS, confirmStep,
   modesAllowed, accountTradable, botSwitchOn, accountMark, botAccount, accountChoices, botAccountChange,
   createProposals,

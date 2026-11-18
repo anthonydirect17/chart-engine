@@ -96,16 +96,43 @@ test('the bot\'s fills: claimed only against the contracts its own orders fill (
   assert.equal(L.claim(fill('e5', 'buy', 25001)), false, 'cleared');
 });
 
+test('release 1 (the R12 review of the cut): on a ChartBridge before 0.6.24 the Bot tab fails closed: copilot and auto refused, the old rails said', () => {
+  const ready = LIB.bots.find(b => b.shelf === 'ready');
+  const old = { enabled: true, connected: true, mode: 'shadow', account: 'PERS-1', trades: 0, maxTrades: 5, losses: 0, maxLosses: 3 };   // 0.6.23's bot message: no railsMissing, size or day stops
+  const why = 'This ChartBridge (before 0.6.24) has the old fixed rails (1 contract, 5 trades, 3 losing trades, no day stops): install 0.6.24 to arm the bot';
+  assert.equal(BC.OLD_RAILS, why);
+  assert.equal(BC.oldRails(old), true); assert.equal(BC.oldRails({ railsMissing: [] }), false); assert.equal(BC.oldRails(null), false);
+  for (const tradable of [true, false]) {
+    const m = BC.modesAllowed({ entry: ready, tradable, account: 'PERS-1', bot: old });
+    assert.ok(m.shadow.ok, 'Shadow stays');
+    assert.deepEqual(m.copilot, { ok: false, why }); assert.deepEqual(m.auto, { ok: false, why });
+  }
+  assert.deepEqual(BC.modesAllowed({ entry: null, tradable: true, account: 'PERS-1', bot: Object.assign({}, old, { railsMissing: 'size' }) }).auto, { ok: false, why }, 'a railsMissing that is not a list is the old shape too');
+  // no bot message yet: refused as well (fail closed), with its own words
+  const none = BC.modesAllowed({ entry: ready, tradable: true, account: 'PERS-1' });
+  assert.ok(none.shadow.ok && !none.copilot.ok && !none.auto.ok); assert.match(none.auto.why, /No word yet from ChartBridge's bot channel/);
+  // 0.6.24 with every rail set: as before
+  const m = BC.modesAllowed({ entry: ready, tradable: true, account: 'PERS-1', bot: Object.assign({}, old, { railsMissing: [] }) });
+  assert.ok(m.copilot.ok && m.auto.ok);
+  // the panel: the sentence in railMiss, never "Not set" with no warning
+  const src = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'live', 'bot.js'), 'utf8');
+  assert.match(src, /BC\.modesAllowed\(\{ entry: e, tradable: BC\.accountTradable\(S\.accounts, S\.trading, acc\.name\), account: acc\.name, bot: S\.bot \}\)/, 'the panel hands modesAllowed the bot message');
+  assert.match(src, /const old = BC\.oldRails\(S\.bot\), miss = old \? '' : BC\.railsMissingText\(b\);/);
+  assert.match(src, /put\(q\('\[data-k="railMiss"\]'\), 'textContent', old \? BC\.OLD_RAILS \+ '\.' :/);
+  assert.match(src, /put\(q\('\[data-k="railMiss"\]'\), 'hidden', !old && !miss\);/);
+});
+
 test('modes: Research builds run in shadow only; auto only when the bot\'s account is tradable (Sim or LIVE); the bot switch', () => {
   const ready = LIB.bots.find(b => b.shelf === 'ready'), research = LIB.bots.find(b => b.shelf === 'research');
-  let m = BC.modesAllowed({ entry: ready, tradable: true, account: 'EVAL-A' });
+  const cur = { railsMissing: [] };   // release 1: a 0.6.24 bot message
+  let m = BC.modesAllowed({ entry: ready, tradable: true, account: 'EVAL-A', bot: cur });
   assert.ok(m.shadow.ok && m.copilot.ok && m.auto.ok, 'auto on a LIVE account: allowed when ChartBridge says it is tradable');
-  m = BC.modesAllowed({ entry: ready, tradable: false, account: 'EVAL-A' });
+  m = BC.modesAllowed({ entry: ready, tradable: false, account: 'EVAL-A', bot: cur });
   assert.ok(m.copilot.ok); assert.equal(m.auto.ok, false); assert.match(m.auto.why, /Auto needs EVAL-A to be tradable/);
-  assert.match(BC.modesAllowed({ entry: ready, tradable: false }).auto.why, /None: choose its account first/, 'no account: None (DECISION 2026-10-14e)');
-  m = BC.modesAllowed({ entry: research, tradable: true });
+  assert.match(BC.modesAllowed({ entry: ready, tradable: false, bot: cur }).auto.why, /None: choose its account first/, 'no account: None (DECISION 2026-10-14e)');
+  m = BC.modesAllowed({ entry: research, tradable: true, bot: cur });
   assert.ok(m.shadow.ok); assert.equal(m.copilot.ok, false); assert.equal(m.auto.ok, false); assert.match(m.copilot.why, /Shadow only/);
-  m = BC.modesAllowed({ entry: null, tradable: true });
+  m = BC.modesAllowed({ entry: null, tradable: true, bot: cur });
   assert.ok(m.copilot.ok && m.auto.ok, 'a bot not in the library: ChartBridge decides');
   assert.equal(BC.MODE_NAME.auto, 'Auto', 'not "Sim auto": the bot trades the account Anthony chose');
   assert.equal(BC.accountTradable({ list: [{ name: 'Sim101', tradable: true }] }, null), false, 'no account named: None, never tradable (DECISION 2026-10-14e)');
@@ -152,7 +179,7 @@ test('the bot\'s account (Anthony 2026-10-07): SIM or LIVE mark, the accounts to
   assert.match(BC.botAccountChange({ account: null }, '', ch).error, /None is already the bot's account/);
   assert.match(BC.botAccountChange(bot, null, ch).error, /Choose an account, or None/);
   assert.equal(BC.accountTradable(accounts, null, ''), false, 'None is never tradable');
-  assert.deepEqual(BC.modesAllowed({ tradable: false, account: '' }).auto, { ok: false, why: 'The bot\'s account is None: choose its account first (nothing trades on None).' });
+  assert.deepEqual(BC.modesAllowed({ tradable: false, account: '', bot: { railsMissing: ['size'] } }).auto, { ok: false, why: 'The bot\'s account is None: choose its account first (nothing trades on None).' });
   const st = BC.stripModel({ enabled: true, connected: true, name: 'Demo', mode: 'auto', account: 'EVAL-A', sim: false, trades: 0, maxTrades: 5, losses: 0, maxLosses: 3 });
   assert.equal(st.account, 'EVAL-A'); assert.equal(st.accountMark, 'LIVE'); assert.equal(st.mode, 'Auto');
 });
