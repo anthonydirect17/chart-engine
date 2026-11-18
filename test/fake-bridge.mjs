@@ -550,9 +550,9 @@ function onMessage(c, text) {
   else if (DATA_037 && (m.type === 'htf' || m.type === 'weekProfile')) onDataRequest(c, m, text);
   else if (m.type === 'auth') desk.auth(c, m.token);
   else if (V3 && m.type === 'client') desk.client(c, m);
-  else if (V3 && ['order', 'change', 'plan', 'cancel', 'flatten', 'accountTrade', 'accountArchive', 'accountUnarchive', 'merge', 'copierGet', 'copierSet', 'copierFollower', 'copierRearm', 'copierFollowerRemove', 'firmMinimum',
+  else if (V3 && ['order', 'change', 'plan', 'cancel', 'flatten', 'cutHalf', 'accountTrade', 'accountArchive', 'accountUnarchive', 'merge', 'copierGet', 'copierSet', 'copierFollower', 'copierRearm', 'copierFollowerRemove', 'firmMinimum',
     'botMode', 'botKill', 'botSeen', 'botAnswer', 'botRails', 'botAccount', 'agentMode', 'agentKill', 'agentSeen', 'agentAnswer', 'agentAccount', 'agentRules', 'agentStandDownClear', 'groupSave', 'groupDelete', 'accountGroup', 'memberRules', 'accountLimits', 'groupPreview', 'groupOrder', 'memberBench'].includes(m.type)) desk.handle(c, m, text);   // 0.6.7: memberBench
-  else if (['order', 'change', 'plan', 'cancel', 'flatten'].includes(m.type)) desk.handle(c, m);   // plan: ChartBridge 0.3.7 (prices), 0.3.8 (ticks)
+  else if (['order', 'change', 'plan', 'cancel', 'flatten', 'cutHalf'].includes(m.type)) desk.handle(c, m);   // plan: ChartBridge 0.3.7 (prices), 0.3.8 (ticks); cutHalf: release 1 (1.6c)
 }
 /* ---------------- --data-037: settlement, higher-timeframe bars, the weekly profile (sample data) */
 const settlement = {}, settlementDate = {};       // the prior session's settlement and its trading date (sample: its last close)
@@ -923,7 +923,8 @@ server.on('upgrade', (req, sock) => {
     for (const i of hello.instruments) { i.settlement = settlement[i.root]; i.settlementDate = settlementDate[i.root]; }
     hello.features = (hello.features || []).concat(['settlement', 'htf', 'weekProfile']); hello.version = 'fake-0.3.7';
   }
-  if (V3) { hello.features = (hello.features || []).concat(['v3']); hello.version = flagValue('version') || (AGENTS.length ? 'fake-0.5.4' : 'fake-0.4.0'); }   // --version still wins (1.22.0)   // protocol v3 (quote-only markets are told per instrument); 0.5.4 with agents (keepMode 0.5.2, the window in a trade 0.5.4)
+  if (V3) { hello.features = (hello.features || []).concat(['v3', 'cutHalf']);   // release 1 (1.6c): Cut half
+    hello.version = flagValue('version') || (AGENTS.length ? 'fake-0.5.4' : 'fake-0.4.0'); }   // --version still wins (1.22.0)   // protocol v3 (quote-only markets are told per instrument); 0.5.4 with agents (keepMode 0.5.2, the window in a trade 0.5.4)
   send(c, hello);
   send(c, { type: 'execs', list: NO_HELLO_ACCOUNTS ? [] : fillsSample() });
   sock.on('data', d => {

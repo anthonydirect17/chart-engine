@@ -1,8 +1,8 @@
 /*
  * TradeCore: the order logic of the order ticket, in one place (chart 1.12.0). The workspace's order ticket
  * (live/workspace.js, index.html) calls these very functions (the single chart page's order bar did too until chart
- * 1.22.0, when that page went), so there is one order path: what Buy MKT, Sell MKT, B/E, Flatten (Close), Cancel all, Flatten all,
- * Flatten every account (1.34.0), a
+ * 1.22.0, when that page went), so there is one order path: what Buy MKT, Sell MKT, B/E, Flatten (Close until release 1), Cut half
+ * (release 1), Cancel all, Flatten all, Flatten every account (1.34.0), a
  * chart click and a drag send, and every check before it, is written once, here. It is the 1.11.0 code of live.js moved
  * out unchanged, with the chart's instrument, last price, Qty box and account picker read through `env`.
  *
@@ -65,7 +65,7 @@ const OS = typeof self !== 'undefined' && self.OrderStrategies ? self.OrderStrat
 /* 1.17.0: AgentCore's pageExitPasses, the one test of an exit on an agent's pair (agent-core.js loads after this file in
    index.html, so it is looked up when needed; with none loaded no agent owns anything and nothing asks) */
 const agentCore = () => (typeof self !== 'undefined' && self.AgentCore) || (typeof require === 'function' ? require('./agent-core.js') : null);
-const ORDER_ACTIONS = ['order', 'change', 'cancel', 'flatten', 'plan', 'merge', 'groupPreview', 'groupOrder'];   // 1.33.0: a group entry's preview and send count too   // what ChartBridge counts, 10 a second at most (plan: 0.3.8; merge: 0.4.0)
+const ORDER_ACTIONS = ['order', 'change', 'cancel', 'flatten', 'plan', 'merge', 'groupPreview', 'groupOrder', 'cutHalf'];   // 1.33.0: a group entry's preview and send count too; release 1 (1.6c): Cut half   // what ChartBridge counts, 10 a second at most (plan: 0.3.8; merge: 0.4.0)
 const CANCEL_CHUNK = 6, CANCEL_GAP = 1100, CANCEL_AGAIN = 5000;
 const BE_LIMIT = 10;
 const RATE_REFUSAL = /order actions/i;
@@ -90,6 +90,7 @@ function create(env) {
   const TR = {
     v2: false, enabled: false, reason: '', accounts: [], maxQty: {}, maxBracketTicks: 0, signInStarted: false,
     armed: false,                        // never saved: Armed is off after every page load
+    cutHalf: false,                      // release 1 (1.6c): ChartBridge's hello lists cutHalf
     account: '',
     /* ChartBridge 0.5.7 (review of #47): the sign-in snapshot of orders and positions is whole (the orders list says how many
        position messages follow it); false until then, and again after a drop. The ticket's daily reset waits for it. */
@@ -265,6 +266,8 @@ function create(env) {
   /** ChartBridge's `hello`: protocol v2 carries `trading`; sign in. */
   function hello(m) {
     recap();
+    /* release 1 (1.6c): Cut half needs ChartBridge's cutHalf (0.6.24); an older one lists no such feature, and its button greys */
+    TR.cutHalf = !!(m && Array.isArray(m.features) && m.features.includes('cutHalf'));
     if (m && m.trading) { applyTrading(m.trading); signIn(); }
   }
   /** A message from ChartBridge about trading; true when it was one. */
@@ -814,6 +817,67 @@ function create(env) {
     }
     sendFlatten(TR.account, R, false, other ? 'all' : 'here');     // takes its orders off a Cancel all; sent again once if refused for the rate
     flash('Flatten sent for ' + TR.account + ' ' + R + ': cancel its orders, close the position at market.', '');
+  }
+  /*
+   * Cut half (release 1, Bot-Lab plan step 1.6c, Anthony 2026-11-17): half the position on the ticket's account and instrument
+   * closed at market, its stop and target shrunk to the size left in the same step, by ChartBridge (one `cutHalf` per account,
+   * carrying the signed position shown here, which ChartBridge checks against its own two readings). An odd size closes the
+   * smaller part (3 closes 1, 5 closes 2). Works with Armed off, as Flatten (it only takes risk off): every check of ready() but
+   * Armed. On a group each member is cut on its own size; a member at 1 is left alone and named in the note. Paced within
+   * ChartBridge's 10 order actions a second; a member sent later is read again first (its size may have changed).
+   * cutHalfState(R) is what the button shows: { ok, title }.
+   */
+  let cutRun = null;                                               // { account, R, queue: [account], words: [], alone: '' }
+  const cutWords = x => x.account + ' closes ' + x.cut + ' of ' + Math.abs(x.position);
+  function cutHalfState(R) {
+    const account = TR.account;
+    if (!TR.enabled || !account) return { ok: false, title: 'Cut half: ' + (!TR.enabled ? TR.reason || 'trading is not enabled' : 'pick an account') };
+    if (!TR.cutHalf) return { ok: false, title: 'Cut half needs ChartBridge 0.6.24 or newer (this ChartBridge does not have it)' };
+    const plan = OT.cutHalfPlan(targets(account), TR.positions, R);
+    if (!plan.send.length) return { ok: false, title: 'Cut half needs 2 or more contracts' + (isGroup(account) ? ' on a member' : '') };
+    if (!isGroup(account)) { const x = plan.send[0]; return { ok: true, title: 'Cut half: close ' + x.cut + ' of ' + Math.abs(x.position) + ' at market; the stop and target shrink to ' + x.keep + '. Works with Armed off.' }; }
+    return { ok: true, title: 'Cut half on ' + nameOf(account) + ': ' + plan.send.map(cutWords).join(', ') + ' at market, each stop and target shrunk to its size left' +
+      (plan.alone.length ? '; left alone (1 contract): ' + plan.alone.join(', ') : '') + '. Works with Armed off.' };
+  }
+  function sendCut(x, R) { send({ type: 'cutHalf', cid: (sentCid = newCid()), account: x.account, root: R, position: x.position }); }
+  function cutHalf() {
+    if (!ready(false)) return;
+    const R = root(), account = TR.account;
+    if (!TR.cutHalf) { flash('Cut half needs ChartBridge 0.6.24 or newer: nothing was sent. Flatten works.', 'warn'); return; }
+    if (cutRun) { flash('Cut half under way on ' + nameOf(cutRun.account) + ': ' + cutRun.queue.join(', ') + ' left. Nothing new was sent.', 'warn'); return; }
+    const plan = OT.cutHalfPlan(targets(account), TR.positions, R);
+    const alone = plan.alone.length ? ' Left alone (1 contract): ' + plan.alone.join(', ') + '.' : '';
+    if (!plan.send.length) { flash('Cut half needs 2 or more contracts on ' + nameOf(account) + ' ' + R + ': nothing was sent.' + (isGroup(account) ? alone : plan.alone.length ? ' Flatten closes the 1.' : ''), 'warn'); return; }
+    /* ChartBridge refuses Cut half on a pair an AI agent owns (its stop and target are the agent's): said before sending */
+    const owned = typeof env.agentOwner === 'function' ? plan.send.filter(x => env.agentOwner(x.account, R)) : [];
+    if (owned.length) { flash('Not sent: ' + owned.map(x => x.account).join(', ') + ' ' + R + ' belongs to agent ' + env.agentOwner(owned[0].account, R) + ': use Flatten, or a market exit.', 'error'); return; }
+    if (!sameAction('cutHalf|' + account + '|' + R, now())) { flash('Ignored a repeat click within 0.4 s.', 'warn'); return; }
+    const t = now(), recent = actionTimes.filter(x => x > t - CANCEL_GAP).length;
+    const first = OT.paceChunks(plan.send, recent, BE_LIMIT)[0], rest = plan.send.slice(first.length);
+    for (const x of first) sendCut(x, R);
+    if (!isGroup(account)) { const x = plan.send[0]; flash('Cut half sent for ' + account + ' ' + R + ': close ' + x.cut + ' of ' + Math.abs(x.position) + ' at market; the stop and target shrink to ' + x.keep + '.', ''); return; }
+    const words = first.map(cutWords);
+    if (!rest.length) { flash('Cut half sent for ' + nameOf(account) + ' ' + R + ': ' + words.join(', ') + ' at market, each stop and target shrunk to its size left.' + alone, ''); return; }
+    cutRun = { account, R, queue: rest.map(x => x.account), words, alone };
+    flash('Cut half for ' + nameOf(account) + ' ' + R + ': ' + words.join(', ') + ' sent; ' + cutRun.queue.join(', ') + ' as ChartBridge\'s 10 a second allows.' + alone, '');
+    cutPump();
+  }
+  function cutPump() {
+    const r = cutRun;
+    if (!r) return;
+    const t = now(), recent = actionTimes.filter(x => x > t - CANCEL_GAP).length;
+    const room = OT.paceChunks(r.queue, recent, BE_LIMIT)[0].length;
+    if (room) {
+      const why = FRAMED || !TR.enabled ? 'trading went off' : !open() ? 'the connection to ChartBridge dropped' : TR.account !== r.account || root() !== r.R ? 'the ticket\'s account or instrument changed' : '';
+      if (why) { cutRun = null; flash('Cut half for ' + nameOf(r.account) + ' ' + r.R + ': ' + r.words.join(', ') + ' sent; ' + r.queue.join(', ') + ' not sent: ' + why + '.', 'error'); return; }
+      for (const a of r.queue.splice(0, room)) {
+        const x = OT.cutHalfPlan([a], TR.positions, r.R).send[0];          // read again: its size may have changed since the press
+        if (x) { sendCut(x, r.R); r.words.push(cutWords(x)); } else r.words.push(a + ' not sent (under 2 contracts now)');
+      }
+    }
+    if (!r.queue.length) { cutRun = null; flash('Cut half sent for ' + nameOf(r.account) + ' ' + r.R + ': ' + r.words.join(', ') + ' at market, each stop and target shrunk to its size left.' + r.alone, ''); return; }
+    const oldest = actionTimes.find(x => x > t - CANCEL_GAP);
+    later(() => { if (cutRun === r) cutPump(); }, Math.max(20, (oldest === undefined ? t : oldest) + CANCEL_GAP - t));
   }
   /*
    * The Agent tab's "Flatten and turn him off?" Yes (chart 1.20.0, DECISION 2026-10-09 v): one Flatten (sendFlatten, as the
@@ -1475,6 +1539,7 @@ function create(env) {
     planMove, planRemove, planAdd, chartOrders, groupPosition, framedReason: FRAMED_REASON, tradeMode, noteMoving, moveRefusal,
     hello, message, lost, signIn, applyTrading,
     ready, sendOrder, placeAt, placeChecked, lastCid: () => sentCid, breakEven, cancelAll, flattenHere, flattenAgent, flattenAll, flattenEvery, everyItems, everyScan, moveOrder, cancelOrder, setArmed, pickAccount,
+    cutHalf, cutHalfState,
     merge, managedOf, switchOn: sw, setSwitches, v3Lost, cancelFromList,
     working, inCancelAll, batchLine, unsentNote, dismissUnsent,
     fmtUnit, bracketSelShown, typedTicks, committedTicks, setBracket, setUnit, setQty, pickPreset, savePreset, readPresets, flushBrackets, cancelBrackets,
@@ -1484,14 +1549,14 @@ function create(env) {
     isGroup, groupMembers: a => targets(a), groupsChanged, groupProjectTick, groupProjection, groupOut: a => outWords(a), groupLeftWords: a => leftWords(a), groupOf: a => groupFor(a),
     _t: { batchStop, unsentCheck, actionSent, sendFlatten, onRefused, get batch() { return batch; } },
     /** for tests: the order actions sent in the last 1.1 s, and whether a B/E, Flatten all or Flatten retry is under way */
-    busy: () => ({ be: !!beRun, flattenAll: !!faRun, retry: retry ? retry.list.map(f => f.account + ' ' + f.root) : [], recent: actionTimes.filter(x => x > now() - CANCEL_GAP).length }),
+    busy: () => ({ be: !!beRun, flattenAll: !!faRun, cutHalf: !!cutRun, retry: retry ? retry.list.map(f => f.account + ' ' + f.root) : [], recent: actionTimes.filter(x => x > now() - CANCEL_GAP).length }),
   };
 }
 
 /*
  * The order ticket's controls wired to a core (the workspace's ticket; the single chart page's bar shared it until 1.22.0). `$(id)`
  * finds a control by its 1.11.0 id (obar, armBtn, armText, oAcct, oQty, oQtyCap, buyMkt, sellMkt, bPreset, bSaveBox,
- * bSaveName, bSaveOk, bSaveNo, bStop, bTarget, bUnit, flattenBtn, beBtn, cancelAllBtn, oPos, oLegs, oOther, oAcctNote,
+ * bSaveName, bSaveOk, bSaveNo, bStop, bTarget, bUnit, flattenBtn, beBtn, cancelAllBtn, cutHalfBtn (release 1, optional), oPos, oLegs, oOther, oAcctNote,
  * oCancel, oOff, unsentBar, unsentText, unsentClose). A control marked data-keep stays on while trading is off.
  * ui: root() the instrument shown; flash(text, level); render() the host's whole order render (it calls bar.render);
  * listen(target, type, fn) (removed on destroy); pickViewAccount(a) (a pick while trading is off); accountPicked(a) (a
@@ -1592,6 +1657,7 @@ function wire($, core, ui) {
     if (e.key === ui.prefix + ui.LP.KEYS.bracketPresets) { core.readPresets(); renderBracket(ui.root()); }
   });
   $('flattenBtn').addEventListener('click', pointerOnly(() => core.flattenHere()));
+  if ($('cutHalfBtn')) $('cutHalfBtn').addEventListener('click', pointerOnly(() => core.cutHalf()));   // release 1 (1.6c); works with Armed off, as Flatten
   $('beBtn').addEventListener('click', pointerOnly(core.breakEven));
   $('cancelAllBtn').addEventListener('click', pointerOnly(core.cancelAll));
   $('unsentClose').addEventListener('click', () => core.dismissUnsent());
@@ -1616,6 +1682,7 @@ function wire($, core, ui) {
     $('oOff').hidden = on;
     renderBracket(r);
     renderBreakEven(r, on);
+    renderCutHalf(r);
     renderBatch();                                                 // its color follows the account and instrument shown
     renderPositionInfo();
   }
@@ -1673,6 +1740,15 @@ function wire($, core, ui) {
     btn.disabled = !on || !ok;
     btn.title = ok ? 'Move the ChartBridge stop' + (legs.ids.length > 1 ? 's' : '') + ' of this position to break-even (the average price, rounded a tick toward safety)'
       : 'B/E needs an open position here with a ChartBridge stop working';
+  }
+  /* Cut half (release 1, 1.6c): on with 2 or more contracts here (on a group: on a member), and ChartBridge with cutHalf; greyed at
+     1 contract and when flat. Never dimmed by Armed (it works with Armed off, as Flatten). */
+  function renderCutHalf(r) {
+    const btn = $('cutHalfBtn');
+    if (!btn) return;
+    const st = core.cutHalfState(r);
+    btn.disabled = !st.ok;
+    if (btn.title !== st.title) btn.title = st.title;
   }
   /* The batch line in the state row (core.batchLine). */
   function renderBatch() {
@@ -1736,7 +1812,7 @@ function wire($, core, ui) {
     other.title = other.textContent;
     other.classList.toggle('live', [...others.values()].some(x => x.pos));
   }
-  return { render, renderBatch, renderUnsent, renderPositionInfo, renderBracket, syncTradeAccounts, handBack };
+  return { render, renderBatch, renderUnsent, renderPositionInfo, renderBracket, renderCutHalf, syncTradeAccounts, handBack };
 }
 
 return { create, wire, ORDER_ACTIONS, CANCEL_CHUNK, CANCEL_GAP, CANCEL_AGAIN, BE_LIMIT, FLATTEN_KEEP };

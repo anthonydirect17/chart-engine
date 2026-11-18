@@ -416,14 +416,40 @@ function flattenAllRoots(orders, positions, account, served, order) {
 }
 
 /*
+ * Cut half (release 1, Bot-Lab plan step 1.6c, Anthony 2026-11-17): half the position closed at market and its stop and
+ * target shrunk to the size left, in one ChartBridge command per account (cutHalf). An odd size closes the smaller part:
+ * 3 closes 1 and keeps 2, 5 closes 2 and keeps 3. Nothing to cut under 2 contracts (greyed at 1 and when flat).
+ */
+function cutHalfSize(qty) {
+  const n = Math.abs(Math.trunc(+qty || 0)), cut = n >= 2 ? Math.floor(n / 2) : 0;
+  return { held: n, cut, keep: n - cut };
+}
+/**
+ * What one Cut half press does on `accounts` (one account, or a group's members) on `root`: `send` [{ account, position, cut,
+ * keep }] for each account holding 2 or more (position: the signed position shown, which ChartBridge checks), `alone` the
+ * accounts holding 1 (left alone and named in the note), `flat` the rest. `positions` is a Map of 'account|root' -> { qty }.
+ */
+function cutHalfPlan(accounts, positions, root) {
+  const out = { send: [], alone: [], flat: [] };
+  for (const a of accounts || []) {
+    const p = positions && typeof positions.get === 'function' ? positions.get(a + '|' + root) : null, q = p ? Math.trunc(+p.qty || 0) : 0, z = cutHalfSize(q);
+    if (z.cut > 0) out.send.push({ account: a, position: q, cut: z.cut, keep: z.keep });
+    else if (z.held === 1) out.alone.push(a);
+    else out.flat.push(a);
+  }
+  return out;
+}
+
+/*
  * Trading hotkeys (1.11.0, Anthony 2026-10-01). Five actions, each with a key Anthony assigns in Settings; none has a
- * default. A combo is kept as text, the modifiers in a fixed order then the key: "Alt+B", "Ctrl+Shift+F9", "Num1".
+ * default. Release 1 (1.6c): Close is named Flatten (the same action; its id stays 'close', so a key already set keeps
+ * working), and Cut half is the sixth, last in the list so the older keys keep their precedence (cleanHotkeys). A combo is kept as text, the modifiers in a fixed order then the key: "Alt+B", "Ctrl+Shift+F9", "Num1".
  * The key is the physical key (KeyboardEvent.code), so Shift never changes it ("Shift+1", not "!"). Only letters,
  * digits, F-keys, the numpad (not its Enter) and the punctuation keys can be hotkeys; Meta (the Windows key) never.
  */
 const HOTKEY_ACTIONS = [
   { id: 'buy', name: 'Buy MKT' }, { id: 'sell', name: 'Sell MKT' }, { id: 'be', name: 'B/E' },
-  { id: 'close', name: 'Close' }, { id: 'flattenAll', name: 'Flatten all' },
+  { id: 'close', name: 'Flatten' }, { id: 'flattenAll', name: 'Flatten all' }, { id: 'cutHalf', name: 'Cut half' },
 ];
 const HOTKEY_IDS = HOTKEY_ACTIONS.map(a => a.id);
 const PUNCT = { Minus: '-', Equal: '=', BracketLeft: '[', BracketRight: ']', Semicolon: ';', Quote: "'", Comma: ',', Period: '.', Slash: '/', Backslash: '\\', Backquote: '`' };
@@ -513,7 +539,7 @@ function hotkeyRefused(combo, e) {
   if (!HOTKEY_KEY.test(c.key)) return c.key + ' cannot be a hotkey: use a letter, a digit, an F-key, the numpad or a punctuation key.';
   return '';
 }
-/** Hotkeys as read from storage: { buy, sell, be, close, flattenAll }, each a combo or ''. A combo that is refused, or
+/** Hotkeys as read from storage: { buy, sell, be, close, flattenAll, cutHalf }, each a combo or ''. A combo that is refused, or
     already given to an action before it in the list, is dropped. Never throws. */
 function cleanHotkeys(v) {
   const out = {}, used = new Set();
@@ -550,6 +576,6 @@ function hotkeyAction(keys, combo) {
   return a ? a.id : '';
 }
 
-return { realClick, GROUP_MERGE_TICKS, mergeEnd, mergeLevels, HOTKEY_ACTIONS, hotkeyKeyName, hotkeyCombo, parseHotkey, hotkeyRefused, isChartKey, cleanHotkeys, hotkeyFromEvent, hotkeyAction, flattenAllRoots,
+return { realClick, GROUP_MERGE_TICKS, mergeEnd, mergeLevels, HOTKEY_ACTIONS, hotkeyKeyName, hotkeyCombo, parseHotkey, hotkeyRefused, isChartKey, cleanHotkeys, hotkeyFromEvent, hotkeyAction, flattenAllRoots, cutHalfSize, cutHalfPlan,
   MAX_BRACKET_TICKS, NO_CAP, bracketCap, planIdOf, plannedLines, planDrag, BRACKET_RATIOS, BRACKET_PRESET_MAX, BRACKET_PRESET_NAME_MAX, QTY_CHOICES, ratioOf, ratioBracket, bracketPresetName, defaultPresetName, cleanBracketPresets, qtyOptions, breakEvenPrice, breakEvenLegs, breakEvenAllowed, paceChunks, isWorking, bracketAllowed, opensPosition, placeKind, maxQtyFor, checkQty, cleanBracket, defaultAccount, openEntryFills, groupFillMarks, groupFillWords, cancelAllIds, orderEvent, legSummary, protectionLine, repeatGuard };
 });

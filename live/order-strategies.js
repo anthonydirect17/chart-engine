@@ -41,7 +41,8 @@ const deskSyncOn = sw => !!sw && !!(sw.strategies || sw.orderTypes || sw.merge |
 
 /* ---------------- the hotkeys document (GET/PUT /api/chart-hotkeys) */
 /* The five trading keys of 1.11.0, Merge and Maximize (The Desk's seven), and the copilot's one-key answers (lead's
-   default: The Desk lane adds `accept` and `reject` too; no default key). */
+   default: The Desk lane adds `accept` and `reject` too; no default key). Release 1 (1.6c): Cut half (`cutHalf`) with the
+   trading keys, and `close` named Flatten; The Desk's list has both (thedesk chart_settings.py ACTIONS). */
 const KEY_ACTIONS = OT.HOTKEY_ACTIONS.concat([
   { id: 'merge', name: 'Merge' }, { id: 'maximize', name: 'Maximize panel' },
   { id: 'accept', name: 'Accept (copilot)' }, { id: 'reject', name: 'Reject (copilot)' },

@@ -478,6 +478,13 @@ export class OrderDeskV3 extends OrderDesk {
     return null;
   }
   do_flatten(m) { this.mergedSets.delete(m.account + '|' + m.root); super.do_flatten(m); }
+  /* release 1 (1.6c): Cut half, an exit (the exit side of gate 2), refused on an agent's pair, as ChartBridge */
+  check_cutHalf(m) {
+    const why = this.check_flatten(m); if (why) return why;
+    const owner = String((typeof this.ownerOf === 'function' && this.ownerOf(m.account, m.root)) || '');
+    if (owner.startsWith('agent:')) return 'Cut half: ' + m.root + ' ' + m.account + ' belongs to agent ' + owner.slice(6) + ' (its stop and target are the agent\'s); use Flatten, or a market exit';
+    return super.check_cutHalf(m);
+  }
 
   check_accountTrade(m) {
     const a = this.acct.get(m.account);
