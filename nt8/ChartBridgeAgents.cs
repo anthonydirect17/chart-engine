@@ -1015,7 +1015,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             { "agentStandDownClear", new[] { "type", "cid", "build", "group" } },   // 0.6.2: Anthony's Clear stand-down (the Board); no agent key: a stand-down is the build's on the group
             { "agentPick", new[] { "type", "cid", "agent", "file" } },   // 0.6.21: the roster file a runner's slot runs (a file name GET /roster serves, or null for none)
             { "agentKillAllProp", new[] { "type", "cid" } },   // 0.6.17: Kill all for the prop accounts: flatten, the kill switch on, Shadow; no agent key: every agent on prop accounts
-            { "stopAllAutomation", new[] { "type", "cid" } },   // plan step 3.2: Legion's Stop all automation: Kill all with the prop accounts found by the account ledger too (StopScope)
+            { "agentStopAll", new[] { "type", "cid" } },   // plan step 3.2 (named agent... so ChartBridge.cs routes it here): Legion's Stop all automation: Kill all with the prop accounts found by the account ledger too (StopScope)
             { "agentFlattenOff", new[] { "type", "cid", "agent" } },   // plan step 3.2: "Flatten and turn him off" as one command: Shadow, its own flatten, no Auto until its program ends
         };
 
@@ -1120,7 +1120,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (d.ContainsKey("cid") && cid == null) { PageReject(client, cid, id, "cid must be a plain string"); return; }
                 // the review's N2: Kill all is never refused for the action rate (it was, as the 11th action inside a second)
                 if (type == "agentKillAllProp") { why = PageKillAllProp(); if (why != null) PageReject(client, cid, id, why); return; }   // 0.6.17
-                if (type == "stopAllAutomation") { why = PageStopAll(); if (why != null) PageReject(client, cid, id, why); return; }   // plan step 3.2: never refused for the rate either
+                if (type == "agentStopAll") { why = PageStopAll(); if (why != null) PageReject(client, cid, id, why); return; }   // plan step 3.2: never refused for the rate either
                 if (!RateOk(client.Actions)) { PageReject(client, cid, id, "too many order actions (more than " + MaxActionsPerSecond + " a second)"); return; }
                 if (type == "agentStandDownClear") { why = PageClear(d); if (why != null) PageReject(client, cid, id, why); return; }   // 0.6.2
                 ChartBridgeAgent a = Get(ChartBridgeAgent.S(d, "agent") ?? "");

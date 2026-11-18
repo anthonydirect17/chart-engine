@@ -551,7 +551,7 @@ function onMessage(c, text) {
   else if (m.type === 'auth') desk.auth(c, m.token);
   else if (V3 && m.type === 'client') desk.client(c, m);
   else if (V3 && ['order', 'change', 'plan', 'cancel', 'flatten', 'cutHalf', 'accountTrade', 'accountArchive', 'accountUnarchive', 'merge', 'copierGet', 'copierSet', 'copierFollower', 'copierRearm', 'copierFollowerRemove', 'firmMinimum',
-    'botMode', 'botKill', 'botSeen', 'botAnswer', 'botRails', 'botAccount', 'agentMode', 'agentKill', 'agentSeen', 'agentAnswer', 'agentAccount', 'agentRules', 'agentStandDownClear', 'stopAllAutomation', 'agentKillAllProp', 'agentFlattenOff', 'groupSave', 'groupDelete', 'accountGroup', 'memberRules', 'accountLimits', 'groupPreview', 'groupOrder', 'memberBench'].includes(m.type)) desk.handle(c, m, text);   // 0.6.7: memberBench
+    'botMode', 'botKill', 'botSeen', 'botAnswer', 'botRails', 'botAccount', 'agentMode', 'agentKill', 'agentSeen', 'agentAnswer', 'agentAccount', 'agentRules', 'agentStandDownClear', 'agentStopAll', 'agentKillAllProp', 'agentFlattenOff', 'groupSave', 'groupDelete', 'accountGroup', 'memberRules', 'accountLimits', 'groupPreview', 'groupOrder', 'memberBench'].includes(m.type)) desk.handle(c, m, text);   // 0.6.7: memberBench
   else if (['order', 'change', 'plan', 'cancel', 'flatten', 'cutHalf'].includes(m.type)) desk.handle(c, m);   // plan: ChartBridge 0.3.7 (prices), 0.3.8 (ticks); cutHalf: release 1 (1.6c)
 }
 /* ---------------- --data-037: settlement, higher-timeframe bars, the weekly profile (sample data) */

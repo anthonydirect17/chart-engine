@@ -1,7 +1,7 @@
 'use strict';
 // Legion, the app for bots and agents (plan step 3.2): its own page (live/legion.html), the five tabs, Stop all automation in the
 // header of every tab, the tabs moved from the chart page with their own gates, and the ChartBridge commands for the steps a closed
-// page must never leave half done (stopAllAutomation, agentFlattenOff). test/legion-smoke.mjs runs the page in a browser.
+// page must never leave half done (agentStopAll, agentFlattenOff). test/legion-smoke.mjs runs the page in a browser.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -53,14 +53,14 @@ test('Stop all: what it can send by ChartBridge\'s version, and why not otherwis
 });
 
 test('Stop all: one message with exactly its keys, and the header\'s gate passes those two and nothing else', () => {
-  assert.deepEqual(L.stopMsg('stopAll', 'c1'), { type: 'stopAllAutomation', cid: 'c1' });
+  assert.deepEqual(L.stopMsg('stopAll', 'c1'), { type: 'agentStopAll', cid: 'c1' });
   assert.deepEqual(L.stopMsg('killAll', 'c1'), { type: 'agentKillAllProp', cid: 'c1' });
   assert.equal(L.stopMsg('', 'c1'), null); assert.equal(L.stopMsg('stopAll', ''), null);
-  assert.equal(L.stopMaySend({ type: 'stopAllAutomation', cid: 'c1' }), true);
+  assert.equal(L.stopMaySend({ type: 'agentStopAll', cid: 'c1' }), true);
   assert.equal(L.stopMaySend({ type: 'agentKillAllProp', cid: 'c1' }), true);
-  for (const bad of [null, [], 'x', { type: 'stopAllAutomation' }, { type: 'stopAllAutomation', cid: '' }, { type: 'stopAllAutomation', cid: 'c', agent: 'a' },
+  for (const bad of [null, [], 'x', { type: 'agentStopAll' }, { type: 'agentStopAll', cid: '' }, { type: 'agentStopAll', cid: 'c', agent: 'a' },
     { type: 'agentKill', cid: 'c', agent: 'a', on: true }, { type: 'agentMode', cid: 'c', agent: 'a', mode: 'shadow' }, { type: 'order', cid: 'c' }, { type: 'flatten', cid: 'c' },
-    { type: 'stopAllAutomation', cid: 'x'.repeat(65) }, { type: 'stopAllAutomation', cid: 7 }]) assert.equal(L.stopMaySend(bad), false, JSON.stringify(bad));
+    { type: 'agentStopAll', cid: 'x'.repeat(65) }, { type: 'agentStopAll', cid: 7 }]) assert.equal(L.stopMaySend(bad), false, JSON.stringify(bad));
 });
 
 test('Stop all: the question takes a real click on Yes only, never in its first moment and never once it is old', () => {
@@ -159,9 +159,9 @@ test('agentFlattenOff: a stop on both desks\' gates, for a trader ChartBridge de
 
 test('ChartBridge: the two messages, their keys, never refused for the rate, and the personal account never in Stop all\'s scope', () => {
   const cs = read('nt8', 'ChartBridgeAgents.cs');
-  assert.match(cs, /\{ "stopAllAutomation", new\[\] \{ "type", "cid" \} \}/);
+  assert.match(cs, /\{ "agentStopAll", new\[\] \{ "type", "cid" \} \}/);
   assert.match(cs, /\{ "agentFlattenOff", new\[\] \{ "type", "cid", "agent" \} \}/);
-  const disp = cs.indexOf('if (type == "stopAllAutomation") { why = PageStopAll();'), rate = cs.indexOf('if (!RateOk(client.Actions))');
+  const disp = cs.indexOf('if (type == "agentStopAll") { why = PageStopAll();'), rate = cs.indexOf('if (!RateOk(client.Actions))');
   assert.ok(disp > 0 && rate > disp, 'handled before the action rate, as Kill all');
   const scope = /internal static bool StopScope\(string name\)\s*\{([\s\S]*?)\n        \}/.exec(cs)[1];
   assert.match(scope, /if \(ChartBridgeBranches\.PersonalNamed && ChartBridgeBranches\.IsPersonal\(name\)\) return false;/);

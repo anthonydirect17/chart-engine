@@ -17,7 +17,7 @@
  * real click on Yes only (OrderTicket.realClick, the page's one rule), never in the first ARM_MS after it opens (a double click
  * answers nothing) and never after CONFIRM_MS by the clock; Escape and Cancel close it. Then one message to ChartBridge, which does
  * the whole of it itself, so a page closed a moment later never leaves it half done:
- *   - stopAllAutomation (the ChartBridge that knows it, STOPALL_MIN): every bot and agent on a prop account, found by ChartBridge's
+ *   - agentStopAll (the ChartBridge that knows it, STOPALL_MIN): every bot and agent on a prop account, found by ChartBridge's
  *     own rule AND by the account ledger The Desk serves (each account it types eval or funded), so an account NinjaTrader lists
  *     as a simulator is still covered (law 9.3, item 113). Each such trader: the kill switch on, Shadow, its own flatten. A trader
  *     that also trades your personal account loses its prop seats for the session (no new entry there, its own flatten there) and
@@ -79,7 +79,7 @@ function tabSearch(search, tab, sub) {
 
 /* ---------------- Stop all automation */
 const KILL_MIN = '0.6.17';       // ChartBridge's Kill all for the prop accounts (agentKillAllProp)
-/* The ChartBridge that knows stopAllAutomation and agentFlattenOff. This branch does not bump ChartBridge's version (the release
+/* The ChartBridge that knows agentStopAll and agentFlattenOff. This branch does not bump ChartBridge's version (the release
    that carries it names the number and sets this to it); until then no installed ChartBridge reports it, and the page uses Kill
    all as above: the careful side. */
 const STOPALL_MIN = '0.6.25';
@@ -112,7 +112,7 @@ function stopPlan(version, connected, signedIn) {
 /** The one message a press sends, with exactly its keys. */
 function stopMsg(kind, cid) {
   if (typeof cid !== 'string' || !cid) return null;
-  if (kind === 'stopAll') return { type: 'stopAllAutomation', cid };
+  if (kind === 'stopAll') return { type: 'agentStopAll', cid };
   if (kind === 'killAll') return { type: 'agentKillAllProp', cid };
   return null;
 }
@@ -120,7 +120,7 @@ function stopMsg(kind, cid) {
 /** The header's gate: true only for one of the two messages, with exactly the keys type and cid (a plain string). */
 function stopMaySend(m) {
   if (!m || typeof m !== 'object' || Array.isArray(m)) return false;
-  if (m.type !== 'stopAllAutomation' && m.type !== 'agentKillAllProp') return false;
+  if (m.type !== 'agentStopAll' && m.type !== 'agentKillAllProp') return false;
   const k = Object.keys(m);
   return k.length === 2 && k.includes('type') && k.includes('cid') && typeof m.cid === 'string' && m.cid.length > 0 && m.cid.length <= 64;
 }

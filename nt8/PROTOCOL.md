@@ -3949,7 +3949,7 @@ keep their own three steps, as before. Both are guarded as every agent page mess
 origin, trading on, the agent channel on).
 
 ```json
-{"type": "stopAllAutomation", "cid": "s1"}
+{"type": "agentStopAll", "cid": "s1"}
 ```
 
 No agent key. Like Kill all it is never refused for the action rate. **What is a prop account here** (`StopScope`): never

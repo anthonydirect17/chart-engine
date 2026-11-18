@@ -7,7 +7,7 @@
 // Cohorts holds the chart page's Legion tab and Praetorian, the Colosseum the chart page's Colosseum, each the real module.
 // Stop all: a double click on the button sends nothing; Yes inside its first moment is refused; Yes by the keyboard is refused;
 // Escape and Cancel close it; a real click on Yes sends exactly one message, Kill all with ChartBridge 0.6.24 (and the header says
-// the ledger is not covered), stopAllAutomation with 0.6.25, and ChartBridge's answer shows. No page error. No sideways scroll on
+// the ledger is not covered), agentStopAll with 0.6.25, and ChartBridge's answer shows. No page error. No sideways scroll on
 // a phone. Screenshots (test/out): legion-castra, legion-cohorts, legion-praetorian, legion-colosseum, legion-ludus, legion-golive,
 // legion-ask, legion-answer (1600 x 900) and legion-phone-castra, legion-phone-cohorts, legion-phone-ask (390 x 844).
 import { chromium } from 'playwright';
@@ -87,11 +87,11 @@ try {
     check(!pr2.pr && !pr2.fl && !pr2.lg, 'on Castra no moved tab is shown (a hidden one reads and acknowledges nothing): ' + JSON.stringify(pr2));
 
     /* Stop all: the question and its guards */
-    const r0 = await received(port), sent0 = (r0.types.agentKillAllProp || 0) + (r0.types.stopAllAutomation || 0);
+    const r0 = await received(port), sent0 = (r0.types.agentKillAllProp || 0) + (r0.types.agentStopAll || 0);
     await page.dblclick('#lxStop');
     await sleep(300);
     const afterDbl = await app(page), r1 = await received(port);
-    check(((r1.types.agentKillAllProp || 0) + (r1.types.stopAllAutomation || 0)) === sent0, 'a double click on Stop all sends nothing: ' + JSON.stringify(afterDbl));
+    check(((r1.types.agentKillAllProp || 0) + (r1.types.agentStopAll || 0)) === sent0, 'a double click on Stop all sends nothing: ' + JSON.stringify(afterDbl));
     if (!afterDbl.asking) await page.click('#lxStop');
     check((await app(page)).asking && await page.locator('#lxStopAsk').isVisible(), 'the question opens in the page (no browser dialog)');
     await page.screenshot({ path: path.join(SHOTS, 'legion-ask.png') });
@@ -107,11 +107,11 @@ try {
     await page.keyboard.press('Escape');
     check(!(await app(page)).asking, 'Escape closes it');
     const r2 = await received(port);
-    check(((r2.types.agentKillAllProp || 0) + (r2.types.stopAllAutomation || 0)) === sent0, 'nothing was sent by any of that');
+    check(((r2.types.agentKillAllProp || 0) + (r2.types.agentStopAll || 0)) === sent0, 'nothing was sent by any of that');
     await page.click('#lxStop'); await sleep(700); await page.click('#lxStopYes');
     await page.waitForFunction(() => /Kill all \(prop accounts\)/.test(document.getElementById('lxStopSaid').textContent) && !/waiting/.test(document.getElementById('lxStopSaid').textContent), null, { timeout: 5000 }).catch(() => {});
     const r3 = await received(port), done = await app(page);
-    check((r3.types.agentKillAllProp || 0) === (r0.types.agentKillAllProp || 0) + 1 && (r3.types.stopAllAutomation || 0) === (r0.types.stopAllAutomation || 0), 'a real click on Yes: exactly one Kill all with ChartBridge 0.6.24: ' + JSON.stringify(r3.types));
+    check((r3.types.agentKillAllProp || 0) === (r0.types.agentKillAllProp || 0) + 1 && (r3.types.agentStopAll || 0) === (r0.types.agentStopAll || 0), 'a real click on Yes: exactly one Kill all with ChartBridge 0.6.24: ' + JSON.stringify(r3.types));
     check(!done.asking && !done.pending && /^Kill all \(prop accounts\)/.test(done.said), 'ChartBridge\'s answer shows in the header: ' + done.said);
     await page.screenshot({ path: path.join(SHOTS, 'legion-answer.png') });
     check(pe.length === 0, 'no page error: ' + JSON.stringify(pe));
@@ -148,7 +148,7 @@ try {
     await page.click('#lxStop'); await sleep(700); await page.click('#lxStopYes');
     await page.waitForFunction(() => /^Stop all automation:/.test(document.getElementById('lxStopSaid').textContent), null, { timeout: 5000 }).catch(() => {});
     const r1 = await received(port), s = await app(page);
-    check((r1.types.stopAllAutomation || 0) === (r0.types.stopAllAutomation || 0) + 1 && (r1.types.agentKillAllProp || 0) === (r0.types.agentKillAllProp || 0), 'a real click on Yes: exactly one stopAllAutomation: ' + JSON.stringify(r1.types));
+    check((r1.types.agentStopAll || 0) === (r0.types.agentStopAll || 0) + 1 && (r1.types.agentKillAllProp || 0) === (r0.types.agentKillAllProp || 0), 'a real click on Yes: exactly one agentStopAll: ' + JSON.stringify(r1.types));
     check(/^Stop all automation:/.test(s.said) && !s.saidBad, 'its answer shows: ' + s.said);
     check(pe.length === 0, 'no page error: ' + JSON.stringify(pe));
     await ctx.close();
