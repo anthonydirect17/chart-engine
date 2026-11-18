@@ -153,6 +153,7 @@ public static class BotHarness
             LateFill();      // review R12 finding 1: an entry's late fill after its trade closed is followed, and flattened again at a day stop
             ReArmRace();     // review R12 finding 2: a day stop reached while the page arms the bot: refused, never armed by itself
             OpenAtRestart(); // review R12 round 2: a bot trade open across a restart is followed again from NinjaTrader's position
+            CutAtRestart();  // release 1 (1.6c): Cut half on a bot trade, then a restart: after the cut, and in the middle of it
             ChosenAccount();
             NoneAndReset();   // 0.5.7: None (DECISION 2026-10-14e) and the 17:00 ET reset
             V2PageGetsNothing();
@@ -1203,6 +1204,98 @@ public static class BotHarness
         Check(st.Contains("\"position\":{\"qty\":0,") && st.Contains("\"standDown\":\"bot trade " + Tag(e) + " was still open when ChartBridge started"),
               "review R12 round 3: NinjaTrader short while the bot's stop protects a long: not followed, refused: " + st);
         Settle();
+        Page("{\"type\":\"botMode\",\"cid\":\"m\",\"mode\":\"shadow\"}");
+        et = et.AddDays(1); ChartBridgeBot.Check();
+        ChartBridgeOrders.NoteLast("MNQ", 25000);
+        Page(RailsMsg(1, 5, 3, "500", "500", "MNQ"));
+    }
+
+    // ------------------------------------------------------------ release 1 (1.6c): Cut half on a bot trade across a restart
+    // Cut half shrinks the bot's stop and target to the size left before its close is sent; the bot follows the close's fill as
+    // any execution on its account and root. A restart after the cut restores the size left at the entry's fill; a restart while
+    // the close may still fill waits for it, so the close never ends the trade while the bot still holds the size left.
+    static Order BotTradeOf2(string what)
+    {
+        et = et.AddDays(1); ChartBridgeBot.Check();
+        ChartBridgeOrders.NoteLast("MNQ", 25000);
+        Page(RailsMsg(2, 5, 3, "500", "500", "MNQ"));
+        Page("{\"type\":\"botMode\",\"cid\":\"m\",\"mode\":\"auto\"}");
+        Order e = AutoTrade("buy");
+        Check(e != null && e.Quantity == 2, what + ": a bot trade of 2");
+        if (e == null || e.Quantity != 2) return null;
+        FillEntry(e, 25000);
+        own.Positions.Clear(); own.Positions.Add(new Position { Instrument = mnq, MarketPosition = MarketPosition.Long, Quantity = 2, AveragePrice = 25000 });
+        ChartBridgeOrders.OnPositionUpdate(own, new PositionEventArgs { Position = own.Positions[0], MarketPosition = MarketPosition.Long, Quantity = 2, AveragePrice = 25000 });   // the fill is in the position
+        return e;
+    }
+    // Cut half from the page on OWN-1 MNQ long 2: the legs shrink to 1 (the change confirmed here, as NinjaTrader would), 1 sold at market.
+    static Order CutBotTrade(Order e, string what)
+    {
+        List<Order> legs = own.Orders.Where(o => o != e && Tag(o) == Tag(e) && ChartBridgeOrders.IsWorking(o.OrderState)).ToList();
+        Check(legs.Count == 2 && legs.All(o => o.Quantity == 2), what + ": the bot's stop and target of 2 are working");
+        int m = own.Calls.Count;
+        Page("{\"type\":\"cutHalf\",\"cid\":\"ch\",\"account\":\"OWN-1\",\"root\":\"MNQ\",\"position\":2}");
+        List<string> sent = Calls(own, m);
+        Check(sent.Count == 3 && sent.Take(2).All(x => x.StartsWith("change CB#" + Tag(e) + " ") && x.EndsWith(" Q1")) && Regex.IsMatch(sent[2], "^submit CB#[0-9a-f]{8} exit cut q1 Sell Market 1 "),
+              what + ": Cut half on the bot's trade: its stop and target to 1, then 1 sold at market: " + string.Join(" | ", sent) + " / " + PageReject());
+        foreach (Order o in legs) { o.Quantity = o.QuantityChanged; Update(o); }
+        Order close = own.Orders.Last();
+        close.OrderId = "CUT" + Guid.NewGuid().ToString("N").Substring(0, 6);
+        return Regex.IsMatch(close.Name ?? "", "^CB#[0-9a-f]{8} exit cut q1$") ? close : null;
+    }
+    static void CutFills(Order close, bool up)
+    {
+        close.Filled = 1; close.AverageFillPrice = 25004; close.OrderState = OrderState.Filled;
+        if (up) { Update(close); Deliver(own.Name, mnq, MarketPosition.Short, 1, 25004, close.OrderId); }
+        own.Positions.Clear(); own.Positions.Add(new Position { Instrument = mnq, MarketPosition = MarketPosition.Long, Quantity = 1, AveragePrice = 25000 });
+        ChartBridgeOrders.OnPositionUpdate(own, new PositionEventArgs { Position = own.Positions[0], MarketPosition = MarketPosition.Long, Quantity = 1, AveragePrice = 25000 });
+    }
+    static void CutAtRestart()
+    {
+        Settle();
+        // after a completed cut: the bot follows 1, the legs are 1; a restart restores 1 at the entry's 25000
+        Order a = BotTradeOf2("cut, then restart");
+        if (a == null) return;
+        Order close = CutBotTrade(a, "cut, then restart");
+        Check(close != null, "cut, then restart: the close is listed");
+        if (close == null) return;
+        CutFills(close, true);
+        string st = ChartBridgeBot.StripJson();
+        Check(st.Contains("\"position\":{\"qty\":1,\"avgPrice\":25000}") && File_("bot-day.txt").Contains("trade\t" + Tag(a) + "\topen"), "cut, then restart: the bot follows the size left (1): " + st);
+        Restart();
+        st = ChartBridgeBot.StripJson();
+        Check(st.Contains("\"position\":{\"qty\":1,\"avgPrice\":25000}") && st.Contains("\"standDown\":null") &&
+              File_("bot.log").Contains("trade " + Tag(a) + " (open in bot-day.txt) is followed again from its 1 open stop: 1 MNQ 12-26 at 25000 (its entry's fill) on OWN-1") &&
+              !File_("bot.log").Contains("trade " + Tag(a) + " (open in bot-day.txt) is followed again from its 1 open stop: 1 MNQ 12-26 at 25000 (its entry's fill) on OWN-1; NinjaTrader holds"),
+              "release 1 (1.6c): a restart after a completed Cut half on a bot trade restores the size left (1), never the 2 it opened with: " + st);
+        Sold(1, 25010);
+        Settle();
+        Check(File_("bot-day.txt").Contains("trade\t" + Tag(a) + "\t20"), "cut, then restart: the restored contract closes on the entry's price (+$20 for the part followed after the restart)");
+        // a restart while the cut's close may still fill: the legs are already 1, NinjaTrader still holds 2; never followed at 1 before the
+        // close is done (its fill would end the trade while the bot holds 1), refused and named meanwhile; once it filled, followed at 1
+        Order b = BotTradeOf2("restart mid-cut");
+        if (b == null) return;
+        close = CutBotTrade(b, "restart mid-cut");
+        Check(close != null, "restart mid-cut: the close is listed");
+        if (close == null) return;
+        int k = own.Calls.Count;
+        Restart();
+        for (int i = 0; i < 4; i++) { clock += 350; Bot("{\"type\":\"beat\"}"); ChartBridgeBot.Check(); }
+        st = ChartBridgeBot.StripJson();
+        Check(st.Contains("\"position\":{\"qty\":0,") && st.Contains("\"standDown\":\"bot trade " + Tag(b) + " was still open when ChartBridge started (bot-day.txt), and a market order on its MNQ 12-26 position on OWN-1 may still fill (" + close.Name + ")") &&
+              !File_("bot.log").Contains("trade " + Tag(b) + " (open in bot-day.txt) is followed again") && Calls(own, k).Count == 0,
+              "release 1 (1.6c): a restart while a Cut half's close may still fill: not followed yet, refused and named, nothing sent: " + st);
+        Page("{\"type\":\"botMode\",\"cid\":\"m\",\"mode\":\"auto\"}");
+        Check(PageReject().Contains("auto refused: bot trade " + Tag(b) + " was still open"), "restart mid-cut: no arming while it waits");
+        CutFills(close, true);   // the close fills with ChartBridge up again: not the followed trade's yet, so it ends nothing
+        ChartBridgeBot.Check();
+        st = ChartBridgeBot.StripJson();
+        Check(st.Contains("\"position\":{\"qty\":1,\"avgPrice\":25000}") && st.Contains("\"standDown\":null") && File_("bot-day.txt").Contains("trade\t" + Tag(b) + "\topen") &&
+              File_("bot.log").Contains("trade " + Tag(b) + " (open in bot-day.txt) is followed again from its 1 open stop: 1 MNQ 12-26 at 25000 (its entry's fill) on OWN-1"),
+              "release 1 (1.6c): once the cut's close filled, the bot follows the 1 it still holds (never more), still open: " + st);
+        Sold(1, 25000);
+        Settle();
+        Check(File_("bot-day.txt").Contains("trade\t" + Tag(b) + "\t0"), "restart mid-cut: the restored contract closes once, at its own price");
         Page("{\"type\":\"botMode\",\"cid\":\"m\",\"mode\":\"shadow\"}");
         et = et.AddDays(1); ChartBridgeBot.Check();
         ChartBridgeOrders.NoteLast("MNQ", 25000);

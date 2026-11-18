@@ -144,6 +144,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static readonly Dictionary<string, double> Trades = new Dictionary<string, double>();   // entry tag -> realized $ (NaN while open)
         private static readonly HashSet<string> SignalIds = new HashSet<string>();   // ids used today
         private static string openTag;                    // the bot trade being followed (its entry's tag), or null
+        private static string restoreWait;                // release 1 (1.6c): why the open trade's restore waits for a close on its way, or null
         private static int ledQty;                        // that trade's position, signed, from the executions
         private static double ledCash, ledAvg;            // its cash flow (points times contracts) and average entry
         private static double ledPrior;                   // the dollars the trade had already closed with when a late entry fill reopened it, else 0
@@ -241,7 +242,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 mode = "shadow"; killed = false; size = 0; maxTrades = 0; maxLosses = 0; dayLoss = 0; dayProfit = 0; railRoot = null; railsBroken = null; dayBroken = null;
                 dayStopKind = null; dayStopDay = 0; stopFlattenTryMs = -1; stopFlattenWhy = null; stopFlattenWait = null; openUnknownSaid = false;
                 account = DefaultAccount; accountBroken = null;
-                secret = null; secretState = "missing"; session = null; Trades.Clear(); SignalIds.Clear(); openTag = null; ledQty = 0; ledCash = 0; ledAvg = 0; ledPrior = 0;
+                secret = null; secretState = "missing"; session = null; Trades.Clear(); SignalIds.Clear(); openTag = null; restoreWait = null; ledQty = 0; ledCash = 0; ledAvg = 0; ledPrior = 0;
                 Proposals.Clear(); EntryOfSignal.Clear(); Placed.Clear(); Tags.Clear(); CancelSent.Clear(); Actions.Clear(); lastSignalJson = null;
                 nSignals = nProposals = nAnswered = nNotAnswered = nPlaced = nRefused = nHeartbeatLost = 0;
             }
@@ -584,7 +585,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             List<string> open = Trades.Where(kv => double.IsNaN(kv.Value)).Select(kv => kv.Key).ToList();
             if (open.Count == 0) return null;
             return "bot trade " + string.Join(", ", open) + " was still open when ChartBridge started (bot-day.txt), and " +
-                   (open.Count > 1 ? "more than one open trade cannot be told apart" : "NinjaTrader shows no stop or target of it (CB#" + open[0] + ") with its " + (railRoot ?? ConfigRoot) + " position on " + account) +
+                   (open.Count > 1 ? "more than one open trade cannot be told apart" : restoreWait != null ? restoreWait : "NinjaTrader shows no stop or target of it (CB#" + open[0] + ") with its " + (railRoot ?? ConfigRoot) + " position on " + account) +
                    ": copilot, auto and new bot entries are refused until it is followed again (or 18:00 ET)";
         }
 
@@ -596,6 +597,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             string tag;
             lock (Sync)
             {
+                restoreWait = null;
                 if (openTag != null || dayBroken != null) return;
                 List<string> open = Trades.Where(kv => double.IsNaN(kv.Value)).Select(kv => kv.Key).ToList();
                 if (open.Count != 1) return;
@@ -605,6 +607,20 @@ namespace NinjaTrader.NinjaScript.AddOns
             string root = EffectiveRoot();
             Instrument inst = ChartBridgeServer.InstrumentFor(root);
             if (a == null || inst == null) return;
+            // release 1 (1.6c): a close still on its way there (a Cut half, which shrinks the legs BEFORE its close fills; a flatten; a
+            // hand market order) waits: followed from the shrunk legs now, the close's fill would end the trade while the bot still
+            // holds the size left. Looked at again every 500 ms; once it has filled, the legs and the position agree.
+            string closing = null;
+            lock (a.Orders)
+                foreach (Order o in a.Orders)
+                    if (o != null && o.OrderType == OrderType.Market && !IsBotEntry(o) && o.Instrument != null && (o.Instrument == inst || o.Instrument.FullName == inst.FullName) &&
+                        o.OrderState != OrderState.Filled && o.OrderState != OrderState.Cancelled && o.OrderState != OrderState.Rejected)
+                    { closing = o.Name ?? "no name"; break; }
+            if (closing != null)
+            {
+                lock (Sync) restoreWait = "a market order on its " + inst.FullName + " position on " + a.Name + " may still fill (" + closing + "), so it is followed again once that is done";
+                return;
+            }
             // the proof: the trade's own stops and targets still open on this account and contract (never its entry)
             List<Order> legs = new List<Order>();
             lock (a.Orders)
