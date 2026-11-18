@@ -131,8 +131,8 @@ export async function run({ browser, check, fail, shot, root, port }) {
     await wait(500);
     check((await info(A)).held && !(await info(B)).held && (await info(B)).holder.root === 'MNQ' && !(await B.$('#wsDialog[open]')), 'B opens: it does not take it and does not ask; it shows "Ticket is in the other window"');
     const ticketUi = await A.evaluate(() => [...document.querySelectorAll('.ws-panel[data-type="ticket"] [data-tk-id]')].map(e => e.dataset.tkId));
-    check(['root', 'oAcct', 'oQty', 'bPreset', 'armBtn', 'buyMkt', 'sellMkt', 'beBtn', 'flattenBtn', 'cancelAllBtn', 'oPos', 'fill'].every(x => ticketUi.includes(x)) && await tk(A, 'flattenBtn').textContent() === 'Close',
-      'the ticket: instrument, account, Qty, bracket presets, Armed, Buy MKT, Sell MKT, B/E, Close, Cancel all, position, last fill');
+    check(['root', 'oAcct', 'oQty', 'bPreset', 'armBtn', 'buyMkt', 'sellMkt', 'beBtn', 'flattenBtn', 'cutHalfBtn', 'cancelAllBtn', 'oPos', 'fill'].every(x => ticketUi.includes(x)) && await tk(A, 'flattenBtn').textContent() === 'Flatten' && await tk(A, 'cutHalfBtn').textContent() === 'Cut half',
+      'the ticket: instrument, account, Qty, bracket presets, Armed, Buy MKT, Sell MKT, B/E, Flatten (Close until release 1), Cut half, Cancel all, position, last fill');
     const mnqMain = (await panelsOf(A, 'chart', 'MNQ'))[0];
     await A.evaluate(id => window.workspace.chart(id).goLive(), mnqMain.id); await wait(1200);
     const ticketMsgs = await SEQ(A, { buy: '[data-tk-id="buyMkt"]', sell: '[data-tk-id="sellMkt"]', close: '[data-tk-id="flattenBtn"]', be: '[data-tk-id="beBtn"]', cancelAll: '[data-tk-id="cancelAllBtn"]', arm: '[data-tk-id="armBtn"]', qty: '[data-tk-id="oQty"]', stop: '[data-tk-id="bStop"]', target: '[data-tk-id="bTarget"]' },
@@ -374,7 +374,7 @@ export async function run({ browser, check, fail, shot, root, port }) {
     const keysTip = await A.getAttribute('#wsKeys', 'title');
     await press(A, 'Alt+C');
     await until(async () => !Object.values((await state()).positions).some(x => x.qty), 'flat after A\'s Close with no ticket');
-    check(JSON.stringify((await sent(A)).filter(m => m.type === 'flatten')) === JSON.stringify([{ type: 'flatten', account: 'Sim101', root: 'NQ' }]) && /Close: Sim101 NQ/.test(keysTip),
+    check(JSON.stringify((await sent(A)).filter(m => m.type === 'flatten')) === JSON.stringify([{ type: 'flatten', account: 'Sim101', root: 'NQ' }]) && /Flatten: Sim101 NQ/.test(keysTip),
       'no ticket anywhere: A\'s Close flattens the last ticket\'s instrument (NQ, set in B), and KEYS says so: ' + JSON.stringify(await sent(A)) + ' / ' + keysTip.split('\n').pop());
     await wait(450);
     await B.click('#wsAdd');

@@ -375,7 +375,7 @@ try {
   check(st.pin === 'Change PIN', 'Settings: Change PIN (ChartBridge has a PIN)');
   check(st.floors === 8, 'Settings: the large-print floors, RTH and overnight for 4 instruments');
   // 1.16.0: and the workspace's own Maximize panel (never a trading key)
-  check(st.hk === 'Buy MKT|Sell MKT|B/E|Close|Flatten all|Maximize panel', 'Settings: the 1.11.0 trading hotkeys, and Maximize panel (' + st.hk + ')');
+  check(st.hk === 'Buy MKT|Sell MKT|B/E|Flatten|Flatten all|Cut half|Maximize panel', 'Settings: the 1.11.0 trading hotkeys (release 1: Close named Flatten, and Cut half), and Maximize panel (' + st.hk + ')');
   check(st.reset && st.fits, 'Settings: Reset layout, and the panel fits the window (it scrolls inside)');
   await shot(page, 'workspace-settings.png');
   await page.click('#wsGlide [data-v="fast"]');

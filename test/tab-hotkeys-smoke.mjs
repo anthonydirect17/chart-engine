@@ -94,7 +94,7 @@ try {
       check(on, t.name + ': the tab is open and covers the chart grid');
       await sentNow();
       const shown = t.name === 'Agent' || t.name === 'Bot';       // the tabs that show the proposal the Accept key answers
-      const why = 'Hotkey ignored: the ' + (t.tab || t.name) + ' tab covers the chart. Only Close, Flatten all and Reject work under ' + (shown ? 'it, and Accept for a proposal shown on it.' : 'a tab.');
+      const why = 'Hotkey ignored: the ' + (t.tab || t.name) + ' tab covers the chart. Only Flatten, Cut half, Flatten all and Reject work under ' + (shown ? 'it, and Accept for a proposal shown on it.' : 'a tab.');
       if (urgent === 'close') for (const id of ['buy', 'sell', 'be', 'merge'].concat(shown ? [] : ['accept'])) {
         const got = await press(id);
         const said = await note();
