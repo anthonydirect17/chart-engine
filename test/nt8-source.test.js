@@ -107,14 +107,14 @@ const fnBody = name => fnBodies(name).join('\n');
 
 test('order calls appear only in the gated functions and the bracket upkeep of ChartBridgeOrders.cs', () => {
   const fromPage = ['PlaceOrderLocked', 'ChangeOrder', 'CancelOrder', 'Flatten', 'CutHalf'];   // release 1 (1.6c): Cut half, the close and its legs' shrink
-  const upkeep = ['PlaceLegs', 'KeepPartner', 'CancelLeftoverLegs', 'CheckLegs', 'GroupCancelLeftover'];   // 0.5.8 Q-EXIT (b): a cancel only (checked below)
+  const upkeep = ['PlaceLegs', 'KeepPartner', 'CancelLeftoverLegs', 'CheckLegs', 'GroupCancelLeftover', 'CutLegUpdate'];   // 0.5.8 Q-EXIT (b): a cancel only (checked below); release 1 (1.6c, R12 F2): Cut half's shrink again, cancel and change only
   let rest = ocode;
   for (const f of fromPage.concat(upkeep)) for (const b of fnBodies(f)) rest = rest.replace(b, '');
   for (const re of [/\.Submit\s*\(/, /\.CreateOrder\s*\(/, /\.Change\s*\(/, /\.Cancel\s*\(/, /\.Flatten\s*\(/])
     assert.ok(!re.test(rest), 'order call outside the gated functions: ' + re);
   assert.ok(!/CancelAllOrders|StartAtmStrategy|\bAtm\w*\./.test(ocode), 'no ATM or cancel-all calls');
   // only PlaceOrderLocked and PlaceLegs create orders; the rest of the upkeep only cancels or shrinks
-  for (const f of ['ChangeOrder', 'PlanOrder', 'CancelOrder', 'Flatten', 'KeepPartner', 'CancelLeftoverLegs', 'CheckLegs', 'KeepBracket', 'ScanEntries', 'GroupCancelLeftover'])
+  for (const f of ['ChangeOrder', 'PlanOrder', 'CancelOrder', 'Flatten', 'KeepPartner', 'CancelLeftoverLegs', 'CheckLegs', 'KeepBracket', 'ScanEntries', 'GroupCancelLeftover', 'CutLegUpdate'])
     assert.ok(!/\.CreateOrder\s*\(|\.Submit\s*\(/.test(fnBody(f)), f + ' creates orders');
   assert.match(fnBody('PlaceOrder'), /lock \(PlaceLock\) why = PlaceOrderLocked\(/);
   // 0.3.7: planned_brackets.txt is written outside PlaceLock, and only WritePlans touches it; NinjaTrader's paths only read memory
