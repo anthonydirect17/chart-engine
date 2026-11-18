@@ -570,17 +570,20 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         // ---------------------------------------------------------- review R12 round 2: a bot trade still open after a restart
         // The trade being followed (openTag and its ledger) lives in memory only; bot-day.txt keeps "open" for it. After a restart or
-        // a NinjaScript recompile, that trade is followed again from NinjaTrader's position on the bot's account and the bot's root
-        // (its quantity and average price), so its dollars reach the day stops and a latched day flattens it. Until then (no position
-        // there yet, or more than one open trade in the file), copilot, auto and every new bot entry are refused, named; it is looked
-        // at again every 500 ms. At 18:00 ET a trade never followed again is dropped with the day, as before.
+        // a NinjaScript recompile, that trade is followed again, so its dollars reach the day stops and a latched day flattens it. Round
+        // 3: only with proof the position is the bot's: a stop or target of that trade (named CB#<its tag>) still open on the bot's
+        // account and root. Its size comes from those legs (the stops', else the targets'), the side from theirs (a sell stop: the bot
+        // is long), and only when NinjaTrader's position there has that side and at least that size; the price is NinjaTrader's
+        // average. A position with no such leg is never taken (it may be Anthony's own). Until then (no leg, no matching position, or
+        // more than one open trade in the file), copilot, auto and every new bot entry are refused, named; it is looked at again every
+        // 500 ms. At 18:00 ET a trade never followed again is dropped with the day, as before.
         private static string OpenNotFollowedLocked()
         {
             if (openTag != null) return null;
             List<string> open = Trades.Where(kv => double.IsNaN(kv.Value)).Select(kv => kv.Key).ToList();
             if (open.Count == 0) return null;
             return "bot trade " + string.Join(", ", open) + " was still open when ChartBridge started (bot-day.txt), and " +
-                   (open.Count > 1 ? "more than one open trade cannot be told apart" : "NinjaTrader shows no " + (railRoot ?? ConfigRoot) + " position on " + account + " for it") +
+                   (open.Count > 1 ? "more than one open trade cannot be told apart" : "NinjaTrader shows no stop or target of it (CB#" + open[0] + ") with its " + (railRoot ?? ConfigRoot) + " position on " + account) +
                    ": copilot, auto and new bot entries are refused until it is followed again (or 18:00 ET)";
         }
 
@@ -598,12 +601,26 @@ namespace NinjaTrader.NinjaScript.AddOns
             string root = EffectiveRoot();
             Instrument inst = ChartBridgeServer.InstrumentFor(root);
             if (a == null || inst == null) return;
+            // the proof: the trade's own stops and targets still open on this account and contract (never its entry)
+            List<Order> legs = new List<Order>();
+            lock (a.Orders)
+                foreach (Order o in a.Orders)
+                    if (o != null && TagOf(o.Name) == tag && !IsBotEntry(o) && o.Instrument != null && (o.Instrument == inst || o.Instrument.FullName == inst.FullName) &&
+                        o.OrderState != OrderState.Filled && o.OrderState != OrderState.Cancelled && o.OrderState != OrderState.Rejected && o.Quantity - o.Filled > 0)
+                        legs.Add(o);
+            List<Order> stops = legs.Where(o => o.OrderType == OrderType.StopMarket || o.OrderType == OrderType.StopLimit).ToList();
+            List<Order> sized = stops.Count > 0 ? stops : legs.Where(o => o.OrderType == OrderType.Limit).ToList();
+            if (sized.Count == 0) return;
+            bool sells = sized[0].OrderAction == OrderAction.Sell || sized[0].OrderAction == OrderAction.SellShort;
+            if (sized.Any(o => (o.OrderAction == OrderAction.Sell || o.OrderAction == OrderAction.SellShort) != sells)) return;   // legs on both sides: cannot tell
+            int q = sized.Sum(o => o.Quantity - o.Filled) * (sells ? 1 : -1);   // a sell stop protects a long
             Position held = null;
             lock (a.Positions)
                 foreach (Position p in a.Positions)
                     if (p != null && p.Instrument != null && (p.Instrument == inst || p.Instrument.FullName == inst.FullName) && p.MarketPosition != MarketPosition.Flat && p.Quantity > 0) { held = p; break; }
             if (held == null || !(held.AveragePrice > 0)) return;
-            int q = held.MarketPosition == MarketPosition.Long ? held.Quantity : -held.Quantity;
+            int pos = held.MarketPosition == MarketPosition.Long ? held.Quantity : -held.Quantity;
+            if (Math.Sign(pos) != Math.Sign(q) || Math.Abs(pos) < Math.Abs(q)) return;   // another side, or less than the legs cover: not the bot's as read
             double avg = held.AveragePrice, was;
             bool done = false;
             lock (Sync)
@@ -611,11 +628,13 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (openTag == null && Trades.TryGetValue(tag, out was) && double.IsNaN(was))
                 {
                     openTag = tag; ledQty = q; ledAvg = avg; ledCash = -q * avg; ledPrior = 0;
+                    Tags.Add(tag);   // its legs' updates reach the bot again
                     done = true;
                 }
             }
             if (!done) return;
-            string w = "Bot: trade " + tag + " (open in bot-day.txt) is followed again from NinjaTrader's position: " + q + " " + inst.FullName + " at " + avg.ToString("0.##", CultureInfo.InvariantCulture) + " on " + a.Name;
+            string w = "Bot: trade " + tag + " (open in bot-day.txt) is followed again from its " + sized.Count + " open " + (stops.Count > 0 ? "stop" : "target") + (sized.Count == 1 ? "" : "s") + ": " + q + " " + inst.FullName + " at " + avg.ToString("0.##", CultureInfo.InvariantCulture) + " (NinjaTrader's average) on " + a.Name +
+                       (Math.Abs(pos) > Math.Abs(q) ? "; NinjaTrader holds " + pos + " there, the rest is not the bot's" : "");
             Log(w); BotLog(w); ToPages(StatusJson("warn", w));
             Notify();
         }
