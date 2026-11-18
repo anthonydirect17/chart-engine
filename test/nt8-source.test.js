@@ -108,8 +108,14 @@ const fnBody = name => fnBodies(name).join('\n');
 test('order calls appear only in the gated functions and the bracket upkeep of ChartBridgeOrders.cs', () => {
   const fromPage = ['PlaceOrderLocked', 'ChangeOrder', 'CancelOrder', 'Flatten'];
   const upkeep = ['PlaceLegs', 'KeepPartner', 'CancelLeftoverLegs', 'CheckLegs', 'GroupCancelLeftover'];   // 0.5.8 Q-EXIT (b): a cancel only (checked below)
+  const botClose = ['BotCloseCancel', 'BotCloseSend'];   // release 1 (decision 3a): the bot's close of its own share only (checked below)
   let rest = ocode;
-  for (const f of fromPage.concat(upkeep)) for (const b of fnBodies(f)) rest = rest.replace(b, '');
+  for (const f of fromPage.concat(upkeep, botClose)) for (const b of fnBodies(f)) rest = rest.replace(b, '');
+  assert.ok(!/\.Submit\s*\(|\.CreateOrder\s*\(|\.Change\s*\(|\.Flatten\s*\(/.test(fnBody('BotCloseCancel')), 'BotCloseCancel only cancels');
+  const bcs = fnBody('BotCloseSend');
+  assert.match(bcs, /OrderType\.Market, OrderEntry\.Manual, TimeInForce\.Day, qty, 0, 0, "",\s*"CB#" \+ tag \+ " bot close"/, 'the bot\'s close: one market order, named for the bot\'s trade');
+  assert.ok(bcs.indexOf('if (qty > cover) return') < bcs.indexOf('.CreateOrder('), 'never more than the position holds on the bot\'s side');
+  assert.ok(!/\.Cancel\s*\(|\.Change\s*\(|\.Flatten\s*\(/.test(bcs), 'BotCloseSend only sends its close');
   for (const re of [/\.Submit\s*\(/, /\.CreateOrder\s*\(/, /\.Change\s*\(/, /\.Cancel\s*\(/, /\.Flatten\s*\(/])
     assert.ok(!re.test(rest), 'order call outside the gated functions: ' + re);
   assert.ok(!/CancelAllOrders|StartAtmStrategy|\bAtm\w*\./.test(ocode), 'no ATM or cancel-all calls');
@@ -1117,9 +1123,19 @@ test('0.4.0 bot: on by default, the account Anthony chooses (None until then, 0.
   for (const re of [/\.Submit\s*\(/, /\.CreateOrder\s*\(/, /\.Change\s*\(/, /\.Flatten\s*\(/, /OrderAction\./, /\bAtm\w*\./]) assert.ok(!re.test(bcode), 'ChartBridgeBot.cs: ' + re);
   assert.equal((bcode.match(/\.Cancel\(/g) || []).length, 1, 'one cancel call');
   assert.match(bodyOf(bcode, 'private static bool Cancel(Order o)'), /!IsBotEntry\(o\)\) return false;/, 'it cancels only a bot entry, never a stop or target');
-  assert.deepEqual([...new Set(bcode.match(/ChartBridgeOrders\.(PlaceBotEntry|FlattenForBot)/g))].sort(), ['ChartBridgeOrders.FlattenForBot', 'ChartBridgeOrders.PlaceBotEntry']);
+  // release 1 (decision 3a, 2026-11-18, "bot only"): the bot's close goes through ChartBridgeOrders' two close entry points (its own
+  // orders cancelled, then one market close of its own share); NinjaTrader's Flatten of the whole root (FlattenForBot) is gone
+  assert.deepEqual([...new Set(bcode.match(/ChartBridgeOrders\.(PlaceBotEntry|FlattenForBot|BotCloseCancel|BotCloseSend)/g))].sort(), ['ChartBridgeOrders.BotCloseCancel', 'ChartBridgeOrders.BotCloseSend', 'ChartBridgeOrders.PlaceBotEntry']);
+  assert.ok(!/FlattenForBot/.test(ocode), 'no Flatten of the bot\'s whole root left');
+  for (const [fn, re] of [['BotCloseCancel', /StartsWith\("CB#" \+ tag \+ " ", StringComparison\.Ordinal\) \|\| BotEntryNameRx\.IsMatch/], ['BotCloseSend', /if \(qty > cover\) return /]])
+    assert.match(ocode.slice(ocode.indexOf('internal static ' + (fn === 'BotCloseCancel' ? 'int ' : 'string ') + fn + '(')), re, fn + ': only the bot\'s own orders, never more than the position holds');
+  const share = bodyOf(bcode, 'private static string CloseShare(string root, out int kind, out int qty)');
+  assert.match(share, /qty = Math\.Min\(Math\.Min\(proof, Math\.Abs\(q\)\), cover\);/, 'the close: the smallest of the ledger, the legs\' proof and the position');
+  assert.ok(share.indexOf('if (legs.Count > 0)') < share.indexOf('ChartBridgeOrders.BotCloseSend('), 'its legs cancelled before its close');
+  assert.match(bodyOf(bcode, 'private static string RailsProblem()'), /return OwnerGuard\(FindAccount\(\), EffectiveRoot\(\)\);/, 'decision 3b: the owner guard');
+  assert.match(ocode, /if \(bot\) \{ string guard = ChartBridgeBot\.OwnerGuard\(account, root\); if \(guard != null\) return guard; \}/, 'decision 3b: asked again under the order lock');
   assert.match(bodyOf(bcode, 'private static void OnBotFlatten()'), /if \(m != "auto"\) why = "flatten is for auto mode only";/, 'the bot\'s own flatten: auto only');
-  assert.ok(!/ChartBridgeOrders\.FlattenForBot/.test(bodyOf(bcode, 'private static void Lose(ChartBridgeClient c, string why, bool heartbeat)')), 'heartbeat loss never flattens');
+  assert.ok(!/ChartBridgeOrders\.BotClose/.test(bodyOf(bcode, 'private static void Lose(ChartBridgeClient c, string why, bool heartbeat)')), 'heartbeat loss never closes');
   assert.ok(!/trading = false|Enabled = true/.test(bcode), 'never turns trading or itself on or off');
   // the order is always built from the bot's account and root, quantity 1; a proposal is placed only on the account it named
   const place = bodyOf(bcode, 'private static string Place(Signal s, string forAccount, out Order placed)');
