@@ -2084,7 +2084,8 @@ public static class BotHarness
         ChartBridgeVoice.Reset();
         ChartBridgeVoice.On = true;
         ChartBridgeVoice.Player = path => { lock (said) said.Add(Path.GetFileName(path)); return true; };
-        Func<int, bool> heard = k => { for (int i = 0; i < 60; i++) { lock (said) if (said.Count(x => x == "BotNotClosed.wav") >= k) return true; Thread.Sleep(50); } return false; };
+        // up to 10 s: the voice plays on a thread of its own, behind any call still playing (PlayTimeoutMs, 5 s), so a busy machine is not a miss
+        Func<int, bool> heard = k => { for (int i = 0; i < 200; i++) { lock (said) if (said.Count(x => x == "BotNotClosed.wav") >= k) return true; Thread.Sleep(50); } return false; };
         try
         {
             m = own.Calls.Count;
