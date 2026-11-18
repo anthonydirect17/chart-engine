@@ -5738,7 +5738,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             string json = ExecJson(account, inst, side, qty, price, time, id, orderId, true);
             foreach (ChartBridgeClient c in Clients.Values) c.Send(json);
-            try { ChartBridgeBot.OnExec(account, inst, side, qty, price, orderId, json, ExecKey(account, id, time, price, qty, orderId)); } catch (Exception ex) { Log("bot fill error: " + ex.Message); }   // 0.4.0 bot: its trades, losses and fills; release 1 (decision 3, R12 finding 2): with its key, so a replayed one is never counted twice
+            try { ChartBridgeBot.OnExec(account, inst, side, qty, price, orderId, json, ExecKey(account, id, time, price, qty, orderId), time); } catch (Exception ex) { Log("bot fill error: " + ex.Message); }   // 0.4.0 bot: its trades, losses and fills; release 1 (decision 3, R12 finding 2): with its key, so a replayed one is never counted twice
             try { ChartBridgeAgents.OnExec(account, inst, side, qty, price, orderId, json); } catch (Exception ex) { Log("agent fill error: " + ex.Message); }   // 0.5.0 agents: each agent's trades, losses and fills
             try { ChartBridgeOrders.StrategyExecution(account, execOrder, orderId, time); } catch (Exception ex) { Log("strategy fill error: " + ex.Message); }   // 1.42: an Order Strategy entry's session from its execution's own time
             if (!ChartBridgeConfig.PostFills) return;
@@ -6083,7 +6083,8 @@ namespace NinjaTrader.NinjaScript.AddOns
     // move puts one call on a small queue (at most 8; full: the call is dropped); one background thread plays them, each with a 5 s limit
     // (a stuck player: that call is dropped, the queue goes on). NinjaTrader's thread never waits. One call per decision: a group entry
     // copied to several accounts (one decision id) speaks once; a single entry once per kind. config.txt voice = on turns it on (OFF by
-    // default: an F5 alone changes nothing he hears); voiceFolder names the folder (default Documents\NinjaTrader 8\sounds_voice4). A
+    // default: an F5 alone changes nothing he hears); voiceFolder names the folder (default since release 1: ChartBridge\www\voice, where the
+    // page updater installs the voice-4 files; before, Documents\NinjaTrader 8\sounds_voice4). A
     // missing folder or file is said once in the Output window and that call is silent.
     // Calls: entry filled: LongFilled / ShortFilled (by side); ChartBridge's stop leg: StopFilled; its target leg: TargetFilled, or
     // TargetOneFilled / TargetTwoFilled for a strategy's first and second target; ChartBridge's market exit, an agent's flatten, or a fill
@@ -6092,7 +6093,7 @@ namespace NinjaTrader.NinjaScript.AddOns
     public static class ChartBridgeVoice
     {
         public static bool On;
-        public static string Folder = DefaultFolder();
+        public static string Folder;                       // voiceFolder from config.txt; null: the default, FolderNow (release 1: www\voice)
         public static Func<string, bool> Player;          // test hook: plays a file path, true when it played (null: Windows' player)
         public static int PlayTimeoutMs = 5000;
         public const int QueueMax = 8;
@@ -6106,10 +6107,14 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static readonly Regex LegRx = new Regex("^CB#([0-9a-f]{8}) (stop|target|exit) f[0-9]{1,6} q[0-9]{1,6} p([0-9]{1,9}(?:\\.[0-9]{1,8})?)(?: k([1-3])){0,1}\\z");
         private static readonly Regex TagRx = new Regex("^CB#([0-9a-f]{8})(?: |$)");
 
+        // Release 1 (Anthony's ruling of 2026-11-18): the voice-4 files ship with the page (nt8/install-files.json, live/voice), so the
+        // default folder is ChartBridge's www\voice, read when a call plays. A voiceFolder line in config.txt still wins. Before release 1
+        // the default was Documents\NinjaTrader 8\sounds_voice4.
+        public static string FolderNow { get { return Folder ?? DefaultFolder(); } }
         private static string DefaultFolder()
         {
-            try { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "NinjaTrader 8", "sounds_voice4"); }
-            catch (Exception) { return "sounds_voice4"; }
+            try { return Path.Combine(ChartBridgeConfig.WwwFolder, "voice"); }
+            catch (Exception) { return "voice"; }
         }
         public static bool ReadConfig(string key, string val)
         {
@@ -6117,7 +6122,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (key == "voiceFolder") { if (!string.IsNullOrWhiteSpace(val)) Folder = val.Trim(); return true; }
             return false;
         }
-        public static void Reset() { lock (Sync) { Calls.Clear(); Said.Clear(); Missing.Clear(); Flattened.Clear(); dropped = 0; played = 0; } On = false; Folder = DefaultFolder(); Player = null; PlayTimeoutMs = 5000; }
+        public static void Reset() { lock (Sync) { Calls.Clear(); Said.Clear(); Missing.Clear(); Flattened.Clear(); dropped = 0; played = 0; } On = false; Folder = null; Player = null; PlayTimeoutMs = 5000; }
         public static long Dropped { get { lock (Sync) return dropped; } }
         public static long Played { get { lock (Sync) return played; } }
         private static double NowMs() { return (DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds; }
@@ -6230,13 +6235,13 @@ namespace NinjaTrader.NinjaScript.AddOns
         // Plays one call, at most PlayTimeoutMs; a missing file is said once and is silent.
         public static void PlayOne(string call)
         {
-            string path;
-            try { path = Path.Combine(Folder, call + ".wav"); } catch (Exception) { return; }
+            string path, folder = FolderNow;
+            try { path = Path.Combine(folder, call + ".wav"); } catch (Exception) { return; }
             Func<string, bool> p = Player;
             if (p == null && !File.Exists(path))
             {
                 bool say; lock (Sync) say = Missing.Add(path);
-                if (say) ChartBridgeServer.Log("voice: " + call + ".wav is not in " + Folder + ": that call is silent (said once)");
+                if (say) ChartBridgeServer.Log("voice: " + call + ".wav is not in " + folder + ": that call is silent (said once)");
                 return;
             }
             Task<bool> t = Task.Run(() => { try { if (p != null) return p(path); using (System.Media.SoundPlayer sp = new System.Media.SoundPlayer(path)) sp.PlaySync(); return true; } catch (Exception) { return false; } });

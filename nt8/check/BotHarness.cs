@@ -110,6 +110,9 @@ public static class BotHarness
     {
         foreach (Order o in own.Orders.ToList()) if (ChartBridgeOrders.IsWorking(o.OrderState)) { o.OrderState = OrderState.Cancelled; Update(o); }
         own.Positions.Clear();
+        // R12 re-review L1: NinjaTrader's position has settled (the owner guard's wait after a fill of Anthony's); a connected bot keeps beating
+        if (ChartBridgeBot.StripJson().Contains("\"connected\":true")) for (int i = 0; i < 5; i++) { clock += 350; Bot("{\"type\":\"beat\"}"); }
+        else clock += ChartBridgeBot.HandSettleMs + 500;
         FieldInfo moves = typeof(ChartBridgeOrders).GetField("Moves", PS);
         ((System.Collections.IDictionary)moves.GetValue(null)).Clear();
     }
@@ -1766,6 +1769,7 @@ public static class BotHarness
         // Anthony buys 2 by hand while the bot holds its 1: his 2 are his, named by the guard, never in the bot's ledger
         HandFill(MarketPosition.Long, 2, 25004);
         Held(3, 25002.67);
+        for (int i = 0; i < 5; i++) { clock += 350; Bot("{\"type\":\"beat\"}"); }   // settled
         string g = ChartBridgeBot.OwnerGuard(own, "MNQ") ?? "";
         string st = ChartBridgeBot.StripJson();
         Check(g.StartsWith("OWN-1 MNQ holds 2 contracts long that are not the bot's") && st.Contains("\"position\":{\"qty\":1,\"avgPrice\":25000}"),
@@ -2070,6 +2074,12 @@ public static class BotHarness
         Order stuck = new Order { Account = own, Instrument = mnq, Name = "Close", OrderAction = OrderAction.Sell, OrderType = OrderType.Market, OrderState = OrderState.Working, Quantity = 1 };
         own.Orders.Add(stuck);   // a market order on the bot's root that never finishes (the review's probe E)
         List<string> said = new List<string>();
+        ChartBridgeVoice.Reset();
+        Check(ChartBridgeVoice.FolderNow == Path.Combine(ChartBridgeConfig.WwwFolder, "voice") && !ChartBridgeVoice.On,
+              "release 1 (Anthony 2026-11-18): the voice files' default folder is ChartBridge's www\\voice (the page updater installs them there); voice stays off by default: " + ChartBridgeVoice.FolderNow);
+        ChartBridgeVoice.ReadConfig("voiceFolder", "C:\\made-up\\sounds");
+        Check(ChartBridgeVoice.FolderNow == "C:\\made-up\\sounds", "release 1: a voiceFolder line in config.txt still wins");
+        ChartBridgeVoice.Reset();
         ChartBridgeVoice.On = true;
         ChartBridgeVoice.Player = path => { lock (said) said.Add(Path.GetFileName(path)); return true; };
         Func<int, bool> heard = k => { for (int i = 0; i < 60; i++) { lock (said) if (said.Count(x => x == "BotNotClosed.wav") >= k) return true; Thread.Sleep(50); } return false; };
@@ -2126,17 +2136,28 @@ public static class BotHarness
         CloseFills(1, 24985);
         his.OrderState = OrderState.Cancelled;
 
-        // ---- finding 5: Anthony's fill between the guard's read and the placement stays his
+        // ---- finding 5 and R12 re-review L1: a fill of Anthony's between the guard's first read and the placement: the guard under the
+        // order lock waits 2 s for NinjaTrader's position (it cannot tell what he holds yet), so no bot entry goes in that window
         NewDay(1, "500");
         ChartBridgeBot.PlaceGuardChecked = () => { ChartBridgeBot.PlaceGuardChecked = null; HandFill(MarketPosition.Long, 2, 25004); };
+        int k0 = own.Calls.Count;
         Order k1;
         try { k1 = AutoTrade("buy"); } finally { ChartBridgeBot.PlaceGuardChecked = null; }
-        if (k1 == null) { Check(false, "race: a bot trade: " + BotReject()); return; }
+        Check(k1 == null && own.Calls.Count == k0 && BotReject().Contains("OWN-1 MNQ has a fill of Anthony's from less than 2 s ago that NinjaTrader's position may not show yet: no bot entry until it settles"),
+              "finding 5 / L1: his fill between the guard's first read and the placement: refused under the order lock, nothing sent: " + BotReject());
+        Held(2, 25004);
+        Steps(5);
+        Bot(Sig(NewId(), Market("buy")));
+        Check(BotReject().Contains("OWN-1 MNQ holds 2 contracts long that are not the bot's") && own.Calls.Count == k0, "finding 5 / L1: settled, his 2 are named by the guard");
+        HandFill(MarketPosition.Short, 2, 25006); Held(0, 0);
+        Steps(5);
+        k1 = AutoTrade("buy");
+        if (k1 == null) { Check(false, "L1: the bot enters once he is flat and settled: " + BotReject()); return; }
         FillEntry(k1, 25000);
-        Held(3, 25002.67);
-        HandFill(MarketPosition.Short, 2, 25006);   // he sells his own 2
         Held(1, 25000);
-        Check(ChartBridgeBot.StripJson().Contains("\"position\":{\"qty\":1,"), "finding 5: his 2 filled after the guard read and before the placement are his: his sell of 2 leaves the bot's 1");
+        HandFill(MarketPosition.Long, 1, 25003); Held(2, 25001.5);    // his round trip: buys 1
+        HandFill(MarketPosition.Short, 1, 25004); Held(1, 25000);     // and sells it
+        Check(ChartBridgeBot.StripJson().Contains("\"position\":{\"qty\":1,"), "finding 5 / L1: his share starts at the guard's read (0): after his round trip the bot still holds its 1");
         LegFills(k1, 1, 24996);
         // finding 5: a bot entry that fills before NinjaTrader lists it, and before the bot has noted it: found in ChartBridge's own just sent
         NewDay(1, "500");
@@ -2153,6 +2174,62 @@ public static class BotHarness
         try { k2 = AutoTrade("buy"); } finally { own.OnCall = null; }
         Check(k2 != null && ChartBridgeBot.StripJson().Contains("\"position\":{\"qty\":1,"), "finding 5: its fill is the bot's (FindOrder reads ChartBridge's own just sent)");
         if (k2 != null) { k2.OrderState = OrderState.Filled; Update(k2); Exit(k2, 25000); }
+
+        // ---- R12 re-review L1: Anthony long 1 by hand; his sell of 1 lands after Place began and before the guard's reads: refused
+        // (his fill has not settled), so his share never starts from Place's start
+        NewDay(1, "500");
+        HandFill(MarketPosition.Long, 1, 25000);
+        Held(1, 25000);
+        Steps(5);
+        ChartBridgeBot.PlaceEntered = () => { ChartBridgeBot.PlaceEntered = null; HandFill(MarketPosition.Short, 1, 25002); Held(0, 0); };
+        int l0 = own.Calls.Count;
+        Order l1;
+        try { l1 = AutoTrade("buy"); } finally { ChartBridgeBot.PlaceEntered = null; }
+        Check(l1 == null && own.Calls.Count == l0 && BotReject().Contains("has a fill of Anthony's from less than 2 s ago"), "R12 re-review L1: his sell inside Place's window: no entry: " + BotReject());
+        Steps(5);
+        l1 = AutoTrade("buy");
+        if (l1 == null) { Check(false, "L1: a bot trade once settled: " + BotReject()); return; }
+        FillEntry(l1, 25000);
+        Held(1, 25000);
+        HandFill(MarketPosition.Long, 1, 25003); Held(2, 25001.5);
+        HandFill(MarketPosition.Short, 1, 25004); Held(1, 25000);
+        Check(ChartBridgeBot.StripJson().Contains("\"position\":{\"qty\":1,"), "R12 re-review L1: after his round trip the bot still holds its 1 (his share started at 0, at the guard's read)");
+        LegFills(l1, 1, 24996);
+
+        // ---- R12 re-review L1, the base itself: his sell of 1 lands after Place began, and NinjaTrader's position has settled by the
+        // guard's reads (2 s pass inside the hook): the entry goes, and his share starts at the guard's read (0), never at Place's
+        // start (1, which would leave it at -1 and let a round trip of his shrink the bot's ledger)
+        NewDay(1, "500");
+        HandFill(MarketPosition.Long, 1, 25000);
+        Held(1, 25000);
+        Steps(5);
+        ChartBridgeBot.PlaceEntered = () => { ChartBridgeBot.PlaceEntered = null; HandFill(MarketPosition.Short, 1, 25002); Held(0, 0); clock += ChartBridgeBot.HandSettleMs + 100; };
+        Order l1c;
+        try { l1c = AutoTrade("buy"); } finally { ChartBridgeBot.PlaceEntered = null; }
+        if (l1c == null) { Check(false, "L1 base: the entry goes once his sell has settled: " + BotReject()); return; }
+        FillEntry(l1c, 25000);
+        Held(1, 25000);
+        HandFill(MarketPosition.Long, 1, 25003); Held(2, 25001.5);
+        HandFill(MarketPosition.Short, 1, 25004); Held(1, 25000);
+        Check(ChartBridgeBot.StripJson().Contains("\"position\":{\"qty\":1,"), "R12 re-review L1: his share's base is the guard's own read: after his round trip the bot still holds its 1");
+        LegFills(l1c, 1, 24996);
+
+        // ---- R12 re-review L2: an execution timed before this run began, delivered after the first watch, is never counted; this run's own is
+        NewDay(1, "500");
+        Order l2 = AutoTrade("buy");
+        if (l2 == null) { Check(false, "L2: a bot trade"); return; }
+        FillEntry(l2, 25000);
+        Held(1, 25000);
+        DateTime past = ChartBridgeBot.RunStart.AddMinutes(-30);
+        typeof(ChartBridgeServer).GetMethod("Deliver", PS).Invoke(null, new object[] { own.Name, mnq, MarketPosition.Short, 1, 24990.0, past, "P" + Guid.NewGuid().ToString("N").Substring(0, 9), "HP" + Guid.NewGuid().ToString("N").Substring(0, 6), null });
+        st = ChartBridgeBot.StripJson();
+        Check(st.Contains("\"position\":{\"qty\":1,\"avgPrice\":25000}") && st.Contains("\"pnlToday\":0,"), "R12 re-review L2: a past execution (before this run began) added by the connection after the first watch: not counted: " + st);
+        Order leg = own.Orders.FirstOrDefault(o => o != l2 && Tag(o) == Tag(l2) && o.OrderType == OrderType.StopMarket && ChartBridgeOrders.IsWorking(o.OrderState));
+        if (leg == null) { Check(false, "L2: its stop"); return; }
+        leg.OrderId = "NL" + Guid.NewGuid().ToString("N").Substring(0, 8); leg.Filled = 1; leg.OrderState = OrderState.Filled; Update(leg);
+        typeof(ChartBridgeServer).GetMethod("Deliver", PS).Invoke(null, new object[] { own.Name, mnq, MarketPosition.Short, 1, 24996.0, past, "P" + Guid.NewGuid().ToString("N").Substring(0, 9), leg.OrderId, null });
+        st = ChartBridgeBot.StripJson();
+        Check(st.Contains("\"position\":{\"qty\":0,") && st.Contains("\"pnlToday\":-8,"), "R12 re-review L2: a fill of this run's own trade (its tag in RunTags) is counted whatever its time: " + st);
 
         // ---- finding 6: a page order ChartBridge just sent that NinjaTrader does not list yet refuses a bot entry
         NewDay(1, "500");
@@ -2188,6 +2265,20 @@ public static class BotHarness
         Check(ChartBridgeBot.StripJson().Contains("\"ownerWait\":null"), "ruling B: Shadow: no line");
         Page(Auto3());
         mine.OrderState = OrderState.Cancelled;
+        Land();
+        // R12 re-review M8: pause and cancel waits for BOTH position readings to agree (a fill reported, not yet in the position: no)
+        Settle();
+        Bot(Sig(NewId(), "\"side\":\"buy\",\"kind\":\"limit\",\"price\":24990,\"stopTicks\":8,\"targetTicks\":16"));
+        Order r1 = own.Orders.LastOrDefault(o => Regex.IsMatch(o.Name ?? "", " bot s") && ChartBridgeOrders.IsWorking(o.OrderState));
+        if (r1 == null) { Check(false, "M8: a resting entry: " + BotReject()); return; }
+        System.Collections.IDictionary mv = (System.Collections.IDictionary)typeof(ChartBridgeOrders).GetField("Moves", PS).GetValue(null);
+        mv["OWN-1|MNQ 12-26"] = new List<double[]> { new double[] { 2, ChartBridgeTime.NowUtcMs(), 0 } };   // 2 reported, not in the position yet
+        m = own.Calls.Count;
+        Steps(4);
+        Check(Calls(own, m).Count == 0, "R12 re-review M8: one reading only (a fill not yet in the position): the bot's resting entry is not cancelled: " + string.Join(" | ", Calls(own, m)));
+        Held(2, 25000);   // both readings now
+        Steps(3);
+        Check(Calls(own, m).Count == 1 && Calls(own, m)[0].StartsWith("cancel CB#" + Tag(r1) + " bot"), "R12 re-review M8: both readings agree: cancelled: " + string.Join(" | ", Calls(own, m)));
         Land();
         // a part filled entry: only its rest is cancelled; the bot's filled 1 and its stop and target stay
         Settle();

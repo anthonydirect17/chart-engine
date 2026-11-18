@@ -1161,7 +1161,7 @@ test('0.4.0 bot: the hooks in ChartBridge.cs and ChartBridgeOrders.cs', () => {
   assert.match(code, /ChartBridgeOrders\.StartPlans\(\);[^\n]*\n(?:\s*ChartBridge\w+\.Start\(\);[^\n]*\n)*\s*ChartBridgeBot\.Start\(\);/);
   assert.match(code, /ChartBridgeBot\.Stop\(\);/);
   assert.match(code, /ChartBridgeBot\.OnTick\(json\);/);
-  assert.match(code, /try \{ ChartBridgeBot\.OnExec\(account, inst, side, qty, price, orderId, json, ExecKey\(account, id, time, price, qty, orderId\)\); \} catch/);   // release 1 (decision 3, R12 finding 2): with its key (the replay fence)
+  assert.match(code, /try \{ ChartBridgeBot\.OnExec\(account, inst, side, qty, price, orderId, json, ExecKey\(account, id, time, price, qty, orderId\), time\); \} catch/);   // release 1 (decision 3, R12 finding 2): with its key (the replay fence)
   assert.match(code, /ChartBridgeBot\.NoteWatched\(a\);[^\n]*n \+= CatchUp\(a\);/, 'the replay fence before the first catch-up');
   assert.match(code, /try \{ ChartBridgeBot\.OnPosition\(a, e\); \} catch/);
   assert.match(code, /if \(ChartBridgeBot\.Enabled\) b\.Append\(",\\"bot\\":"\)\.Append\(ChartBridgeBot\.DiagJson\(\)\);/);

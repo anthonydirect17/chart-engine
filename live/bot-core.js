@@ -675,12 +675,13 @@ function stripModel(bot, fmtPrice) {
     trades: r.trades, losses: r.losses, level: r.level, state,
   };
 }
-/** Anthony's ruling B (2026-11-18, ChartBridge's owner guard): the Bot tab's standing line while the guard blocks entries (copilot
- * and auto only; ChartBridge sends `ownerWait` then, else null). '' when there is none. */
+/** Anthony's rulings B and of 2026-11-18 (ChartBridge's owner guard): the Bot tab's standing line while the guard blocks entries
+ * (copilot and auto only; ChartBridge sends `ownerWait` then, else null), in his words. '' when there is none. ChartBridge's own
+ * words (what is held there) stay in its log. */
+const OWNER_WAIT = 'Waiting: you\'re in this market.';
 function ownerWaitText(b) {
   if (!b || typeof b.ownerWait !== 'string' || !b.ownerWait || b.mode === 'shadow') return '';
-  const w = b.ownerWait.slice(0, 300);
-  return w.charAt(0).toUpperCase() + w.slice(1) + '. The bot makes no entry until it is clear.';
+  return OWNER_WAIT;
 }
 /** The status words for the panel: what the bot is doing. */
 function statusText(b) {
