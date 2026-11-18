@@ -106,6 +106,11 @@ personal bot (release 1, step 1.6b)".
   half close may still fill there, the restore waits.
 - **The Bot tab**: Set the rails asks for every rail; the panel shows the size, both day stops, the rails not set and a day
   stop reached; Change account offers the personal account only.
+- **The Bot tab fails closed on an older ChartBridge** (the R12 review of the cut): a ChartBridge before 0.6.24 sends no
+  `railsMissing`, size or day stops and would trade the bot on its old fixed rails. Before the F5, and after a rollback,
+  Copilot and Auto are refused (Shadow stays) and the panel says: "This ChartBridge (before 0.6.24) has the old fixed rails
+  (1 contract, 5 trades, 3 losing trades, no day stops): install 0.6.24 to arm the bot". With no bot message yet they are
+  refused too.
 
 ### Cut half and the mini ticket (step 1.6c; ChartBridge, the ticket, the charts)
 
@@ -173,10 +178,16 @@ The non-order parts of release 1 (the lock of 2026-11-15, topic 2).
   file the install added is taken out, and a file it took out comes back.
 - **Nothing is lost**: the files it replaces are kept first, in a new `previous-addons\` folder with their own record, so
   running it again goes forward again. The set it goes back to, and the set the last install kept, are never pruned.
-- **Checked first**: every `-InstallChartBridge` now records the set it kept and each file's sha256 in `state.json`
-  (`chartBridge.installed.backup` and `backupHashes`). The rollback refuses, with a plain reason and nothing changed, when no
-  install is recorded, the set has no record (kept by an older updater), the set is gone, a file is missing, or a file does
-  not match its sha256. It never runs over a recorded mix of files (DO NOT press F5).
+- **Checked first**: every `-InstallChartBridge` and every rollback now records the set it kept, each kept file's sha256 and
+  each file it wrote (`chartBridge.installed.backup`, `backupHashes` and `afterHashes` in `state.json`), and so does a copy
+  that a later run finds whole after it was cut off. The rollback refuses, with a plain reason and nothing changed, when no
+  install is recorded, the set has no record (kept by an older updater), the set is gone, a file is missing, a file does not
+  match its sha256, AddOns changed since the last install (a file not as it wrote it, or a ChartBridge file in neither set),
+  or the kept set is the same as AddOns. It never runs over a recorded mix of files (DO NOT press F5).
+- **An install run twice keeps the way back**: the same files copied again keep the earlier record's kept set.
+- **The copy checks again**: each file written beside AddOns is read back and must have the sha256 it was checked with
+  (the staged commit's, or the kept set's), before any file in AddOns is replaced; for an install too.
+- The log lines of a copy name the command that made it (`-InstallChartBridge` or `rollback-chartbridge`).
 - **Flat**: `-Flat` is Anthony's word that he is flat in every account; without it nothing is done. The updater has no check
   of NinjaTrader's positions that counts while NinjaTrader is closed, so no other check is made for now. Then it asks once
   (type `y`, or `-Yes`), as `-InstallChartBridge` does. `status` says when a put back ChartBridge waits for F5.

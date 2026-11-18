@@ -80,13 +80,19 @@ test('the automatic path never copies add-on files: only -InstallChartBridge and
   const rset = src.slice(src.indexOf('function Get-RollbackSet'), src.indexOf('function Invoke-RollbackChartBridge'));
   assert.ok(rset.length > 0 && !/Copy-Item|Move-|Write-[^L]|Set-Content|Remove-Item|Remove-Dir|Replace\(|Save-State/.test(rset), 'Get-RollbackSet only reads');
   for (const why of ['is incomplete', 'does not match the sha256 recorded when it was kept', 'has no record of the set it replaced', 'is no longer there']) assert.ok(rset.includes(why), 'refuses: ' + why);
+  // the R12 review of the cut: AddOns must hold what the last install wrote, and the kept set must differ from it
+  for (const why of ['AddOns changed since the last install: ', 'the kept set is the same as the files in AddOns: nothing to go back to; nothing changed']) assert.ok(rset.includes(why), 'refuses: ' + why);
+  assert.match(src, /backup = \$kept; backupHashes = \$keptSums; afterHashes = \$copy\.after \}/, 'each install records what it kept and what it wrote');
+  assert.match(src, /if \(\(Test-SameHashes \$copy\.before \$copy\.after\) -and/, 'the same files copied again keep the earlier kept set');
+  const cp = src.slice(src.indexOf('function Install-AddOnFiles'), src.indexOf('function New-InstalledRecord'));
+  assert.ok(cp.indexOf('Copy-Item -LiteralPath (Join-Path $Source $n) -Destination $tmpFile -Force') < cp.indexOf("(Get-FileSha256 $tmpFile) -ne $after[$n]) { throw") && cp.indexOf("(Get-FileSha256 $tmpFile) -ne $after[$n]) { throw") < cp.indexOf('Move-FileAtomic (Join-Path $script:P.AddOns "$n.upd-tmp")'), 'each copied file is checked again before any replace');
+  assert.strictEqual([...src.matchAll(/= New-InstalledRecord \$(cp|mx)/g)].length, 2, 'a copy found whole later keeps its rollback record');
   assert.match(src, /\[ValidateSet\([^\n]*'rollback-chartbridge'\)\]/);
   assert.match(src, /'rollback-chartbridge' \{ return \(Invoke-RollbackChartBridge\) \}/);
-  assert.match(src, /backup = \$backup; backupHashes = \$copy\.before \}/, 'each install records the set it replaced and its sha256');
-  assert.match(src, /function Install-AddOnFiles[\s\S]{0,80}if \(-not \$script:AddOnWriteAllowed\) \{ throw/);
+  assert.match(src, /function Install-AddOnFiles\([^\n]*\) \{\n  if \(-not \$script:AddOnWriteAllowed\) \{ throw/);
   // the only place anything is written under AddOns is Install-AddOnFiles; Get-AddOnVersion only reads
   const uses = [...src.matchAll(/\$script:P\.AddOns/g)].map(m => fnAt(m.index));
-  assert.deepStrictEqual([...new Set(uses)].sort(), ['Get-AddOnHashes', 'Get-AddOnVersion', 'Get-RetiredAddOns', 'Install-AddOnFiles', 'Invoke-InstallChartBridge', 'Invoke-RollbackChartBridge'].sort());
+  assert.deepStrictEqual([...new Set(uses)].sort(), ['Get-AddOnHashes', 'Get-AddOnVersion', 'Get-RetiredAddOns', 'Install-AddOnFiles', 'Invoke-InstallChartBridge', 'Invoke-RollbackChartBridge', 'Get-RollbackSet'].sort());   // Get-RollbackSet lists AddOns (only reads, below)
   const retired = src.slice(src.indexOf('function Get-RetiredAddOns'), src.indexOf('function Install-AddOnFiles'));
   assert.ok(retired.length > 0 && !/Copy-Item|Move-|Write-[^L]|Set-Content|Remove-Item|Replace\(/.test(retired), 'Get-RetiredAddOns only reads');
   assert.match(retired, /'\^ChartBridge\[A-Za-z0-9_\]\*\\\.cs\$'/, 'only ChartBridge*.cs files are ever taken out');

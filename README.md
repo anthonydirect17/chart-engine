@@ -458,8 +458,9 @@ It copies the files the last `-InstallChartBridge` replaced (kept in `updater\pr
 the same all-or-nothing copy, then says to press **F5** while flat and check `/diag`. `-Flat` is your word that you are flat:
 the updater cannot check NinjaTrader's positions while NinjaTrader is closed, so without it nothing is done; then it asks
 once (type `y`). Each install records the set it kept and every file's sha256 in `updater\state.json`; the command refuses,
-saying why, when that record is missing (a set kept by an older updater), the set is gone or incomplete, or a file does not
-match its sha256. The files it replaces are kept first, so running it again goes forward again. It never changes the page
+saying why, when that record is missing (a set kept by an older updater), the set is gone or incomplete, a file does not
+match its sha256, AddOns changed since that install, or the kept set is the same as AddOns (an install run twice keeps the
+earlier set). The files it replaces are kept first, so running it again goes forward again. It never changes the page
 (`rollback` does that).
 
 **Pause, roll back, and the rest:**
