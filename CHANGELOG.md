@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased (2026-11-18): the shared CME calendar and contract values, an exact copy (Bot-Lab plan step 1.5)
+
+`shared/` and tests only (no page change, no version bump). `shared/` holds market-data's four files byte for byte:
+`cme_calendar.json` (CME Globex equity index holidays and early closes for 2026 and 2027, a CME source and a check on
+every row), `contracts.json` (NQ, MNQ, ES, MES: point value and tick size) and their JS and Python loaders. Never edit
+them here: market-data holds the originals.
+
+- `test/shared-calendar.test.js` pins the four files by sha256 and proves the page's own calendar (`cmeSessionDay`,
+  `nyseHolidays`, `nyseEarlyCloses`, `cmeClosed`) agrees with the copy on every day of 2026 and 2027 but one: Good
+  Friday 2026, which the page treats as closed and CME ran as an abbreviated session with its own trade date. The page
+  and ChartBridge are not switched: that waits for Anthony's ruling.
+- `test/test_markup_shared_contracts.py`: the Markup Studio's instrument table matches the shared contract values.
+
 ## Unreleased (2026-11-04): getting ready to go private: the PC updater accepts the box job and reads a chart-engine token; placeholders
 
 `nt8/update-pc.ps1` and docs only (no page change, no version bump, as the 2026-10-23 updater entries). Anthony decided
