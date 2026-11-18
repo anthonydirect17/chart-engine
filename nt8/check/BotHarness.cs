@@ -154,6 +154,7 @@ public static class BotHarness
             ReArmRace();     // review R12 finding 2: a day stop reached while the page arms the bot: refused, never armed by itself
             OpenAtRestart(); // review R12 round 2: a bot trade open across a restart is followed again from NinjaTrader's position
             CutAtRestart();  // release 1 (1.6c): Cut half on a bot trade, then a restart: after the cut, and in the middle of it
+            DayFile();       // R12 (the day file): a part exit, a reopen, an older build's line, a size changed unseen, a file that does not read
             ChosenAccount();
             NoneAndReset();   // 0.5.7: None (DECISION 2026-10-14e) and the 17:00 ET reset
             V2PageGetsNothing();
@@ -683,6 +684,15 @@ public static class BotHarness
     // ------------------------------------------------------------ rails from the page (release 1, step 1.6b): every rail set on the Bot tab, saved, refused while exposed
     static string RailsFile() { return Path.Combine(home, "ChartBridge", "bot-rails.txt"); }
     static void Restart() { ChartBridgeBot.Stop(); ChartBridgeBot.Start(false); Reconnect(); }
+    // R12 (the day file): bot-day.txt has this exact line
+    static bool DayLine(string line) { return File_("bot-day.txt").Split('\n').Select(l => l.TrimEnd('\r')).Contains(line); }
+    // R12 (the day file): the trade's open line as a ChartBridge before this build wrote it (three fields: no dollars, size or price)
+    static void OldLine(Order e)
+    {
+        string f = Path.Combine(home, "ChartBridge", "bot-day.txt");
+        string[] lines = File.ReadAllLines(f).Select(l => l.StartsWith("trade\t" + Tag(e) + "\topen\t") ? "trade\t" + Tag(e) + "\topen" : l).ToArray();
+        File.WriteAllLines(f, lines);
+    }
 
     static void Rails()
     {
@@ -1059,10 +1069,11 @@ public static class BotHarness
         if (a == null) return;
         FillEntry(a, 25000);
         own.Positions.Clear(); own.Positions.Add(new Position { Instrument = mnq, MarketPosition = MarketPosition.Long, Quantity = 1, AveragePrice = 25000 });
-        Check(File_("bot-day.txt").Contains("trade\t" + Tag(a) + "\topen"), "open at restart: bot-day.txt says open");
+        Check(DayLine("trade\t" + Tag(a) + "\topen\t0\t1\t25000"),
+              "open at restart: bot-day.txt says open, with its dollars closed so far (0), its size and its price (R12, the day file): " + File_("bot-day.txt"));
         Restart();
         string st = ChartBridgeBot.StripJson();
-        Check(st.Contains("\"position\":{\"qty\":1,\"avgPrice\":25000}") && st.Contains("\"standDown\":null") && File_("bot.log").Contains("trade " + Tag(a) + " (open in bot-day.txt) is followed again from its 1 open stop: 1 MNQ 12-26 at 25000 (its entry's fill) on OWN-1") &&
+        Check(st.Contains("\"position\":{\"qty\":1,\"avgPrice\":25000}") && st.Contains("\"standDown\":null") && File_("bot.log").Contains("trade " + Tag(a) + " (open in bot-day.txt) is followed again from its 1 open stop: 1 MNQ 12-26 at 25000 (its price in bot-day.txt) on OWN-1") &&
               !File_("bot.log").Contains("the rest is not the bot's"),
               "review R12 round 3: after a restart the open trade is followed again from its own stop leg, NinjaTrader's position matching: " + st);
         Page("{\"type\":\"botMode\",\"cid\":\"m\",\"mode\":\"auto\"}");
@@ -1138,12 +1149,12 @@ public static class BotHarness
         Restart();
         st = ChartBridgeBot.StripJson();
         Check(st.Contains("\"position\":{\"qty\":1,\"avgPrice\":25000}") && st.Contains("\"standDown\":null") &&
-              File_("bot.log").Contains("trade " + Tag(d) + " (open in bot-day.txt) is followed again from its 1 open stop: 1 MNQ 12-26 at 25000 (its entry's fill) on OWN-1; NinjaTrader holds 3 there, the rest is not the bot's"),
+              File_("bot.log").Contains("trade " + Tag(d) + " (open in bot-day.txt) is followed again from its 1 open stop: 1 MNQ 12-26 at 25000 (its price in bot-day.txt) on OWN-1; NinjaTrader holds 3 there, the rest is not the bot's"),
               "review R12 round 3: Anthony's position larger than the bot's leg: the bot follows 1 (its stop's size), not 3, at its own entry's 25000, not NinjaTrader's 25010: " + st);
         Sold(1, 25010);
         Settle();
         Check(File_("bot-day.txt").Contains("trade\t" + Tag(d) + "\t20"), "R12 round 3 follow-up: the restored trade closes on its own entry's price (+$20), not on Anthony's average (+$0)");
-        // the same with the bot's entry no longer listed by NinjaTrader: NinjaTrader's average, as before
+        // the same with the bot's entry no longer listed by NinjaTrader, from an older build's file: NinjaTrader's average, as before
         et = et.AddDays(1); ChartBridgeBot.Check();
         ChartBridgeOrders.NoteLast("MNQ", 25000);
         Page("{\"type\":\"botMode\",\"cid\":\"m\",\"mode\":\"auto\"}");
@@ -1153,6 +1164,7 @@ public static class BotHarness
         FillEntry(g, 25000);
         own.Orders.Remove(g);
         own.Positions.Clear(); own.Positions.Add(new Position { Instrument = mnq, MarketPosition = MarketPosition.Long, Quantity = 3, AveragePrice = 25010 });
+        OldLine(g);   // R12 (the day file): a file from an older build, with no price in it, is where these fallbacks still apply
         Restart();
         st = ChartBridgeBot.StripJson();
         Check(st.Contains("\"position\":{\"qty\":1,\"avgPrice\":25010}") && st.Contains("\"standDown\":null") &&
@@ -1214,13 +1226,14 @@ public static class BotHarness
     // Cut half shrinks the bot's stop and target to the size left before its close is sent; the bot follows the close's fill as
     // any execution on its account and root. A restart after the cut restores the size left at the entry's fill; a restart while
     // the close may still fill waits for it, so the close never ends the trade while the bot still holds the size left.
-    static Order BotTradeOf2(string what)
+    static Order BotTradeOf2(string what) { return BotTradeOf2(what, "500"); }
+    static Order BotTradeOf2(string what, string dayLoss)
     {
         et = et.AddDays(1); ChartBridgeBot.Check();
         ChartBridgeOrders.OnPositionUpdate(own, new PositionEventArgs { Position = new Position { Instrument = mnq }, MarketPosition = MarketPosition.Flat, Quantity = 0, AveragePrice = 0 });   // flat, as NinjaTrader reports it
         Settle();   // its credit for a fill never to be reported here goes with the rest
         ChartBridgeOrders.NoteLast("MNQ", 25000);
-        Page(RailsMsg(2, 5, 3, "500", "500", "MNQ"));
+        Page(RailsMsg(2, 5, 3, dayLoss, "500", "MNQ"));
         Page("{\"type\":\"botMode\",\"cid\":\"m\",\"mode\":\"auto\"}");
         Order e = AutoTrade("buy");
         Check(e != null && e.Quantity == 2, what + ": a bot trade of 2: " + BotReject() + " / " + PageReject() + " / " + Last(page, "bot"));
@@ -1245,15 +1258,36 @@ public static class BotHarness
         close.OrderId = "CUT" + Guid.NewGuid().ToString("N").Substring(0, 6);
         return Regex.IsMatch(close.Name ?? "", "^CB#[0-9a-f]{8} exit cut q1$") ? close : null;
     }
-    static void CutFills(Order close, bool up)
+    static void CutFills(Order close, bool up) { CutFills(close, up, 25004); }
+    static void CutFills(Order close, bool up, double price)
     {
-        close.Filled = 1; close.AverageFillPrice = 25004; close.OrderState = OrderState.Filled;
-        if (up) { Update(close); Deliver(own.Name, mnq, MarketPosition.Short, 1, 25004, close.OrderId); }
+        close.Filled = 1; close.AverageFillPrice = price; close.OrderState = OrderState.Filled;
+        if (up) { Update(close); Deliver(own.Name, mnq, MarketPosition.Short, 1, price, close.OrderId); }
         own.Positions.Clear(); own.Positions.Add(new Position { Instrument = mnq, MarketPosition = MarketPosition.Long, Quantity = 1, AveragePrice = 25000 });
         ChartBridgeOrders.OnPositionUpdate(own, new PositionEventArgs { Position = own.Positions[0], MarketPosition = MarketPosition.Long, Quantity = 1, AveragePrice = 25000 });
     }
     static void CutAtRestart()
     {
+        Settle();
+        // R12 (the day file), check 1: a $30 loss stop; long 2 at 25000; Cut half sells 1 at 24992 (-$16); a restart; the bot follows
+        // the 1 left at 25000 with the -$16 kept, so the stop fires at 24993 (the true day -$30), never at 24985 (the true day -$46)
+        Order l = BotTradeOf2("cut at a loss, then restart", "30");
+        if (l == null) return;
+        Order lc = CutBotTrade(l, "cut at a loss, then restart");
+        Check(lc != null, "cut at a loss, then restart: the close is listed");
+        if (lc == null) return;
+        CutFills(lc, true, 24992);
+        Check(DayLine("trade\t" + Tag(l) + "\topen\t-16\t1\t25000"), "cut at a loss, then restart: the cut is saved at once (-$16 closed, 1 held at 25000): " + File_("bot-day.txt"));
+        Restart();
+        string st0 = ChartBridgeBot.StripJson();
+        Check(st0.Contains("\"position\":{\"qty\":1,\"avgPrice\":25000}") && st0.Contains("\"standDown\":null") &&
+              File_("bot.log").Contains("trade " + Tag(l) + " (open in bot-day.txt) is followed again from its 1 open stop: 1 MNQ 12-26 at 25000 (its price in bot-day.txt) on OWN-1, with -$16 already closed"),
+              "cut at a loss, then restart: the 1 left is followed again with the cut's -$16: " + st0);
+        LossStopAt(24993.5, 24993, "-30", "cut at a loss, then restart");
+        Sold(1, 24993);
+        Settle();
+        Check(DayLine("trade\t" + Tag(l) + "\t-30"), "cut at a loss, then restart: the trade closes at its true -$30 (-$16 and -$14)");
+        Page("{\"type\":\"botMode\",\"cid\":\"m\",\"mode\":\"shadow\"}");
         Settle();
         // after a completed cut: the bot follows 1, the legs are 1; a restart restores 1 at the entry's 25000
         Order a = BotTradeOf2("cut, then restart");
@@ -1267,12 +1301,12 @@ public static class BotHarness
         Restart();
         st = ChartBridgeBot.StripJson();
         Check(st.Contains("\"position\":{\"qty\":1,\"avgPrice\":25000}") && st.Contains("\"standDown\":null") &&
-              File_("bot.log").Contains("trade " + Tag(a) + " (open in bot-day.txt) is followed again from its 1 open stop: 1 MNQ 12-26 at 25000 (its entry's fill) on OWN-1") &&
-              !File_("bot.log").Contains("trade " + Tag(a) + " (open in bot-day.txt) is followed again from its 1 open stop: 1 MNQ 12-26 at 25000 (its entry's fill) on OWN-1; NinjaTrader holds"),
+              File_("bot.log").Contains("trade " + Tag(a) + " (open in bot-day.txt) is followed again from its 1 open stop: 1 MNQ 12-26 at 25000 (its price in bot-day.txt) on OWN-1, with $8 already closed") &&
+              !File_("bot.log").Contains("trade " + Tag(a) + " (open in bot-day.txt) is followed again from its 1 open stop: 1 MNQ 12-26 at 25000 (its price in bot-day.txt) on OWN-1, with $8 already closed; NinjaTrader holds"),
               "release 1 (1.6c): a restart after a completed Cut half on a bot trade restores the size left (1), never the 2 it opened with: " + st);
         Sold(1, 25010);
         Settle();
-        Check(File_("bot-day.txt").Contains("trade\t" + Tag(a) + "\t20"), "cut, then restart: the restored contract closes on the entry's price (+$20 for the part followed after the restart)");
+        Check(DayLine("trade\t" + Tag(a) + "\t28"), "cut, then restart: the trade closes at +$28 in all (R12, the day file): the cut's +$8 kept across the restart, and +$20 on the entry's price");
         // a restart while the cut's close may still fill: the legs are already 1, NinjaTrader still holds 2; never followed at 1 before the
         // close is done (its fill would end the trade while the bot holds 1), refused and named meanwhile; once it filled, followed at 1
         Order b = BotTradeOf2("restart mid-cut");
@@ -1292,12 +1326,267 @@ public static class BotHarness
         CutFills(close, true);   // the close fills with ChartBridge up again: not the followed trade's yet, so it ends nothing
         ChartBridgeBot.Check();
         st = ChartBridgeBot.StripJson();
-        Check(st.Contains("\"position\":{\"qty\":1,\"avgPrice\":25000}") && st.Contains("\"standDown\":null") && File_("bot-day.txt").Contains("trade\t" + Tag(b) + "\topen") &&
+        string untold = "bot trade " + Tag(b) + " held 2 when it was saved (bot-day.txt) and 1 when it was followed again: the dollars of those contracts cannot be told, so copilot, auto and new bot entries are refused until 18:00 ET";
+        Check(st.Contains("\"position\":{\"qty\":1,\"avgPrice\":25000}") && st.Contains("\"standDown\":\"" + untold + "\"") && File_("bot-day.txt").Contains("trade\t" + Tag(b) + "\topen") && DayLine("untold\t" + Tag(b)) &&
               File_("bot.log").Contains("trade " + Tag(b) + " (open in bot-day.txt) is followed again from its 1 open stop: 1 MNQ 12-26 at 25000 (its entry's fill) on OWN-1"),
-              "release 1 (1.6c): once the cut's close filled, the bot follows the 1 it still holds (never more), still open: " + st);
+              "release 1 (1.6c): once the cut's close filled, the bot follows the 1 it still holds (never more), still open; R12 (the day file): the cut filled while it was not followed, so its dollars cannot be told: refused until 18:00 ET, named: " + st);
         Sold(1, 25000);
         Settle();
         Check(File_("bot-day.txt").Contains("trade\t" + Tag(b) + "\t0"), "restart mid-cut: the restored contract closes once, at its own price");
+        Page("{\"type\":\"botMode\",\"cid\":\"m\",\"mode\":\"shadow\"}");
+        et = et.AddDays(1); ChartBridgeBot.Check();
+        ChartBridgeOrders.NoteLast("MNQ", 25000);
+        Page(RailsMsg(1, 5, 3, "500", "500", "MNQ"));
+    }
+
+    // ------------------------------------------------------------ R12 (the day file): what bot-day.txt keeps of a trade open across a restart
+    // The made-up trades below are MNQ ($2 a point, $0.50 a tick); the loss stops are made up.
+    static List<Order> LegsOf(Order e) { return own.Orders.Where(o => o != e && Tag(o) == Tag(e) && ChartBridgeOrders.IsWorking(o.OrderState)).ToList(); }
+    static void LegsTo(Order e, int qty) { foreach (Order o in LegsOf(e)) { o.Quantity = qty; o.Filled = 0; } }   // as NinjaTrader shows them after the legs check's change
+    static void Held(int qty, double avg)
+    {
+        own.Positions.Clear();
+        if (qty != 0) own.Positions.Add(new Position { Instrument = mnq, MarketPosition = qty > 0 ? MarketPosition.Long : MarketPosition.Short, Quantity = Math.Abs(qty), AveragePrice = avg });
+    }
+    static Order DayTrade(string what, int size, string loss)
+    {
+        Settle();
+        et = et.AddDays(1); ChartBridgeBot.Check();
+        ChartBridgeOrders.NoteLast("MNQ", 25000);
+        Page(RailsMsg(size, 5, 3, loss, "500", "MNQ"));
+        Page("{\"type\":\"botMode\",\"cid\":\"m\",\"mode\":\"auto\"}");
+        Order e = AutoTrade("buy");
+        Check(e != null && e.Quantity == size, what + ": a bot trade of " + size + ": " + BotReject() + " / " + PageReject());
+        return e != null && e.Quantity == size ? e : null;
+    }
+    // The loss stop: nothing a tick before `at`, then the flatten once at `at`, the day latched at `day`.
+    static void LossStopAt(double notYet, double at, string day, string what)
+    {
+        int m = own.Calls.Count;
+        ChartBridgeOrders.NoteLast("MNQ", notYet); ChartBridgeBot.Check();
+        string st = ChartBridgeBot.StripJson();
+        Check(Calls(own, m).Count == 0 && st.Contains("\"dayStop\":null"), what + ": nothing yet at " + notYet + ": " + string.Join(" | ", Calls(own, m)) + " / " + st);
+        ChartBridgeOrders.NoteLast("MNQ", at); ChartBridgeBot.Check();
+        st = ChartBridgeBot.StripJson();
+        Check(Calls(own, m).Count(x => x == "flatten MNQ 12-26") == 1 && st.Contains("\"dayStop\":{\"kind\":\"loss\",\"day\":" + day + ","),
+              what + ": the loss stop flattens at " + at + ", the true day at " + day + ": " + string.Join(" | ", Calls(own, m)) + " / " + st);
+    }
+    static void DayFile()
+    {
+        string f = Path.Combine(home, "ChartBridge", "bot-day.txt");
+        // (2) Anthony sells 1 of the bot's 2 by hand (-$16), then a restart: the loss stop ($30) fires at the true day, at 24993 (-$16
+        // closed, -$14 open), never at 24985 (-$46 in truth)
+        Order a = DayTrade("part exit", 2, "30");
+        if (a == null) return;
+        FillEntry(a, 25000);
+        Held(2, 25000);
+        Sold(1, 24992);
+        Held(1, 25000);
+        Check(DayLine("trade\t" + Tag(a) + "\topen\t-16\t1\t25000"), "R12 (the day file): a part exit is saved at once: open, -$16 closed so far, 1 held at 25000: " + File_("bot-day.txt"));
+        LegsTo(a, 1);
+        Restart();
+        string st = ChartBridgeBot.StripJson();
+        Check(st.Contains("\"position\":{\"qty\":1,\"avgPrice\":25000}") && st.Contains("\"standDown\":null") &&
+              File_("bot.log").Contains("trade " + Tag(a) + " (open in bot-day.txt) is followed again from its 1 open stop: 1 MNQ 12-26 at 25000 (its price in bot-day.txt) on OWN-1, with -$16 already closed"),
+              "R12 (the day file): a part exit, then a restart: the 1 left is followed again with the -$16 already closed: " + st);
+        LossStopAt(24993.5, 24993, "-30", "part exit, then a restart");
+        Sold(1, 24993);
+        Settle();
+        st = ChartBridgeBot.StripJson();
+        Check(DayLine("trade\t" + Tag(a) + "\t-30") && st.Contains("\"trades\":1,") && st.Contains("\"losses\":1,") && st.Contains("\"pnlToday\":-30,"),
+              "part exit, then a restart: the trade closes at its true -$30 (-$16 and -$14), one losing trade: " + st);
+
+        // (3) a late entry fill reopens a closed trade (-$8 closed), then a restart: followed again, counted, and flattened by a latched day
+        foreach (bool latched in new[] { false, true })
+        {
+            string what = latched ? "reopened, then a restart on a latched day" : "reopened, then a restart";
+            Order b = DayTrade(what, 2, "30");
+            if (b == null) return;
+            PartFill(b, 1, 1, 25000);
+            Held(1, 25000);
+            Sold(1, 24996);   // its stop leg: -$8, the trade closes
+            LegsDone(b);   // that stop filled, its target cancelled (as NinjaTrader lists them)
+            Held(0, 0);
+            Check(DayLine("trade\t" + Tag(b) + "\t-8"), what + ": closed at -$8 first");
+            PartFill(b, 2, 1, 24996);   // the entry's other contract fills after the trade closed: reopened
+            b.AverageFillPrice = 24998;   // NinjaTrader's average of both entry fills, not the reopened contract's price
+            Held(1, 24996);
+            Check(DayLine("trade\t" + Tag(b) + "\topen\t-8\t1\t24996"),
+                  what + ": R12 (b): a reopened trade is saved open, with what it closed with (-$8), its size and its own price: " + File_("bot-day.txt"));
+            Check(LegsOf(b).Count == 2, what + ": the late contract's stop and target are working: " + string.Join(" | ", own.Orders.Where(o => Tag(o) == Tag(b)).Select(o => o.Name + " " + o.OrderState + " q" + o.Quantity)));
+            if (latched) File.AppendAllText(f, "stop\tloss\t-30\n");   // made up: the latch saved, the flatten never landed
+            int m = own.Calls.Count;
+            Restart();
+            st = ChartBridgeBot.StripJson();
+            Check(st.Contains("\"position\":{\"qty\":1,\"avgPrice\":24996}") &&
+                  File_("bot.log").Contains("trade " + Tag(b) + " (open in bot-day.txt) is followed again from its 1 open stop: 1 MNQ 12-26 at 24996 (its price in bot-day.txt) on OWN-1, with -$8 already closed"),
+                  what + ": followed again at its own 24996 (not the entry's 24998), with the -$8 it closed with: " + st);
+            if (latched)
+            {
+                ChartBridgeBot.Check();
+                st = ChartBridgeBot.StripJson();
+                Check(Calls(own, m).Count(x => x == "flatten MNQ 12-26") == 1 && st.Contains("\"kind\":\"loss\"") && st.Contains("\"mode\":\"shadow\""),
+                      what + ": the latched day flattens the reopened trade once it is followed again: " + string.Join(" | ", Calls(own, m)) + " / " + st);
+                Page("{\"type\":\"botMode\",\"cid\":\"m\",\"mode\":\"auto\"}");
+                Check(PageReject().Contains("auto refused: the day's loss stop ($30) was reached today"), what + ": the latch stays across the restart");
+                Sold(1, 24996);
+                Settle();
+                Check(DayLine("trade\t" + Tag(b) + "\t-8") && DayLine("stop\tloss\t-30"), what + ": closed at -$8 in all, still latched: " + File_("bot-day.txt"));
+                continue;
+            }
+            Check(st.Contains("\"standDown\":null") && st.Contains("\"trades\":1,"), what + ": followed, so nothing is refused; still one trade: " + st);
+            LossStopAt(24985.5, 24985, "-30", what);
+            Sold(1, 24985);
+            Settle();
+            st = ChartBridgeBot.StripJson();
+            Check(DayLine("trade\t" + Tag(b) + "\t-30") && st.Contains("\"trades\":1,") && st.Contains("\"losses\":1,") && st.Contains("\"pnlToday\":-30,"),
+                  what + ": the trade closes at its true -$30 (-$8 and -$22), one losing trade: " + st);
+        }
+
+        // (4) a three field open line from an older build: 0 dollars closed (that build never kept them), still followed by its legs
+        Order d = DayTrade("older build's line", 2, "30");
+        if (d == null) return;
+        FillEntry(d, 25000);
+        Held(2, 25000);
+        Sold(1, 24992);
+        Held(1, 25000);
+        LegsTo(d, 1);
+        OldLine(d);
+        Check(DayLine("trade\t" + Tag(d) + "\topen"), "older build's line: trade<TAB>tag<TAB>open");
+        Restart();
+        st = ChartBridgeBot.StripJson();
+        Check(st.Contains("\"position\":{\"qty\":1,\"avgPrice\":25000}") && st.Contains("\"standDown\":null") &&
+              File_("bot.log").Contains("trade " + Tag(d) + " (open in bot-day.txt) is followed again from its 1 open stop: 1 MNQ 12-26 at 25000 (its entry's fill) on OWN-1\n") ||
+              File_("bot.log").Contains("trade " + Tag(d) + " (open in bot-day.txt) is followed again from its 1 open stop: 1 MNQ 12-26 at 25000 (its entry's fill) on OWN-1\r\n"),
+              "older build's line: read as 0 closed and followed by its legs at its entry's fill, as before: " + st);
+        LossStopAt(24985.5, 24985, "-30", "older build's line (0 closed)");
+        Sold(1, 24985);
+        Settle();
+        Check(DayLine("trade\t" + Tag(d) + "\t-30"), "older build's line: the part followed closes at -$30");
+
+        // a size that changed while the trade was not followed (its stop filled 1 of 2 while ChartBridge was down): followed, its
+        // known dollars count, but the rest cannot be told: no arming and no entry until 18:00 ET, kept across a restart
+        Order u = DayTrade("size changed unseen", 2, "30");
+        if (u == null) return;
+        FillEntry(u, 25000);
+        Held(2, 25000);
+        Check(DayLine("trade\t" + Tag(u) + "\topen\t0\t2\t25000"), "size changed unseen: saved open at 2");
+        Order stop = LegsOf(u).FirstOrDefault(o => o.OrderType == OrderType.StopMarket);
+        Check(stop != null, "size changed unseen: its stop");
+        if (stop == null) return;
+        stop.Filled = 1;
+        Held(1, 25000);
+        Restart();
+        st = ChartBridgeBot.StripJson();
+        string why = "bot trade " + Tag(u) + " held 2 when it was saved (bot-day.txt) and 1 when it was followed again: the dollars of those contracts cannot be told, so copilot, auto and new bot entries are refused until 18:00 ET";
+        Check(st.Contains("\"position\":{\"qty\":1,") && st.Contains("\"standDown\":\"" + why + "\"") && DayLine("untold\t" + Tag(u)),
+              "R12 (the day file): a size changed while not followed: followed, refused and named, kept in bot-day.txt: " + st);
+        foreach (string mode in new[] { "copilot", "auto" })
+        {
+            Page("{\"type\":\"botMode\",\"cid\":\"m\",\"mode\":\"" + mode + "\"}");
+            Check(PageReject().Contains(mode + " refused: " + why) && Last(page, "bot").Contains("\"mode\":\"shadow\""), "size changed unseen: " + mode + " refused: " + PageReject());
+        }
+        Restart();
+        st = ChartBridgeBot.StripJson();
+        Check(st.Contains("\"position\":{\"qty\":1,") && st.Contains("\"standDown\":\"bot trade " + Tag(u) + " changed size while ChartBridge was not following it (bot-day.txt): the dollars of those contracts cannot be told"),
+              "size changed unseen: still refused after another restart: " + st);
+        Sold(1, 24990);
+        Settle();
+        et = et.AddDays(1); ChartBridgeBot.Check();
+        st = ChartBridgeBot.StripJson();
+        Check(st.Contains("\"standDown\":null") && !File_("bot-day.txt").Contains("untold"), "size changed unseen: the refusal ends at 18:00 ET: " + st);
+
+        // the entry fills more while its open trade waits to be followed again (NinjaTrader has not listed the position yet)
+        Order v = DayTrade("entry fill before it is followed again", 2, "500");
+        if (v == null) return;
+        PartFill(v, 1, 1, 25000);
+        Check(DayLine("trade\t" + Tag(v) + "\topen\t0\t1\t25000"), "entry fill before followed: saved open at 1");
+        Held(0, 0);
+        Restart();
+        Check(ChartBridgeBot.StripJson().Contains("\"standDown\":\"bot trade " + Tag(v) + " was still open when ChartBridge started"), "entry fill before followed: waiting");
+        PartFill(v, 2, 1, 25000);
+        Check(DayLine("untold\t" + Tag(v)) && DayLine("trade\t" + Tag(v) + "\topen\t0\t1\t25000") && File_("bot.log").Contains("Bot stands down: bot trade " + Tag(v) + "'s entry filled 1 more before it was followed again after a restart"),
+              "R12 (the day file): an entry fill of a trade not followed again yet is never a fresh ledger: refused until 18:00 ET, kept: " + File_("bot-day.txt"));
+        Held(2, 25000);
+        if (LegsOf(v).Count(o => o.OrderType == OrderType.StopMarket) == 1) LegsTo(v, 2);   // the legs cover the 2 held (one pair of 2, or a pair for each fill)
+        ChartBridgeBot.Check();
+        st = ChartBridgeBot.StripJson();
+        Check(st.Contains("\"position\":{\"qty\":2,") && st.Contains("the dollars of those contracts cannot be told"), "entry fill before followed: followed at 2 once listed, still refused: " + st);
+        Sold(2, 25000);
+        Settle();
+
+        // a trade carried past 18:00 ET: the contract it closed yesterday (+$100) is yesterday's, so today's loss stop reads today only
+        Order r = DayTrade("carried past 18:00 ET", 2, "30");
+        if (r == null) return;
+        FillEntry(r, 25000);
+        Held(2, 25000);
+        Sold(1, 25050);
+        Held(1, 25000);
+        DateTime day = et.Hour >= 18 ? et.Date.AddDays(1) : et.Date;   // the trading day's date (it ends at 18:00 ET that day)
+        et = day.AddHours(18).AddSeconds(1); ChartBridgeBot.Check();   // 18:00 ET: a new trading day
+        Check(DayLine("trade\t" + Tag(r) + "\topen\t0\t1\t25000"), "carried past 18:00 ET: saved open, nothing closed today: " + File_("bot-day.txt"));
+        LossStopAt(24985.5, 24985, "-30", "carried past 18:00 ET");
+        Sold(1, 24985);
+        Settle();
+        Check(DayLine("trade\t" + Tag(r) + "\t-30"), "carried past 18:00 ET: today's part closes at -$30");
+        et = day.AddDays(1).AddHours(10);
+
+        // (5) a day file that does not read: the bot stands down, named; copilot and auto are refused; nothing is ever sent; the file
+        // is never written over. Then a save cut off (no bot-day.txt, a copy of today's left): the same. A copy of another day: a new day.
+        Settle();
+        et = et.AddDays(1); ChartBridgeBot.Check();
+        ChartBridgeOrders.NoteLast("MNQ", 25000);
+        Page(RailsMsg(1, 5, 3, "500", "500", "MNQ"));
+        Page("{\"type\":\"botMode\",\"cid\":\"m\",\"mode\":\"shadow\"}");
+        string today = et.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), yesterday = et.AddDays(-1).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        string[][] bad = {
+            new[] { "session\t" + today, "trade\tabcdef12\topen\t-16\t1" },             // a line cut short
+            new[] { "session\t" + today, "trade\tabcdef12\topen\t-16" },                // the reviewer's four fields: not this build's
+            new[] { "session\t" + today, "trade\tabcdef12\topen\t-1x\t1\t25000" },      // a number that does not read
+            new[] { "session\t" + today, "trade\tabcdef12\topen\t-16\t0\t25000" },      // size 0
+            new[] { "session\t" + today, "trade\tabcdef12\topen\t-16\t1\t0" },          // no price
+            new[] { "session\t" + today, "untold\txyz" },                              // a tag that is not one
+            new[] { "trade\tabcdef12\t-16" },                                          // no session line
+        };
+        foreach (string[] lines in bad)
+        {
+            Gone(f);
+            File.WriteAllLines(f, lines);
+            string text = File_("bot-day.txt");
+            Restart();
+            string want = lines.Length == 1 ? "bot-day.txt has no session line" : "bot-day.txt has a line ChartBridge does not understand";
+            want += ": no new bot entries this run (delete it to start the day over)";
+            st = ChartBridgeBot.StripJson();
+            Check(st.Contains("\"standDown\":\"" + want + "\""), "R12 (the day file): " + lines[lines.Length - 1].Replace("\t", " ") + ": the bot stands down, named: " + st);
+            foreach (string mode in new[] { "copilot", "auto" })
+            {
+                Page("{\"type\":\"botMode\",\"cid\":\"m\",\"mode\":\"" + mode + "\"}");
+                Check(PageReject().Contains(mode + " refused: " + want) && Last(page, "bot").Contains("\"mode\":\"shadow\""), "R12 (the day file): " + mode + " refused on a day that does not read: " + PageReject());
+            }
+            int n = own.Calls.Count;
+            Bot(Sig(NewId(), Market("buy")));
+            for (int i = 0; i < 4; i++) { clock += 350; Bot("{\"type\":\"beat\"}"); ChartBridgeBot.Check(); }
+            Check(own.Calls.Count == n && File_("bot-day.txt") == text, "R12 (the day file): nothing sent, and the file is never written over");
+        }
+        foreach (string[] left in new[] { new[] { ".tmp" }, new[] { ".bak", ".tmp" } })
+        {
+            Gone(f);
+            foreach (string ext in left) File.WriteAllLines(f + ext, new[] { "# made-up", "session\t" + today, "trade\tabcdef12\t-16" });
+            Restart();
+            string want = "bot-day.txt is missing and bot-day.txt" + left[0] + " (today's session) is there: a save may have been cut off: no new bot entries this run (delete " +
+                          string.Join(" and ", left.Select(x => "bot-day.txt" + x)) + " to start the day over)";
+            st = ChartBridgeBot.StripJson();
+            Check(st.Contains("\"standDown\":\"" + want + "\"") && st.Contains("\"trades\":0,"), "R12 (the day file): a save cut off (" + string.Join(", ", left) + " left): never an empty day by accident, named: " + st);
+            Page("{\"type\":\"botMode\",\"cid\":\"m\",\"mode\":\"auto\"}");
+            Check(PageReject().Contains("auto refused: " + want) && Last(page, "bot").Contains("\"mode\":\"shadow\""), "R12 (the day file): auto refused after a save cut off");
+        }
+        Gone(f);
+        File.WriteAllLines(f + ".bak", new[] { "# made-up", "session\t" + yesterday, "trade\tabcdef12\t-16" });
+        Restart();
+        st = ChartBridgeBot.StripJson();
+        Check(st.Contains("\"standDown\":null") && st.Contains("\"trades\":0,"), "R12 (the day file): a copy of an earlier day left: a new day: " + st);
+        Gone(f);
+        Restart();
         Page("{\"type\":\"botMode\",\"cid\":\"m\",\"mode\":\"shadow\"}");
         et = et.AddDays(1); ChartBridgeBot.Check();
         ChartBridgeOrders.NoteLast("MNQ", 25000);
