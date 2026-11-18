@@ -248,6 +248,7 @@ public static class GroupsHarness
             FirmLimits();    // 0.6.6 (Anthony 2026-10-20): his own entries: the firm's max only; the machines': a known breach only; the daily loss alert
             FirmFloor();     // 0.6.6 (Anthony 2026-10-20): the firm's rules on an account in no group, the computed floor first, firmMinimum
             Lifecycle();     // 0.6.10 (Anthony 2026-10-30, the account lifecycle): remove-only for an account NinjaTrader no longer lists, Hide leaves the group, the preview as placed
+            FloorHighs();    // unreleased (Anthony 2026-11-18, the floor fix): every prop account's end-of-day high kept at every close, in a group or not
         }
         catch (Exception ex) { Check(false, "groups harness threw: " + ex); }
         finally
@@ -2251,6 +2252,175 @@ public static class GroupsHarness
         finally
         {
             ChartBridgeSwitches.Note("accountChecks", "off");
+            Restart();
+            Flat();
+            ChartBridgeGroups.GapMs = 10000;
+            ClockEt(2026, 10, 14, 10, 0);
+        }
+    }
+
+    // ------------------------------------------------------------ unreleased (Anthony 2026-11-18): the floor fix
+    // ChartBridge showed a made-up Lucid 50K Flex account's floor at 48,000 where the firm showed 48,151: a join with no highest close
+    // started the highs at the larger of the size and the balance, and leaving a group forgot them. Now every prop account's
+    // end-of-day high is kept at every close, in a group or not, through a leave, a deleted group, Hide and a restart; a join with
+    // no highest close starts from the larger of the kept high, the size and the balance; the lane rule's join carries The Desk's
+    // highest close (raised to the kept high when that is higher). Made-up accounts and money only.
+    static string HighEod(string name)
+    {
+        Match m = Regex.Match(AccountsNow(), "\\{\"name\":\"" + Regex.Escape(name) + "\".*?\"highEod\":(null|[0-9.]+)");
+        return m.Success ? m.Groups[1].Value : "(no entry)";
+    }
+    static string LaneRowJson(string acct, string high)
+    {
+        return "{\"account\":\"" + acct + "\",\"kind\":\"eval\",\"outcome\":null,\"archived\":false,\"hasRules\":true,\"why\":null,\"size\":50000.0,\"dailyLoss\":1000.0,\"drawdown\":2000.0,\"drawdownType\":\"eod\"," +
+               "\"lockAt\":0.0,\"target\":3000.0,\"consistency\":0.0,\"maxMinis\":4,\"maxMicros\":40,\"typeId\":\"made-up-50k\"" + (high == "absent" ? "" : ",\"highClose\":" + high) + "}";
+    }
+    static int LaneApplyRows(params string[] rows)
+    {
+        string why;
+        List<ChartBridgeGroups.LaneRow> rs = ChartBridgeGroups.LaneRows("{\"v\":1,\"accounts\":[" + string.Join(",", rows) + "],\"asOf\":\"2026-11-18T00:00:00Z\"}", out why);
+        Check(rs != null, "FH lane rule: the made-up answer reads: " + why);
+        return rs == null ? 0 : ChartBridgeGroups.LaneApply(rs);
+    }
+    static void FloorHighs()
+    {
+        Flat();
+        ChartBridgeGroups.GapMs = 1e12;
+        string p = Path.Combine(folder, "groups.txt"), mp = Path.Combine(folder, "account-marks.txt"), pf = Path.Combine(folder, "personal-account.txt"), hand = Path.Combine(folder, "lane-hand.txt");
+        Gone(p); Gone(mp); File.Delete(p + ".good"); Gone(hand);
+        File.WriteAllText(p, ChartBridgeGroups.Header + "\n#\ngroup\tg1\tLucid 50K\ton\t-\t2000\teod\t3000\t50000\t-\t-\teval\t-\n");
+        File.WriteAllLines(pf, new[] { "# made-up", "# test", "account\tMINE-9" });
+        ChartBridgeBranches.LoadPersonal();
+        List<Account> made = new List<Account>();
+        Func<string, Account> prop = n => { Account a = NewAccount(n); a.Provider = Provider.Rithmic; made.Add(a); return a; };
+        Account lucid = prop("LUCID-1"), mine = prop("MINE-9"), l2 = prop("LUCID-2"), l3 = prop("LUCID-3"), l4 = prop("LUCID-4");
+        bool laneWas = ChartBridgeGroups.LaneHarnessManual;
+        ClockEt(2026, 10, 20, 9, 0); Restart();
+        try
+        {
+            Check(ChartBridgeBranches.IsProp("LUCID-1") && !ChartBridgeBranches.IsProp("MINE-9") && !ChartBridgeBranches.IsProp("SIM-A") && ChartBridgeGroups.GroupOf("LUCID-1") == null,
+                  "FH setup: LUCID-1 is prop (a personal account is picked), MINE-9 is the personal account, SIM-A is Sim; LUCID-1 in no group");
+            Money(lucid, 50000, 0, 0); Money(simA, 50000, 0, 0); Money(mine, 20000, 0, 0);
+            foreach (Account a in new[] { l2, l3, l4 }) Money(a, 0, 0, 0);   // no balance yet (NinjaTrader gives none): no mark until the lane part
+            Tick();
+            Check(HighEod("LUCID-1") == "null", "FH: no close seen yet: no end-of-day high kept (highEod null)");
+            // the close of 10-20: the 17:00 mark keeps the prop account's high, in no group
+            ClockEt(2026, 10, 20, 17, 10); Money(lucid, 50151, 0, 0); Money(mine, 20500, 0, 0); Money(simA, 50700, 0, 0);
+            ChartBridgeGroups.EodMark();
+            Check(HighEod("LUCID-1") == "50151" && MarksText().Contains("mark\tLUCID-1\t50151\t") && Logged("LUCID-1's end-of-day high is kept from this close: 50151.00"),
+                  "FH: the 17:00 mark keeps a prop account's end-of-day high (50151) while it is in no group, in account-marks.txt: " + MarksText().Replace("\t", "<TAB>"));
+            Check(HighEod("MINE-9") == "null" && HighEod("SIM-A") == "null", "FH: the personal account and a Sim account in no group keep none (as before)");
+            // THE SCENARIO: the next day it is down to 49,900 and joins with no highest close: floor 48,151 (it was 48,000)
+            ClockEt(2026, 10, 21, 10, 0); Money(lucid, 49900, 0, 0); Tick();
+            Clear(); G("accountGroup", Join("LUCID-1", "\"g1\"", null));
+            string e = Entry(AccountsNow(), "LUCID-1");
+            Check(Rejection() == "" && ChartBridgeGroups.GroupOf("LUCID-1") == "g1" && e.Contains("\"floor\":48151,") && MarksText().Contains("mark\tLUCID-1\t50151\t50151\t"),
+                  "FH THE SCENARIO: a 50151 close, then a join at a balance of 49900 with no highest close: floor 48151, not 48000: " + e);
+            Check(Logged("LUCID-1 joined Lucid 50K with the group's rules (its highs start at 50151.00, no highest close given: its kept end-of-day high)"), "FH: the Output window says where the highs started");
+            // the same at a balance of exactly 50,000 (the account size): still 48,151
+            Clear(); G("accountGroup", Join("LUCID-1", "null", null));
+            Money(lucid, 50000, 0, 0); Tick();
+            Clear(); G("accountGroup", Join("LUCID-1", "\"g1\"", null));
+            Check(Rejection() == "" && Entry(AccountsNow(), "LUCID-1").Contains("\"floor\":48151,"), "FH THE SCENARIO at a balance of 50000 (the size): floor 48151, not 48000: " + Entry(AccountsNow(), "LUCID-1"));
+            // a highest close typed on the page is his word, as before (also below the kept high: the correction path)
+            Clear(); G("accountGroup", Join("LUCID-1", "null", null));
+            Clear(); G("accountGroup", Join("LUCID-1", "\"g1\"", "50100"));
+            Check(Rejection() == "" && Entry(AccountsNow(), "LUCID-1").Contains("\"floor\":48100,"), "FH: a highest close given on the page is taken as given (50100: floor 48100)");
+            Clear(); G("accountGroup", Join("LUCID-1", "null", null));
+            Clear(); G("accountGroup", Join("LUCID-1", "\"g1\"", "50151"));
+
+            // a leave and a rejoin: the high stays in no group, rises at a close while out, and the rejoin starts from it
+            Clear(); G("accountGroup", Join("LUCID-1", "null", null));
+            Check(Rejection() == "" && ChartBridgeGroups.GroupOf("LUCID-1") == null && HighEod("LUCID-1") == "50151" && MarksText().Contains("mark\tLUCID-1\t50151\t"),
+                  "FH leave: a prop account that leaves its group keeps its end-of-day high (was forgotten): " + MarksText().Replace("\t", "<TAB>"));
+            ClockEt(2026, 10, 21, 17, 10); Money(lucid, 50300, 0, 0); ChartBridgeGroups.EodMark();
+            Check(HighEod("LUCID-1") == "50300", "FH leave: in no group, the close of 10-21 (50300) raises it: " + HighEod("LUCID-1"));
+            ClockEt(2026, 10, 22, 10, 0); Money(lucid, 50000, 0, 0); Tick();
+            Clear(); G("accountGroup", Join("LUCID-1", "\"g1\"", null));
+            Check(Rejection() == "" && Entry(AccountsNow(), "LUCID-1").Contains("\"floor\":48300,"), "FH rejoin: no highest close given at a balance of 50000: floor 48300 from the kept high: " + Entry(AccountsNow(), "LUCID-1"));
+            // a restart: read back from account-marks.txt
+            ClockEt(2026, 10, 22, 10, 5); Restart(); Tick();
+            Check(Entry(AccountsNow(), "LUCID-1").Contains("\"floor\":48300,") && HighEod("LUCID-1") == "50300", "FH restart: the kept high and the floor read back (48300)");
+            Clear(); G("accountGroup", Join("LUCID-1", "null", null));
+            ClockEt(2026, 10, 22, 10, 10); Restart(); Tick();
+            Check(ChartBridgeGroups.GroupOf("LUCID-1") == null && HighEod("LUCID-1") == "50300", "FH restart: in no group, the kept high reads back too");
+            Clear(); G("accountGroup", Join("LUCID-1", "\"g1\"", null));
+            Check(Entry(AccountsNow(), "LUCID-1").Contains("\"floor\":48300,"), "FH restart: and a join after it starts from it (48300)");
+            // a deleted group keeps it
+            Clear(); G("groupDelete", "{\"type\":\"groupDelete\",\"cid\":\"d\",\"group\":\"g1\"}");
+            Check(Rejection() == "" && ChartBridgeGroups.GroupOf("LUCID-1") == null && HighEod("LUCID-1") == "50300", "FH: deleting its group keeps the prop account's high (was forgotten)");
+            File.WriteAllText(p, ChartBridgeGroups.Header + "\n#\ngroup\tg1\tLucid 50K\ton\t-\t2000\teod\t3000\t50000\t-\t-\teval\t-\n");
+            Gone(hand); ChartBridgeGroups.LaneForget(); Restart(); Tick();
+            // Hide keeps it (Hide needs the checkmarks: accountChecks on)
+            ChartBridgeSwitches.Note("accountChecks", "on");
+            try
+            {
+                Restart(); Tick();
+                Clear(); G("accountGroup", Join("LUCID-1", "\"g1\"", null));
+                Clear(); Acc("accountArchive", HideMsg("LUCID-1"));
+                Check(Rejection() == "" && ChartBridgeGroups.GroupOf("LUCID-1") == null && MarksText().Contains("mark\tLUCID-1\t50300\t"), "FH: Hide takes it out of its group and keeps its high (was forgotten): " + Rejection());
+                Acc("accountUnarchive", "{\"type\":\"accountUnarchive\",\"cid\":\"u\",\"account\":\"LUCID-1\"}");
+            }
+            finally { ChartBridgeSwitches.Note("accountChecks", "off"); }
+            Gone(hand); ChartBridgeGroups.LaneForget(); Restart(); Tick();
+            Check(HighEod("LUCID-1") == "50300", "FH: shown again, the high is still there: " + HighEod("LUCID-1"));
+            // a Sim member still forgets its highs when it leaves (as before: only prop accounts keep theirs)
+            Clear(); G("accountGroup", Join("SIM-A", "\"g1\"", "51000"));
+            Check(HighEod("SIM-A") == "51000", "FH: a Sim member has its highs while in the group");
+            Clear(); G("accountGroup", Join("SIM-A", "null", null));
+            Check(HighEod("SIM-A") == "null", "FH: a Sim account that leaves forgets them (as before)");
+
+            // a missed close: ChartBridge off over the close of 10-22 while LUCID-1 (in no group) traded: the kept high stays (a lower
+            // bound), the missed close is kept with it; a join with no highest close starts from the larger of it and the balance
+            ClockEt(2026, 10, 22, 16, 30); Tick();
+            ClockEt(2026, 10, 23, 9, 0); Restart(); Money(lucid, 50450, 0, 0); Tick();
+            Check(HighEod("LUCID-1") == "50300" && MarksText().Contains("mark\tLUCID-1\t50300\t") && Regex.IsMatch(MarksText(), "mark\tLUCID-1\t[^\n]*\t50450\tflat\t2026-10-22\t"),
+                  "FH missed close: off over a close while it traded: the kept high stays and the missed close is kept: " + MarksText().Replace("\t", "<TAB>"));
+            Clear(); G("accountGroup", Join("LUCID-1", "\"g1\"", null));
+            Check(Rejection() == "" && Entry(AccountsNow(), "LUCID-1").Contains("\"floor\":48450,") && Regex.IsMatch(MarksText(), "mark\tLUCID-1\t50450\t50450\t[^\n]*\tflat\t-\t-\n"),
+                  "FH missed close: a join with no highest close starts from the larger of the kept high and the balance (50450: floor 48450), the missed close cleared: " + MarksText().Replace("\t", "<TAB>"));
+            Clear(); G("accountGroup", Join("LUCID-1", "null", null));
+            // off over a close with nothing traded: the balance is that close, and it raises the kept high (as for a member)
+            ClockEt(2026, 10, 23, 16, 30); Tick();
+            ClockEt(2026, 10, 26, 9, 0); Restart(); Tick();
+            Check(HighEod("LUCID-1") == "50450" && Regex.IsMatch(MarksText(), "mark\tLUCID-1\t50450\t[^\n]*\tflat\t-\t"), "FH missed close: off over the weekend with nothing traded: nothing missed: " + MarksText().Replace("\t", "<TAB>"));
+
+            // the lane rule adds: The Desk's highest close when it gives one, raised to the kept high when that is higher; with neither
+            // the size, and its line on the lane says to check the firm's dashboard
+            ClockEt(2026, 10, 26, 17, 10); Money(l3, 50151, 0, 0); Money(l4, 50151, 0, 0); Tick(); ChartBridgeGroups.EodMark();
+            ClockEt(2026, 10, 27, 10, 0); foreach (Account a in new[] { l2, l3, l4 }) Money(a, 49900, 0, 0); Money(lucid, 50000, 0, 0); Tick();
+            Check(HighEod("LUCID-2") == "null" && HighEod("LUCID-3") == "50151" && HighEod("LUCID-4") == "50151", "FH lane (setup): LUCID-3 and LUCID-4 have a kept close of 50151, LUCID-2 none");
+            Gone(hand); ChartBridgeGroups.LaneForget(); ChartBridgeGroups.LaneHarnessManual = true;
+            int moved = LaneApplyRows(LaneRowJson("LUCID-1", "50600.0"), LaneRowJson("LUCID-2", "null"), LaneRowJson("LUCID-3", "absent"), LaneRowJson("LUCID-4", "50100.0"));
+            string acc = AccountsNow(), gj = ChartBridgeGroups.GroupsJson();
+            Check(moved == 4 && new[] { "LUCID-1", "LUCID-2", "LUCID-3", "LUCID-4" }.All(n => ChartBridgeGroups.GroupOf(n) == "g1"), "FH lane: the rule adds all four to the eval lane: " + moved + " " + gj);
+            Check(Entry(acc, "LUCID-1").Contains("\"floor\":48600,") && gj.Contains("added: 1 eval account, LUCID-1, on the bench (rule); its end-of-day high starts at 50600.00 (The Desk's highest close)"),
+                  "FH lane: The Desk's highest close (50600, above the kept 50450) is used: floor 48600: " + Entry(acc, "LUCID-1"));
+            Check(Entry(acc, "LUCID-3").Contains("\"floor\":48151,") && gj.Contains("LUCID-3, on the bench (rule); its end-of-day high starts at 50151.00 (ChartBridge's kept close or its balance now; The Desk gave no highest close)"),
+                  "FH lane: The Desk gives none (a Desk before this change): the kept close, floor 48151, not 48000: " + Entry(acc, "LUCID-3"));
+            Check(Entry(acc, "LUCID-4").Contains("\"floor\":48151,") && gj.Contains("LUCID-4, on the bench (rule); its end-of-day high starts at 50151.00 (ChartBridge's kept close, above The Desk's highest close 50100.00)"),
+                  "FH lane: The Desk's highest close below the kept close (a close it has not counted yet): the kept one, floor 48151: " + Entry(acc, "LUCID-4"));
+            Check(Entry(acc, "LUCID-2").Contains("\"floor\":48000,") && gj.Contains("LUCID-2, on the bench (rule); its end-of-day high starts at the account size 50000.00: no higher close is known (none from The Desk, none kept by ChartBridge), so check the firm's dashboard"),
+                  "FH lane: no highest close anywhere: the size (48000), said once on the lane: " + Entry(acc, "LUCID-2"));
+            Check(ChartBridgeGroups.BenchedOf("g1").Contains("LUCID-1") && ChartBridgeGroups.BenchedOf("g1").Contains("LUCID-2"), "FH lane: still on the bench, as every rule join");
+            // The Desk's highest close at the size (its card made from the type, no seed, no fill) and nothing kept: said plainly too
+            Clear(); G("accountGroup", Join("LUCID-2", "null", null));
+            Gone(hand); ChartBridgeGroups.LaneForget();
+            Check(LaneApplyRows(LaneRowJson("LUCID-2", "50000.0")) == 1 && Entry(AccountsNow(), "LUCID-2").Contains("\"floor\":48000,") &&
+                  ChartBridgeGroups.GroupsJson().Contains("LUCID-2, on the bench (rule); its end-of-day high starts at the account size 50000.00: no higher close is known (The Desk's highest close is 50000.00, none kept by ChartBridge), so check the firm's dashboard"),
+                  "FH lane: The Desk's highest close at the size: 48000, and said to check the firm's dashboard: " + ChartBridgeGroups.GroupsJson());
+            // a highClose The Desk sends that is not a plain number: the join is refused with accountGroup's words (never a guess)
+            Clear(); G("accountGroup", Join("LUCID-2", "null", null));
+            Gone(hand); ChartBridgeGroups.LaneForget();
+            Check(LaneApplyRows(LaneRowJson("LUCID-2", "\"lots\"")) == 0 && ChartBridgeGroups.GroupOf("LUCID-2") == null && ChartBridgeGroups.GroupsJson().Contains("LUCID-2 is not added to Lucid 50K: highClose must be a plain number of dollars"),
+                  "FH lane: a highClose that is not a number: not added, said on the lane");
+        }
+        finally
+        {
+            ChartBridgeGroups.LaneHarnessManual = laneWas; ChartBridgeGroups.LaneForget();
+            try { Gone(pf); Gone(hand); } catch (Exception) { }
+            ChartBridgeBranches.LoadPersonal();
+            foreach (Account a in made) Account.All.Remove(a);
             Restart();
             Flat();
             ChartBridgeGroups.GapMs = 10000;

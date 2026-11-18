@@ -1,6 +1,37 @@
 # Changelog
 
-## Unreleased (2026-11-04): getting ready to go private: the PC updater accepts the box job and reads a chart-engine token; placeholders
+## Unreleased (2026-11-04 and 2026-11-18): getting ready to go private: the PC updater accepts the box job and reads a chart-engine token; placeholders; the floor fix
+
+### The floor fix (2026-11-18): every prop account's highest close kept (ChartBridge and the page; no version bump yet)
+
+Anthony's ruling (2026-11-18): ChartBridge showed a Lucid 50K Flex account's floor at $48,000 where Lucid showed $48,151.
+A join with no highest close started the highs at the larger of the account size and the balance, the lane rule's join
+never sent a highest close, and leaving a group, deleting a group or Hide forgot the highs, so a rejoin started over at
+the size. Fixed in `nt8/ChartBridgeGroups.cs`, `live/groups.js`, `live/accounts.js` and `live/multi-account.js`
+(nt8/PROTOCOL.md "The floor's highest close kept").
+
+- **Every prop account's end-of-day high is kept at every close, in a group or not** (`EodMark`): in the 17:00 to 18:00
+  ET break a prop account (ChartBridge's own rule, `IsProp`) with no high starts one at that close, then rises as a
+  member's does. Kept in `account-marks.txt` as today (the same line, no new field).
+- **Kept through a leave, a deleted group, Hide and a restart** (`ForgetHighs` now forgets only an account that is not
+  prop: a Sim or personal account forgets them as before). The restart and missed-close rules (0.6.3) are unchanged.
+- **A join with no highest close** starts from the larger of the kept end-of-day high, the account size and the balance
+  now. A highest close typed on the page is still taken as given (the correction path, with the firm's minimum).
+- **The lane rule's join carries The Desk's highest close** (`highClose` in `/api/lane-accounts`, from The Desk's floor
+  plus the drawdown), raised to the kept high when that is higher; the lane line says where the high started, and says
+  to check the firm's dashboard when it had to start at the account size. A Desk that sends none: the kept high or the
+  size, as above.
+- **The page**: the `accounts` entry's new `highEod`; the join's highest close is prefilled never below it (also above
+  The Desk's seed when that is lower), and the join row (the Accounts tab and the Multi-Account panel) warns once when
+  the join must start at the account size, unless NinjaTrader's own figure is within $25 (`AccountsCore.sizeStartWarn`,
+  the same `FLOOR_GAP` as the floor flag).
+- **Unchanged**: an account whose floor is not known trades as before ("Let them through"); payouts; the order path.
+- Tests: `nt8/check/GroupsHarness.cs` `FloorHighs` (the case itself: a 50,151 close, then a join at a balance of 49,900
+  or 50,000 gives a floor of 48,151, not 48,000; a leave and rejoin; a restart; a deleted group; Hide; a missed close; the
+  lane rule with The Desk's highest close, without it, below the kept high, with neither, and not a number); 25 of its
+  checks fail on the code before the fix. `test/floor-highs.test.js` (the prefill, the warning, the join steps).
+
+### Getting ready to go private (2026-11-04)
 
 `nt8/update-pc.ps1` and docs only (no page change, no version bump, as the 2026-10-23 updater entries). Anthony decided
 (2026-11-04) to make chart-engine private, with its Windows CI on HOMESERVER's self-hosted runner (SERVER_RULES.md rule
