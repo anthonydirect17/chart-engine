@@ -349,7 +349,8 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
     IB's note when both show). Nothing either when ChartBridge reports the data connection down inside the window (its
     profile's drop), or locked with no trade in the window. Quiet overnight minutes with no trade are normal, so a
     missing minute is not taken as a hole. No Globex session that trading day (weekends, New Year's Day, Good Friday,
-    Christmas): nothing, no note. NYSE-only holidays (Globex trades, as Thanksgiving) have their overnight, locked at 9:30.
+    Christmas): nothing, no note. NYSE-only holidays (Globex trades, as Thanksgiving) have their overnight, locked at 9:30;
+    so does Good Friday 2026, CME's abbreviated session to 09:15 ET (`cmeShortSessions`, Anthony's ruling 2026-11-18).
 - **Levels' lines, each its own toggle (1.14.0, Anthony):** the Levels gear lists PDH, PDL, Prior close, ONH, ONL,
   PD VAH, PD VAL, PD POC, IBH and IBL as a row of small toggles (`.ind-tog`, 24 px, 600 11px mono, styled as the chips: on = solid border on `--s3`,
   off = dashed in the quiet grey), all on

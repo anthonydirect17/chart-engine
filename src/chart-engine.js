@@ -725,17 +725,28 @@ function rthClose(t) {
 /*
  * CME Globex equity index futures (NQ, MNQ, ES and so on), for the volume profile's loads (1.6.1, review 2 S5): Globex
  * trades on most NYSE holidays, so "the stock market is closed" is not "CME is closed". The days with no Globex
- * session at all: New Year's Day, Good Friday and Christmas, on the days the NYSE observes them (cmeClosures). On the
- * other NYSE holidays (Martin Luther King Jr. Day, Presidents Day, Memorial Day, Juneteenth, Independence Day, Labor
- * Day, Thanksgiving) Globex trades from 18:00 the evening before and halts at 13:00 ET; on an NYSE early close day
- * it halts at 13:15 ET. Unscheduled changes are not known in advance and are not here.
+ * session at all: New Year's Day, Good Friday and Christmas, on the days the NYSE observes them (cmeClosures), except
+ * an abbreviated session CME ran on such a day (cmeShortSessions). On the other NYSE holidays (Martin Luther King Jr.
+ * Day, Presidents Day, Memorial Day, Juneteenth, Independence Day, Labor Day, Thanksgiving) Globex trades from 18:00
+ * the evening before and halts at 13:00 ET; on an NYSE early close day it halts at 13:15 ET. Other unscheduled changes
+ * are not known in advance and are not here.
  */
+/*
+ * The sessions the rule gets wrong: CME ran an abbreviated equity index session on a day the rule calls a full
+ * closure. Trading day number -> its close, seconds after midnight New York. Each is a row of the shared CME calendar
+ * (market-data shared/cme_calendar.json: kind "early", its close_ny); nt8/ChartBridge.cs ChartBridgeCme.ShortSessions
+ * holds the same rows. Good Friday 2026: CME's abbreviated Globex session, 18:00 the evening before to 09:15 ET
+ * (Anthony's ruling 2026-11-18, "follow CME").
+ */
+const CME_SHORT_SESSIONS = new Map([[Date.UTC(2026, 3, 3) / 1000 / DAY, 33300]]);
+/** The abbreviated sessions as a fresh Map (trading day number -> close in seconds after midnight ET). */
+function cmeShortSessions() { return new Map(CME_SHORT_SESSIONS); }
 const cmeClosureCache = new Map();
 function cmeClosures(year) {
   let set = cmeClosureCache.get(year);
   if (set) return set;
   const hol = nyseHolidays(year), D = (m, d) => Date.UTC(year, m - 1, d) / 1000 / DAY;
-  const days = [D(1, 1), D(1, 2), goodFriday(year), D(12, 24), D(12, 25), D(12, 26)].filter(d => hol.has(d));
+  const days = [D(1, 1), D(1, 2), goodFriday(year), D(12, 24), D(12, 25), D(12, 26)].filter(d => hol.has(d) && !CME_SHORT_SESSIONS.has(d));
   set = new Set(days);
   cmeClosureCache.set(year, set);
   return set;
@@ -747,8 +758,9 @@ function cmeSessionDay(d) {
 }
 /**
  * Whether CME Globex equity index futures are closed at exchange wall-clock time t: the 17:00 to 18:00 ET break every
- * day, Friday 17:00 to Sunday 18:00, a day with no Globex session (cmeClosures), and after the halt on an NYSE holiday
- * (13:00 ET) or an NYSE early close (13:15 ET) until 18:00.
+ * day, Friday 17:00 to Sunday 18:00, a day with no Globex session (cmeClosures), after an abbreviated session's close
+ * (cmeShortSessions: 09:15 ET on Good Friday 2026), and after the halt on an NYSE holiday (13:00 ET) or an NYSE early
+ * close (13:15 ET) until 18:00.
  */
 function cmeClosed(t) {
   const s = tod(t);
@@ -756,6 +768,7 @@ function cmeClosed(t) {
   if (!cmeSessionDay(tradeDay(t, 64800))) return true;
   const day = Math.floor(t / DAY), date = new Date(day * DAY * 1000), wd = date.getUTCDay(), y = date.getUTCFullYear();
   if (wd === 0 || wd === 6 || s >= 64800) return false;          // Sunday evening, or any evening's new session
+  if (CME_SHORT_SESSIONS.has(day)) return s >= CME_SHORT_SESSIONS.get(day);
   if (nyseHolidays(y).has(day)) return s >= 46800;
   if (nyseEarlyCloses(y).has(day)) return s >= 47700;
   return false;
@@ -860,7 +873,7 @@ function ibLines(ib, colors) {
  * (ChartBridge's profile drop), inside the window up to now makes the answer 'gap': trades may be missing.
  *
  * Returns { state, high, low, start, end }: 'closed' (no CME Globex session that trading day: a weekend, New Year's
- * Day, Good Friday, Christmas), 'forming' (18:00 to 9:30; high and low so far, null before the first trade),
+ * Day, Good Friday, Christmas; not Good Friday 2026, CME's abbreviated session to 09:15), 'forming' (18:00 to 9:30; high and low so far, null before the first trade),
  * 'locked' (from 9:30:00 to the next 18:00), 'empty' (locked with no trade in the window), 'uncovered', 'gap' or
  * 'inexact'. high and low are null in every state but 'forming' and 'locked'.
  */
@@ -4587,7 +4600,7 @@ return {
     parseColor, rgba, luminance, contrast, readableOn, legible, onGround, markOnGround, pairOnGround, ibPair, distinct, mix, buildTheme, chromeColors, CHROME_VARS,
     V1_GROUND, groundOf, HOUSE_CHROME,
     obarDims, fadedContrast, OBAR_DIM: { alpha: DIM, house: HOUSE_DIMS },
-    aggregate, foldLast, addSessionVwap, sessionLevels, levelLines, initialBalance, ibLines, overnightRange, onLines, rthDay, closedDay, cmeClosed, cmeSessionDay, cmeClosures, nyseHolidays, nyseEarlyCloses, rthClose,
+    aggregate, foldLast, addSessionVwap, sessionLevels, levelLines, initialBalance, ibLines, overnightRange, onLines, rthDay, closedDay, cmeClosed, cmeSessionDay, cmeClosures, cmeShortSessions, nyseHolidays, nyseEarlyCloses, rthClose,
     orderLabel, orderLabelShort, positionShort, partsRisk, htfStart, htfEnd, HTF_SECONDS, cornerPlace, openPnl, fmtMoney, fmtSigned, groupFills, stackFillLabels, profileRects,
     roomBars, ROOM_MIN, ROOM_MAX, LINE_SOFT, LABEL_SOFT, fitRange, fmtRemain, barRemain, atr, smaAt, emaAt, bandsAt, rsiAt, smaSeries, emaSeries, bollinger, rsiSeries, pctFrom, bubbleRadius, BUBBLE_R_MIN, BUBBLE_R_MAX, rthVwap, rthVwapUpdate, vwapAt, PD_POC_DASH,
   },

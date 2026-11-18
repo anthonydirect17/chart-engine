@@ -111,13 +111,18 @@ test('DST: the Sunday the clocks change (8 March and 1 November 2026) opens at 1
   }
 });
 
-test('holidays: no Globex session (Christmas, Good Friday, New Year\'s Day) is no line; an NYSE-only holiday has its overnight', () => {
+test('holidays: no Globex session (Christmas, Good Friday, New Year\'s Day) is no line; an NYSE-only holiday and Good Friday 2026 have their overnight', () => {
   // Christmas Friday 25 December 2026: the trading day has no session
   const xmas = U.overnightRange(minuteBars(trades(et(2026, 12, 23, 9, 0), et(2026, 12, 24, 13, 0), 5, 2)), { asOf: et(2026, 12, 25, 3, 0) });
   assert.equal(xmas.state, 'closed');
   assert.deepEqual(U.onLines(xmas), []);
   assert.equal(U.overnightRange([], { asOf: et(2027, 1, 1, 6, 0) }).state, 'closed', 'New Year\'s Day 2027');
-  assert.equal(U.overnightRange([], { asOf: et(2026, 4, 3, 6, 0) }).state, 'closed', 'Good Friday 2026');
+  assert.equal(U.overnightRange([], { asOf: et(2027, 3, 26, 6, 0) }).state, 'closed', 'Good Friday 2027');
+  // Good Friday 2026 was CME's abbreviated session (18:00 the evening before to 09:15 ET): an overnight as on any day
+  const gf = trades(et(2026, 4, 2, 9, 30), et(2026, 4, 3, 9, 15), 4, 7);
+  const gfOn = U.overnightRange(minuteBars(gf), { asOf: et(2026, 4, 3, 9, 0) });
+  assert.equal(gfOn.state, 'forming', 'Good Friday 2026');
+  assert.deepEqual(hl(gfOn), truth(gf, gfOn.start, gfOn.end, et(2026, 4, 3, 9, 0)));
   // Thanksgiving (NYSE closed, Globex trades from 18:00 the evening before): an overnight as on any day, locked at 9:30
   const ticks = trades(et(2026, 11, 25, 9, 30), et(2026, 11, 26, 11, 0), 4, 6);
   const tg = U.overnightRange(minuteBars(ticks), { asOf: et(2026, 11, 26, 10, 0) });

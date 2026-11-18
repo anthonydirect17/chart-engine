@@ -122,7 +122,8 @@ public static class DataHarness
     {
         Func<HashSet<DateTime>, string> D = set => string.Join(" ", set.OrderBy(x => x).Select(x => x.ToString("yyyy-MM-dd")).ToArray());
         // what src/chart-engine.js gives (cmeClosures, nyseHolidays, nyseEarlyCloses), run with node for 2026 and 2027
-        Check(D(ChartBridgeCme.CmeClosures(2026)) == "2026-01-01 2026-04-03 2026-12-25" && D(ChartBridgeCme.CmeClosures(2027)) == "2027-01-01 2027-03-26 2027-12-24",
+        // Good Friday 2026 is not one: CME's abbreviated session to 09:15 (ShortSessions, Anthony's ruling 2026-11-18); Good Friday 2027 is
+        Check(D(ChartBridgeCme.CmeClosures(2026)) == "2026-01-01 2026-12-25" && D(ChartBridgeCme.CmeClosures(2027)) == "2027-01-01 2027-03-26 2027-12-24",
             "holidays: no Globex session on the page's dates (2026: " + D(ChartBridgeCme.CmeClosures(2026)) + "; 2027: " + D(ChartBridgeCme.CmeClosures(2027)) + ")");
         Check(D(ChartBridgeCme.NyseHolidays(2026)) == "2026-01-01 2026-01-19 2026-02-16 2026-04-03 2026-05-25 2026-06-19 2026-07-03 2026-09-07 2026-11-26 2026-12-25"
               && D(ChartBridgeCme.NyseHolidays(2027)) == "2027-01-01 2027-01-18 2027-02-15 2027-03-26 2027-05-31 2027-06-18 2027-07-05 2027-09-06 2027-11-25 2027-12-24",
@@ -130,7 +131,9 @@ public static class DataHarness
         Check(D(ChartBridgeCme.NyseEarlyCloses(2026)) == "2026-11-27 2026-12-24" && D(ChartBridgeCme.NyseEarlyCloses(2027)) == "2027-11-26", "holidays: the NYSE early closes (the 13:15 halt) are the page's");
         // cmeClosed at New York wall times: the page's answers (node), true = closed
         string[][] page = {
-            new[] {"2026-04-03T10:00:00", "true"}, new[] {"2026-04-02T18:30:00", "true"}, new[] {"2026-04-02T16:59:00", "false"},
+            new[] {"2026-04-03T10:00:00", "true"}, new[] {"2026-04-02T18:30:00", "false"}, new[] {"2026-04-02T16:59:00", "false"},
+            new[] {"2026-04-03T09:14:00", "false"}, new[] {"2026-04-03T09:15:00", "true"}, new[] {"2026-04-03T18:30:00", "true"},
+            new[] {"2027-03-25T18:30:00", "true"},
             new[] {"2026-01-19T12:59:00", "false"}, new[] {"2026-01-19T13:00:00", "true"}, new[] {"2026-01-19T18:30:00", "false"},
             new[] {"2026-11-27T13:14:00", "false"}, new[] {"2026-11-27T13:15:00", "true"}, new[] {"2026-12-24T13:20:00", "true"},
             new[] {"2026-12-24T18:30:00", "true"}, new[] {"2026-12-27T18:30:00", "false"}, new[] {"2026-12-31T18:30:00", "true"},
@@ -196,8 +199,12 @@ public static class DataHarness
             "settlement day (0.3.8 buffer, Anthony): 16:00 to 17:00 ET is provisional (used only when it differs from the day before's); from the 17:00 close it is the day's; an early close (11-27, 12:00 to 13:15) the same; a date-only stamp is never provisional");
         Check(ChartBridgeServer.SettlementDay(Et(2026, 10, 1, 20, 43, 0), Et(2026, 10, 1, 20, 43, 0)).HasValue && ChartBridgeServer.SettlementDay(Et(2026, 10, 1, 20, 43, 0), Et(2026, 10, 1, 20, 43, 0)).Value == new DateTime(2026, 10, 1),
             "settlement day (0.3.8, HOME 2026-10-01): stamped 20:43 ET that evening is 10-01's");
-        Check(SD(Et(2026, 4, 3, 12, 0, 0)) == "2026-04-02" && SD(Et(2026, 1, 19, 13, 30, 0)) == "2026-01-19" && SD(new DateTime(2026, 9, 28)) == "2026-09-28" && SD(new DateTime(2026, 10, 3)) == "null",
-            "settlement day: Good Friday 2026 (no session) is Thursday's; MLK Day's halt settles at noon; a date-only stamp is its date (a Saturday is none)");
+        Check(SD(Et(2026, 4, 3, 12, 0, 0)) == "2026-04-02" && SD(Et(2026, 1, 19, 13, 30, 0)) == "2026-01-19" && SD(new DateTime(2026, 9, 28)) == "2026-09-28" && SD(new DateTime(2026, 10, 3)) == "null"
+              && SD(new DateTime(2026, 4, 3)) == "null" && ChartBridgeCme.SessionDay(new DateTime(2026, 4, 3)) && !ChartBridgeCme.SettledDay(new DateTime(2026, 4, 3)),
+            "settlement day: Good Friday 2026 (a session CME did not settle) is Thursday's, and a date-only stamp of that day is none; MLK Day's halt settles at noon; a date-only stamp is its date (a Saturday is none)");
+        Check(ChartBridgeCme.SessionClose(new DateTime(2026, 4, 3)) == new TimeSpan(9, 15, 0) && ChartBridgeCme.SessionClose(new DateTime(2026, 1, 19)) == TimeSpan.FromHours(13)
+              && ChartBridgeCme.ShortClose(new DateTime(2026, 4, 3)) == new TimeSpan(9, 15, 0) && !ChartBridgeCme.ShortClose(new DateTime(2027, 3, 26)).HasValue,
+            "session close: Good Friday 2026 at 09:15 (CME's abbreviated session), an NYSE holiday's halt at 13:00; Good Friday 2027 is no short session");
         DateTime? early = ChartBridgeServer.SettlementDay(new DateTime(2026, 9, 29), Et(2026, 9, 29, 10, 0, 0)), late = ChartBridgeServer.SettlementDay(new DateTime(2026, 9, 29), Et(2026, 9, 29, 16, 30, 0));
         Check(!early.HasValue && late.HasValue && late.Value == new DateTime(2026, 9, 29),
             "settlement day (review B2 N1): a date-only stamp for today counts only once today's settlement time has passed (10:00: not known; 16:30: today's)");
@@ -206,8 +213,8 @@ public static class DataHarness
             "prior: on Tuesday, Monday's until 18:00 (the 16:15 to 18:00 window included), then Tuesday's");
         Check(PR(2026, 10, 2, 16, 30) == "2026-10-01" && PR(2026, 10, 3, 12, 0) == "2026-10-01" && PR(2026, 10, 4, 17, 59) == "2026-10-01" && PR(2026, 10, 4, 18, 0) == "2026-10-02" && PR(2026, 10, 5, 16, 59) == "2026-10-02",
             "prior: over a weekend Thursday's stays until Sunday 18:00; Friday's is the prior from Sunday 18:00 to Monday 17:00 (and to 18:00)");
-        Check(PR(2026, 4, 3, 12, 0) == "2026-04-01" && PR(2026, 4, 5, 18, 0) == "2026-04-02" && PR(2026, 4, 6, 11, 0) == "2026-04-02",
-            "prior: Good Friday 2026 (no session): Thursday's settlement is the prior from Sunday 18:00 through Monday");
+        Check(PR(2026, 4, 3, 8, 0) == "2026-04-02" && PR(2026, 4, 3, 12, 0) == "2026-04-02" && PR(2026, 4, 5, 18, 0) == "2026-04-02" && PR(2026, 4, 6, 11, 0) == "2026-04-02",
+            "prior: Good Friday 2026 (CME's abbreviated session, not settled; April 2's settlement used): Thursday's settlement is the prior in that session, after it and through Monday");
 
         // a first start at different times (each resets the books and settlements.txt)
         StartChecks();
@@ -309,7 +316,7 @@ public static class DataHarness
             }
             finally { Named()["MNQ"] = mnq; ResetSettlements(true); }
 
-            // a holiday: Good Friday 2026 has no session; Thursday's settlement is the prior from Sunday 18:00
+            // Good Friday 2026, CME's abbreviated session that CME did not settle: Thursday's settlement is the prior in it and through Monday
             ResetSettlements(true);
             simNow = Et(2026, 4, 2, 17, 10, 0); SettleEvent(mnq, 20000, Et(2026, 4, 2, 17, 5, 0), false);
             Thread.Sleep(200);
@@ -318,8 +325,8 @@ public static class DataHarness
             simNow = Et(2026, 4, 5, 18, 0, 5);
             string sunH = HelloOf("MNQ");
             simNow = Et(2026, 4, 6, 11, 0, 0);
-            Check(fri.EndsWith(SetOf("MNQ", "null", "2026-04-01")) && sunH.EndsWith(SetOf("MNQ", "20000", "2026-04-02")) && HelloOf("MNQ").EndsWith(SetOf("MNQ", "20000", "2026-04-02")),
-                "settlement, Good Friday: on the holiday the prior is Wednesday's (none known: null); from Sunday 18:00 and on Monday, Thursday's (" + fri + " | " + sunH + ")");
+            Check(fri.EndsWith(SetOf("MNQ", "20000", "2026-04-02")) && sunH.EndsWith(SetOf("MNQ", "20000", "2026-04-02")) && HelloOf("MNQ").EndsWith(SetOf("MNQ", "20000", "2026-04-02")),
+                "settlement, Good Friday 2026: on the day, from Sunday 18:00 and on Monday, Thursday's (" + fri + " | " + sunH + ")");
             Check(Of(a, "tick").Count == 0, "settlement: no tick or trade comes of it");
 
             // 0.3.7 release nits: a date-only stamp before its day's settlement time says so (not "inside a later session")
@@ -671,12 +678,15 @@ public static class DataHarness
     }
     static void WeekProfile()
     {
-        // which sessions: the last 5 finished, days with a Globex session (Good Friday 2026 has none; a weekend is not one)
+        // which sessions: the last 5 finished, days with a Globex session (Good Friday 2026 is CME's abbreviated session, so it counts;
+        // Good Friday 2027 has none; a weekend is not one)
         Func<DateTime, string> F = now => string.Join(" ", ChartBridgeServer.FinishedSessions(now, 5).Select(x => x.ToString("MM-dd")).ToArray());
         Check(F(new DateTime(2026, 10, 8, 11, 0, 0)) == "10-01 10-02 10-05 10-06 10-07", "week: Thursday 11:00: the 5 sessions before today's (" + F(new DateTime(2026, 10, 8, 11, 0, 0)) + ")");
         Check(F(new DateTime(2026, 10, 8, 17, 30, 0)) == "10-02 10-05 10-06 10-07 10-08", "week: in the 17:00 break today's session is finished and counts");
-        Check(F(new DateTime(2026, 4, 6, 11, 0, 0)) == "03-27 03-30 03-31 04-01 04-02",
-            "week: the week of Good Friday 2026: no session on 04-03, so it is not missing (" + F(new DateTime(2026, 4, 6, 11, 0, 0)) + ")");
+        Check(F(new DateTime(2026, 4, 6, 11, 0, 0)) == "03-30 03-31 04-01 04-02 04-03",
+            "week: the week of Good Friday 2026: CME's abbreviated session on 04-03 is one of them (" + F(new DateTime(2026, 4, 6, 11, 0, 0)) + ")");
+        Check(F(new DateTime(2027, 3, 29, 11, 0, 0)) == "03-19 03-22 03-23 03-24 03-25",
+            "week: the week of Good Friday 2027: no session on 03-26, so it is not missing (" + F(new DateTime(2027, 3, 29, 11, 0, 0)) + ")");
         Check(F(new DateTime(2026, 10, 10, 12, 0, 0)) == "10-05 10-06 10-07 10-08 10-09", "week: on a Saturday, Monday to Friday");
 
         simNow = Et(2026, 10, 8, 11, 0, 0);
