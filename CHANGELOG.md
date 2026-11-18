@@ -117,7 +117,9 @@ personal bot (release 1, step 1.6b)".
 - **After the R12 review of decision 3 and Anthony's rulings of 2026-11-18**:
   - **The replay fence**: executions already in an account when the bot starts, or when the account is first watched (a
     NinjaScript recompile delivers the whole session again), and any execution timed before this run began (a connection may
-    add the day's past executions later), are never counted again by the bot; its own fills of this run always are.
+    add the day's past executions later), are never counted again by the bot; its own fills of this run always are. The
+    times are compared in UTC, whatever NinjaTrader's time zone setting (Tools > Options > General), with 30 seconds of room
+    for the broker's clock and the PC's to differ.
   - **A close that cannot go** is an error to the pages after 15 seconds, naming the order or the reason, again every 60
     seconds until the bot is flat, each time with the voice call `BotNotClosed` (ruling 3; the voice calls of 0.6.22, on only
     with `voice = on`; `BotNotClosed.wav` ships with this release, below). The day stop's words say
