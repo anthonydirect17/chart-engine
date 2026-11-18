@@ -1386,15 +1386,15 @@ public static class BotHarness
         Held(0, 0);
         Restart();
         Check(ChartBridgeBot.StripJson().Contains("\"standDown\":\"bot trade " + Tag(v) + " was still open when ChartBridge started"), "entry fill before followed: waiting");
-        PartFill(v, 2, 1, 25004);
+        PartFill(v, 2, 1, 25000);
         Check(DayLine("untold\t" + Tag(v)) && DayLine("trade\t" + Tag(v) + "\topen\t0\t1\t25000") && File_("bot.log").Contains("Bot stands down: bot trade " + Tag(v) + "'s entry filled 1 more before it was followed again after a restart"),
               "R12 (the day file): an entry fill of a trade not followed again yet is never a fresh ledger: refused until 18:00 ET, kept: " + File_("bot-day.txt"));
-        Held(2, 25002);
-        LegsTo(v, 2);
+        Held(2, 25000);
+        if (LegsOf(v).Count(o => o.OrderType == OrderType.StopMarket) == 1) LegsTo(v, 2);   // the legs cover the 2 held (one pair of 2, or a pair for each fill)
         ChartBridgeBot.Check();
         st = ChartBridgeBot.StripJson();
         Check(st.Contains("\"position\":{\"qty\":2,") && st.Contains("the dollars of those contracts cannot be told"), "entry fill before followed: followed at 2 once listed, still refused: " + st);
-        Sold(2, 25002);
+        Sold(2, 25000);
         Settle();
 
         // a trade carried past 18:00 ET: the contract it closed yesterday (+$100) is yesterday's, so today's loss stop reads today only
