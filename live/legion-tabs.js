@@ -119,19 +119,34 @@ function mount(env) {
     mounted.colosseum = true;
   });
 
+  /* ---------------- Ludus (plan step 3.4): Pipeline, Board, Builder, Seeds, Agents and the build page (live/ludus.js), read only:
+     The Desk's reads through its one address (AccountsPage.deskBase), the PC helper's builds, one trade on chart-engine's own chart.
+     No connection to ChartBridge is handed to it. */
+  let ludus = null;
+  guard('the Ludus', () => {
+    if (!window.LudusView || !$('ldView')) return;
+    const AH = window.AgentHelper;
+    $('ldView').innerHTML = '';
+    ludus = window.LudusView.mount($('ldView'), { fetch: (u, o) => fetch(u, o), deskBase: () => window.AccountsPage.deskBase((u, o) => fetch(u, o)),
+      helper: AH && typeof AH.createClient === 'function' && typeof fetch === 'function' ? AH.createClient({ fetch: (u, i) => fetch(u, i), headers }) : null,
+      chart: window.ChartEngine || null });
+    mounted.ludus = !!ludus;
+  });
+
   /* each part is shown only while its tab (and side) is: a hidden one reads nothing and acknowledges nothing */
   let dayAsked = false;
   hooks.tab.push((tab, sub) => {
     if (fleet) guard('the cohorts', () => fleet.showTab(tab === 'cohorts' && sub === 'legion'));
     if (praetorian) guard('Praetorian', () => praetorian.showTab(tab === 'cohorts' && sub === 'praetorian'));
+    if (ludus) guard('the Ludus', () => ludus.show(tab === 'ludus'));
     if (league) guard('the Colosseum', () => {
       if (tab !== 'colosseum') { league.showTab(false); return; }
       if (!dayAsked) { dayAsked = true; league.openDay(new URLSearchParams(location.search).get('day')); }   // a day checked first: a past one read only
       else league.showTab(true);
     });
   });
-  window.LegionTabs.state = () => ({ cohorts: fleet ? fleet.state() : null, praetorian: praetorian ? praetorian.state() : null, colosseum: league ? league.state() : null });
-  window.LegionTabs.parts = { fleet, praetorian, league };
+  window.LegionTabs.state = () => ({ cohorts: fleet ? fleet.state() : null, praetorian: praetorian ? praetorian.state() : null, colosseum: league ? league.state() : null, ludus: ludus ? ludus.state() : null });
+  window.LegionTabs.parts = { fleet, praetorian, league, ludus };
 }
 
 window.LegionTabs = { mount, readOnlyFeed };

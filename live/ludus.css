@@ -1,0 +1,82 @@
+/*
+ * Ludus (plan step 3.4): the tab's sub tabs, the stations, the tables and the build page, on Legion's Imperial look
+ * (live/legion.css: cut corners, gold and bronze, no purple; Roman numerals through its .lx-rn). Green and red only for a
+ * trade's side, its R and its P&L. Wide pages: the page scrolls and nothing inside it does; on a phone the tables stack
+ * (legion.css .lx-tbl, each cell named by its column).
+ */
+.ld { display: block; }
+.ld-subs { align-items: center; }
+.ld-subs .ld-again { margin-left: auto; }
+.ld-body { display: grid; gap: 14px; }
+.ld-card h3 { margin: 4px 0 8px; font: 600 12.5px var(--lx-head); letter-spacing: .08em; text-transform: uppercase; color: var(--lx-gold-hot); }
+.ld-note { margin: 6px 0; max-width: 110ch; color: var(--lx-fg); }
+.ld-note.ld-dim, .ld-dim { color: var(--lx-muted); }
+.ld-note.bad { color: var(--lx-fg); border-left: 2px solid var(--lx-bronze); padding-left: 8px; }
+.ld-note.ld-sim { color: var(--lx-gold-hot); }
+.ld-src { font-size: 12.5px; }
+.ld-off .ld-note { color: var(--lx-muted); font-style: italic; }
+
+/* the stations I to VII */
+.ld-stations { list-style: none; margin: 8px 0 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
+.ld-station { border: 1px solid var(--lx-line2); background: var(--lx-panel2); padding: 10px 12px; min-width: 0;
+  clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px)); }
+.ld-st-head { display: flex; align-items: baseline; gap: 8px; }
+.ld-st-head .lx-rn { font-size: 16px; color: var(--lx-gold-hot); }
+.ld-st-head b { font: 600 13px var(--lx-head); letter-spacing: .06em; text-transform: uppercase; color: var(--lx-gold); }
+.ld-count { margin-left: auto; font: 600 16px "IBM Plex Mono", monospace; color: var(--lx-fg); font-variant-numeric: tabular-nums; }
+.ld-station .ld-note { font-size: 12.5px; color: var(--lx-muted); }
+.ld-st-items { margin: 6px 0 0; padding-left: 16px; font-size: 12.5px; }
+.ld-st-items li { margin: 2px 0; overflow-wrap: anywhere; }
+
+/* tables, wide: the whole width of the page, no box that scrolls */
+.ld .lx-tbl { margin: 8px 0; }
+.ld .lx-tbl table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.ld .lx-tbl th { text-align: left; font: 600 10.5px var(--lx-head); letter-spacing: .08em; text-transform: uppercase; color: var(--lx-muted); padding: 6px 8px; border-bottom: 1px solid var(--lx-line); white-space: nowrap; }
+.ld .lx-tbl td { padding: 6px 8px; border-bottom: 1px solid var(--lx-line2); vertical-align: top; overflow-wrap: anywhere; }
+.ld .lx-tbl tr[aria-current="true"] td { background: var(--lx-gold-bg); }
+.ld-num { font-family: "IBM Plex Mono", monospace; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ld-lead { color: var(--lx-gold-hot); font-weight: 600; }
+.ld-rank { font-family: "IBM Plex Mono", monospace; color: var(--lx-bronze); }
+.ld-up { color: var(--ws-buy, #3DDC97); }
+.ld-down { color: var(--ws-sell, #FF5C7A); }
+.ld-long { color: var(--ws-buy, #3DDC97); }
+.ld-short { color: var(--ws-sell, #FF5C7A); }
+.ld-link { font: inherit; color: var(--lx-gold-hot); background: none; border: 0; padding: 0; cursor: pointer; text-align: left; text-decoration: underline; text-decoration-color: var(--lx-line); text-underline-offset: 3px; }
+.ld-link:hover { text-decoration-color: var(--lx-gold); }
+.ld-link:focus-visible, .ld .lx-sub button:focus-visible { outline: 1px solid var(--lx-gold-hot); outline-offset: 2px; }
+.ld-pager { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 8px 0; font-size: 12.5px; color: var(--lx-muted); }
+
+/* the build page */
+.ld-back { margin-bottom: -4px; }
+.ld-id { margin: 0 0 6px; font-size: 12.5px; color: var(--lx-muted); overflow-wrap: anywhere; }
+.ld-pbs { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+.ld-pb { border: 1px solid var(--lx-line2); background: var(--lx-panel2); padding: 10px 12px; min-width: 0; }
+.ld-kv { display: grid; grid-template-columns: minmax(150px, max-content) 1fr; gap: 4px 14px; margin: 6px 0; font-size: 13px; }
+.ld-kv dt { color: var(--lx-muted); }
+.ld-kv dt { overflow-wrap: break-word; }
+.ld-kv dd { margin: 0; white-space: normal; overflow-wrap: break-word; min-width: 0; }
+.ld-kv-pb { border-top: 1px solid var(--lx-line2); padding-top: 6px; }
+.ld-checks { margin: 6px 0; padding-left: 18px; }
+.ld-checks li { margin: 3px 0; }
+.ld-checks li.ok::marker { color: var(--lx-gold); }
+.ld-checks li.no::marker { color: var(--lx-dim); }
+.ld-shows { margin: 4px 0 6px; }
+.ld-lib { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 8px 0; font-size: 13px; }
+.ld-lib dt { font: 600 11px var(--lx-head); letter-spacing: .08em; text-transform: uppercase; color: var(--lx-bronze); padding-top: 3px; }
+.ld-lib dd { margin: 0; display: flex; flex-wrap: wrap; gap: 4px; }
+.ld-chip { border: 1px solid var(--lx-line2); padding: 2px 7px; font-size: 12px; color: var(--lx-fg); }
+
+/* the one trade on the chart (chart-engine's own engine): a fixed height, never a scroll box */
+.ld-one { margin-top: 10px; }
+.ld-one-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(220px, 300px); gap: 14px; align-items: start; }
+.ld-chart { height: 380px; border: 1px solid var(--lx-line2); position: relative; }
+.ld-chart[hidden] { display: none; }
+
+@media (max-width: 760px) {
+  .ld-one-grid { grid-template-columns: 1fr; }
+  .ld-chart { height: 260px; }
+  .ld-subs .ld-again { margin-left: 0; }
+  .ld-lib { grid-template-columns: 1fr; }
+  .ld-kv { grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); }
+  .ld-num { white-space: normal; }
+}

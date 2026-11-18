@@ -74,6 +74,7 @@ function tabSearch(search, tab, sub) {
   q.set('tab', TAB_IDS.includes(tab) ? tab : 'castra');
   if (tab === 'cohorts' && COHORT_SUBS.includes(sub)) q.set('sub', sub); else q.delete('sub');
   if (tab !== 'colosseum') q.delete('day');                      // a past league day belongs to the Colosseum only
+  if (tab !== 'ludus') for (const k of ['ludus', 'build', 'show', 'page', 'trade']) q.delete(k);   // the Ludus's view and build page (live/ludus.js), its own
   return '?' + q.toString();
 }
 
