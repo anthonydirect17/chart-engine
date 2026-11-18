@@ -4296,8 +4296,8 @@ Anthony's decisions of 2026-10-14 (items 4 and 5, with G1, G2, G3 and F-ALL) and
   (`accounts`) and to each agent (`accountState`). A number ChartBridge cannot give is null with the reason; it is never
   estimated. Bots are not in scope.
 - **G2 (b)**: when an account is put into a group, the page asks once for its "highest close so far" (from the firm's
-  dashboard; optional, prefilled with the larger of the account size and its balance now); ChartBridge starts both trailing
-  highs from it.
+  dashboard; optional, prefilled with the larger of the account size and its balance now, and, unreleased (the floor fix),
+  of the end-of-day high ChartBridge keeps for it); ChartBridge starts both trailing highs from it.
 
 **Files** (next to `config.txt`; written whole through a temp file, off NinjaTrader's thread; Anthony never edits them).
 `groups.txt`: two `#` lines, then one line per group, member and personal account:
