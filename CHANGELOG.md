@@ -1,5 +1,40 @@
 # Changelog
 
+## Unreleased (2026-11-18): release 1, step 1.6c: the mini ticket and Cut half (ChartBridge, the ticket, the charts)
+
+Anthony 2026-11-17 (the mockup, and his answers that night: Cut half only; the smaller part on an odd size; compact by
+default with an arrow; Close renamed Flatten; Cut half with Armed off; no picker when compact; one Armed switch; Merge in
+both views; a hotkey for Cut half). No version bump yet (the release is cut as chart 1.57.1 with ChartBridge 0.6.24). Full
+rules: `nt8/PROTOCOL.md`, "Cut half (release 1, step 1.6c)".
+
+- **Cut half, one new ChartBridge command** (`cutHalf`, one per account; `hello` lists the feature `cutHalf`): half the
+  position closed at market, the smaller part on an odd size (3 closes 1, 5 closes 2), and ChartBridge's stops and targets
+  there shrunk to the size left in the same step: first, by the legs check's own rule (`ShrinkPlan`, taken out of
+  `CheckLegs` unchanged), at once instead of after its 4 seconds, then the close. An exit like Flatten (no checkmark, Armed
+  off works). Refused, nothing sent: under 2 contracts, the position not what the page showed or its two readings apart, a
+  Cut half close still filling, working exits that would pass the position with it, an agent's pair, an active copier
+  follower, a Merge running. A close NinjaTrader rejects after the legs were shrunk raises an error at once.
+- **The ticket**: Cut half beside Flatten (greyed at 1 contract and when flat, never dimmed by Armed); on a group each member
+  is cut on its own size, a member at 1 is left alone and named in the note. **Close is renamed Flatten** (the button, the
+  "Also open" rows and the hotkey; the hotkey's saved id stays `close`, so a key already set keeps working). Flatten all is
+  unchanged. B/E, Flatten, Cut half, Cancel all and Merge sit in a grid of three.
+- **The Cut half hotkey** (Settings, Keys; `cutHalf` in `live-hotkeys-v1` and in The Desk's hotkeys document). Like Buy, Sell
+  and B/E it goes to the ticket's window; it works under a covering tab, as Flatten does (it only reduces). **The Desk must
+  know `cutHalf` first** (thedesk branch `claude/desk-hotkeys-cut-half`): The Desk accepts only its own exact key list, so a
+  hotkey save from this page is refused by an older Desk.
+- **The mini ticket**, an indicator (Indicators, Trades, Mini ticket; listed only on the workspace's charts): dragged anywhere
+  by its grip, its spot kept per chart (`live-mini-ticket-v1`); compact (Armed, Qty, Buy MKT, Sell MKT, Flatten, Cut half,
+  Merge, the position) with an arrow that shows every control of the ticket, the account or group picker included. Not a
+  second ticket: in the ticket's window it is the ticket's own controls wired a second time to the same TradeCore (the same
+  account or group, Armed, Qty, bracket, strategy, order path and checks); in another window its order buttons are forwarded
+  to the ticket's window like the ticket's chart clicks (TicketLink), Flatten goes from that window as the Flatten key does,
+  and Armed, the account, Qty, the bracket and the strategy are shown and set in the ticket's window. On a chart not on the
+  ticket's instrument it says so and sends nothing.
+- Tests: `nt8/check/OrdersHarness.cs` (Cut half: even, odd 3 and 5, a short, pairs per fill, a Merge set, 1 contract and flat,
+  a stale page, readings apart, a second press, working exits, strict keys and the gates, a group's members, a rejected close,
+  trading off), `nt8/check/DataHarness.cs` (the feature); `test/cut-half.test.js`; `test/mini-ticket-smoke.mjs`
+  (`npm run smoke:mini-ticket`); `test/prefs.test.js`, `test/nt8-source.test.js` and the hotkey tests follow the rename.
+
 ## Unreleased (2026-11-18): release 1, step 1.6b: the personal bot (ChartBridge, the Bot tab)
 
 Anthony's answers of 2026-11-17 (Q6, Q7) and 2026-11-18. No version bump yet (the release is cut as chart 1.57.1 with

@@ -33,7 +33,8 @@
  *   live-bracket-sel-v1 { MNQ: 'custom' | '1:1' | '1:1.5' | '1:2' | 'p:<preset name>', ... } the preset picked per root
  *   live-bracket-unit-v1  't' | 'pt' the bracket boxes in ticks or points (1.10.0; stored in ticks always)
  *   live-qty-v1         { MNQ: 2, ... } the qty picked last per root, 1 to 9 (1.10.0)
- *   live-hotkeys-v1     { buy, sell, be, close, flattenAll } the trading hotkeys set in Settings (1.11.0), each a combo
+ *   live-hotkeys-v1     { buy, sell, be, close, flattenAll, cutHalf } the trading hotkeys set in Settings (1.11.0; release 1: close
+ *                       is named Flatten, cutHalf is Cut half), each a combo
  *                       such as "Alt+B" or ''; none by default; cleaned on read by OrderTicket.cleanHotkeys
  *   live-indicator-colors-v1  { vwap, prior, overnight, value, close, ibHigh, ibLow, vpPoc } the indicators' colors as set
  *                       in their gears (1.9.0); only colors set by hand. The VWAP color the Colors panel kept in
@@ -127,6 +128,11 @@ const INDICATORS = [
     opt: 'Wilder\'s relative strength index of the bar closes, 0 to 100, in a pane below the chart (under the delta pane when both are on) with its two levels and a faint 50. Drag the line above the pane (or focus it and use the arrow keys) to resize it.' },
   { id: 'fills', name: 'Fills', code: 'FL', short: 'FILLS', letter: 'F', cat: 'trades', sw: 'var(--profit)', alias: 'fills executions trades',
     opt: 'Past fills and trade marks of the account picked (side and size at the fill price). Hiding them never hides the open trade: its entry fills, the position line, working orders and stop and target lines stay.' },
+  /* release 1 (Bot-Lab plan step 1.6c, Anthony 2026-11-17): the mini ticket, the order ticket's own controls on the chart (the host
+     draws it: ChartLive.mount's trade.mini; listed only on a chart whose host has one). No chip: it is a panel, not a line. */
+  { id: 'ticket', name: 'Mini ticket', code: 'MT', short: 'TICKET', letter: 'T', cat: 'trades', sw: 'var(--accent, #C9A55C)', nochip: true,
+    alias: 'mini ticket order ticket orders trade buy sell flatten cut half merge armed',
+    opt: 'The order ticket on this chart, dragged anywhere by its grip (its spot is kept for this chart): Armed, Qty, Buy MKT, Sell MKT, Flatten, Cut half, Merge and the position; the arrow shows every control of the ticket. It is the ticket itself, not a second one: the same account or group, Armed switch, orders and checks. It trades only while this chart is on the ticket\'s instrument.' },
   /* nochip (G1c, Anthony): no chip on the strip and never counted toward it */
   { id: 'absorption', name: 'Absorption bars', code: 'AB', short: 'ABSORB', letter: 'A', cat: 'signals', sw: 'var(--sig-bull)', nochip: true,
     alias: 'absorption absorb combo large trade spike rejection signals bars cyan yellow',
@@ -147,9 +153,9 @@ let api = null;
 const pinMax = () => (api ? api.PIN_MAX : 10);
 /* What the page showed before any choice was made (1.3), plus the 1-hour Initial Balance (1.5.3); the main pane
    starts here, each on the chart, shown and pinned to the chip strip. */
-const DEFAULT_INDICATORS = { volume: true, vwap: true, levels: true, fills: true, vp: false, delta: true, bubbles: false, absorption: false, ema: false, sma: false, bands: false, rsi: false };   // the profile: off on every pane; the delta pane (1.7.0): on for the main pane (Anthony)
+const DEFAULT_INDICATORS = { volume: true, vwap: true, levels: true, fills: true, vp: false, delta: true, bubbles: false, absorption: false, ema: false, sma: false, bands: false, rsi: false, ticket: false };   // the profile: off on every pane; the delta pane (1.7.0): on for the main pane (Anthony)
 /* A new pane (the grid, next step) starts with no indicators on; Anthony picks them per pane (2026-09-29). */
-const NEW_PANE_INDICATORS = { volume: false, vwap: false, levels: false, fills: false, vp: false, delta: false, bubbles: false, absorption: false, ema: false, sma: false, bands: false, rsi: false };
+const NEW_PANE_INDICATORS = { volume: false, vwap: false, levels: false, fills: false, vp: false, delta: false, bubbles: false, absorption: false, ema: false, sma: false, bands: false, rsi: false, ticket: false };   // release 1: the mini ticket off until added
 /* 1.34.0: the studies are off on every pane, also one saved before they existed (cleanPane gives a missing id its default) */
 /* The main pane's own five up to 1.5.3, which a pane saved by 1.4 to 1.5.3 lists (paneFromV1); the IB is part of Levels
    since 1.14.0 (migrateIb). */
@@ -2618,6 +2624,17 @@ function mount(container, options) {
      sends only subscribe, ping and htf. */
   const HOST = opt.trade && typeof opt.trade.place === 'function' && typeof opt.trade.move === 'function' && typeof opt.trade.cancel === 'function' ? opt.trade : null;
   const HT = { root: '', live: false, account: '', accountShort: '', orders: [], position: null, pointValue: 0, qty: 1, members: null };
+  /* release 1 (Bot-Lab plan step 1.6c): the mini ticket (the indicator 'ticket'). While it is on this chart and shown, the host
+     draws it in the chart's stage: HOST.mini({ stage, paneId, root }) returns its undo; root() is this chart's instrument now.
+     The chart itself still never sends an order: the mini ticket is the host's order ticket. */
+  let miniOff = null;
+  function miniSync() {
+    const want = !destroyed && !!HOST && typeof HOST.mini === 'function' && !!IS.ind.ticket && IS.ind.ticket.on && IS.ind.ticket.shown;
+    if (want && !miniOff) { try { miniOff = HOST.mini({ stage: $('chart').parentElement, paneId: PANE, root: () => S.root }) || null; } catch (e) { miniOff = null; setTimeout(() => { throw e; }); } }
+    else if (!want && miniOff) { const undo = miniOff; miniOff = null; try { undo(); } catch (e) { setTimeout(() => { throw e; }); } }
+  }
+  cleanups.push(() => { const undo = miniOff; miniOff = null; if (undo) try { undo(); } catch (e) { /* the host's */ } });
+  miniSync();
   const armedHere = () => HT.live && HT.root === D.root;
 
   /*
@@ -3253,7 +3270,9 @@ function mount(container, options) {
    * off), then the groups, folded, one open at a time, each with a + to add, and Hide all / Restore. The chip strip next
    * to the button holds the pinned ones: one click shows or hides; on a narrow pane each chip is one letter.
    */
-  const IND = LP.INDICATORS, ALL_DEFS = IND.concat(LP.COMING);
+  /* release 1 (1.6c): the mini ticket is listed only where the host draws it (the workspace's charts) */
+  const hostOnly = d => d.id !== 'ticket' || !!(opt.trade && typeof opt.trade.mini === 'function');
+  const IND = LP.INDICATORS.filter(hostOnly), ALL_DEFS = IND.concat(LP.COMING);
   const defOf = id => ALL_DEFS.find(d => d.id === id);
   const M = { q: '', cat: null, gear: null, returnTo: null, note: '' };   // menu state that is not saved
   const SVG = {
@@ -3279,6 +3298,7 @@ function mount(container, options) {
     else if (!IS.ind.delta.on && (D.delta || deltaBuilding())) deltaStop();
     else deltaView();
     sigApply();                                                    // the chart signals (G1c): made when added, dropped when off
+    miniSync();                                                    // release 1 (1.6c): the mini ticket, drawn by the host
     syncIndicators();
   }
   /* One change, here and in storage (read fresh there, so another tab's choices are kept). `fn` runs twice, so it
@@ -3452,7 +3472,7 @@ function mount(container, options) {
     let html = M.note ? `<div class="ind-note">${esc(M.note)}</div>` : '';
     const q = M.q.trim();
     if (q) {
-      const found = LP.searchIndicators(q);
+      const found = LP.searchIndicators(q).filter(hostOnly);
       html += `<div class="ind-cap">${found.length ? 'Results' : 'No match'}</div>` + found.map(rowHtml).join('');
     } else {
       if (IS.recent.length) html += '<div class="ind-recent"><span class="ind-cap-in">Recent</span>' + IS.recent.map(id => {

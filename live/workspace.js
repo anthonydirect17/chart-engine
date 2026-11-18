@@ -708,6 +708,7 @@ const TK = {
   price: null, last: {}, priceSeq: 0,                // the ticket's price feed: { root: { p, at, seq } } (its instrument's last trade)
   noteTimer: 0, published: '',
 };
+const MINIS = new Set();                              // release 1 (1.6c): the mini tickets on this window's charts (mountMini, below)
 const FRAMED = (() => { try { return window.top !== window.self; } catch (e) { return true; } })();
 let tws = null, tTries = 0, tTimer = 0, instruments = {};
 const tfills = new Map();                             // 'account|id' -> fill (the order connection's execs)
@@ -741,11 +742,17 @@ const accountPick = () => { try { const v = JSON.parse(store.getItem('live-accou
 const PICK_AT_KEY = 'live-account-at-v1';
 function notePick(a) { try { store.setItem('live-account-v1', JSON.stringify(a)); store.setItem(PICK_AT_KEY, String(Date.now())); } catch (e) { /* blocked */ } }
 
-/* notes: the ticket's own line in the ticket's window, else the top bar's */
+/* the account pickers of the ticket and of this window's mini tickets (release 1, 1.6c: the same choice) */
+function syncBars() {
+  if (TK.bar) TK.bar.syncTradeAccounts();
+  for (const m of MINIS) if (m.bar) m.bar.syncTradeAccounts();
+}
+/* notes: the ticket's own line in the ticket's window, else the top bar's; release 1: a mini ticket shows the ticket's notes too */
 function tnote(text, level) {
   if (capture) capture.push(text);
   // the ticket shows its last fill on its own line: a "Filled ..." note would only repeat it (1.13.0, Anthony)
   if (holds() && TK.el && !level && /^(Part filled|Filled) /.test(text || '')) return;
+  if (holds()) for (const m of MINIS) if (m.mode === 'live') miniNote(m, text, level);
   if (holds() && TK.el) {
     const el = tk('note');
     el.textContent = text || ''; el.className = 'tk-note' + (level ? ' ' + level : ''); el.title = text || '';
@@ -775,7 +782,7 @@ function syncGroupPicks() {
   try { core.groupsChanged(); } catch (e) { /* the ticket's notes only */ }   // review 7: a member that left the group mid trade
   if (k === groupPickKey) return;
   groupPickKey = k;
-  if (TK.bar) TK.bar.syncTradeAccounts();
+  syncBars();
   try { followHolder(); noTicketAccount(); } catch (e) { /* core is made below; the feed may call this first */ }
 }
 /* the v3 connection's switches to the ticket (each control shows only while its switch is on), only when they change */
@@ -799,8 +806,8 @@ const core = TC.create({
   tick: tickOf, served: r => !Object.keys(instruments).length || !!instruments[r], fmt: p => fmtPx(p),
   flash: tnote, later: tlater, destroyed: () => false,
   changed: () => renderOrders(), armed: on => ticketArmedUi(on),
-  applied: (pick, cameOn) => { if (TK.bar) TK.bar.syncTradeAccounts(); if (holds() && core.TR.enabled && (cameOn || pick.missed)) ticketAccountNote(pick); /* None too: it says pick an account */ deskCheck(); renderOrders(); },
-  lost: () => {}, syncAccounts: () => { if (TK.bar) TK.bar.syncTradeAccounts(); },
+  applied: (pick, cameOn) => { syncBars(); if (holds() && core.TR.enabled && (cameOn || pick.missed)) ticketAccountNote(pick); /* None too: it says pick an account */ deskCheck(); renderOrders(); },
+  lost: () => {}, syncAccounts: () => syncBars(),
   batch: () => { if (TK.bar) TK.bar.renderBatch(); }, unsent: renderUnsent, positionChanged: () => {},
   armBlocked: () => (holds() ? '' : 'The order ticket is in another window: arm it there.'),
   /* NO STOP (1.13.0): asked in this window (the one Anthony is looking at); a click forwarded from another window was
@@ -983,6 +990,7 @@ function chartTrade(v) {
 function renderCharts() { for (const v of chartViews()) v.pane.setTrade(chartTrade(v)); }
 function renderOrders() {
   if (holds() && TK.bar) { TK.bar.render(); renderTicketExtras(); publish(); }
+  renderMinis();                                         // release 1 (1.6c): the mini tickets on this window's charts
   renderCharts();
   renderLimits();                                        // 1.16.0: the ticket's account may have changed
   renderTags();                                          // 1.34.0: the Trade tags panels
@@ -1047,8 +1055,9 @@ function chartAction(action) {
   if (holds()) { actHere(action); renderOrders(); return; }  // its note is on the ticket's notes line
   forward(withMembers(action));                                // 1.43.0: a group line's members as this window drew them
 }
-function forward(action) {
-  if (!link) { note(TL.NO_CHANNEL, true, 8000); renderCharts(); return; }
+function forward(action, done) {
+  const told = r => { if (typeof done === 'function') done(r); };   // release 1 (1.6c): the mini ticket's note says the answer too
+  if (!link) { note(TL.NO_CHANNEL, true, 8000); told({ answered: false, sent: 0, note: TL.NO_CHANNEL }); renderCharts(); return; }
   /* NO STOP: the ticket's window has a stop of 0 and has not been told "Send" yet; an order that opens or adds is asked
      about here, where Anthony clicked, and goes with his answer (the ticket's window never asks for another window) */
   const hd = holder(), side = action.kind === 'place' ? action.side : action.kind === 'buy' || action.kind === 'sell' ? action.kind : '';
@@ -1059,13 +1068,14 @@ function forward(action) {
          window refuses it for another, or after a Close or Flatten of that instrument since (F2 review, re-review) */
       const asked = { root: hd.root, account: hd.account, askedAt: Date.now() };
       askNoStop('The ' + hd.root + ' order has no stop (the order ticket\'s bracket stop is 0). Later orders with no stop go without asking.',
-        () => forward(Object.assign({}, action, { noStopOk: true }, asked)), () => { note('Not sent: no stop.', true); renderCharts(); }, Object.assign({ fwd: true }, asked));
+        () => forward(Object.assign({}, action, { noStopOk: true }, asked), done), () => { note('Not sent: no stop.', true); told({ answered: false, sent: 0, note: 'Not sent: no stop.' }); renderCharts(); }, Object.assign({ fwd: true }, asked));
       return;
     }
   }
   link.forward(action).then(r => {
     if (!r.answered || !r.sent) note(r.note || 'Nothing was sent.', true, 8000);
     else note(r.note, false, 6000);
+    told(r);
     /* 1.22.0 (F2 in this window too): an entry's move the ticket's window sent waits here as there, drawn at the dropped
        price, so a planned line dragged here meanwhile is measured from it. Ended by this window's own order messages,
        orders list or drop, or the 5 s limit (a refusal comes back as the note above, from the ticket's window) */
@@ -1081,7 +1091,7 @@ function actHere(a) {
   try {
     const R = ticketRoot(), plan = typeof a.id === 'string' ? OT.planIdOf(a.id) : null, oid = plan ? plan.entry : a.id;
     const mem = Array.isArray(a.members) ? a.members.filter(x => typeof x === 'string').slice(0, 200) : undefined;   // 1.43.0: a group line's members as drawn
-    const otherRoot = !!a.root && a.root !== R && ['place', 'placeTyped', 'move', 'cancel', 'planAdd', 'buy', 'sell'].includes(a.kind);
+    const otherRoot = !!a.root && a.root !== R && ['place', 'placeTyped', 'move', 'cancel', 'planAdd', 'buy', 'sell', 'be', 'merge', 'cutHalf', 'cancelAll'].includes(a.kind);   // release 1: the mini ticket's buttons name its chart's instrument
     // asked in the window it came from, and Anthony said Send: only for the instrument and account he was asked about,
     // and not when a Close or Flatten of it went out after he was asked (F2 review, re-review)
     const otherAcct = a.noStopOk === true && !!a.account && a.account !== core.TR.account;
@@ -1089,7 +1099,7 @@ function actHere(a) {
     if (a.noStopOk === true && !otherRoot && !otherAcct && !stale) core.allowNoStop();
     if (otherRoot) tnote('Not sent: the order ticket is on ' + R + ' now, not ' + a.root + '.', 'warn');
     else if (otherAcct) tnote('Not sent: the order ticket is on ' + core.TR.account + ' now, not ' + a.account + '.', 'warn');
-    else if (stale) tnote('Not sent: a Close or Flatten of ' + R + ' went out after that order was asked about. Send it again to be asked.', 'warn');
+    else if (stale) tnote('Not sent: a Flatten of ' + R + ' went out after that order was asked about. Send it again to be asked.', 'warn');
     else if ((a.kind === 'move' || a.kind === 'cancel' || a.kind === 'planAdd') && core.TR.orders.has(oid) && core.TR.orders.get(oid).root !== R) tnote('Not sent: that order is not on ' + R + '.', 'warn');
     else if (a.kind === 'place' && (a.side === 'buy' || a.side === 'sell') && isFinite(a.price)) core.placeChecked(a.side, ['limit', 'stop', 'stopLimit', 'mit'].includes(a.orderKind) ? a.orderKind : null, +a.price);
     /* 1.16.0: a Buy or Sell key with an entry-type modifier held, at the price under the mouse: the kind by the ticket's own
@@ -1105,6 +1115,8 @@ function actHere(a) {
     else if (a.kind === 'buy') core.sendOrder('buy', 'market', null);
     else if (a.kind === 'sell') core.sendOrder('sell', 'market', null);
     else if (a.kind === 'be') core.breakEven();
+    else if (a.kind === 'cutHalf') core.cutHalf();                 // release 1 (1.6c): the Cut half key or a mini ticket in another window
+    else if (a.kind === 'cancelAll') core.cancelAll();             // release 1 (1.6c): a mini ticket's Cancel all in another window
   } finally { capture = was; }
   const cid = core.lastCid() !== cid0 ? core.lastCid() : '';
   return { sent: sentCount - before, note: notes.length ? notes[notes.length - 1] : '', cid };
@@ -1127,6 +1139,7 @@ function pressOffText(root) {
 }
 const tradeHost = {
   pressOff: root => pressOffText(root),
+  mini: o => mountMini(o),                                      // release 1 (1.6c): the mini ticket indicator on a chart
   /* 1.16.0: an entry-type modifier held on the click (orderTypes on) turns the chart's limit or stop into that entry type,
      on the same side of the market (OrderStrategies.kindFor); Shift+click alone places what it always has */
   place: (side, price, root, kind, mods) => {
@@ -1304,7 +1317,7 @@ function mountTicket(v) {
       <span class="seg sans bunit" data-tk-id="bUnit" role="group" aria-label="Bracket stop and target in ticks or points"><button type="button" data-v="t" title="Ticks">t</button><button type="button" data-v="pt" title="Points">pt</button></span>
       <span class="nostop" data-tk-id="bNoStop" title="The stop is 0: an order sent now has no stop" hidden>NO STOP</span></div>
     <div class="tk-row tk-two"><button type="button" class="obtn buy" data-tk-id="buyMkt">Buy MKT</button><button type="button" class="obtn sell" data-tk-id="sellMkt">Sell MKT</button></div>
-    <div class="tk-row tk-three"><button type="button" class="btn" data-tk-id="beBtn" title="Move the stop to break-even">B/E</button><button type="button" class="btn" data-tk-id="flattenBtn" title="Close: cancel every working order on this account and instrument, then close the position at market. Works with Armed off.">Close</button><button type="button" class="btn" data-tk-id="cancelAllBtn" title="Cancel every working order on this account and instrument">Cancel all</button><button type="button" class="btn" data-tk-id="mergeBtn" hidden>Merge</button></div>
+    <div class="tk-row tk-three"><button type="button" class="btn" data-tk-id="beBtn" title="Move the stop to break-even">B/E</button><button type="button" class="btn" data-tk-id="flattenBtn" title="Flatten: cancel every working order on this account and instrument, then close the position at market. Works with Armed off.">Flatten</button><button type="button" class="btn" data-tk-id="cutHalfBtn" title="Cut half">Cut half</button><button type="button" class="btn" data-tk-id="cancelAllBtn" title="Cancel every working order on this account and instrument">Cancel all</button><button type="button" class="btn" data-tk-id="mergeBtn" hidden>Merge</button></div>
     <div class="tk-state ostate">
       <span class="oinfo" data-tk-id="oPos"></span><span class="oinfo olegs" data-tk-id="oLegs"></span><span class="oinfo dim tk-room" data-tk-id="room"></span>
       <span class="oinfo tk-v3" data-tk-id="managed" role="status"></span><span class="oinfo tk-v3" data-tk-id="mergeLine" role="status"></span><span class="oinfo tk-fill" data-tk-id="fill"></span>
@@ -1316,13 +1329,13 @@ function mountTicket(v) {
   const map = {};
   for (const el of v.body.querySelectorAll('[data-tk-id]')) map[el.dataset.tkId] = el;
   map.unsentBar = $('wsUnsent'); map.unsentText = $('wsUnsentText'); map.unsentClose = document.createElement('button');   // the window's own note (one per window)
-  TK.view = map; TK.el = v.body.firstChild;
+  TK.view = map; TK.el = v.body.firstChild; TK.v3 = {};
   map.root.value = TK.root;
   TK.bar = TC.wire(id => map[id] || null, core, {
     U, LP, prefix: PREFIX, ticket: true, root: () => TK.root, flash: tnote, render: () => renderOrders(), listen: (t, type, fn) => { t.addEventListener(type, fn); v.cleanups.push(() => t.removeEventListener(type, fn)); },
     tick: tickOf, lastPrice: () => (TK.last[TK.root] ? TK.last[TK.root].p : null), pointValue: r => (instruments[r] || {}).pointValue || 0, precision: () => precisionOf(TK.root),
     pickViewAccount: a => { notePick(a); renderOrders(); },
-    accountPicked: a => { notePick(a); renderOrders(); },
+    accountPicked: a => { notePick(a); syncBars(); renderOrders(); },   // release 1 (1.6c): the mini tickets' pickers show it too
     clearAccountNote: () => { map.oAcctNote.textContent = ''; map.oAcctNote.title = ''; },
     armBlocked: () => (holds() ? '' : 'The order ticket is in another window: arm it there.'),
   });
@@ -1335,7 +1348,7 @@ function mountTicket(v) {
     startTicketPrice();
     renderOrders();
   });
-  /* "Also open": the ticket's account on another instrument, each with its own Close */
+  /* "Also open": the ticket's account on another instrument, each with its own Flatten (Close until release 1) */
   map.also.addEventListener('click', e => {
     const b = e.target.closest('button[data-close]');
     if (!b) return;
@@ -1393,7 +1406,7 @@ function renderTicketExtras() {
   const el = tk('also');
   if (el.dataset.key === key) return;
   el.dataset.key = key;
-  el.innerHTML = rows.map(x => `<span class="tk-also-row"><span>Also open: ${esc(x.text)}</span><button type="button" class="btn" data-close="${x.root}" title="Close ${x.root}: cancel its orders and close its position at market on ${esc(acct)}">Close</button></span>`).join('');
+  el.innerHTML = rows.map(x => `<span class="tk-also-row"><span>Also open: ${esc(x.text)}</span><button type="button" class="btn" data-close="${x.root}" title="Flatten ${x.root}: cancel its orders and close its position at market on ${esc(acct)}">Flatten</button></span>`).join('');
 }
 /* 1.34.0 (Anthony 2026-10-20): the ticket says the account's room where its rules give it (ChartBridge's own numbers: the daily
    room and the room to the floor, as the Account page's Room column), and this entry's risk at its stop (Qty x the bracket's stop,
@@ -1441,9 +1454,218 @@ function stopTicketPrice() {
   const P = TK.price; TK.price = null;
   if (P) { P.sock.onmessage = P.sock.onclose = null; try { P.sock.close(); } catch (e) { /* closed */ } }
 }
-setInterval(() => { if (holds() && TK.bar) { core.groupProjectTick(); TK.bar.renderPositionInfo(); renderRoom(); } }, 500);   // 1.34.0: the room as ChartBridge's numbers change   // the P&L, as the single chart page's; 1.34.0: a group's projected sizes
+setInterval(() => { if (holds() && TK.bar) { core.groupProjectTick(); TK.bar.renderPositionInfo(); renderRoom(); for (const m of MINIS) if (m.mode === 'live' && m.bar) m.bar.renderPositionInfo(); } }, 500);   // 1.34.0: the room as ChartBridge's numbers change   // the P&L, as the single chart page's; 1.34.0: a group's projected sizes
 
-/* ---------------- hotkeys: in either window. Buy, Sell and B/E go to the ticket's window; Close and Flatten all go from
+/* ======================================================================== the mini ticket (release 1, Bot-Lab plan step 1.6c)
+ * Anthony 2026-11-17 (the mockup; "lets lock this in as part of the larger build"): an indicator added from a chart's
+ * Indicators menu (Mini ticket, under Trades), dragged anywhere on the chart by its grip, its spot kept per chart
+ * (live-mini-ticket-v1 { <paneId>: { x, y } }, CSS px from the chart's top left corner). Compact by default: Armed, Qty, Buy MKT,
+ * Sell MKT, Flatten, Cut half, Merge and the position, with no account picker; the arrow expands it to every control of the
+ * regular ticket, with the account or group picker (the same choice). It is NOT a second ticket:
+ *   - in the ticket's window its controls are the ticket's own, wired a second time to the same TradeCore (TC.wire): the same
+ *     account or group, Armed switch, Qty, bracket and strategy, the same order path and the same checks;
+ *   - in a window without the ticket its order buttons are forwarded to the ticket's window like the ticket's chart clicks and
+ *     keys (TicketLink: Buy, Sell, B/E, Cut half, Cancel all, Merge), and Flatten goes from this window as the Flatten key
+ *     does; what only the ticket's window sets (Armed, the account, Qty, the bracket, the strategy) is shown, and set there.
+ * It acts only while its chart is on the ticket's instrument; on another it says so and every order button is off.
+ * Merge shows in both views, gated as on the ticket (the merge switch on; Armed; two or more stops working).
+ */
+const MINI_KEY = 'live-mini-ticket-v1';
+const MINI_W = 272, MINI_W_OPEN = 300, MINI_AXIS = 72;   // the mockup's widths; the default spot keeps clear of the price axis
+const miniSpots = () => { try { const v = JSON.parse(store.getItem(MINI_KEY)); return v && typeof v === 'object' && !Array.isArray(v) ? v : {}; } catch (e) { return {}; } };
+function saveMiniSpot(id, x, y) {
+  const all = miniSpots();                              // read fresh: another chart's spot is kept
+  all[id] = { x: Math.round(x), y: Math.round(y) };
+  try { store.setItem(MINI_KEY, JSON.stringify(all)); } catch (e) { /* blocked: the spot holds for this page load */ }
+}
+const MINI_GRIP = '<svg width="12" height="16" viewBox="0 0 12 16" aria-hidden="true"><g fill="currentColor"><circle cx="3" cy="3" r="1.4"/><circle cx="9" cy="3" r="1.4"/><circle cx="3" cy="8" r="1.4"/><circle cx="9" cy="8" r="1.4"/><circle cx="3" cy="13" r="1.4"/><circle cx="9" cy="13" r="1.4"/></g></svg>';
+const MINI_CHEV = '<svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M3 5l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+/* One DOM for both views: .mt-x is shown expanded only; expanded, the Qty row and the Buy and Sell row take their own lines in the
+   ticket's order (live/workspace.css .mini-tk). The ids are the ticket's (TradeCore.wire reads them). */
+function miniMarkup() {
+  const qty = [1, 2, 3, 4, 5, 6, 7, 8, 9].map(n => '<option value="' + n + '">' + n + '</option>').join('');
+  return `<div class="tk-row mt-head"><button type="button" class="mt-ic mt-grip" data-mt-id="grip" data-keep aria-label="Drag the mini ticket" title="Drag to move. The spot is kept for this chart.">${MINI_GRIP}</button><span class="mt-root" data-mt-id="rootName"></span><span class="mt-fill"></span><button type="button" class="mt-ic mt-chev" data-mt-id="chev" data-keep aria-expanded="false">${MINI_CHEV}</button></div>
+    <div class="tk-row"><button type="button" class="arm" data-mt-id="armBtn" role="switch" aria-checked="false" title="Armed: the order ticket's own switch. One click trades, no confirmation."><span class="knob" aria-hidden="true"></span><span class="arm-text"><span data-mt-id="armText">Armed off</span></span></button></div>
+    <div class="tk-row tk-acct mt-x mt-acct"><span class="glabel">Account</span><select class="acct-sel acct-main" data-mt-id="oAcct" aria-label="Account or group, the order ticket's: the same choice" title="The order ticket's account or group: changing it here changes it there"></select></div>
+    <div class="tk-row mt-trade"><div class="tk-row mt-qrow"><span class="glabel mt-x">Qty</span><select class="acct-sel oqty" data-mt-id="oQty" aria-label="Order quantity">${qty}</select><span class="ounit mt-x" data-mt-id="oQtyCap"></span>
+      <select class="acct-sel bpre mt-x" data-mt-id="bPreset" aria-label="Bracket preset" title="Bracket preset: a ratio links the target to the stop"></select>
+      <span class="bsave mt-x" data-mt-id="bSaveBox" hidden><input class="oin bname" data-mt-id="bSaveName" type="text" maxlength="24" spellcheck="false" autocomplete="off" aria-label="Name for the bracket preset"><button type="button" class="btn" data-mt-id="bSaveOk">Save</button><button type="button" class="btn" data-mt-id="bSaveNo" aria-label="Do not save">x</button></span></div>
+      <div class="tk-row tk-two mt-bs"><button type="button" class="obtn buy" data-mt-id="buyMkt">Buy MKT</button><button type="button" class="obtn sell" data-mt-id="sellMkt">Sell MKT</button></div></div>
+    <div class="tk-row tk-strat mt-x mt-strat" data-mt-id="stratRow" hidden><span class="glabel">Strategy</span><select class="acct-sel tk-ssel" data-mt-id="strat" aria-label="Order Strategy: Shift+click and the order keys send it" title="Order Strategy: Shift+click, Buy MKT, Sell MKT and their keys send it in place of the bracket. None: the bracket."></select></div>
+    <div class="tk-sdesc mt-x mt-sdesc" data-mt-id="stratDesc" hidden></div>
+    <div class="tk-row tk-bk mt-x mt-bk"><span class="glabel" title="Stop and target from the fill (0 = none)">Bracket</span><input class="oin" data-mt-id="bStop" type="number" min="0" max="200" step="1" inputmode="decimal" aria-label="Bracket stop in ticks, 0 for none" title="Stop, from the fill (0 = none)">
+      <input class="oin" data-mt-id="bTarget" type="number" min="0" max="200" step="1" inputmode="decimal" aria-label="Bracket target in ticks, 0 for none" title="Target, from the fill (0 = none)">
+      <span class="seg sans bunit" data-mt-id="bUnit" role="group" aria-label="Bracket stop and target in ticks or points"><button type="button" data-v="t" title="Ticks">t</button><button type="button" data-v="pt" title="Points">pt</button></span>
+      <span class="nostop" data-mt-id="bNoStop" title="The stop is 0: an order sent now has no stop" hidden>NO STOP</span></div>
+    <div class="tk-row tk-three mt-btns"><button type="button" class="btn mt-x" data-mt-id="beBtn" title="Move the stop to break-even">B/E</button><button type="button" class="btn" data-mt-id="flattenBtn" title="Flatten: cancel every working order on this account and instrument, then close the position at market. Works with Armed off.">Flatten</button><button type="button" class="btn" data-mt-id="cutHalfBtn" title="Cut half">Cut half</button><button type="button" class="btn mt-x" data-mt-id="cancelAllBtn" title="Cancel every working order on this account and instrument">Cancel all</button><button type="button" class="btn" data-mt-id="mergeBtn" hidden>Merge</button></div>
+    <div class="tk-state ostate mt-state"><span class="oinfo" data-mt-id="oPos"></span><span class="oinfo olegs" data-mt-id="oLegs"></span><span class="oinfo tk-v3 mt-x" data-mt-id="managed" role="status"></span><span class="oinfo tk-v3" data-mt-id="mergeLine" role="status"></span>
+      <span class="oinfo dim oother mt-x" data-mt-id="oOther"></span><span class="oinfo acct-note mt-x" data-mt-id="oAcctNote" role="status"></span><span class="oinfo acct-note batch-note mt-x" data-mt-id="oCancel" role="status"></span><span class="ooff" data-mt-id="oOff"></span>
+      <span class="oinfo mt-away" data-mt-id="away" role="status"></span><span class="tk-note" data-mt-id="note" role="status"></span></div>`;
+}
+/* the instrument the ticket is on is not this chart's: the mini ticket sends nothing */
+const miniAway = m => m.root() !== ticketRoot();
+function miniNote(m, text, level) {
+  const el = m.map && m.map.note;
+  if (!el) return;
+  el.textContent = text || ''; el.className = 'tk-note' + (level ? ' ' + level : ''); el.title = text || '';
+  clearTimeout(m.noteTimer);
+  if (text) m.noteTimer = setTimeout(() => { if (el.textContent === text) { el.textContent = ''; el.title = ''; } }, level === 'error' ? 12000 : 6000);
+}
+/** Draw a mini ticket in a chart's stage (ChartLive.mount's trade.mini): { stage, paneId, root }. Returns its undo. */
+function mountMini(o) {
+  const m = { paneId: o.paneId, root: typeof o.root === 'function' ? o.root : () => 'MNQ', stage: o.stage, open: false, mode: '', map: null, bar: null, cleanups: [], outer: [], spot: null, noteTimer: 0, v3: {} };
+  const s = miniSpots()[m.paneId];
+  if (s && isFinite(s.x) && isFinite(s.y)) m.spot = { x: +s.x, y: +s.y };
+  m.el = document.createElement('section');
+  m.el.className = 'obar tk-bar mini-tk';
+  m.el.setAttribute('aria-label', 'Mini order ticket');
+  o.stage.appendChild(m.el);
+  if (typeof ResizeObserver === 'function') { const ro = new ResizeObserver(() => placeMini(m)); ro.observe(o.stage); m.outer.push(() => ro.disconnect()); }
+  MINIS.add(m);
+  buildMini(m);
+  renderMini(m);
+  return () => { for (const f of m.cleanups.splice(0)) f(); for (const f of m.outer.splice(0)) f(); clearTimeout(m.noteTimer); MINIS.delete(m); m.el.remove(); };
+}
+/* Its spot: the saved one, kept inside the chart (clamped when the chart is smaller); first time: the top right, clear of the axis */
+function placeMini(m) {
+  const sw = m.stage.clientWidth, sh = m.stage.clientHeight, w = m.el.offsetWidth || (m.open ? MINI_W_OPEN : MINI_W), h = m.el.offsetHeight || 0;
+  const want = m.spot || { x: sw - w - MINI_AXIS, y: 8 };
+  const x = Math.max(0, Math.min(Math.max(0, sw - w), want.x)), y = Math.max(0, Math.min(Math.max(0, sh - h), want.y));
+  m.el.style.left = x + 'px'; m.el.style.top = y + 'px';
+}
+function buildMini(m) {
+  for (const f of m.cleanups.splice(0)) f();
+  m.mode = holds() ? 'live' : 'remote';
+  m.v3 = {};
+  m.el.innerHTML = miniMarkup();
+  const map = {};
+  for (const el of m.el.querySelectorAll('[data-mt-id]')) map[el.dataset.mtId] = el;
+  map.obar = m.el;
+  map.unsentBar = $('wsUnsent'); map.unsentText = $('wsUnsentText'); map.unsentClose = document.createElement('button');   // the window's own note
+  m.map = map; m.bar = null;
+  const listen = (t, type, fn, cap) => { t.addEventListener(type, fn, cap); m.cleanups.push(() => t.removeEventListener(type, fn, cap)); };
+  /* the arrow: compact or every control */
+  listen(map.chev, 'click', e => { e.currentTarget.blur(); m.open = !m.open; renderMini(m); });
+  /* the grip: drag anywhere on the chart, kept for this chart */
+  listen(map.grip, 'pointerdown', e => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    try { map.grip.setPointerCapture(e.pointerId); } catch (err) { /* not capturable: the moves still come while over it */ }
+    const r = m.el.getBoundingClientRect(), sr = m.stage.getBoundingClientRect();
+    m.drag = { dx: e.clientX - r.left, dy: e.clientY - r.top, sx: sr.left, sy: sr.top };
+    m.el.classList.add('is-drag');
+  });
+  listen(map.grip, 'pointermove', e => {
+    if (!m.drag) return;
+    m.spot = { x: e.clientX - m.drag.sx - m.drag.dx, y: e.clientY - m.drag.sy - m.drag.dy };
+    placeMini(m);
+  });
+  const drop = () => {
+    if (!m.drag) return;
+    m.drag = null; m.el.classList.remove('is-drag');
+    m.spot = { x: parseFloat(m.el.style.left) || 0, y: parseFloat(m.el.style.top) || 0 };   // where it was kept inside the chart
+    saveMiniSpot(m.paneId, m.spot.x, m.spot.y);
+  };
+  listen(map.grip, 'pointerup', drop); listen(map.grip, 'pointercancel', drop); listen(map.grip, 'lostpointercapture', drop);
+  /* a chart not on the ticket's instrument sends nothing: caught before any order button's own handler (capture) */
+  listen(m.el, 'click', e => {
+    const b = e.target.closest('button');
+    if (!b || b.hasAttribute('data-keep') || !miniAway(m)) return;
+    e.stopImmediatePropagation(); e.preventDefault(); b.blur();
+    miniNote(m, miniAwayText(m), 'warn');
+  }, true);
+  if (m.mode === 'live') {
+    m.bar = TC.wire(id => map[id] || null, core, {
+      U, LP, prefix: PREFIX, ticket: true, root: () => TK.root, flash: tnote, render: () => renderOrders(), listen,
+      tick: tickOf, lastPrice: () => (TK.last[TK.root] ? TK.last[TK.root].p : null), pointValue: r => (instruments[r] || {}).pointValue || 0, precision: () => precisionOf(TK.root),
+      pickViewAccount: a => { notePick(a); renderOrders(); },
+      accountPicked: a => { notePick(a); syncBars(); renderOrders(); },   // release 1 (1.6c): the mini tickets' pickers show it too
+      clearAccountNote: () => { if (TK.view) { tk('oAcctNote').textContent = ''; tk('oAcctNote').title = ''; } },
+      armBlocked: () => (holds() ? '' : 'The order ticket is in another window: arm it there.'),
+    });
+    listen(map.strat, 'change', () => { m.bar.handBack(map.strat); pickStrategy(map.strat.value); });
+    listen(map.mergeBtn, 'click', e => {
+      e.currentTarget.blur();
+      if (e.detail === 0) { tnote('Order buttons work by click only, not by keyboard.', 'warn'); return; }
+      core.merge();
+    });
+    for (const k of ['bStop', 'bTarget', 'bPreset']) for (const t of ['input', 'change']) listen(map[k], t, () => setTimeout(publish, 0));
+    m.bar.syncTradeAccounts();
+  } else {
+    /* another window has the ticket (or none has): forwarded there, as its chart clicks and keys; Flatten goes from here, as the key */
+    const click = fn => e => { e.currentTarget.blur(); if (e.detail === 0) { miniNote(m, 'Order buttons work by click only, not by keyboard.', 'warn'); return; } fn(); };
+    const fwd = kind => click(() => forward({ kind, root: m.root() }, r => miniNote(m, r.note || (r.sent ? '' : 'Nothing was sent.'), r.answered && r.sent ? '' : 'warn')));
+    listen(map.buyMkt, 'click', fwd('buy')); listen(map.sellMkt, 'click', fwd('sell')); listen(map.beBtn, 'click', fwd('be'));
+    listen(map.cutHalfBtn, 'click', fwd('cutHalf')); listen(map.cancelAllBtn, 'click', fwd('cancelAll')); listen(map.mergeBtn, 'click', fwd('merge'));
+    listen(map.flattenBtn, 'click', click(() => { const was = capture, notes = []; capture = notes; try { core.flattenHere(); } finally { capture = was; } miniNote(m, notes[notes.length - 1] || '', ''); renderOrders(); }));
+    listen(map.armBtn, 'click', e => { e.currentTarget.blur(); miniNote(m, holder() ? 'Armed is the order ticket\'s: arm it in the ticket\'s window.' : TL.NO_TICKET, 'warn'); });
+  }
+}
+function miniAwayText(m) { return 'The order ticket is on ' + ticketRoot() + ': this chart is ' + m.root() + '. Switch the ticket to ' + m.root() + ' to trade from here.'; }
+function renderMinis() { for (const m of MINIS) renderMini(m); }
+function renderMini(m) {
+  if (m.mode !== (holds() ? 'live' : 'remote')) buildMini(m);   // the ticket came or went: the other wiring
+  const map = m.map, away = miniAway(m), R = m.root();
+  m.el.classList.toggle('is-open', m.open);
+  if (map.rootName.textContent !== R) map.rootName.textContent = R;
+  const ct = m.open ? 'Show less' : 'Show every control';
+  map.chev.setAttribute('aria-expanded', String(m.open)); map.chev.setAttribute('aria-label', ct); map.chev.title = ct;
+  if (m.mode === 'live') {
+    m.bar.render();
+    renderV3Into(id => map[id] || null, m.v3);
+    miniArmed(m, core.TR.armed);
+  } else miniRemote(m);
+  const at = away ? miniAwayText(m) : '';
+  if (map.away.textContent !== at) { map.away.textContent = at; map.away.title = at; }
+  map.away.classList.toggle('warn', away);
+  if (away) for (const el of m.el.querySelectorAll('button, input, select')) if (!el.hasAttribute('data-keep')) el.disabled = true;
+  placeMini(m);
+}
+function miniArmed(m, on) {
+  m.map.armBtn.setAttribute('aria-checked', String(on));
+  m.map.armText.textContent = on ? 'ARMED' : 'Armed off';
+  m.el.classList.toggle('armed', on);
+}
+/* A window without the ticket: the ticket's state as its window announces it, this window's own positions and orders (its own
+   connection follows the ticket's account), nothing set from here. */
+function miniRemote(m) {
+  const map = m.map, TR = core.TR, hd = holder(), R = ticketRoot(), acct = ticketAccount(), on = TR.enabled && !!hd && !!acct, armed = !!(hd && hd.armed);
+  miniArmed(m, armed);
+  map.armBtn.disabled = !TR.enabled;
+  const label = acct ? String(acct).replace(/^group:/, 'group ') : 'None';
+  if (map.oAcct.dataset.v !== acct) { map.oAcct.dataset.v = acct; map.oAcct.replaceChildren(new Option(label, acct)); }
+  map.oAcct.disabled = true; map.oAcct.title = 'The order ticket\'s account or group: change it in the ticket\'s window';
+  const q = hd && Number.isInteger(hd.qty) ? hd.qty : 1;
+  map.oQty.value = String(Math.min(9, Math.max(1, q))); map.oQty.disabled = true; map.oQty.title = 'The order ticket\'s Qty: change it in the ticket\'s window';
+  map.oQtyCap.textContent = '';
+  renderV3Into(id => map[id] || null, m.v3, armed);                // the strategy shown (set in the ticket's window) and Merge
+  for (const k of ['bPreset', 'bStop', 'bTarget', 'strat']) { map[k].disabled = true; map[k].title = 'The order ticket\'s: change it in the ticket\'s window'; }
+  for (const b of map.bUnit.querySelectorAll('button')) b.disabled = true;
+  map.bStop.value = hd && Number.isFinite(hd.stop) ? String(hd.stop) : ''; map.bTarget.value = '';
+  map.bNoStop.hidden = !(hd && hd.stop === 0);
+  for (const id of ['buyMkt', 'sellMkt', 'cancelAllBtn']) { map[id].disabled = !on; map[id].classList.toggle('is-off', !armed); }
+  map.flattenBtn.disabled = !TR.enabled || !acct;
+  const pos = TR.positions.get(acct + '|' + R), legs = pos && pos.qty ? OT.breakEvenLegs(TR.orders.values(), acct, R, pos.qty, null) : null;
+  map.beBtn.disabled = !on || !(legs && legs.ids.length > 0); map.beBtn.classList.toggle('is-off', !armed);
+  const st = core.cutHalfState(R);
+  map.cutHalfBtn.disabled = !st.ok; if (map.cutHalfBtn.title !== st.title) map.cutHalfBtn.title = st.title;
+  map.mergeBtn.disabled = map.mergeBtn.disabled || !hd;
+  /* the position on the ticket's account and instrument, and its stop and target cover (a group: each member's) */
+  let text = 'Flat', lines = '';
+  if (core.isGroup(acct)) text = core.groupMembers(acct).map(a => { const p = TR.positions.get(a + '|' + R); return a + ' ' + (p && p.qty ? (p.qty > 0 ? '+' : '') + p.qty : 'flat'); }).join(' · ');
+  else if (pos && pos.qty) {
+    text = (pos.qty > 0 ? 'LONG ' : 'SHORT ') + Math.abs(pos.qty) + ' at ' + fmtPx(pos.avgPrice, R);
+    lines = OT.protectionLine(OT.legSummary(TR.orders.values(), acct, R, pos.qty)).text;
+  }
+  if (!hd) text = 'No window has the order ticket';
+  if (map.oPos.textContent !== text) { map.oPos.textContent = text; map.oPos.title = text; }
+  map.oPos.className = 'oinfo pz' + (pos && pos.qty && hd ? '' : ' flat');
+  if (map.oLegs.textContent !== lines) map.oLegs.textContent = lines;
+  map.oOff.textContent = TR.enabled ? '' : 'Trading off: ' + TR.reason; map.oOff.hidden = TR.enabled;
+}
+
+/* ---------------- hotkeys: in either window. Buy, Sell, B/E and Cut half (release 1) go to the ticket's window; Flatten (Close until
+   release 1) and Flatten all go from
    this one, on the ticket's account (Anthony 2026-10-01). */
 let HK = OT.cleanHotkeys(prefs.raw.get(LP.KEYS.hotkeys));
 const busy = () => !!pop || $('wsDialog').open || !!document.querySelector('.ws-panel .ind-panel:not([hidden]), .ce-theme-panel:not([hidden]), .ind-chip-list:not([hidden]), .chip-pop:not([hidden]), .cb-pin') || !$('wsSettings').hidden;
@@ -1458,12 +1680,13 @@ const busy = () => !!pop || $('wsDialog').open || !!document.querySelector('.ws-
 /* 1.50.0: the League tab is the Colosseum (its name in the note); 1.51.0: the Agent and Bot tabs are Praetorian's two sides */
 const COVERING_TABS = { 'fl-on': 'Legion', 'ag-on': 'Praetorian', 'bt-on': 'Praetorian', 'lg-on': 'Colosseum' };
 const coveringTab = () => { for (const c of Object.keys(COVERING_TABS)) if (document.body.classList.contains(c)) return COVERING_TABS[c]; return ''; };
-const LIVE_UNDER_TAB = new Set(['close', 'flattenAll', 'reject']);
+/* release 1 (1.6c): Cut half only reduces, so it is live under a tab too */
+const LIVE_UNDER_TAB = new Set(['close', 'flattenAll', 'reject', 'cutHalf']);
 const ACCEPT_SHOWN_ON = new Set(['Praetorian']);         // the tabs that show the proposal the Accept key answers
 const underTab = (id, fn) => () => {
   const t = coveringTab();
   if (t && !LIVE_UNDER_TAB.has(id) && !(id === 'accept' && ACCEPT_SHOWN_ON.has(t))) {
-    note('Hotkey ignored: the ' + t + ' tab covers the chart. Only Close, Flatten all and Reject work under ' + (ACCEPT_SHOWN_ON.has(t) ? 'it, and Accept for a proposal shown on it.' : 'a tab.'), true);
+    note('Hotkey ignored: the ' + t + ' tab covers the chart. Only Flatten, Cut half, Flatten all and Reject work under ' + (ACCEPT_SHOWN_ON.has(t) ? 'it, and Accept for a proposal shown on it.' : 'a tab.'), true);
     return;
   }
   fn();
@@ -1472,7 +1695,7 @@ const underTab = (id, fn) => () => {
 const keyAct = kind => { if (holds()) { actHere({ kind }); renderOrders(); } else { const hd = holder(); forward(kind === 'be' || !hd || !hd.root ? { kind } : { kind, root: hd.root }); } };
 document.addEventListener('keydown', window.ChartLive.hotkeyHandler({
   keys: () => HK, root: document.body, busy,
-  actions: { buy: underTab('buy', () => keyAct('buy')), sell: underTab('sell', () => keyAct('sell')), be: underTab('be', () => keyAct('be')), close: underTab('close', () => core.flattenHere()), flattenAll: underTab('flattenAll', () => core.flattenAll()) },
+  actions: { buy: underTab('buy', () => keyAct('buy')), sell: underTab('sell', () => keyAct('sell')), be: underTab('be', () => keyAct('be')), close: underTab('close', () => core.flattenHere()), flattenAll: underTab('flattenAll', () => core.flattenAll()), cutHalf: underTab('cutHalf', () => keyAct('cutHalf')) },
   ignored: () => note(window.ChartLive.HOTKEY_IN_BOX, true),
 }));
 /* 1.16.0: the workspace's own hotkeys (Maximize panel), kept apart from the trading ones (live-ws-keys-v1) and never one
@@ -1505,7 +1728,7 @@ function syncKeys() {
   el.textContent = on ? 'KEYS ON' : 'KEYS OFF';
   el.className = 'ws-keys' + (on ? ' on' : '');
   el.title = (on ? 'A hotkey pressed now works in this window' : 'Hotkeys do nothing now: this window does not have the focus, or a box, menu or dialog has it. Click the page (not a box) to turn them on.') +
-    (core.TR.enabled ? '\nClose: ' + closeTarget() + '. Flatten all: ' + ticketAccount() + '.' : '');
+    (core.TR.enabled ? '\nFlatten: ' + closeTarget() + '. Flatten all: ' + ticketAccount() + '.' : '');
 }
 for (const t of ['focusin', 'focusout', 'pointerup', 'keyup']) document.addEventListener(t, () => setTimeout(syncKeys, 0), true);
 window.addEventListener('focus', syncKeys); window.addEventListener('blur', syncKeys);
@@ -1699,41 +1922,46 @@ function setText(el, text, level, tip) {
   const c = 'oinfo tk-v3' + (level ? ' ' + level : '');
   if (el.className !== c) el.className = c;
 }
-let stratOptsKey = '';
 function renderTicketV3() {
   if (!TK.view) return;
-  const TR = core.TR, sOn = core.switchOn('strategies'), sg = activeStrategy();
-  tk('stratRow').hidden = !sOn;
+  renderV3Into(tk, TK.v3 || (TK.v3 = {}));
+}
+/* release 1 (1.6c): the ticket's and each mini ticket's (get: the control by its id; cache: that view's own; armedShown: the
+   Armed it shows, the ticket's window's when it is another window's) */
+function renderV3Into(get, cache, armedShown) {
+  const TR = core.TR, sOn = core.switchOn('strategies'), sg = activeStrategy(), R = ticketRoot(), acct = ticketAccount();
+  const armed = armedShown === undefined ? TR.armed : armedShown;
+  get('stratRow').hidden = !sOn;
   if (sOn) {
     const list = stratList(), key = list.map(x => x.id + '|' + x.name).join(',');
-    if (key !== stratOptsKey) {
-      stratOptsKey = key;
-      tk('strat').replaceChildren(new Option('None (the bracket)', ''), ...list.map(x => new Option(x.name + (x.hotkey ? ' (' + x.hotkey + ')' : ''), x.id)));
+    if (key !== cache.strat) {
+      cache.strat = key;
+      get('strat').replaceChildren(new Option('None (the bracket)', ''), ...list.map(x => new Option(x.name + (x.hotkey ? ' (' + x.hotkey + ')' : ''), x.id)));
     }
     const v = sg ? sg.id : '';
-    if (tk('strat').value !== v) tk('strat').value = v;
+    if (get('strat').value !== v) get('strat').value = v;
   }
-  tk('stratDesc').hidden = !sg;
-  if (sg) setText(tk('stratDesc'), OS.describe(sg), '');
-  tk('stratDesc').className = 'tk-sdesc';
-  tk('obar').classList.toggle('tk-has-strat', !!sg);           // the bracket boxes and presets step aside (the strategy has its own)
-  const mb = tk('mergeBtn'), mOn = core.switchOn('merge');
+  get('stratDesc').hidden = !sg;
+  if (sg) setText(get('stratDesc'), OS.describe(sg), '');
+  get('stratDesc').className = 'tk-sdesc' + (get('stratDesc').classList.contains('mt-x') ? ' mt-x mt-sdesc' : '');
+  get('obar').classList.toggle('tk-has-strat', !!sg);           // the bracket boxes and presets step aside (the strategy has its own)
+  const mb = get('mergeBtn'), mOn = core.switchOn('merge');
   mb.hidden = !mOn;
   if (mOn) {
-    const pos = TR.positions.get(TR.account + '|' + TK.root), legs = pos && pos.qty ? OT.legSummary(TR.orders.values(), TR.account, TK.root, pos.qty) : null;
+    const pos = TR.positions.get(acct + '|' + R), legs = pos && pos.qty ? OT.legSummary(TR.orders.values(), acct, R, pos.qty) : null;
     const ok = TR.enabled && !!legs && legs.stopLegs >= 2;
     mb.disabled = !ok;
-    mb.classList.toggle('is-off', !TR.armed);
-    const t = ok ? 'Merge: one stop and one target set for the whole ' + TK.root + ' position at the first leg\'s prices (ChartBridge does the swap and puts the brackets back if anything fails)'
+    mb.classList.toggle('is-off', !armed);
+    const t = ok ? 'Merge: one stop and one target set for the whole ' + R + ' position at the first leg\'s prices (ChartBridge does the swap and puts the brackets back if anything fails)'
       : 'Merge needs an open position here with two or more stops working';
     if (mb.title !== t) mb.title = t;
   }
-  const mg = core.managedOf(TR.account, TK.root).map(OS.managedLine).filter(x => x.text);
-  setText(tk('managed'), mg.map(x => x.text).join(' · '), mg.some(x => x.level === 'error') ? 'error' : mg.some(x => x.level === 'warn') ? 'warn' : '', mg.map(x => x.tip || x.text).join(' · '));
-  const pos = TR.positions.get(TR.account + '|' + TK.root);
-  if (!(pos && pos.qty)) TR.merges.delete(TR.account + '|' + TK.root);   // the last Merge is shown while its position is open
-  const ml = OS.mergeLine(TR.merges.get(TR.account + '|' + TK.root));
-  setText(tk('mergeLine'), ml.text, ml.level);
+  const mg = core.managedOf(acct, R).map(OS.managedLine).filter(x => x.text);
+  setText(get('managed'), mg.map(x => x.text).join(' · '), mg.some(x => x.level === 'error') ? 'error' : mg.some(x => x.level === 'warn') ? 'warn' : '', mg.map(x => x.tip || x.text).join(' · '));
+  const pos = TR.positions.get(acct + '|' + R);
+  if (!(pos && pos.qty)) TR.merges.delete(acct + '|' + R);   // the last Merge is shown while its position is open
+  const ml = OS.mergeLine(TR.merges.get(acct + '|' + R));
+  setText(get('mergeLine'), ml.text, ml.level);
 }
 /* another window picked a strategy, or read The Desk */
 window.addEventListener('storage', e => {

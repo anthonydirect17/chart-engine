@@ -687,7 +687,7 @@ test('hotkeys under a tab (Anthony 2026-11-11 and 2026-11-12): one place, every 
     fn(doc, (t, w) => notes.push([t, w]), tabs, covering, new Set(new Function('return ' + m[2])()), new Set(new Function('return ' + m[3])()))(id, () => { acted = true; })();
     return [acted, notes];
   };
-  const entry = ['buy', 'sell', 'buy:limit', 'buy:stop', 'sell:limit', 'sell:stop'], undecided = ['be', 'merge', 'strategy:s1'], live = ['close', 'flattenAll', 'reject'];
+  const entry = ['buy', 'sell', 'buy:limit', 'buy:stop', 'sell:limit', 'sell:stop'], undecided = ['be', 'merge', 'strategy:s1'], live = ['close', 'flattenAll', 'reject', 'cutHalf'];   // release 1 (1.6c): Cut half only reduces
   for (const id of entry.concat(undecided, live, ['accept'])) assert.deepStrictEqual(run('', id), [true, []], id + ' on the bare chart: as before, and nothing said');
   for (const cls of Object.keys(tabs)) {
     for (const id of live) assert.deepStrictEqual(run(cls, id), [true, []], id + ' under ' + tabs[cls] + ': live');
@@ -695,7 +695,7 @@ test('hotkeys under a tab (Anthony 2026-11-11 and 2026-11-12): one place, every 
   }
   assert.deepStrictEqual(['fl-on', 'lg-on', 'ag-on', 'bt-on'].map(c => run(c, 'accept')[0]), [false, false, true, true], 'Accept: only on the tabs that show its proposal (Anthony 2026-11-12)');
   // both handlers go through it, and nothing else reaches the actions
-  assert.match(ws, /actions: \{ buy: underTab\('buy', \(\) => keyAct\('buy'\)\), sell: underTab\('sell', \(\) => keyAct\('sell'\)\), be: underTab\('be', \(\) => keyAct\('be'\)\), close: underTab\('close', \(\) => core\.flattenHere\(\)\), flattenAll: underTab\('flattenAll', \(\) => core\.flattenAll\(\)\) \},/);
+  assert.match(ws, /actions: \{ buy: underTab\('buy', \(\) => keyAct\('buy'\)\), sell: underTab\('sell', \(\) => keyAct\('sell'\)\), be: underTab\('be', \(\) => keyAct\('be'\)\), close: underTab\('close', \(\) => core\.flattenHere\(\)\), flattenAll: underTab\('flattenAll', \(\) => core\.flattenAll\(\)\), cutHalf: underTab\('cutHalf', \(\) => keyAct\('cutHalf'\)\) \},/);
   assert.match(ws, /run: id => underTab\(id, \(\) => runExtraKey\(id\)\)\(\),/);
   assert.strictEqual((ws.match(/runExtraKey\(/g) || []).length, 2, 'runExtraKey: its definition and the one guarded call');
 });

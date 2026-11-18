@@ -210,6 +210,8 @@ body.ws-busy[data-edge="nw"], body.ws-busy[data-edge="se"], body.ws-busy[data-ed
 .chart-live .tk-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .chart-live .tk-row > * { min-width: 0; }
 .chart-live .tk-two > * { flex: 1 1 0; }
+/* release 1 (1.6c): B/E, Flatten, Cut half, Cancel all and Merge in a grid of three (the mockup), the hidden ones left out */
+.chart-live .tk-three { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .chart-live .tk-three > * { flex: 1 1 0; padding-inline: 4px; }
 .chart-live .tk-bar .acct-sel { max-width: none; min-height: 28px; padding: 3px 6px; }
 .chart-live .tk-bar .bpre { flex: 1 1 auto; max-width: none; }
@@ -640,3 +642,42 @@ body.ws-tight .ws-body > .chart-live { padding: 2px 3px 2px; }
 #wsTopTabs .ws-btn[aria-pressed="true"] { border-color: var(--ws-gold); background: var(--ws-tint); color: var(--ws-gold-text); }
 /* the Agent and Bot tab buttons after the row, at the same tab padding (the top bar's room at 1366 px, test/workspace-smoke.mjs) */
 .ws-top .ws-btn.ag-tabbtn, .ws-top .ws-btn.bt-tabbtn { padding: 0 9px; }
+
+/* ---------------- the mini ticket (release 1, Bot-Lab plan step 1.6c; the mockup): the order ticket's own controls on a chart,
+   dragged by its grip, its spot kept per chart. One DOM for both views: .mt-x shows expanded only; expanded, the Qty row and the
+   Buy and Sell row take their own lines in the ticket's order (display: contents lifts them into the column). */
+.chart-live .stage > .mini-tk { position: absolute; z-index: 4; width: 272px; max-width: calc(100% - 8px); box-sizing: border-box; padding: 6px; gap: 6px;
+  background: color-mix(in srgb, var(--s2) 96%, transparent); border: 1px solid var(--line-strong); border-radius: 10px; box-shadow: 0 10px 30px rgba(0, 0, 0, .55); font-size: 12px; }
+.chart-live .stage > .mini-tk.is-open { width: 300px; }
+.chart-live .stage > .mini-tk.is-drag { border-color: var(--ws-accent); }
+.chart-live .stage > .mini-tk.armed { border-color: var(--ws-accent); }
+.chart-live .mini-tk:not(.is-open) .mt-x { display: none !important; }
+.chart-live .mini-tk .mt-head { gap: 6px; }
+.chart-live .mini-tk .mt-fill { flex: 1 1 auto; }
+.chart-live .mini-tk .mt-root { font: 600 12px var(--cond); letter-spacing: .06em; color: var(--head); flex: none; }
+.chart-live .mini-tk .mt-ic { width: 30px; height: 30px; flex: none; display: inline-flex; align-items: center; justify-content: center; padding: 0; color: var(--text2);
+  background: transparent; border: 1px solid transparent; border-radius: 8px; cursor: pointer; }
+.chart-live .mini-tk .mt-ic:hover { border-color: var(--line-strong); color: var(--ws-accent); }
+.chart-live .mini-tk .mt-ic:focus-visible { outline: 2px solid var(--ws-accent); outline-offset: 1px; }
+.chart-live .mini-tk .mt-grip { cursor: grab; touch-action: none; }
+.chart-live .mini-tk.is-drag .mt-grip { cursor: grabbing; }
+.chart-live .mini-tk.is-open .mt-chev svg { transform: rotate(180deg); }
+.chart-live .mini-tk .mt-trade { gap: 6px; }
+.chart-live .mini-tk .mt-qrow { flex: none; }
+.chart-live .mini-tk .mt-bs { flex: 1 1 auto; }
+.chart-live .mini-tk.is-open .mt-qrow { flex: 1 1 auto; }
+.chart-live .mini-tk.is-open .mt-trade { display: contents; }
+.chart-live .mini-tk.is-open > .mt-head { order: 0; }
+.chart-live .mini-tk.is-open > .mt-acct { order: 2; }
+.chart-live .mini-tk.is-open .mt-qrow { order: 3; }
+.chart-live .mini-tk.is-open > .mt-strat { order: 4; }
+.chart-live .mini-tk.is-open > .mt-sdesc { order: 5; }
+.chart-live .mini-tk.is-open > .mt-bk { order: 6; }
+.chart-live .mini-tk.is-open .mt-bs { order: 7; }
+.chart-live .mini-tk.is-open > .mt-btns { order: 8; }
+.chart-live .mini-tk.is-open > .mt-state { order: 9; }
+.chart-live .mini-tk.is-open > .tk-row:nth-child(2) { order: 1; }
+.chart-live .mini-tk .mt-state { padding: 4px 4px 2px; border-top: 1px solid var(--line); }
+.chart-live .mini-tk .mt-away { font-size: 11px; }
+.chart-live .mini-tk .mt-away:empty { display: none; }
+.chart-live .mini-tk .mt-away.warn { color: var(--warn); }
