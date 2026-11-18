@@ -103,14 +103,32 @@ personal bot (release 1, step 1.6b)".
   account with Anthony, so a day stop, and the bot's own `flatten` in Auto, cancel only the bot's own working orders (its
   entry, stop and target) and close only the bot's own contracts; Anthony's own contracts and working orders on the same
   account and root are never touched. Its stop and target are cancelled first, and the close waits until none of them can
-  fill; then one market order (`CB#<tag> bot close`) of the smallest of the bot's followed size, what its own stop and target
-  proved, and NinjaTrader's position on its side by both readings. Net long 3 with the bot's 1: it sells 1. NinjaTrader's
-  Flatten of the whole root is no longer used for the bot. The bot's ledger counts only its own share: an execution that is not
-  the bot's (a hand order, a Flatten) changes the bot's share only where the position can no longer hold it, so Anthony's own
-  contracts go first and never enter the bot's dollars or its day stops. When the bot's size cannot be told, only what its own
-  stop and target prove is closed; with nothing to prove it (no leg left, or a trade open in `bot-day.txt` that is not followed)
-  nothing is closed, the pages get an error, and the bot stays stood down. A bot close that goes unfilled is an error (its stop
-  and target were cancelled for it) and is sent again within 5 seconds.
+  fill; then one market order (`CB#<tag> bot close`) of the smallest of what its own stop and target proved and is not closed
+  yet, the bot's followed size, and NinjaTrader's position on its side by both readings. Net long 3 with the bot's 1: it sells 1.
+  NinjaTrader's Flatten of the whole root is no longer used for the bot. The proof is a budget for the whole close (the R12 review
+  of decision 3): once the contracts its stop and target proved are closed, nothing more is ever closed for that trade, and an
+  error says so. The bot's ledger follows its own share: an execution that is not the bot's (a hand order, a Flatten, a Cut half)
+  changes the bot's share only where the position can no longer hold it, so Anthony's own contracts go first; a sell of his
+  beyond his own contracts closes the bot's (Anthony's ruling 1 of 2026-11-18: the bot alone long 2, he sells 1: the bot then
+  holds 1, its stop and target follow 1, and its day counts that contract closed at his price). When the bot's size cannot be
+  told, only what its own stop and target prove is closed; with nothing to prove it (no leg left, or a trade open in
+  `bot-day.txt` that is not followed) nothing is closed, the pages get an error, and the bot stays stood down. A bot close that
+  goes unfilled is an error (its stop and target were cancelled for it) and is sent again within 5 seconds.
+- **After the R12 review of decision 3 and Anthony's rulings of 2026-11-18**:
+  - **The replay fence**: executions already in an account when the bot starts, or when the account is first watched (a
+    NinjaScript recompile delivers the whole session again), are never counted again by the bot; its own fills of this run are.
+  - **A close that cannot go** is an error to the pages after 15 seconds, naming the order or the reason, again every 60
+    seconds until the bot is flat, each time with the voice call `BotNotClosed` (ruling 3; the voice calls of 0.6.22, on only
+    with `voice = on`; `BotNotClosed.wav` is a new file in the voice folder, silent until it is there). The day stop's words say
+    "being closed", "were NOT closed" or "were closed", whichever is true.
+  - **His own exits too big** after the bot's close (ruling 2): the bot's close goes and an error names his exits; his orders
+    are never changed.
+  - **Pause and cancel** (ruling A): his own position or working order on the bot's account and root cancels a bot entry still
+    resting there (within about a second); the bot's filled contracts and its stop and target stay.
+  - **The standing line** (ruling B): while the owner guard blocks entries in Copilot or Auto, the Bot tab shows "Waiting: you
+    hold your own position or order (...)" (`bot`'s `ownerWait`); the refusals stay in the log.
+  - His fills between the guard's read and the placement stay his; a bot order's fill is found before NinjaTrader lists it; a
+    page order ChartBridge has just sent counts for the guard.
 - **The owner guard** (decision 3b, 2026-11-18): no new bot entry while Anthony holds his own position (the root's position
   minus the bot's followed size, by both readings, any contract month) or has his own working order on the bot's account and
   root. Named, like the agents' owner lock ("OWN-1 MNQ holds 2 contracts long that are not the bot's: no bot entry while Anthony
@@ -225,7 +243,8 @@ The non-order parts of release 1 (the lock of 2026-11-15, topic 2).
 `nt8/check/BotHarness.cs` moves from Sim101 to a made-up live personal account and adds FailClosed, SizeCeiling, DayStops,
 LateFill, ReArmRace, OpenAtRestart, CutAtRestart and the day file checks, and for decision 3 OwnerGuardCase, OwnerShare (the loss
 and profit stops, long and short on both sides, Anthony's 2 by hand and his own stop untouched) and OwnerUntold (untold, not followed,
-no leg left, a ledger above its legs' proof, a close rejected); `nt8/check/OrdersHarness.cs` (Cut half: even, odd 3 and 5, a short,
+no leg left, a ledger above its legs' proof, a close rejected, the proof used up) and Review3 (the replay fence, a stuck close
+and its voice call, his oversized exits, the races, rulings A and B); `test/bot.test.js` (the standing line); `nt8/check/OrdersHarness.cs` (Cut half: even, odd 3 and 5, a short,
 pairs per fill, a Merge set, 1 contract and flat, a stale page, readings apart, a second press, working exits, strict keys
 and the gates, a group's members, a rejected close, trading off, and the R12 section), `nt8/check/AgentHarness.cs` (Cut half
 on an agent's pair), `nt8/check/DataHarness.cs` (the feature); `test/start-guard.test.js` and `npm run smoke:start-guard`,
