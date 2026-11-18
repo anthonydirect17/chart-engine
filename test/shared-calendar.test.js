@@ -18,7 +18,7 @@ const S = require('../shared/shared_calendar.js');
 
 const SHARED = path.join(__dirname, '..', 'shared');
 const PINS = {
-  'cme_calendar.json': '1affd11ccd40b2911f3324143dfec426878f8307df248d72dd000f23b2791c3f',
+  'cme_calendar.json': '1a35b18b28c26b0e3139da9de1edbfd799ba2dd2feece3d39fbf2482d0e9eb42',
   'contracts.json': 'ff54367ca6d97568cfaea1236d0c4b3f465eba0148d5020bcd798dd6ee1ac47b',
   'shared_calendar.js': '7853f72528e3ae0732b3817dc33ad0132a518fff3414cb9069fd5a8f93100265',
   'shared_calendar.py': '2652f8c5e70554992bd2e4efa236a2c93f16697671e4955e5a6e0646fadff3a8',
@@ -47,7 +47,7 @@ test('the four files are market-data\'s byte for byte', () => {
 
 test('the loader reads the copy and fails closed outside it', () => {
   const cal = S.loadCalendar();
-  assert.strictEqual(cal.coveredFrom, '2026-01-01');
+  assert.strictEqual(cal.coveredFrom, '2024-01-01');
   assert.strictEqual(cal.coveredTo, '2027-12-31');
   assert.strictEqual(cal.closeTime('2026-04-03'), '09:15');
   assert.strictEqual(cal.prevSession('2026-04-06'), '2026-04-03');

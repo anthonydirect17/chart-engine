@@ -459,7 +459,10 @@
    "session_date": "2025-10-31",
    "in_session": true,
    "weekend": false,
-   "calendar": "not covered"
+   "calendar": {
+    "session_date": "2025-10-31",
+    "in_session": true
+   }
   },
   {
    "label": "2025 autumn switch: Friday 17:00 (the weekend starts, rolls to Monday)",
@@ -472,7 +475,10 @@
    "session_date": "2025-11-03",
    "in_session": false,
    "weekend": true,
-   "calendar": "not covered"
+   "calendar": {
+    "session_date": "2025-11-03",
+    "in_session": false
+   }
   },
   {
    "label": "2025 autumn switch: Sunday 01:30 daylight time (the first 01:30)",
@@ -485,7 +491,10 @@
    "session_date": "2025-11-03",
    "in_session": false,
    "weekend": true,
-   "calendar": "not covered"
+   "calendar": {
+    "session_date": "2025-11-03",
+    "in_session": false
+   }
   },
   {
    "label": "2025 autumn switch: Sunday 01:30 standard time (the second 01:30)",
@@ -498,7 +507,10 @@
    "session_date": "2025-11-03",
    "in_session": false,
    "weekend": true,
-   "calendar": "not covered"
+   "calendar": {
+    "session_date": "2025-11-03",
+    "in_session": false
+   }
   },
   {
    "label": "2025 autumn switch: Sunday 17:59",
@@ -511,7 +523,10 @@
    "session_date": "2025-11-03",
    "in_session": false,
    "weekend": true,
-   "calendar": "not covered"
+   "calendar": {
+    "session_date": "2025-11-03",
+    "in_session": false
+   }
   },
   {
    "label": "2025 autumn switch: Sunday 18:00 (Monday's session opens)",
@@ -524,7 +539,10 @@
    "session_date": "2025-11-03",
    "in_session": true,
    "weekend": false,
-   "calendar": "not covered"
+   "calendar": {
+    "session_date": "2025-11-03",
+    "in_session": true
+   }
   },
   {
    "label": "2025 autumn switch: Monday 16:59",
@@ -537,7 +555,10 @@
    "session_date": "2025-11-03",
    "in_session": true,
    "weekend": false,
-   "calendar": "not covered"
+   "calendar": {
+    "session_date": "2025-11-03",
+    "in_session": true
+   }
   },
   {
    "label": "2025 autumn switch: Monday 17:00 (the daily break, dated Tuesday)",
@@ -550,7 +571,10 @@
    "session_date": "2025-11-04",
    "in_session": false,
    "weekend": false,
-   "calendar": "not covered"
+   "calendar": {
+    "session_date": "2025-11-04",
+    "in_session": false
+   }
   },
   {
    "label": "2025 autumn switch: Monday 17:59",
@@ -563,7 +587,10 @@
    "session_date": "2025-11-04",
    "in_session": false,
    "weekend": false,
-   "calendar": "not covered"
+   "calendar": {
+    "session_date": "2025-11-04",
+    "in_session": false
+   }
   },
   {
    "label": "2025 autumn switch: Monday 18:00 (Tuesday's session opens)",
@@ -576,7 +603,10 @@
    "session_date": "2025-11-04",
    "in_session": true,
    "weekend": false,
-   "calendar": "not covered"
+   "calendar": {
+    "session_date": "2025-11-04",
+    "in_session": true
+   }
   },
   {
    "label": "2024 autumn switch: Friday 16:59",
@@ -589,7 +619,10 @@
    "session_date": "2024-11-01",
    "in_session": true,
    "weekend": false,
-   "calendar": "not covered"
+   "calendar": {
+    "session_date": "2024-11-01",
+    "in_session": true
+   }
   },
   {
    "label": "2024 autumn switch: Friday 17:00 (the weekend starts, rolls to Monday)",
@@ -602,7 +635,10 @@
    "session_date": "2024-11-04",
    "in_session": false,
    "weekend": true,
-   "calendar": "not covered"
+   "calendar": {
+    "session_date": "2024-11-04",
+    "in_session": false
+   }
   },
   {
    "label": "2024 autumn switch: Sunday 01:30 daylight time (the first 01:30)",
@@ -615,7 +651,10 @@
    "session_date": "2024-11-04",
    "in_session": false,
    "weekend": true,
-   "calendar": "not covered"
+   "calendar": {
+    "session_date": "2024-11-04",
+    "in_session": false
+   }
   },
   {
    "label": "2024 autumn switch: Sunday 01:30 standard time (the second 01:30)",
@@ -628,7 +667,10 @@
    "session_date": "2024-11-04",
    "in_session": false,
    "weekend": true,
-   "calendar": "not covered"
+   "calendar": {
+    "session_date": "2024-11-04",
+    "in_session": false
+   }
   },
   {
    "label": "2024 autumn switch: Sunday 17:59",
@@ -641,7 +683,10 @@
    "session_date": "2024-11-04",
    "in_session": false,
    "weekend": true,
-   "calendar": "not covered"
+   "calendar": {
+    "session_date": "2024-11-04",
+    "in_session": false
+   }
   },
   {
    "label": "2024 autumn switch: Sunday 18:00 (Monday's session opens)",
@@ -654,7 +699,10 @@
    "session_date": "2024-11-04",
    "in_session": true,
    "weekend": false,
-   "calendar": "not covered"
+   "calendar": {
+    "session_date": "2024-11-04",
+    "in_session": true
+   }
   },
   {
    "label": "2024 autumn switch: Monday 16:59",
@@ -667,7 +715,10 @@
    "session_date": "2024-11-04",
    "in_session": true,
    "weekend": false,
-   "calendar": "not covered"
+   "calendar": {
+    "session_date": "2024-11-04",
+    "in_session": true
+   }
   },
   {
    "label": "2024 autumn switch: Monday 17:00 (the daily break, dated Tuesday)",
@@ -680,7 +731,10 @@
    "session_date": "2024-11-05",
    "in_session": false,
    "weekend": false,
-   "calendar": "not covered"
+   "calendar": {
+    "session_date": "2024-11-05",
+    "in_session": false
+   }
   },
   {
    "label": "2024 autumn switch: Monday 17:59",
@@ -693,7 +747,10 @@
    "session_date": "2024-11-05",
    "in_session": false,
    "weekend": false,
-   "calendar": "not covered"
+   "calendar": {
+    "session_date": "2024-11-05",
+    "in_session": false
+   }
   },
   {
    "label": "2024 autumn switch: Monday 18:00 (Tuesday's session opens)",
@@ -706,7 +763,10 @@
    "session_date": "2024-11-05",
    "in_session": true,
    "weekend": false,
-   "calendar": "not covered"
+   "calendar": {
+    "session_date": "2024-11-05",
+    "in_session": true
+   }
   },
   {
    "label": "2021 autumn switch: Friday 16:59",
@@ -1415,28 +1475,28 @@
    "session_date": "2025-10-31",
    "start_utc": "2025-10-30T22:00:00.000Z",
    "end_utc": "2025-10-31T21:00:00.000Z",
-   "calendar_end_utc": "not covered"
+   "calendar_end_utc": "2025-10-31T21:00:00.000Z"
   },
   {
    "label": "2025 autumn switch: Monday (opens Sunday 18:00 standard time)",
    "session_date": "2025-11-03",
    "start_utc": "2025-11-02T23:00:00.000Z",
    "end_utc": "2025-11-03T22:00:00.000Z",
-   "calendar_end_utc": "not covered"
+   "calendar_end_utc": "2025-11-03T22:00:00.000Z"
   },
   {
    "label": "2024 autumn switch: the Friday before",
    "session_date": "2024-11-01",
    "start_utc": "2024-10-31T22:00:00.000Z",
    "end_utc": "2024-11-01T21:00:00.000Z",
-   "calendar_end_utc": "not covered"
+   "calendar_end_utc": "2024-11-01T21:00:00.000Z"
   },
   {
    "label": "2024 autumn switch: Monday (opens Sunday 18:00 standard time)",
    "session_date": "2024-11-04",
    "start_utc": "2024-11-03T23:00:00.000Z",
    "end_utc": "2024-11-04T22:00:00.000Z",
-   "calendar_end_utc": "not covered"
+   "calendar_end_utc": "2024-11-04T22:00:00.000Z"
   },
   {
    "label": "2021 autumn switch: the Friday before",
@@ -1509,11 +1569,11 @@
    "calendar_end_utc": "2026-01-02T22:00:00.000Z"
   },
   {
-   "label": "outside the calendar: a Monday before it",
+   "label": "a Monday of 2025, inside the calendar since 2024 and 2025 were added",
    "session_date": "2025-05-19",
    "start_utc": "2025-05-18T22:00:00.000Z",
    "end_utc": "2025-05-19T21:00:00.000Z",
-   "calendar_end_utc": "not covered"
+   "calendar_end_utc": "2025-05-19T21:00:00.000Z"
   }
  ]
 }

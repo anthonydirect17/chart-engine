@@ -21,7 +21,7 @@ const SHARED = path.join(__dirname, '..', 'shared');
 const PINS = {   // market-data shared/ (tests/test_ny_clock.py there holds the same pins)
   'ny_clock.js': 'a17906c43de2476445f7b66c9d17e8c5de1cf8535404430c664b536c903f3f54',
   'ny_clock.py': '94d718be50d0890fd495c114d8cdcb98cc5113c6e9297eefe6df4db141845dee',
-  'ny_clock_cases.json': '1ec6e14ad47add61946f5b8b1269c2a867c75b1171b024aeba3f5738144bb71e',
+  'ny_clock_cases.json': 'b72626d8e74c572b30c1f2e149a45af740dcb7afaa94edeb4b77f9d8b15c2e38',
 };
 const T = JSON.parse(fs.readFileSync(path.join(SHARED, 'ny_clock_cases.json'), 'utf8'));
 const cal = S.loadCalendar();
