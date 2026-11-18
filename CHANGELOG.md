@@ -20,8 +20,8 @@ on the order path changed.
 - **ChartKit off the PC install list**: `kit.css`, `kit.js` and `kit.html` leave `nt8/install-files.json` (kept in the
   repo as the design reference for Legion). The PC updater drops them from a PC's page folder at its next page install.
   The fonts they name stay installed.
-- **The agent board F snapshot is removed** (`live/kits/agent-board-f/` and `test/agent-kit.test.js`); the tag
-  `pre-release1-f-snapshot` marks chart 1.57.0 with both.
+- **The agent board F snapshot is removed** (`live/kits/agent-board-f/` and `test/agent-kit.test.js`); commit
+  aabb2cb on main (chart 1.57.0) still holds both.
 - **The Studio's work folder** in the examples is `C:\Data\Studio\work` (the task script and `docs/MARKUP_STUDIO.md`; the
   code sets no default, `--work` is required).
 
