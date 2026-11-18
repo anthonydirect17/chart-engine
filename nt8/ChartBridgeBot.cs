@@ -173,6 +173,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static readonly HashSet<string> Tags = new HashSet<string>();   // tags of bot entries (legs share them)
         private static readonly HashSet<Order> CancelSent = new HashSet<Order>();
         private static readonly HashSet<Order> CloseLost = new HashSet<Order>();   // decision 3a: the bot's closes said as gone unfilled
+        private static readonly List<Order> CloseOrders = new List<Order>();      // decision 3a: the bot's closes sent, until done (also before NinjaTrader lists them)
         private static readonly Queue<double> Actions = new Queue<double>();   // the bot's recent actions (gate 7)
         private static string lastSignalJson;
         private static long nSignals, nProposals, nAnswered, nNotAnswered, nPlaced, nRefused, nHeartbeatLost;
@@ -265,7 +266,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 account = DefaultAccount; accountBroken = null;
                 secret = null; secretState = "missing"; session = null; Trades.Clear(); SignalIds.Clear(); openTag = null; ledQty = 0; ledCash = 0; ledAvg = 0; ledPrior = 0; ledPv = 0;
                 OpenSaved.Clear(); untoldTag = null; untoldWhy = null;
-                Proposals.Clear(); EntryOfSignal.Clear(); Placed.Clear(); Tags.Clear(); CancelSent.Clear(); CloseLost.Clear(); Actions.Clear(); lastSignalJson = null;
+                Proposals.Clear(); EntryOfSignal.Clear(); Placed.Clear(); Tags.Clear(); CancelSent.Clear(); CloseLost.Clear(); CloseOrders.Clear(); Actions.Clear(); lastSignalJson = null;
                 nSignals = nProposals = nAnswered = nNotAnswered = nPlaced = nRefused = nHeartbeatLost = 0;
             }
         }
@@ -1531,6 +1532,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (!ChartBridgeOrders.IsWorking(o.OrderState) && o.OrderState != OrderState.CancelPending && o.OrderState != OrderState.CancelSubmitted)
                 {
                     Placed.Remove(o);
+                    CloseOrders.Remove(o);
                     CancelSent.Remove(o);
                     lostClose = IsBotClose(o) && (o.OrderState == OrderState.Rejected || o.OrderState == OrderState.Cancelled) && o.Filled < o.Quantity && CloseLost.Add(o);   // said once an order
                 }
@@ -1643,7 +1645,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (string.IsNullOrEmpty(orderId)) return null;
             Account a = FindAccount();
             if (a != null) lock (a.Orders) foreach (Order o in a.Orders) if (o.OrderId == orderId) return o;
-            lock (Sync) foreach (Order o in Placed) if (o.OrderId == orderId) return o;
+            lock (Sync) foreach (Order o in Placed.Concat(CloseOrders)) if (o.OrderId == orderId) return o;   // decision 3a: its own close too
             return null;
         }
 
@@ -1794,7 +1796,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (inst == null) return "instrument " + root + " is not served by ChartBridge";
             List<Order> orders;
             lock (a.Orders) orders = a.Orders.ToList();
-            lock (Sync) foreach (Order o in Placed) if (!orders.Contains(o)) orders.Add(o);
+            lock (Sync) foreach (Order o in Placed.Concat(CloseOrders)) if (!orders.Contains(o)) orders.Add(o);
             List<Order> legs = orders.Where(o => o != null && TagOf(o.Name) == tag && !IsBotEntry(o) && !IsBotClose(o) && SameContract(o.Instrument, inst) && MayStillFill(o)).ToList();
             List<Order> entries = orders.Where(o => IsBotEntry(o) && MayStillFill(o)).ToList();
             // 2. the proof
@@ -1849,6 +1851,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             string shortWhy = null;
             lock (Sync)
             {
+                if (sent != null) CloseOrders.Add(sent);   // its own close, known before NinjaTrader lists it (step 3, and its fill is the bot's: FindOrder)
                 if (proof < Math.Abs(q) && closeShortSaid != tag) { closeShortSaid = tag; shortWhy = "bot trade " + tag + " follows " + Contracts(Math.Abs(q)) + " but its own stop and target prove only " + proof + ": ChartBridge closed those " + proof + " and none of the rest, which cannot be told apart from Anthony's own contracts; act in NinjaTrader"; }
             }
             if (shortWhy != null) { string w = "Bot: " + shortWhy; Log(w); BotLog(w); ToPages(StatusJson("error", w)); }

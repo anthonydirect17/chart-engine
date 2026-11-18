@@ -1708,7 +1708,17 @@ public static class BotHarness
         Check(c.Count == 1 && c[0].StartsWith("submit CB#" + Tag(e) + " bot close " + (longSide ? "Sell" : "Buy") + " Market 1 "),
               what + ": then one market close of the bot's own 1, never 3: " + string.Join(" | ", Calls(own, m)));
         Check(his.OrderState == OrderState.Working && !Calls(own, m).Any(x => x == "cancel Stop1"), what + ": Anthony's own working stop is untouched");
-        CloseFills(1, px);
+        if (kind == "loss" && longSide)
+        {
+            // its close fills before NinjaTrader lists it on the account: still the bot's own fill (never Anthony's, so never closed twice)
+            Order x = NewestClose();
+            own.Orders.Remove(x);
+            x.OrderId = "NC" + Guid.NewGuid().ToString("N").Substring(0, 8);
+            Deliver(own.Name, mnq, MarketPosition.Short, 1, px, x.OrderId);
+            x.Filled = 1; x.OrderState = OrderState.Filled;
+            own.Orders.Add(x);
+        }
+        else CloseFills(1, px);
         Held(2 * d, 25000);
         st = ChartBridgeBot.StripJson();
         string dollars = kind == "loss" ? "-30" : "40";
