@@ -5098,7 +5098,7 @@ only, never through the tunnel; CORS for `http://localhost:8765` and `http://127
 | endpoint | document | used for |
 |---|---|---|
 | `GET`, `PUT /api/chart-strategies` | `{rev, strategies: [{id, name, stop: {ticks, type, limitOffsetTicks}, targets: [{ticks, sharePct}], breakeven: {afterTicks, plusTicks} or null, trail: {startTicks, byTicks, stepTicks} or null, hotkey}]}` | the Order Strategies, at most 24 |
-| `GET`, `PUT /api/chart-hotkeys` | `{rev, keys: {buy, sell, be, close, flattenAll, merge, maximize}, modifiers: {limit, stop}}` | the trading hotkeys (Merge's key is `merge`) |
+| `GET`, `PUT /api/chart-hotkeys` | `{rev, keys: {buy, sell, be, close, flattenAll, cutHalf, merge, maximize, accept, reject}, modifiers: {limit, stop}}` | the trading hotkeys, ten keys (see "The hotkeys document" below; `close` is shown as Flatten, Merge's key is `merge`) |
 | `GET /api/chart-accounts` | `{accounts: [{account, firm, archived, daily_loss_limit, trailing_drawdown, account_size, source, accountType, outcome}]}` | read only: a prop limit Anthony typed on The Desk, shown only where ChartBridge's `roomDrawdown` or `roomDailyLoss` is null; 1.40.0: `outcome` (`blown`, `promoted` or `null`) starts the account lifecycle (see "The account lifecycle (0.6.10)") |
 | `PUT /api/accounts/{account}/outcome` (chart 1.40.0) | `{outcome: "blown" \| "promoted" \| null}` | the drawer's Blown and Promoted, as the account type's PUT (CORS `PUT`, `OPTIONS`) |
 | `PUT /api/chart-accounts/listed` (chart 1.40.0) | `{accounts: [names]}`; answer `{kept: [...], left_out: [...]}` | the accounts ChartBridge lists, so a new account shows on Prop > Accounts before its first fill: Sim and Playback names left out, at most 200 names of 1 to 64 characters, sorted; once a page load (when ChartBridge's accounts arrive) and whenever the list changes (checked each minute with the rows), as the account type's PUT (mode `cors`, credentials `omit`, `no-store`); a failure is asked again only the next minute, a `404` (an older Desk) stops it for the page load |
@@ -5126,8 +5126,8 @@ The Desk took before. The Desk of the Sunday 11-01 release (`thedesk/chart_setti
 the key (400, "unknown or missing keys"); the page says so and keeps the edit. The Desk needs to accept the key with these
 rules before Anthony can save a bar trail.
 
-Copilot's one-key accept and reject are not keys in D2's draft hotkeys document yet (an open item for the lead); until
-they are, the page shows Accept and Reject buttons and `botAnswer` is the same either way.
+Copilot's one-key accept and reject are keys of the hotkeys document (`accept` and `reject`, no default key, below);
+the page also shows Accept and Reject buttons, and `botAnswer` is the same either way.
 
 The Desk checks its own rules on save; ChartBridge checks `order.strategy` again on every order (it never trusts the
 store).
@@ -5182,8 +5182,11 @@ Each choice below that the brief left open is marked **(lead's default)**.
   (`live-hotkeys-v1`, `live-ws-keys-v1`), so the 1.15 handlers use them. (Until chart 1.22.0 the single chart page then
   showed them read only, told by `live-desk-sync-v1`; the page and the key are gone.) A key The Desk has that this browser keeps for itself (`hotkeyRefused`) is shown with why it does
   nothing here.
-- **The hotkeys document** has nine keys: The Desk's seven plus `accept` and `reject` (the copilot's one-key answers, no
-  default key) (lead's default; The Desk lane adds them). The page sends a cancelable `chart-copilot-key` DOM event
+- **The hotkeys document** has ten keys, the ones the page and The Desk use, in the order the page writes them:
+  `buy` (Buy MKT), `sell` (Sell MKT), `be` (B/E), `close` (shown as Flatten since release 1; the id stays `close`),
+  `flattenAll` (Flatten all), `cutHalf` (Cut half, release 1), `merge` (Merge), `maximize` (Maximize panel), `accept`
+  and `reject` (the copilot's one-key answers, no default key). The page refuses a document without exactly these ten, in any order
+  (`live/order-strategies.js`, `KEY_IDS` and `checkHotkeysDoc`). The page sends a cancelable `chart-copilot-key` DOM event
   (`detail.answer` `accept` or `reject`); the Bot tab answers it (the oldest open proposal); with none open a note says so.
 - **The Desk not reachable:** the last copy read (`live-desk-cache-v1`) is used and shown read only, with a plain note; a
   key pressed, a modifier picked or a strategy saved is refused and says it was not saved (nothing is queued or guessed).
