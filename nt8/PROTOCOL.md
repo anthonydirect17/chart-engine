@@ -2988,14 +2988,19 @@ decision 3: OwnerGuardCase, OwnerShare, OwnerUntold).
   hand while the bot alone is long 2: his sell closes one of the bot's contracts; the bot then holds 1, its stop and target follow
   1 through the legs check, and its day counts that contract closed at his price). A hand order on the bot's own side only adds
   to Anthony's share. Before 3a every execution there counted as the bot's. After a restart, the rest of NinjaTrader's position
-  beyond what the bot's legs prove is Anthony's. **Anthony's share** (`handQty`) starts at 0 at each bot entry, the owner guard
-  having found nothing of his; his fills between the guard's read and the placement are kept (finding 5). A fill of a bot order
-  that NinjaTrader does not list yet is found in ChartBridge's own just sent (finding 5).
+  beyond what the bot's legs prove is Anthony's. **Anthony's share** (`handQty`) starts at 0 at each bot entry, taken at the owner
+  guard's own last read (under the order lock; the R12 re-review L1), so his fills after that read count and none before it. A
+  fill of Anthony's that changed his share less than 2 s ago (`HandSettleMs`) may not be in NinjaTrader's position yet, so the
+  guard refuses a bot entry until it settles ("OWN-1 MNQ has a fill of Anthony's from less than 2 s ago that NinjaTrader's
+  position may not show yet: no bot entry until it settles"). A fill of a bot order that NinjaTrader does not list yet is found
+  in ChartBridge's own just sent (finding 5).
   **The replay fence** (finding 2): NinjaTrader keeps an account's executions of the session across a NinjaScript recompile, and
   ChartBridge delivers them all again when it starts watching the account, after the bot followed its open trade again from
   `bot-day.txt` and its legs. Every execution already in an account when the bot starts, or when the account is first watched,
   is noted (`ChartBridgeBot.NoteWatched`, keyed as ChartBridge keys executions) and never counted by the bot: its effect is in
-  `bot-day.txt` and the restore. A fill of an order the bot placed in this run is never fenced.
+  `bot-day.txt` and the restore. And (the R12 re-review L2: after a full NinjaTrader restart a connection may add the day's past
+  executions later) an execution timed before this run began (`RunStart`, NinjaTrader's execution time on the PC's clock) is
+  never counted either. A fill of an order the bot placed in this run (its tag) is never fenced, whatever its time.
   **When the bot's size cannot be told** (the fail-safe, the coordinator's choice): only what the bot's own legs prove is ever
   closed. The untold state of the day file (its dollars cannot be told) closes what its legs prove, as any trade: its followed
   size came from its legs at the restore. A followed size above the proof (an execution counted twice) closes the proof only,
@@ -3024,8 +3029,8 @@ decision 3: OwnerGuardCase, OwnerShare, OwnerUntold).
   500 ms. The bot's filled position and its legs are never touched.
 - **The standing line** (Anthony's ruling B, 2026-11-18): while the owner guard blocks entries in copilot or auto, `bot` carries
   `ownerWait` ("waiting: you hold your own position or order (OWN-1 MNQ holds 1 contract long that is not the bot's)", both
-  readings agreeing; null otherwise and in Shadow), and the Bot tab shows it as a line under the rails ("Waiting: you hold your
-  own position or order (...). The bot makes no entry until it is clear."). The refusals stay in the log.
+  readings agreeing; null otherwise and in Shadow), and the Bot tab shows a line under the rails in Anthony's words of
+  2026-11-18: "Waiting: you're in this market." The refusals and ChartBridge's own words stay in the log.
 - **Messages.** `bot` adds `size`, `hardCeiling`, `dayLoss`, `dayProfit` (each null when not set), `railsMissing` (the names
   of the rails not set), `dayStop` (null, or `{kind, day, text}`), `personal` (the bot's account is the personal one) and
   `ownerWait` (ruling B: null, or the standing line's words; the fake bridge always sends null);
@@ -3986,7 +3991,12 @@ lists them word for word).
   5 s limit (a stuck player: that call is dropped). A missing folder or file is said once in the Output window and that
   call is silent.
 - **`config.txt`**: `voice = on` turns it on (**off by default**: a recompile alone changes nothing Anthony hears);
-  `voiceFolder` names the folder (default `Documents\NinjaTrader 8\sounds_voice4`).
+  `voiceFolder` names the folder. **Release 1** (Anthony's rulings of 2026-11-18): the default folder is ChartBridge's
+  `www\voice` (`ChartBridgeVoice.FolderNow`, read when a call plays), and the nine voice-4 files ship in this repo
+  (`live/voice/<Call>.wav`, mono 16-bit PCM at 48000 Hz) and install with the page (`nt8/install-files.json`, the page
+  updater); nothing is made on a PC any more. `live/voice/README.txt` says how they were made and holds each file's sha256.
+  A `voiceFolder` line in `config.txt` still wins, so a PC that set it by hand keeps its old folder until that line is
+  removed. Before release 1 the default was `Documents\NinjaTrader 8\sounds_voice4`.
 
 Checked in `check/AgentHarness.cs` (`Voice`) and `test/nt8-record.test.js`.
 
