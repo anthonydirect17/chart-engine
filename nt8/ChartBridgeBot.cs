@@ -199,6 +199,13 @@ namespace NinjaTrader.NinjaScript.AddOns
         public static Func<double> ClockMs;
         public static Func<DateTime> ClockEt;
         public static Action ModeArmChecked;              // runs in SetMode after ArmProblem, before the lock (the race of review R12 finding 2)
+        public const double HandSettleMs = 2000;           // R12 re-review L1: the owner guard waits this long after a fill of Anthony's
+        private static double lastHandFillMs = -1;        // R12 re-review L1: when the last execution that is not the bot's was counted (-1: none)
+        public static DateTime RunStart = DateTime.MinValue;   // R12 re-review L2: when this run began (Start), in NinjaTrader's execution time
+        public static Func<DateTime> RunClock;            // test hook: the clock RunStart reads (null: DateTime.Now)
+        public static Action PlaceEntered;                // runs in Place first, before the rails and the guards (R12 re-review L1)
+        [ThreadStatic] private static bool placing;       // R12 re-review L1: Place is sending the bot's entry on this thread
+        [ThreadStatic] private static int? guardHand;     // R12 re-review L1: Anthony's share (handQty) at the owner guard's last read while placing
         public static Action PlaceGuardChecked;           // runs in Place after the rails and the owner guard, before the order is sent (R12 of decision 3, finding 5)
         private static double Now() { Func<double> f = ClockMs; return f != null ? f() : ChartBridgeTime.NowUtcMs(); }
         private static DateTime NowEt() { Func<DateTime> f = ClockEt; return f != null ? f() : ChartBridgeTime.NowEastern(); }
@@ -255,6 +262,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             RestoreOpenTrade();   // review R12 round 2: a bot trade open in bot-day.txt is followed again from NinjaTrader's position
             List<Account> all;
             lock (NinjaTrader.Cbi.Account.All) all = NinjaTrader.Cbi.Account.All.ToList();
+            RunStart = RunClock != null ? RunClock() : DateTime.Now;   // R12 re-review L2: this run's start, for the time fence
             foreach (Account x in all) NoteWatched(x);   // R12 of decision 3, finding 2: the replay fence
             double? kill = ChartBridgeFiles.KillSince(KillFile);   // 0.6.3 (audit C5): the kill switch survives a restart until the page releases it
             lock (Sync) { noBotSinceMs = Now(); killed = kill.HasValue; killedAt = Math.Max(0, kill ?? 0); killReadPending = kill == -1; }
@@ -282,7 +290,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 bot = null; claimed = false; helloed = false; botName = null; lastMsgMs = 0; noBotSinceMs = 0; lastStripMs = 0;
                 mode = "shadow"; killed = false; size = 0; maxTrades = 0; maxLosses = 0; dayLoss = 0; dayProfit = 0; railRoot = null; railsBroken = null; dayBroken = null;
                 dayStopKind = null; dayStopDay = 0; stopFlattenTryMs = -1; stopFlattenWhy = null; stopFlattenWait = null; openUnknownSaid = false;
-                handQty = 0; ProofUnits.Clear(); closeUsed = 0; closeTryMs = -1; closeAsked = false; closeShortSaid = null; closeWaitSinceMs = -1; closeErrMs = -1; closeErrN = 0; pauseSinceMs = -1; Replayed.Clear(); RunTags.Clear();
+                handQty = 0; lastHandFillMs = -1; ProofUnits.Clear(); closeUsed = 0; closeTryMs = -1; closeAsked = false; closeShortSaid = null; closeWaitSinceMs = -1; closeErrMs = -1; closeErrN = 0; pauseSinceMs = -1; Replayed.Clear(); RunTags.Clear();
                 account = DefaultAccount; accountBroken = null;
                 secret = null; secretState = "missing"; session = null; Trades.Clear(); SignalIds.Clear(); openTag = null; restoreWait = null; ledQty = 0; ledCash = 0; ledAvg = 0; ledPrior = 0; ledPv = 0;
                 OpenSaved.Clear(); untoldTag = null; untoldWhy = null;
@@ -1398,8 +1406,12 @@ namespace NinjaTrader.NinjaScript.AddOns
             placed = null;
             lock (PlaceGate)
             {
-                int handBase;
-                lock (Sync) handBase = handQty;   // R12 of decision 3, finding 5: Anthony's fills from here on count; the guard below finds none before
+                // R12 re-review L1: Anthony's share starts at the owner guard's own last read (in PlaceOrderLocked, under the order lock, on
+                // this thread: guardHand), so his fills after that read count and none before it does
+                Action enter = PlaceEntered;
+                if (enter != null) enter();
+                placing = true; guardHand = null;
+                try {   // not indented, so the lines below stay as they were
                 string root, acct = BotAccount;
                 string rootWhy = RootProblem(out root);
                 string why = RailsProblem() ?? AccountProblem(false) ?? rootWhy;
@@ -1416,7 +1428,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                               ",\"bracket\":{\"stop\":" + s.StopTicks.ToString(CultureInfo.InvariantCulture) + ",\"target\":" + s.TargetTicks.ToString(CultureInfo.InvariantCulture) + "}}";
                 why = ChartBridgeOrders.PlaceBotEntry(text, out placed);
                 if (why != null) { lock (Sync) nRefused++; placed = null; return why; }
-                lock (Sync) { Placed.Add(placed); Tags.Add(TagOf(placed.Name)); RunTags.Add(TagOf(placed.Name)); nPlaced++; handQty -= handBase; }   // decision 3b: the owner guard found nothing of Anthony's there, so his share is only his fills since (finding 5: a fill between the guard's read and here is kept)
+                lock (Sync) { Placed.Add(placed); Tags.Add(TagOf(placed.Name)); RunTags.Add(TagOf(placed.Name)); nPlaced++; handQty -= guardHand ?? handQty; }   // decision 3b: the owner guard found nothing of Anthony's at its last read, so his share is only his fills since (R12 re-review L1: that read, not Place's start)
+                } finally { placing = false; }
             }
             BotLog("placed " + s.Side + " " + SizeFor(EffectiveRoot()) + " " + EffectiveRoot() + " " + s.Kind + (s.PriceText != null ? " @ " + s.PriceText : "") + " stop " + s.StopTicks + " target " + s.TargetTicks + " on " + BotAccount + (SimNow() ? " (Sim)" : " (LIVE)") + " (signal " + s.Id + ")");
             return null;
@@ -1449,6 +1462,13 @@ namespace NinjaTrader.NinjaScript.AddOns
         // the order lock, so a page order cannot slip in between. Reads NinjaTrader: never under Sync. Null when the bot may enter.
         public static string OwnerGuard(Account a, string root)
         {
+            // R12 re-review L1 (and finding 5): a fill of Anthony's that arrived in the last 2 s may not be in NinjaTrader's position yet,
+            // so the guard cannot tell what he holds: no bot entry until it settles. Past that, his share's base is taken at this read
+            // (placing: the guard under the order lock), so his fills after it count and none before it does.
+            double since;
+            lock (Sync) { since = lastHandFillMs < 0 ? double.MaxValue : Now() - lastHandFillMs; if (placing) guardHand = handQty; }
+            if (since < HandSettleMs)
+                return a.Name + " " + root + " has a fill of Anthony's from less than 2 s ago that NinjaTrader's position may not show yet: no bot entry until it settles (the owner guard; copilot and auto stay armed)";
             string own = OwnerExposure(a, root, false);
             return own == null ? null : own + ": no bot entry while Anthony holds his own position or working orders on the bot's account and root (the owner guard; copilot and auto stay armed and enter once it is clear)";
         }
@@ -1665,13 +1685,24 @@ namespace NinjaTrader.NinjaScript.AddOns
         // entry filling after its stop, or after a day stop's flatten) reopens that trade: it is followed again, and at its close
         // the new dollars are added to what it closed with before, so the trades, the losing trades and the day stops count them.
         public static void OnExec(string account, Instrument inst, MarketPosition side, int qty, double price, string orderId, string json) { OnExec(account, inst, side, qty, price, orderId, json, null); }
-        public static void OnExec(string account, Instrument inst, MarketPosition side, int qty, double price, string orderId, string json, string execKey)
+        public static void OnExec(string account, Instrument inst, MarketPosition side, int qty, double price, string orderId, string json, string execKey) { OnExec(account, inst, side, qty, price, orderId, json, execKey, default(DateTime)); }
+        public static void OnExec(string account, Instrument inst, MarketPosition side, int qty, double price, string orderId, string json, string execKey, DateTime time)
         {
             if (!Enabled || account != BotAccount || inst == null || qty <= 0) return;
             if (execKey != null) lock (Sync) if (Replayed.Contains(execKey)) return;   // R12 of decision 3, finding 2: already counted before this run (NoteWatched)
             string root = ChartBridgeServer.RootFor(inst);
             if (root == null || root != EffectiveRoot()) return;
             Order o = FindOrder(orderId);
+            // R12 re-review L2: after a full NinjaTrader restart a connection may add the day's past executions after the first watch:
+            // one timed before this run began (NinjaTrader's execution time, the PC's clock as NinjaTrader shows it) is never counted,
+            // unless it is a fill of an order the bot placed in this run (RunTags)
+            if (time != default(DateTime) && time < RunStart)
+            {
+                string t = o != null ? TagOf(o.Name) : null;
+                bool run;
+                lock (Sync) run = t != null && RunTags.Contains(t);
+                if (!run) return;
+            }
             string entryTag = IsBotEntry(o) ? TagOf(o.Name) : null;
             bool mine = o != null && Watching(o);
             RollDay();
@@ -1712,7 +1743,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                     int after = handQty + ledQty + signed;
                     int keep = openTag == null || ledQty == 0 ? 0 : Math.Sign(ledQty) * Math.Min(Math.Abs(ledQty), Math.Max(0, Math.Sign(ledQty) * after));
                     part = openTag == null ? 0 : keep - ledQty;
+                    int handWas = handQty;
                     handQty = after - (ledQty + part);
+                    if (handQty != handWas) lastHandFillMs = Now();   // R12 re-review L1: a fill that changed Anthony's own share: the owner guard waits HandSettleMs after it
                 }
                 if (openTag != null && part != 0)
                 {
