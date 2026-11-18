@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased (Bot-Lab plan step 1.6): the shared New York clock and session date, an exact copy
+
+`shared/` and tests only (no page change, no version bump). `shared/` adds market-data's three clock files byte for byte:
+`ny_clock.js` (one rule: a session runs 18:00 New York the evening before to 17:00, from 17:00 a moment is dated the next
+day, a weekend rolls to Monday; now in New York, the session date, the session's start and end, in session, the
+weekend; the US daylight-saving rules in code, never the browser's own zone), its Python twin `ny_clock.py`, and
+`ny_clock_cases.json`, the table both are proved by. Never edit them here: market-data holds the originals. This
+branch sits on the shared calendar's (plan step 1.5), whose calendar it reads for holiday evenings.
+
+- `test/ny-clock.test.js` pins the three files by sha256, computes every value of the table again through the
+  runtime's own America/New_York zone, and holds the module to it. Nothing in the page, the live pages, Legion or
+  ChartBridge reads it yet. It pins where the page stands: the league's `sessionToday` and `sessionOfBar` agree on every
+  row; `tradeDay(t, 18:00)` and the bot's `tradeDay` (18:00, no weekend roll) differ only in the 17:00 to 18:00 break
+  and at weekends; `cmeClosed` agrees with the calendar's in-session answer but on Good Friday 2026.
+- `test/shared-calendar.test.js`: its file list names the three new files.
+- After its review: every date in the table is chosen clear of both fences (market-data and Bot-Lab test that); a
+  moment must be a whole number of UTC ms from 2007-01-01T00:00Z up to the start of the year 2100 (seconds or
+  microseconds passed as ms are refused), and session dates the same range; the US rules answer from the end of
+  daylight time in 2006, so the first session of 2007 opens as in Python.
+
 ## Unreleased (2026-11-18): the shared CME calendar and contract values, an exact copy (Bot-Lab plan step 1.5)
 
 `shared/` and tests only (no page change, no version bump). `shared/` holds market-data's four files byte for byte:
