@@ -3984,25 +3984,38 @@ a deleted group and Hide forgot them. Built in `ChartBridgeGroups.cs`; no versio
   (`ChartBridgeBranches.IsProp`: a personal account is picked, and this is not it, not Sim, not Backtest or Playback). In
   the 17:00 to 18:00 ET break a prop account with no end-of-day high starts one at its equity then (a close ChartBridge
   saw, so never above the firm's highest close), said once in the Output window; after that the same raise as a member's.
-  With no personal account picked nothing is prop and nothing changes.
+  The R12 review (BLOCKER 1): a high started this way has not seen the closes before it, so that close's day is kept as
+  its `eodMissed` (the same 12 field line). An account in no group with the firm's rules applied (a copier follower, say)
+  then still reads `floor` null and NinjaTrader's own room (as before any close), with "no end-of-day high is known from
+  before <day>: give the minimum balance from the firm's dashboard"; the kept high still counts in a join (below). A join
+  or `firmMinimum` clears the mark.
+  With no personal account picked nothing is prop and nothing changes (the R12 review, SHOULD 2): no high is started, a
+  join or a move between groups starts as before (the larger of the size and the balance), leaving forgets, and `highEod`
+  is null.
 - **Kept through a leave, a deleted group, Hide and a restart.** A prop account keeps both highs and its missed-close
   marks (`eodMissed`, `intradayMissed`) when it leaves a group by any way; a Sim or personal account forgets them as
   before. `account-marks.txt` holds them in the same 12 field line (no new field, so any ChartBridge since 0.6.3 reads it).
   The restart and missed-close rules (0.6.3, audit C2) are unchanged: a close it did not see while the account traded is
   kept as `eodMissed` beside the kept high, and a gap with nothing traded takes the balance as that close.
 - **A join with no `highClose`** starts both highs at the larger of the kept end-of-day high, the account size and the
-  balance now (the intraday high never below a kept one either). A `highClose` typed on the page is taken as given (the
-  way to correct a high, with `firmMinimum`).
+  balance now (the intraday high never below a kept one either), for a prop account; any other account as before. A
+  `highClose` typed on the page is taken as given (the way to correct a high, with `firmMinimum`). **A kept high on a prop
+  account is never forgotten by ChartBridge**: after a firm reset that keeps the account's name, the way to lower it is a
+  typed highest close on the join or `firmMinimum`.
 - **The lane rule's join** carries The Desk's `highClose` from `/api/lane-accounts` when The Desk gives one; ChartBridge
-  raises it to the kept end-of-day high when that is higher (a close The Desk has not walked yet: its floor moves only
-  after the session). With neither, the join starts at the account size as before. The lane line says where the high
+  starts at the larger of it, the kept end-of-day high (a close The Desk has not walked yet: its floor moves only after the
+  session) and the balance now (the R12 review, SHOULD 1: the old rule's balance floor stays), so **The Desk's highest
+  close can only raise the start**, never lower it. With neither, the join starts at the larger of the account size and
+  the balance, as before. The lane line says where the high
   started: `added: 1 eval account, X, on the bench (rule); its end-of-day high starts at 50151.00 (The Desk's highest
-  close)`, `(ChartBridge's kept close, above The Desk's highest close 50100.00)`, `(ChartBridge's kept close or its
-  balance now; The Desk gave no highest close)`, or `; its end-of-day high starts at the account size 50000.00: no higher
+  close)`, `(ChartBridge's kept close, above The Desk's highest close 50100.00)`, `(its balance now, above The Desk's
+  highest close 50100.00)`, `(ChartBridge's kept close or its balance now; The Desk gave no highest close)`, or `; its end-of-day high starts at the account size 50000.00: no higher
   close is known (none from The Desk, none kept by ChartBridge), so check the firm's dashboard and give its minimum balance
-  if the floor differs` (with The Desk's figure in place of "none from The Desk" when it gave the size itself). A `highClose` that is not a plain number of dollars refuses the join with `accountGroup`'s words.
-- **The `accounts` entry gains `highEod`**: the end-of-day high kept for the account (dollars), or null when none is kept
-  (or `account-marks.txt` does not read). The page's join prefills the highest close never below it (above The Desk's
+  if the floor differs` (with The Desk's figure in place of "none from The Desk" when it gave the size itself). A `highClose` that reads but is not a plain number of dollars (a string, `true`) refuses that account's join with
+  `accountGroup`'s words; a bare token that is not a JSON number the reader takes (`NaN`, a negative) makes the whole
+  lane-accounts answer unreadable for that minute, so nothing moves until it reads again.
+- **The `accounts` entry gains `highEod`**: the end-of-day high kept for a prop account (dollars), or null when none is
+  kept, the account is not prop (the R12 review, SHOULD 2) or `account-marks.txt` does not read. The page's join prefills the highest close never below it (above The Desk's
   seed too when that is lower), and warns once, in the join row, when the join must start at the account size, unless
   NinjaTrader's own figure puts the floor within $25 of it (the same gap as the floor flag).
 - **Entries are unchanged**: an account whose floor is not known still trades as before ("Let them through", Anthony

@@ -25,11 +25,19 @@ the size. Fixed in `nt8/ChartBridgeGroups.cs`, `live/groups.js`, `live/accounts.
   The Desk's seed when that is lower), and the join row (the Accounts tab and the Multi-Account panel) warns once when
   the join must start at the account size, unless NinjaTrader's own figure is within $25 (`AccountsCore.sizeStartWarn`,
   the same `FLOOR_GAP` as the floor flag).
+- **The R12 review's changes**: a high started at a close marks the closes before it as not known (`eodMissed`), so an
+  account in no group with the firm's rules applied keeps a null floor and NinjaTrader's own room (the review's probe: a
+  1,800 stop against a room of 1,749 is still held after the first close), with "no end-of-day high is known from before
+  <day>"; the kept high still counts in a join, which clears the mark. With no personal account picked nothing changes at
+  all (no kept high in a join or a move, `highEod` only for a prop account). A lane join never starts below the balance
+  now: The Desk's highest close can only raise the start. PROTOCOL says how a kept high is lowered after a firm reset that
+  keeps the name (a typed highest close or the firm's minimum) and that a `highClose` the reader cannot take as a number
+  (`NaN`, a negative) leaves the whole lane answer unread for that minute.
 - **Unchanged**: an account whose floor is not known trades as before ("Let them through"); payouts; the order path.
 - Tests: `nt8/check/GroupsHarness.cs` `FloorHighs` (the case itself: a 50,151 close, then a join at a balance of 49,900
   or 50,000 gives a floor of 48,151, not 48,000; a leave and rejoin; a restart; a deleted group; Hide; a missed close; the
   lane rule with The Desk's highest close, without it, below the kept high, with neither, and not a number); 25 of its
-  checks fail on the code before the fix. `test/floor-highs.test.js` (the prefill, the warning, the join steps).
+  checks fail on the code before the fix; the review's probes (BLOCKER 1, SHOULD 1, SHOULD 2) fail on 04c741c. `test/floor-highs.test.js` (the prefill, the warning, the join steps).
 
 ### Getting ready to go private (2026-11-04)
 

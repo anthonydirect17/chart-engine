@@ -32,7 +32,7 @@ test('floor fix: the one warning when a join must start at the account size (the
   const a = { name: 'LUCID-1', balance: 49900, unrealized: 0 };
   const w = AC.sizeStartWarn(a, lucid, '50000');
   assert.match(w, /^No close above the account size is known for LUCID-1 \(none from The Desk, none kept by ChartBridge\): its floor starts at \$48,000\.00, the account size less the drawdown\. If the firm's dashboard shows a higher minimum balance, type its highest close here \(that minimum plus \$2,000\.00\)\.$/);
-  assert.ok(!/[–—]/.test(w), 'no en or em dashes');
+  assert.ok(!/[\u2013\u2014]/.test(w), 'no en or em dashes');
   assert.equal(AC.sizeStartWarn(a, lucid, '50151'), '', 'a start above the size: no warning');
   assert.equal(AC.sizeStartWarn(a, Object.assign({}, lucid, { drawdownType: 'static' }), '50000'), '', 'a static floor never trails');
   assert.equal(AC.sizeStartWarn(Object.assign({}, a, { roomFloorNt: 1910 }), lucid, '50000'), '', 'NinjaTrader puts the floor within $25 (47,990): quiet');
