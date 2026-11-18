@@ -201,8 +201,9 @@ namespace NinjaTrader.NinjaScript.AddOns
         public static Action ModeArmChecked;              // runs in SetMode after ArmProblem, before the lock (the race of review R12 finding 2)
         public const double HandSettleMs = 2000;           // R12 re-review L1: the owner guard waits this long after a fill of Anthony's
         private static double lastHandFillMs = -1;        // R12 re-review L1: when the last execution that is not the bot's was counted (-1: none)
-        public static DateTime RunStart = DateTime.MinValue;   // R12 re-review L2: when this run began (Start), in NinjaTrader's execution time
-        public static Func<DateTime> RunClock;            // test hook: the clock RunStart reads (null: DateTime.Now)
+        public static DateTime RunStart = DateTime.MinValue;   // R12 re-review L2: when this run began (Start), in UTC, less RunStartMarginMs
+        public static Func<DateTime> RunClock;            // test hook: the UTC clock RunStart reads (null: DateTime.UtcNow)
+        public const double RunStartMarginMs = 30000;     // R12 delta re-review: room for the broker's and the PC's clocks to differ
         public static Action PlaceEntered;                // runs in Place first, before the rails and the guards (R12 re-review L1)
         [ThreadStatic] private static bool placing;       // R12 re-review L1: Place is sending the bot's entry on this thread
         [ThreadStatic] private static int? guardHand;     // R12 re-review L1: Anthony's share (handQty) at the owner guard's last read while placing
@@ -262,7 +263,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             RestoreOpenTrade();   // review R12 round 2: a bot trade open in bot-day.txt is followed again from NinjaTrader's position
             List<Account> all;
             lock (NinjaTrader.Cbi.Account.All) all = NinjaTrader.Cbi.Account.All.ToList();
-            RunStart = RunClock != null ? RunClock() : DateTime.Now;   // R12 re-review L2: this run's start, for the time fence
+            // R12 re-review L2: this run's start, for the time fence. In UTC (R12 delta re-review: NinjaTrader times its executions in its
+            // own time zone setting, which need not be the PC's), less 30 s for clock skew: a replay inside those 30 s is still caught by
+            // the execution-id fence (NoteWatched)
+            RunStart = (RunClock != null ? RunClock() : DateTime.UtcNow).AddMilliseconds(-RunStartMarginMs);
             foreach (Account x in all) NoteWatched(x);   // R12 of decision 3, finding 2: the replay fence
             double? kill = ChartBridgeFiles.KillSince(KillFile);   // 0.6.3 (audit C5): the kill switch survives a restart until the page releases it
             lock (Sync) { noBotSinceMs = Now(); killed = kill.HasValue; killedAt = Math.Max(0, kill ?? 0); killReadPending = kill == -1; }
@@ -1467,6 +1471,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             // (placing: the guard under the order lock), so his fills after it count and none before it does.
             double since;
             lock (Sync) { since = lastHandFillMs < 0 ? double.MaxValue : Now() - lastHandFillMs; if (placing) guardHand = handQty; }
+            if (a == null) return null;   // as OwnerExposure: no account, nothing to guard (R12 delta re-review nit: before a.Name is read)
             if (since < HandSettleMs)
                 return a.Name + " " + root + " has a fill of Anthony's from less than 2 s ago that NinjaTrader's position may not show yet: no bot entry until it settles (the owner guard; copilot and auto stay armed)";
             string own = OwnerExposure(a, root, false);
@@ -1694,9 +1699,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (root == null || root != EffectiveRoot()) return;
             Order o = FindOrder(orderId);
             // R12 re-review L2: after a full NinjaTrader restart a connection may add the day's past executions after the first watch:
-            // one timed before this run began (NinjaTrader's execution time, the PC's clock as NinjaTrader shows it) is never counted,
-            // unless it is a fill of an order the bot placed in this run (RunTags)
-            if (time != default(DateTime) && time < RunStart)
+            // one timed before this run began is never counted, unless it is a fill of an order the bot placed in this run (RunTags).
+            // Compared in UTC (R12 delta re-review): the execution's time is in NinjaTrader's time zone setting, RunStart in UTC
+            if (time != default(DateTime) && ChartBridgeTime.ToUtc(time) < RunStart)
             {
                 string t = o != null ? TagOf(o.Name) : null;
                 bool run;
