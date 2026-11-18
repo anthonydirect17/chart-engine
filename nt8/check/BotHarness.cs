@@ -1061,7 +1061,7 @@ public static class BotHarness
         Check(File_("bot-day.txt").Contains("trade\t" + Tag(a) + "\topen"), "open at restart: bot-day.txt says open");
         Restart();
         string st = ChartBridgeBot.StripJson();
-        Check(st.Contains("\"position\":{\"qty\":1,\"avgPrice\":25000}") && st.Contains("\"standDown\":null") && File_("bot.log").Contains("trade " + Tag(a) + " (open in bot-day.txt) is followed again from its 1 open stop: 1 MNQ 12-26 at 25000 (NinjaTrader's average) on OWN-1") &&
+        Check(st.Contains("\"position\":{\"qty\":1,\"avgPrice\":25000}") && st.Contains("\"standDown\":null") && File_("bot.log").Contains("trade " + Tag(a) + " (open in bot-day.txt) is followed again from its 1 open stop: 1 MNQ 12-26 at 25000 (its entry's fill) on OWN-1") &&
               !File_("bot.log").Contains("the rest is not the bot's"),
               "review R12 round 3: after a restart the open trade is followed again from its own stop leg, NinjaTrader's position matching: " + st);
         Page("{\"type\":\"botMode\",\"cid\":\"m\",\"mode\":\"auto\"}");
@@ -1126,7 +1126,7 @@ public static class BotHarness
         et = et.AddDays(1); ChartBridgeBot.Check();   // 18:00 ET: the never-followed trade goes with the day
         st = ChartBridgeBot.StripJson();
         Check(st.Contains("\"standDown\":null") && st.Contains("\"position\":{\"qty\":0,"), "review R12 round 3: at 18:00 ET the refusal ends with the day: " + st);
-        // Anthony holds more by hand than the bot's leg covers: the bot follows its own size, at NinjaTrader's average
+        // Anthony holds more by hand than the bot's leg covers: the bot follows its own size, at its own entry's fill (still listed)
         ChartBridgeOrders.NoteLast("MNQ", 25000);
         Page("{\"type\":\"botMode\",\"cid\":\"m\",\"mode\":\"auto\"}");
         Order d = AutoTrade("buy");
@@ -1136,11 +1136,58 @@ public static class BotHarness
         own.Positions.Clear(); own.Positions.Add(new Position { Instrument = mnq, MarketPosition = MarketPosition.Long, Quantity = 3, AveragePrice = 25010 });
         Restart();
         st = ChartBridgeBot.StripJson();
-        Check(st.Contains("\"position\":{\"qty\":1,\"avgPrice\":25010}") && st.Contains("\"standDown\":null") &&
-              File_("bot.log").Contains("trade " + Tag(d) + " (open in bot-day.txt) is followed again from its 1 open stop: 1 MNQ 12-26 at 25010 (NinjaTrader's average) on OWN-1; NinjaTrader holds 3 there, the rest is not the bot's"),
-              "review R12 round 3: Anthony's position larger than the bot's leg: the bot follows 1 (its stop's size), not 3: " + st);
+        Check(st.Contains("\"position\":{\"qty\":1,\"avgPrice\":25000}") && st.Contains("\"standDown\":null") &&
+              File_("bot.log").Contains("trade " + Tag(d) + " (open in bot-day.txt) is followed again from its 1 open stop: 1 MNQ 12-26 at 25000 (its entry's fill) on OWN-1; NinjaTrader holds 3 there, the rest is not the bot's"),
+              "review R12 round 3: Anthony's position larger than the bot's leg: the bot follows 1 (its stop's size), not 3, at its own entry's 25000, not NinjaTrader's 25010: " + st);
         Sold(1, 25010);
         Settle();
+        Check(File_("bot-day.txt").Contains("trade\t" + Tag(d) + "\t20"), "R12 round 3 follow-up: the restored trade closes on its own entry's price (+$20), not on Anthony's average (+$0)");
+        // the same with the bot's entry no longer listed by NinjaTrader: NinjaTrader's average, as before
+        et = et.AddDays(1); ChartBridgeBot.Check();
+        ChartBridgeOrders.NoteLast("MNQ", 25000);
+        Page("{\"type\":\"botMode\",\"cid\":\"m\",\"mode\":\"auto\"}");
+        Order g = AutoTrade("buy");
+        Check(g != null, "open at restart, no entry listed: a bot trade");
+        if (g == null) return;
+        FillEntry(g, 25000);
+        own.Orders.Remove(g);
+        own.Positions.Clear(); own.Positions.Add(new Position { Instrument = mnq, MarketPosition = MarketPosition.Long, Quantity = 3, AveragePrice = 25010 });
+        Restart();
+        st = ChartBridgeBot.StripJson();
+        Check(st.Contains("\"position\":{\"qty\":1,\"avgPrice\":25010}") && st.Contains("\"standDown\":null") &&
+              File_("bot.log").Contains("trade " + Tag(g) + " (open in bot-day.txt) is followed again from its 1 open stop: 1 MNQ 12-26 at 25010 (NinjaTrader's average) on OWN-1; NinjaTrader holds 3 there, the rest is not the bot's"),
+              "R12 round 3 follow-up: the bot's entry not listed: followed at NinjaTrader's average, as before: " + st);
+        Sold(1, 25010);
+        Settle();
+        // Anthony's own long on the bot's root; the bot's long closed by its stop while ChartBridge was down and its target's cancel is
+        // still on its way: a leg being cancelled is no proof, so Anthony's long is never taken as the bot's
+        foreach (OrderState cancelling in new[] { OrderState.CancelPending, OrderState.CancelSubmitted })
+        {
+            et = et.AddDays(1); ChartBridgeBot.Check();
+            ChartBridgeOrders.NoteLast("MNQ", 25000);
+            Page("{\"type\":\"botMode\",\"cid\":\"m\",\"mode\":\"auto\"}");
+            Order h = AutoTrade("buy");
+            Check(h != null, "open at restart, " + cancelling + ": a bot trade");
+            if (h == null) return;
+            FillEntry(h, 25000);
+            Order target = own.Orders.FirstOrDefault(o => o != h && Tag(o) == Tag(h) && o.OrderType == OrderType.Limit && ChartBridgeOrders.IsWorking(o.OrderState));
+            Check(target != null, "open at restart, " + cancelling + ": the trade has a target");
+            if (target == null) return;
+            LegsDone(h);   // its stop filled
+            target.OrderState = cancelling;   // its target's cancel not yet done
+            own.Positions.Clear(); own.Positions.Add(new Position { Instrument = mnq, MarketPosition = MarketPosition.Long, Quantity = 1, AveragePrice = 25005 });   // Anthony's own, by hand
+            int r = own.Calls.Count;
+            Restart();
+            for (int i = 0; i < 4; i++) { clock += 350; Bot("{\"type\":\"beat\"}"); ChartBridgeBot.Check(); }
+            st = ChartBridgeBot.StripJson();
+            Check(st.Contains("\"position\":{\"qty\":0,") && st.Contains("\"standDown\":\"bot trade " + Tag(h) + " was still open when ChartBridge started") &&
+                  !File_("bot.log").Contains("trade " + Tag(h) + " (open in bot-day.txt) is followed again") && Calls(own, r).Count == 0,
+                  "R12 round 3 follow-up: the only leg left is " + cancelling + ": Anthony's long is not taken as the bot's, nothing sent, still refused: " + st);
+            Page("{\"type\":\"botMode\",\"cid\":\"m\",\"mode\":\"auto\"}");
+            Check(PageReject().Contains("auto refused: bot trade " + Tag(h) + " was still open"), "R12 round 3 follow-up: " + cancelling + ": no arming");
+            target.OrderState = OrderState.Cancelled;
+            Settle();
+        }
         // NinjaTrader's position is on the other side from the bot's legs: refused
         et = et.AddDays(1); ChartBridgeBot.Check();
         ChartBridgeOrders.NoteLast("MNQ", 25000);

@@ -572,9 +572,10 @@ namespace NinjaTrader.NinjaScript.AddOns
         // The trade being followed (openTag and its ledger) lives in memory only; bot-day.txt keeps "open" for it. After a restart or
         // a NinjaScript recompile, that trade is followed again, so its dollars reach the day stops and a latched day flattens it. Round
         // 3: only with proof the position is the bot's: a stop or target of that trade (named CB#<its tag>) still open on the bot's
-        // account and root. Its size comes from those legs (the stops', else the targets'), the side from theirs (a sell stop: the bot
-        // is long), and only when NinjaTrader's position there has that side and at least that size; the price is NinjaTrader's
-        // average. A position with no such leg is never taken (it may be Anthony's own). Until then (no leg, no matching position, or
+        // account and root (a leg being cancelled is no proof). Its size comes from those legs (the stops', else the targets'), the side
+        // from theirs (a sell stop: the bot is long), and only when NinjaTrader's position there has that side and at least that size;
+        // the price is the bot's own filled entry when NinjaTrader still lists it, else NinjaTrader's average. A position with no such
+        // leg is never taken (it may be Anthony's own). Until then (no leg, no matching position, or
         // more than one open trade in the file), copilot, auto and every new bot entry are refused, named; it is looked at again every
         // 500 ms. At 18:00 ET a trade never followed again is dropped with the day, as before.
         private static string OpenNotFollowedLocked()
@@ -609,7 +610,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (a.Orders)
                 foreach (Order o in a.Orders)
                     if (o != null && TagOf(o.Name) == tag && !IsBotEntry(o) && o.Instrument != null && (o.Instrument == inst || o.Instrument.FullName == inst.FullName) &&
-                        o.OrderState != OrderState.Filled && o.OrderState != OrderState.Cancelled && o.OrderState != OrderState.Rejected && o.Quantity - o.Filled > 0)
+                        o.OrderState != OrderState.Filled && o.OrderState != OrderState.Cancelled && o.OrderState != OrderState.Rejected &&
+                        o.OrderState != OrderState.CancelPending && o.OrderState != OrderState.CancelSubmitted && o.Quantity - o.Filled > 0)   // a leg on its way out proves nothing
                         legs.Add(o);
             List<Order> stops = legs.Where(o => o.OrderType == OrderType.StopMarket || o.OrderType == OrderType.StopLimit).ToList();
             List<Order> sized = stops.Count > 0 ? stops : legs.Where(o => o.OrderType == OrderType.Limit).ToList();
@@ -624,7 +626,17 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (held == null || !(held.AveragePrice > 0)) return;
             int pos = held.MarketPosition == MarketPosition.Long ? held.Quantity : -held.Quantity;
             if (Math.Sign(pos) != Math.Sign(q) || Math.Abs(pos) < Math.Abs(q)) return;   // another side, or less than the legs cover: not the bot's as read
-            double avg = held.AveragePrice, was;
+            // the price: the trade's own filled entry when NinjaTrader still lists it (its tag, this account and contract, the other side
+            // from its legs), so Anthony's contracts held there never move it; else NinjaTrader's average, as before
+            int entryFilled = 0;
+            double entryCost = 0;
+            lock (a.Orders)
+                foreach (Order o in a.Orders)
+                    if (o != null && IsBotEntry(o) && TagOf(o.Name) == tag && o.Account != null && (o.Account == a || o.Account.Name == a.Name) &&
+                        o.Instrument != null && (o.Instrument == inst || o.Instrument.FullName == inst.FullName) && o.Filled > 0 && o.AverageFillPrice > 0 && SellsLeg(o) != sells)
+                    { entryFilled += o.Filled; entryCost += o.Filled * o.AverageFillPrice; }
+            bool fromEntry = entryFilled > 0;
+            double avg = fromEntry ? entryCost / entryFilled : held.AveragePrice, was;
             bool done = false;
             lock (Sync)
             {
@@ -636,7 +648,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 }
             }
             if (!done) return;
-            string w = "Bot: trade " + tag + " (open in bot-day.txt) is followed again from its " + sized.Count + " open " + (stops.Count > 0 ? "stop" : "target") + (sized.Count == 1 ? "" : "s") + ": " + q + " " + inst.FullName + " at " + avg.ToString("0.##", CultureInfo.InvariantCulture) + " (NinjaTrader's average) on " + a.Name +
+            string w = "Bot: trade " + tag + " (open in bot-day.txt) is followed again from its " + sized.Count + " open " + (stops.Count > 0 ? "stop" : "target") + (sized.Count == 1 ? "" : "s") + ": " + q + " " + inst.FullName + " at " + avg.ToString("0.##", CultureInfo.InvariantCulture) + (fromEntry ? " (its entry's fill)" : " (NinjaTrader's average)") + " on " + a.Name +
                        (Math.Abs(pos) > Math.Abs(q) ? "; NinjaTrader holds " + pos + " there, the rest is not the bot's" : "");
             Log(w); BotLog(w); ToPages(StatusJson("warn", w));
             Notify();
