@@ -116,19 +116,29 @@ personal bot (release 1, step 1.6b)".
   goes unfilled is an error (its stop and target were cancelled for it) and is sent again within 5 seconds.
 - **After the R12 review of decision 3 and Anthony's rulings of 2026-11-18**:
   - **The replay fence**: executions already in an account when the bot starts, or when the account is first watched (a
-    NinjaScript recompile delivers the whole session again), are never counted again by the bot; its own fills of this run are.
+    NinjaScript recompile delivers the whole session again), and any execution timed before this run began (a connection may
+    add the day's past executions later), are never counted again by the bot; its own fills of this run always are.
   - **A close that cannot go** is an error to the pages after 15 seconds, naming the order or the reason, again every 60
     seconds until the bot is flat, each time with the voice call `BotNotClosed` (ruling 3; the voice calls of 0.6.22, on only
-    with `voice = on`; `BotNotClosed.wav` is a new file in the voice folder, silent until it is there). The day stop's words say
+    with `voice = on`; `BotNotClosed.wav` ships with this release, below). The day stop's words say
     "being closed", "were NOT closed" or "were closed", whichever is true.
   - **His own exits too big** after the bot's close (ruling 2): the bot's close goes and an error names his exits; his orders
     are never changed.
   - **Pause and cancel** (ruling A): his own position or working order on the bot's account and root cancels a bot entry still
     resting there (within about a second); the bot's filled contracts and its stop and target stay.
-  - **The standing line** (ruling B): while the owner guard blocks entries in Copilot or Auto, the Bot tab shows "Waiting: you
-    hold your own position or order (...)" (`bot`'s `ownerWait`); the refusals stay in the log.
-  - His fills between the guard's read and the placement stay his; a bot order's fill is found before NinjaTrader lists it; a
-    page order ChartBridge has just sent counts for the guard.
+  - **The standing line** (ruling B): while the owner guard blocks entries in Copilot or Auto, the Bot tab shows, in Anthony's
+    words, "Waiting: you're in this market." (`bot`'s `ownerWait`); the refusals and ChartBridge's own words stay in the log.
+  - Anthony's share starts at the owner guard's own last read (under the order lock), and the guard waits 2 seconds after a
+    fill of his that changed his share, so NinjaTrader's position shows it; a bot order's fill is found before NinjaTrader lists
+    it; a page order ChartBridge has just sent counts for the guard.
+- **The voice files ship with this release** (Anthony's rulings of 2026-11-18): the nine calls ChartBridge can say (voice 4,
+  Sonia: `LongFilled`, `ShortFilled`, `StopFilled`, `TargetFilled`, `TargetOneFilled`, `TargetTwoFilled`, `PositionClosed`,
+  `BreakEvenSet`, `BotNotClosed`) are in `live/voice` (eight byte-copies of HOME's 2026-11-03 set; `BotNotClosed` made in the
+  cloud on 2026-11-18 with the same voice, settings and effect; `live/voice/README.txt` has each file's words, bytes and
+  sha256). The page updater installs them into ChartBridge's `www\voice`, now ChartBridge's default voice folder (before:
+  `Documents\NinjaTrader 8\sounds_voice4`). Nothing is made on a PC any more. A `voiceFolder` line in `config.txt` still wins,
+  so a PC that set one keeps its old folder until the line is removed. The calls still play only with `voice = on` (off by
+  default). The set ships in this public repo by Anthony's choice, knowing the edge-tts terms are unclear.
 - **The owner guard** (decision 3b, 2026-11-18): no new bot entry while Anthony holds his own position (the root's position
   minus the bot's followed size, by both readings, any contract month) or has his own working order on the bot's account and
   root. Named, like the agents' owner lock ("OWN-1 MNQ holds 2 contracts long that are not the bot's: no bot entry while Anthony
@@ -244,7 +254,9 @@ The non-order parts of release 1 (the lock of 2026-11-15, topic 2).
 LateFill, ReArmRace, OpenAtRestart, CutAtRestart and the day file checks, and for decision 3 OwnerGuardCase, OwnerShare (the loss
 and profit stops, long and short on both sides, Anthony's 2 by hand and his own stop untouched) and OwnerUntold (untold, not followed,
 no leg left, a ledger above its legs' proof, a close rejected, the proof used up) and Review3 (the replay fence, a stuck close
-and its voice call, his oversized exits, the races, rulings A and B); `test/bot.test.js` (the standing line); `nt8/check/OrdersHarness.cs` (Cut half: even, odd 3 and 5, a short,
+and its voice call, his oversized exits, the races, rulings A and B, and the re-review's L1, L2 and M8); `test/bot.test.js` (the
+standing line); `test/voice-files.test.js` (every call has its file in the install list, each file mono 16-bit PCM WAV at
+48000 Hz, the README's sha256); `nt8/check/OrdersHarness.cs` (Cut half: even, odd 3 and 5, a short,
 pairs per fill, a Merge set, 1 contract and flat, a stale page, readings apart, a second press, working exits, strict keys
 and the gates, a group's members, a rejected close, trading off, and the R12 section), `nt8/check/AgentHarness.cs` (Cut half
 on an agent's pair), `nt8/check/DataHarness.cs` (the feature); `test/start-guard.test.js` and `npm run smoke:start-guard`,
