@@ -1207,6 +1207,115 @@ Test '-InstallChartBridge: a commit that drops an add-on file (a revert of daily
   $script:FakeDiag = $vNext3
   [void](Run-Update)
 }
+# ---------------------------------------------------------------------------------------------- rollback-chartbridge (release 1)
+
+# The world here: the last install copied $vNext3 (which drops ChartBridgeBars.cs) over $vNext2, and kept the $vNext2 set
+# with each file's sha256 in state.json. Every test below leaves AddOns, state.json and the kept sets as it found them.
+function Get-RbInstalled { return (Read-State)['chartBridge']['installed'] }
+function Invoke-Rb([switch]$NoFlat) {
+  $script:Flat = (-not $NoFlat); $script:Yes = $true
+  try { return (Invoke-RollbackChartBridge) } finally { $script:Flat = $false; $script:Yes = $false }
+}
+Test 'rollback-chartbridge: the install records the set it replaced and each file''s sha256 then' {
+  $inst = Get-RbInstalled
+  Assert ($inst['version'] -eq $vNext3 -and $inst['backup'] -and (Test-Path -LiteralPath $inst['backup'])) "the kept set: $($inst['backup'])"
+  $sums = $inst['backupHashes']
+  Assert ($sums['ChartBridgeBars.cs'] -match '^[0-9a-f]{64}$') 'the file the install took out has its sha256'
+  foreach ($n in @($sums.Keys)) { if ($sums[$n] -ne 'missing') { Assert ((Get-FileSha256 (Join-Path $inst['backup'] $n)) -eq $sums[$n]) "$n kept as recorded" } }
+}
+Test 'rollback-chartbridge without -Flat does nothing (your word that you are flat is the check)' {
+  $before = Get-AddOnsPrint; $st = Get-Text $script:P.State
+  [void](Get-Said)
+  $code = Invoke-Rb -NoFlat
+  $said = Get-Said
+  Assert-Code $code 1 'STOP'
+  Assert ($said -match 'STOP: rollback-chartbridge needs -Flat' -and $said -match 'Nothing changed') $said
+  Assert ((Get-AddOnsPrint) -eq $before -and (Get-Text $script:P.State) -eq $st) 'AddOns and state.json unchanged'
+}
+Test 'rollback-chartbridge refuses, naming why, when there is no install record, no record of the kept set, a set gone, incomplete or not matching its sha256' {
+  $before = Get-AddOnsPrint; $saved = Get-Text $script:P.State
+  $inst = Get-RbInstalled; $bk = $inst['backup']
+  $cases = @(
+    @{ why = 'no ChartBridge install by this tool is recorded'; set = { $s = Read-State; $s['chartBridge'].Remove('installed'); Save-State $s }; undo = { } },
+    @{ why = 'has no record of the set it replaced'; set = { $s = Read-State; $s['chartBridge']['installed'].Remove('backupHashes'); Save-State $s }; undo = { } },
+    @{ why = 'is not a folder of'; set = { $s = Read-State; $s['chartBridge']['installed']['backup'] = (Join-Path $tmpRoot 'elsewhere'); Save-State $s }; undo = { } },
+    @{ why = 'is no longer there'; set = { Rename-Item -LiteralPath $bk -NewName ((Split-Path -Leaf $bk) + '.away') }; undo = { Rename-Item -LiteralPath ($bk + '.away') -NewName (Split-Path -Leaf $bk) } },
+    @{ why = 'is incomplete: ChartBridgeBars\.cs missing'; set = { Move-Item -LiteralPath (Join-Path $bk 'ChartBridgeBars.cs') -Destination (Join-Path $tmpRoot 'bars.away') }; undo = { Move-Item -LiteralPath (Join-Path $tmpRoot 'bars.away') -Destination (Join-Path $bk 'ChartBridgeBars.cs') } },
+    @{ why = 'does not match the sha256 recorded when it was kept: ChartBridgeOrders\.cs'; set = { $f = Join-Path $bk 'ChartBridgeOrders.cs'; Copy-Item -LiteralPath $f -Destination (Join-Path $tmpRoot 'orders.keep'); Put $f ((Get-Text $f) + "`n// changed`n") }; undo = { Copy-Item -LiteralPath (Join-Path $tmpRoot 'orders.keep') -Destination (Join-Path $bk 'ChartBridgeOrders.cs') -Force } },
+    @{ why = "no sha256 for ChartBridgePin\.cs"; set = { $s = Read-State; $s['chartBridge']['installed']['backupHashes']['ChartBridgePin.cs'] = 'x'; Save-State $s }; undo = { } },
+    @{ why = 'names SomethingElse\.cs, which is not a ChartBridge file'; set = { $s = Read-State; $s['chartBridge']['installed']['backupHashes']['SomethingElse.cs'] = 'missing'; Save-State $s }; undo = { } }
+  )
+  foreach ($c in $cases) {
+    & $c.set
+    [void](Get-Said)
+    try { $code = Invoke-Rb } finally { & $c.undo; Put $script:P.State $saved }
+    $said = Get-Said
+    Assert-Code $code 1 "STOP ($($c.why))"
+    Assert ($said -match $c.why -and $said -match 'nothing changed') "says why ($($c.why)): $said"
+    Assert ((Get-AddOnsPrint) -eq $before) "AddOns unchanged ($($c.why))"
+  }
+  Assert ((Get-AddOnsPrint) -eq $before -and (Get-Text $script:P.State) -eq $saved) 'as found'
+}
+Test 'rollback-chartbridge: a file held past the retry puts back every file already replaced; AddOns exactly as before' {
+  $before = Get-AddOnsPrint; $instBefore = (Get-RbInstalled)['backup']
+  [void](Get-Said)
+  $script:HoldAddOn = 'ChartBridgeOrders.cs'
+  try { $code = Invoke-Rb } finally { $script:HoldAddOn = '' }
+  $said = Get-Said
+  Assert-Code $code 1 'STOP'
+  Assert ($said -match "STOP: ChartBridge $(Rx $vNext2) was not copied and nothing changed in AddOns" -and $said -match 'then run update-pc\.ps1 rollback-chartbridge -Flat again') "says nothing changed and what to run: $said"
+  Assert ((Get-AddOnsPrint) -eq $before) 'AddOns exactly as before'
+  Assert (@(Get-ChildItem -LiteralPath $script:P.AddOns | Where-Object { $_.Name -like '*.upd-*' }).Count -eq 0) 'no temporary file left'
+  $s = Read-State
+  Assert ($s['chartBridge']['installed']['version'] -eq $vNext3 -and $s['chartBridge']['installed']['backup'] -eq $instBefore -and -not $s['chartBridge'].Contains('mixed') -and -not $s['chartBridge'].Contains('copying')) 'the install record unchanged, no mix'
+}
+Test 'rollback-chartbridge -Flat puts the kept set back (the file that install took out too), keeps what it replaces, says F5; run again it goes forward again' {
+  $before = Get-AddOnsPrint
+  $inst = Get-RbInstalled; $bk = $inst['backup']; $sums = $inst['backupHashes']
+  # three newer kept sets (three failed installs since): the set to go back to is never pruned
+  $leaf = Split-Path -Leaf $bk
+  foreach ($x in 1..3) { New-Item -ItemType Directory -Force -Path (Join-Path $script:P.PrevAddOns "$leaf-x$x") | Out-Null }
+  [void](Get-Said)
+  $code = Invoke-Rb
+  $said = Get-Said
+  Assert-Code $code 0 'OK'
+  foreach ($n in @($sums.Keys)) {
+    $f = Join-Path $script:P.AddOns $n
+    if ($sums[$n] -eq 'missing') { Assert (-not (Test-Path -LiteralPath $f)) "$n was not there before: taken out" }
+    else { Assert ((Get-FileSha256 $f) -eq $sums[$n]) "$n is the kept file" }
+  }
+  Assert (Test-Path -LiteralPath (Join-Path $script:P.AddOns 'ChartBridgeBars.cs')) 'ChartBridgeBars.cs, which the install took out, is back'
+  Assert ((Get-AddOnVersion) -eq $vNext2) "AddOns\ChartBridge.cs says $vNext2 ($(Get-AddOnVersion))"
+  Assert ((Get-Text (Join-Path $script:P.AddOns 'SomethingElse.cs')) -match 'another add-on') 'other add-ons untouched'
+  Assert ((Get-Hash $script:P.Config) -eq $configHash -and (Get-Hash (Join-Path $cbDir 'pin.txt')) -eq $pinHash) 'config.txt and pin.txt untouched'
+  Assert (@(Get-ChildItem -LiteralPath $script:P.AddOns | Where-Object { $_.Name -like '*.upd-*' }).Count -eq 0) 'no temporary file left'
+  Assert ((Test-Path -LiteralPath $bk) -and -not (Test-Path -LiteralPath (Join-Path $script:P.PrevAddOns "$leaf-x1"))) 'the set it read from is kept; the oldest other one pruned as before'
+  $now = Get-RbInstalled
+  Assert ($now['version'] -eq $vNext2 -and $now['rolledBackFrom'] -eq $vNext3 -and $now['confirmed'] -eq $false -and $now['backup'] -ne $bk) "recorded: $($now['version']) from $($now['rolledBackFrom'])"
+  # the files it replaced are kept, each as it was
+  foreach ($p in ($before -split ';')) {
+    $n, $h = $p -split ':'
+    if ($n -eq 'SomethingElse.cs') { continue }
+    Assert ((Get-Hash (Join-Path $now['backup'] $n)) -eq $h) "the replaced $n is kept in $($now['backup'])"
+  }
+  Assert ($now['backupHashes']['ChartBridgeBars.cs'] -eq 'missing') 'and the file that was not there is recorded as missing'
+  Assert ($said -match 'press F5' -and $said -match "version"":""$(Rx $vNext2)" -and $said -match 'rollback-chartbridge -Flat again goes forward again' -and $said -match [regex]::Escape($now['backup'])) "says F5, the check and the way forward: $said"
+  Assert ((Read-JsonFile $script:P.Status)['outcome'] -eq 'chartbridge_rolled_back') 'status.json'
+  Assert ((Get-Text $script:P.Log) -match "rollback-chartbridge: ChartBridge $(Rx $vNext2) put back") 'update.log'
+  # before F5, NinjaTrader closed: no more than the files in AddOns counts
+  $script:FakeDiag = $null
+  Assert ((Get-CompiledChartBridge (Read-State)).version -eq $vNext2) 'the lower version counts until F5'
+  [void](Get-Said); [void](Invoke-Status)
+  Assert ((Get-Said) -match "ChartBridge $(Rx $vNext2) was put back by rollback-chartbridge \(from $(Rx $vNext3)\): press F5") 'status says F5'
+  # forward again: the same files as before the rollback, ChartBridgeBars.cs out again
+  $code = Invoke-Rb
+  Assert-Code $code 0 'forward again: OK'
+  Assert ((Get-AddOnsPrint) -eq $before) "AddOns exactly as before the rollback"
+  Assert ((Get-RbInstalled)['version'] -eq $vNext3) "recorded $vNext3 again"
+  foreach ($x in 2..3) { Remove-Dir (Join-Path $script:P.PrevAddOns "$leaf-x$x") }
+  $script:FakeDiag = $vNext3
+  [void](Run-Update)
+}
 Test 'status keeps what /diag said (a page waiting for F5 then follows on the next run)' {
   $s = Read-State; $s['chartBridge']['diagVersion'] = $vPc; Save-State $s
   $script:FakeDiag = $vNext0

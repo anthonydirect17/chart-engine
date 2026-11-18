@@ -58,22 +58,35 @@ test('COMPAT.json follows package.json and the ChartBridge in this commit', () =
   assert.deepStrictEqual({ page: compat.history[0].page, minChartBridge: compat.history[0].minChartBridge }, { page: compat.page, minChartBridge: compat.minChartBridge }, 'history starts with the current line');
 });
 
-test('the automatic path never copies add-on files: only -InstallChartBridge, after Anthony confirms', () => {
+test('the automatic path never copies add-on files: only -InstallChartBridge and rollback-chartbridge -Flat, after Anthony confirms', () => {
   const src = code(updater);
+  const fnAt = i => src.slice(src.lastIndexOf('function ', i), src.lastIndexOf('function ', i) + 40).split(/[\s(]/)[1];
+  // release 1 (the audit): rollback-chartbridge is the second hand path, and the only other one
   const calls = [...src.matchAll(/Install-AddOnFiles\s+\$/g)];
-  assert.strictEqual(calls.length, 1, 'one call');
-  const fnStart = src.lastIndexOf('function ', calls[0].index);
-  assert.match(src.slice(fnStart, fnStart + 40), /^function Invoke-InstallChartBridge/);
+  assert.deepStrictEqual(calls.map(m => fnAt(m.index)), ['Invoke-InstallChartBridge', 'Invoke-RollbackChartBridge'], 'one call in each hand path');
   const allow = [...src.matchAll(/\$script:AddOnWriteAllowed = \$true/g)];
-  assert.strictEqual(allow.length, 1);
-  assert.match(src.slice(src.lastIndexOf('function ', allow[0].index), src.lastIndexOf('function ', allow[0].index) + 40), /^function Invoke-InstallChartBridge/);
+  assert.deepStrictEqual(allow.map(m => fnAt(m.index)), ['Invoke-InstallChartBridge', 'Invoke-RollbackChartBridge']);
   const body = src.slice(src.indexOf('function Invoke-InstallChartBridge'), src.indexOf('function Invoke-Repair'));
   assert.ok(body.indexOf('Read-Host') < body.indexOf('$script:AddOnWriteAllowed = $true'), 'asks first (unless -Yes)');
+  // the rollback: -Flat (Anthony's word that he is flat) before anything, then the set checked, then asked (unless -Yes)
+  const rb = src.slice(src.indexOf('function Invoke-RollbackChartBridge'), src.indexOf('function Invoke-Pause'));
+  const flat = rb.indexOf("if (-not $Flat) { return (Write-Verdict $false 'rollback-chartbridge needs -Flat");
+  const lock = rb.indexOf('$lock = Enter-Lock'), chk = rb.indexOf('$set = Get-RollbackSet $state'), ask = rb.indexOf('Read-Host'), go = rb.indexOf('$script:AddOnWriteAllowed = $true');
+  assert.ok(flat > 0 && lock > flat && chk > lock && ask > chk && go > ask, '-Flat, the lock, the set checked, asked, then copied: ' + [flat, lock, chk, ask, go].join(','));
+  assert.match(rb, /if \(-not \$set\.ok\) \{ return \(Write-Verdict \$false \$set\.why\) \}/, 'a set that fails its check: nothing changed');
+  assert.match(rb, /if \(Get-Field \$state\['chartBridge'\] 'mixed'\) \{ Save-State \$state; return \(Write-Verdict \$false/, 'never over a mix');
+  assert.match(rb, /Install-AddOnFiles \$set\.stage \$state \$set\.backup/, 'through the same all-or-nothing copy, which keeps the files it replaces first');
+  assert.ok(!/Copy-Item|Move-FileAtomic|Remove-Item|Remove-Dir/.test(rb.replace(/Install-AddOnFiles/g, '')), 'rollback-chartbridge writes AddOns only through Install-AddOnFiles');
+  const rset = src.slice(src.indexOf('function Get-RollbackSet'), src.indexOf('function Invoke-RollbackChartBridge'));
+  assert.ok(rset.length > 0 && !/Copy-Item|Move-|Write-[^L]|Set-Content|Remove-Item|Remove-Dir|Replace\(|Save-State/.test(rset), 'Get-RollbackSet only reads');
+  for (const why of ['is incomplete', 'does not match the sha256 recorded when it was kept', 'has no record of the set it replaced', 'is no longer there']) assert.ok(rset.includes(why), 'refuses: ' + why);
+  assert.match(src, /\[ValidateSet\([^\n]*'rollback-chartbridge'\)\]/);
+  assert.match(src, /'rollback-chartbridge' \{ return \(Invoke-RollbackChartBridge\) \}/);
+  assert.match(src, /backup = \$backup; backupHashes = \$copy\.before \}/, 'each install records the set it replaced and its sha256');
   assert.match(src, /function Install-AddOnFiles[\s\S]{0,80}if \(-not \$script:AddOnWriteAllowed\) \{ throw/);
   // the only place anything is written under AddOns is Install-AddOnFiles; Get-AddOnVersion only reads
-  const fnOf = i => src.slice(src.lastIndexOf('function ', i), src.lastIndexOf('function ', i) + 40).split(/[\s(]/)[1];
-  const uses = [...src.matchAll(/\$script:P\.AddOns/g)].map(m => fnOf(m.index));
-  assert.deepStrictEqual([...new Set(uses)].sort(), ['Get-AddOnHashes', 'Get-AddOnVersion', 'Get-RetiredAddOns', 'Install-AddOnFiles', 'Invoke-InstallChartBridge'].sort());
+  const uses = [...src.matchAll(/\$script:P\.AddOns/g)].map(m => fnAt(m.index));
+  assert.deepStrictEqual([...new Set(uses)].sort(), ['Get-AddOnHashes', 'Get-AddOnVersion', 'Get-RetiredAddOns', 'Install-AddOnFiles', 'Invoke-InstallChartBridge', 'Invoke-RollbackChartBridge'].sort());
   const retired = src.slice(src.indexOf('function Get-RetiredAddOns'), src.indexOf('function Install-AddOnFiles'));
   assert.ok(retired.length > 0 && !/Copy-Item|Move-|Write-[^L]|Set-Content|Remove-Item|Replace\(/.test(retired), 'Get-RetiredAddOns only reads');
   assert.match(retired, /'\^ChartBridge\[A-Za-z0-9_\]\*\\\.cs\$'/, 'only ChartBridge*.cs files are ever taken out');

@@ -447,6 +447,21 @@ it: after F5, run `update` (or `status`, which notes the new version for the nex
 installs at once; if it cannot be written right then, the ChartBridge part still counts and the page follows on the
 next update. `-InstallChartBridge` also moves the task's copy of the updater to that commit (never to an older one).
 
+**Put the last ChartBridge back** (release 1; while flat in every account, with the NinjaScript Editor closed), when a new
+ChartBridge misbehaves after its F5:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File $u rollback-chartbridge -Flat
+```
+
+It copies the files the last `-InstallChartBridge` replaced (kept in `updater\previous-addons\`) back over AddOns, through
+the same all-or-nothing copy, then says to press **F5** while flat and check `/diag`. `-Flat` is your word that you are flat:
+the updater cannot check NinjaTrader's positions while NinjaTrader is closed, so without it nothing is done; then it asks
+once (type `y`). Each install records the set it kept and every file's sha256 in `updater\state.json`; the command refuses,
+saying why, when that record is missing (a set kept by an older updater), the set is gone or incomplete, or a file does not
+match its sha256. The files it replaces are kept first, so running it again goes forward again. It never changes the page
+(`rollback` does that).
+
 **Pause, roll back, and the rest:**
 
 | Command (`powershell -NoProfile -ExecutionPolicy Bypass -File $u ...`) | What it does |
@@ -455,6 +470,7 @@ next update. `-InstallChartBridge` also moves the task's copy of the updater to 
 | `check` | dry run: what `update` would do now |
 | `update` | the automatic path, by hand |
 | `rollback` | puts the previous page files back; that commit is skipped until a newer one is on `main`. `rollback` again goes forward again |
+| `rollback-chartbridge -Flat` | puts the ChartBridge files the last `-InstallChartBridge` replaced back (above), then F5 while flat; again goes forward again |
 | `repair` | page files only, never ChartBridge: finishes or undoes a cut-off install, or writes a whole page (staged, previous, or the clone's page files; the clone's only when its `live/COMPAT.json` allows the ChartBridge compiled here, or it says plainly that it could not check) |
 | `pause` / `resume` | turns the automatic update off and on (off is never the default; a cut-off install is still repaired while paused) |
 | `register` / `unregister` | the scheduled task "ChartEngine Updater" for this Windows user: at sign-in and daily at 9:00 AM and 5:00 PM New York time (`-DailyAt`), started hidden (wscript.exe //B and a one-line launcher) |
