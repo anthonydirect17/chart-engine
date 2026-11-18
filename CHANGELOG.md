@@ -93,12 +93,30 @@ personal bot (release 1, step 1.6b)".
 - **The hard ceiling**: the size is the Bot tab's, capped only by 2 minis or 20 micros (`ChartBridgeAgents.HardCeiling`),
   raised only by a new ChartBridge build. `config.txt`'s `maxQty` no longer caps the bot; the Output line about
   `maxQty.MNQ` says so.
-- **The day stops latch the day** (realized plus open): reached, the bot's position is flattened at once (even with the kill
-  switch on), the day is latched in `bot-day.txt` until 18:00 ET and the mode drops to Shadow. Anthony arms it again
-  himself; ChartBridge never re-arms it, and a day stop reached while the page arms the bot refuses the arming. The flatten
-  is tried again every 5 seconds while the bot still holds a trade, never twice at once and never while a close may still
-  fill. A late fill of a bot entry whose trade had closed is followed again and counted. A ChartBridge before 0.6.24 stands
-  the bot down on a latched `bot-day.txt` (it does not understand the line).
+- **The day stops latch the day** (realized plus open): reached, the bot's own contracts are closed at once (even with the
+  kill switch on; only the bot's, below), the day is latched in `bot-day.txt` until 18:00 ET and the mode drops to Shadow.
+  Anthony arms it again himself; ChartBridge never re-arms it, and a day stop reached while the page arms the bot refuses the
+  arming. The close is tried again while the bot still holds a trade, at most once every 5 seconds, never twice at once and
+  never while a close may still fill. A late fill of a bot entry whose trade had closed is followed again and counted. A
+  ChartBridge before 0.6.24 stands the bot down on a latched `bot-day.txt` (it does not understand the line).
+- **Bot only** (decision 3a, 2026-11-18; Anthony "whatever you think", the coordinator's call): the bot shares the personal
+  account with Anthony, so a day stop, and the bot's own `flatten` in Auto, cancel only the bot's own working orders (its
+  entry, stop and target) and close only the bot's own contracts; Anthony's own contracts and working orders on the same
+  account and root are never touched. Its stop and target are cancelled first, and the close waits until none of them can
+  fill; then one market order (`CB#<tag> bot close`) of the smallest of the bot's followed size, what its own stop and target
+  proved, and NinjaTrader's position on its side by both readings. Net long 3 with the bot's 1: it sells 1. NinjaTrader's
+  Flatten of the whole root is no longer used for the bot. The bot's ledger counts only its own share: an execution that is not
+  the bot's (a hand order, a Flatten) changes the bot's share only where the position can no longer hold it, so Anthony's own
+  contracts go first and never enter the bot's dollars or its day stops. When the bot's size cannot be told, only what its own
+  stop and target prove is closed; with nothing to prove it (no leg left, or a trade open in `bot-day.txt` that is not followed)
+  nothing is closed, the pages get an error, and the bot stays stood down. A bot close that goes unfilled is an error (its stop
+  and target were cancelled for it) and is sent again within 5 seconds.
+- **The owner guard** (decision 3b, 2026-11-18): no new bot entry while Anthony holds his own position (the root's position
+  minus the bot's followed size, by both readings, any contract month) or has his own working order on the bot's account and
+  root. Named, like the agents' owner lock ("OWN-1 MNQ holds 2 contracts long that are not the bot's: no bot entry while Anthony
+  holds his own position or working orders on the bot's account and root (the owner guard; ...)"). Checked for a copilot
+  proposal, an auto entry and an accepted proposal, and again under the order lock. Copilot and Auto stay armed and make no
+  entry until the account is clear; Shadow is unaffected.
 - **A restart follows a bot trade again only by its own legs**: a trade open in `bot-day.txt` after a restart or a recompile
   is followed again only while a stop or target named for that trade is still working on the bot's account and contract;
   its size and side come from those legs, and its price from the bot's own entry fill. A position with no such leg (one
@@ -205,7 +223,9 @@ The non-order parts of release 1 (the lock of 2026-11-15, topic 2).
 ### Tests
 
 `nt8/check/BotHarness.cs` moves from Sim101 to a made-up live personal account and adds FailClosed, SizeCeiling, DayStops,
-LateFill, ReArmRace, OpenAtRestart, CutAtRestart and the day file checks; `nt8/check/OrdersHarness.cs` (Cut half: even, odd 3 and 5, a short,
+LateFill, ReArmRace, OpenAtRestart, CutAtRestart and the day file checks, and for decision 3 OwnerGuardCase, OwnerShare (the loss
+and profit stops, long and short on both sides, Anthony's 2 by hand and his own stop untouched) and OwnerUntold (untold, not followed,
+no leg left, a ledger above its legs' proof, a close rejected); `nt8/check/OrdersHarness.cs` (Cut half: even, odd 3 and 5, a short,
 pairs per fill, a Merge set, 1 contract and flat, a stale page, readings apart, a second press, working exits, strict keys
 and the gates, a group's members, a rejected close, trading off, and the R12 section), `nt8/check/AgentHarness.cs` (Cut half
 on an agent's pair), `nt8/check/DataHarness.cs` (the feature); `test/start-guard.test.js` and `npm run smoke:start-guard`,
