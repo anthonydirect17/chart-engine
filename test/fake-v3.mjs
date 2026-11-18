@@ -935,7 +935,7 @@ export class OrderDeskV3 extends OrderDesk {
       position: { qty: b.position ? p.qty : 0, avgPrice: b.position && p.qty ? p.avgPrice : null }, pnlToday: +(b.pnl || 0).toFixed(2), trades: b.trades, maxTrades: b.maxTrades,
       losses: b.losses, maxLosses: b.maxLosses, maxQty: b.size, size: b.size, hardCeiling: BOT_CEILING[this.botRoot] || 0, dayLoss: b.dayLoss, dayProfit: b.dayProfit,
       railsMissing: this.botMissing(), dayStop: b.dayStop, personal: !!(this.botAccount && this.personalName && this.botAccount === this.personalName),
-      killed: b.killed, standDown: this.botStandDown(), lastBeatMs: b.connected ? (b.simulated ? 400 : this.now() - b.lastBeat) : null, lastSignal: b.lastSignal };   // the simulated bot never misses a beat
+      killed: b.killed, standDown: this.botStandDown(), ownerWait: null, lastBeatMs: b.connected ? (b.simulated ? 400 : this.now() - b.lastBeat) : null, lastSignal: b.lastSignal };   // the simulated bot never misses a beat
   }
   /* release 1 (1.6b, ChartBridgeBot.cs): the rails not set (fail closed), and the stand-down's order: None, the personal account (only
      when the fake names one: --personal; without it the demo keeps its made-up bot account), a rail not set, a day stop, the losses */

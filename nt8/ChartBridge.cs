@@ -5721,7 +5721,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
         }
 
-        private static string ExecKey(string account, string id, DateTime time, double price, int qty, string orderId)
+        internal static string ExecKey(string account, string id, DateTime time, double price, int qty, string orderId)   // release 1 (decision 3, R12 finding 2): the bot's replay fence reads it too
         {
             if (!string.IsNullOrEmpty(id)) return account + "|" + id;
             return account + "|" + time.Ticks.ToString(CultureInfo.InvariantCulture) + "|" + CbJson.Num(price) + "|" + qty + "|" + orderId;
@@ -5738,7 +5738,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             string json = ExecJson(account, inst, side, qty, price, time, id, orderId, true);
             foreach (ChartBridgeClient c in Clients.Values) c.Send(json);
-            try { ChartBridgeBot.OnExec(account, inst, side, qty, price, orderId, json); } catch (Exception ex) { Log("bot fill error: " + ex.Message); }   // 0.4.0 bot: its trades, losses and fills
+            try { ChartBridgeBot.OnExec(account, inst, side, qty, price, orderId, json, ExecKey(account, id, time, price, qty, orderId)); } catch (Exception ex) { Log("bot fill error: " + ex.Message); }   // 0.4.0 bot: its trades, losses and fills; release 1 (decision 3, R12 finding 2): with its key, so a replayed one is never counted twice
             try { ChartBridgeAgents.OnExec(account, inst, side, qty, price, orderId, json); } catch (Exception ex) { Log("agent fill error: " + ex.Message); }   // 0.5.0 agents: each agent's trades, losses and fills
             try { ChartBridgeOrders.StrategyExecution(account, execOrder, orderId, time); } catch (Exception ex) { Log("strategy fill error: " + ex.Message); }   // 1.42: an Order Strategy entry's session from its execution's own time
             if (!ChartBridgeConfig.PostFills) return;
@@ -5810,7 +5810,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             // Fills that happened before this account was watched (earlier this session) go to The Desk too;
             // The Desk ignores ones it already has.
             int n = 0;
-            foreach (Account a in added) n += CatchUp(a);
+            foreach (Account a in added) { try { ChartBridgeBot.NoteWatched(a); } catch (Exception ex) { Log("bot replay fence error: " + ex.Message); } n += CatchUp(a); }   // release 1 (decision 3, R12 finding 2): the bot's replay fence before the catch-up
             if (n > 0) ChartBridgeDesk.Flush();
         }
 
@@ -6087,7 +6087,8 @@ namespace NinjaTrader.NinjaScript.AddOns
     // missing folder or file is said once in the Output window and that call is silent.
     // Calls: entry filled: LongFilled / ShortFilled (by side); ChartBridge's stop leg: StopFilled; its target leg: TargetFilled, or
     // TargetOneFilled / TargetTwoFilled for a strategy's first and second target; ChartBridge's market exit, an agent's flatten, or a fill
-    // of NinjaTrader's close after ChartBridge's Flatten: PositionClosed; ChartBridge's stop moved to its fill price: BreakEvenSet.
+    // of NinjaTrader's close after ChartBridge's Flatten: PositionClosed; ChartBridge's stop moved to its fill price: BreakEvenSet;
+    // release 1 (decision 3): the bot's day stop close still not done after 15 s, then every 60 s while it holds: BotNotClosed.
     public static class ChartBridgeVoice
     {
         public static bool On;
@@ -6167,6 +6168,15 @@ namespace NinjaTrader.NinjaScript.AddOns
                 }
                 Enqueue(key, call);
             }
+            catch (Exception) { }
+        }
+
+        // Release 1 (R12 of decision 3, Anthony's ruling 3 of 2026-11-18): a call ChartBridge's own logic raises, once per key (the bot's
+        // day stop close still not done: BotNotClosed, said with its page error). Never throws, never waits.
+        public static void Say(string key, string call)
+        {
+            if (!On || string.IsNullOrEmpty(key) || string.IsNullOrEmpty(call)) return;
+            try { Enqueue("say|" + key, call); }
             catch (Exception) { }
         }
 

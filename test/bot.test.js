@@ -545,3 +545,16 @@ test('engine: ghost trades are drawn faint with no label; an open trade draws it
     delete require.cache[require.resolve('../src/chart-engine.js')];
   }
 });
+
+test('ruling B (Anthony 2026-11-18): the Bot tab\'s standing line while ChartBridge\'s owner guard blocks entries', () => {
+  const w = 'waiting: you hold your own position or order (OWN-1 MNQ holds 1 contract long that is not the bot\'s)';
+  assert.equal(BC.ownerWaitText({ mode: 'auto', ownerWait: w }), 'Waiting: you hold your own position or order (OWN-1 MNQ holds 1 contract long that is not the bot\'s). The bot makes no entry until it is clear.');
+  assert.equal(BC.ownerWaitText({ mode: 'copilot', ownerWait: w }).startsWith('Waiting: you hold your own position or order'), true);
+  assert.equal(BC.ownerWaitText({ mode: 'shadow', ownerWait: w }), '', 'Shadow: no line');
+  assert.equal(BC.ownerWaitText({ mode: 'auto', ownerWait: null }), '');
+  assert.equal(BC.ownerWaitText({ mode: 'auto' }), '', 'an older ChartBridge sends no ownerWait');
+  assert.equal(BC.ownerWaitText(null), '');
+  const js = require('fs').readFileSync(require('path').join(__dirname, '..', 'live', 'bot.js'), 'utf8');
+  assert.match(js, /data-k="ownerWait" role="note" hidden/);
+  assert.match(js, /const ow = BC\.ownerWaitText\(b\);/);
+});

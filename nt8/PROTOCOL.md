@@ -3008,30 +3008,56 @@ decision 3: OwnerGuardCase, OwnerShare, OwnerUntold).
   working orders on the same account and root untouched. Before 3a it was NinjaTrader's Flatten of the whole root
   (`ChartBridgeOrders.FlattenForBot`, gone). Each step (`ChartBridgeBot.CloseShare`, every 500 ms while it is due):
   1. the bot's own orders on its contract: the legs of its trade (its tag), every bot entry, and its own closes;
-  2. **the proof**: what its legs still working on the closing side cover (its stops', else its targets', as the restore reads
-     them), the most seen while it is being closed;
+  2. **the proof, a budget for the whole close** (R12 of decision 3, finding 1): each pair of the bot's own legs on the closing
+     side, seen working (its OCO id, or the leg alone), is kept with the most contracts and the most of them filled seen, also
+     once it is done; the bot's own closes' fills are added up (`closeUsed`). What is left to prove is the pairs' contracts minus
+     what they filled and what its closes filled. Both start over when the trade is flat, and when it is followed again after a
+     restart;
   3. a close of its own, or any other market order on its account and root (a Flatten or a close of Anthony's on its way, which
      closes the bot's share too), that may still fill: wait, never a second close beside it ("a market order on OWN-1 MNQ may
-     still fill (Close)");
+     still fill (Close)"). Its own stop and target stay working meanwhile (they still protect it);
   4. its legs and entries still working are **cancelled first** (`ChartBridgeOrders.BotCloseCancel`, which cancels only orders
      named the bot's; a lost cancel again every 5 s), and the close waits until **none of its legs can fill**, so a leg never
      fills after the close and the close never reaches Anthony's contracts. An entry of its own still working does not hold the
      close back (its fill only adds to the bot's own position; a late fill reopens the trade, which is closed again);
-  5. **the size**: the smallest of the bot's followed size (its ledger), the proof, and NinjaTrader's position on the bot's side
-     by both readings; one market order `CB#<tag> bot close` of that size (`ChartBridgeOrders.BotCloseSend`, under the order
-     lock, the position read again first), at most once every 5 s. A close that goes unfilled (rejected or cancelled) is an
-     error to the pages (its stop and target were cancelled for it) and is sent again within 5 s while the bot holds its trade.
+  5. **the size**: the smallest of what is left to prove, the bot's followed size (its ledger), and NinjaTrader's position on
+     the bot's side by both readings; one market order `CB#<tag> bot close` of that size (`ChartBridgeOrders.BotCloseSend`,
+     under the order lock, the position read again first), at most once every 5 s. When nothing is left to prove and the ledger
+     still holds contracts, nothing more is ever closed for that trade: an error ("bot trade 1a2b3c4d's own stop and target
+     proved 1 contract and all of them are closed, yet the bot still follows 1 that cannot be told apart from Anthony's own
+     contracts, so ChartBridge closes nothing more: act in NinjaTrader"). A close that goes unfilled (rejected or cancelled) is
+     an error to the pages (its stop and target were cancelled for it) and is sent again within 5 s while the bot holds its
+     trade. **His own exits too big** (finding 4, Anthony's ruling 2 of 2026-11-18, close and warn): under the same lock the
+     other exits that may still fill on the closing side are counted; when with the bot's close they are more than the
+     position, the bot's close still goes, and an error names them ("Anthony's own exits there (3 to sell, working) are more
+     than his own 2 left once the bot's 1 is closed: if they fill they open a position the other way; ChartBridge does not
+     change them: check them in NinjaTrader"). His orders are never changed.
+  **A close that cannot go** (finding 3, Anthony's ruling 3 of 2026-11-18): while the bot still holds and its close waits or is
+  refused for 15 s, the pages get an error naming the order or the reason ("the bot's own contracts on OWN-1 MNQ are still NOT
+  closed after 15 s: a market order on OWN-1 MNQ may still fill (Close); act in NinjaTrader if you need to"), again every 60 s
+  until the bot is flat, each with the voice call `BotNotClosed` (the voice calls of 0.6.22, below). The latch's words say what is
+  true: "the bot's own contracts are being closed" while it holds, "were NOT closed (why)" after a refusal or for a trade not
+  followed, and "were closed" only once the bot is flat.
   Net long 3 with the bot's 1: the day stop cancels the bot's stop and target, then sells 1 at market; Anthony's 2 and his own
-  stop stay. **The bot's ledger follows only its own share**: its own executions (its entry, legs and close: its tag) are its
-  share; any other execution on its contract is Anthony's own (a hand order, or a close of the whole position such as Flatten)
-  and changes the bot's share only where NinjaTrader's position can no longer hold it, so Anthony's own contracts go first and
-  his trades never enter the bot's ledger, its dollars or its day stops (before 3a every execution there counted as the bot's:
-  right only while the bot alone held the contract). After a restart, the rest of NinjaTrader's position beyond what the bot's
-  legs prove is Anthony's.
+  stop stay. **The bot's ledger follows its own share**: its own executions (its entry, legs and close: its tag) are its share.
+  Any other execution on its contract (a hand order of Anthony's, or a close of the whole position such as Flatten or Cut half)
+  changes the bot's share only where NinjaTrader's position can no longer hold it: Anthony's own contracts there go first. When
+  he holds fewer than he sells, the rest of his sell closes the bot's contracts (Anthony's ruling 1 of 2026-11-18: he sells 1 by
+  hand while the bot alone is long 2: his sell closes one of the bot's contracts; the bot then holds 1, its stop and target follow
+  1 through the legs check, and its day counts that contract closed at his price). A hand order on the bot's own side only adds
+  to Anthony's share. Before 3a every execution there counted as the bot's. After a restart, the rest of NinjaTrader's position
+  beyond what the bot's legs prove is Anthony's. **Anthony's share** (`handQty`) starts at 0 at each bot entry, the owner guard
+  having found nothing of his; his fills between the guard's read and the placement are kept (finding 5). A fill of a bot order
+  that NinjaTrader does not list yet is found in ChartBridge's own just sent (finding 5).
+  **The replay fence** (finding 2): NinjaTrader keeps an account's executions of the session across a NinjaScript recompile, and
+  ChartBridge delivers them all again when it starts watching the account, after the bot followed its open trade again from
+  `bot-day.txt` and its legs. Every execution already in an account when the bot starts, or when the account is first watched,
+  is noted (`ChartBridgeBot.NoteWatched`, keyed as ChartBridge keys executions) and never counted by the bot: its effect is in
+  `bot-day.txt` and the restore. A fill of an order the bot placed in this run is never fenced.
   **When the bot's size cannot be told** (the fail-safe, the coordinator's choice): only what the bot's own legs prove is ever
   closed. The untold state of the day file (its dollars cannot be told) closes what its legs prove, as any trade: its followed
   size came from its legs at the restore. A followed size above the proof (an execution counted twice) closes the proof only,
-  said as an error ("bot trade 1a2b3c4d follows 2 contracts but its own stop and target prove only 1: ChartBridge closed those 1
+  said as an error ("bot trade 1a2b3c4d follows 2 contracts but its own stop and target prove only 1 still open: ChartBridge closed those 1
   and none of the rest, which cannot be told apart from Anthony's own contracts; act in NinjaTrader"). With no proof at all (no
   working leg was seen, or the trade is open in `bot-day.txt` and not followed), nothing is closed, the pages get an error ("no
   stop or target of bot trade 1a2b3c4d proves its size, so ChartBridge closes none of it (Anthony's own contracts are never
@@ -3047,10 +3073,20 @@ decision 3: OwnerGuardCase, OwnerShare, OwnerUntold).
   proposal is shown), an auto entry and an accepted proposal (`RailsProblem`), and again under the order lock
   (`ChartBridgeOrders.PlaceOrderLocked`), so a page order cannot slip in between. **Copilot and auto stay armed** and make no
   entry until the account is clear; **Shadow is unaffected**. With the guard, a mixed position arises only when Anthony trades
-  by hand while the bot holds its trade (or while a bot entry rests); "Bot only" above handles it exactly. Gate 3's cap for the
-  bot stays behind the guard (defense in depth).
+  by hand while the bot holds its trade; "Bot only" above handles it. Gate 3's cap for the bot stays behind the guard (defense in
+  depth). A page order ChartBridge has just sent that NinjaTrader does not list yet counts as his (finding 6).
+- **Pause and cancel** (Anthony's ruling A, 2026-11-18): when his own position or working order is on the bot's account and root
+  (both readings agreeing, seen for 1 s, so a fill whose position update is late is not taken for his), every bot entry still
+  resting there is cancelled (a part filled entry: its rest), said as a warn ("... the bot's resting entry is cancelled
+  (Anthony's ruling of 2026-11-18, pause and cancel); its filled position and its stop and target are untouched"). Checked every
+  500 ms. The bot's filled position and its legs are never touched.
+- **The standing line** (Anthony's ruling B, 2026-11-18): while the owner guard blocks entries in copilot or auto, `bot` carries
+  `ownerWait` ("waiting: you hold your own position or order (OWN-1 MNQ holds 1 contract long that is not the bot's)", both
+  readings agreeing; null otherwise and in Shadow), and the Bot tab shows it as a line under the rails ("Waiting: you hold your
+  own position or order (...). The bot makes no entry until it is clear."). The refusals stay in the log.
 - **Messages.** `bot` adds `size`, `hardCeiling`, `dayLoss`, `dayProfit` (each null when not set), `railsMissing` (the names
-  of the rails not set), `dayStop` (null, or `{kind, day, text}`) and `personal` (the bot's account is the personal one);
+  of the rails not set), `dayStop` (null, or `{kind, day, text}`), `personal` (the bot's account is the personal one) and
+  `ownerWait` (ruling B: null, or the standing line's words; the fake bridge always sends null);
   `maxTrades`, `maxLosses` and `maxQty` (the size) are null when not set. `welcome`'s `rails` is `{maxQty, size, maxTrades,
   maxLosses, dayLoss, dayProfit}` (null when not set). `botState` adds `dayStop` (`loss`, `profit` or null). A proposal's
   `qty` is the size.
@@ -3999,7 +4035,10 @@ lists them word for word).
 - **Calls**, each a `.wav` file of that name in the folder: an entry fill `LongFilled` / `ShortFilled`; ChartBridge's
   stop leg `StopFilled`; its target leg `TargetFilled`, or `TargetOneFilled` / `TargetTwoFilled` for a strategy's first
   and second target; ChartBridge's market exit, an agent's flatten, or NinjaTrader's close after ChartBridge's Flatten
-  `PositionClosed`; ChartBridge's stop moved to its fill price `BreakEvenSet`.
+  `PositionClosed`; ChartBridge's stop moved to its fill price `BreakEvenSet`. Release 1 (R12 of decision 3, Anthony's ruling 3 of
+  2026-11-18): the bot's day stop close still not done after 15 s, then every 60 s while the bot holds, `BotNotClosed`
+  (`ChartBridgeVoice.Say`, one call per error; a new file in the voice folder: until it is there that call is silent and the
+  Output window says so once).
 - **One call per decision**: a group entry copied to several accounts (one decision id) speaks once.
 - **Never waits**: a queue of at most 8 calls (full: the call is dropped) and one background thread plays them, each with a
   5 s limit (a stuck player: that call is dropped). A missing folder or file is said once in the Output window and that
