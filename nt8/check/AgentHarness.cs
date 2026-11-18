@@ -1300,6 +1300,11 @@ public static class AgentHarness
         Order e = PlacedNow(id, Good(id));
         Fill(e, 1, 24999);
         Check(ChartBridgeAgents.OwnerAgent("Sim101", "MNQ") == "manrae", "manrae owns Sim101 MNQ");
+        // release 1 (1.6c, the R12 review F6): Cut half on an agent's pair is refused, nothing sent (its stop and target are the agent's)
+        int cutCalls = sim.Calls.Count;
+        P("{\"type\":\"cutHalf\",\"cid\":\"ch-ag\",\"account\":\"Sim101\",\"root\":\"MNQ\",\"position\":1}");
+        Check(Rejected("ch-ag") && PageReject().Contains("belongs to agent manrae (its stop and target are the agent's)") && sim.Calls.Count == cutCalls,
+              "Cut half on the agent's pair: refused, nothing sent: " + PageReject());
         // the bot on Sim101 (a clash from files): its entry there is refused at PlaceOrderLocked
         ChartBridgeSwitches.Note("bot", "on");
         ChartBridgeBot.Start(false);

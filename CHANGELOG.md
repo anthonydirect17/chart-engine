@@ -34,6 +34,15 @@ rules: `nt8/PROTOCOL.md`, "Cut half (release 1, step 1.6c)".
   a stale page, readings apart, a second press, working exits, strict keys and the gates, a group's members, a rejected close,
   trading off), `nt8/check/DataHarness.cs` (the feature); `test/cut-half.test.js`; `test/mini-ticket-smoke.mjs`
   (`npm run smoke:mini-ticket`); `test/prefs.test.js`, `test/nt8-source.test.js` and the hotkey tests follow the rename.
+- **The R12 review of Cut half.** Every exit on the closing side that Cut half does not shrink now counts (an ATM's or the
+  DOM's bracket, a hand OCO, an agent's legs, not only lone exits): with ChartBridge's legs at the size left and the close they
+  may never close more than the position, or it is refused, nothing sent. A stop or target to shrink that is being changed or
+  not yet accepted refuses it. A shrink NinjaTrader does not make (an error, or the leg back above its planned size) raises an
+  error and is shrunk again at once. A refused cancel or change sends no close; a close whose submit throws changes the shrunk
+  legs back. A copier follower that is off but still holds the copier's position or orders is refused (Merge's rule). The
+  Merge check runs again under the order lock, and a Merge that plans while a Cut half is sent there is refused. The Hotkeys
+  help says Flatten, and that Cut half goes to the ticket's window with Armed off. Tests: `nt8/check/OrdersHarness.cs` (the
+  R12 section), `nt8/check/AgentHarness.cs` (Cut half on an agent's pair).
 
 ## Unreleased (2026-11-18): release 1, step 1.6b: the personal bot (ChartBridge, the Bot tab)
 

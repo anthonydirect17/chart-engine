@@ -863,6 +863,7 @@ public static class OrdersHarness
 
         PlannedChecks();   // 0.3.8: a resting entry's planned stop and target, ticks from its fill (the ATM rule); 0.3.7: no distance limits unless config.txt sets them
         Section("cut half (release 1, 1.6c)", CutHalfChecks);   // Cut half: half closed at market, the legs shrunk to the size left in the same step
+        Section("cut half, the R12 review (release 1, 1.6c)", CutHalfR12Checks);   // other exits counted, legs mid-change, a refused change, copier, Merge, a throw
 
         // ------------------------------------------------------------ turning trading off stops every order action
         ChartBridgeOrders.ResetConfig();
@@ -1074,6 +1075,221 @@ public static class OrdersHarness
         ChartBridgeOrders.ReadConfig("tradeAccounts", was);
         foreach (Account x in new[] { a, b, cc, d, e, f, g, h, i, j, k, l, m1 }) foreach (Order o in x.Orders) o.OrderState = OrderState.Cancelled;
     }
+
+    // The R12 review of Cut half (release 1, 1.6c): F1 every exit Cut half does not shrink is counted, F2 a leg being changed refuses
+    // and a refused change is shrunk again at once, F3 a copier follower off but holding, F4 a Merge started after the freeze check,
+    // F5 a refused cancel, change or close, F6 the cases the first round lacked.
+    static void CutHalfR12Checks(Action<bool, string> check)
+    {
+        string was = string.Join(", ", ChartBridgeOrders.TradeAccounts);
+        string[] names = { "CutN", "CutO", "CutP", "CutQ", "CutR", "CutS", "CutT", "CutU", "CutV", "CutW", "CutX", "CutY", "CutZ", "CutAA", "CutAB", "CutAC" };
+        ChartBridgeOrders.ReadConfig("tradeAccounts", was + ", " + string.Join(", ", names));
+        Dictionary<string, Account> ac = names.ToDictionary(x => x, x => NewAccount(x));
+        Func<string, Account> A = x => ac[x];
+
+        // F1: an outside OCO pair (NinjaTrader's ATM or DOM: not ChartBridge's, so never shrunk) of 4 on a long 4: closing 2 would leave
+        // its stop of 4 on a long 2, which can flip the account: refused, nothing sent (the first round counted only lone exits)
+        Manual(A("CutN"), mnq, OrderAction.Sell, OrderType.StopMarket, 4, 0, 24990, "atm-n1", "Stop1");
+        Manual(A("CutN"), mnq, OrderAction.Sell, OrderType.Limit, 4, 25020, 0, "atm-n1", "Target1");
+        SetPos(A("CutN"), mnq, 4);
+        Msg("cutHalf", Cut("CutN", 4));
+        check(Rejected("other exits working for 4") && A("CutN").Calls.Count == 0, "F1: an outside OCO pair of 4 on a long 4: refused, no calls: " + LastSent());
+        // the reviewer's sum (other + cut <= held) would let this one go: ChartBridge's pair of 2 plus an outside pair of 2 on a long 4.
+        // ChartBridge's legs are already at the 2 left, so nothing shrinks: after the close, stops of 4 on a long 2. Refused.
+        Pair(A("CutO"), "c0000011", 1, 2, true);
+        Manual(A("CutO"), mnq, OrderAction.Sell, OrderType.StopMarket, 2, 0, 24990, "atm-o1", "Stop1");
+        Manual(A("CutO"), mnq, OrderAction.Sell, OrderType.Limit, 2, 25020, 0, "atm-o1", "Target1");
+        SetPos(A("CutO"), mnq, 4);
+        Msg("cutHalf", Cut("CutO", 4));
+        check(Rejected("other exits working for 2") && Rejected("legs at 2") && A("CutO").Calls.Count == 0, "F1: ChartBridge's pair of 2 and an outside pair of 2 on a long 4: refused, no calls: " + LastSent());
+        // an agent's protective stop (ag:, not a ChartBridge leg) on a pair it no longer owns: counted as another exit
+        Pair(A("CutP"), "c0000012", 1, 4, true);
+        Manual(A("CutP"), mnq, OrderAction.Sell, OrderType.StopMarket, 1, 0, 24985, "", "CB#c0000013 ag:xa stop p24985");
+        SetPos(A("CutP"), mnq, 4);
+        Msg("cutHalf", Cut("CutP", 4));
+        check(Rejected("other exits working for 1") && A("CutP").Calls.Count == 0, "F1: an agent's stop of 1 beside ChartBridge's pair of 4 on a long 4: refused, no calls: " + LastSent());
+        // the ordinary case still cuts: ChartBridge's own pair of 4, and an order on the opening side (it closes nothing) is not counted
+        Order[] q4 = Pair(A("CutQ"), "c0000014", 1, 4, true);
+        Manual(A("CutQ"), mnq, OrderAction.Buy, OrderType.Limit, 3, 24900, 0, "", "hand buy limit");
+        SetPos(A("CutQ"), mnq, 4);
+        Msg("cutHalf", Cut("CutQ", 4));
+        check(A("CutQ").Calls.Count == 3 && A("CutQ").Calls[0] == "change " + q4[0].Name + " L0 S0 Q2" && A("CutQ").Calls[2].Contains(" exit cut q2 Sell Market 2 "),
+              "F1: ChartBridge's own pair of 4 on a long 4 (a buy limit beside it): still cuts 2, legs to 2: " + Calls(A("CutQ")));
+        // own legs fewer than the size left, nothing else: they stay, and the close goes (pair of 1 on a long 4: keeps 2, 1 covered)
+        Order[] r1 = Pair(A("CutR"), "c0000015", 1, 1, true);
+        SetPos(A("CutR"), mnq, 4);
+        Msg("cutHalf", Cut("CutR", 4));
+        check(A("CutR").Calls.Count == 1 && A("CutR").Calls[0].Contains(" exit cut q2 Sell Market 2 ") && r1[0].OrderState == OrderState.Working, "F1: a pair of 1 on a long 4: nothing to shrink, 2 sold: " + Calls(A("CutR")));
+
+        // F2 (a): a stop or target to shrink that is being changed (breakeven or trailing, a drag) or not yet accepted: refused, nothing sent
+        Order[] s4 = Pair(A("CutS"), "c0000016", 1, 4, true);
+        SetPos(A("CutS"), mnq, 4);
+        foreach (OrderState st in new[] { OrderState.ChangePending, OrderState.ChangeSubmitted, OrderState.Submitted, OrderState.Initialized, OrderState.PartFilled })
+        {
+            s4[0].OrderState = st;
+            Msg("cutHalf", Cut("CutS", 4));
+            check(Rejected("is being sent, changed or filled (" + st + ")") && A("CutS").Calls.Count == 0, "F2 (a): the stop " + st + ": refused, no calls: " + LastSent());
+        }
+        check(s4[0].QuantityChanged != 2, "F2 (a): a refused Cut half leaves no planned size on the leg");
+        // Accepted and TriggerPending are settled: it cuts
+        s4[0].OrderState = OrderState.TriggerPending; s4[1].OrderState = OrderState.Accepted;
+        Msg("cutHalf", Cut("CutS", 4));
+        check(A("CutS").Calls.Count == 3 && A("CutS").Calls[2].Contains(" exit cut q2 "), "F2 (a): the stop TriggerPending, the target Accepted: it cuts: " + Calls(A("CutS")));
+
+        // F2 (b): NinjaTrader refuses the shrink (an error), while the close works: an alarm and the legs shrunk again at once
+        sent.Clear();
+        Order[] t4 = Pair(A("CutT"), "c0000017", 1, 4, true);
+        SetPos(A("CutT"), mnq, 4);
+        Msg("cutHalf", Cut("CutT", 4));
+        int nt = A("CutT").Calls.Count;
+        ChartBridgeOrders.OnOrderUpdate(A("CutT"), new OrderEventArgs { Order = t4[0], Error = ErrorCode.UnableToChangeOrder });   // the stop stays at 4
+        check(Alarmed("NinjaTrader did not shrink the stop to 2") && A("CutT").Calls.Count == nt + 2 && A("CutT").Calls.Skip(nt).All(x => x.EndsWith(" Q2")),
+              "F2 (b): the stop's change refused while the close works: alarm, the legs shrunk to 2 again at once: " + Calls(A("CutT")));
+        // refused again: said, no third try (the legs check carries on)
+        sent.Clear();
+        nt = A("CutT").Calls.Count;
+        ChartBridgeOrders.OnOrderUpdate(A("CutT"), new OrderEventArgs { Order = t4[0], Error = ErrorCode.UnableToChangeOrder });
+        check(Alarmed("again did not shrink the stop") && A("CutT").Calls.Count == nt, "F2 (b): refused again: an alarm, nothing more sent: " + Calls(A("CutT")));
+        // the leg settles Working above its planned size with no error (breakeven's change carried the old size), the close filled: same
+        sent.Clear();
+        Order[] u4 = Pair(A("CutU"), "c0000018", 1, 4, true);
+        SetPos(A("CutU"), mnq, 4);
+        Msg("cutHalf", Cut("CutU", 4));
+        Order cu = A("CutU").Orders.Last();
+        Fill(A("CutU"), cu, 2, 25001);
+        SetPos(A("CutU"), mnq, 2);
+        ChartBridgeOrders.OnPositionUpdate(A("CutU"), new PositionEventArgs { Position = new Position { Instrument = mnq }, MarketPosition = MarketPosition.Long, Quantity = 2, AveragePrice = 25000 });
+        nt = A("CutU").Calls.Count;
+        u4[1].OrderState = OrderState.ChangePending;
+        Update(A("CutU"), u4[1]);
+        check(A("CutU").Calls.Count == nt && !Alarmed("did not shrink"), "F2 (b): a leg still changing: nothing said yet");
+        u4[1].OrderState = OrderState.Working;   // back Working with its old size of 4
+        Update(A("CutU"), u4[1]);
+        check(Alarmed("NinjaTrader did not shrink the target to 2 (it is 4)") && A("CutU").Calls.Count == nt + 2 && A("CutU").Calls.Skip(nt).All(x => x.EndsWith(" Q2")),
+              "F2 (b): the target back Working at 4 after the close filled: alarm, shrunk to the 2 held at once: " + Calls(A("CutU")));
+        // a leg that comes back at its planned size: confirmed, nothing said
+        sent.Clear();
+        Order[] v4 = Pair(A("CutV"), "c0000019", 1, 4, true);
+        SetPos(A("CutV"), mnq, 4);
+        Msg("cutHalf", Cut("CutV", 4));
+        nt = A("CutV").Calls.Count;
+        v4[0].Quantity = 2; Update(A("CutV"), v4[0]);
+        v4[0].Quantity = 4; Update(A("CutV"), v4[0]);   // a later event is no longer the cut's (confirmed once)
+        check(!Alarmed("did not shrink") && A("CutV").Calls.Count == nt, "F2 (b): the stop confirmed at 2: forgotten, nothing said or sent");
+        // the close rejected: legs at their old size fit the position held, so no re-shrink (CutUpdate says the close failed)
+        sent.Clear();
+        Order[] w4 = Pair(A("CutW"), "c000001a", 1, 4, true);
+        SetPos(A("CutW"), mnq, 4);
+        Msg("cutHalf", Cut("CutW", 4));
+        Order cw = A("CutW").Orders.Last();
+        cw.OrderState = OrderState.Rejected; Update(A("CutW"), cw);
+        nt = A("CutW").Calls.Count;
+        ChartBridgeOrders.OnOrderUpdate(A("CutW"), new OrderEventArgs { Order = w4[0], Error = ErrorCode.UnableToChangeOrder });
+        check(Alarmed("Cut half close was REJECTED") && !Alarmed("did not shrink") && A("CutW").Calls.Count == nt, "F2 (b): the close rejected: no re-shrink of the legs: " + Calls(A("CutW")));
+
+        // F3 and F6: a copier follower: on, refused; off but still holding a copier position, refused; off with nothing of the copier, cuts
+        bool copierWas = ChartBridgeV3.Copier;
+        ChartBridgeSwitches.Note("copier", "on");
+        BindingFlags ps = BindingFlags.NonPublic | BindingFlags.Static;
+        object lk = typeof(ChartBridgeCopier).GetField("Lk", ps).GetValue(null);
+        System.Collections.IList followers = (System.Collections.IList)typeof(ChartBridgeCopier).GetField("Followers", ps).GetValue(null);
+        System.Collections.IDictionary copies = (System.Collections.IDictionary)typeof(ChartBridgeCopier).GetField("Copies", ps).GetValue(null);
+        Type folT = typeof(ChartBridgeCopier).GetNestedType("Follower", BindingFlags.NonPublic), copyT = typeof(ChartBridgeCopier).GetNestedType("Copy", BindingFlags.NonPublic);
+        object fol = Activator.CreateInstance(folT, true);
+        folT.GetField("Name").SetValue(fol, "CutX"); folT.GetField("On").SetValue(fol, true);
+        object cp = Activator.CreateInstance(copyT, true);
+        copyT.GetField("A").SetValue(cp, A("CutX")); copyT.GetField("Inst").SetValue(cp, mnq); copyT.GetField("Root").SetValue(cp, "MNQ");
+        Pair(A("CutX"), "c000001b", 1, 4, true);
+        SetPos(A("CutX"), mnq, 4);
+        try
+        {
+            lock (lk) followers.Add(fol);
+            Msg("cutHalf", Cut("CutX", 4));
+            check(Rejected("CutX is a copier follower (the copier keeps its size") && A("CutX").Calls.Count == 0, "F3: a follower that is on: refused, no calls: " + LastSent());
+            lock (lk) { folT.GetField("On").SetValue(fol, false); copies["CutX|" + mnq.FullName] = cp; }
+            Msg("cutHalf", Cut("CutX", 4));
+            check(Rejected("CutX is a copier follower (off) that still holds a copier position or orders") && A("CutX").Calls.Count == 0, "F3: a follower that is off but holds a copier position: refused, no calls: " + LastSent());
+            lock (lk) copies.Remove("CutX|" + mnq.FullName);
+            Msg("cutHalf", Cut("CutX", 4));
+            check(A("CutX").Calls.Count == 3 && A("CutX").Calls[2].Contains(" exit cut q2 "), "F3: a follower that is off with nothing of the copier there: its own position cuts: " + Calls(A("CutX")));
+        }
+        finally
+        {
+            lock (lk) { followers.Remove(fol); copies.Remove("CutX|" + mnq.FullName); }
+            ChartBridgeSwitches.Note("copier", copierWas ? "on" : "off");
+        }
+
+        // F4 and F6: a Merge running there: refused by the freeze check before Cut half; and one that starts after that check but before
+        // PlaceLock is seen by Cut half's own check under PlaceLock (nothing sent)
+        Type swapT = typeof(ChartBridgeOrders).GetNestedType("MergeSwapState", BindingFlags.NonPublic);
+        System.Collections.IDictionary swaps = (System.Collections.IDictionary)typeof(ChartBridgeOrders).GetField("MergeSwaps", ps).GetValue(null);
+        object mlk = typeof(ChartBridgeOrders).GetField("MergeLock", ps).GetValue(null);
+        string ykey = "CutY|" + mnq.FullName;
+        object sw = Activator.CreateInstance(swapT, true);
+        swapT.GetField("Account").SetValue(sw, A("CutY")); swapT.GetField("Instrument").SetValue(sw, mnq); swapT.GetField("Key").SetValue(sw, ykey); swapT.GetField("Where").SetValue(sw, "MNQ CutY");
+        Pair(A("CutY"), "c000001c", 1, 4, true);
+        SetPos(A("CutY"), mnq, 4);
+        try
+        {
+            lock (mlk) swaps[ykey] = sw;
+            Msg("cutHalf", Cut("CutY", 4));
+            check(Rejected("a Merge is running on MNQ CutY; cutHalf is refused") && A("CutY").Calls.Count == 0, "F4: a Merge running: refused, no calls: " + LastSent());
+            lock (mlk) swaps.Remove(ykey);
+            object pl = ChartBridgeOrders.GroupPlaceLock;
+            Thread th;
+            Monitor.Enter(pl);
+            try
+            {
+                th = new Thread(() => Msg("cutHalf", Cut("CutY", 4))) { IsBackground = true };
+                th.Start();
+                System.Diagnostics.Stopwatch wt = System.Diagnostics.Stopwatch.StartNew();
+                while ((th.ThreadState & ThreadState.WaitSleepJoin) == 0 && wt.ElapsedMilliseconds < 5000) Thread.Sleep(1);   // past the freeze check, waiting for PlaceLock
+                lock (mlk) swaps[ykey] = sw;   // the Merge starts now
+            }
+            finally { Monitor.Exit(pl); }
+            th.Join(5000);
+            check(Rejected("a Merge started on MNQ CutY; cutHalf is refused") && A("CutY").Calls.Count == 0 && !A("CutY").Orders.Any(IsCutOrder),
+                  "F4: a Merge that starts after the freeze check: Cut half's own check under PlaceLock refuses it, no calls: " + LastSent());
+        }
+        finally { lock (mlk) swaps.Remove(ykey); }
+        Msg("cutHalf", Cut("CutY", 4));
+        check(A("CutY").Calls.Count == 3, "F4: the Merge ended: it cuts: " + Calls(A("CutY")));
+
+        // F5 and F6: a cancel or change NinjaTrader refuses: an alarm, the close never sent
+        sent.Clear();
+        Order[] z4 = Pair(A("CutZ"), "c000001d", 1, 4, true);
+        SetPos(A("CutZ"), mnq, 4);
+        A("CutZ").OnCall = (kind, o) => { if (kind == "change") throw new InvalidOperationException("test change refusal"); };
+        Msg("cutHalf", Cut("CutZ", 4));
+        A("CutZ").OnCall = null;
+        check(Rejected("refused the stop and target change (test change refusal); the close was not sent") && !A("CutZ").Calls.Any(x => x.StartsWith("submit")) &&
+              Alarmed("Cut half could not shrink the stop and target (test change refusal)"), "F5: a change that throws: alarm, no close sent: " + Calls(A("CutZ")));
+        Order[] e1 = Pair(A("CutAA"), "c000001e", 1, 1, true), e2 = Pair(A("CutAA"), "c000001e", 2, 1, true), e3 = Pair(A("CutAA"), "c000001e", 3, 1, true), e4 = Pair(A("CutAA"), "c000001e", 4, 1, true);
+        SetPos(A("CutAA"), mnq, 4);
+        A("CutAA").OnCall = (kind, o) => { if (kind == "cancel") throw new InvalidOperationException("test cancel refusal"); };
+        Msg("cutHalf", Cut("CutAA", 4));
+        A("CutAA").OnCall = null;
+        check(Rejected("the close was not sent") && !A("CutAA").Calls.Any(x => x.StartsWith("submit")), "F5: a cancel that throws: no close sent: " + Calls(A("CutAA")));
+        // a close that throws: nothing was sent, so the shrunk legs go back to the 4 held, with an alarm
+        sent.Clear();
+        Order[] ab = Pair(A("CutAB"), "c000001f", 1, 4, true);
+        SetPos(A("CutAB"), mnq, 4);
+        A("CutAB").OnCall = (kind, o) => { if (kind == "submit") { o.OrderState = OrderState.Rejected; throw new InvalidOperationException("test submit refusal"); } };
+        Msg("cutHalf", Cut("CutAB", 4));
+        A("CutAB").OnCall = null;
+        List<string> abc = A("CutAB").Calls;
+        check(Rejected("NinjaTrader refused the close (test submit refusal)") && abc.Count == 5 && abc[0].EndsWith(" Q2") && abc[1].EndsWith(" Q2") && abc[2].Contains(" exit cut q2 ") &&
+              abc[3] == "change " + ab[0].Name + " L0 S0 Q4" && abc[4] == "change " + ab[1].Name + " L0 S0 Q4", "F5: a close that throws: the legs changed back to 4: " + Calls(A("CutAB")));
+        check(Alarmed("Cut half could not send its close of 2 (test submit refusal); ChartBridge changed its 2 shrunk leg(s) back"), "F5: and an alarm says so");
+        // the change back is no cut leg: its event is not taken for a refused shrink
+        sent.Clear();
+        ab[0].OrderState = OrderState.Working; Update(A("CutAB"), ab[0]);
+        check(!Alarmed("did not shrink"), "F5: the legs changed back are not watched as a cut's");
+
+        ChartBridgeOrders.ReadConfig("tradeAccounts", was);
+        foreach (Account x in ac.Values) foreach (Order o in x.Orders) o.OrderState = OrderState.Cancelled;
+    }
+    static bool IsCutOrder(Order o) { return IsCutName(o.Name); }
 
     // ------------------------------------------------------------ 0.3.7 and 0.3.8: planned stop and target on resting entries (Anthony's rulings, 2026-10-01)
     static Order Newest(Account a) { return a.Orders[a.Orders.Count - 1]; }

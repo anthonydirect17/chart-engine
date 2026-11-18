@@ -1717,8 +1717,15 @@ actions a second; a member at 1 contract is left alone and named in the page's n
 - **The position, read three ways.** `position` is the signed position the page showed when Anthony pressed. It is refused,
   nothing sent, unless ChartBridge's two readings (NinjaTrader's list, and with the fills not yet in it) agree and equal it:
   a stale page or a second press never cuts twice. A Cut half close of the same account and contract that may still fill
-  refuses the next one too ("the last Cut half ... is still being filled"). Exits already working there that are no bracket
-  leg (a hand limit, a market exit) count: closing half more must not pass the position with them, or it is refused.
+  refuses the next one too ("the last Cut half ... is still being filled"). Every other exit working on the closing side
+  counts (the R12 review): each order that may fill, an OCO group once at its largest, less ChartBridge's own stops and
+  targets there by the same count, so an ATM's or the DOM's bracket, a hand order or hand OCO, an agent's legs and a page
+  exit all count. Those, plus ChartBridge's legs at the size left (or fewer if they were fewer), plus the close, may never
+  close more than the position, or it is refused: a long 4 with an outside stop and target of 4 is refused (its stop of 4
+  would stay on a long 2), and so is a long 4 with ChartBridge's pair of 2 and an outside pair of 2.
+- **A stop or target being changed.** When a leg Cut half would cancel or shrink is not Accepted, Working or TriggerPending
+  (breakeven or trailing moving it, a drag, a pair not yet accepted, a part fill), it is refused, nothing sent ("a stop or
+  target on MNQ Sim101 is being sent, changed or filled"; try again).
 - **One step: the legs first, then the close.** Under the order lock (`PlaceLock`), ChartBridge's own stops and targets on
   that contract are made to fit the size left by the legs check's own rule (`ShrinkPlan`: legs on the wrong side cancelled,
   then the newest units cut, a unit covering no more than the excess cancelled whole, the one past it shrunk, a Merge set as a
@@ -1726,14 +1733,24 @@ actions a second; a member at 1 contract is left alone and named in the page's n
   `CB#<tag> exit cut q<n>` (never a bracket leg, never an entry). Legs that cover the size left can never open a position
   whichever fills first (a stop filling first leaves the close to finish the exit); legs covering the whole position after the
   close filled could. Legs ChartBridge cancels here are never called lost by the missing-stop alarm. Orders not named `CB#`
-  (placed in NinjaTrader), an ATM's and an agent's legs are never touched.
+  (placed in NinjaTrader), an ATM's and an agent's legs are never touched. If NinjaTrader refuses the cancel or the change
+  (the call throws), the close is not sent and every signed-in page gets a `status` `error`.
+- **A shrink NinjaTrader does not make.** Each shrunk leg's planned size is kept while the close may fill or has filled. If
+  the leg comes back with an error, or settles (Accepted, Working, TriggerPending) above that size, every signed-in page gets
+  a `status` `error` and the legs are shrunk again at once by the same rule, to the size left (or the position, if smaller),
+  without the legs check's 4 seconds; once per cut (a second miss is said and left to the legs check). A position flat,
+  flipped or changing by its two readings is left to the legs check. Whether to wait for NinjaTrader to confirm the shrink
+  before the close goes is parked for Anthony.
 - **A close NinjaTrader refuses.** If NinjaTrader rejects or cancels the close before it fills (or the call throws), its legs
   were already shrunk: every signed-in page gets a `status` `error` at once ("the Cut half close was REJECTED ... those
-  contracts may have NO STOP; act in NinjaTrader now"), and the missing-stop alarm says it again after its 4 seconds. A close
-  that a Flatten cancels raises nothing (the Flatten closes the whole position).
+  contracts may have NO STOP; act in NinjaTrader now"), and the missing-stop alarm says it again after its 4 seconds. When the
+  submit call itself throws, nothing was sent: ChartBridge changes the shrunk legs back to the size held (legs it cancelled
+  are gone, and the error says so). A close that a Flatten cancels raises nothing (the Flatten closes the whole position).
 - **Refused, nothing sent:** a pair an AI agent owns (its stop and target are the agent's: use Flatten, or a market exit); a
-  copier follower that is on (the copier keeps its size from the leader: cut the leader, whose exits are copied); a Merge
-  running on that account and root; a root ChartBridge does not serve or a quote-only one.
+  copier follower that is on (the copier keeps its size from the leader: cut the leader, whose exits are copied), or off while
+  the copier still holds a position or orders of its own there (Merge's rule); a Merge running on that account and root
+  (checked again under the order lock, and a Merge that plans while a Cut half is sent there is refused); a root ChartBridge
+  does not serve or a quote-only one.
 - The page's Close button and hotkey are named **Flatten** in release 1 (the same `flatten` message; the hotkey's id stays
   `close`). Flatten all is unchanged.
 

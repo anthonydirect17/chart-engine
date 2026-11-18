@@ -294,7 +294,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (ConnectedSince) ConnectedSince.Clear();
             lock (PlanMemLock) { Plans.Clear(); LegacyPlans.Clear(); plansLoaded = false; plansReadFailed = false; writeWaiting = false; writeFailed = null; planGeneration++; }
             lock (Sync) { PlanDeferred.Clear(); PlanWaitSince.Clear(); }
-            lock (Sync) CutFlattened.Clear();   // release 1 (1.6c)
+            lock (Sync) { CutFlattened.Clear(); CutLegs.Clear(); }   // release 1 (1.6c)
             MergeClear();   // 0.4.0 B4
             ClearStrategies();   // 0.4.0 B1
         }
@@ -1097,8 +1097,12 @@ namespace NinjaTrader.NinjaScript.AddOns
         // could. If NinjaTrader refuses the close after the legs were shrunk, the page gets an error at once (CutUpdate).
         // Refused, nothing sent: the two position readings disagree or differ from what the page saw ("position", so a second
         // press or a stale page never cuts twice), under 2 contracts, a Cut half of this account and contract still filling, other
-        // exits already working that would close more than the position with it, an agent's pair (its legs are the agent's), a
-        // copier follower that is on (the copier keeps its size), a Merge running there.
+        // exits working that Cut half does not shrink (an ATM or DOM bracket, a hand order, an agent's legs) which, with the close and
+        // ChartBridge's shrunk legs, could close more than the position (R12 F1), a stop or target to shrink that is being sent,
+        // changed or filled (R12 F2), an agent's pair (its legs are the agent's), a copier follower that is on or still holds copier
+        // positions or orders (the copier keeps its size), a Merge running there (checked again under PlaceLock, R12 F4). A cancel
+        // or change NinjaTrader refuses sends nothing more; a close it refuses changes the shrunk legs back (R12 F5). A leg whose
+        // change NinjaTrader does not make is shrunk again at once (CutLegUpdate, R12 F2).
         private static readonly Regex CutNameRx = new Regex("^CB#([0-9a-f]{8}) exit cut q([0-9]{1,6})$");
         private static bool IsCut(Order o) { return o != null && CutNameRx.IsMatch(o.Name ?? ""); }
 
@@ -1114,7 +1118,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             string where = Where(account, inst);
             string owner = ChartBridgeAgents.OwnerAgent(account.Name, root);
             if (owner != null) return "Cut half: " + where + " belongs to agent " + owner + " (its stop and target are the agent's); use Flatten, or a market exit";
-            string copier = ChartBridgeCopier.CutHalfRefusal(account);   // 0.4.0 copier: release 1 (1.6c): never on a follower that is on
+            string copier = ChartBridgeCopier.CutHalfRefusal(account);   // 0.4.0 copier: release 1 (1.6c): never on a follower that is on, or off and still holding (R12 F3)
             if (copier != null) return copier;
             lock (PlaceLock)   // one order check and send at a time: never interleaved with an entry's cap check
             {
@@ -1129,36 +1133,138 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (orders.Any(o => IsCut(o) && SameInstrument(o.Instrument, inst) && MayFill(o.OrderState)))
                     return "Cut half: the last Cut half on " + where + " is still being filled; nothing was sent";
                 bool buy = posNow < 0;   // the close buys back a short, sells a long
-                int cut = held / 2, keep = held - cut, pb, ps, loneBuy, loneSell;
-                PendingOrders(account, inst, out pb, out ps, out loneBuy, out loneSell);
-                int lone = buy ? loneBuy : loneSell;   // exits already working there that are no bracket leg (a hand limit, a market exit)
-                if ((long)lone + cut > held)
-                    return "Cut half: " + where + " has exits working for " + lone + " of its " + held + " contracts; closing " + cut + " more could pass the position, so nothing was sent (cancel them, or use Flatten)";
+                int cut = held / 2, keep = held - cut, pb, ps;
+                PendingOrders(account, inst, out pb, out ps);
+                // R12 F1: every exit on the closing side that may fill, each OCO group once at its largest (PendingOrders), less ChartBridge's
+                // own legs there by the same count (LegUnits): what is left is the exits Cut half does not shrink (an ATM or DOM bracket, a
+                // hand order or hand OCO, an agent's legs, a page exit). After the cut, those plus ChartBridge's legs (shrunk to keep, or
+                // fewer if they were fewer) and the close may never close more than the position: else a stop could flip the account.
+                List<Unit> units = LegUnits(WorkingLegs(account, inst));
+                int own = units.Where(u => u.Buy == buy).Sum(u => Math.Max(0, u.Left));
+                int other = Math.Max(0, (buy ? pb : ps) - own), ownAfter = Math.Min(own, keep);
+                if ((long)other + ownAfter + cut > held)
+                    return "Cut half: " + where + " has other exits working for " + other + " of its " + held + " contracts (not ChartBridge's stop and target: an ATM or DOM bracket, a hand order, an agent's legs); with " +
+                           cut + " closed and ChartBridge's legs at " + ownAfter + " they could close more than the " + keep + " left, so nothing was sent (cancel them, or use Flatten)";
                 // the legs to the size left, by the legs check's rule (cancel and change are only planned here)
                 List<Order> cancel = new List<Order>(), change = new List<Order>();
-                ShrinkPlan(LegUnits(WorkingLegs(account, inst)), buy ? -keep : keep, cancel, change);
+                Dictionary<Order, int> was = new Dictionary<Order, int>();
+                foreach (Unit u in units) foreach (Order o in u.Legs) was[o] = o.Quantity;
+                ShrinkPlan(units, buy ? -keep : keep, cancel, change);
+                // R12 F2 (a): a leg being sent, changed or filled (breakeven or trailing moving it, a drag, a pair not yet accepted) may
+                // refuse the change: refused, nothing sent
+                Order busy = cancel.Concat(change).FirstOrDefault(o => o.OrderState != OrderState.Accepted && o.OrderState != OrderState.Working && o.OrderState != OrderState.TriggerPending);
+                if (busy != null)
+                {
+                    foreach (Order o in change) o.QuantityChanged = was[o];
+                    return "Cut half: a stop or target on " + where + " is being sent, changed or filled (" + busy.OrderState + "); nothing was sent, try again";
+                }
                 string tag = Guid.NewGuid().ToString("N").Substring(0, 8);
                 Order close = account.CreateOrder(inst, buy ? OrderAction.Buy : OrderAction.Sell, OrderType.Market, OrderEntry.Manual, TimeInForce.Day, cut, 0, 0, "",
                     "CB#" + tag + " exit cut q" + cut.ToString(CultureInfo.InvariantCulture), NinjaTrader.Core.Globals.MaxDate, null);
-                ChartBridgeGroups.NoteNewOrder(account, inst, close, buy);   // 0.5.8 Q-EXIT (b): an exit of the position, as any page order
                 lock (Sync)
                 {
                     IdFor(close);
                     Ours.Add(close);
                     if (!string.IsNullOrEmpty(cid)) CidOf[close] = cid;
                 }
-                if (cancel.Count > 0) { NoteWeCancelSafe(() => cancel, "Cut half"); account.Cancel(cancel.ToArray()); }
-                if (change.Count > 0) account.Change(change.ToArray());
+                // R12 F4: the Merge check again, under PlaceLock with the close in Ours (a Merge that started since MergeFreezeWhy is
+                // seen here; one that plans from now on sees the close, or this count, and is refused)
+                string merging = MergeCutCheck(account, inst);
+                if (merging != null)
+                {
+                    foreach (Order o in change) o.QuantityChanged = was[o];
+                    lock (Sync) { Ours.Remove(close); DropId(close); }
+                    return merging;
+                }
+                ChartBridgeGroups.NoteNewOrder(account, inst, close, buy);   // 0.5.8 Q-EXIT (b): an exit of the position, as any page order
+                // R12 F2 (b): each changed leg's planned size, watched while the close works (CutLegUpdate)
+                lock (Sync) foreach (Order o in change) CutLegs[o] = new CutLeg { Close = close, Planned = o.QuantityChanged, Keep = keep, Buy = buy };
+                // R12 F5: a refused cancel or change sends nothing more (the close is not sent)
+                try
+                {
+                    if (cancel.Count > 0) { NoteWeCancelSafe(() => cancel, "Cut half"); account.Cancel(cancel.ToArray()); }
+                    if (change.Count > 0) account.Change(change.ToArray());
+                }
+                catch (Exception ex)
+                {
+                    lock (Sync) { Ours.Remove(close); DropId(close); foreach (Order o in change) CutLegs.Remove(o); }
+                    Alarm(where + ": Cut half could not shrink the stop and target (" + ex.Message + "), so its close of " + cut + " was NOT sent; the legs may be partly cancelled or changed: check the stop in NinjaTrader");
+                    return "Cut half: NinjaTrader refused the stop and target change (" + ex.Message + "); the close was not sent";
+                }
                 try { account.Submit(new[] { close }); }
                 catch (Exception ex)
                 {
-                    lock (Sync) Ours.Remove(close);
-                    Alarm(where + ": Cut half could not send its close of " + cut + " (" + ex.Message + "); the stop and target were already shrunk to " + keep + " while the position holds " + held + ": check NinjaTrader and add a stop");
+                    // nothing was sent: the shrunk legs go back to the position held
+                    lock (Sync) { Ours.Remove(close); foreach (Order o in change) CutLegs.Remove(o); }
+                    string back = "";
+                    if (change.Count > 0)
+                    {
+                        foreach (Order o in change) o.QuantityChanged = was[o];
+                        try { account.Change(change.ToArray()); back = "; ChartBridge changed its " + change.Count + " shrunk leg(s) back"; }
+                        catch (Exception ex2) { back = "; changing its " + change.Count + " shrunk leg(s) back failed too (" + ex2.Message + ")"; }
+                    }
+                    Alarm(where + ": Cut half could not send its close of " + cut + " (" + ex.Message + ")" + back + (cancel.Count > 0 ? "; " + cancel.Count + " leg(s) it cancelled are gone" : "") +
+                          "; the position holds " + held + ": check its stop in NinjaTrader");
                     return "Cut half: NinjaTrader refused the close (" + ex.Message + ")";
                 }
                 ChartBridgeServer.Log("Cut half sent: " + (buy ? "buy " : "sell ") + cut + " " + root + " at market on " + account.Name + " (held " + held + ", keeps " + keep +
                                       "); legs: cancelled " + cancel.Count + ", shrunk " + change.Count);
                 return null;
+            }
+        }
+
+        // R12 F2 (b): a leg Cut half shrank, while its close may fill or has filled. NinjaTrader may refuse the change (breakeven or
+        // trailing changing the stop at that moment, a drag, a pair not yet accepted) and leave the leg at its old size, over the
+        // position once the close fills. Seen at its next event (an error, or settled above the planned size): an alarm, and the legs
+        // shrunk again at once by the same rule (no SettleMs wait), once per cut; a second miss is said and left to the legs check.
+        private class CutLeg { public Order Close; public int Planned, Keep; public bool Buy, Retried, Said; }
+        private static readonly Dictionary<Order, CutLeg> CutLegs = new Dictionary<Order, CutLeg>();
+        private static void CutLegUpdate(Account account, Order o, ErrorCode error, string where)
+        {
+            CutLeg w;
+            lock (Sync) if (!CutLegs.TryGetValue(o, out w)) return;
+            bool closeLive = w.Close.Filled > 0 || MayFill(w.Close.OrderState);
+            bool settled = o.OrderState == OrderState.Accepted || o.OrderState == OrderState.Working || o.OrderState == OrderState.TriggerPending;
+            bool missed = error != ErrorCode.NoError || (settled && o.Quantity > w.Planned);
+            if (IsDone(o.OrderState) || !closeLive || (!missed && settled)) { lock (Sync) CutLegs.Remove(o); return; }   // done, the close failed (CutUpdate), or confirmed
+            if (!missed) return;   // still changing
+            bool retry;
+            lock (Sync)
+            {
+                if (w.Said) return;
+                w.Said = true;
+                retry = !w.Retried;
+                CutLegs.Remove(o);
+            }
+            string role = RoleFor(o);
+            if (!retry)
+            {
+                Alarm(where + ": Cut half: NinjaTrader again did not shrink the " + (role ?? "leg") + " to " + w.Planned + " (it is " + o.Quantity + (error != ErrorCode.NoError ? ", " + error : "") +
+                      "); the legs may cover more than the position: check the stop and target in NinjaTrader (the legs check tries again)");
+                return;
+            }
+            Alarm(where + ": Cut half: NinjaTrader did not shrink the " + (role ?? "leg") + " to " + w.Planned + " (it is " + o.Quantity + (error != ErrorCode.NoError ? ", " + error : "") +
+                  "); ChartBridge shrinks the legs to the position again now");
+            Instrument inst = o.Instrument;
+            int posNow = SignedPosition(account, inst), posEff = EffectivePosition(account, inst);
+            if (posNow == 0 || posEff == 0 || (posNow < 0) != w.Buy || (posEff < 0) != w.Buy)
+            {
+                Alarm(where + ": Cut half: the position is " + posNow + " (" + posEff + " with the fills not yet in it), so ChartBridge leaves the legs to the legs check; check the stop and target in NinjaTrader");
+                return;   // flat, flipped or changing: never cancel legs on a reading that may be stale
+            }
+            int target = (w.Buy ? -1 : 1) * Math.Min(w.Keep, Math.Min(Math.Abs(posNow), Math.Abs(posEff)));   // the size left, or less if the position is smaller
+            List<Order> cancel = new List<Order>(), change = new List<Order>();
+            ShrinkPlan(LegUnits(WorkingLegs(account, inst)), target, cancel, change);
+            lock (Sync) foreach (Order c in change) CutLegs[c] = new CutLeg { Close = w.Close, Planned = c.QuantityChanged, Keep = w.Keep, Buy = w.Buy, Retried = true };
+            try
+            {
+                if (cancel.Count > 0) { NoteWeCancelSafe(() => cancel, "Cut half"); account.Cancel(cancel.ToArray()); }
+                if (change.Count > 0) account.Change(change.ToArray());
+            }
+            catch (Exception ex)
+            {
+                lock (Sync) foreach (Order c in change) CutLegs.Remove(c);
+                Alarm(where + ": Cut half could not shrink the legs again (" + ex.Message + "); check the stop and target in NinjaTrader");
             }
         }
 
@@ -1296,6 +1402,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             bool failed = o.OrderState == OrderState.Rejected || e.Error != ErrorCode.NoError;
             try { CutUpdate(account, o, where); } catch (Exception ex) { ChartBridgeServer.Log("Cut half check error: " + ex.Message); }   // release 1 (1.6c)
+            try { CutLegUpdate(account, o, e.Error, where); } catch (Exception ex) { Alarm(where + ": Cut half leg check error (" + ex.Message + "); check the stop and target in NinjaTrader"); }   // R12 F2 (b)
             if ((o.OrderState == OrderState.Rejected || o.OrderState == OrderState.Cancelled) && IsExit(o) && o.Filled < o.Quantity)
                 Alarm(where + ": the market EXIT was " + (o.OrderState == OrderState.Rejected ? "REJECTED" : "CANCELLED") + "; the position may have NO STOP and NO TARGET; act in NinjaTrader now");
             if (failed) ChartBridgeServer.Log("order problem: " + (o.Name ?? "") + " " + StateText(o.OrderState) + " (" + e.Error.ToString() + ") on " + account.Name);

@@ -958,14 +958,23 @@ namespace NinjaTrader.NinjaScript.AddOns
                    Waits.Any(w => w.Fe != null && me(w.Fe.A));
         }
 
-        // Release 1 (1.6c): Cut half on a copier follower that is on is refused (the copier sizes the follower from the leader, and its
-        // stops are the copier's); on the leader it goes as any exit there (every leader exit is copied).
+        // Release 1 (1.6c): Cut half on a copier follower is refused by MergeRefusal's rule (the R12 review F3): one that is on (the copier
+        // sizes the follower from the leader, and its stops are the copier's), or one that is off while the copier still follows
+        // something of its own there. On the leader it goes as any exit there (every leader exit is copied).
         public static string CutHalfRefusal(Account account)
         {
             if (!Enabled || account == null) return null;
-            bool isFollower;
-            lock (Lk) { Follower f = FollowerNamed(account.Name); isFollower = f != null && f.On; }
-            return isFollower ? "Cut half: " + account.Name + " is a copier follower (the copier keeps its size from the leader); cut the leader, or use Flatten" : null;
+            bool on, held;
+            lock (Lk)
+            {
+                Follower f = FollowerNamed(account.Name);
+                if (f == null) return null;
+                on = f.On;
+                held = !on && CopierOnAccountLocked(account.Name);
+            }
+            if (on) return "Cut half: " + account.Name + " is a copier follower (the copier keeps its size from the leader); cut the leader, or use Flatten";
+            if (held) return "Cut half: " + account.Name + " is a copier follower (off) that still holds a copier position or orders (the copier manages those orders); use Flatten, or wait until the copier's part there is flat and done";
+            return null;
         }
 
         // Integration (lead's default): with the copier on, the bot never trades the leader's account. Only the page's entries
