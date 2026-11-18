@@ -423,7 +423,11 @@ test('0.6.22: the lanes, the day\'s loss stop and the voice calls: the order pat
   // release 1 step 1.6b (unreleased, Anthony 2026-11-18 "Bot tab + hard ceiling"): one line of gate 3 changes, the bot's cap only, listed word for word
   const r1b = ['            if (bot) cap = ChartBridgeBot.EntryCap(root, out capWhy);   // release 1 (1.6b, Anthony 2026-11-18 "Bot tab + hard ceiling"): the bot\'s size and the hard ceiling only, on the order and the position (gate 3\'s own count); config.txt\'s maxQty no longer caps the bot (the ticket\'s and the agents\' caps are unchanged)',
                '            if (bot) cap = Math.Min(cap, ChartBridgeBot.MaxQty);   // 0.4.0 bot: the 1 contract rail, on the order and the position (gate 3\'s own count)'];
-  const ordersNow = without('ChartBridgeOrders.cs', orders);
+  // release 1 step 1.6b, review R12 round 2: one read-only helper for the bot's day stop (both position readings), listed word for word
+  const r12 = ['        // Release 1 (1.6b, review R12 round 2): read only, for the bot\'s day stop before it sends its flatten again. NinjaTrader\'s position',
+    '        // on inst by both readings (listed, and with the fills not yet in it): 0 means already flat, so only executions are late.',
+    '        internal static bool FlatByBothReadings(Account a, Instrument inst) { return a != null && inst != null && SignedPosition(a, inst) == 0 && EffectivePosition(a, inst) == 0; }'];
+  const ordersNow = without('ChartBridgeOrders.cs', orders.concat(r12));
   assert.strictEqual(ordersNow.split(r1b[0] + '\n').length, 2, 'ChartBridgeOrders.cs: the 1.6b gate 3 line is there once');
   // release 1 step 1.6c (unreleased, Anthony 2026-11-17, Cut half) re-pins ChartBridgeOrders.cs: the cutHalf command (CutHalf, CutUpdate),
   // the legs check's shrink taken out unchanged as ShrinkPlan for both; its rules are OrdersHarness's Cut half section (check:orders).

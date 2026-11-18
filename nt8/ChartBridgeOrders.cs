@@ -702,6 +702,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             return false;
         }
 
+        // Release 1 (1.6b, review R12 round 2): read only, for the bot's day stop before it sends its flatten again. NinjaTrader's position
+        // on inst by both readings (listed, and with the fills not yet in it): 0 means already flat, so only executions are late.
+        internal static bool FlatByBothReadings(Account a, Instrument inst) { return a != null && inst != null && SignedPosition(a, inst) == 0 && EffectivePosition(a, inst) == 0; }
         private static string PlaceOrder(string top, string bracketBody, string cid, string strategyBody, bool bot, out Order placed) { return PlaceOrder(top, bracketBody, cid, strategyBody, bot, null, null, out placed); }
 
         // agent (0.5.0 agents): the agent id when an agent places it (ChartBridgeAgents.cs, PlaceAgentEntry), else null; agentPlan:
