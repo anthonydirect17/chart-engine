@@ -6291,7 +6291,7 @@ public static class AgentHarness
             int s1 = N(page);
             P("{\"type\":\"agentStopAll\",\"cid\":\"sa3\"}");
             Advance(1500);
-            Check(!M.Killed && ModeNow() == "auto" && Any(page, s1, "Not touched (not on prop accounts): manrae") && Any(page, s1, "Not touched (not on prop accounts): demob"),
+            Check(!M.Killed && ModeNow() == "auto" && Any(page, s1, "Stop all automation: no bot or agent is on a prop account: nothing was done") && Any(page, s1, "Not touched (not on prop accounts): manrae, demob"),
                   "stop all with no pick: an account the ledger does not type is not touched (nothing else is known to be prop)");
             Mode("manrae", "shadow");
             ChartBridgeGroups.LedgerForCheck(null);
