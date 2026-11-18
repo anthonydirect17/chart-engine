@@ -428,7 +428,7 @@ test('0.6.22: the lanes, the day\'s loss stop and the voice calls: the order pat
   // release 1 step 1.6c (unreleased, Anthony 2026-11-17, Cut half) re-pins ChartBridgeOrders.cs: the cutHalf command (CutHalf, CutUpdate),
   // the legs check's shrink taken out unchanged as ShrinkPlan for both; its rules are OrdersHarness's Cut half section (check:orders).
   // Before 1.6c this was 8e15e56a06b1f2597b5ff1ecebccba724b27a019819fa691b9f0a30c16bfaffd.
-  assert.strictEqual(sha(ordersNow.replace(r1b[0] + '\n', r1b[1] + '\n')), '58b5d1e7858567d0c8028669c7f057f5b139b2e9227a48cd6711c413f19afa74', 'ChartBridgeOrders.cs: the 1.6c file but for the two voice lines and the 1.6b gate 3 line');
+  assert.strictEqual(sha(ordersNow.replace(r1b[0] + '\n', r1b[1] + '\n')), '2a0dfd4f49d06d0723d0083079eb26f9055267ab66f6e4b1344624131a722a15', 'ChartBridgeOrders.cs: the 1.6c file but for the two voice lines and the 1.6b gate 3 line');
   assert.strictEqual(sha(without('ChartBridgeStrategies.cs', strategies)), '968179e96aa887424b9df26148f8ae65bc3c60238f6f9de90f238e7781ab9193', 'ChartBridgeStrategies.cs: the 0.6.18 file but for the one voice line');
   // each voice entry the order path calls is off unless config says voice = on, and catches everything it does
   const main = read('ChartBridge.cs');

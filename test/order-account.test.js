@@ -356,7 +356,8 @@ test('order-ticket.js is unchanged by 1.6.1 (defaultAccount stays for anything e
 
 test('the ticket\'s daily reset is wired in the workspace: every pick is stamped, the reset runs every 5 s in the ticket\'s window, None is kept as picked', () => {
   assert.match(WS, /function notePick\(a\) \{ try \{ store\.setItem\('live-account-v1', JSON\.stringify\(a\)\); store\.setItem\(PICK_AT_KEY, String\(Date\.now\(\)\)\);/);
-  assert.match(WS, /pickViewAccount: a => \{ notePick\(a\); renderOrders\(\); \},\n\s+accountPicked: a => \{ notePick\(a\); renderOrders\(\); \},/);
+  assert.match(WS, /pickViewAccount: a => \{ notePick\(a\); renderOrders\(\); \},\n\s+accountPicked: a => \{ notePick\(a\); syncBars\(\); renderOrders\(\); \},/);   // release 1 (1.6c): the mini tickets' pickers follow
+  assert.strictEqual((WS.match(/accountPicked: a => \{ notePick\(a\); syncBars\(\); renderOrders\(\); \},/g) || []).length, 2, 'the ticket and the mini ticket stamp every pick');
   assert.match(WS, /const r = LP\.ticketReset\(\{ account: acct, pickedAt: at, now, busy \}\);/);
   assert.match(WS, /setInterval\(ticketDailyReset, 5000\);/);
   assert.match(WS, /if \(!TR\.enabled \|\| !TR\.snapReady \|\| \(holder\(\) && !holds\(\)\)\) return;/, 'review of #47: only once the sign-in snapshot of orders and positions is whole, never on a timer');

@@ -1729,7 +1729,8 @@ actions a second; a member at 1 contract is left alone and named in the page's n
   (placed in NinjaTrader), an ATM's and an agent's legs are never touched.
 - **A close NinjaTrader refuses.** If NinjaTrader rejects or cancels the close before it fills (or the call throws), its legs
   were already shrunk: every signed-in page gets a `status` `error` at once ("the Cut half close was REJECTED ... those
-  contracts may have NO STOP; act in NinjaTrader now"), and the missing-stop alarm says it again after its 4 seconds.
+  contracts may have NO STOP; act in NinjaTrader now"), and the missing-stop alarm says it again after its 4 seconds. A close
+  that a Flatten cancels raises nothing (the Flatten closes the whole position).
 - **Refused, nothing sent:** a pair an AI agent owns (its stop and target are the agent's: use Flatten, or a market exit); a
   copier follower that is on (the copier keeps its size from the leader: cut the leader, whose exits are copied); a Merge
   running on that account and root; a root ChartBridge does not serve or a quote-only one.

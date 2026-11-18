@@ -909,6 +909,7 @@ public static class OrdersHarness
         return new[] { st, tg };
     }
     static string Calls(Account a) { return string.Join(" | ", a.Calls); }
+    static bool IsCutName(string n) { return Regex.IsMatch(n ?? "", "^CB#[0-9a-f]{8} exit cut q[0-9]+$"); }
 
     static void CutHalfChecks(Action<bool, string> check)
     {
@@ -1045,6 +1046,19 @@ public static class OrdersHarness
         kc.OrderState = OrderState.Rejected;
         ChartBridgeOrders.OnOrderUpdate(k, new OrderEventArgs { Order = kc });
         check(sent.Any(m => m.Contains("\"level\":\"error\"") && m.Contains("Cut half close was REJECTED") && m.Contains("NO STOP")), "the close rejected: the page gets an error at once");
+        // a close a Flatten cancels says nothing: the Flatten closes it all
+        Order[] f2 = Pair(f, "c000000e", 4, 4, true);
+        foreach (Order o in f.Orders) if (o.OrderState == OrderState.Working && !f2.Contains(o)) o.OrderState = OrderState.Cancelled;
+        SetPos(f, mnq, 4);
+        ChartBridgeOrders.OnPositionUpdate(f, new PositionEventArgs { Position = new Position { Instrument = mnq }, MarketPosition = MarketPosition.Long, Quantity = 4, AveragePrice = 25000 });
+        Msg("cutHalf", Cut("CutF", 4));
+        Order fc = f.Orders.Last();
+        check(IsCutName(fc.Name), "CutF: cut again: " + Calls(f));
+        Msg("flatten", "{\"type\":\"flatten\",\"account\":\"CutF\",\"root\":\"MNQ\"}");
+        sent.Clear();
+        fc.OrderState = OrderState.Cancelled;
+        ChartBridgeOrders.OnOrderUpdate(f, new OrderEventArgs { Order = fc });
+        check(!sent.Any(m => m.Contains("Cut half close")), "a Cut half close a Flatten cancelled: no alarm (the Flatten closes it all)");
         // a filled close says nothing
         sent.Clear();
         Order lc = l.Orders.Last();

@@ -294,6 +294,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (ConnectedSince) ConnectedSince.Clear();
             lock (PlanMemLock) { Plans.Clear(); LegacyPlans.Clear(); plansLoaded = false; plansReadFailed = false; writeWaiting = false; writeFailed = null; planGeneration++; }
             lock (Sync) { PlanDeferred.Clear(); PlanWaitSince.Clear(); }
+            lock (Sync) CutFlattened.Clear();   // release 1 (1.6c)
             MergeClear();   // 0.4.0 B4
             ClearStrategies();   // 0.4.0 B1
         }
@@ -1079,6 +1080,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             NoteWeCancelSafe(() => WorkingLegs(account, inst), "flatten");   // the flatten cancels these pairs: not a stop lost with its target
             // 0.4.0 fix1 (F1): a Merge swap on this account and root ends only here, once Flatten passed its gates, in one step with
             // the flatten call (MergeFlattenSend); a refused Flatten leaves the swap to go on or restore as before.
+            CutFlattening(account, inst);   // release 1 (1.6c): a Cut half close this Flatten cancels is no alarm (the Flatten closes it all)
             ChartBridgeVoice.NoteFlatten(account, inst);   // 0.6.22: listen only (its close says Position closed)
             MergeFlattenSend(account, inst, () => account.Flatten(new[] { inst }));   // cancels working orders for the instrument, then closes the position
             ChartBridgeServer.Log("flatten sent: " + root + " on " + account.Name);
@@ -1161,10 +1163,25 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         // A Cut half close that NinjaTrader rejected or cancelled before it filled: its legs were already shrunk to the size left, so
-        // the position may have contracts with no stop. Said at once (the missing-stop alarm says it again after SettleMs).
+        // the position may have contracts with no stop. Said at once (the missing-stop alarm says it again after SettleMs). One a
+        // Flatten cancels is no alarm: the Flatten closes the whole position (CutFlattening).
+        private static readonly HashSet<Order> CutFlattened = new HashSet<Order>();
+        private static void CutFlattening(Account account, Instrument inst)
+        {
+            List<Order> orders;
+            lock (account.Orders) orders = account.Orders.ToList();
+            lock (Sync)
+            {
+                foreach (Order o in Ours) if (o.Account == account && !orders.Contains(o)) orders.Add(o);
+                foreach (Order o in orders) if (IsCut(o) && SameInstrument(o.Instrument, inst) && MayFill(o.OrderState)) CutFlattened.Add(o);
+            }
+        }
         private static void CutUpdate(Account account, Order o, string where)
         {
-            if (!IsCut(o) || o.Filled >= o.Quantity || (o.OrderState != OrderState.Rejected && o.OrderState != OrderState.Cancelled)) return;
+            if (!IsCut(o)) return;
+            bool flattened;
+            lock (Sync) { flattened = CutFlattened.Contains(o); if (IsDone(o.OrderState)) CutFlattened.Remove(o); }
+            if (flattened || o.Filled >= o.Quantity || (o.OrderState != OrderState.Rejected && o.OrderState != OrderState.Cancelled)) return;
             Alarm(where + ": the Cut half close was " + (o.OrderState == OrderState.Rejected ? "REJECTED" : "CANCELLED") + " with " + (o.Quantity - o.Filled) +
                   " of " + o.Quantity + " not closed, and its stop and target were already shrunk: those contracts may have NO STOP; act in NinjaTrader now");
         }
