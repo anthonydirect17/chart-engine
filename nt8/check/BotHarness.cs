@@ -1985,6 +1985,8 @@ public static class BotHarness
     // Made-up prices and positions only. Each step is 500 ms of the harness clock (a beat and a check).
     static void Steps(int n) { for (int i = 0; i < n; i++) { clock += 350; Bot("{\"type\":\"beat\"}"); ChartBridgeBot.Check(); } }
     // An execution as NinjaTrader keeps it on the account (Account.Executions) and delivers it (finding 2 replays these).
+    // Now on NinjaTrader's clock (its time zone setting), as its executions are timed
+    static DateTime NtNow() { return TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, NinjaTrader.Core.Globals.GeneralOptions.TimeZoneInfo); }
     static void Exec(Order o, MarketPosition side, int qty, double price)
     {
         string id = "E" + Guid.NewGuid().ToString("N").Substring(0, 10);
@@ -2082,7 +2084,8 @@ public static class BotHarness
         ChartBridgeVoice.Reset();
         ChartBridgeVoice.On = true;
         ChartBridgeVoice.Player = path => { lock (said) said.Add(Path.GetFileName(path)); return true; };
-        Func<int, bool> heard = k => { for (int i = 0; i < 60; i++) { lock (said) if (said.Count(x => x == "BotNotClosed.wav") >= k) return true; Thread.Sleep(50); } return false; };
+        // up to 10 s: the voice plays on a thread of its own, behind any call still playing (PlayTimeoutMs, 5 s), so a busy machine is not a miss
+        Func<int, bool> heard = k => { for (int i = 0; i < 200; i++) { lock (said) if (said.Count(x => x == "BotNotClosed.wav") >= k) return true; Thread.Sleep(50); } return false; };
         try
         {
             m = own.Calls.Count;
@@ -2214,13 +2217,28 @@ public static class BotHarness
         Check(ChartBridgeBot.StripJson().Contains("\"position\":{\"qty\":1,"), "R12 re-review L1: his share's base is the guard's own read: after his round trip the bot still holds its 1");
         LegFills(l1c, 1, 24996);
 
+        // ---- R12 re-review L1, after the guard: his buy of 1 fills after the owner guard's last read, while the entry is being sent
+        // (NinjaTrader's submit): it stays his, so his later sell of 1 leaves the bot's 1 alone
+        NewDay(1, "500");
+        Action<string, Order> onSend = null;
+        onSend = (kind, o) => { if (kind == "submit" && o.Name != null && o.Name.Contains(" bot s")) { own.OnCall = null; HandFill(MarketPosition.Long, 1, 25000); Held(1, 25000); } };
+        own.OnCall = onSend;
+        Order l1d;
+        try { l1d = AutoTrade("buy"); } finally { own.OnCall = null; }
+        if (l1d == null) { Check(false, "L1 after the guard: the entry goes: " + BotReject()); return; }
+        FillEntry(l1d, 25000);
+        Held(2, 25000);
+        HandFill(MarketPosition.Short, 1, 25004); Held(1, 25000);
+        Check(ChartBridgeBot.StripJson().Contains("\"position\":{\"qty\":1,"), "R12 re-review L1: his fill after the guard's last read (while the entry is sent) is his: after his sell the bot still holds its 1: " + ChartBridgeBot.StripJson());
+        LegFills(l1d, 1, 24996);
+
         // ---- R12 re-review L2: an execution timed before this run began, delivered after the first watch, is never counted; this run's own is
         NewDay(1, "500");
         Order l2 = AutoTrade("buy");
         if (l2 == null) { Check(false, "L2: a bot trade"); return; }
         FillEntry(l2, 25000);
         Held(1, 25000);
-        DateTime past = ChartBridgeBot.RunStart.AddMinutes(-30);
+        DateTime past = NtNow().AddHours(-2);   // NinjaTrader's time zone, well before this run's start
         typeof(ChartBridgeServer).GetMethod("Deliver", PS).Invoke(null, new object[] { own.Name, mnq, MarketPosition.Short, 1, 24990.0, past, "P" + Guid.NewGuid().ToString("N").Substring(0, 9), "HP" + Guid.NewGuid().ToString("N").Substring(0, 6), null });
         st = ChartBridgeBot.StripJson();
         Check(st.Contains("\"position\":{\"qty\":1,\"avgPrice\":25000}") && st.Contains("\"pnlToday\":0,"), "R12 re-review L2: a past execution (before this run began) added by the connection after the first watch: not counted: " + st);
@@ -2230,6 +2248,44 @@ public static class BotHarness
         typeof(ChartBridgeServer).GetMethod("Deliver", PS).Invoke(null, new object[] { own.Name, mnq, MarketPosition.Short, 1, 24996.0, past, "P" + Guid.NewGuid().ToString("N").Substring(0, 9), leg.OrderId, null });
         st = ChartBridgeBot.StripJson();
         Check(st.Contains("\"position\":{\"qty\":0,") && st.Contains("\"pnlToday\":-8,"), "R12 re-review L2: a fill of this run's own trade (its tag in RunTags) is counted whatever its time: " + st);
+
+        // ---- R12 delta re-review, probe Z: NinjaTrader's time zone setting an hour behind the PC's. After a restart, a new fill of a trade
+        // not placed in this run (the restored trade's stop) and a new fill of Anthony's are counted: the time fence compares in UTC
+        NewDay(1, "500");
+        Order zt = AutoTrade("buy");
+        if (zt == null) { Check(false, "probe Z: a bot trade"); return; }
+        FillEntry(zt, 25000);
+        Held(1, 25000);
+        TimeZoneInfo behind = TimeZoneInfo.CreateCustomTimeZone("made-up zone, an hour behind the PC", TimeZoneInfo.Local.GetUtcOffset(DateTime.UtcNow) - TimeSpan.FromHours(1), "made-up zone", "made-up zone");
+        NinjaTrader.Core.GeneralOptionsClass.Zone = behind;
+        try
+        {
+            Restart();
+            Page(Auto3());
+            st = ChartBridgeBot.StripJson();
+            Check(st.Contains("\"position\":{\"qty\":1,\"avgPrice\":25000}"), "probe Z: the trade is followed again after the restart: " + st);
+            Order zleg = own.Orders.FirstOrDefault(o => o != zt && Tag(o) == Tag(zt) && o.OrderType == OrderType.StopMarket && ChartBridgeOrders.IsWorking(o.OrderState));
+            if (zleg == null) { Check(false, "probe Z: its stop"); return; }
+            zleg.OrderId = "NL" + Guid.NewGuid().ToString("N").Substring(0, 8); zleg.Filled = 1; zleg.OrderState = OrderState.Filled; Update(zleg);
+            Held(0, 0);
+            typeof(ChartBridgeServer).GetMethod("Deliver", PS).Invoke(null, new object[] { own.Name, mnq, MarketPosition.Short, 1, 24996.0, NtNow(), "Z" + Guid.NewGuid().ToString("N").Substring(0, 9), zleg.OrderId, null });
+            st = ChartBridgeBot.StripJson();
+            Check(st.Contains("\"position\":{\"qty\":0,") && st.Contains("\"pnlToday\":-8,"),
+                  "R12 delta re-review, probe Z: NinjaTrader's zone an hour behind the PC's, the restored trade's stop fill timed now in that zone is counted: " + st);
+            Settle();
+            // Anthony's own buy, timed 10 s before now in that zone (inside the 30 s margin for clock skew), with NinjaTrader's position
+            // not showing it: counted, so the owner guard waits for it to settle
+            Held(0, 0);
+            typeof(ChartBridgeServer).GetMethod("Deliver", PS).Invoke(null, new object[] { own.Name, mnq, MarketPosition.Long, 1, 25000.0, NtNow().AddSeconds(-10), "Z" + Guid.NewGuid().ToString("N").Substring(0, 9), "HZ" + Guid.NewGuid().ToString("N").Substring(0, 6), null });
+            int zn = own.Calls.Count;
+            Bot(Sig(NewId(), Market("buy")));
+            Check(own.Calls.Count == zn && BotReject().Contains("less than 2 s ago"),
+                  "R12 delta re-review, probe Z: Anthony's own fill timed 10 s ago in NinjaTrader's zone is counted (the owner guard waits for it): " + BotReject() + " | " + string.Join(" | ", Calls(own, zn)));
+            Held(1, 25000);
+            HandFill(MarketPosition.Short, 1, 25000);
+            Held(0, 0);
+        }
+        finally { NinjaTrader.Core.GeneralOptionsClass.Zone = null; }
 
         // ---- finding 6: a page order ChartBridge just sent that NinjaTrader does not list yet refuses a bot entry
         NewDay(1, "500");
