@@ -32,8 +32,9 @@
  *     messages this page sends, and ChartBridge checks every one.
  *   - Rails (release 1, step 1.6b): every rail is set here (`botRails`, BotCore.railsChange) and all are required: the size (up to
  *     the hard ceiling of the root, 2 minis or 20 micros), trades and losing trades a day, the day's loss and profit stops in
- *     dollars. Nothing has a default: a rail not set keeps the bot from arming (fail closed). A day stop reached flattens the bot,
- *     latches the day and drops it to Shadow; it is armed again by hand. The bot trades the personal account only.
+ *     dollars. Nothing has a default: a rail not set keeps the bot from arming (fail closed). A day stop reached closes the bot's
+ *     own contracts (never Anthony's own, decision 3a), latches the day and drops it to Shadow; it is armed again by hand. The bot
+ *     trades the personal account only, and enters only while Anthony holds nothing of his own there (the owner guard, 3b).
  *   - Motion (live/motion.js, docs/MOTION.md) is used for the Bot tab and the Library only. R3: the kill switch, the
  *     mode, Accept and Reject, the position and P&L figures and the pop-ups are marked data-no-motion and are never
  *     animated. R4: a click or a key during a scene finishes it at once and still acts (the kit's rule). The chart in the
