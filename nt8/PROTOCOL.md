@@ -2819,7 +2819,8 @@ bot entry needs a stop (`stopTicks` 1 or more, lead's default); the **kill switc
 (trading, the bot account's gate 2, caps, grid, side of market, rate) on top. **Heartbeat**: any bot message counts; 5 s of silence
 and ChartBridge cancels the bot's unfilled entries, keeps any bot position's stop and target, marks the bot lost and tells
 the page (`bot` and a `status` `warn`). The kill switch does the same and refuses every bot order until it is released.
-**ChartBridge never flattens the bot's position by itself**; Flatten on the page works as always.
+**ChartBridge never flattens the bot's position by itself**; Flatten on the page works as always. (Release 1: a day stop closes
+the bot's own share, decision 3a below.)
 
 Bot orders are named `CB#1a2b3c4d bot s8 t16` and their legs as v2, so the legs check, the missing-stop alarm and restart
 recovery cover them.
@@ -2830,7 +2831,7 @@ recovery cover them.
 | `beat` | none | at least every 2 s when nothing else is sent |
 | `signal` | `id` (1 to 40 characters, unique today), `action` (`fired` or `skipped`), `side`, `kind` (`market`, `limit`, `stop`), `price` (limit or stop only), `stopTicks`, `targetTicks` (whole ticks, or `null` for none), `reason` (1 to 200 characters) | `skipped` carries only `id`, `action`, `reason` (and optionally `side`); by mode: logged, proposed, or placed |
 | `withdraw` | `id`, `reason` | the entry is no longer valid: a proposal expires ("not answered"), an unfilled auto entry is cancelled |
-| `flatten` | none | auto mode only: close the bot's position on its account (cancel its legs, then market) |
+| `flatten` | none | auto mode only: close the bot's own position on its account (cancel its legs, then market). Release 1, decision 3a: its own share only, never Anthony's contracts or orders there (see "Bot only") |
 
 | server to bot | fields | when |
 |---|---|---|
@@ -2954,8 +2955,9 @@ the made-up bot client `test/fake-bot.mjs` (no real bot's rules anywhere in this
 #### The personal bot (release 1, step 1.6b)
 
 Anthony's answers of 2026-11-17 (Q6, Q7) and 2026-11-18, for the bot channel only. Every other bot rule above stands. Built in
-`nt8/ChartBridgeBot.cs` (one line of gate 3 in `nt8/ChartBridgeOrders.cs`); harnessed in `nt8/check/BotHarness.cs` (sections
-Rails, FailClosed, SizeCeiling, DayStops, ChosenAccount).
+`nt8/ChartBridgeBot.cs` (one line of gate 3 in `nt8/ChartBridgeOrders.cs`; decision 3: the owner guard's line and the bot's two close
+entry points there too); harnessed in `nt8/check/BotHarness.cs` (sections Rails, FailClosed, SizeCeiling, DayStops, ChosenAccount;
+decision 3: OwnerGuardCase, OwnerShare, OwnerUntold).
 
 - **The personal account only** (Q7: "Bot accounts: personal account only (ChartBridge refuses to arm on any prop account)";
   2026-11-18: "Personal only, Sim later"). The bot trades only the personal account picked once on the chart page's Accounts
@@ -2993,13 +2995,60 @@ Rails, FailClosed, SizeCeiling, DayStops, ChosenAccount).
   every 500 ms and at every close. At or below minus `dayLoss`, or at or above `dayProfit`: the day is **latched** in
   `bot-day.txt` (`stop<TAB>loss|profit<TAB><the day's dollars>`; a ChartBridge before 1.6b does not understand the line and
   stands the bot down, the careful side), the mode **drops to Shadow** (open proposals end `not answered`, unfilled bot
-  entries are cancelled) and the bot's position on its account and root is **flattened at once** (`ChartBridgeOrders.FlattenForBot`,
-  the bot's own flatten), even with the kill switch on; a refused flatten is said and tried again every 5 s while the bot holds
+  entries are cancelled) and the **bot's own contracts are closed at once** (decision 3a below: only the bot's share, never
+  NinjaTrader's Flatten of the root), even with the kill switch on; a refused close is said and tried again while the bot holds
   its trade. Until 18:00 ET `copilot` and `auto` are refused ("the day's loss stop ($30) was reached today (the day at -$30,
-  realized plus open): the bot was flattened and set to Shadow; no bot entries until 18:00 ET, then Anthony arms it again"),
-  and a restart keeps the latch. At 18:00 ET the latch ends with the day and the mode stays Shadow: **ChartBridge never arms
-  the bot by itself**. When the open trade cannot be valued (no fresh last trade), the realized dollars alone are checked,
-  said once a day. This is the one place ChartBridge flattens the bot's position by itself.
+  realized plus open): the bot's own contracts were closed and it was set to Shadow; no bot entries until 18:00 ET, then
+  Anthony arms it again"), and a restart keeps the latch. At 18:00 ET the latch ends with the day and the mode stays Shadow:
+  **ChartBridge never arms the bot by itself**. When the open trade cannot be valued (no fresh last trade), the realized
+  dollars alone are checked, said once a day. This is the one place ChartBridge closes the bot's position by itself.
+- **Bot only** (decision 3a, 2026-11-18: Anthony "whatever you think", the coordinator's call). The bot shares the personal
+  account with Anthony, so a day stop (and the bot's own `flatten` in auto) closes **only the bot's own contracts** and cancels
+  **only the bot's own working orders** (its entry, stop and target: the bot's tag), and leaves Anthony's own contracts and
+  working orders on the same account and root untouched. Before 3a it was NinjaTrader's Flatten of the whole root
+  (`ChartBridgeOrders.FlattenForBot`, gone). Each step (`ChartBridgeBot.CloseShare`, every 500 ms while it is due):
+  1. the bot's own orders on its contract: the legs of its trade (its tag), every bot entry, and its own closes;
+  2. **the proof**: what its legs still working on the closing side cover (its stops', else its targets', as the restore reads
+     them), the most seen while it is being closed;
+  3. a close of its own, or any other market order on its account and root (a Flatten or a close of Anthony's on its way, which
+     closes the bot's share too), that may still fill: wait, never a second close beside it ("a market order on OWN-1 MNQ may
+     still fill (Close)");
+  4. its legs and entries still working are **cancelled first** (`ChartBridgeOrders.BotCloseCancel`, which cancels only orders
+     named the bot's; a lost cancel again every 5 s), and the close waits until **none of its legs can fill**, so a leg never
+     fills after the close and the close never reaches Anthony's contracts. An entry of its own still working does not hold the
+     close back (its fill only adds to the bot's own position; a late fill reopens the trade, which is closed again);
+  5. **the size**: the smallest of the bot's followed size (its ledger), the proof, and NinjaTrader's position on the bot's side
+     by both readings; one market order `CB#<tag> bot close` of that size (`ChartBridgeOrders.BotCloseSend`, under the order
+     lock, the position read again first), at most once every 5 s. A close that goes unfilled (rejected or cancelled) is an
+     error to the pages (its stop and target were cancelled for it) and is sent again within 5 s while the bot holds its trade.
+  Net long 3 with the bot's 1: the day stop cancels the bot's stop and target, then sells 1 at market; Anthony's 2 and his own
+  stop stay. **The bot's ledger follows only its own share**: its own executions (its entry, legs and close: its tag) are its
+  share; any other execution on its contract is Anthony's own (a hand order, or a close of the whole position such as Flatten)
+  and changes the bot's share only where NinjaTrader's position can no longer hold it, so Anthony's own contracts go first and
+  his trades never enter the bot's ledger, its dollars or its day stops (before 3a every execution there counted as the bot's:
+  right only while the bot alone held the contract). After a restart, the rest of NinjaTrader's position beyond what the bot's
+  legs prove is Anthony's.
+  **When the bot's size cannot be told** (the fail-safe, the coordinator's choice): only what the bot's own legs prove is ever
+  closed. The untold state of the day file (its dollars cannot be told) closes what its legs prove, as any trade: its followed
+  size came from its legs at the restore. A followed size above the proof (an execution counted twice) closes the proof only,
+  said as an error ("bot trade 1a2b3c4d follows 2 contracts but its own stop and target prove only 1: ChartBridge closed those 1
+  and none of the rest, which cannot be told apart from Anthony's own contracts; act in NinjaTrader"). With no proof at all (no
+  working leg was seen, or the trade is open in `bot-day.txt` and not followed), nothing is closed, the pages get an error ("no
+  stop or target of bot trade 1a2b3c4d proves its size, so ChartBridge closes none of it (Anthony's own contracts are never
+  touched): act in NinjaTrader"), and the bot stays stood down (Shadow, the latch, no entry). Why: the legs carry the bot's
+  tag and are sized by ChartBridge to the bot's own fills, so they never claim Anthony's contracts; refusing outright would
+  leave a proven bot position open past its day stop, and closing past the proof could sell Anthony's own contracts.
+- **The owner guard** (decision 3b, 2026-11-18). No new bot entry while Anthony holds his own position, or has his own working
+  order, on the bot's account and root. His exposure is the root's position (any contract month, by both readings) minus the
+  bot's followed size, plus any order there that may still fill and is not a bot order (its entries, and the legs and close of a
+  bot trade). Named, like the agents' owner lock: "OWN-1 MNQ holds 2 contracts long that are not the bot's: no bot entry while
+  Anthony holds his own position or working orders on the bot's account and root (the owner guard; copilot and auto stay armed
+  and enter once it is clear)" (or "has a working order that is not the bot's (buy limit 1)"). Asked for a copilot proposal (no
+  proposal is shown), an auto entry and an accepted proposal (`RailsProblem`), and again under the order lock
+  (`ChartBridgeOrders.PlaceOrderLocked`), so a page order cannot slip in between. **Copilot and auto stay armed** and make no
+  entry until the account is clear; **Shadow is unaffected**. With the guard, a mixed position arises only when Anthony trades
+  by hand while the bot holds its trade (or while a bot entry rests); "Bot only" above handles it exactly. Gate 3's cap for the
+  bot stays behind the guard (defense in depth).
 - **Messages.** `bot` adds `size`, `hardCeiling`, `dayLoss`, `dayProfit` (each null when not set), `railsMissing` (the names
   of the rails not set), `dayStop` (null, or `{kind, day, text}`) and `personal` (the bot's account is the personal one);
   `maxTrades`, `maxLosses` and `maxQty` (the size) are null when not set. `welcome`'s `rails` is `{maxQty, size, maxTrades,

@@ -678,8 +678,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             return why ?? PlaceOrder(top, bracketBody, null, null, true, out placed);
         }
 
-        // 0.4.0 bot: the bot's flatten (auto mode only, ChartBridgeBot.cs): v2 Flatten on the bot's account and root.
-        public static string FlattenForBot(string root) { return Flatten("{\"account\":" + CbJson.Str(ChartBridgeBot.BotAccount) + ",\"root\":\"" + root + "\"}"); }
+        // 0.4.0 bot: the bot's flatten was v2 Flatten on the bot's account and root (FlattenForBot). Release 1 (decision 3a, 2026-11-18):
+        // gone; the bot closes only its own contracts (BotCloseCancel, then BotCloseSend, below).
 
         // 0.4.0 minors (3): botAccount's check. Any position (either reading: listed, or a fill not yet in it), or any order that may
         // still fill (NinjaTrader's list and ChartBridge's own just sent), on root in any contract month, on this account.
@@ -705,6 +705,101 @@ namespace NinjaTrader.NinjaScript.AddOns
         // Release 1 (1.6b, review R12 round 2): read only, for the bot's day stop before it sends its flatten again. NinjaTrader's position
         // on inst by both readings (listed, and with the fills not yet in it): 0 means already flat, so only executions are late.
         internal static bool FlatByBothReadings(Account a, Instrument inst) { return a != null && inst != null && SignedPosition(a, inst) == 0 && EffectivePosition(a, inst) == 0; }
+
+        // Release 1 (decision 3, 2026-11-18, "bot only" and the owner guard): the personal bot shares the personal account with
+        // Anthony, so it closes only its own contracts and enters only where nothing of his is held or working. Read only, never
+        // under ChartBridgeBot's lock.
+        //
+        // What on the bot's account and root is not the bot's, in words, or null: the position on the bot's contract minus the
+        // bot's followed size (botQty, signed), by either reading (listed, or with the fills not yet in it); a position (or a fill
+        // not yet in one) on another contract month of the root; and any order there that may still fill (NinjaTrader's list and
+        // ChartBridge's own just sent) that isBot does not claim.
+        internal static string BotOwnerExposure(Account a, string root, int botQty, Func<Order, bool> isBot)
+        {
+            if (a == null || string.IsNullOrEmpty(root)) return null;
+            Instrument inst = ChartBridgeServer.InstrumentFor(root);
+            Func<Instrument, bool> onRoot = i => i != null && ((i.MasterInstrument != null && string.Equals(i.MasterInstrument.Name, root, StringComparison.OrdinalIgnoreCase)) || ChartBridgeServer.RootFor(i) == root);
+            string where = a.Name + " " + root;
+            if (inst != null)
+            {
+                int listed = SignedPosition(a, inst) - botQty, eff = EffectivePosition(a, inst) - botQty, own = listed != 0 ? listed : eff;
+                if (own != 0) return where + " holds " + Math.Abs(own) + " contract" + (Math.Abs(own) == 1 ? "" : "s") + (own > 0 ? " long" : " short") + " that " + (Math.Abs(own) == 1 ? "is" : "are") + " not the bot's";
+            }
+            List<Position> positions;
+            lock (a.Positions) positions = a.Positions.ToList();
+            foreach (Position p in positions)
+                if (onRoot(p.Instrument) && !SameInstrument(p.Instrument, inst) && p.MarketPosition != MarketPosition.Flat && p.Quantity != 0)
+                    return where + " holds a position in " + p.Instrument.FullName + " that is not the bot's";
+            List<Order> orders;
+            lock (a.Orders) orders = a.Orders.ToList();
+            lock (Sync) foreach (Order o in Ours) if (o.Account == a && !orders.Contains(o)) orders.Add(o);
+            foreach (Order o in orders)
+                if (onRoot(o.Instrument) && MayFill(o.OrderState) && !isBot(o))
+                    return where + " has a working order that is not the bot's (" + (IsBuy(o) ? "buy " : "sell ") + KindText(o.OrderType) + " " + Math.Max(0, o.Quantity - o.Filled) + ")";
+            double now = ChartBridgeTime.NowUtcMs();
+            string prefix = a.Name + "|" + root + " ", mine = inst != null ? PosKey(a, inst) : null;
+            lock (Moves)
+                foreach (KeyValuePair<string, List<double[]>> kv in Moves)
+                    if (kv.Key != mine && kv.Key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) && kv.Value.Where(m => now - m[1] <= MoveTtlMs).Sum(m => m[0]) != 0)
+                        return where + " has a fill in " + kv.Key.Substring(a.Name.Length + 1) + " that is not the bot's";
+            return null;
+        }
+
+        // How many of the bot's contracts on its side (dir: 1 long, -1 short) NinjaTrader's position holds by BOTH readings: the
+        // smaller of the two when both are on that side, else 0. The bot's close never sends more.
+        internal static int BotCover(Account a, Instrument inst, int dir)
+        {
+            if (a == null || inst == null || dir == 0) return 0;
+            int listed = SignedPosition(a, inst), eff = EffectivePosition(a, inst);
+            return Math.Sign(listed) == dir && Math.Sign(eff) == dir ? Math.Min(Math.Abs(listed), Math.Abs(eff)) : 0;
+        }
+
+        // The bot's own stop, target and entries cancelled for its close (decision 3a): only orders named the bot's (its trade's tag,
+        // or a bot entry), whatever the caller passed. Just before: its bracket is marked (a later fill of its entry still gets legs,
+        // with the alarm, as after Flatten) and its pairs are noted as cancelled by ChartBridge (not a stop lost with its target).
+        // Only the bot's bracket (tag): Anthony's brackets and orders on the same contract are never marked or cancelled. Returns how
+        // many cancels were sent.
+        private static readonly Regex BotEntryNameRx = new Regex("^CB#[0-9a-f]{8} bot s[0-9]{1,9} t[0-9]{1,9}$");
+        internal static int BotCloseCancel(Account a, Instrument inst, string tag, List<Order> orders)
+        {
+            if (a == null || string.IsNullOrEmpty(tag) || orders == null) return 0;
+            List<Order> mine = orders.Where(o => o != null && o.Account == a && ((o.Name ?? "").StartsWith("CB#" + tag + " ", StringComparison.Ordinal) || BotEntryNameRx.IsMatch(o.Name ?? ""))).ToList();
+            if (mine.Count == 0) return 0;
+            lock (Sync)
+                foreach (Bracket br in BracketOfEntry.Values)
+                    if (br.Account == a && SameInstrument(br.Instrument, inst) && br.Tag == tag) br.AfterFlatten = true;
+            NoteWeCancelSafe(() => mine.Where(IsChartBridgeLeg).ToList(), "the bot's close");
+            a.Cancel(mine.ToArray());
+            ChartBridgeServer.Log("the bot's close: cancel sent for " + mine.Count + " of its own order(s) on " + a.Name + " " + (inst != null ? inst.FullName : "") + " (CB#" + tag + ")");
+            return mine.Count;
+        }
+
+        // The bot's close: one market order of qty on the bot's account and contract, the other side of the bot's position (dir),
+        // named "CB#<tag> bot close" (the bot's tag, so the bot follows its fill; never an entry and never a bracket leg). An exit:
+        // the account as Flatten checks it (no checkmark needed). Under the order lock, NinjaTrader's position is read again
+        // first: never more than it holds on that side by both readings, never against its side. Null when sent, else why not.
+        internal static string BotCloseSend(Account a, Instrument inst, string tag, int dir, int qty, out Order sent)
+        {
+            sent = null;
+            string why;
+            Account account = ChartBridgeAccounts.On ? ChartBridgeAccounts.FindForExit(a.Name, out why) : FindAccount(a.Name, out why);
+            if (account == null) return why;
+            if (qty < 1 || (dir != 1 && dir != -1)) return "nothing to close";
+            Order x;
+            lock (PlaceLock)
+            {
+                int cover = BotCover(account, inst, dir);
+                if (qty > cover) return "NinjaTrader's " + (ChartBridgeServer.RootFor(inst) ?? inst.FullName) + " position on " + account.Name + " holds " + cover + " on the bot's side by both readings, less than the " + qty + " to close (its executions are late, or it changed meanwhile)";
+                x = account.CreateOrder(inst, dir > 0 ? OrderAction.Sell : OrderAction.Buy, OrderType.Market, OrderEntry.Manual, TimeInForce.Day, qty, 0, 0, "",
+                    "CB#" + tag + " bot close", NinjaTrader.Core.Globals.MaxDate, null);
+                lock (Sync) { IdFor(x); Ours.Add(x); }   // counted in gate 3 at once
+                try { account.Submit(new[] { x }); }
+                catch (Exception ex) { lock (Sync) Ours.Remove(x); return "the close could not be sent (" + ex.Message + ")"; }
+            }
+            sent = x;
+            ChartBridgeServer.Log("the bot's close sent: " + (dir > 0 ? "sell " : "buy ") + qty + " " + inst.FullName + " at market on " + account.Name + " (CB#" + tag + ")");
+            return null;
+        }
         private static string PlaceOrder(string top, string bracketBody, string cid, string strategyBody, bool bot, out Order placed) { return PlaceOrder(top, bracketBody, cid, strategyBody, bot, null, null, out placed); }
 
         // agent (0.5.0 agents): the agent id when an agent places it (ChartBridgeAgents.cs, PlaceAgentEntry), else null; agentPlan:
@@ -768,6 +863,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             string ownerWhy = pageReduces ? null : ChartBridgeAgents.EntryCheck(agent != null ? "agent:" + agent : bot ? "bot" : "page", account, root);
             if (ownerWhy != null) return ownerWhy;
+            if (bot) { string guard = ChartBridgeBot.OwnerGuard(account, root); if (guard != null) return guard; }   // release 1 (decision 3b): the owner guard, here under the order lock as well, so a page order cannot slip in between
             string exitOf = pageReduces ? ChartBridgeAgents.OwnerAgent(account.Name, root) : null;   // 0.5.3 review: a page exit from an agent's position
             if (side != "buy" && side != "sell") return "side must be buy or sell";
             if (kind != "market" && kind != "limit" && kind != "stop" && !(OrderTypesOn && NewKind(kind))) return "kind must be market, limit or stop";   // 0.4.0 B1: stopLimit, mit
