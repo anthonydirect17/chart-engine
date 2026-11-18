@@ -958,6 +958,16 @@ namespace NinjaTrader.NinjaScript.AddOns
                    Waits.Any(w => w.Fe != null && me(w.Fe.A));
         }
 
+        // Release 1 (1.6c): Cut half on a copier follower that is on is refused (the copier sizes the follower from the leader, and its
+        // stops are the copier's); on the leader it goes as any exit there (every leader exit is copied).
+        public static string CutHalfRefusal(Account account)
+        {
+            if (!Enabled || account == null) return null;
+            bool isFollower;
+            lock (Lk) { Follower f = FollowerNamed(account.Name); isFollower = f != null && f.On; }
+            return isFollower ? "Cut half: " + account.Name + " is a copier follower (the copier keeps its size from the leader); cut the leader, or use Flatten" : null;
+        }
+
         // Integration (lead's default): with the copier on, the bot never trades the leader's account. Only the page's entries
         // on the leader are copied, but every exit on the leader is (PROTOCOL "Copier engine"), so a bot position mixed into the
         // leader's would make the bot's exits shrink or flatten the followers. Refused before anything is sent.

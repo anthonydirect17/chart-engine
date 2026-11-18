@@ -227,7 +227,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             lock (MergeLock) if (MergeSwaps.Count == 0) return null;
             Account a = null; Instrument i = null;
-            if (type == "order")
+            if (type == "order" || type == "cutHalf")   // release 1 (1.6c): Cut half names its account and root, as an order does
             {
                 string name = Str(top, "account");
                 lock (Account.All) foreach (Account x in Account.All) if (name != null && x.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) { a = x; break; }

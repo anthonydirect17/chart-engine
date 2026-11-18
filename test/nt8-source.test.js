@@ -106,7 +106,7 @@ const fnBodies = name => {
 const fnBody = name => fnBodies(name).join('\n');
 
 test('order calls appear only in the gated functions and the bracket upkeep of ChartBridgeOrders.cs', () => {
-  const fromPage = ['PlaceOrderLocked', 'ChangeOrder', 'CancelOrder', 'Flatten'];
+  const fromPage = ['PlaceOrderLocked', 'ChangeOrder', 'CancelOrder', 'Flatten', 'CutHalf'];   // release 1 (1.6c): Cut half, the close and its legs' shrink
   const upkeep = ['PlaceLegs', 'KeepPartner', 'CancelLeftoverLegs', 'CheckLegs', 'GroupCancelLeftover'];   // 0.5.8 Q-EXIT (b): a cancel only (checked below)
   let rest = ocode;
   for (const f of fromPage.concat(upkeep)) for (const b of fnBodies(f)) rest = rest.replace(b, '');
@@ -244,7 +244,7 @@ test('accounts: off by default, exact names only, never Backtest or Playback', (
 
 test('the main file routes order messages only to ChartBridgeOrders, and ships both files', () => {
   assert.match(code, /ChartBridgeOrders\.OnMessage\(client, type, text\)/);
-  assert.match(code, /type == "auth" \|\| type == "order" \|\| type == "change" \|\| type == "plan" \|\| type == "cancel" \|\| type == "flatten" \|\| type == "groupPreview" \|\| type == "groupOrder"\)[^\n]*\s*ChartBridgeOrders\.OnMessage/);   // 0.3.7: plan
+  assert.match(code, /type == "auth" \|\| type == "order" \|\| type == "change" \|\| type == "plan" \|\| type == "cancel" \|\| type == "flatten" \|\| type == "groupPreview" \|\| type == "groupOrder" \|\| type == "cutHalf"\)[^\n]*\s*ChartBridgeOrders\.OnMessage/);   // 0.3.7: plan; release 1 (1.6c): cutHalf
   // /session: the Host check, then (0.3.2) the PIN unlock, then the order sign-in token
   assert.match(code, /if \(path == "\/session"\)[^\n]*\n\s*\{\s*if \(ctx\.Request\.Headers\["Host"\] != "localhost:" \+ ChartBridgeConfig\.Port\) \{ ctx\.Response\.StatusCode = 403;[^\n]*\n\s*if \(!ChartBridgePin\.TokenValid\(ctx\.Request\.Headers\[ChartBridgePin\.Header\]\)\) \{ Refuse\(ctx\); return; \}[^\n]*\n\s*ServeText\(ctx, ChartBridgeOrders\.SessionJson\(\), "application\/json"\);/);
   assert.match(code, /ChartBridgeOrders\.WatchConnections\(\);\s*try \{ ChartBridgeOrders\.Resume\(\); \}/);
@@ -577,7 +577,7 @@ test('0.3.4: every trade carries its side, additively, and the seam match ignore
 test('0.3.5: every tick chart gets the served window by count, one request at a time; the profile comes from the session table', () => {
   assert.match(src, /^\/\/ ChartBridge for NinjaTrader 8 \(its version is ChartBridgeServer\.Version, below\)/);   // 0.5.5: the header names no version   // 0.3.6 adds the daily bars on top
   assert.match(code, /public const string Version = "0\.(3\.[5-9]|4\.[0-9]+|5\.[0-9]+|6\.[0-9]+)";/);
-  assert.match(bodyOf(code, 'private static string HelloJsonFor('), /\\"features\\":\[\\"liveFirst\\",\\"profile\\",\\"settlement\\",\\"htf\\",\\"weekProfile\\",\\"v3\\"\]/);   // 0.3.7 adds three; 0.4.0 v3
+  assert.match(bodyOf(code, 'private static string HelloJsonFor('), /\\"features\\":\[\\"liveFirst\\",\\"profile\\",\\"settlement\\",\\"htf\\",\\"weekProfile\\",\\"v3\\",\\"cutHalf\\"\]/);   // 0.3.7 adds three; 0.4.0 v3; release 1 (1.6c) cutHalf
   // S6: every tick chart (liveFirst or not) gets the served window; 0.3.7: the by-date tick load is gone
   assert.match(bodyOf(code, 'private static void StartLoad('), /Window = tickHours > 0, /);
   assert.ok(!/ByDateTickLoads/.test(code));

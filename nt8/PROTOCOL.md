@@ -1671,6 +1671,7 @@ at most 400 ticks from the last price) and `maxBracketTicks = 300` (bracket tick
 | `change` | `cid` (optional), `id` (ChartBridge order id, `o1`, `o2`, ...), `price` | move a working limit or stop, or a bracket leg (drag on the chart) |
 | `cancel` | `cid` (optional), `id` | cancel one working order (cancelling one leg of an OCO pair cancels its partner) |
 | `flatten` | `cid` (optional), `account`, `root` | cancel every working order for that account and instrument, then close the position at market |
+| `cutHalf` | `cid` (optional), `account`, `root`, `position` (the signed position the page shows) | release 1 (1.6c): close half the position at market and shrink ChartBridge's stops and targets there to the size left, in one step; see "Cut half (release 1, step 1.6c)" below |
 
 String values must be plain (no backslash escapes, at most 200 characters).
 
@@ -1696,6 +1697,44 @@ reduce). An order that already says `by` (a strategy's) keeps it; the page's own
 carry none. A v2 page never gets `by` for these: its `order` message stays byte for byte 0.3.8's. 0.5.0: `"by": "agent:<id>"`
 for an agent's entry (named `CB#<tag> ag:<id> s8 t16`), its legs and its flat close. 0.5.7: those also carry `"planId"`, the
 `id` of the plan the entry was placed for, when ChartBridge knows it (see the agent channel's Placing).
+
+### Cut half (release 1, step 1.6c)
+
+Anthony 2026-11-17 (the mini ticket mockup; Bot-Lab plan step 1.6c): **Cut half** on the order ticket and the mini ticket closes
+half the position on the ticket's account (or each member of its group) and instrument at market, and the stop and the target
+shrink to the size left **in the same step**. ChartBridge lists `cutHalf` in `hello`'s `features`; a page greys its Cut half
+button without it. One `cutHalf` message per account (a group: one per member, each on its own size, paced within the 10
+actions a second; a member at 1 contract is left alone and named in the page's note, never sent).
+
+`{"type":"cutHalf","cid":"p1","account":"Sim101","root":"MNQ","position":4}`
+
+- **The size.** Half of the position, the smaller part on an odd size: 4 closes 2 and keeps 2, 3 closes 1 and keeps 2, 5
+  closes 2 and keeps 3. Under 2 contracts (1, or flat) it is refused: "Cut half needs 2 or more contracts; MNQ Sim101 holds 1
+  (use Flatten)".
+- **An exit, like Flatten.** The exit side of gate 2 (with `accountChecks` on: a watched, Connected account, no checkmark
+  needed; off: `tradeAccounts`), gates 1, 4, 6, 7 and 8 as every order action, never gate 3 or 9 (it only takes risk off).
+  The page sends it with Armed off too. A `bracket` (or any key not in the table) is refused.
+- **The position, read three ways.** `position` is the signed position the page showed when Anthony pressed. It is refused,
+  nothing sent, unless ChartBridge's two readings (NinjaTrader's list, and with the fills not yet in it) agree and equal it:
+  a stale page or a second press never cuts twice. A Cut half close of the same account and contract that may still fill
+  refuses the next one too ("the last Cut half ... is still being filled"). Exits already working there that are no bracket
+  leg (a hand limit, a market exit) count: closing half more must not pass the position with them, or it is refused.
+- **One step: the legs first, then the close.** Under the order lock (`PlaceLock`), ChartBridge's own stops and targets on
+  that contract are made to fit the size left by the legs check's own rule (`ShrinkPlan`: legs on the wrong side cancelled,
+  then the newest units cut, a unit covering no more than the excess cancelled whole, the one past it shrunk, a Merge set as a
+  set), at once instead of after the legs check's 4 seconds. Then the close goes out, a Day market order of the half named
+  `CB#<tag> exit cut q<n>` (never a bracket leg, never an entry). Legs that cover the size left can never open a position
+  whichever fills first (a stop filling first leaves the close to finish the exit); legs covering the whole position after the
+  close filled could. Legs ChartBridge cancels here are never called lost by the missing-stop alarm. Orders not named `CB#`
+  (placed in NinjaTrader), an ATM's and an agent's legs are never touched.
+- **A close NinjaTrader refuses.** If NinjaTrader rejects or cancels the close before it fills (or the call throws), its legs
+  were already shrunk: every signed-in page gets a `status` `error` at once ("the Cut half close was REJECTED ... those
+  contracts may have NO STOP; act in NinjaTrader now"), and the missing-stop alarm says it again after its 4 seconds.
+- **Refused, nothing sent:** a pair an AI agent owns (its stop and target are the agent's: use Flatten, or a market exit); a
+  copier follower that is on (the copier keeps its size from the leader: cut the leader, whose exits are copied); a Merge
+  running on that account and root; a root ChartBridge does not serve or a quote-only one.
+- The page's Close button and hotkey are named **Flatten** in release 1 (the same `flatten` message; the hotkey's id stays
+  `close`). Flatten all is unchanged.
 
 ## 0.4.0 hardening and markets
 

@@ -400,8 +400,10 @@ test('0.6.22: the lanes, the day\'s loss stop and the voice calls: the order pat
   const same = {
     'ChartBridgeBars.cs': '7a9de59769499d804767461f67f8442c7a44a04b8b8bfae8cf6f4879b5186664',
     // ChartBridgeBot.cs: release 1 step 1.6b (unreleased, the personal bot) changed it; its rules are BotHarness's (check:orders)
-    'ChartBridgeCopier.cs': 'bb90a637610b3b56236c6cfba014c1a1db40110f2b821bbeecf7778f2f4e6e49',
-    'ChartBridgeMerge.cs': '7aa31e37d38c1875eb236e1575d20f49ed31c1e2c08fc9d265d5aa7e0a32952c',
+    // release 1 step 1.6c (unreleased, Cut half) re-pins these two: the copier gains CutHalfRefusal (a follower that is on is never
+    // cut), Merge's freeze reads cutHalf's account and root as an order's; their rules are OrdersHarness's Cut half section (check:orders)
+    'ChartBridgeCopier.cs': 'af309f8da530c682dd2a9e1a221dba5f52ae2fa887e9c6737ea01ebc26d7eabe',
+    'ChartBridgeMerge.cs': 'ed51c05639cc48d0fde76f6cf4011159d5ac32d0b64785802d566805fd1f1956',
     'ChartBridgeOrderRecord.cs': 'de33b77a1d774d2ce8d11a5f3a8e927f1ff085c7d8f47259ff6a542d18ccc1f1',
     'ChartBridgePin.cs': '8c6b28abf30cc716b7175fa3c1fd4e1cb9ca0c9407a19a03357830028481e3eb',
     'ChartBridgeStops.cs': 'f2d74c58a904a5ba448ca5ebceb05f25b01d55642ddfdf1323b0c7dbf95f5d3c',
@@ -409,7 +411,7 @@ test('0.6.22: the lanes, the day\'s loss stop and the voice calls: the order pat
     'ChartBridgeTicks.cs': 'def1e998f0e49dda1287d5422a6375ea8152646f62e86bc0c34d34b219cb7851',
     'ChartBridgeV3.cs': '4ea9774ee3d30e619d1b849965b68565c24eed8f276194deaf93ee23242261dc',
   };
-  for (const [f, h] of Object.entries(same)) assert.strictEqual(sha(read(f).replace(/\r/g, '')), h, f + ' is the 0.6.18 file');
+  for (const [f, h] of Object.entries(same)) assert.strictEqual(sha(read(f).replace(/\r/g, '')), h, f + ' is the pinned file (0.6.18, or release 1 where it says so)');
   const without = (f, lines) => {
     let text = read(f).replace(/\r/g, '');
     for (const l of lines) { assert.strictEqual(text.split(l + '\n').length, 2, f + ': the added line is there once: ' + l.trim().slice(0, 80)); text = text.replace(l + '\n', ''); }
@@ -423,7 +425,10 @@ test('0.6.22: the lanes, the day\'s loss stop and the voice calls: the order pat
                '            if (bot) cap = Math.Min(cap, ChartBridgeBot.MaxQty);   // 0.4.0 bot: the 1 contract rail, on the order and the position (gate 3\'s own count)'];
   const ordersNow = without('ChartBridgeOrders.cs', orders);
   assert.strictEqual(ordersNow.split(r1b[0] + '\n').length, 2, 'ChartBridgeOrders.cs: the 1.6b gate 3 line is there once');
-  assert.strictEqual(sha(ordersNow.replace(r1b[0] + '\n', r1b[1] + '\n')), '8e15e56a06b1f2597b5ff1ecebccba724b27a019819fa691b9f0a30c16bfaffd', 'ChartBridgeOrders.cs: the 0.6.18 file but for the two voice lines and the 1.6b gate 3 line');
+  // release 1 step 1.6c (unreleased, Anthony 2026-11-17, Cut half) re-pins ChartBridgeOrders.cs: the cutHalf command (CutHalf, CutUpdate),
+  // the legs check's shrink taken out unchanged as ShrinkPlan for both; its rules are OrdersHarness's Cut half section (check:orders).
+  // Before 1.6c this was 8e15e56a06b1f2597b5ff1ecebccba724b27a019819fa691b9f0a30c16bfaffd.
+  assert.strictEqual(sha(ordersNow.replace(r1b[0] + '\n', r1b[1] + '\n')), '58b5d1e7858567d0c8028669c7f057f5b139b2e9227a48cd6711c413f19afa74', 'ChartBridgeOrders.cs: the 1.6c file but for the two voice lines and the 1.6b gate 3 line');
   assert.strictEqual(sha(without('ChartBridgeStrategies.cs', strategies)), '968179e96aa887424b9df26148f8ae65bc3c60238f6f9de90f238e7781ab9193', 'ChartBridgeStrategies.cs: the 0.6.18 file but for the one voice line');
   // each voice entry the order path calls is off unless config says voice = on, and catches everything it does
   const main = read('ChartBridge.cs');

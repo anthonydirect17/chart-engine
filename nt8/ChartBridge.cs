@@ -2647,7 +2647,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             else if (type == "htf") OnHtfMessage(client, text);                 // 0.3.7: 4h, 1D, 1W bars (strict)
             else if (type == "weekProfile") OnWeekProfileMessage(client, text); // 0.3.7: the last 5 sessions' volume at price (strict)
-            else if (type == "auth" || type == "order" || type == "change" || type == "plan" || type == "cancel" || type == "flatten" || type == "groupPreview" || type == "groupOrder")   // 0.6.5: groupPreview, groupOrder
+            else if (type == "auth" || type == "order" || type == "change" || type == "plan" || type == "cancel" || type == "flatten" || type == "groupPreview" || type == "groupOrder" || type == "cutHalf")   // 0.6.5: groupPreview, groupOrder; release 1 (1.6c): cutHalf
                 ChartBridgeOrders.OnMessage(client, type, text);   // every order path and its gates live in ChartBridgeOrders.cs
             else if (ChartBridgeGroups.Handles(type)) ChartBridgeGroups.OnMessage(client, type, text);   // 0.5.8: groupSave, groupDelete, accountGroup, accountLimits (ChartBridgeGroups.cs; no order calls); 0.6.7: memberBench
             else if (type == "client" || type == "accountTrade" || type == "accountArchive" || type == "accountUnarchive" || type == "accountPersonal")   // 0.6.16: accountPersonal, the one-time pick of the personal account
@@ -2778,7 +2778,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             b.Append("],\"trading\":").Append(ChartBridgeOrders.TradingJson(false, null));
             b.Append(",\"pcClock\":").Append(ChartBridgeClock.Json());   // 0.5.6: this PC's clock against a time server (ChartBridgeClock)
-            b.Append(",\"features\":[\"liveFirst\",\"profile\",\"settlement\",\"htf\",\"weekProfile\",\"v3\"]}");   // 0.4.0 accounts: "v3", this ChartBridge speaks protocol v3   // 0.3.5: the served window, the session's volume at price; 0.3.7: settlement, higher-timeframe bars, the weekly profile
+            b.Append(",\"features\":[\"liveFirst\",\"profile\",\"settlement\",\"htf\",\"weekProfile\",\"v3\",\"cutHalf\"]}");   // 0.4.0 accounts: "v3", this ChartBridge speaks protocol v3   // 0.3.5: the served window, the session's volume at price; 0.3.7: settlement, higher-timeframe bars, the weekly profile
             return b.ToString();
         }
 

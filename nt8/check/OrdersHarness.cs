@@ -862,6 +862,7 @@ public static class OrdersHarness
         Check(sent.Count == 1, "position on a contract ChartBridge does not serve is not sent");
 
         PlannedChecks();   // 0.3.8: a resting entry's planned stop and target, ticks from its fill (the ATM rule); 0.3.7: no distance limits unless config.txt sets them
+        Section("cut half (release 1, 1.6c)", CutHalfChecks);   // Cut half: half closed at market, the legs shrunk to the size left in the same step
 
         // ------------------------------------------------------------ turning trading off stops every order action
         ChartBridgeOrders.ResetConfig();
@@ -896,6 +897,170 @@ public static class OrdersHarness
         Console.WriteLine(fails == 0 ? "ALL PASSED" : fails + " FAILED");
         return fails == 0 ? 0 : 1;
     }
+    // ------------------------------------------------------------ release 1, step 1.6c: Cut half (Anthony 2026-11-17)
+    static string Cut(string account, int position) { return "{\"type\":\"cutHalf\",\"cid\":\"ch\",\"account\":\"" + account + "\",\"root\":\"MNQ\",\"position\":" + position + "}"; }
+    // A ChartBridge pair (stop and target, one OCO) of qty on a long (sell legs) or a short (buy legs).
+    static Order[] Pair(Account a, string tag, int fill, int qty, bool longPos)
+    {
+        OrderAction exit = longPos ? OrderAction.Sell : OrderAction.Buy;
+        string oco = "cb-" + tag + "-" + fill, mark = " f" + fill + " q" + qty + " p25000";
+        Order st = Manual(a, mnq, exit, OrderType.StopMarket, qty, 0, longPos ? 24990 : 25010, oco, "CB#" + tag + " stop" + mark);
+        Order tg = Manual(a, mnq, exit, OrderType.Limit, qty, longPos ? 25020 : 24980, 0, oco, "CB#" + tag + " target" + mark);
+        return new[] { st, tg };
+    }
+    static string Calls(Account a) { return string.Join(" | ", a.Calls); }
+
+    static void CutHalfChecks(Action<bool, string> check)
+    {
+        string was = string.Join(", ", ChartBridgeOrders.TradeAccounts);
+        ChartBridgeOrders.ReadConfig("tradeAccounts", was + ", CutA, CutB, CutC, CutD, CutE, CutF, CutG, CutH, CutI, CutJ, CutK, CutL");
+        Account a = NewAccount("CutA"), b = NewAccount("CutB"), cc = NewAccount("CutC"), d = NewAccount("CutD"), e = NewAccount("CutE"), f = NewAccount("CutF"),
+                g = NewAccount("CutG"), h = NewAccount("CutH"), i = NewAccount("CutI"), j = NewAccount("CutJ"), k = NewAccount("CutK"), l = NewAccount("CutL");
+
+        // even size: long 4 with one pair of 4: sells 2 at market; the pair shrinks to 2 first, in the same step
+        Order[] pa = Pair(a, "c0000001", 4, 4, true);
+        SetPos(a, mnq, 4);
+        Msg("cutHalf", Cut("CutA", 4));
+        check(a.Calls.Count == 3 && a.Calls[0] == "change " + pa[0].Name + " L0 S0 Q2" && a.Calls[1] == "change " + pa[1].Name + " L0 S0 Q2",
+              "long 4, one pair of 4: the stop and the target shrink to 2: " + Calls(a));
+        check(a.Calls.Count == 3 && Regex.IsMatch(a.Calls[2], "^submit CB#[0-9a-f]{8} exit cut q2 Sell Market 2 L0 S0 oco:$"), "and 2 are sold at market, after the legs: " + Calls(a));
+        check(!LastSent().Contains("\"type\":\"reject\""), "nothing refused");
+        Order cutA = a.Orders.Last();
+        check(cutA.TimeInForce == TimeInForce.Day && cutA.Quantity == 2, "the close is a Day market order of 2");
+
+        // a second press before the first close filled: refused, nothing sent (the close may still fill)
+        int n = a.Calls.Count;
+        Msg("cutHalf", Cut("CutA", 4));
+        check(Rejected("still being filled") && a.Calls.Count == n, "a second Cut half while the first close may still fill: refused, nothing sent");
+        // the close fills: long 2, legs 2; a Cut half then sells 1 (keeps 1); the legs follow
+        Fill(a, cutA, 2, 25001);
+        SetPos(a, mnq, 2);
+        ChartBridgeOrders.OnPositionUpdate(a, new PositionEventArgs { Position = new Position { Instrument = mnq }, MarketPosition = MarketPosition.Long, Quantity = 2, AveragePrice = 25000 });   // the fill is in the position now
+        pa[0].Quantity = 2; pa[1].Quantity = 2;   // the shrink confirmed
+        ChartBridgeOrders.CheckLegs(9000000); ChartBridgeOrders.CheckLegs(9006000);
+        check(a.Calls.Count == n, "after the cut the legs fit the position: the legs check has nothing to do");
+        Msg("cutHalf", Cut("CutA", 2));
+        check(a.Calls.Count == n + 3 && a.Calls[n] == "change " + pa[0].Name + " L0 S0 Q1" && a.Calls[n + 2].Contains(" exit cut q1 Sell Market 1 "), "long 2: 1 sold, legs to 1: " + Calls(a));
+
+        // odd sizes close the smaller part: 3 closes 1 and keeps 2; 5 closes 2 and keeps 3
+        Order[] pb = Pair(b, "c0000002", 3, 3, true);
+        SetPos(b, mnq, 3);
+        Msg("cutHalf", Cut("CutB", 3));
+        check(b.Calls.Count == 3 && b.Calls[0] == "change " + pb[0].Name + " L0 S0 Q2" && b.Calls[1] == "change " + pb[1].Name + " L0 S0 Q2" && b.Calls[2].Contains(" exit cut q1 Sell Market 1 "),
+              "long 3: sells 1, keeps 2, legs to 2: " + Calls(b));
+        Order[] pc = Pair(cc, "c0000003", 5, 5, true);
+        SetPos(cc, mnq, 5);
+        Msg("cutHalf", Cut("CutC", 5));
+        check(cc.Calls.Count == 3 && cc.Calls[0] == "change " + pc[0].Name + " L0 S0 Q3" && cc.Calls[2].Contains(" exit cut q2 Sell Market 2 "), "long 5: sells 2, keeps 3, legs to 3: " + Calls(cc));
+
+        // a short works the same way: it buys back half
+        Order[] pd = Pair(d, "c0000004", 4, 4, false);
+        SetPos(d, mnq, -4);
+        Msg("cutHalf", Cut("CutD", -4));
+        check(d.Calls.Count == 3 && d.Calls[0] == "change " + pd[0].Name + " L0 S0 Q2" && d.Calls[2].Contains(" exit cut q2 Buy Market 2 "), "short 4: buys back 2, legs to 2: " + Calls(d));
+
+        // one pair per fill (4 pairs of 1 on a long 4): the newest two pairs are cancelled, as the legs check would, the oldest two kept
+        Order[] e1 = Pair(e, "c0000005", 1, 1, true), e2 = Pair(e, "c0000005", 2, 1, true), e3 = Pair(e, "c0000005", 3, 1, true), e4 = Pair(e, "c0000005", 4, 1, true);
+        SetPos(e, mnq, 4);
+        sent.Clear();
+        Msg("cutHalf", Cut("CutE", 4));
+        check(e.Calls.Count == 5 && e.Calls.Take(4).All(x => x.StartsWith("cancel CB#c0000005 ")) && e.Calls.Take(4).Count(x => x.Contains(" f3 ") || x.Contains(" f4 ")) == 4 &&
+              e.Calls[4].Contains(" exit cut q2 Sell Market 2 "), "four pairs of 1 on a long 4: the two newest pairs cancelled, 2 sold: " + Calls(e));
+        e3[0].OrderState = OrderState.Cancelled; e3[1].OrderState = OrderState.Cancelled; e4[0].OrderState = OrderState.Cancelled; e4[1].OrderState = OrderState.Cancelled;
+        ChartBridgeOrders.OnOrderUpdate(e, new OrderEventArgs { Order = e4[0] });
+        SetPos(e, mnq, 4);
+        ChartBridgeOrders.CheckLegs(9100000); ChartBridgeOrders.CheckLegs(9104500);
+        check(!sent.Any(m => m.Contains("CutE") && m.Contains("the target was cancelled too")), "pairs Cut half cancels are never called lost (no OCO alarm)");
+
+        // a merged set (Merge) shrinks as a set: its stop to 2, its target to 2
+        Order ms = Manual(f, mnq, OrderAction.Sell, OrderType.StopMarket, 4, 0, 24990, "", "CB#c0000006 mstop q4 p24990");
+        Order mt = Manual(f, mnq, OrderAction.Sell, OrderType.Limit, 4, 25020, 0, "", "CB#c0000006 mtarget q4 p25020 k1");
+        SetPos(f, mnq, 4);
+        Msg("cutHalf", Cut("CutF", 4));
+        check(f.Calls.Count == 3 && f.Calls.Contains("change " + ms.Name + " L0 S0 Q2") && f.Calls.Contains("change " + mt.Name + " L0 S0 Q2") && f.Calls[2].Contains(" exit cut q2 "),
+              "a merged set on a long 4: its stop and target to 2, 2 sold: " + Calls(f));
+
+        // greyed at 1 contract and when flat: refused, nothing sent
+        Pair(g, "c0000007", 1, 1, true);
+        SetPos(g, mnq, 1);
+        Msg("cutHalf", Cut("CutG", 1));
+        check(Rejected("needs 2 or more contracts") && Rejected("use Flatten") && g.Calls.Count == 0, "1 contract: refused (use Flatten), nothing sent");
+        SetPos(g, mnq, 0);
+        Msg("cutHalf", Cut("CutG", 0));
+        check(Rejected("needs 2 or more contracts") && g.Calls.Count == 0, "flat: refused, nothing sent");
+
+        // the page saw another size (a stale page, a fill since): refused, nothing sent
+        Pair(h, "c0000008", 4, 4, true);
+        SetPos(h, mnq, 3);
+        Msg("cutHalf", Cut("CutH", 4));
+        check(Rejected("is 3 now, not 4") && h.Calls.Count == 0, "the page saw 4, the position is 3: refused, nothing sent");
+        // the two readings disagree (a fill reported, not in the position yet): refused
+        SetPos(h, mnq, 4);
+        FieldInfo mv = typeof(ChartBridgeOrders).GetField("Moves", BindingFlags.NonPublic | BindingFlags.Static);
+        var moves = (Dictionary<string, List<double[]>>)mv.GetValue(null);
+        lock (moves) moves["CutH|" + mnq.FullName] = new List<double[]> { new double[] { -1, ChartBridgeTime.NowUtcMs() } };
+        Msg("cutHalf", Cut("CutH", 4));
+        check(Rejected("is changing") && h.Calls.Count == 0, "the readings disagree (4 listed, 3 with a fill not in it yet): refused, nothing sent");
+        lock (moves) moves.Remove("CutH|" + mnq.FullName);
+
+        // other exits already working there: Cut half never closes more than the position with them
+        Pair(i, "c0000009", 4, 4, true);
+        Manual(i, mnq, OrderAction.Sell, OrderType.Limit, 3, 25030, 0, "", "hand limit");
+        SetPos(i, mnq, 4);
+        Msg("cutHalf", Cut("CutI", 4));
+        check(Rejected("exits working for 3") && i.Calls.Count == 0, "a hand sell limit of 3 on a long 4: closing 2 more could pass the position: refused");
+
+        // strict messages and the gates
+        SetPos(j, mnq, 4); Pair(j, "c000000a", 4, 4, true);
+        Msg("cutHalf", "{\"type\":\"cutHalf\",\"account\":\"CutJ\",\"root\":\"MNQ\",\"position\":4,\"qty\":2}");
+        check(Rejected("unknown key") && Rejected("qty") && j.Calls.Count == 0, "strict: an unknown key is refused");
+        Msg("cutHalf", "{\"type\":\"cutHalf\",\"account\":\"CutJ\",\"root\":\"MNQ\",\"position\":4,\"bracket\":{\"stop\":8,\"target\":16}}");
+        check(Rejected("bracket") && j.Calls.Count == 0, "strict: a bracket is refused");
+        Msg("cutHalf", "{\"type\":\"cutHalf\",\"account\":\"CutJ\",\"root\":\"MNQ\"}");
+        check(Rejected("position must be") && j.Calls.Count == 0, "strict: the position the page saw is required");
+        Msg("cutHalf", "{\"type\":\"cutHalf\",\"account\":\"CutJ\",\"root\":\"MNQ\",\"position\":\"4\"}");
+        check(Rejected("position must be") && j.Calls.Count == 0, "strict: the position is a plain whole number");
+        Msg("cutHalf", "{\"type\":\"cutHalf\",\"account\":\"CutJ\",\"root\":\"ES\",\"position\":4}");
+        check(Rejected("not served") && j.Calls.Count == 0, "a root ChartBridge does not serve: refused");
+        Msg("cutHalf", "{\"type\":\"cutHalf\",\"account\":\"OTHER-ACC\",\"root\":\"MNQ\",\"position\":4}");
+        check(Rejected("may not trade") && j.Calls.Count == 0, "an account that may not trade: refused");
+        Msg("cutHalf", "{\"type\":\"cutHalf\",\"account\":\"Playback101\",\"root\":\"MNQ\",\"position\":4}");
+        check(Rejected("may not trade"), "a Playback account: refused");
+
+        // a group: each member is cut on its own size (the page sends one Cut half per member); a member at 1 is left alone
+        // (the page never sends it; sent anyway, it is refused)
+        Order[] k4 = Pair(k, "c000000b", 4, 4, true), l3 = Pair(l, "c000000c", 3, 3, true);
+        Account m1 = NewAccount("CutM");
+        ChartBridgeOrders.ReadConfig("tradeAccounts", was + ", CutA, CutB, CutC, CutD, CutE, CutF, CutG, CutH, CutI, CutJ, CutK, CutL, CutM");
+        Pair(m1, "c000000d", 1, 1, true);
+        SetPos(k, mnq, 4); SetPos(l, mnq, 3); SetPos(m1, mnq, 1);
+        Msg("cutHalf", Cut("CutK", 4)); Msg("cutHalf", Cut("CutL", 3)); Msg("cutHalf", Cut("CutM", 1));
+        check(k.Calls.Count == 3 && k.Calls[2].Contains(" exit cut q2 ") && k.Calls[0] == "change " + k4[0].Name + " L0 S0 Q2", "group member long 4: closes 2, keeps 2: " + Calls(k));
+        check(l.Calls.Count == 3 && l.Calls[2].Contains(" exit cut q1 ") && l.Calls[0] == "change " + l3[0].Name + " L0 S0 Q2", "group member long 3: closes 1, keeps 2: " + Calls(l));
+        check(m1.Calls.Count == 0 && Rejected("needs 2 or more"), "group member long 1: left alone (refused if sent)");
+
+        // NinjaTrader rejects the close after the legs were shrunk: an error at once
+        sent.Clear();
+        Order kc = k.Orders.Last();
+        kc.OrderState = OrderState.Rejected;
+        ChartBridgeOrders.OnOrderUpdate(k, new OrderEventArgs { Order = kc });
+        check(sent.Any(m => m.Contains("\"level\":\"error\"") && m.Contains("Cut half close was REJECTED") && m.Contains("NO STOP")), "the close rejected: the page gets an error at once");
+        // a filled close says nothing
+        sent.Clear();
+        Order lc = l.Orders.Last();
+        Fill(l, lc, 1, 25000);
+        check(!sent.Any(m => m.Contains("Cut half close")), "a filled close: no alarm");
+
+        // trading off: refused, nothing sent
+        ChartBridgeOrders.ReadConfig("trading", "false");
+        SetPos(j, mnq, 4);
+        Msg("cutHalf", Cut("CutJ", 4));
+        check(Rejected("trading is off") && j.Calls.Count == 0, "trading off: refused");
+        ChartBridgeOrders.ReadConfig("trading", "true");
+        ChartBridgeOrders.ReadConfig("tradeAccounts", was);
+        foreach (Account x in new[] { a, b, cc, d, e, f, g, h, i, j, k, l, m1 }) foreach (Order o in x.Orders) o.OrderState = OrderState.Cancelled;
+    }
+
     // ------------------------------------------------------------ 0.3.7 and 0.3.8: planned stop and target on resting entries (Anthony's rulings, 2026-10-01)
     static Order Newest(Account a) { return a.Orders[a.Orders.Count - 1]; }
     static string Ord(string account, string rest) { return Order(account, rest); }
