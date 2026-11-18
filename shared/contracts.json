@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "name": "Contract values for CME equity index futures: point value and tick size (fees are not here)",
+  "how_checked": "2026-11-18, CME Group pages read through a web search index only: cmegroup.com refuses automated reading (HTTP 403 under its Data Terms of Use). tick_value is point_value times tick_size.",
+  "currency": "USD",
+  "contracts": [
+    {"root": "NQ", "name": "E-mini Nasdaq-100", "point_value": 20.0, "tick_size": 0.25, "tick_value": 5.0, "micro": "MNQ", "check": "cme", "cme_sources": ["https://www.cmegroup.com/markets/equities/nasdaq/e-mini-nasdaq-100.contractSpecs.html"], "note": "CME: $20 x the Nasdaq-100 index, minimum tick 0.25 index points = $5.00."},
+    {"root": "MNQ", "name": "Micro E-mini Nasdaq-100", "point_value": 2.0, "tick_size": 0.25, "tick_value": 0.5, "micro": null, "check": "cme", "cme_sources": ["https://www.cmegroup.com/rulebook/CME/IV/350/361.pdf", "https://www.cmegroup.com/articles/faqs/frequently-asked-questions-micro-e-mini-equity-index-futures.html"], "note": "CME rulebook chapter 361: each futures contract is valued at $2.00 times the Nasdaq-100 index; minimum tick 0.25 index points = $0.50."},
+    {"root": "ES", "name": "E-mini S&P 500", "point_value": 50.0, "tick_size": 0.25, "tick_value": 12.5, "micro": "MES", "check": "cme", "cme_sources": ["https://www.cmegroup.com/markets/equities/sp-500-and-nasdaq-100-futures.html", "https://www.cmegroup.com/education/courses/introduction-to-futures/tick-movements-understanding-how-they-work"], "note": "CME: $50 x the S&P 500 index; a quarter point move is worth $12.50 (outright; calendar spreads trade in smaller ticks)."},
+    {"root": "MES", "name": "Micro E-mini S&P 500", "point_value": 5.0, "tick_size": 0.25, "tick_value": 1.25, "micro": null, "check": "cme", "cme_sources": ["https://www.cmegroup.com/markets/equities/sp/micro-e-mini-sandp-500.contractSpecs.html"], "note": "CME: $5 x the S&P 500 index, minimum tick 0.25 index points = $1.25."}
+  ]
+}
