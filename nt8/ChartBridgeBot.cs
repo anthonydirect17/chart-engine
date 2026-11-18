@@ -132,6 +132,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static double dayStopDay;                 // the day's dollars when it was reached
         private static double stopFlattenTryMs = -1;      // the last flatten (or cancel again) a latched day stop sent, reserved under Sync
         private static string stopFlattenWhy;             // why that flatten was refused (tried again every 5 s), or null
+        private static string stopFlattenWait;            // why the flatten again waited (a close on its way), said once a reason, or null
         private static bool openUnknownSaid;              // the open trade's dollars could not be read: said once a trading day
         private static string railRoot;                   // the page's choice (botRails), or null for botRoot
         private static string account = DefaultAccount;   // the bot's account (botAccount, bot-account.txt), exact name
@@ -212,6 +213,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             LoadRails();
             LoadAccount();
             LoadDay();
+            RestoreOpenTrade();   // review R12 round 2: a bot trade open in bot-day.txt is followed again from NinjaTrader's position
             double? kill = ChartBridgeFiles.KillSince(KillFile);   // 0.6.3 (audit C5): the kill switch survives a restart until the page releases it
             lock (Sync) { noBotSinceMs = Now(); killed = kill.HasValue; killedAt = Math.Max(0, kill ?? 0); killReadPending = kill == -1; }
             if (kill == -1) Log("bot-kill.txt is there but could not be read yet (held open): the kill switch is on; ChartBridge reads it again");
@@ -237,7 +239,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 bot = null; claimed = false; helloed = false; botName = null; lastMsgMs = 0; noBotSinceMs = 0; lastStripMs = 0;
                 mode = "shadow"; killed = false; size = 0; maxTrades = 0; maxLosses = 0; dayLoss = 0; dayProfit = 0; railRoot = null; railsBroken = null; dayBroken = null;
-                dayStopKind = null; dayStopDay = 0; stopFlattenTryMs = -1; stopFlattenWhy = null; openUnknownSaid = false;
+                dayStopKind = null; dayStopDay = 0; stopFlattenTryMs = -1; stopFlattenWhy = null; stopFlattenWait = null; openUnknownSaid = false;
                 account = DefaultAccount; accountBroken = null;
                 secret = null; secretState = "missing"; session = null; Trades.Clear(); SignalIds.Clear(); openTag = null; ledQty = 0; ledCash = 0; ledAvg = 0; ledPrior = 0;
                 Proposals.Clear(); EntryOfSignal.Clear(); Placed.Clear(); Tags.Clear(); CancelSent.Clear(); Actions.Clear(); lastSignalJson = null;
@@ -520,7 +522,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (open) Trades[openTag] = double.NaN;
                 ledPrior = 0;   // a reopened trade's earlier dollars were yesterday's
                 SignalIds.Clear();
-                dayStopKind = null; dayStopDay = 0; stopFlattenTryMs = -1; stopFlattenWhy = null; openUnknownSaid = false;   // release 1 (1.6b): the day stops' latch ends with the day
+                dayStopKind = null; dayStopDay = 0; stopFlattenTryMs = -1; stopFlattenWhy = null; stopFlattenWait = null; openUnknownSaid = false;   // release 1 (1.6b): the day stops' latch ends with the day
                 changed = true;
             }
             if (changed) { SaveDay(); Log("a new trading day: the bot's trades, losses and day stops start over (the mode stays as it is: Anthony arms the bot)"); Notify(); }
@@ -544,6 +546,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (own != null) return own;
             string missing = RailsMissingLocked();
             if (missing != null) return missing;
+            string unfollowed = OpenNotFollowedLocked();
+            if (unfollowed != null) return unfollowed;
             if (dayStopKind != null) return DayStopWordsLocked();
             int losses = Trades.Values.Count(v => v < 0);
             if (losses >= maxLosses) return losses + " losing trades today: no new bot entries until 18:00 ET";
@@ -562,6 +566,58 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (!ChartBridgeBranches.PersonalNamed) return "no personal account is picked (the chart page's Accounts tab): the bot trades the personal account only";
             if (!ChartBridgeBranches.IsPersonal(name)) return name + " is not the personal account: the bot trades the personal account only (choose it on the Bot tab)";
             return null;
+        }
+
+        // ---------------------------------------------------------- review R12 round 2: a bot trade still open after a restart
+        // The trade being followed (openTag and its ledger) lives in memory only; bot-day.txt keeps "open" for it. After a restart or
+        // a NinjaScript recompile, that trade is followed again from NinjaTrader's position on the bot's account and the bot's root
+        // (its quantity and average price), so its dollars reach the day stops and a latched day flattens it. Until then (no position
+        // there yet, or more than one open trade in the file), copilot, auto and every new bot entry are refused, named; it is looked
+        // at again every 500 ms. At 18:00 ET a trade never followed again is dropped with the day, as before.
+        private static string OpenNotFollowedLocked()
+        {
+            if (openTag != null) return null;
+            List<string> open = Trades.Where(kv => double.IsNaN(kv.Value)).Select(kv => kv.Key).ToList();
+            if (open.Count == 0) return null;
+            return "bot trade " + string.Join(", ", open) + " was still open when ChartBridge started (bot-day.txt), and " +
+                   (open.Count > 1 ? "more than one open trade cannot be told apart" : "NinjaTrader shows no " + (railRoot ?? ConfigRoot) + " position on " + account + " for it") +
+                   ": copilot, auto and new bot entries are refused until it is followed again (or 18:00 ET)";
+        }
+
+        private static void RestoreOpenTrade()
+        {
+            string tag;
+            lock (Sync)
+            {
+                if (openTag != null || dayBroken != null) return;
+                List<string> open = Trades.Where(kv => double.IsNaN(kv.Value)).Select(kv => kv.Key).ToList();
+                if (open.Count != 1) return;
+                tag = open[0];
+            }
+            Account a = FindAccount();
+            string root = EffectiveRoot();
+            Instrument inst = ChartBridgeServer.InstrumentFor(root);
+            if (a == null || inst == null) return;
+            Position held = null;
+            lock (a.Positions)
+                foreach (Position p in a.Positions)
+                    if (p != null && p.Instrument != null && (p.Instrument == inst || p.Instrument.FullName == inst.FullName) && p.MarketPosition != MarketPosition.Flat && p.Quantity > 0) { held = p; break; }
+            if (held == null || !(held.AveragePrice > 0)) return;
+            int q = held.MarketPosition == MarketPosition.Long ? held.Quantity : -held.Quantity;
+            double avg = held.AveragePrice, was;
+            bool done = false;
+            lock (Sync)
+            {
+                if (openTag == null && Trades.TryGetValue(tag, out was) && double.IsNaN(was))
+                {
+                    openTag = tag; ledQty = q; ledAvg = avg; ledCash = -q * avg; ledPrior = 0;
+                    done = true;
+                }
+            }
+            if (!done) return;
+            string w = "Bot: trade " + tag + " (open in bot-day.txt) is followed again from NinjaTrader's position: " + q + " " + inst.FullName + " at " + avg.ToString("0.##", CultureInfo.InvariantCulture) + " on " + a.Name;
+            Log(w); BotLog(w); ToPages(StatusJson("warn", w));
+            Notify();
         }
 
         // ---------------------------------------------------------- strict messages (gate 8, as extended for v3 and the bot)
@@ -1479,7 +1535,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         // Release 1 (1.6b, review R12 finding 1): while the day is latched, at most every 5 s, the try reserved under Sync so two
         // overlapping checks never send two. held: the bot still holds a trade (a refused flatten, or an entry that filled after the
         // flatten): the flatten again. Otherwise a bot entry still working (its cancel lost): its cancel again, never a flatten of a
-        // root the bot holds nothing on.
+        // root the bot holds nothing on. Round 2: the flatten again waits (the try is used, so it looks again in 5 s) while a close
+        // may still be on its way (CloseOnItsWay), so a slow first close and a second one never both fill.
         private static void RetryStopFlatten(string root, bool held)
         {
             List<Order> working = held ? null : WorkingEntries();
@@ -1489,6 +1546,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (!due) return;
             if (held)
             {
+                string wait = CloseOnItsWay(root), was;
+                lock (Sync) { was = stopFlattenWait; stopFlattenWait = wait; }
+                if (wait != null) { if (wait != was) { string w = "Bot: the day stop's flatten again waits: " + wait + " (looked at again every 5 s)"; Log(w); BotLog(w); } return; }
                 if (StopFlatten(root) == null) { string w = "Bot: the day stop's flatten sent again: the bot still held its trade on " + BotAccount + " " + root; Log(w); BotLog(w); }
                 return;
             }
@@ -1496,6 +1556,26 @@ namespace NinjaTrader.NinjaScript.AddOns
             int n = 0;
             foreach (Order o in working) if (Cancel(o)) n++;
             if (n > 0) { string w = "Bot: the day stop: " + n + " bot entr" + (n == 1 ? "y is" : "ies are") + " still working: cancel sent again"; Log(w); BotLog(w); }
+        }
+
+        // Review R12 round 2: a close of the bot's position may still be on its way, so a flatten now could close it twice and leave
+        // the account on the other side: a market order that may still fill on the bot's account and root (any contract month; never
+        // a bot entry, which adds, and a stop or target, which is not a market order), or NinjaTrader's position on the root already
+        // flat by both readings (only the executions are late). Null when the flatten may go again. Reads NinjaTrader: never under Sync.
+        private static string CloseOnItsWay(string root)
+        {
+            Account a = FindAccount();
+            if (a == null) return null;   // the flatten names its own refusal
+            Func<Instrument, bool> onRoot = i => i != null && ((i.MasterInstrument != null && string.Equals(i.MasterInstrument.Name, root, StringComparison.OrdinalIgnoreCase)) || ChartBridgeServer.RootFor(i) == root);
+            List<Order> orders;
+            lock (a.Orders) orders = a.Orders.ToList();
+            foreach (Order o in orders)
+                if (o.OrderType == OrderType.Market && onRoot(o.Instrument) && !IsBotEntry(o) &&
+                    o.OrderState != OrderState.Filled && o.OrderState != OrderState.Cancelled && o.OrderState != OrderState.Rejected)
+                    return "a market order on " + a.Name + " " + root + " may still fill (" + (o.Name ?? "no name") + ")";
+            Instrument inst = ChartBridgeServer.InstrumentFor(root);
+            if (inst != null && ChartBridgeOrders.FlatByBothReadings(a, inst)) return "NinjaTrader's " + root + " position on " + a.Name + " is already flat (only its executions are late)";
+            return null;
         }
 
         // ---------------------------------------------------------- the timer: heartbeat, the day, the strip
@@ -1510,6 +1590,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (k != -1) { lock (Sync) { killReadPending = false; if (k.HasValue) killedAt = k.Value; } Log("bot-kill.txt read now: the kill switch stays on until it is released on the page"); Notify(); }
             }
             RollDay();
+            RestoreOpenTrade();   // review R12 round 2: until it is followed again, no arming and no entry (OpenNotFollowedLocked)
             CheckDayStops();   // release 1 (1.6b): the day's loss and profit stops, realized plus open
             double now = Now();
             ChartBridgeClient silent = null;
@@ -1588,7 +1669,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 {
                     // review R12 finding 2: checked again where the mode is set, so a day stop reached (or a rail lost) after ArmProblem
                     // above can never be armed over (the latch ends at 18:00 ET; the bot must not then be armed by itself)
-                    string again = railsBroken ?? RailsMissingLocked() ?? DayStopWordsLocked();
+                    string again = railsBroken ?? RailsMissingLocked() ?? OpenNotFollowedLocked() ?? DayStopWordsLocked();
                     if (again != null) return m + " refused: " + again;
                 }
                 old = mode; mode = m;
@@ -1614,6 +1695,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (railsBroken != null) return railsBroken;
                 string missing = RailsMissingLocked();
                 if (missing != null) return missing;
+                string unfollowed = OpenNotFollowedLocked();
+                if (unfollowed != null) return unfollowed;
                 if (dayStopKind != null) return DayStopWordsLocked();
             }
             return null;
