@@ -751,8 +751,9 @@ the session is run: only then, never at a later 18:00. The backfills start once 
 first live trade after market data started) and no page is loading, through the gate, one instrument at a time in
 `profileRoots` order (MNQ, NQ, ES, MES, whatever order their first trades came in), once per session, never for a page load,
 and not while the market is closed (0.3.7, review lf7 N4: "closed" also knows the CME holidays, by the page's own rules in
-`src/chart-engine.js`, `cmeClosed`: no session on New Year's Day, Good Friday and Christmas as the NYSE observes them, the
-13:00 ET halt on the other NYSE holidays and 13:15 on an NYSE early close, until 18:00; the same rule decides whether a feed
+`src/chart-engine.js`, `cmeClosed`: no session on New Year's Day, Good Friday and Christmas as the NYSE observes them, except
+CME's abbreviated session on Good Friday 2026, closed from 09:15 ET (`cmeShortSessions`, `ChartBridgeCme.ShortClose`, Anthony's
+ruling 2026-11-18), the 13:00 ET halt on the other NYSE holidays and 13:15 on an NYSE early close, until 18:00; the same rule decides whether a feed
 drop missed trades). It asks NinjaTrader for the session so far **by
 date**, from its 18:00 start. NinjaTrader's help says a by-date request covers whole trading days from 12:00 AM, so the answer
 also holds the hours before 18:00 (back to midnight the day before); NinjaTrader loads them and ChartBridge copies them, then
@@ -823,7 +824,9 @@ serve is answered with an `error` and no bars.
   are named by the date they end on (the CME rules above: weekends and CME holidays have none). The current session is the
   one begun last: in the 17:00 to 18:00 break, a weekend or a holiday it is still the one that just ended. So on Tuesday
   the prior is Monday's until Tuesday 18:00; from Sunday 18:00 to Monday 17:00 (and to 18:00) it is Friday's; across Good
-  Friday it is Thursday's from Sunday 18:00.
+  Friday it is Thursday's from Sunday 18:00. Good Friday 2026 was CME's abbreviated session (to 09:15 ET) that CME did not
+  settle (its clearing memo: the April 2 settlement was used), so no settlement is dated to it and Thursday's is the prior
+  in that session, after it and on Monday (`ChartBridgeCme.SettledDay`).
 - **Where the values come from:** NinjaTrader's own settlement for the served contract. NinjaTrader 8's `MarketData` object
   (the one ChartBridge already subscribes to for trades) holds a snapshot of each market data type, `MarketData.Settlement`
   among them (a `MarketDataEventArgs`; NinjaTrader's help, MarketData: "Snapshot data is provided right on subscription"),
@@ -835,7 +838,8 @@ serve is answered with an `error` and no bars.
   (0.3.8, Anthony's ruling) belongs to the session whose settlement time it comes after: stamped after a session day's
   settlement time (16:00 ET, or 12:00 ET on an NYSE holiday or early close, when CME halts early) and before the next
   session day's settlement time, it is that day's. So 16:15 Monday, 20:43 Monday evening and 10:00 Tuesday are all Monday's;
-  a Saturday, a Sunday evening or Monday 15:00 are Friday's; Good Friday (no session) is Thursday's. This dates the
+  a Saturday, a Sunday evening or Monday 15:00 are Friday's; Good Friday (no session, or in 2026 a session CME did not
+  settle) is Thursday's. This dates the
   snapshot NinjaTrader gives at subscription, which carries the time it was read (HOME, 2026-10-01: a first start at
   20:43 ET read that day's settlement stamped 20:43; 0.3.7 left it undated). **Equal to the day before's** (Anthony
   and the coordinator, 0.3.8): NinjaTrader can still hold the day before's value after the settlement time, so a value

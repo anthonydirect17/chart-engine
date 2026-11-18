@@ -490,7 +490,20 @@ namespace NinjaTrader.NinjaScript.AddOns
                 return set;
             }
         }
-        // Days with no Globex session at all: New Year's Day, Good Friday and Christmas, on the days the NYSE observes them.
+        // The sessions the rule gets wrong: CME ran an abbreviated equity index session on a day the rule calls a full closure.
+        // Trading day -> its close, New York time of day. The page's cmeShortSessions (src/chart-engine.js) holds the same rows,
+        // each a row of the shared CME calendar (market-data shared/cme_calendar.json, kind "early"). Good Friday 2026: CME's
+        // abbreviated Globex session, 18:00 the evening before to 09:15 (Anthony's ruling 2026-11-18, "follow CME").
+        // Never changed after start, so read without a lock.
+        private static readonly Dictionary<DateTime, TimeSpan> ShortSessions = new Dictionary<DateTime, TimeSpan> { { new DateTime(2026, 4, 3), new TimeSpan(9, 15, 0) } };
+        // An abbreviated session's close on trading day d, or null when d is not one.
+        public static TimeSpan? ShortClose(DateTime d) { TimeSpan c; return ShortSessions.TryGetValue(d.Date, out c) ? c : (TimeSpan?)null; }
+        // Sessions CME did not settle for equity index futures, so a settlement is never dated to them and the prior settlement
+        // passes over them: Good Friday 2026 (CME's clearing memo: equities not settled that day, April 2's settlement used for
+        // the mark to market; the shared calendar's note on that row).
+        private static readonly HashSet<DateTime> Unsettled = new HashSet<DateTime> { new DateTime(2026, 4, 3) };
+        // Days with no Globex session at all: New Year's Day, Good Friday and Christmas, on the days the NYSE observes them,
+        // except an abbreviated session CME ran on such a day (ShortSessions).
         public static HashSet<DateTime> CmeClosures(int year)
         {
             lock (ClosureCache)
@@ -498,7 +511,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 HashSet<DateTime> set;
                 if (ClosureCache.TryGetValue(year, out set)) return set;
                 HashSet<DateTime> hol = NyseHolidays(year);
-                set = new HashSet<DateTime>(new[] { new DateTime(year, 1, 1), new DateTime(year, 1, 2), GoodFriday(year), new DateTime(year, 12, 24), new DateTime(year, 12, 25), new DateTime(year, 12, 26) }.Where(d => hol.Contains(d)));
+                set = new HashSet<DateTime>(new[] { new DateTime(year, 1, 1), new DateTime(year, 1, 2), GoodFriday(year), new DateTime(year, 12, 24), new DateTime(year, 12, 25), new DateTime(year, 12, 26) }.Where(d => hol.Contains(d) && !ShortSessions.ContainsKey(d)));
                 ClosureCache[year] = set;
                 return set;
             }
@@ -511,17 +524,22 @@ namespace NinjaTrader.NinjaScript.AddOns
             d = d.Date;
             return d.DayOfWeek != DayOfWeek.Saturday && d.DayOfWeek != DayOfWeek.Sunday && !CmeClosures(d.Year).Contains(d);
         }
+        // Whether trading day d has a Globex session that CME settled (SessionDay, not Unsettled): the days settlements are dated to.
+        public static bool SettledDay(DateTime d) { return SessionDay(d) && !Unsettled.Contains(d.Date); }
         // 0.3.7 (the prior settlement): the earliest a session's settlement can be out, its next session's 18:00 ET open, the
         // session running at New York time et (the last one begun; in a break, a weekend or a holiday, the one before it), and
         // the session day before a given one.
         public static TimeSpan EarliestSettlement(DateTime d) { return NyseHolidays(d.Year).Contains(d.Date) || NyseEarlyCloses(d.Year).Contains(d.Date) ? TimeSpan.FromHours(12) : TimeSpan.FromHours(16); }
-        // 0.3.8: the session's close, New York time of day: 17:00, or the halt on an NYSE holiday (13:00) or early close (13:15).
-        public static TimeSpan SessionClose(DateTime d) { return NyseHolidays(d.Year).Contains(d.Date) ? TimeSpan.FromHours(13) : NyseEarlyCloses(d.Year).Contains(d.Date) ? new TimeSpan(13, 15, 0) : TimeSpan.FromHours(17); }
+        // 0.3.8: the session's close, New York time of day: 17:00, or the halt on an NYSE holiday (13:00) or early close (13:15), or
+        // an abbreviated session's own close (ShortSessions: 09:15 on Good Friday 2026).
+        public static TimeSpan SessionClose(DateTime d) { TimeSpan? c = ShortClose(d); if (c.HasValue) return c.Value; return NyseHolidays(d.Year).Contains(d.Date) ? TimeSpan.FromHours(13) : NyseEarlyCloses(d.Year).Contains(d.Date) ? new TimeSpan(13, 15, 0) : TimeSpan.FromHours(17); }
         public static DateTime NextSessionOpen(DateTime d) { DateTime n = d.Date.AddDays(1); for (int i = 0; i < 30 && !SessionDay(n); i++) n = n.AddDays(1); return n.AddHours(-6); }
         public static DateTime CurrentSession(DateTime et) { DateTime d = TradingDay(et); for (int i = 0; i < 30 && !SessionDay(d); i++) d = d.AddDays(-1); return d; }
-        public static DateTime PreviousSession(DateTime d) { DateTime p = d.Date.AddDays(-1); for (int i = 0; i < 30 && !SessionDay(p); i++) p = p.AddDays(-1); return p; }
+        // The settled session before d (SettledDay): the prior settlement's day, so the Monday after Good Friday 2026 has Thursday's.
+        public static DateTime PreviousSession(DateTime d) { DateTime p = d.Date.AddDays(-1); for (int i = 0; i < 30 && !SettledDay(p); i++) p = p.AddDays(-1); return p; }
         // Closed at New York wall time et: the 17:00 to 18:00 break every day, Friday 17:00 to Sunday 18:00, a day with no
-        // Globex session, and after the halt on an NYSE holiday (13:00) or an NYSE early close (13:15) until 18:00.
+        // Globex session, after an abbreviated session's close (ShortSessions) and after the halt on an NYSE holiday (13:00) or
+        // an NYSE early close (13:15) until 18:00.
         public static bool Closed(DateTime et)
         {
             double s = et.TimeOfDay.TotalSeconds;
@@ -529,6 +547,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (!SessionDay(TradingDay(et))) return true;
             DateTime day = et.Date;
             if (day.DayOfWeek == DayOfWeek.Saturday || day.DayOfWeek == DayOfWeek.Sunday || s >= 64800) return false;
+            TimeSpan? shortClose = ShortClose(day);
+            if (shortClose.HasValue) return s >= shortClose.Value.TotalSeconds;
             if (NyseHolidays(day.Year).Contains(day)) return s >= 46800;
             if (NyseEarlyCloses(day.Year).Contains(day)) return s >= 47700;
             return false;
@@ -4797,7 +4817,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static string Day(DateTime d) { return d.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture); }
 
         // The trading day a settlement stamped at NinjaTrader time ntTime belongs to, or null when the time cannot say. A
-        // date-only stamp (00:00) is that date. Otherwise (0.3.8, Anthony): the latest day with a Globex session
+        // date-only stamp (00:00) is that date. Otherwise (0.3.8, Anthony): the latest day with a Globex session that CME settled (SettledDay)
         // whose settlement could be out by then (16:00 ET; 12:00 on an NYSE holiday or early close, when CME halts early),
         // as long as the next session's settlement time has not come yet: NinjaTrader keeps the last settlement and stamps
         // it when it is read, so on HOME 10-01's settlement came stamped 20:43 ET that evening (inside the next session),
@@ -4817,7 +4837,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (ntTime.TimeOfDay == TimeSpan.Zero)
             {
                 DateTime d0 = ntTime.Date;
-                if (!ChartBridgeCme.SessionDay(d0)) return null;
+                if (!ChartBridgeCme.SettledDay(d0)) return null;
                 try { if (TimeZoneInfo.ConvertTimeFromUtc(ChartBridgeTime.ToUtc(nowNt), ChartBridgeTime.Eastern) < d0.Add(ChartBridgeMarkets.EarliestSettlement(root, d0))) return null; }
                 catch (Exception) { return null; }
                 return d0;
@@ -4825,9 +4845,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             DateTime et = TimeZoneInfo.ConvertTimeFromUtc(ChartBridgeTime.ToUtc(ntTime), ChartBridgeTime.Eastern);
             for (DateTime d = et.Date; d > et.Date.AddDays(-14); d = d.AddDays(-1))
             {
-                if (!ChartBridgeCme.SessionDay(d) || d.Add(ChartBridgeMarkets.EarliestSettlement(root, d)) > et) continue;
+                if (!ChartBridgeCme.SettledDay(d) || d.Add(ChartBridgeMarkets.EarliestSettlement(root, d)) > et) continue;
                 for (DateTime n = d.AddDays(1); n < d.AddDays(15); n = n.AddDays(1))
-                    if (ChartBridgeCme.SessionDay(n))
+                    if (ChartBridgeCme.SettledDay(n))
                     {
                         if (et >= n.Add(ChartBridgeMarkets.EarliestSettlement(root, n))) return null;
                         provisional = et < d.Add(ChartBridgeCme.SessionClose(d));
@@ -4844,6 +4864,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 DateTime d0 = ntTime.Date;
                 if (!ChartBridgeCme.SessionDay(d0)) return "is dated " + Day(d0) + ", a day with no Globex session, so it is not used";
+                if (!ChartBridgeCme.SettledDay(d0)) return "is dated " + Day(d0) + ", a session CME did not settle, so it is not used";
                 return "is dated " + Day(d0) + ", and that day's settlement is not due before " + d0.Add(ChartBridgeMarkets.EarliestSettlement(root, d0)).ToString("HH:mm", CultureInfo.InvariantCulture) +
                        " ET, so it is not used yet (a date-only stamp counts once that time has passed)";
             }

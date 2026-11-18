@@ -157,14 +157,29 @@ test('fromStore: the last session with trades; RTH looks back to the last RTH in
 
 test('cmeClosed: the CME Globex calendar, not the NYSE one (review 2 S5)', () => {
   const iso = y => [...U.cmeClosures(y)].map(d => new Date(d * 86400000).toISOString().slice(0, 10)).sort();
-  assert.deepEqual(iso(2026), ['2026-01-01', '2026-04-03', '2026-12-25']);
-  assert.deepEqual(iso(2027), ['2027-01-01', '2027-03-26', '2027-12-24']);   // Christmas on a Saturday: the Friday
+  assert.deepEqual(iso(2026), ['2026-01-01', '2026-12-25']);              // Good Friday 2026: CME's abbreviated session
+  assert.deepEqual(iso(2027), ['2027-01-01', '2027-03-26', '2027-12-24']);   // Christmas on a Saturday: the Friday; Good Friday 2027 a full closure
   assert.deepEqual(iso(2022), ['2022-04-15', '2022-12-26']);               // New Year's on a Saturday: not moved
-  const open = [et(2026, 9, 28, 3, 0), et(2026, 9, 27, 18, 0), et(2026, 9, 25, 16, 59), et(2026, 9, 7, 12, 59), et(2026, 7, 3, 12, 0), et(2026, 6, 19, 9, 30)];
+  const open = [et(2026, 9, 28, 3, 0), et(2026, 9, 27, 18, 0), et(2026, 9, 25, 16, 59), et(2026, 9, 7, 12, 59), et(2026, 7, 3, 12, 0), et(2026, 6, 19, 9, 30),
+    et(2026, 4, 2, 18, 0), et(2026, 4, 3, 3, 0), et(2026, 4, 3, 9, 14), et(2026, 4, 5, 18, 0)];   // Good Friday 2026: 18:00 the evening before to 09:15
   const shut = [et(2026, 9, 28, 17, 0), et(2026, 9, 25, 17, 0), et(2026, 9, 26, 12, 0), et(2026, 9, 27, 17, 59), et(2026, 9, 7, 13, 0), et(2026, 7, 3, 13, 0),
-    et(2026, 12, 24, 13, 15), et(2026, 12, 24, 20, 0), et(2026, 12, 25, 12, 0), et(2026, 4, 3, 9, 30)];
+    et(2026, 12, 24, 13, 15), et(2026, 12, 24, 20, 0), et(2026, 12, 25, 12, 0), et(2026, 4, 3, 9, 15), et(2026, 4, 3, 9, 30), et(2026, 4, 3, 13, 0),
+    et(2026, 4, 3, 18, 0), et(2027, 3, 26, 3, 0)];
   for (const t of open) assert.equal(U.cmeClosed(t), false, 'open at ' + U.fmtFull(t));
   for (const t of shut) assert.equal(U.cmeClosed(t), true, 'closed at ' + U.fmtFull(t));
+  assert.ok(U.cmeSessionDay(et(2026, 4, 3, 0, 0) / 86400) && !U.cmeSessionDay(et(2027, 3, 26, 0, 0) / 86400));
+});
+
+test('cmeShortSessions: the one abbreviated session, Good Friday 2026 to 09:15 ET (the shared calendar\'s row, Anthony 2026-11-18)', () => {
+  const list = [...U.cmeShortSessions()].map(([d, close]) => [new Date(d * 86400000).toISOString().slice(0, 10), close]);
+  assert.deepEqual(list, [['2026-04-03', 9 * 3600 + 15 * 60]]);
+  U.cmeShortSessions().clear();                                         // a copy: the engine's list is not changed
+  assert.equal(U.cmeShortSessions().size, 1);
+  for (const [d] of U.cmeShortSessions()) {
+    const y = new Date(d * 86400000).getUTCFullYear();
+    assert.ok(U.nyseHolidays(y).has(d) && !U.cmeClosures(y).has(d) && U.cmeSessionDay(d), 'an NYSE holiday the rule alone would close');
+    assert.ok(!U.rthDay(d * 86400 + 43200), 'no regular stock market session: no IB, no RTH profile');
+  }
 });
 
 test('fromStore: nothing that counts gives an empty profile, never an error', () => {

@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased (2026-11-18): Good Friday 2026 is CME's abbreviated session to 09:15 ET, not a closed day
+
+No version bump (held for Anthony, release 1 is on other branches). Anthony's ruling 2026-11-18: "Good Friday 2026: follow
+CME, an abbreviated equity session (The Desk's cme_closed and the chart's cmeClosed change to match, each in a reviewed
+change)". CME's Globex equity index session on Good Friday 2026 ran from 18:00 the evening before to 09:15 New York, the
+shared CME calendar's row (market-data `shared/cme_calendar.json`: kind "early", close 09:15).
+
+- **The page** (`src/chart-engine.js`): `cmeShortSessions()` (new in `util`) lists the sessions the rule gets wrong, one
+  row, Good Friday 2026 at 09:15. `cmeClosures(2026)` no longer holds it, `cmeSessionDay` is true for it, and `cmeClosed`
+  is open from 18:00 the evening before to 09:15 and closed from 09:15. `overnightRange` on that day forms and locks as
+  on Thanksgiving instead of `closed`. `rthDay`, `nyseHolidays` and the IB are unchanged (no stock market session that
+  day). Good Friday in every other year is still a full closure.
+- **ChartBridge** (`nt8/ChartBridge.cs`, `ChartBridgeCme`, the C# twin): the same row (`ShortClose`), so `Closed`,
+  `SessionDay`, `SessionClose` (09:15) and `FinishedSessions` (the week profile now counts that session) match the page.
+  CME did not settle equity index futures that day (its clearing memo: the April 2 settlement was used), so
+  `SettledDay` passes over it: no settlement is dated to it, and the prior settlement is Thursday's in that session,
+  after it and on Monday (before, on the day itself it was Wednesday's). `nt8/check/DataHarness.cs` follows.
+- Docs: `CHART_STYLE.md` (the overnight range), `nt8/PROTOCOL.md` (closed, the prior settlement).
+
 ## Unreleased (2026-11-04): getting ready to go private: the PC updater accepts the box job and reads a chart-engine token; placeholders
 
 `nt8/update-pc.ps1` and docs only (no page change, no version bump, as the 2026-10-23 updater entries). Anthony decided
