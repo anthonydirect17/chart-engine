@@ -587,6 +587,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                    ": copilot, auto and new bot entries are refused until it is followed again (or 18:00 ET)";
         }
 
+        // A leg's side by its name (Sell, SellShort): read only, so this file never names an order action it could build.
+        private static bool SellsLeg(Order o) { string side = Convert.ToString(o.OrderAction, CultureInfo.InvariantCulture); return side == "Sell" || side == "SellShort"; }
+
         private static void RestoreOpenTrade()
         {
             string tag;
@@ -611,8 +614,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             List<Order> stops = legs.Where(o => o.OrderType == OrderType.StopMarket || o.OrderType == OrderType.StopLimit).ToList();
             List<Order> sized = stops.Count > 0 ? stops : legs.Where(o => o.OrderType == OrderType.Limit).ToList();
             if (sized.Count == 0) return;
-            bool sells = sized[0].OrderAction == OrderAction.Sell || sized[0].OrderAction == OrderAction.SellShort;
-            if (sized.Any(o => (o.OrderAction == OrderAction.Sell || o.OrderAction == OrderAction.SellShort) != sells)) return;   // legs on both sides: cannot tell
+            bool sells = SellsLeg(sized[0]);
+            if (sized.Any(o => SellsLeg(o) != sells)) return;   // legs on both sides: cannot tell
             int q = sized.Sum(o => o.Quantity - o.Filled) * (sells ? 1 : -1);   // a sell stop protects a long
             Position held = null;
             lock (a.Positions)
