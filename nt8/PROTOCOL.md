@@ -2999,8 +2999,11 @@ decision 3: OwnerGuardCase, OwnerShare, OwnerUntold).
   `bot-day.txt` and its legs. Every execution already in an account when the bot starts, or when the account is first watched,
   is noted (`ChartBridgeBot.NoteWatched`, keyed as ChartBridge keys executions) and never counted by the bot: its effect is in
   `bot-day.txt` and the restore. And (the R12 re-review L2: after a full NinjaTrader restart a connection may add the day's past
-  executions later) an execution timed before this run began (`RunStart`, NinjaTrader's execution time on the PC's clock) is
-  never counted either. A fill of an order the bot placed in this run (its tag) is never fenced, whatever its time.
+  executions later) an execution timed before this run began is never counted either. The two are compared in UTC (the R12
+  delta re-review): the execution's time is in NinjaTrader's time zone setting (Tools > Options > General), turned to UTC as the
+  bars are; `RunStart` is the PC's UTC clock at the bot's start, less 30 s for the broker's clock and the PC's to differ (an
+  execution from those 30 s before the start is still fenced by its key). A fill of an order the bot placed in this run (its
+  tag) is never fenced, whatever its time.
   **When the bot's size cannot be told** (the fail-safe, the coordinator's choice): only what the bot's own legs prove is ever
   closed. The untold state of the day file (its dollars cannot be told) closes what its legs prove, as any trade: its followed
   size came from its legs at the restore. A followed size above the proof (an execution counted twice) closes the proof only,
