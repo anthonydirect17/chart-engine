@@ -1460,7 +1460,7 @@ public static class BotHarness
             st = ChartBridgeBot.StripJson();
             Check(st.Contains("\"standDown\":\"" + want + "\"") && st.Contains("\"trades\":0,"), "R12 (the day file): a save cut off (" + string.Join(", ", left) + " left): never an empty day by accident, named: " + st);
             Page("{\"type\":\"botMode\",\"cid\":\"m\",\"mode\":\"auto\"}");
-            Check(PageReject().Contains("auto refused: " + want), "R12 (the day file): auto refused after a save cut off");
+            Check(PageReject().Contains("auto refused: " + want) && Last(page, "bot").Contains("\"mode\":\"shadow\""), "R12 (the day file): auto refused after a save cut off");
         }
         Gone(f);
         File.WriteAllLines(f + ".bak", new[] { "# made-up", "session\t" + yesterday, "trade\tabcdef12\t-16" });
