@@ -41,7 +41,8 @@ test('the four files are market-data\'s byte for byte', () => {
   }
   assert.deepStrictEqual(got, PINS);
   const files = fs.readdirSync(SHARED).filter(n => fs.statSync(path.join(SHARED, n)).isFile()).sort();
-  assert.deepStrictEqual(files, Object.keys(PINS).sort());
+  const clock = ['ny_clock.js', 'ny_clock.py', 'ny_clock_cases.json'];   // step 1.6, pinned by test/ny-clock.test.js
+  assert.deepStrictEqual(files, Object.keys(PINS).concat(clock).sort());
 });
 
 test('the loader reads the copy and fails closed outside it', () => {
