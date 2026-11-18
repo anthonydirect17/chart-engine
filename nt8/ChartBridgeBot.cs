@@ -516,7 +516,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 }
             }
             catch (Exception ex) { broken = "bot-day.txt could not be read (" + ex.Message + ")"; }
-            string fix = left == null ? "delete it to start the day over" : "delete " + left + " to start the day over";
+            string fix = left == null ? "delete bot-day.txt and bot-day.txt.bak to start the day over" : "delete " + left + " to start the day over";   // R12 N1: today's .bak would stand the bot down again
             lock (Sync)
             {
                 session = today;

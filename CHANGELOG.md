@@ -104,6 +104,15 @@ personal bot (release 1, step 1.6b)".
   its size and side come from those legs, and its price from the bot's own entry fill. A position with no such leg (one
   Anthony opened by hand) is never taken: copilot, auto and new bot entries stay refused, named, until 18:00 ET. While a Cut
   half close may still fill there, the restore waits.
+- **The day file keeps an open trade's dollars** (R12 of 1.6b, the day file): the open trade's line in `bot-day.txt` holds
+  its dollars closed so far, its size and its price, and is saved on every fill (a part exit, a Cut half, a late entry fill,
+  its close). After a restart the day stops count those dollars. Dollars from a part exit before 18:00 ET stay with that
+  day; a trade still open goes on into the new one. When the dollars cannot be told after a restart (the size changed while
+  ChartBridge was not following the trade, for example a close that filled while it was down), copilot, auto and new bot
+  entries are refused, named, until 18:00 ET. A day file that does not read, or a missing `bot-day.txt` with today's copy
+  left by a cut-off save, refuses them for that run; the refusal names the files to delete to start the day over
+  (`bot-day.txt` and `bot-day.txt.bak`). A ChartBridge before this build does not understand the new line and stands the
+  bot down, never writing over the file.
 - **The Bot tab**: Set the rails asks for every rail; the panel shows the size, both day stops, the rails not set and a day
   stop reached; Change account offers the personal account only.
 - **The Bot tab fails closed on an older ChartBridge** (the R12 review of the cut): a ChartBridge before 0.6.24 sends no
@@ -196,7 +205,7 @@ The non-order parts of release 1 (the lock of 2026-11-15, topic 2).
 ### Tests
 
 `nt8/check/BotHarness.cs` moves from Sim101 to a made-up live personal account and adds FailClosed, SizeCeiling, DayStops,
-LateFill, ReArmRace, OpenAtRestart and CutAtRestart; `nt8/check/OrdersHarness.cs` (Cut half: even, odd 3 and 5, a short,
+LateFill, ReArmRace, OpenAtRestart, CutAtRestart and the day file checks; `nt8/check/OrdersHarness.cs` (Cut half: even, odd 3 and 5, a short,
 pairs per fill, a Merge set, 1 contract and flat, a stale page, readings apart, a second press, working exits, strict keys
 and the gates, a group's members, a rejected close, trading off, and the R12 section), `nt8/check/AgentHarness.cs` (Cut half
 on an agent's pair), `nt8/check/DataHarness.cs` (the feature); `test/start-guard.test.js` and `npm run smoke:start-guard`,

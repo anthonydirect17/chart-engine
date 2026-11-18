@@ -1555,7 +1555,7 @@ public static class BotHarness
             string text = File_("bot-day.txt");
             Restart();
             string want = lines.Length == 1 ? "bot-day.txt has no session line" : "bot-day.txt has a line ChartBridge does not understand";
-            want += ": no new bot entries this run (delete it to start the day over)";
+            want += ": no new bot entries this run (delete bot-day.txt and bot-day.txt.bak to start the day over)";   // R12 N1: both files
             st = ChartBridgeBot.StripJson();
             Check(st.Contains("\"standDown\":\"" + want + "\""), "R12 (the day file): " + lines[lines.Length - 1].Replace("\t", " ") + ": the bot stands down, named: " + st);
             foreach (string mode in new[] { "copilot", "auto" })
