@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased (2026-11-17): release 1, first part: the start guard, the old Account panel out, ChartKit off the install list
+
+The non-order parts of release 1 (the lock of 2026-11-15, topic 2). No version bump yet: the release is cut as chart 1.57.1
+with ChartBridge 0.6.24 once the personal bot and the mini ticket join it. Page and docs only; no ChartBridge change, nothing
+on the order path changed.
+
+- **The start guard** (`live/workspace.js` `startGuard`, `start`): the layout, the ticket's connection and the ticket open
+  first; then the Bot, Agent, Colosseum and Legion tabs start, each inside its own guard, and are told the layout the
+  charts opened on; then the tab in the address. A tab that throws is named in the note line ("The Bot tab did not start:
+  the charts and the ticket work; reload this window to try it again.") and in the console, its top bar button stays
+  hidden, and the charts, the ticket and the other tabs run on. The tabs' share of ChartBridge's hello (after the
+  ticket's), a layout change (after the charts and the ticket are placed), Praetorian's link and Legion's helper status
+  go through the same guard. `test/start-guard.test.js`; `npm run smoke:start-guard` breaks the four tabs' files on
+  purpose and checks the charts go live and the ticket still sends to the fake.
+- **The old Account panel is removed** (1.15.0; not offered since 1.34.0). A saved layout that still holds one opens
+  without it, quietly, the rest as saved. The Account page has its figures. The smokes that used it (h1, h1-orders,
+  noscroll, v2, perf-workspace) now check it is dropped.
+- **ChartKit off the PC install list**: `kit.css`, `kit.js` and `kit.html` leave `nt8/install-files.json` (kept in the
+  repo as the design reference for Legion). The PC updater drops them from a PC's page folder at its next page install.
+  The fonts they name stay installed.
+- **The agent board F snapshot is removed** (`live/kits/agent-board-f/` and `test/agent-kit.test.js`); the tag
+  `pre-release1-f-snapshot` marks chart 1.57.0 with both.
+- **The Studio's work folder** in the examples is `C:\Data\Studio\work` (the task script and `docs/MARKUP_STUDIO.md`; the
+  code sets no default, `--work` is required).
+
 ## Unreleased (2026-11-04): getting ready to go private: the PC updater accepts the box job and reads a chart-engine token; placeholders
 
 `nt8/update-pc.ps1` and docs only (no page change, no version bump, as the 2026-10-23 updater entries). Anthony decided
