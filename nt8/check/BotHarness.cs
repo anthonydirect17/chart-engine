@@ -1217,11 +1217,13 @@ public static class BotHarness
     static Order BotTradeOf2(string what)
     {
         et = et.AddDays(1); ChartBridgeBot.Check();
+        ChartBridgeOrders.OnPositionUpdate(own, new PositionEventArgs { Position = new Position { Instrument = mnq }, MarketPosition = MarketPosition.Flat, Quantity = 0, AveragePrice = 0 });   // flat, as NinjaTrader reports it
+        Settle();   // its credit for a fill never to be reported here goes with the rest
         ChartBridgeOrders.NoteLast("MNQ", 25000);
         Page(RailsMsg(2, 5, 3, "500", "500", "MNQ"));
         Page("{\"type\":\"botMode\",\"cid\":\"m\",\"mode\":\"auto\"}");
         Order e = AutoTrade("buy");
-        Check(e != null && e.Quantity == 2, what + ": a bot trade of 2");
+        Check(e != null && e.Quantity == 2, what + ": a bot trade of 2: " + BotReject() + " / " + PageReject() + " / " + Last(page, "bot"));
         if (e == null || e.Quantity != 2) return null;
         FillEntry(e, 25000);
         own.Positions.Clear(); own.Positions.Add(new Position { Instrument = mnq, MarketPosition = MarketPosition.Long, Quantity = 2, AveragePrice = 25000 });
