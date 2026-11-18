@@ -3939,6 +3939,57 @@ and the Board's KILL ALL AGENTS (agentKill on to every agent) are unchanged.
 The page's Legion tab sends this message (chart 1.45.0, `live/fleet.js`: asked first on the page; the tab's connection can post nothing else); no other page file names it. Checked in `check/AgentHarness.cs` (`PropAccounts`, the
 "kill all" parts, the review's three scenarios among them) and `test/nt8-agents.test.js`.
 
+### Stop all automation and Flatten and turn off (plan step 3.2: Legion, the next ChartBridge)
+
+Legion's own page (`live/legion.html`, served from the www folder behind the same PIN) has **Stop all automation** in its header
+on every tab (law 9.3; the lock of 2026-11-15, item 90; Anthony 2026-11-17, item 113). This branch does not bump ChartBridge's
+version: the release that carries these two messages names the number, and the pages ask for it as `0.6.25`
+(`LegionCore.STOPALL_MIN`, `AgentCore.FLATOFF_MIN`); with an older ChartBridge Legion sends `agentKillAllProp` and the desks
+keep their own three steps, as before. Both are guarded as every agent page message (a signed-in v3 page from an allowed
+origin, trading on, the agent channel on).
+
+```json
+{"type": "stopAllAutomation", "cid": "s1"}
+```
+
+No agent key. Like Kill all it is never refused for the action rate. **What is a prop account here** (`StopScope`): never
+the personal account (when one is picked), None, Backtest or Playback; otherwise in scope when Kill all's own rule says so
+(every account but the personal one that NinjaTrader does not list as Sim) **or** when the account ledger types it eval or
+funded: every account The Desk's last `GET /api/lane-accounts` rows give kind `eval` or `funded`, whatever its outcome or
+archive and whatever NinjaTrader calls its connection, so a prop account listed as a simulator is still stopped. The ledger
+is read by the lane rule's poll once a minute; with `laneRule = off`, no `deskUrl` or The Desk not reached it is not known, and
+the answer says the prop accounts were found by ChartBridge's own rule only. With no personal account picked it still acts on
+the ledger's accounts; with neither a pick nor the ledger, nothing is known to be prop and it is refused (`reject`).
+For every agent:
+
+1. **On prop seats only** (no personal seat): exactly Kill all's part (above), with this wider scope: its kill switch on
+   first and Shadow, its saved Auto removed, then its own flatten on the seats in scope.
+2. **On the personal account and prop seats too** (item 113: it "loses its prop seats"): it is NOT killed and its mode is
+   not changed, since the personal account is never touched. Each seat in scope is latched for the session first (no new
+   entry there by any trader until 18:00 ET: a group plan's seat sits out, `taken off by Stop all automation until 18:00 ET`;
+   a one-account plan there is refused), then its own flatten starts on those seats only.
+3. Otherwise (the personal account or Sim only, None): not touched.
+
+The bot, the copier, the order ticket and every manual order are never touched. One `status` line (level warn) to every v3
+page answers, starting `Stop all automation:`; one that throws is named FAILED and the others go on.
+
+```json
+{"type": "agentFlattenOff", "cid": "f1", "agent": "manrae"}
+```
+
+"Flatten and turn him off" as one command, so a page closed half way never leaves it half done (before, the page sent Shadow,
+then its own Flatten, then the PC helper's Off once flat). At once, under the agent's placement gate: its mode goes to
+Shadow (a Copilot proposal expires as not answered), its saved Auto is removed, its unfilled entries are cancelled and its own
+flatten starts on every seat (its own orders only; the position on that account and contract closed whole, as the page's
+Flatten for an agent did). ChartBridge finishes the flatten whatever the page does. Ending its program stays the PC helper's
+Off: while its program is connected, its `agent` message carries `"offAsked": true` and Copilot and Auto are refused for it
+(`auto refused: Flatten and turn off was asked ...`) until its program ends or connects again. The kill switch is not touched.
+One `status` line answers (`Agent <id>: Flatten and turn off: ...`). The page sends the helper's Off once the agent is flat.
+
+Checked in `check/AgentHarness.cs` (`PropAccounts`: stop all with no pick and no ledger, with the ledger only, a Sim-listed
+account the ledger types, a trader on the personal account and a prop account, the latch on a one-account plan; flatten and
+turn off: Shadow, the saved Auto, its own close, Copilot and Auto refused, the keys, a new start).
+
 ### A hand move is the move (0.6.23)
 
 Anthony 2026-11-13: "If I make a move, that's the move". Built in `ChartBridgeGroups.cs` only.

@@ -960,6 +960,18 @@ function create(o) {
     const ask = H.ask; H.ask = null;
     const a = ask ? agents.get(ask.agent) : null;
     if (!a || a.agent !== S.chosen) { renderPanel(); return; }
+    /* plan step 3.2: with a ChartBridge that knows it, one command (agentFlattenOff): ChartBridge puts him in Shadow and flattens what
+       he owns itself, and refuses Copilot and Auto for him until his program ends, so this page closing half way leaves nothing half
+       done. This page then sends the helper's Off once ChartBridge says he is flat, as before (the same wait and the same lines). */
+    if (AC.FLATOFF_MIN && AC.atLeast(S.version, AC.FLATOFF_MIN)) {
+      if (AH.flat(a)) { helperOff(a.agent); return; }
+      const fm = { type: 'agentFlattenOff', agent: a.agent }, no = refusal(Object.assign({ cid: 'x' }, fm));
+      if (!sendAgent(fm, 'flatoff')) { H.lines[a.agent] = (no || 'Flatten and turn off could not be sent (not signed in to ChartBridge).') + ' Nothing was flattened and he stays on.'; renderPanel(); return; }
+      const st0 = AH.flatOffStart(a, Date.now()), now0 = Date.now();
+      H.job = Object.assign({ agent: a.agent, account: String(a.account || ''), root: '' }, st0.job || {}, { phase: 'flatten', until: now0 + AH.FLAT_WAIT_MS }); H.flatSent = true;
+      H.lines[a.agent] = 'Flatten and turn off sent: ChartBridge puts him in Shadow and flattens what he owns; turning him off once flat...';
+      jobStep(); flatLoop(); return;
+    }
     if (typeof o.flatten !== 'function') { H.lines[a.agent] = 'Flatten him on the main page or in NinjaTrader, then press Off.'; renderPanel(); return; }
     const st = AH.flatOffStart(a, Date.now());
     if (st.error) { H.lines[a.agent] = st.error; renderPanel(); return; }

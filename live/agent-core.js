@@ -1365,6 +1365,13 @@ const fleetCore = () => {
 const PR_AGENT_TYPES = new Set(['agentMode', 'agentKill', 'agentRules', 'agentAnswer', 'agentAccount', 'agentSeen']);
 const PR_BOT_TYPES = new Set(['botMode', 'botKill', 'botRails', 'botAnswer', 'botAccount', 'botSeen']);
 const PR_ACKS = new Set(['agentSeen', 'botSeen']);
+/* plan step 3.2: "Flatten and turn him off" as one ChartBridge command (agentFlattenOff: Shadow, his saved Auto removed, his unfilled
+   entries cancelled, his own flatten, Copilot and Auto refused until his program ends). The ChartBridge that knows it: the release
+   that carries it names the number (this branch does not bump ChartBridge's version), so until then the desks use the page's own
+   three steps as before. It is a stop like Shadow: both gates pass it for any trader ChartBridge has described, with exactly the
+   keys type, cid and agent. */
+const FLATOFF_MIN = '0.6.25';
+const flatOffOk = (m, s) => Object.keys(m).every(k => k === 'type' || k === 'cid' || k === 'agent') && s.agents instanceof Map && typeof m.agent === 'string' && s.agents.has(m.agent);
 const PR_WHERE = 'it is set up from Legion\'s trader desk; from here you can only stop it';   // the review of 102 (F5): the words say the truth until Legion's trader desk is in
 
 /**
@@ -1525,6 +1532,7 @@ function prCheck(m, st) {
   /* the review of 102 (F2): Shadow is a stop too (it places nothing new): agentMode to exactly 'shadow' goes for any trader
      ChartBridge has described, so "Flatten and turn off" works on a prop trader. Nothing else for one. */
   if (t === 'agentMode' && m.mode === 'shadow' && s.agents instanceof Map && typeof m.agent === 'string' && s.agents.has(m.agent)) return '';
+  if (t === 'agentFlattenOff') return flatOffOk(m, s) ? '' : 'Not sent from Praetorian: ChartBridge has not described trader ' + String(m.agent || '') + ' yet.';   // plan step 3.2: a stop
   /* the coordinator, 03:30: the bot's Shadow is a stop too, with the same exact check, once ChartBridge has described the bot */
   if (t === 'botMode' && m.mode === 'shadow' && plainObj(s.bot)) return '';
   if (PR_ACKS.has(t)) return '';
@@ -1754,6 +1762,7 @@ function lgCheck(m, st) {
   const t = m.type;
   if ((t === 'agentKill' || t === 'botKill') && m.on === true) return '';
   if (t === 'agentMode' && m.mode === 'shadow' && s.agents instanceof Map && typeof m.agent === 'string' && s.agents.has(m.agent)) return '';
+  if (t === 'agentFlattenOff') return flatOffOk(m, s) ? '' : 'Not sent from Legion: ChartBridge has not described trader ' + String(m.agent || '') + ' yet.';   // plan step 3.2: a stop
   if (t === 'botMode' && m.mode === 'shadow' && plainObj(s.bot)) return '';   // the coordinator, 03:30: Shadow is a stop on both desks
   if (PR_ACKS.has(t)) return '';
   if (t === 'agentStandDownClear') {
@@ -1829,6 +1838,6 @@ return {
   createCopilotRouter, copilotRouter, KEY_LOCK_MS, KEY_MIN_SHOWN_MS, KEY_SAY,
   boardRows, boardRoom, boardPosition, rWords, leagueChoices, standDownClearMsg, sdWhen,
   LIGHT, STEPS, PANELS, LIGHT_HOLD, LAP_MS, lightEvents, lightState, stepLines, ageText, entryRisk, tradesR, heatNow, rowTone, decisionRecord, sessionTrail, roomLines, MOTION_KEY, motionPref, setMotionPref,
-  gateAccounts, leftoverWhy, botAccountOf, noHomeWhy, traderFlat, gatedLink, MOVE_MS, prChoices, prBotChoices, praetorianLink, lgAccountOk, lgGroupWhy, lgTraderWhy, lgBotWhy, lgCheck, legionGate, legionLink, PR_AGENT_TYPES, PR_BOT_TYPES, prIsPersonal, prNotPersonalWhy, prTraderWhy, prBotWhy, prCheck, praetorianGate
+  gateAccounts, leftoverWhy, botAccountOf, noHomeWhy, traderFlat, gatedLink, MOVE_MS, prChoices, prBotChoices, praetorianLink, lgAccountOk, lgGroupWhy, lgTraderWhy, lgBotWhy, lgCheck, legionGate, legionLink, FLATOFF_MIN, PR_AGENT_TYPES, PR_BOT_TYPES, prIsPersonal, prNotPersonalWhy, prTraderWhy, prBotWhy, prCheck, praetorianGate
 };
 });

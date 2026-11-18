@@ -87,6 +87,10 @@ export const KEYS = Object.assign({}, V2_KEYS, {
   agentAccount: ['type', 'cid', 'agent', 'account', 'group', 'keepMode', 'league'],   // 0.6.0: group in place of account; 0.6.2: league (a league seat, Sim only)
   agentStandDownClear: ['type', 'cid', 'build', 'group'],   // 0.6.2 (SPEC CE-2): Anthony's Clear stand-down on the board
   agentRules: ['type', 'cid', 'agent', 'roots', 'maxQtyNQ', 'maxQtyMNQ', 'maxQtyES', 'maxQtyMES', 'entryFrom', 'entryUntil', 'flatAt', 'maxExpireSec', 'maxTrades', 'maxLosses'],
+  // plan step 3.2 (Legion): Stop all automation and Kill all (no agent key), and "Flatten and turn him off" as one command
+  stopAllAutomation: ['type', 'cid'],
+  agentKillAllProp: ['type', 'cid'],
+  agentFlattenOff: ['type', 'cid', 'agent'],
 });
 Object.assign(KEYS, GROUP_KEYS);   // 0.5.8: groupSave, groupDelete, accountGroup, accountLimits
 export const STRATEGY_KEYS = ['name', 'stop', 'stopLimit', 't1', 't1Share', 't2', 't2Share', 't3', 't3Share', 'beAfter', 'bePlus', 'trailAfter', 'trailBy', 'trailStep', 'barTrail', 'barTrailOffset', 'barTrailType', 'barTrailSize', 'barTrailStart'];
@@ -97,7 +101,7 @@ export const BOT_KEYS = {
   signal: ['type', 'id', 'action', 'side', 'kind', 'price', 'stopTicks', 'targetTicks', 'reason'],
 };
 const BOT_NONE_WHY = 'the bot\'s account is None: no bot entries until an account is chosen on the Bot tab';   // ChartBridge 0.5.7
-export const AGENT_PAGE_TYPES = ['agentMode', 'agentKill', 'agentSeen', 'agentAnswer', 'agentAccount', 'agentRules', 'agentStandDownClear'];
+export const AGENT_PAGE_TYPES = ['agentMode', 'agentKill', 'agentSeen', 'agentAnswer', 'agentAccount', 'agentRules', 'agentStandDownClear', 'stopAllAutomation', 'agentKillAllProp', 'agentFlattenOff'];
 const V3_TYPES = GROUP_TYPES.concat(['accountTrade', 'accountArchive', 'accountUnarchive', 'merge', 'copierGet', 'copierSet', 'copierFollower', 'copierRearm', 'copierFollowerRemove', 'botMode', 'botKill', 'botSeen', 'botAnswer', 'botRails', 'botAccount']).concat(AGENT_PAGE_TYPES);
 const SWITCH_OF = { accountTrade: 'accountChecks', accountArchive: null, accountUnarchive: null, merge: 'merge', copierGet: 'copier', copierSet: 'copier', copierFollower: 'copier', copierRearm: 'copier', copierFollowerRemove: 'copier', botMode: 'bot', botKill: 'bot', botSeen: 'bot', botAnswer: 'bot', botRails: 'bot', botAccount: 'bot' };
 
@@ -1426,6 +1430,7 @@ Object.assign(OrderDeskV3.prototype, {
   agentPageCheck(m) {
     if (!this.agents.size) return m.type + ' is refused: there are no agents on this ChartBridge (agents in config.txt).';
     if (m.type === 'agentStandDownClear') return null;   // 0.6.2: no agent key (a stand-down is the build's on the group)
+    if (m.type === 'stopAllAutomation' || m.type === 'agentKillAllProp') return null;   // plan step 3.2: no agent key (every trader)
     if (typeof m.agent !== 'string' || !this.agents.has(m.agent)) return 'No agent ' + m.agent + '.';
     return null;
   },
@@ -1445,6 +1450,23 @@ Object.assign(OrderDeskV3.prototype, {
     if (was === 'auto') this.agentCancelEntries(a, 'expired', 'the mode left auto');
     a.mode = m.mode;
     this.agentLogLine(a, 'mode ' + m.mode + ' (was ' + was + '), set by the page');
+    this.agentToAgent(a, this.agentWelcome(a));
+    this.agentNotify(a);
+  },
+  /* plan step 3.2 (Legion's header). The fake bridge knows no prop account and no account ledger (sample data only), so both
+     answer with ChartBridge's status line and touch no trader; a test that wants the effect reads nt8/check (AgentHarness.cs). */
+  check_stopAllAutomation() { return null; },
+  do_stopAllAutomation() { this.broadcastV3({ type: 'status', level: 'warn', text: 'Stop all automation: no bot or agent is on a prop account: nothing was done (the fake bridge knows no prop account and no ledger)' }); },
+  check_agentKillAllProp() { return null; },
+  do_agentKillAllProp() { this.broadcastV3({ type: 'status', level: 'warn', text: 'Kill all (prop accounts): no agent is on prop accounts: nothing was done (the fake bridge knows no prop account)' }); },
+  /* plan step 3.2: Shadow, its unfilled entries cancelled, its Copilot proposals expired; the fake holds no agent position of its own to flatten */
+  check_agentFlattenOff() { return null; },
+  do_agentFlattenOff(m) {
+    const a = this.agents.get(m.agent), was = a.mode;
+    a.mode = 'shadow';
+    this.agentCancelEntries(a, 'expired', 'Flatten and turn off');
+    this.agentExpireProposals(a, 'not answered', 'Flatten and turn off');
+    this.broadcastV3({ type: 'status', level: 'warn', text: 'Agent ' + a.id + ': Flatten and turn off: mode shadow' + (was !== 'shadow' ? ' (was ' + was + ')' : '') });
     this.agentToAgent(a, this.agentWelcome(a));
     this.agentNotify(a);
   },
