@@ -1130,7 +1130,9 @@ test('0.4.0 bot: on by default, the account Anthony chooses (None until then, 0.
   for (const [fn, re] of [['BotCloseCancel', /StartsWith\("CB#" \+ tag \+ " ", StringComparison\.Ordinal\) \|\| BotEntryNameRx\.IsMatch/], ['BotCloseSend', /if \(qty > cover\) return /]])
     assert.match(ocode.slice(ocode.indexOf('internal static ' + (fn === 'BotCloseCancel' ? 'int ' : 'string ') + fn + '(')), re, fn + ': only the bot\'s own orders, never more than the position holds');
   const share = bodyOf(bcode, 'private static string CloseShare(string root, out int kind, out int qty)');
-  assert.match(share, /qty = Math\.Min\(Math\.Min\(proof, Math\.Abs\(q\)\), cover\);/, 'the close: the smallest of the ledger, the legs\' proof and the position');
+  assert.match(share, /qty = Math\.Min\(Math\.Min\(left, Math\.Abs\(q\)\), cover\);/, 'the close: the smallest of what is left to prove, the ledger and the position');
+  assert.match(share, /left = proof - used;/, 'R12 of decision 3, finding 1: the proof is a budget, what its legs and its closes filled is used up');
+  assert.ok(share.indexOf('if (left <= 0) return') < share.indexOf('ChartBridgeOrders.BotCloseSend('), 'nothing left to prove: never closed again');
   assert.ok(share.indexOf('if (legs.Count > 0)') < share.indexOf('ChartBridgeOrders.BotCloseSend('), 'its legs cancelled before its close');
   assert.match(bodyOf(bcode, 'private static string RailsProblem()'), /return OwnerGuard\(FindAccount\(\), EffectiveRoot\(\)\);/, 'decision 3b: the owner guard');
   assert.match(ocode, /if \(bot\) \{ string guard = ChartBridgeBot\.OwnerGuard\(account, root\); if \(guard != null\) return guard; \}/, 'decision 3b: asked again under the order lock');
@@ -1159,7 +1161,8 @@ test('0.4.0 bot: the hooks in ChartBridge.cs and ChartBridgeOrders.cs', () => {
   assert.match(code, /ChartBridgeOrders\.StartPlans\(\);[^\n]*\n(?:\s*ChartBridge\w+\.Start\(\);[^\n]*\n)*\s*ChartBridgeBot\.Start\(\);/);
   assert.match(code, /ChartBridgeBot\.Stop\(\);/);
   assert.match(code, /ChartBridgeBot\.OnTick\(json\);/);
-  assert.match(code, /try \{ ChartBridgeBot\.OnExec\(account, inst, side, qty, price, orderId, json\); \} catch/);
+  assert.match(code, /try \{ ChartBridgeBot\.OnExec\(account, inst, side, qty, price, orderId, json, ExecKey\(account, id, time, price, qty, orderId\)\); \} catch/);   // release 1 (decision 3, R12 finding 2): with its key (the replay fence)
+  assert.match(code, /ChartBridgeBot\.NoteWatched\(a\);[^\n]*n \+= CatchUp\(a\);/, 'the replay fence before the first catch-up');
   assert.match(code, /try \{ ChartBridgeBot\.OnPosition\(a, e\); \} catch/);
   assert.match(code, /if \(ChartBridgeBot\.Enabled\) b\.Append\(",\\"bot\\":"\)\.Append\(ChartBridgeBot\.DiagJson\(\)\);/);
   assert.ok(!/SendToV3Traders|IsV3Stub/.test(code), 'the main file has no v3 send of its own (ChartBridgeV3.cs has the one)');

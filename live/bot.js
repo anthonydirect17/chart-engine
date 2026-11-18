@@ -146,6 +146,7 @@ function create(o) {
             '<div class="bt-kv bt-railset" data-k="railSet"><span class="k">Day loss stop</span><span class="v mono" data-k="railDL">-</span><span class="k">Day profit stop</span><span class="v mono" data-k="railDP">-</span></div>' +
             '<p class="bt-why bt-railmiss" data-k="railMiss" role="note" hidden></p>' +
             '<p class="bt-why bt-daystop" data-k="dayStop" role="alert" hidden></p>' +
+            '<p class="bt-why bt-ownerwait" data-k="ownerWait" role="note" hidden></p>' +
             '<div class="bt-rails-edit" data-k="railsEdit" hidden><label>Size <input type="number" min="1" max="20" step="1" inputmode="numeric" data-k="railSIn"></label>' +
               '<label>Trades <input type="number" min="1" max="100" step="1" inputmode="numeric" data-k="railTIn"></label>' +
               '<label>Losing trades <input type="number" min="1" max="100" step="1" inputmode="numeric" data-k="railLIn"></label>' +
@@ -779,6 +780,9 @@ function create(o) {
     const ds = b.dayStop && typeof b.dayStop.text === 'string' ? b.dayStop.text : '';
     put(q('[data-k="dayStop"]'), 'textContent', ds ? 'Day stop: ' + ds : '');
     put(q('[data-k="dayStop"]'), 'hidden', !ds);
+    const ow = BC.ownerWaitText(b);   // Anthony's ruling B (2026-11-18): while ChartBridge's owner guard blocks entries
+    put(q('[data-k="ownerWait"]'), 'textContent', ow);
+    put(q('[data-k="ownerWait"]'), 'hidden', !ow);
     put(q('[data-k="status"]'), 'textContent', BC.statusText(b));
     const beat = q('[data-k="beat"]');
     put(beat, 'textContent', on && isNum(b.lastBeatMs) ? (b.lastBeatMs / 1000).toFixed(1) + ' s ago' : b.enabled ? 'none' : '-');

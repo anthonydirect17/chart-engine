@@ -709,7 +709,10 @@ namespace NinjaTrader.NinjaScript.AddOns
         // bot's followed size (botQty, signed), by either reading (listed, or with the fills not yet in it); a position (or a fill
         // not yet in one) on another contract month of the root; and any order there that may still fill (NinjaTrader's list and
         // ChartBridge's own just sent) that isBot does not claim.
-        internal static string BotOwnerExposure(Account a, string root, int botQty, Func<Order, bool> isBot)
+        // strict (R12 of decision 3, Anthony's rulings A and B): a position on the bot's contract counts only when both readings agree
+        // (the smaller of the two); otherwise either reading counts (the entries' guard: the careful side).
+        internal static string BotOwnerExposure(Account a, string root, int botQty, Func<Order, bool> isBot) { return BotOwnerExposure(a, root, botQty, isBot, false); }
+        internal static string BotOwnerExposure(Account a, string root, int botQty, Func<Order, bool> isBot, bool strict)
         {
             if (a == null || string.IsNullOrEmpty(root)) return null;
             Instrument inst = ChartBridgeServer.InstrumentFor(root);
@@ -718,6 +721,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (inst != null)
             {
                 int listed = SignedPosition(a, inst) - botQty, eff = EffectivePosition(a, inst) - botQty, own = listed != 0 ? listed : eff;
+                if (strict) own = Math.Sign(listed) == Math.Sign(eff) ? Math.Sign(listed) * Math.Min(Math.Abs(listed), Math.Abs(eff)) : 0;
                 if (own != 0) return where + " holds " + Math.Abs(own) + " contract" + (Math.Abs(own) == 1 ? "" : "s") + (own > 0 ? " long" : " short") + " that " + (Math.Abs(own) == 1 ? "is" : "are") + " not the bot's";
             }
             List<Position> positions;
@@ -769,13 +773,26 @@ namespace NinjaTrader.NinjaScript.AddOns
             return mine.Count;
         }
 
+        // R12 of decision 3, finding 5: a bot order (an entry, or the bot's close) ChartBridge has just sent on this account that NinjaTrader
+        // does not list yet, by its order id; else null.
+        private static readonly Regex BotCloseNameRx = new Regex("^CB#[0-9a-f]{8} bot close$");
+        internal static Order BotOursById(Account a, string orderId)
+        {
+            if (a == null || string.IsNullOrEmpty(orderId)) return null;
+            lock (Sync) foreach (Order o in Ours) if (o.Account == a && o.OrderId == orderId && (BotEntryNameRx.IsMatch(o.Name ?? "") || BotCloseNameRx.IsMatch(o.Name ?? ""))) return o;
+            return null;
+        }
+
         // The bot's close: one market order of qty on the bot's account and contract, the other side of the bot's position (dir),
         // named "CB#<tag> bot close" (the bot's tag, so the bot follows its fill; never an entry and never a bracket leg). An exit:
         // the account as Flatten checks it (no checkmark needed). Under the order lock, NinjaTrader's position is read again
         // first: never more than it holds on that side by both readings, never against its side. Null when sent, else why not.
-        internal static string BotCloseSend(Account a, Instrument inst, string tag, int dir, int qty, out Order sent)
+        // R12 of decision 3, finding 4 (Anthony's ruling 2 of 2026-11-18, close and warn): under the same lock, the other exits that may
+        // still fill on the closing side (the bot's own stop and target are done by now) are counted; when with this close they are more
+        // than the position, the close still goes and `over` names them, so the bot raises an error. His orders are never changed.
+        internal static string BotCloseSend(Account a, Instrument inst, string tag, int dir, int qty, out Order sent, out string over)
         {
-            sent = null;
+            sent = null; over = null;
             string why;
             Account account = ChartBridgeAccounts.On ? ChartBridgeAccounts.FindForExit(a.Name, out why) : FindAccount(a.Name, out why);
             if (account == null) return why;
@@ -785,6 +802,11 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 int cover = BotCover(account, inst, dir);
                 if (qty > cover) return "NinjaTrader's " + (ChartBridgeServer.RootFor(inst) ?? inst.FullName) + " position on " + account.Name + " holds " + cover + " on the bot's side by both readings, less than the " + qty + " to close (its executions are late, or it changed meanwhile)";
+                int pb, ps;
+                PendingOrders(account, inst, out pb, out ps);
+                int other = dir > 0 ? ps : pb;
+                if (other + qty > cover)
+                    over = "Anthony's own exits there (" + other + " to " + (dir > 0 ? "sell" : "buy") + ", working) are more than his own " + (cover - qty) + " left once the bot's " + qty + " is closed: if they fill they open a position the other way; ChartBridge does not change them: check them in NinjaTrader";
                 x = account.CreateOrder(inst, dir > 0 ? OrderAction.Sell : OrderAction.Buy, OrderType.Market, OrderEntry.Manual, TimeInForce.Day, qty, 0, 0, "",
                     "CB#" + tag + " bot close", NinjaTrader.Core.Globals.MaxDate, null);
                 lock (Sync) { IdFor(x); Ours.Add(x); }   // counted in gate 3 at once

@@ -209,6 +209,7 @@ public static class BotHarness
             OwnerGuardCase();   // release 1 (decision 3b): no bot entry while Anthony holds his own position or working orders there
             OwnerShare();    // release 1 (decision 3a): the day stops close only the bot's own contracts, long and short
             OwnerUntold();   // release 1 (decision 3a): untold, not followed, a ledger above its legs' proof, a close rejected
+            Review3();       // the R12 review of decision 3: the replay fence, a stuck close and its voice call, his oversized exits, the races, rulings A and B
             ChosenAccount();
             NoneAndReset();   // 0.5.7: None (DECISION 2026-10-14e) and the 17:00 ET reset
             V2PageGetsNothing();
@@ -939,8 +940,8 @@ public static class BotHarness
         Check(CloseCalls(m).Count == 1 && CloseCalls(m)[0].StartsWith("submit CB#" + Tag(b) + " bot close Sell Market 1 ") && own2.Calls.Count == 0 && eval.Calls.Count == 0,
               "decision 3a: once they are cancelled, one market close of the bot's own 1 at the next check: " + string.Join(" | ", Calls(own, m)));
         Check(st.Contains("\"mode\":\"shadow\"") && st.Contains("\"dayStop\":{\"kind\":\"loss\",\"day\":-30,") &&
-              st.Contains("the day's loss stop ($30) was reached today (the day at -$30, realized plus open): the bot's own contracts were closed and it was set to Shadow; no bot entries until 18:00 ET, then Anthony arms it again"),
-              "the day's loss stop: the mode drops to Shadow, the latch is in the strip: " + st);
+              st.Contains("the day's loss stop ($30) was reached today (the day at -$30, realized plus open): the bot's own contracts are being closed and it was set to Shadow; no bot entries until 18:00 ET, then Anthony arms it again"),
+              "the day's loss stop: the mode drops to Shadow, the latch is in the strip; R12 of decision 3, finding 3: being closed while the bot holds: " + st);
         Check(page.Skip(s0).Any(x => x.Contains("\"level\":\"warn\"") && x.Contains("the day's loss stop ($30) was reached today") && x.Contains("mode auto to shadow") && x.Contains("the bot's own contracts on OWN-1 MNQ are closed once nothing of its own can fill")),
               "the pages are told (status warn): the stop, the mode and the bot's own close");
         Check(page.Skip(s0).Any(x => x.Contains("\"level\":\"warn\"") && x.Contains("the day stop: the bot's own 1 contract on OWN-1 MNQ closed at market (only the bot's: Anthony's own contracts and orders are untouched)")),
@@ -958,6 +959,7 @@ public static class BotHarness
         Settle();
         ChartBridgeBot.Check();
         Check(Calls(own, m).Count == 0 && ChartBridgeBot.StripJson().Contains("\"position\":{\"qty\":0,"), "the trade closed by the bot's own close: nothing more sent");
+        Check(ChartBridgeBot.StripJson().Contains("realized plus open): the bot's own contracts were closed and it was set to Shadow"), "R12 of decision 3, finding 3: the latch says were closed only once the bot is flat");
         Restart();
         Page("{\"type\":\"botMode\",\"cid\":\"m\",\"mode\":\"auto\"}");
         Check(PageReject().Contains("auto refused: the day's loss stop ($30) was reached today") && ChartBridgeBot.StripJson().Contains("\"kind\":\"loss\""), "the latch is kept across a restart (bot-day.txt)");
@@ -1824,7 +1826,7 @@ public static class BotHarness
         ChartBridgeBot.Check();
         c = CloseCalls(m);
         Check(c.Count == 1 && c[0].StartsWith("submit CB#" + Tag(w) + " bot close Sell Market 1 ") &&
-              page.Skip(s0).Any(x => x.Contains("\"level\":\"error\"") && x.Contains("bot trade " + Tag(w) + " follows 2 contracts but its own stop and target prove only 1: ChartBridge closed those 1 and none of the rest")),
+              page.Skip(s0).Any(x => x.Contains("\"level\":\"error\"") && x.Contains("bot trade " + Tag(w) + " follows 2 contracts but its own stop and target prove only 1 still open: ChartBridge closed those 1 and none of the rest")),
               "decision 3a: the close is the smallest of its ledger (2), its legs' proof (1) and the position: 1, said as an error: " + string.Join(" | ", Calls(own, m)));
         // its close rejected: said as an error (its stop and target were cancelled for it), sent again within 5 s
         Order x1 = NewestClose();
@@ -1839,8 +1841,255 @@ public static class BotHarness
         Check(CloseCalls(m).Count == 1 && CloseCalls(m)[0].Contains(" bot close Sell Market 1 "), "decision 3a: sent again at 5 s, still only the proven 1: " + string.Join(" | ", Calls(own, m)));
         CloseFills(1, 24992.5);
         Held(2, 25000);
+        // R12 of decision 3, finding 1 (the review's probe): the proof is a budget for the whole close. Its 1 is closed; the ledger's
+        // other 1 cannot be told from Anthony's 2, so nothing more is ever sent (before: a second close 5 s later sold his contract)
+        m = own.Calls.Count;
+        s0 = page.Count;
+        for (int i = 0; i < 30; i++) { clock += 350; Bot("{\"type\":\"beat\"}"); ChartBridgeBot.Check(); }
+        st = ChartBridgeBot.StripJson();
+        Check(CloseCalls(m).Count == 0 && Calls(own, m).Count == 0 && st.Contains("\"position\":{\"qty\":1,") &&
+              page.Skip(s0).Any(x => x.Contains("\"level\":\"error\"") && x.Contains("bot trade " + Tag(w) + "'s own stop and target proved 1 contract and all of them are closed, yet the bot still follows 1")) &&
+              st.Contains("the bot's own contracts were NOT closed (bot trade " + Tag(w) + "'s own stop and target proved 1 contract and all of them are closed"),
+              "R12 of decision 3, finding 1: its proof used up, 30 more steps (15 s): no further close, an error, and the latch says NOT closed: " + string.Join(" | ", Calls(own, m)) + " / " + st);
         Settle();
         Restart();   // the ledger's last contract cannot be followed (no leg of it): stood down until 18:00 ET
+        et = et.AddDays(1); ChartBridgeBot.Check();
+        ChartBridgeOrders.NoteLast("MNQ", 25000);
+        Page(RailsMsg(1, 5, 3, "500", "500", "MNQ"));
+        Page(Mode3("shadow"));
+    }
+
+    // ------------------------------------------------------------ the R12 review of decision 3 (2026-11-18) and Anthony's rulings of that day
+    // Made-up prices and positions only. Each step is 500 ms of the harness clock (a beat and a check).
+    static void Steps(int n) { for (int i = 0; i < n; i++) { clock += 350; Bot("{\"type\":\"beat\"}"); ChartBridgeBot.Check(); } }
+    // An execution as NinjaTrader keeps it on the account (Account.Executions) and delivers it (finding 2 replays these).
+    static void Exec(Order o, MarketPosition side, int qty, double price)
+    {
+        string id = "E" + Guid.NewGuid().ToString("N").Substring(0, 10);
+        DateTime t = DateTime.Now;
+        Execution x = new Execution { Instrument = mnq, MarketPosition = side, Quantity = qty, Price = price, Time = t, ExecutionId = id, OrderId = o != null ? o.OrderId : "H" + id, Order = o };
+        own.Executions.Add(x);
+        typeof(ChartBridgeServer).GetMethod("Deliver", PS).Invoke(null, new object[] { own.Name, mnq, side, qty, price, t, id, x.OrderId, null });
+    }
+    static void FillEntryKept(Order o, double price)
+    {
+        o.OrderId = "NT" + Guid.NewGuid().ToString("N").Substring(0, 8);
+        o.Filled = o.Quantity; o.AverageFillPrice = price; o.OrderState = OrderState.Filled;
+        Update(o);
+        Exec(o, o.OrderAction == OrderAction.Buy ? MarketPosition.Long : MarketPosition.Short, o.Quantity, price);
+    }
+    // A recompile's first watch of the account: ChartBridge's own memory of delivered executions is new, so every execution
+    // NinjaTrader keeps is delivered again (ChartBridgeServer.WatchAccounts: the bot's fence, then CatchUp).
+    static void Replay()
+    {
+        ((HashSet<string>)typeof(ChartBridgeServer).GetField("Seen", PS).GetValue(null)).Clear();
+        ChartBridgeBot.NoteWatched(own);
+        typeof(ChartBridgeServer).GetMethod("CatchUp", PS).Invoke(null, new object[] { own });
+    }
+    static void NewDay(int size, string loss)
+    {
+        Settle();
+        own.Executions.Clear();
+        et = et.AddDays(1); ChartBridgeBot.Check();
+        ChartBridgeOrders.NoteLast("MNQ", 25000);
+        Page(RailsMsg(size, 5, 3, loss, "500", "MNQ"));
+        Page(Auto3());
+    }
+
+    static void Review3()
+    {
+        // ---- finding 2: executions replayed after a recompile are never counted twice (the review's probe B)
+        NewDay(1, "30");
+        Order e = AutoTrade("buy");
+        Check(e != null, "replay: a bot trade");
+        if (e == null) return;
+        FillEntryKept(e, 25000);
+        Exec(null, MarketPosition.Long, 2, 25004);   // Anthony's 2 by hand
+        Held(3, 25002.67);
+        Restart();
+        string st = ChartBridgeBot.StripJson();
+        Check(st.Contains("\"position\":{\"qty\":1,\"avgPrice\":25000}"), "replay: after the restart the bot follows its own 1 again: " + st);
+        int s0 = page.Count;
+        Replay();
+        st = ChartBridgeBot.StripJson();
+        Check(st.Contains("\"position\":{\"qty\":1,\"avgPrice\":25000}") && st.Contains("\"trades\":1,") && st.Contains("\"pnlToday\":0,") && !page.Skip(s0).Any(x => x.Contains("is open again")),
+              "R12 of decision 3, finding 2: the session's executions delivered again after the restart are never counted twice (the bot's entry, Anthony's 2): " + st);
+        int m = own.Calls.Count;
+        ChartBridgeOrders.NoteLast("MNQ", 24990); ChartBridgeBot.Check();   // the bot's 1 at -$20 (a doubled ledger would read -$40 and stop)
+        Check(ChartBridgeBot.StripJson().Contains("\"dayStop\":null") && Calls(own, m).Count == 0, "finding 2: no early day stop from a doubled ledger");
+        ChartBridgeOrders.NoteLast("MNQ", 24985); ChartBridgeBot.Check();   // -$30
+        Land();
+        ChartBridgeBot.Check();
+        Check(CloseCalls(m).Count == 1 && CloseCalls(m)[0].StartsWith("submit CB#" + Tag(e) + " bot close Sell Market 1 "), "finding 2: the loss stop at the true -$30 closes the bot's own 1: " + string.Join(" | ", Calls(own, m)));
+        CloseFills(1, 24985);
+        Held(2, 25004);
+        // the trade closed: a replay must not reopen it or count its dollars twice
+        Restart();
+        s0 = page.Count;
+        Replay();
+        st = ChartBridgeBot.StripJson();
+        Check(st.Contains("\"position\":{\"qty\":0,") && st.Contains("\"trades\":1,") && st.Contains("\"pnlToday\":-30,") && !page.Skip(s0).Any(x => x.Contains("is open again")) && DayLine("trade\t" + Tag(e) + "\t-30"),
+              "finding 2: a closed trade's executions delivered again: not reopened, its dollars not doubled: " + st);
+        // a fill of an order the bot placed in this run, not yet delivered when the account is first watched: never fenced
+        NewDay(1, "500");
+        Order f = AutoTrade("buy");
+        Check(f != null, "replay: a bot trade of this run");
+        if (f == null) return;
+        f.OrderId = "NT" + Guid.NewGuid().ToString("N").Substring(0, 8); f.Filled = 1; f.AverageFillPrice = 25000; f.OrderState = OrderState.Filled;
+        Update(f);
+        own.Executions.Add(new Execution { Instrument = mnq, MarketPosition = MarketPosition.Long, Quantity = 1, Price = 25000, Time = DateTime.Now, ExecutionId = "E" + Guid.NewGuid().ToString("N").Substring(0, 10), OrderId = f.OrderId, Order = f });
+        ChartBridgeBot.NoteWatched(own);
+        typeof(ChartBridgeServer).GetMethod("CatchUp", PS).Invoke(null, new object[] { own });
+        Check(ChartBridgeBot.StripJson().Contains("\"position\":{\"qty\":1,"), "finding 2: a fill of this run's own entry at the first watch is counted (only executions from before the run are fenced)");
+        Exit(f, 25000);
+
+        // ---- finding 3 and Anthony's ruling 3: a close that cannot go is an error after 15 s, again every 60 s, with a voice call
+        NewDay(1, "30");
+        Order g = AutoTrade("buy");
+        if (g == null) { Check(false, "stuck: a bot trade"); return; }
+        FillEntry(g, 25000);
+        Held(1, 25000);
+        Order stuck = new Order { Account = own, Instrument = mnq, Name = "Close", OrderAction = OrderAction.Sell, OrderType = OrderType.Market, OrderState = OrderState.Working, Quantity = 1 };
+        own.Orders.Add(stuck);   // a market order on the bot's root that never finishes (the review's probe E)
+        List<string> said = new List<string>();
+        ChartBridgeVoice.On = true;
+        ChartBridgeVoice.Player = path => { lock (said) said.Add(Path.GetFileName(path)); return true; };
+        Func<int, bool> heard = k => { for (int i = 0; i < 60; i++) { lock (said) if (said.Count(x => x == "BotNotClosed.wav") >= k) return true; Thread.Sleep(50); } return false; };
+        try
+        {
+            m = own.Calls.Count;
+            s0 = page.Count;
+            ChartBridgeOrders.NoteLast("MNQ", 24985); ChartBridgeBot.Check();
+            Land();
+            Steps(28);   // 14 s
+            Func<int> errors = () => page.Skip(s0).Count(x => x.Contains("\"level\":\"error\"") && x.Contains("the bot's own contracts on OWN-1 MNQ are still NOT closed after"));
+            st = ChartBridgeBot.StripJson();
+            Check(CloseCalls(m).Count == 0 && errors() == 0 && st.Contains("the bot's own contracts are being closed and it was set to Shadow"),
+                  "finding 3: a market order on the root still working holds the close back; under 15 s no error; the latch says being closed: " + st);
+            Steps(4);    // 16 s
+            Check(errors() == 1 && page.Skip(s0).Any(x => x.Contains("still NOT closed after") && x.Contains("a market order on OWN-1 MNQ may still fill (Close)")),
+                  "finding 3: after 15 s an error to the pages, naming the order: " + page.Skip(s0).LastOrDefault(x => x.Contains("NOT closed")));
+            Check(heard(1), "Anthony's ruling 3: the voice call BotNotClosed with that error (ChartBridge 0.6.22's voice path)");
+            Steps(116);  // 58 s more
+            Check(errors() == 1, "finding 3: not again before 60 s");
+            Steps(6);    // 61 s after the first
+            Check(errors() == 2 && heard(2), "finding 3 and ruling 3: the error and the voice call again after 60 s while the bot still holds");
+            Check(CancelCalls(m).Count == 0, "finding 3: while a close may be on its way the bot's own stop and target stay working (they still protect it)");
+            stuck.OrderState = OrderState.Cancelled;
+            Steps(1);
+            Land();
+            Steps(1);
+            Check(CancelCalls(m).Count == 2 && CloseCalls(m).Count == 1, "finding 3: that order done, the bot's own legs are cancelled, then its close goes: " + string.Join(" | ", Calls(own, m)));
+            CloseFills(1, 24985);
+            Steps(140);  // 70 s
+            int n;
+            lock (said) n = said.Count(x => x == "BotNotClosed.wav");
+            Check(errors() == 2 && n == 2 && ChartBridgeBot.StripJson().Contains("the bot's own contracts were closed and it was set to Shadow"),
+                  "finding 3 and ruling 3: flat: no more errors or calls; the latch says were closed now");
+        }
+        finally { ChartBridgeVoice.Reset(); }
+
+        // ---- finding 4 (Anthony's ruling 2): his own exits too big after the bot's close: the bot is closed and he is warned; his orders untouched
+        NewDay(1, "30");
+        Order h = AutoTrade("buy");
+        if (h == null) { Check(false, "oversized: a bot trade"); return; }
+        FillEntry(h, 25000);
+        HandFill(MarketPosition.Long, 2, 25000);
+        Held(3, 25000);
+        Order his = HandOrder(OrderAction.Sell, OrderType.StopMarket, 3, 24900);   // his stop for 3 on his own 2
+        m = own.Calls.Count;
+        s0 = page.Count;
+        ChartBridgeOrders.NoteLast("MNQ", 24985); ChartBridgeBot.Check();
+        Land();
+        ChartBridgeBot.Check();
+        Check(CloseCalls(m).Count == 1 && CloseCalls(m)[0].Contains(" bot close Sell Market 1 ") && his.OrderState == OrderState.Working && his.Quantity == 3 && !Calls(own, m).Any(x => x.Contains("Stop1")) &&
+              page.Skip(s0).Any(x => x.Contains("\"level\":\"error\"") && x.Contains("Anthony's own exits there (3 to sell, working) are more than his own 2 left once the bot's 1 is closed")),
+              "finding 4: the bot's own 1 closed, an error names his exits now more than his position, his stop unchanged: " + string.Join(" | ", Calls(own, m)));
+        CloseFills(1, 24985);
+        his.OrderState = OrderState.Cancelled;
+
+        // ---- finding 5: Anthony's fill between the guard's read and the placement stays his
+        NewDay(1, "500");
+        ChartBridgeBot.PlaceGuardChecked = () => { ChartBridgeBot.PlaceGuardChecked = null; HandFill(MarketPosition.Long, 2, 25004); };
+        Order k1;
+        try { k1 = AutoTrade("buy"); } finally { ChartBridgeBot.PlaceGuardChecked = null; }
+        if (k1 == null) { Check(false, "race: a bot trade: " + BotReject()); return; }
+        FillEntry(k1, 25000);
+        Held(3, 25002.67);
+        HandFill(MarketPosition.Short, 2, 25006);   // he sells his own 2
+        Held(1, 25000);
+        Check(ChartBridgeBot.StripJson().Contains("\"position\":{\"qty\":1,"), "finding 5: his 2 filled after the guard read and before the placement are his: his sell of 2 leaves the bot's 1");
+        LegFills(k1, 1, 24996);
+        // finding 5: a bot entry that fills before NinjaTrader lists it, and before the bot has noted it: found in ChartBridge's own just sent
+        NewDay(1, "500");
+        own.OnCall = (kind, o) =>
+        {
+            if (kind != "submit" || !Regex.IsMatch(o.Name ?? "", " bot s")) return;
+            own.OnCall = null;
+            own.Orders.Remove(o);
+            o.OrderId = "NS" + Guid.NewGuid().ToString("N").Substring(0, 8); o.Filled = 1; o.AverageFillPrice = 25000;
+            Deliver(own.Name, mnq, MarketPosition.Long, 1, 25000, o.OrderId);
+            own.Orders.Add(o);
+        };
+        Order k2;
+        try { k2 = AutoTrade("buy"); } finally { own.OnCall = null; }
+        Check(k2 != null && ChartBridgeBot.StripJson().Contains("\"position\":{\"qty\":1,"), "finding 5: its fill is the bot's (FindOrder reads ChartBridge's own just sent)");
+        if (k2 != null) { k2.OrderState = OrderState.Filled; Update(k2); Exit(k2, 25000); }
+
+        // ---- finding 6: a page order ChartBridge just sent that NinjaTrader does not list yet refuses a bot entry
+        NewDay(1, "500");
+        int pn = own.Calls.Count;
+        Page("{\"type\":\"order\",\"cid\":\"o6\",\"account\":\"OWN-1\",\"root\":\"MNQ\",\"side\":\"buy\",\"kind\":\"limit\",\"price\":24990,\"qty\":1}");
+        Order po = own.Calls.Count > pn ? Newest(own) : null;
+        Check(po != null, "finding 6: Anthony's own limit from the page: " + PageReject());
+        if (po == null) return;
+        own.Orders.Remove(po);
+        pn = own.Calls.Count;
+        Bot(Sig(NewId(), Market("buy")));
+        Check(BotReject().Contains("OWN-1 MNQ has a working order that is not the bot's (buy limit 1)") && own.Calls.Count == pn, "finding 6: his order known only to ChartBridge yet refuses the bot's entry: " + BotReject());
+        po.OrderState = OrderState.Cancelled; Update(po);
+
+        // ---- Anthony's ruling A (pause and cancel) and ruling B (the standing line)
+        NewDay(2, "500");
+        Bot(Sig(NewId(), "\"side\":\"buy\",\"kind\":\"limit\",\"price\":24990,\"stopTicks\":8,\"targetTicks\":16"));
+        Order r = own.Orders.LastOrDefault(o => Regex.IsMatch(o.Name ?? "", " bot s") && ChartBridgeOrders.IsWorking(o.OrderState));
+        Check(r != null, "ruling A: a bot entry resting: " + BotReject());
+        if (r == null) return;
+        Check(ChartBridgeBot.StripJson().Contains("\"ownerWait\":null"), "ruling B: nothing of Anthony's there: no line");
+        Order mine = HandOrder(OrderAction.Sell, OrderType.Limit, 1, 25100);
+        m = own.Calls.Count;
+        s0 = page.Count;
+        Steps(1);
+        st = ChartBridgeBot.StripJson();
+        Check(Calls(own, m).Count == 0 && st.Contains("\"ownerWait\":\"waiting: you hold your own position or order (OWN-1 MNQ has a working order that is not the bot's (sell limit 1))\""),
+              "ruling B: his order there: the Bot tab's line; ruling A: not cancelled within the first second: " + st);
+        Steps(2);
+        Check(Calls(own, m).Count == 1 && Calls(own, m)[0].StartsWith("cancel CB#" + Tag(r) + " bot") && page.Skip(s0).Any(x => x.Contains("\"level\":\"warn\"") && x.Contains("pause and cancel")),
+              "ruling A: his own order there for a second: the bot's resting entry is cancelled, said: " + string.Join(" | ", Calls(own, m)));
+        Page(Mode3("shadow"));
+        Check(ChartBridgeBot.StripJson().Contains("\"ownerWait\":null"), "ruling B: Shadow: no line");
+        Page(Auto3());
+        mine.OrderState = OrderState.Cancelled;
+        Land();
+        // a part filled entry: only its rest is cancelled; the bot's filled 1 and its stop and target stay
+        Settle();
+        Bot(Sig(NewId(), "\"side\":\"buy\",\"kind\":\"limit\",\"price\":24990,\"stopTicks\":8,\"targetTicks\":16"));
+        Order r2 = own.Orders.LastOrDefault(o => Regex.IsMatch(o.Name ?? "", " bot s") && ChartBridgeOrders.IsWorking(o.OrderState));
+        if (r2 == null) { Check(false, "ruling A: a second resting entry: " + BotReject()); return; }
+        PartFill(r2, 1, 1, 24990);
+        Held(1, 24990);
+        ((System.Collections.IDictionary)typeof(ChartBridgeOrders).GetField("Moves", PS).GetValue(null)).Clear();
+        Steps(3);
+        HandFill(MarketPosition.Long, 2, 25000);
+        Held(3, 24996.67);
+        m = own.Calls.Count;
+        Steps(3);
+        List<string> c = Calls(own, m);
+        Check(c.Count == 1 && c[0].StartsWith("cancel CB#" + Tag(r2) + " bot") && ChartBridgeBot.StripJson().Contains("\"position\":{\"qty\":1,") && LegsOf(r2).Count == 2,
+              "ruling A: his own 2 by hand: only the rest of the bot's part filled entry is cancelled; its filled 1, its stop and target untouched: " + string.Join(" | ", c));
+        LegFills(r2, 1, 24986);
+        Settle();
+        own.Executions.Clear();
         et = et.AddDays(1); ChartBridgeBot.Check();
         ChartBridgeOrders.NoteLast("MNQ", 25000);
         Page(RailsMsg(1, 5, 3, "500", "500", "MNQ"));
