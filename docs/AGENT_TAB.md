@@ -307,12 +307,13 @@ at sign-in, which starts and stops the agent's runner. The logic is `live/agent-
 | Build row (Status) | the build id and stamp, as his hello says them; the header shows only his name |
 
 - **Off in a trade:** "<name> holds long 1 MNQ on SIM-AG1. Flatten and turn him off?", for that agent only (showing another
-  agent closes it). Flatten and turn off (`AgentHelper.flatOffStart`, `flatOffStep`): Shadow first (`agentMode` shadow, 10 s
-  at most for ChartBridge to say so), then the page's own Flatten for his account and root (`trade.js` `flattenAgent`: the
-  chart's Flatten message, which ChartBridge lets through the agent's lock as an exit; his position and account read again
-  right before; never a default account), then Off once his `agent` message says flat, 30 s at most. Not in Shadow or not
-  flat in time: he stays on, in Shadow, and the line says so until the next On or Off. Keep him on sends nothing. The page
-  never builds an order for him.
+  agent closes it). Flatten and turn off (`AgentHelper.flatOffStart`, `flatOffStep`; plan step 3.2 and its R12 delta): with a
+  ChartBridge that knows it, one `agentFlattenOff` (ChartBridge puts him in Shadow and flattens what he owns); the line says
+  Shadow only once his `agent` message does (10 s at most), a refusal ends it with ChartBridge's words, then Off once he is flat,
+  30 s at most. With an older ChartBridge: Shadow first (`agentMode` shadow, 10 s at most), then the line says where to flatten
+  him by hand (in NinjaTrader, or Flatten on the chart page's ticket), 15 minutes at most, then Off. Off goes only in Shadow and
+  flat; out of Shadow, or not flat in time, he stays on and the line says so until the next On or Off. No desk sends a Flatten of
+  its own. Keep him on sends nothing. The page never builds an order for him.
 - **A build that is not a hero** runs in Shadow on a Sim account only: Copilot, Auto and a LIVE account are closed with the
   reason, the helper refuses On for it in any other mode or account, and the runner refuses every plan there. The page fails
   closed: without the helper's word it reads it from his hello (such a runner says its build id as its name).

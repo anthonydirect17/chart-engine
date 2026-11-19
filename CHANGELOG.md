@@ -13,9 +13,16 @@ Page and ChartBridge (`ChartBridgeAgents.cs` only; `ChartBridge.cs` untouched, i
 - **Stop all automation** (`agentStopAll`, new): ChartBridge stops every bot and agent on a prop account by its own rule and
   the account ledger, flattens what each owns and latches a mixed trader's prop seats until 18:00 ET. An older ChartBridge (0.6.17
   or later) gets Kill all (prop accounts) instead, said beside the button.
-- **Flatten and turn off** (`agentFlattenOff`, new): one ChartBridge command puts the trader in Shadow and flattens what he owns,
-  then the page turns him off once flat. On an older ChartBridge a desk with no Flatten of its own (Legion, the pop-out) sends
-  Shadow first and turns him off once he is flattened by hand (in NinjaTrader, or Flatten on the chart page's ticket).
+- **Kill all on Cohorts** sends `agentStopAll` on a ChartBridge that knows it (the same command as the header's Stop all, so it
+  also reaches the ledger's eval and funded accounts NinjaTrader lists as Sim, and a mixed trader's prop seats); older ones
+  `agentKillAllProp` as before. On an older ChartBridge the header's question itself says the ledger's accounts are not covered.
+- **Flatten and turn off** (`agentFlattenOff`, new): one ChartBridge command puts the trader in Shadow and flattens what he owns;
+  the page says Shadow only once ChartBridge says it, ends the job with ChartBridge's words when it refuses the command, and turns
+  him off only in Shadow and flat. On an older ChartBridge the desk sends Shadow first and turns him off once he is flattened by
+  hand (in NinjaTrader, or Flatten on the chart page's ticket). No desk sends a Flatten of its own any more. Legion's Armed
+  leaves out a lane whose trader a desk in any window of this browser is turning off, until his Off answers.
+- **One version rule:** ChartBridge's version is read as exactly a.b.c on every gate (Stop all, Kill all, Flatten and turn off);
+  anything else counts as no version.
 - **The chart page** keeps Chart, the Bot tab, the bot strip and a small Legion link (shown with a v3 ChartBridge, opening
   `legion.html` in its own window). Legion, the Colosseum and Praetorian's Agent tab left it, and so did its league read: the
   Drone sky shows the agents and the bot only, and a chart's ⋯ has no League trades switch. The Agent desk stays on the chart page
