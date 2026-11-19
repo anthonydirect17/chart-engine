@@ -1666,7 +1666,7 @@ function mount(v, host) {
       const askJoin = a => {
         if (!P.join || P.join.account !== a.name) return '';
         const j = P.join, jg = (S.groups || []).find(x => x.id === j.group), hw = GroupsCore.highWord(j.mode === 'auto' ? j.rules : jg), gn = gName(j.group);
-        const high = `${esc(hw)} <input type="text" inputmode="decimal" class="oin apg-ll-in apg-high" data-act="join-high" value="${esc(j.prefill)}" aria-label="${esc(hw.charAt(0).toUpperCase() + hw.slice(1))} for ${esc(a.name)}, from the firm's dashboard" title="${esc(j.seed ? 'From ' + j.seed.words + '. ' : j.kept ? 'From the end-of-day high ChartBridge keeps for it. ' : 'From the firm\'s dashboard. ')}Optional: empty takes the larger of its kept end-of-day high, the account size and its balance. ChartBridge starts the trailing floor from it."> <span class="mut">(${esc(j.seed ? (hw.startsWith('highest balance') ? 'highest balance' : 'highest close') + ' from The Desk\'s seed' + (j.seed.date ? ' of ' + j.seed.date : '') : j.kept ? 'the close ChartBridge kept; the firm\'s dashboard wins' : 'the firm\'s dashboard; optional')})</span>` +
+        const high = `${esc(hw)} <input type="text" inputmode="decimal" class="oin apg-ll-in apg-high" data-act="join-high" data-id="${esc(a.name + '|' + j.group + '|' + j.mode)}" value="${esc(j.prefill)}" aria-label="${esc(hw.charAt(0).toUpperCase() + hw.slice(1))} for ${esc(a.name)}, from the firm's dashboard" title="${esc(j.seed ? 'From ' + j.seed.words + '. ' : j.kept ? 'From the end-of-day high ChartBridge keeps for it. ' : 'From the firm\'s dashboard. ')}Optional: empty takes the larger of its kept end-of-day high, the account size and its balance. ChartBridge starts the trailing floor from it."> <span class="mut">(${esc(j.seed ? (hw.startsWith('highest balance') ? 'highest balance' : 'highest close') + ' from The Desk\'s seed' + (j.seed.date ? ' of ' + j.seed.date : '') : j.kept ? 'the close ChartBridge kept; the firm\'s dashboard wins' : 'the firm\'s dashboard; optional')})</span>` +
           (j.warn ? ` <span class="apg-twarn apg-jwarn">${esc(j.warn)}</span>` : '');
         const yes = `<button type="button" class="ac-btn apg-yes" data-act="join-yes" data-id="${esc(a.name)}">Put in ${esc(gn)}</button>`, no = `<button type="button" class="ac-btn" data-act="join-no" data-id="${esc(a.name)}">Cancel</button>`;
         if (j.mode === 'old') return row('join|' + a.name + '|' + j.group, `<span role="cell" class="apg-confirm apg-join">Put ${esc(a.name)} in ${esc(gn)}: ${high} ${yes}${no}</span>`, 'apg-ask');
@@ -2019,7 +2019,15 @@ function mount(v, host) {
       if ('value' in x && e !== document.activeElement && e.value !== x.value) e.value = x.value;
     }
     const findAct = (act, id) => [...listEl.querySelectorAll(`[data-act="${act}"]`)].find(e => (e.dataset.id || '') === id) || null;
-    for (const t of typed) { const e = findAct(t.act, t.id); if (e && !e.dataset.p && e.value === e.defaultValue) e.value = t.v; }
+    /* only into the same box (the same data-act and the same whole data-id: a join's box is keyed by its account, group and mode), and
+       never into a join's box once the join itself was replaced (another account or group chosen): its own prefill stands (the R12
+       review of f02fbb6, B1) */
+    const joinSame = P.join === P.joinDrawn;
+    for (const t of typed) {
+      if (!t.id || (t.act === 'join-high' && !joinSame)) continue;
+      const e = findAct(t.act, t.id); if (e && !e.dataset.p && e.value === e.defaultValue) e.value = t.v;
+    }
+    P.joinDrawn = P.join;
     if (rebuilt && keep) { const e = findAct(keep.act, keep.id); if (e && !e.disabled) e.focus(); }
     /* after Cancel, Not set or Save: the account's Change or Set button (once it is back, after a save; only while nothing else
        has the focus) */

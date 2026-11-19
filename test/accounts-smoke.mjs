@@ -281,6 +281,20 @@ try {
   const pre = ask ? await p4.$eval(`${AP} [data-act="join-high"]`, e => e.value) : '';
   check(pre === '50000', 'the highest close so far, prefilled with the larger of the size and the balance (' + pre + ')');
   await p4.screenshot({ path: path.join(out, 'accounts-6-groups-1366.png') });
+  /* the R12 review of f02fbb6 (B1): a figure typed in one join's box never lands in another join's box when the join is replaced
+     (another account, or another group for the same account); each join shows its own prefill */
+  const joinBox = name => `${AP} [data-act="join-high"][aria-label*="for ${name},"]`;
+  await p4.fill(`${AP} [data-act="join-high"]`, '50500');
+  await p4.selectOption(`${AP} select.apg-grp[data-id="SIM-F2"]`, 'g1');
+  const f2 = await until(() => p4.$eval(joinBox('SIM-F2'), e => e.value).catch(() => null), 'SIM-F2\'s join');
+  check(f2 === '50000', 'B1: SIM-F1\'s typed 50500, then Lucid chosen for SIM-F2: its box shows its own prefill (' + f2 + ')');
+  await p4.fill(joinBox('SIM-F2'), '50777');
+  await p4.selectOption(`${AP} select.apg-grp[data-id="SIM-F1"]`, 'g2');
+  const f1 = await until(() => p4.$eval(joinBox('SIM-F1'), e => e.value).catch(() => null), 'SIM-F1\'s join to Apex');
+  check(f1 === '50000', 'B1: SIM-F2\'s typed 50777, then Apex chosen for SIM-F1: its box shows its own prefill (' + f1 + ')');
+  await p4.selectOption(`${AP} select.apg-grp[data-id="SIM-F1"]`, 'g1');
+  await until(() => p4.$eval(joinBox('SIM-F1'), e => e.value === '50000').catch(() => null), 'SIM-F1\'s join to Lucid again');
+  check(((await control(GP_PORT, 'received')).types.accountGroup || 0) === 0, 'B1: nothing sent while the joins were only chosen');
   await p4.fill(`${AP} [data-act="join-high"]`, '50500');
   await p4.click(`${AP} [data-act="join-yes"]`);
   await until(async () => (await p4.$eval(`${AP} select.apg-grp[data-id="SIM-F1"]`, e => e.value)) === 'g1', 'SIM-F1 in Lucid');

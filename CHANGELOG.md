@@ -377,7 +377,8 @@ the size. Fixed in `nt8/ChartBridgeGroups.cs`, `live/groups.js`, `live/accounts.
 - Accounts: a typed firm minimum or highest close is no longer cleared while a figure in the open drawer moves (a figure
   moving about once a second used to rebuild the list, so Set could read an empty box). The drawer's flag text is now a
   value updated in place (`live/accounts.js`), and a box with no value of its own in the list (the firm minimum, the
-  join's highest close) keeps what was typed if the list is rebuilt. Main had it too; found by an intermittent
+  join's highest close) keeps what was typed if the list is rebuilt, only into the same box: a join's box is keyed by its
+  account, group and mode, and a join replaced by another (another account or group chosen) shows its own prefill. Main had it too; found by an intermittent
   `test/accounts-smoke.mjs` failure, which now waits 2.5 s after typing and checks the box still holds the minimum.
 
 ### A fix on the order ticket (the page only)
