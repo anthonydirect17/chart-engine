@@ -63,18 +63,21 @@ function mount(el, opts) {
     else {
       body += table('cx-money', ['Build', 'Real profit per $1', 'Simulated profit per $1 (eval)', 'Real costs', 'Real payouts', 'Real net', 'Real sample', 'Money alarm'], mv.builds.map(b => ({ attrs: ' data-cx-build="' + esc(b.bot) + '"', cells: [
         raw('<b>' + esc(b.bot) + '</b>' + (b.onRoster ? '' : '<br><span class="cx-dim">no longer on the roster</span>'), 'cx-lead'),
-        raw(esc(b.real.ppd) + (b.real.words && !b.real.has && b.real.words !== K.NOT_ENOUGH ? '<br><span class="cx-dim">' + esc(b.real.words) + '</span>' : ''), 'cx-num cx-lead ' + b.real.ppdTone),
+        raw(esc(b.real.ppd) + (b.real.words && !b.real.has && b.real.words !== K.NOT_ENOUGH ? '<br><span class="cx-dim">' + esc(b.real.words) + '</span>' : '') +
+          (b.real.cardAccount ? '<br><span class="cx-dim" data-cx-cnt>' + esc(b.real.cardAccount) + '</span>' : ''), 'cx-num cx-lead ' + b.real.ppdTone),
         cell(b.hasSim ? b.sim.eval.text : 'no simulated figure (not on the roster)', 'cx-sim'),
         cell(b.real.costs, 'cx-num'), cell(b.real.payouts, 'cx-num'), cell(b.real.net, 'cx-num ' + b.real.netTone), cell(b.real.sample, 'cx-dim'),
         raw('<span class="cx-al cx-al-' + esc(b.alarm.state) + '">' + esc(b.alarm.state === 'tripped' ? 'Tripped' : b.alarm.state === 'clear' ? 'Clear' : 'Not known yet') + '</span> <span class="cx-dim">' + esc(b.alarm.words) + '</span>')] })));
       body += note('Real: the prop ledger, split by the day each account ran the build (The Desk). ' + K.SIM_LABEL, 'cx-dim');
     }
     if (mv.total) body += note('The ledger in all: ' + K.plural(mv.total.entries, 'entry', 'entries') + ', costs ' + mv.total.costs + ', payouts ' + mv.total.payouts + (mv.unattributed ? '; of it ' + K.plural(mv.unattributed.entries, 'entry', 'entries') + ' (costs ' + mv.unattributed.costs + ') belong to no build' : '') + '.', 'cx-dim');
+    /* TheDesk #120: the card's fills account when each entry was booked, and the entries that could not be told (the numbers still shown) */
+    if (mv.cardLog) body += '<p class="cx-note cx-dim" data-cx-cardlog>' + esc(mv.cardLog.words) + (mv.cardLog.note ? ' <span class="cx-dim">The Desk: ' + esc(mv.cardLog.note) + '</span>' : '') + '</p>';
     for (const p of mv.problems) body += note(p, 'cx-bad');
     return card('I', 'Real against simulated money', body, 'cx-first');
   }
 
-  /* II. who goes in today */
+  /* III. who goes in today */
   function goes(gv) {
     if (status('roster') !== 'ok') return card('III', 'Who goes in today', failNote('roster'));
     if (!gv.ok) return card('III', 'Who goes in today', note(gv.problem, 'cx-bad'));
@@ -93,7 +96,7 @@ function mount(el, opts) {
     return card('III', 'Who goes in today', body);
   }
 
-  /* III. running now, VI. today live only: from ChartBridge, through FleetView */
+  /* IV. running now, V. today live only: from ChartBridge, through FleetView */
   function running(lv) {
     if (!lv) return card('IV', 'Running now', note('ChartBridge is not connected, so this page cannot tell what is running: not read.', 'cx-dim'));
     const r = K.runningNow(lv.traders, lv.heard);
@@ -116,7 +119,7 @@ function mount(el, opts) {
     return card('V', 'Today, live only', body + note('Live only: what ChartBridge reports now, realized plus open. Nothing simulated is added to it.', 'cx-dim'));
   }
 
-  /* IV. Needs you: the one place */
+  /* II. Needs you: the one place */
   function needs(nv) {
     let body;
     if (nv.items.length) {
@@ -127,7 +130,7 @@ function mount(el, opts) {
     return card('II', 'Needs you', body, nv.items.length ? 'cx-needsyou' : '');
   }
 
-  /* V. last night */
+  /* VI. last night */
   function night() {
     if (status('board') !== 'ok') return card('VI', 'Last night', failNote('board'));
     const n = K.lastNight(S.reads.board.ans);
