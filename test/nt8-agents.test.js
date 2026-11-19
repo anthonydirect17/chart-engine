@@ -546,6 +546,11 @@ test('plan step 3.2 (the R12 review, B1): Stop all and Flatten and turn off wait
   assert.ok(flat && stop, 'both minimums are plain versions');
   assert.equal(flat[1], stop[1], 'FLATOFF_MIN (agent-core.js) and STOPALL_MIN (legion.js) name the same ChartBridge');
   assert.equal(require('../live/agent-core.js').FLATOFF_MIN, flat[1]);
+  const kill = /const STOPALL_MIN = '(\d+\.\d+\.\d+)';/.exec(read('fleet.js'));   // the R12 delta, X1: the Cohorts tab's Kill all too
+  assert.ok(kill && kill[1] === stop[1], 'STOPALL_MIN (fleet.js, Kill all) names the same ChartBridge');
+  /* round 4: GOLIVE_MIN (Go live, and Auto on a prop account) in agent-core.js, fleet.js and legion.js, the same ChartBridge */
+  const go = ['agent-core.js', 'fleet.js', 'legion.js'].map(f => (/const GOLIVE_MIN = '(\d+\.\d+\.\d+)';/.exec(read(f)) || [])[1]);
+  assert.deepEqual(go, [stop[1], stop[1], stop[1]], 'GOLIVE_MIN: ' + go.join(', '));
 });
 
 test('plan step 3.5 (0.6.25): one direction per firm, one PC per firm and the GO size, where each binds', () => {

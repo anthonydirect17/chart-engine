@@ -6,7 +6,7 @@
 // Then, against the fake bridge (plan step 3.2): the chart page's Legion link, Legion's Cohorts and its two sides, an old address forwarded.
 // The review of 92: a double click anywhere on Kill all sends nothing (STOP 1); a press, a message, a release still counts, on
 // Kill all and on Yes, also under a stream of messages (STOP 2); hostile strings run nothing; a roster tag is never a P&L colour.
-// Screenshots: fleet-roster-shut, fleet-banner, fleet-desktop, fleet-ask, fleet-answer, fleet-phone, fleet-empty, fleet-workspace (.png in test/out).
+// Screenshots: fleet-roster-shut, fleet-banner, fleet-desktop, fleet-ask, fleet-answer, fleet-stopall, fleet-phone, fleet-empty, fleet-workspace (.png in test/out).
 import { chromium } from 'playwright';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
@@ -374,6 +374,15 @@ try {
   check((await text('[data-do="arm"]')) === 'Armed: off' && await page.locator('#flView [role="switch"]').count() === 1 && await page.locator('[data-do="arm"]').getAttribute('aria-checked') === 'false', 'one Armed switch, off');
   await page.evaluate(() => { document.getElementById('flView').scrollTop = 0; });
   await page.screenshot({ path: path.join(SHOTS, 'fleet-lanes.png') });
+  /* round 4, GOLIVE_MIN: on ChartBridge 0.6.21 Armed is not offered (aria-disabled, the plain line naming the version as its title);
+     a click forced on it opens no question and sends nothing */
+  const goRef = await page.evaluate(() => { const b = document.querySelector('[data-do="arm"]'); return { dis: b.getAttribute('aria-disabled'), title: b.title }; });
+  await page.click('[data-do="arm"]', { force: true }); await sleep(200);
+  check(goRef.dis === 'true' && /^Armed needs ChartBridge 0\.6\.25 or later for Auto on a prop account \(its firm and GO-size guards\); this one is 0\.6\.21/.test(goRef.title) && !(await armAsking()) && (await sentD2()).length === 0,
+    'round 4: Armed on ChartBridge 0.6.21: not offered, the version said, a forced click opens nothing and sends nothing: ' + JSON.stringify(goRef));
+  await feed({ type: 'hello', version: '0.6.25' }); await feed({ type: 'trading', enabled: true }); await feed(accounts); await feed(groups);
+  await feed(lane1()); await feed(lane2()); await feed({ type: 'agentStandDowns', list: [] });
+  await page.waitForFunction(() => window.fleet.state().lanes[0].armable === true);
   // a double click anywhere on the switch arms nothing, at every width; where the switch was, the question has Cancel, never Yes
   for (const width of [1440, 1024, 700, 390]) {
     await page.setViewportSize({ width, height: 900 });
@@ -523,6 +532,21 @@ try {
   check(unTitles.length === 3 && unTitles.every(t => /^true \S/.test(t)), '1.56.0: with no lane panel here (or no funded lane), each Add and Move is greyed with why: ' + JSON.stringify(unTitles));
   await page.evaluate(() => { document.getElementById('flView').scrollTop = 0; });
   await page.screenshot({ path: path.join(SHOTS, 'fleet-three-rows.png') });
+  /* plan step 3.2, the R12 delta X1: on a ChartBridge that knows Legion's Stop all automation, Kill all sends that command
+     (agentStopAll, exactly type and cid), with no personal account picked, and ChartBridge's own Stop all line is the answer */
+  await feed({ type: 'hello', version: '0.6.25', features: ['v3'] }); await feed({ type: 'trading', enabled: true });
+  await feed(Object.assign({}, accounts, { personalNamed: false, list: accounts.list.map(a => Object.assign({}, a, { personal: false, prop: false })) }));
+  await page.evaluate(() => { document.getElementById('flView').scrollTop = 0; });
+  await page.waitForFunction(() => !document.querySelector('[data-do="ask"]').hasAttribute('aria-disabled'));
+  check((await text('.fl-said')).startsWith('Kill all is Stop all automation here:') && (await text('.fl-said')).includes("The Desk's account ledger"), 'X1, 0.6.25: Kill all is offered with no personal account picked, and the line under it says it is Stop all automation: ' + await text('.fl-said'));
+  const s0 = await sentN();
+  await page.click('[data-do="ask"]'); await sleep(ARM); await page.click('[data-do="yes"]');
+  const stopSent = await page.evaluate(n => window.sent.slice(n), s0);
+  check(stopSent.length === 1 && stopSent[0].type === 'agentStopAll' && Object.keys(stopSent[0]).sort().join() === 'cid,type', 'X1, 0.6.25: Kill all then Yes sends exactly one agentStopAll {type, cid}: ' + JSON.stringify(stopSent));
+  await feed({ type: 'status', level: 'warn', text: 'Stop all automation: agent legion1 on SAMPLE-EVAL-1: flattening what it owns, the kill switch on, mode shadow. Your personal account, the bot and the copier are not touched' });
+  check(/^\d\d:\d\d:\d\d\s+Stop all automation: agent legion1/.test(await text('.fl-answer')) && await page.locator('.fl-answer.bad').count() === 0 && !(await page.evaluate(() => window.fleet.state().pending)), "X1: ChartBridge's Stop all line is Kill all's answer: " + await text('.fl-answer'));
+  await page.screenshot({ path: path.join(SHOTS, 'fleet-stopall.png'), clip: { x: 0, y: 0, width: 1440, height: 320 } });
+  await feed({ type: 'hello', version: '0.6.23', features: ['v3'] }); await feed({ type: 'trading', enabled: true }); await feed(accounts);
   // phone width: one column, no sideways scroll of the page, the buttons big enough to touch
   await page.setViewportSize({ width: 390, height: 844 });
   const m = await page.evaluate(() => ({ sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth,

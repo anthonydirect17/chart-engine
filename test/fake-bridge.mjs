@@ -24,7 +24,8 @@
 //   --tick-shift-ms=137             every trade stamped this many ms later (history and live), as real trades are: a
 //                                   session's first trade at 18:00:00.137, not 18:00:00.000 (chart 1.6.1, review 2 S4)
 //   --version=0.3.5                 the version hello reports (default fake-0.3.4; fake-0.3.7 with --data-037, fake-0.4.0
-//                                   with --v3, fake-0.5.2 with --agents)
+//                                   with --v3, 0.5.4 with --agents: a plain a.b.c, as the page's one version rule
+//                                   takes no other text, plan step 3.2, X3)
 //   --tick-gaps                     tick history skips prices now and then (1 to 3 ticks, sometimes a fast 8 to 16),
 //                                   like a fast market, so the two range bar modes differ (sample data, seeded)
 //   --pin-file=path                 where the PIN hash lives (ChartBridge 0.3.2 keeps pin.txt in its folder), so a
@@ -157,7 +158,7 @@
 //   /test/bar-trail?state=notProven&text=... (next release: ChartBridge's word on the bar trail for every live managed entry,
 //   as `managed` `barTrail`; state= empty takes it away; the fake builds no bars).
 //   --agents=demo                   (with --v3) ChartBridge 0.5.0's agent channel (contract AGENT_CHANNEL v1, docs/AGENT_TAB.md):
-//                                   config.txt's `agents` list; hello says fake-0.5.4. The made-up accounts SIM-AG1 and SIM-AG2 (Sim, checked)
+//                                   config.txt's `agents` list; hello says 0.5.4. The made-up accounts SIM-AG1 and SIM-AG2 (Sim, checked)
 //                                   are added for agents to take; every agent starts on None (no account file; ChartBridge 0.5.7) in shadow.
 //   --agent-accounts=demo:SIM-AG1   an agent starts on that account, as if chosen (agent-<id>-account.txt)
 //   --bot-account=Sim101            the bot starts on that account, as if chosen (bot-account.txt); without it: None
@@ -174,7 +175,10 @@
 //   /test/agent-mode?agent=&mode=auto (another page changed its mode),
 //   /test/agent-unlist?account=&on=1 (NinjaTrader no longer lists it), /test/agent-flat-hours?agent=&on=1 (the flat hours now),
 //   /test/agent-market-shut?on=1|0|auto (the market shut, open, or by its fixed hours), /test/agent-lose-trade?agent=&restart=1
-//   (its trade record gone while the account holds the position: the lost-trade error every 60 s until flat).
+//   (its trade record gone while the account holds the position: the lost-trade error every 60 s until flat),
+//   /test/agent-refuse-flatoff?agent=&reason= (plan step 3.2, the R12 delta X2: its next agentFlattenOff is refused with these
+//   words; by default ChartBridge's action rate), /test/agent-flatoff-nofill?on=1 (agentFlattenOff puts him in Shadow, and his
+//   flatten does not fill: he stays in his trade).
 //   Sample data and made-up names only.
 //   GET /bot-library (lane C4, docs/BOT_LIBRARY.md): with --v3 and the bot switch on, the made-up example
 //   test/fixtures/bot-library.json, or the file --bot-library=path names; --no-bot-library answers 404 (no file on this PC).
@@ -981,7 +985,7 @@ server.on('upgrade', (req, sock) => {
     hello.features = (hello.features || []).concat(['settlement', 'htf', 'weekProfile']); hello.version = 'fake-0.3.7';
   }
   if (V3) { hello.features = (hello.features || []).concat(['v3', 'cutHalf']);   // release 1 (1.6c): Cut half
-    hello.version = flagValue('version') || (AGENTS.length ? 'fake-0.5.4' : 'fake-0.4.0'); }   // --version still wins (1.22.0)   // protocol v3 (quote-only markets are told per instrument); 0.5.4 with agents (keepMode 0.5.2, the window in a trade 0.5.4)
+    hello.version = flagValue('version') || (AGENTS.length ? '0.5.4' : 'fake-0.4.0'); }   // --version still wins (1.22.0); with agents a plain a.b.c (the page's version rule, plan step 3.2, X3)   // protocol v3 (quote-only markets are told per instrument); 0.5.4 with agents (keepMode 0.5.2, the window in a trade 0.5.4)
   send(c, hello);
   send(c, { type: 'execs', list: NO_HELLO_ACCOUNTS ? [] : fillsSample() });
   sock.on('data', d => {
@@ -1081,6 +1085,8 @@ function agentUpgrade(req, sock) {
   const gone = () => { if (a.conn === c) desk.agentDrop(id, 'the agent disconnected'); };
   sock.on('close', gone); sock.on('error', gone);
 }
+/* round 4: ChartBridge 0.6.25 puts the press's cid on its Stop all and Kill all status lines; the fake does so from --version=0.6.25 */
+if (desk) desk.pressCid = (v => { const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(v || ''); return !!m && (+m[1] * 1e6 + +m[2] * 1e3 + +m[3]) >= 6025; })(flagValue('version'));
 /* the agents' test controls (see the header); sample data only */
 function agentControl(p, q, req, res) {
   const json = (code, v) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(v)); };
@@ -1088,6 +1094,10 @@ function agentControl(p, q, req, res) {
   if (p === '/test/agents') return json(200, { agents: [...desk.agents.values()].map(x => Object.assign(desk.agentMsg(x), { proposals: [...x.proposals.values()], plans: x.plans, notes: x.notes.length })), log: desk.log.filter(l => l.file.startsWith('agent-')), diag: desk.agentsDiag() });
   if (!a) return json(404, { error: 'no agent ' + id });
   if (p === '/test/agent-secret' && req.method === 'POST') return json(200, { secret: AGENT_SECRETS[id] });
+  /* plan step 3.2, the R12 delta X2: ChartBridge refuses his next agentFlattenOff (as its action rate would), or puts him in Shadow
+     and his flatten does not fill */
+  if (p === '/test/agent-refuse-flatoff') { desk.refuseFlatOff.set(id, q.get('reason') || 'too many order actions (more than 10 a second)'); return json(200, { refuse: id }); }
+  if (p === '/test/agent-flatoff-nofill') { desk.flatOffNoFill = q.get('on') !== '0'; return json(200, { noFill: desk.flatOffNoFill }); }
   const hello = () => { if (!a.connected) { desk.agentConnect(id, null); desk.agentMessage(id, { type: 'agentHello', name: q.get('name') || 'Demo Agent', build: q.get('build') || 'sample-build-1' }); } };
   if (p === '/test/agent-connect') { if (q.get('on') === '0') desk.agentDrop(id, 'no heartbeat for 5 s'); else hello(); return json(200, desk.agentMsg(a)); }
   hello();

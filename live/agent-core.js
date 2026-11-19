@@ -71,10 +71,11 @@ const str = v => (typeof v === 'string' ? v : '');
 const validId = id => typeof id === 'string' && /^[a-z][a-z0-9]{0,11}$/.test(id);
 
 /* ======================================================================== versions */
-/** [major, minor, patch] from a version text ("0.5.0", "fake-0.4.0"), or null. Kept for checks above the page's minimum
- *  ChartBridge (0.5.2 since 1.21.0), such as a later release's feature. */
-function parseVersion(v) { const m = /(\d+)\.(\d+)\.(\d+)/.exec(String(v || '')); return m ? [+m[1], +m[2], +m[3]] : null; }
-/** Is version a at least b? An unknown a is false. */
+/* plan step 3.2 (the R12 delta, X3): ONE rule for ChartBridge's version in agent-core.js, fleet.js and legion.js (the same text
+   in each; test/legion.test.js holds them equal): exactly a.b.c, as ChartBridge.cs writes its Version. Anything else ("0.6.25-rc1",
+   "v0.6.25", "fake-0.5.4", "0.7") is no version, so every gate that asks for one fails closed. */
+function parseVersion(v) { const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(typeof v === 'string' ? v : ''); return m ? [+m[1], +m[2], +m[3]] : null; }
+/** Is version a at least b? A version that is not a.b.c is false. */
 function atLeast(a, b) {
   const x = parseVersion(a), y = parseVersion(b);
   if (!x || !y) return false;
@@ -1371,6 +1372,11 @@ const PR_ACKS = new Set(['agentSeen', 'botSeen']);
    three steps as before. It is a stop like Shadow: both gates pass it for any trader ChartBridge has described, with exactly the
    keys type, cid and agent. */
 const FLATOFF_MIN = '0.6.25';
+/* round 4: Auto on a prop account (Legion's desks and Armed) and Go live need the ChartBridge that carries the firm and GO-size
+   guards (0.6.25), so a PC rolled back to an older ChartBridge can never run a trader past them. The same strict version rule as
+   every gate; held equal to FleetCore.GOLIVE_MIN and LegionCore.GOLIVE_MIN by test/nt8-agents.test.js */
+const GOLIVE_MIN = '0.6.25';
+const goLiveWhy = version => (atLeast(version, GOLIVE_MIN) ? '' : 'Auto on a prop account needs ChartBridge ' + GOLIVE_MIN + ' or later (its firm and GO-size guards); this one is ' + (typeof version === 'string' && version ? version.slice(0, 40) : 'not known'));
 const flatOffOk = (m, s) => Object.keys(m).every(k => k === 'type' || k === 'cid' || k === 'agent') && s.agents instanceof Map && typeof m.agent === 'string' && s.agents.has(m.agent);
 const PR_WHERE = 'it is set up from Legion\'s trader desk; from here you can only stop it';   // the review of 102 (F5): the words say the truth until Legion's trader desk is in
 
@@ -1769,6 +1775,8 @@ function lgCheck(m, st) {
     const why = typeof m.group === 'string' ? lgGroupWhy(m.group, s.groups, s.accounts) : 'no group named';
     return why ? 'Not sent from Legion: ' + why + '.' : '';
   }
+  /* round 4 (GOLIVE_MIN): every trader on Legion's desk is on a prop account, so Auto there waits for the ChartBridge that guards it */
+  if ((t === 'agentMode' || t === 'botMode') && m.mode === 'auto' && goLiveWhy(s.version)) return 'Not sent from Legion: ' + goLiveWhy(s.version) + '.';
   if (PR_AGENT_TYPES.has(t)) {
     const a = s.agents instanceof Map && typeof m.agent === 'string' ? s.agents.get(m.agent) || null : null;
     if (!a) return 'Not sent from Legion: ChartBridge has not described trader ' + String(m.agent || '') + ' yet.';
@@ -1796,16 +1804,17 @@ function lgCheck(m, st) {
 }
 /** The gate of Legion's desk: as praetorianGate, and it hears `groups` too (a group's members). */
 function legionGate() {
-  const S = { agents: new Map(), bot: null, accounts: null, groups: null };
+  const S = { agents: new Map(), bot: null, accounts: null, groups: null, version: '' };
   return {
     hear(m) {
       if (!plainObj(m)) return;
-      if (m.type === 'accounts') S.accounts = m;
+      if (m.type === 'hello') S.version = typeof m.version === 'string' ? m.version : '';   // round 4: GOLIVE_MIN
+      else if (m.type === 'accounts') S.accounts = m;
       else if (m.type === 'groups') S.groups = m;
       else if (m.type === 'agent' && typeof m.agent === 'string') S.agents.set(m.agent, m);
       else if (m.type === 'bot') S.bot = m;
     },
-    lost() { S.agents.clear(); S.bot = null; S.accounts = null; S.groups = null; },
+    lost() { S.agents.clear(); S.bot = null; S.accounts = null; S.groups = null; S.version = ''; },
     check: (m, preMove) => lgCheck(m, preMove ? Object.assign({}, S, { preMove: true }) : S),
     traderWhy: id => lgTraderWhy(S.agents.get(id) || null, S.accounts, S.groups),
     noHome: id => noHomeWhy(S.agents.get(id) || null, S.accounts, S.groups),
@@ -1838,6 +1847,6 @@ return {
   createCopilotRouter, copilotRouter, KEY_LOCK_MS, KEY_MIN_SHOWN_MS, KEY_SAY,
   boardRows, boardRoom, boardPosition, rWords, leagueChoices, standDownClearMsg, sdWhen,
   LIGHT, STEPS, PANELS, LIGHT_HOLD, LAP_MS, lightEvents, lightState, stepLines, ageText, entryRisk, tradesR, heatNow, rowTone, decisionRecord, sessionTrail, roomLines, MOTION_KEY, motionPref, setMotionPref,
-  gateAccounts, leftoverWhy, botAccountOf, noHomeWhy, traderFlat, gatedLink, MOVE_MS, prChoices, prBotChoices, praetorianLink, lgAccountOk, lgGroupWhy, lgTraderWhy, lgBotWhy, lgCheck, legionGate, legionLink, FLATOFF_MIN, PR_AGENT_TYPES, PR_BOT_TYPES, prIsPersonal, prNotPersonalWhy, prTraderWhy, prBotWhy, prCheck, praetorianGate
+  gateAccounts, leftoverWhy, botAccountOf, noHomeWhy, traderFlat, gatedLink, MOVE_MS, prChoices, prBotChoices, praetorianLink, lgAccountOk, lgGroupWhy, lgTraderWhy, lgBotWhy, lgCheck, legionGate, legionLink, FLATOFF_MIN, GOLIVE_MIN, goLiveWhy, PR_AGENT_TYPES, PR_BOT_TYPES, prIsPersonal, prNotPersonalWhy, prTraderWhy, prBotWhy, prCheck, praetorianGate
 };
 });

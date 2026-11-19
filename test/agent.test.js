@@ -24,8 +24,9 @@ const proposal = o => Object.assign({ type: 'agentProposal', agent: 'demo', id: 
   state: 'open', seenAt: null, answeredAt: null }, o || {});
 
 test('the tab with no agent; 1.22.0: an older ChartBridge (before 0.5.2, the page\'s minimum) is told to update', () => {
-  assert.deepEqual(AC.parseVersion('fake-0.4.0'), [0, 4, 0]);   // kept for checks above the page's minimum ChartBridge
-  assert.ok(AC.atLeast('0.5.0', '0.5.0') && AC.atLeast('0.5.1', '0.5.0') && AC.atLeast('fake-0.5.0', '0.5.0'));
+  assert.deepEqual(AC.parseVersion('0.4.0'), [0, 4, 0]);
+  for (const v of ['fake-0.4.0', 'v0.6.25', '0.6.25-rc1', '0.6', ' 0.6.25']) assert.equal(AC.parseVersion(v), null, v);   // plan step 3.2, X3: a.b.c only
+  assert.ok(AC.atLeast('0.5.0', '0.5.0') && AC.atLeast('0.5.1', '0.5.0') && !AC.atLeast('fake-0.5.0', '0.5.0'));
   assert.ok(!AC.atLeast('0.4.3', '0.5.0') && !AC.atLeast('', '0.5.0'));
   assert.equal(AC.offText({ v3: null }), 'Connecting to ChartBridge...');
   assert.equal(AC.MIN_BRIDGE, '0.5.2', 'the page\'s minimum: 0.5.0 and 0.5.1 refuse agentAccount with keepMode');
@@ -34,7 +35,8 @@ test('the tab with no agent; 1.22.0: an older ChartBridge (before 0.5.2, the pag
   assert.equal(AC.offText({ v3: true, version: '0.5.1', trading: { enabled: true } }), 'No agents on this ChartBridge (0.5.2 or later).');
   assert.equal(AC.offText({ v3: true, trading: { enabled: true } }), 'No agents on this ChartBridge (0.5.2 or later).', 'no version: not known to have it');
   assert.match(AC.offText({ v3: true, version: '0.5.2', trading: { enabled: true }, agents: 0 }), /none is named in its config\.txt/);
-  assert.match(AC.offText({ v3: true, version: 'fake-0.5.4', trading: { enabled: true }, agents: 0 }), /none is named in its config\.txt/);
+  assert.match(AC.offText({ v3: true, version: '0.5.4', trading: { enabled: true }, agents: 0 }), /none is named in its config\.txt/);
+  assert.equal(AC.offText({ v3: true, version: 'fake-0.5.4', trading: { enabled: true }, agents: 0 }), 'No agents on this ChartBridge (0.5.2 or later).', 'a version that is not a.b.c is not known to have it (X3)');
   assert.equal(AC.offText({ v3: true, version: '0.5.2', trading: { enabled: true }, agents: 1 }), '');
   assert.ok(AC.validId('manrae') && AC.validId('demo') && AC.validId('a1') && !AC.validId('1a') && !AC.validId('Demo') && !AC.validId('toolongagentid') && !AC.validId(''));
 });
@@ -234,7 +236,7 @@ test('rules change: flat keys exactly as the contract (section 7), checked again
 
 test('ChartBridge 0.5.4 (DECISION 2026-10-10 ag): in a trade the window alone may change; a window that flattens now asks first', () => {
   const pos = { root: 'MNQ', qty: 1, avgPrice: 25400 };
-  const inTrade = agent({ position: pos }), ctx = { roots: ['NQ', 'MNQ', 'ES', 'MES'], version: 'fake-0.5.4', now: T0 };   // 10:00 New York
+  const inTrade = agent({ position: pos }), ctx = { roots: ['NQ', 'MNQ', 'ES', 'MES'], version: '0.5.4', now: T0 };   // 10:00 New York
   const form = o => Object.assign(AC.rulesForm(RULES), o || {});
   assert.deepEqual(AC.rulesEditable(agent(), { version: '0.5.4' }), { ok: true, windowOnly: false, why: '' });
   assert.deepEqual(AC.rulesEditable(inTrade, { version: '0.5.4' }), { ok: true, windowOnly: true, why: 'Demo Agent has a position: only the window (entries from, until, flat at) can change now.' });
@@ -294,7 +296,7 @@ test('account chooser: tradable accounts, SIM first; never the bot\'s, the copie
   assert.equal(AC.accountChange(agent({ mode: 'auto' }), 'EVAL-A', ch, v052).confirm, 'Agent demo will trade LIVE account EVAL-A in Auto. Continue?', 'the question names the mode it keeps');
   assert.equal(AC.accountChange(agent({ mode: 'auto' }), 'EVAL-A', ch, v052).msg.keepMode, 'auto');
   assert.equal(AC.accountChange(agent({ mode: 'copilot' }), 'EVAL-A', ch, v052).confirm, 'Agent demo will trade LIVE account EVAL-A in Copilot. Continue?');
-  assert.equal(AC.accountChange(agent({ mode: 'copilot' }), 'EVAL-A', ch, { version: 'fake-0.5.2' }).msg.keepMode, 'copilot', 'the fake\'s version text counts');
+  assert.equal(AC.accountChange(agent({ mode: 'copilot' }), 'EVAL-A', ch, { version: '0.5.2' }).msg.keepMode, 'copilot', 'the version counts');
   assert.equal(AC.accountChange(agent({ mode: 'copilot' }), 'EVAL-A', ch, { version: '0.6.0' }).msg.keepMode, 'copilot');
   // the mismatch: the question named Auto; another page put the agent in Copilot since: keepMode says auto (ChartBridge then
   // puts it in Shadow), never the mode the person did not see
@@ -937,7 +939,9 @@ test('1.27.0 the Agent tab draws the picker from pickerChoices and a group\'s se
   assert.match(js, /AC\.groupTradable\(S\.accounts, S\.trading, acc\.seats\)/);
   assert.match(js, /function renderSeats\(a\) \{\s*const t = AC\.seatRows\(a, S\.accounts/);
   assert.equal(helper.flatOffStart(onGroup(), 0).action, 'off', 'a flat group turns off as before');
-  assert.match(js, /if \(Array\.isArray\(j\.seats\)\) \{[\s\S]*const failed = j\.seats\.filter\(x => o\.flatten\(x\.account, x\.root\) === false\);/, 'the page\'s Flatten on each seat holding his trade');
+  /* the R12 delta, nit: no desk has a Flatten of its own any more; a group's job names every seat holding his trade (handLine) */
+  assert.ok(!/o\.flatten\(/.test(js), 'no page Flatten');
+  assert.match(helper.handLine(helper.flatOffStart(onGroup({ mode: 'shadow', seats: [{ account: 'SIM-A', seat: true, position: { root: 'MNQ', qty: 1 } }, { account: 'SIM-B', seat: true, position: null }] }), 0).job), /^He is in Shadow: flatten SIM-A MNQ in NinjaTrader/, 'the seat holding his trade, named');
 });
 
 test('1.27.0 the Accounts tab marks each seat with its hero\'s name; the copier\'s pickers show seats with the reason', () => {
@@ -952,7 +956,7 @@ test('1.27.0 the Accounts tab marks each seat with its hero\'s name; the copier\
   assert.match(js, /const last = hero \? hero \+ '\\'s seat: the copier never trades it'/);
 });
 
-test('1.27.0 Off on a group in a trade: Shadow first, then the Flatten on every seat holding his trade, then Off once every seat is flat', () => {
+test('1.27.0 Off on a group in a trade: Shadow first, then every seat holding his trade flattened by hand (the R12 delta: no page Flatten), then Off once every seat is flat', () => {
   const AH = require('../live/agent-helper.js'), T = 1000000;
   const seat = (account, qty) => ({ account, seat: true, position: qty ? { root: 'MNQ', qty, avgPrice: 25000 } : null });
   const g = (mode, a, b, c) => onGroup({ mode, position: a ? { root: 'MNQ', qty: a, avgPrice: 25000 } : null, seats: [seat('SIM-A', a), seat('SIM-B', b), seat('SIM-C', c)] });
@@ -960,17 +964,17 @@ test('1.27.0 Off on a group in a trade: Shadow first, then the Flatten on every 
   assert.equal(AH.offStep(g('auto', 0, 0, 0)), 'off');
   assert.equal(AH.offQuestion(g('auto', 3, 0, -1), 'Demo'), 'Demo holds long 3 MNQ on SIM-A, short 1 MNQ on SIM-C. Flatten and turn him off?');
   const st = AH.flatOffStart(g('auto', 3, 2, 0), T);
-  assert.deepEqual(st, { job: { agent: 'demo', account: '', root: '', seats: [{ account: 'SIM-A', root: 'MNQ' }, { account: 'SIM-B', root: 'MNQ' }], phase: 'shadow', until: T + AH.SHADOW_WAIT_MS }, action: 'shadow' });
-  assert.equal(AH.flatOffStart(g('shadow', 3, 2, 0), T).action, 'flatten', 'in Shadow already: the Flatten at once');
+  assert.deepEqual(st, { job: { agent: 'demo', account: '', root: '', seats: [{ account: 'SIM-A', root: 'MNQ' }, { account: 'SIM-B', root: 'MNQ' }], phase: 'shadow', until: T + AH.SHADOW_WAIT_MS, hand: true }, action: 'shadow' });
+  assert.equal(AH.flatOffStart(g('shadow', 3, 2, 0), T).action, 'hand', 'in Shadow already: the wait at once');
   assert.match(AH.flatOffStart(onGroup({ mode: 'auto', seats: [{ account: 'SIM-A', position: { qty: 1 } }] }), T).error, /A seat's instrument is not known: nothing was sent/);
-  let r = AH.flatOffStep(st.job, g('auto', 3, 2, 0), T + 500, false);
+  let r = AH.flatOffStep(st.job, g('auto', 3, 2, 0), T + 500);
   assert.deepEqual([r.action, r.line], ['', 'Putting him in Shadow first (no new entries)...']);
-  r = AH.flatOffStep(st.job, g('shadow', 3, 2, 0), T + 2000, false);
-  assert.deepEqual([r.action, r.line], ['flatten', 'In Shadow: flattening SIM-A MNQ, SIM-B MNQ...']);
+  r = AH.flatOffStep(st.job, g('shadow', 3, 2, 0), T + 2000);
+  assert.deepEqual([r.action, r.line], ['', 'He is in Shadow: flatten SIM-A MNQ, SIM-B MNQ in NinjaTrader, or with Flatten on the chart page\'s ticket with each account picked; he turns off once every seat is flat.']);
   const j = r.job;
-  assert.match(AH.flatOffStep(j, g('shadow', 0, 2, 0), T + 3000, true).line, /^Flatten sent for SIM-A MNQ, SIM-B MNQ \(he is in Shadow\): turning him off once flat/, 'one seat still holds: wait');
-  assert.equal(AH.flatOffStep(j, g('shadow', 0, 2, 0), T + 3000, true).action, '');
-  assert.equal(AH.flatOffStep(j, g('shadow', 0, 0, 0), T + 4000, true).action, 'off', 'every seat flat: Off');
-  r = AH.flatOffStep(j, g('shadow', 0, 2, 0), j.until + 1, true);
-  assert.equal(r.line, 'Not flat 30 s after the Flatten for SIM-A MNQ, SIM-B MNQ: he stays on, in Shadow. Flatten in NinjaTrader, then press Off.');
+  assert.match(AH.flatOffStep(j, g('shadow', 0, 2, 0), T + 3000).line, /^He is in Shadow: flatten SIM-A MNQ, SIM-B MNQ in NinjaTrader/, 'one seat still holds: wait');
+  assert.equal(AH.flatOffStep(j, g('shadow', 0, 2, 0), T + 3000).action, '');
+  assert.equal(AH.flatOffStep(j, g('shadow', 0, 0, 0), T + 4000).action, 'off', 'every seat flat: Off');
+  r = AH.flatOffStep(j, g('shadow', 0, 2, 0), j.until + 1);
+  assert.equal(r.line, 'Not flat 15 minutes after he went to Shadow: he stays on, in Shadow. Flatten SIM-A MNQ, SIM-B MNQ, then press Off.');
 });

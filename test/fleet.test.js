@@ -109,9 +109,10 @@ test('legion: the head line never says nobody is trading while a trader is in Au
   for (const f of ['live/fleet.js', 'live/fleet.css', 'live/index.html']) assert.ok(!/on duty/i.test(read(...f.split('/'))), f + ': the words "on duty" (the withdrawn claim) are not used');
 });
 
-test('legion: versions: three parts or two, never "older than everything" (N7)', () => {
-  assert.deepStrictEqual([F.atLeast('0.6.17', '0.6.17'), F.atLeast('0.6.16', '0.6.17'), F.atLeast('0.7', '0.6.17'), F.atLeast('1.0', '0.6.20'), F.atLeast('0.6', '0.6.17'), F.atLeast('', '0.6.17'), F.atLeast(null, '0.6.17'), F.atLeast(['0.9.9'], '0.6.17')],
-    [true, false, true, true, false, false, false, false]);
+test('legion: versions: a.b.c only; anything else fails every gate closed (plan step 3.2, X3; was N7)', () => {
+  assert.deepStrictEqual([F.atLeast('0.6.17', '0.6.17'), F.atLeast('0.6.16', '0.6.17'), F.atLeast('0.7.0', '0.6.17'), F.atLeast('1.0.0', '0.6.20'), F.atLeast('0.7', '0.6.17'), F.atLeast('1.0', '0.6.20'), F.atLeast('', '0.6.17'), F.atLeast(null, '0.6.17'), F.atLeast(['0.9.9'], '0.6.17')],
+    [true, false, true, true, false, false, false, false, false]);
+  for (const v of ['0.6.25-rc1', 'v0.6.25', 'fake-0.6.25', '0.6.25 ', '0.6.25.1']) assert.strictEqual(F.atLeast(v, '0.6.17'), false, v);
 });
 
 
@@ -456,6 +457,70 @@ test('the question: everything is checked again at the Yes; closing the tab or a
   assert.strictEqual(P.posts.length, 1, 'Kill all is never sent again by a hello, a reconnect or a timer');
 });
 
+test('X1 (the R12 delta): on a ChartBridge that knows agentStopAll, Kill all sends it, with no personal account picked, and takes its answer', t => {
+  timers(t);
+  const L = require('../live/legion.js');
+  assert.strictEqual(F.STOPALL_MIN, L.STOPALL_MIN, 'Kill all and the header\'s Stop all switch at the same ChartBridge');
+  const nopersonal = Object.assign({}, accounts, { personalNamed: false });
+  /* the state: the personal-account refusal is ChartBridge's own prop rule; agentStopAll also reads the ledger, so it is not the page's to refuse */
+  assert.deepStrictEqual(F.killAllState('0.6.25', nopersonal, true, true), { ok: true, why: '' });
+  assert.match(F.killAllState('0.6.24', nopersonal, true, true).why, /No personal account is picked yet/, 'an older ChartBridge: as before');
+  assert.match(F.killAllState('0.6.25', nopersonal, true, true, true).why, /No personal account is picked yet/, 'Armed\'s own use still asks for it');
+  for (const v of ['0.6.25-rc1', 'v0.6.25']) assert.match(F.killAllState(v, accounts, true, true).why, /needs ChartBridge 0\.6\.17 or later/, v + ': not a version, so not offered (X3)');
+  assert.match(F.killAllState('0.6.25', nopersonal, false, true).why, /Sign in to trading first/);
+  assert.match(F.killAllState('0.6.25', nopersonal, true, false).why, /not connected/);
+  /* the message, by version, and the gate: exactly type and cid */
+  assert.deepStrictEqual(F.killAllMsg('c1', '0.6.25'), { type: 'agentStopAll', cid: 'c1' });
+  assert.deepStrictEqual(F.killAllMsg('c1', '0.7.0'), { type: 'agentStopAll', cid: 'c1' });
+  for (const v of ['0.6.24', '0.6.17', '0.6.25-rc1', '', undefined]) assert.deepStrictEqual(F.killAllMsg('c1', v), { type: 'agentKillAllProp', cid: 'c1' }, String(v));
+  assert.strictEqual(F.maySend({ type: 'agentStopAll', cid: 'c1' }), true);
+  assert.strictEqual(F.maySend({ type: 'agentStopAll' }), true);
+  for (const bad of [{ type: 'agentStopAll', cid: 'c1', agent: 'legion1' }, { type: 'agentStopAll', cid: '' }, { type: 'agentStopAll', cid: 7 }, { type: 'agentStopAll', cid: 'x'.repeat(41) }])
+    assert.strictEqual(F.maySend(bad), false, JSON.stringify(bad));
+  /* the words: a trader on the personal account and a prop one loses its prop seats; a Sim account the ledger types counts */
+  const rows = [{ name: 'mix1', autoProp: true, kind: 'mixed', grouped: true, connected: true }, { name: 'mix2', autoProp: true, kind: 'mixed', grouped: false, connected: true }];
+  assert.match(F.autoLine(rows, true), /Kill all will NOT stop it: stop it on Praetorian\): mix1.*Kill all will NOT stop it: stop it on Praetorian\): mix2/);
+  const said = F.autoLine(rows, true, true);
+  assert.match(said, /^In Auto on a group with your personal account in it \(Kill all takes its prop seats only; your personal account is not touched\): mix1\. In Auto on your personal account with a prop account left over \(Kill all takes its prop seats only; your personal account is not touched\): mix2$/);
+  assert.ok(!/NOT stop/.test(said));
+  /* the tab: no personal account picked, Kill all is offered and sends agentStopAll */
+  const P = page(t); P.fv.showTab(true); P.ready('0.6.25'); P.feed(nopersonal);
+  assert.deepStrictEqual([P.part('kill').attrs['aria-disabled'], /^Kill all is Stop all automation here: .*The Desk's account ledger/.test(P.part('hint').textContent)], [undefined, true], P.part('hint').textContent);
+  P.click('ask'); P.T += 700; P.click('yes');
+  assert.deepStrictEqual(P.posts.map(m => Object.keys(m).sort().join(',') + ' ' + m.type), ['cid,type agentStopAll']);
+  P.feed({ type: 'status', level: 'warn', text: 'Stop all automation: agent germanicus on EVAL-A: flattening what it owns, the kill switch on, mode shadow' });
+  assert.deepStrictEqual([P.part('answer').textContent.replace(/^\d\d:\d\d:\d\d {2}/, ''), P.part('answer').cls.has('bad'), P.fv.state().pending],
+    ['Stop all automation: agent germanicus on EVAL-A: flattening what it owns, the kill switch on, mode shadow', false, false], 'ChartBridge\'s Stop all line is the answer');
+  P.click('ask'); P.T += 700; P.click('yes');
+  P.feed({ type: 'status', level: 'warn', text: 'Stop all automation: agent a: stopped. FAILED, stop it on Legion\'s Cohorts now: b' });
+  assert.strictEqual(P.part('answer').cls.has('bad'), true, 'a FAILED in it is marked bad');
+  P.click('ask'); P.T += 700; P.click('yes');
+  P.feed({ type: 'reject', cid: P.posts[P.posts.length - 1].cid, reason: 'no account is known to be prop' });
+  assert.match(P.part('answer').textContent, /ChartBridge refused Kill all: no account is known to be prop$/);
+  assert.deepStrictEqual(P.posts.map(m => m.type), ['agentStopAll', 'agentStopAll', 'agentStopAll'], 'never agentKillAllProp on this ChartBridge');
+  /* an older ChartBridge on the same tab: agentKillAllProp, with the personal account picked */
+  const Q = page(t); Q.fv.showTab(true); Q.ready('0.6.24');
+  Q.click('ask'); Q.T += 700; Q.click('yes');
+  assert.deepStrictEqual(Q.posts.map(m => m.type), ['agentKillAllProp']);
+});
+
+test('round 4: Kill all takes a status line with a cid only for its own pending press; one with none by its words', t => {
+  timers(t);
+  const W = 'Stop all automation: agent germanicus on EVAL-A: stopped';
+  assert.equal(F.killAnswerOf({ type: 'status', text: W, cid: 'fl1' }, 'fl1'), true);
+  assert.equal(F.killAnswerOf({ type: 'status', text: W, cid: 'lx9' }, 'fl1'), false, 'the header\'s press, or another window\'s');
+  assert.equal(F.killAnswerOf({ type: 'status', text: W, cid: 'fl1' }, ''), false, 'nothing pending here');
+  assert.equal(F.killAnswerOf({ type: 'status', text: W }, ''), true, 'an older ChartBridge: by its words, as before');
+  assert.equal(F.killAnswerOf({ type: 'status', text: 'Something else', cid: 'fl1' }, 'fl1'), false);
+  const P = page(t); P.fv.showTab(true); P.ready('0.6.25');
+  P.click('ask'); P.T += 700; P.click('yes');
+  const mine = P.posts[0].cid;
+  P.feed({ type: 'status', level: 'warn', text: 'Stop all automation: another press, FAILED: x', cid: 'lx' + mine });
+  assert.deepStrictEqual([P.fv.state().pending, /Kill all sent: waiting/.test(P.part('answer').textContent)], [true, true], 'a line for another press is not this answer');
+  P.feed({ type: 'status', level: 'warn', text: W, cid: mine });
+  assert.deepStrictEqual([P.fv.state().pending, P.part('answer').textContent.replace(/^\d\d:\d\d:\d\d {2}/, '')], [false, W]);
+});
+
 test('Kill all is there and works whatever the roster does: a 404, a 500, an answer that never comes, a broken body', async t => {
   timers(t);
   for (const answer of [{ status: 404 }, { status: 500, json: () => Promise.resolve({ error: 'x' }) }, null, { status: 200, json: () => Promise.reject(new Error('bad')) }, { status: 200, json: () => Promise.resolve('junk') }]) {
@@ -796,7 +861,7 @@ test('lanes: a lane is the trader on a group of that Type; each reason a lane ca
 });
 
 test('the Armed switch: offered only when Kill all is, "not known" until heard, PARTLY with the reason; on names the pick and its sha256; off reaches traders in Auto outside the lanes', () => {
-  const V = '0.6.21', cards = liveCards(), L = list => F.lanes(list, groups, accounts, V, cards), cidFn = () => 'c';
+  const V = '0.6.25', cards = liveCards(), L = list => F.lanes(list, groups, accounts, V, cards), cidFn = () => 'c';
   const A = (ls, list, o) => F.armState(ls, (o && o.v) || V, !(o && o.out === 'signin'), !(o && o.out === 'conn'), o && 'acc' in o ? o.acc : accounts, o && 'grp' in o ? o.grp : groups, !(o && o.out === 'agents'), F.outsideAuto(ls, list, accounts, V));
   const both = [evalTrader(), fundTrader({ pick: 'duo.json' })], one = [evalTrader(), fundTrader()];
   const off = A(L(both), both);
@@ -807,8 +872,17 @@ test('the Armed switch: offered only when Kill all is, "not known" until heard, 
   // STOP 1: Armed is never offered when Kill all is not (one function decides both)
   const nopersonal = Object.assign({}, accounts, { personalNamed: false });
   const s1 = F.armState(L(both), V, true, true, nopersonal, groups, true, []);
-  assert.deepStrictEqual([s1.can, F.killAllState(V, nopersonal, true, true).ok], [false, false]);
-  assert.strictEqual(s1.why, F.killAllState(V, nopersonal, true, true).why, 'the same words as Kill all');
+  assert.deepStrictEqual([s1.can, F.killAllState(V, nopersonal, true, true, true).ok], [false, false]);
+  assert.strictEqual(s1.why, F.killAllState(V, nopersonal, true, true, true).why, 'the same words as Kill all (Armed\'s own use: the pick asked on every version)');
+  /* round 4, GOLIVE_MIN: below 0.6.25 Armed is never switched on (Auto on a prop account waits for the firm and GO-size guards);
+     off still works; the line names the version */
+  assert.equal(F.GOLIVE_MIN, '0.6.25');
+  for (const v of ['0.6.24', '0.6.21']) {
+    const old = F.armState(L(both), v, true, true, accounts, groups, true, F.outsideAuto(L(both), both, accounts, v));
+    assert.deepStrictEqual([old.can, old.canOff], [false, true], v);
+    assert.equal(old.why, 'Armed needs ChartBridge 0.6.25 or later for Auto on a prop account (its firm and GO-size guards); this one is ' + v + '. Switching off still works', v);
+  }
+  assert.equal(F.armState(L(both), '0.7.0', true, true, accounts, groups, true, []).can, true);
   // FIX 1: "not known" until the page has heard ChartBridge, and never offered either way
   for (const o of [{ out: 'conn' }, { out: 'signin' }, { acc: null }, { grp: null }, { out: 'agents' }]) {
     const u = A(L(both), both, o);
@@ -856,7 +930,7 @@ test('the Armed switch: offered only when Kill all is, "not known" until heard, 
 async function lanePage(t, list, more) {
   timers(t);
   const P = page(t); P.fv.showTab(true);
-  P.feed({ type: 'hello', version: '0.6.21' }); P.feed({ type: 'trading', enabled: true }); P.feed(accounts); P.feed(groups);
+  P.feed({ type: 'hello', version: '0.6.25' }); P.feed({ type: 'trading', enabled: true }); P.feed(accounts); P.feed(groups);
   for (const a of list) P.feed(a);
   P.replayDone();
   await P.tick();
@@ -1625,7 +1699,7 @@ test('a trader\'s accounts are its account and every seat it has; a shape the pa
 });
 
 test('answers B4-8, F2 (rule 12): no lane is armed while another trader is on, or may be on, one of its accounts, in any mode; the reason names the trader and the place, never the account', () => {
-  const V = '0.6.21', cards = liveCards();
+  const V = '0.6.25', cards = liveCards();
   const ready = [evalTrader(), fundTrader()];
   const armed = list => { const ls = F.lanes(list, groups, accounts, V, cards); return { ls, arm: F.armState(ls, V, true, true, accounts, groups, true, F.outsideAuto(ls, list, accounts, V)) }; };
   // a clean lane is still armable, and an unrelated trader on another account does not hold it
@@ -1954,7 +2028,7 @@ test('the re-review of 94, N6: the day stop mark says it is the page\'s own work
 
 
 test('the R12 delta of plan step 3.2, B1r: a lane whose trader a desk is turning off is not armable, and Armed sends it nothing', () => {
-  const V = '0.6.21', cards = liveCards(), cidFn = () => 'c';
+  const V = '0.6.25', cards = liveCards(), cidFn = () => 'c';
   const both = [evalTrader(), fundTrader({ pick: 'duo.json' })];
   const [ev, fu] = F.lanes(both, groups, accounts, V, cards, ['legion1']);
   assert.deepStrictEqual([ev.armable, ev.why], [false, 'A desk is turning legion1 off (Flatten and turn off): not armed until that ends']);
@@ -1964,5 +2038,35 @@ test('the R12 delta of plan step 3.2, B1r: a lane whose trader a desk is turning
   assert.strictEqual(F.lanes(both, groups, accounts, V, cards)[0].armable, true, 'no list: as before');
   const src = fs.readFileSync(path.join(__dirname, '..', 'live', 'fleet.js'), 'utf8');
   assert.match(src, /C\.lanes\(agentList\(\), S\.groups, S\.accounts, S\.version, S\.roster\.cards,\n\s+window\.AgentDesk && typeof window\.AgentDesk\.turningOff === 'function' \? window\.AgentDesk\.turningOff\(\) : \[\]\)/, 'FleetView reads the desks\' list');
-  assert.match(fs.readFileSync(path.join(__dirname, '..', 'live', 'agent.js'), 'utf8'), /window\.AgentDesk = \{ create, VERSION, turningOff: \(\) => \[\.\.\.new Set\(TURNING\.values\(\)\)\] \};/, 'every desk of the window reports its job');
+  const ag = fs.readFileSync(path.join(__dirname, '..', 'live', 'agent.js'), 'utf8');
+  assert.match(ag, /window\.AgentDesk = \{ create, VERSION, turningOff \};/, 'every desk reports its job');
+  /* the R12 delta X4 and its nit: each desk is read when asked (no copy made at a render), its job and the Off it sent until that
+     answers ok; and the windows of this origin share the list (test/agent-helper.test.js runs createTurnShare) */
+  assert.match(ag, /TURNING\.set\(api0, \(\) => \[H\.job && \{ id: H\.job\.agent, hold: false \}, H\.hold && \{ id: H\.hold, hold: H\.holdFailed && !\(H\.job && H\.job\.agent === H\.hold\) \}\]\);/);
+  /* round 4, S2: a lane held out only because an Off failed says so, and where to act */
+  const heldOnly = ['legion1']; Object.defineProperty(heldOnly, 'held', { value: ['legion1'] });
+  const [hv] = F.lanes(both, groups, accounts, V, cards, heldOnly);
+  assert.deepStrictEqual([hv.armable, hv.why], [false, 'Off was not done on a desk: press Off (or On) for legion1 there']);
+  const jobToo = ['legion1']; Object.defineProperty(jobToo, 'held', { value: [] });
+  assert.equal(F.lanes(both, groups, accounts, V, cards, jobToo)[0].why, 'A desk is turning legion1 off (Flatten and turn off): not armed until that ends', 'a job under way (or an Off in flight) is said as before');
+  assert.match(ag, /function turningOff\(\) \{\n\s+const all = localTurning\(\);\n\s+if \(SHARE\) \{ try \{ const s = SHARE\.list\(\), h = new Set\(s\.held \|\| \[\]\); for \(const id of s\) all\.set\(id, all\.has\(id\) \? all\.get\(id\) && h\.has\(id\) : h\.has\(id\)\); \} catch \(e\) \{/);
+  /* round 4, S1: a window going away clears its own entries at once; brought back from the back-forward cache it writes them again */
+  assert.match(ag, /window\.addEventListener\('pagehide', \(\) => \{ clearTimeout\(shareTimer\); shareTimer = 0; shareSig = ''; shareGone = true; if \(SHARE\) \{ try \{ SHARE\.set\(\[\]\); \}/);
+  assert.match(ag, /window\.addEventListener\('pageshow', e => \{ if \(e && e\.persisted\) \{ shareGone = false; shareSync\(true\); \} \}\);/);
+  assert.match(ag, /if \(H\.hold === id\) \{ if \(r\.reach === 'ok'\) \{ H\.hold = ''; H\.holdFailed = false; \} else H\.holdFailed = true; \}/, 'S2: a failed Off marks the hold');
+  assert.ok(!/syncTurning/.test(ag), 'no copy kept by renderPanel');
+  /* round 5, S1: a hold left by a failed Off ends when the helper says he is off and not running, and Armed is free of it again */
+  const AHm = require('../live/agent-helper.js');
+  assert.match(ag, /if \(AH\.holdClears\(H\.hold, H\.holdFailed, st\.reach, helperOf\(H\.hold\)\)\) \{ H\.hold = ''; H\.holdFailed = false; shareSync\(\); \}/, 'pollHelper clears the hold');
+  assert.strictEqual(AHm.holdClears('legion1', true, 'ok', { on: false, running: false }), true, 'off and not running, reach ok: the hold clears');
+  assert.strictEqual(AHm.holdClears('legion1', true, 'ok', { on: true, running: false }), false, 'still on: the hold stays');
+  assert.strictEqual(AHm.holdClears('legion1', true, 'ok', { on: false, running: true }), false, 'still running: the hold stays');
+  assert.strictEqual(AHm.holdClears('legion1', true, 'down', { on: false, running: false }), false, 'no good answer: the hold stays');
+  assert.strictEqual(AHm.holdClears('legion1', true, 'ok', null), false, 'he is not in the answer: the hold stays');
+  assert.strictEqual(AHm.holdClears('legion1', false, 'ok', { on: false, running: false }), false, 'an Off still in flight is not a failed one');
+  assert.strictEqual(AHm.holdClears('', true, 'ok', { on: false, running: false }), false, 'no hold: nothing to clear');
+  const freed = []; Object.defineProperty(freed, 'held', { value: [] });
+  assert.strictEqual(F.lanes(both, groups, accounts, V, cards, freed)[0].armable, true, 'with the hold gone, Armed is not blocked by it');
+  const stays = ['legion1']; Object.defineProperty(stays, 'held', { value: ['legion1'] });
+  assert.strictEqual(F.lanes(both, groups, accounts, V, cards, stays)[0].armable, false, 'while the hold stays, the lane is out of Armed');
 });
