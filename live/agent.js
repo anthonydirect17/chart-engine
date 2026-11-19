@@ -58,6 +58,9 @@ const EDGES = ['t', 'r', 'b', 'l'];
 const LIGHT_HTML = '<div class="ag-light" data-parity="LT02" aria-hidden="true">' + EDGES.map(e => '<i class="ag-edge e-' + e + '"><b></b><b></b></i>').join('') +
   EDGES.map(e => '<i class="ag-edge ag-h e-' + e + '"><b></b><b></b></i>').join('') + '</div>';
 
+/* the R12 delta of plan step 3.2, B1r: the traders a desk of this window is turning off (Flatten and turn off under way), so
+   Legion's Armed never puts one of them in Auto meanwhile (FleetCore.lanes reads AgentDesk.turningOff) */
+const TURNING = new Map();   // desk -> agent id
 function create(o) {
   o = o || {};
   const els = o.els || {};
@@ -97,6 +100,7 @@ function create(o) {
      H.lines[agent] until it ends (a give-up's until the next On or Off for that agent) */
   /* 1.29.1: H.okAt, H.misses, H.slow: the missed-poll grace (AgentHelper.pollStep): one missed GET /status keeps the last good
      answer, slow true, and nothing starts on it */
+  const api0 = {};                                  // this desk, as TURNING knows it
   const H = { reach: '', why: '', status: null, okAt: 0, misses: 0, slow: false, pick: {}, busy: false, ask: null, job: null, flatSent: false, lines: {}, said: '', saidAt: 0, setFilled: '' };
   { const v = readJson(K.chart); if (v && TF_NAMES[v.tf]) S.chartTf = v.tf; }
   { const v = readJson(K.feed); if (v && FILTERS.some(f => f[0] === v.filter)) S.feedFilter = v.filter; }
@@ -798,7 +802,9 @@ function create(o) {
     put(st, 'hidden', !stText); put(st, 'textContent', stText); attr(st, 'title', stText || null);
     put(q('[data-k="last"]'), 'textContent', m.last); attr(q('[data-k="last"]'), 'title', m.last);   // one line in the column, the whole of it here
   }
+  function syncTurning() { if (H.job && H.job.agent) TURNING.set(api0, H.job.agent); else TURNING.delete(api0); }
   function renderPanel() {
+    syncTurning();
     renderBoard();                                // 1.28.0: the board follows the same messages (accounts, groups, the helper)
     if (!view) return;
     const a = cur(); if (!a) return;
@@ -1836,10 +1842,10 @@ function create(o) {
     board: () => Object.assign({ shown: S.board, line: B.line, job: B.job ? Object.assign({}, B.job) : null }, boardModel()),
     /** Layout 5, read only (tests): the grid canvas, the chart maximized, his trades in R, his heat */
     layout5: () => { const a = cur(); return { grid: GRID ? GRID.state() : null, max: S.max, r: a ? rNow(a) : null, heat: a ? AC.heatNow(a, S.orders.values(), pointValue) : null, risks: risksDay().map }; },
-    destroy() { if (GRID) GRID.destroy(); unlisten(); unroute(); unmountChart(); if (resizeObs) resizeObs.disconnect(); if (rulesObs) rulesObs.disconnect(); clearTimeout(othersTimer); clearTimeout(helperTimer); clearTimeout(flatTimer); clearTimeout(assignTimer); clearTimeout(startTimer); S.shown = false; placeNotes(); if (propBox) propBox.classList.remove('ag-hide'); if (cornerLine) document.body.classList.remove('ag-agents'); if (cornerLine) cornerLine.remove(); clearTimeout(timer); },
+    destroy() { TURNING.delete(api0); if (GRID) GRID.destroy(); unlisten(); unroute(); unmountChart(); if (resizeObs) resizeObs.disconnect(); if (rulesObs) rulesObs.disconnect(); clearTimeout(othersTimer); clearTimeout(helperTimer); clearTimeout(flatTimer); clearTimeout(assignTimer); clearTimeout(startTimer); S.shown = false; placeNotes(); if (propBox) propBox.classList.remove('ag-hide'); if (cornerLine) document.body.classList.remove('ag-agents'); if (cornerLine) cornerLine.remove(); clearTimeout(timer); },
   };
   return api;
 }
 
-window.AgentDesk = { create, VERSION };
+window.AgentDesk = { create, VERSION, turningOff: () => [...new Set(TURNING.values())] };
 })();

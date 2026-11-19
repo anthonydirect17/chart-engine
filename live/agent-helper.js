@@ -312,6 +312,9 @@ function flatOffStep(job, a, now, sent) {
       : { action: '', job: Object.assign({}, j, { phase: 'flatten', until: now + HAND_WAIT_MS }), line: handLine(j) };
   }
   if (j.phase === 'flatten' && j.hand) {
+    /* the R12 delta, B1r: an older ChartBridge refuses nothing, and Legion's Armed can put him back in Auto: out of Shadow the wait
+       ends (never "He is in Shadow" when he is not, and no Off while he trades) */
+    if (x.mode !== 'shadow') return { action: 'giveup', job: null, line: 'He left Shadow (now ' + (x.mode || 'not known') + ') before he was flat: he stays on. Flatten ' + jobWhere(j) + ', then press Off.' };
     if (flat(x)) return { action: 'off', job: Object.assign({}, j, { phase: 'off' }), line: 'Flat: turning him off...' };
     if (now > j.until) return { action: 'giveup', job: null, line: 'Not flat ' + HAND_WAIT_MS / 60000 + ' minutes after he went to Shadow: he stays on, in Shadow. Flatten ' + jobWhere(j) + ', then press Off.' };
     return { action: '', job: j, line: handLine(j) };

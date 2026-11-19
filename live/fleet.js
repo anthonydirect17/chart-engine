@@ -526,8 +526,11 @@ const SHA_RX = /^[0-9a-f]{64}$/;
  * The review of 94: an account on the group's bench is not a lane's account (FIX 3); every account that trades with the
  * group must be one ChartBridge marks prop (or Sim, said as such), never one it has not said (STOP 1); Auto must be one the
  * Agent tab would offer (AgentCore.modesAllowed with groupTradable, FIX 6); and the 17:00 reset's daily None is said (FIX 4).
+ * turningOff: the ids a desk of this window is turning off (AgentDesk.turningOff()): such a lane is not armable meanwhile (plan
+ * step 3.2, the R12 delta B1r: on an older ChartBridge nothing else stops Armed from putting him back in Auto).
  */
-function lanes(agents, groupsMsg, accountsMsg, version, cards) {
+function lanes(agents, groupsMsg, accountsMsg, version, cards, turningOff) {
+  const turning = new Set(Array.isArray(turningOff) ? turningOff.filter(x => typeof x === 'string') : []);   // the R12 delta, B1r
   const groups = groupIndex(groupsMsg), idx = accountIndex(accountsMsg), files = new Map();
   if (cards && cards.ok) for (const c of cards.lineups.concat(cards.bots)) files.set(c.file, c);
   const list = (Array.isArray(agents) ? agents : []).filter(a => plainObj(a) && typeof a.agent === 'string').sort((x, y) => (x.agent < y.agent ? -1 : x.agent > y.agent ? 1 : 0));
@@ -590,6 +593,7 @@ function lanes(agents, groupsMsg, accountsMsg, version, cards) {
       : !accountsReadable(a) ? 'The page cannot tell its accounts (what ChartBridge sent is not an account, a group or a list of seats)'
       : !Array.isArray(g.members) ? 'Not known yet: ChartBridge sent its group without its members, so the page cannot tell who else is on its accounts'   // N3, as groupLock
       : shareWhy ? shareWhy
+      : turning.has(a.agent) ? 'A desk is turning ' + a.agent + ' off (Flatten and turn off): not armed until that ends'
       : a.enabled === false ? 'The trader is off in ChartBridge'
       : a.killed ? 'Its kill switch is on (it is released on his desk, by you: the Traders fold here, or Praetorian)'
       : a.standDown ? 'It is stood down: ' + str(a.standDown, 300)
@@ -1042,7 +1046,8 @@ function create(o) {
   const agentList = () => [...S.agents.values()];
   const cid = () => 'fl' + (++S.cidSeq).toString(36) + Math.random().toString(36).slice(2, 6);
   const killState = () => C.killAllState(S.version, S.accounts, S.signedIn, S.connected);
-  const laneList = () => C.lanes(agentList(), S.groups, S.accounts, S.version, S.roster.cards);
+  const laneList = () => C.lanes(agentList(), S.groups, S.accounts, S.version, S.roster.cards,
+    window.AgentDesk && typeof window.AgentDesk.turningOff === 'function' ? window.AgentDesk.turningOff() : []);   // the R12 delta, B1r
   const outside = ls => C.outsideAuto(ls, agentList(), S.accounts, S.version);
   /* "Heard" (the re-review of 94, N1, and its S1; answers 25). At sign-in ChartBridge replays every trader, one after another,
      and then sends agentStandDowns (ChartBridgeAgents.AfterAuth, 0.6.21). Every trader is heard only when that message has

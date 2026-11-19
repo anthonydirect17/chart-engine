@@ -273,3 +273,17 @@ test('plan step 3.2 (the R12 review, B1): a hand flatten (no Flatten of the page
   assert.equal(AH.flatOffStart(Object.assign({}, inCopilot, { position: null }), T, true).action, 'off', 'flat: Off at once');
   assert.equal(AH.flatOffStart(inCopilot, T).job.hand, undefined, 'without hand: the page\'s own Flatten, as before');
 });
+
+test('the R12 delta of plan step 3.2, B1r: in the hand wait, he leaves Shadow (Auto, from Legion\'s Armed or another page): the wait ends, no Off', () => {
+  const T = 3000000, pos = { root: 'MNQ', qty: 1, avgPrice: 25400 };
+  const inShadow = { agent: 'demo', account: 'SIM-AG1', mode: 'shadow', position: pos };
+  const st = AH.flatOffStart(inShadow, T, true);
+  assert.deepEqual([st.action, st.job.phase, st.job.hand], ['hand', 'flatten', true]);
+  let r = AH.flatOffStep(st.job, Object.assign({}, inShadow, { mode: 'auto' }), T + 5000, false);
+  assert.deepEqual([r.action, r.job], ['giveup', null]);
+  assert.equal(r.line, 'He left Shadow (now auto) before he was flat: he stays on. Flatten SIM-AG1 MNQ, then press Off.');
+  r = AH.flatOffStep(st.job, Object.assign({}, inShadow, { mode: 'auto', position: null }), T + 5000, false);
+  assert.equal(r.action, 'giveup', 'flat but out of Shadow: no Off either');
+  r = AH.flatOffStep(st.job, Object.assign({}, inShadow, { mode: undefined }), T + 5000, false);
+  assert.match(r.line, /^He left Shadow \(now not known\)/);
+});

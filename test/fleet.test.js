@@ -1952,3 +1952,17 @@ test('the re-review of 94, N6: the day stop mark says it is the page\'s own work
   assert.match(P.part('accounts').innerHTML, /The mark shown is worked out on this page from the group's rules and the plan's value; ChartBridge's own mark is not sent to the page yet\./);
 });
 
+
+test('the R12 delta of plan step 3.2, B1r: a lane whose trader a desk is turning off is not armable, and Armed sends it nothing', () => {
+  const V = '0.6.21', cards = liveCards(), cidFn = () => 'c';
+  const both = [evalTrader(), fundTrader({ pick: 'duo.json' })];
+  const [ev, fu] = F.lanes(both, groups, accounts, V, cards, ['legion1']);
+  assert.deepStrictEqual([ev.armable, ev.why], [false, 'A desk is turning legion1 off (Flatten and turn off): not armed until that ends']);
+  assert.strictEqual(fu.armable, true, 'the other lane is armable as before');
+  assert.deepStrictEqual(F.armMsgs([ev, fu], true, both, cidFn).map(m => m.agent), ['legion2'], 'Armed puts only the other lane in Auto');
+  assert.strictEqual(F.lanes(both, groups, accounts, V, cards, [])[0].armable, true, 'once it ends: armable again');
+  assert.strictEqual(F.lanes(both, groups, accounts, V, cards)[0].armable, true, 'no list: as before');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'live', 'fleet.js'), 'utf8');
+  assert.match(src, /C\.lanes\(agentList\(\), S\.groups, S\.accounts, S\.version, S\.roster\.cards,\n\s+window\.AgentDesk && typeof window\.AgentDesk\.turningOff === 'function' \? window\.AgentDesk\.turningOff\(\) : \[\]\)/, 'FleetView reads the desks\' list');
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'live', 'agent.js'), 'utf8'), /window\.AgentDesk = \{ create, VERSION, turningOff: \(\) => \[\.\.\.new Set\(TURNING\.values\(\)\)\] \};/, 'every desk of the window reports its job');
+});
