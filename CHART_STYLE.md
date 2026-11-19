@@ -753,10 +753,13 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   the loss red of the NO STOP tag.
 - **The order ticket**: the order bar's own controls and colors (live.css) in a column, 6 px gaps, 28 px controls:
   instrument and account; Armed (the crimson switch, the ticket outlined in `--crimson-word` while Armed, 1.13.0); Qty with "max N" and the
-  bracket preset; Bracket, stop, target and t / pt; Buy MKT and Sell MKT, half each; B/E, Close and Cancel all, a
-  third each; then the position and P&L, the stop and target cover, the last fill (buy green, sell red), "Also open"
+  bracket preset; Bracket, stop, target and t / pt; Buy MKT and Sell MKT, half each; B/E, Flatten, Cut half, Cancel all
+  and Merge in a grid of three (release 1); then the position and P&L, the stop and target cover, the last fill (buy green, sell red), "Also open"
   lines in warn amber each with its Close, the account note, the Cancel all line and the notes line (11 px; warn and
-  loss colors). It fits a 2 x 3 panel at 1366x768 without scrolling; a shorter panel scrolls inside. The placeholder
+  loss colors). A ticket panel under 400 px tall (the default 2 x 3 at 1366x768) is compact, 4 px gaps and 24 px controls,
+  so the managed line and its bar trail warning stay inside it (1.42); it follows the panel's size, never the ticket's
+  content, so nothing moves when a trade opens. It fits a 2 x 3 panel at 1366x768 without scrolling; a shorter panel
+  scrolls inside. The placeholder
   in another window says "Ticket is in the other window" with Move the ticket here; with no ticket anywhere "No window
   has the ticket" with Use the ticket here.
 

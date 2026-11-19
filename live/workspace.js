@@ -1300,6 +1300,10 @@ function holdLine(v) {
 }
 const placeholderKind = () => !(link && locks) ? 'none' : holder() ? 'elsewhere' : 'free';
 const tk = id => TK.view ? TK.view[id] || null : null;
+/* the ticket panel's height (its content box, the header in it) under which the ticket is compact: a strategy's ticket (its
+   description, the position and a managed line of two) needs about 400 px at full size; the default 2 x 3 panel is 353 px at
+   1366 x 768 (compact) and taller at 1920 x 1080 (as before) */
+const TICKET_SHORT = 400;
 function mountTicket(v) {
   v.mode = 'live';
   const opt = r => `<option value="${r}">${r}</option>`;
@@ -1331,6 +1335,11 @@ function mountTicket(v) {
   for (const el of v.body.querySelectorAll('[data-tk-id]')) map[el.dataset.tkId] = el;
   map.unsentBar = $('wsUnsent'); map.unsentText = $('wsUnsentText'); map.unsentClose = document.createElement('button');   // the window's own note (one per window)
   TK.view = map; TK.el = v.body.firstChild; TK.v3 = {};
+  /* a short ticket panel (the default 2 x 3 at 1366 x 768) is compact: release 1 (1.6c) put B/E, Flatten, Cut half, Cancel all
+     and Merge in a grid of three, a second row of buttons, and the managed line (the bar trail warning, 1.42) went below the
+     panel. Compact gives the room back: by the panel's size only, never by what the ticket shows, so no control moves mid-trade */
+  const unfit = fitPanel(v, (w, h) => ({ 'tk-short': h < TICKET_SHORT }));
+  v.cleanups.push(() => { unfit(); v.el.classList.remove('tk-short'); });
   map.root.value = TK.root;
   TK.bar = TC.wire(id => map[id] || null, core, {
     U, LP, prefix: PREFIX, ticket: true, root: () => TK.root, flash: tnote, render: () => renderOrders(), listen: (t, type, fn) => { t.addEventListener(type, fn); v.cleanups.push(() => t.removeEventListener(type, fn)); },
