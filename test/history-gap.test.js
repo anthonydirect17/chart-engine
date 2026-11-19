@@ -53,7 +53,7 @@ test('0.6.8: ChartBridge keeps a minute book per instrument and joins it to Ninj
   assert.match(cs, /if \(!Started \|\| Bars == null \|\| Bars\.Count == 0\) return null;/, 'item 1: no join in the book\'s first minute');
   assert.match(cs, /if \(!CanStandIn\(L, book\)\)/, 'item 2: the time limit gives up only when history can stand in');
   assert.match(cs, /\\"type\\":\\"historyLate\\"/, 'item 2: the page is told when the real answer comes');
-  assert.match(cs, /StartLoad\(client, root, days, tickHours, sub, false, false, true\); \}/, 'item 3: an agent\'s subscribe');
+  assert.match(cs, /StartLoad\(client, root, days, tickHours, sub, false, false, true(, false)?\); \}/, 'item 3: an agent\'s subscribe');
   assert.match(cs, /if \(!L\.Agent\) Task\.Delay\(MinuteTimeoutMs\)/, 'item 3: no minute time limit for an agent');
   assert.match(cs, /if \(!L\.Agent\) Task\.Delay\(TailTimeoutMs\)/, 'item 3: no last-trades time limit for an agent');
   assert.match(cs, /\\"minuteTimedOut\\":" \+ \(L\.MinuteTimedOut/, 'item 3: ready says it');

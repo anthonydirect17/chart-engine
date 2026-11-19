@@ -25,6 +25,9 @@
  * line's socket closes, every stand-in on it closes; each panel reconnects as it always has, and the first one back
  * opens the line again.
  *
+ * ChartBridge 0.6.25: a panel's subscribe with deltaTable makes a load that asks for it (the delta table before ready, and the
+ * served window's live trades with their sides); one pushed after ready (ChartBridge read the session's table back) is kept in
+ * the load's record like a pushed profile, so a panel that joins later gets it at the same place.
  * 1.14.0: a load keeps each trade's Time and Sales category (q, ChartBridge 0.3.8) with it, so a tape that joins later or
  * a replay colours its trades as one there from the start; a "settlement" (0.3.7) is kept in the line's hello.
  * Seams for the next build (E2b): order messages (trading, orders, order, position, reject) are passed to every panel
@@ -46,7 +49,7 @@ const LIVE_MAX = 1000000;
 const LIVE_TRIM = 100000;
 const SLICE = 5000;                // live trades replayed per task
 const BACKFILL_MAX = 8000000;      // backfill trades a load keeps for a panel that joins later (the chart's own hard cap)
-const LOAD_TYPES = ['history', 'ticks', 'ready', 'profile'];
+const LOAD_TYPES = ['history', 'ticks', 'ready', 'profile', 'deltaTable'];   // deltaTable: ChartBridge 0.6.25
 const NO_TICKS = { tickHours: 0, window: false, tickFrom: null };   // what a panel that asked for no ticks is told (and the load's days, 1.15.0)
 const SENDS = ['subscribe', 'ping', 'htf'];         // 1.15.0: htf (ChartBridge 0.3.7) asks for 4h, 1D or 1W bars: read only
 
@@ -62,12 +65,12 @@ function htfOf(m) {
 function needOf(m) {
   const days = Number.isFinite(+m.days) && m.days !== null && m.days !== '' ? Math.max(0, +m.days) : 5;
   const th = m.tickHours === undefined || m.tickHours === null ? 8 : +m.tickHours;
-  return { days, tickHours: Number.isFinite(th) && th > 0 ? th : 0, liveFirst: m.liveFirst === true, profile: m.profile === true };
+  return { days, tickHours: Number.isFinite(th) && th > 0 ? th : 0, liveFirst: m.liveFirst === true, profile: m.profile === true, deltaTable: m.deltaTable === true };
 }
 /** The least one load that holds both. */
 function merge(a, b) {
   if (!a) return Object.assign({}, b);
-  return { days: Math.max(a.days, b.days), tickHours: Math.max(a.tickHours, b.tickHours), liveFirst: a.liveFirst || b.liveFirst, profile: a.profile || b.profile };
+  return { days: Math.max(a.days, b.days), tickHours: Math.max(a.tickHours, b.tickHours), liveFirst: a.liveFirst || b.liveFirst, profile: a.profile || b.profile, deltaTable: !!(a.deltaTable || b.deltaTable) };
 }
 /**
  * Does a load asked with `have` hold what `want` asks? With ChartBridge 0.3.5 (hello's features list "liveFirst") every
@@ -77,6 +80,7 @@ function merge(a, b) {
 function covers(have, want, windowed) {
   if (have.days < want.days) return false;
   if (want.profile && !have.profile) return false;
+  if (want.deltaTable && !have.deltaTable) return false;   // 0.6.25: the delta table (and sides in the window) only come to a load that asked
   if (want.tickHours <= 0) return true;
   return windowed ? have.tickHours > 0 : have.tickHours >= want.tickHours;
 }
@@ -234,7 +238,7 @@ function create(options) {
       if (!load || m.root !== L.root) return;
       const hasSub = m.sub !== undefined && m.sub !== null;
       if (hasSub && load.sub !== null && +m.sub !== load.sub) return;            // an older load's message, still on its way
-      if (t === 'profile' && !hasSub && load.ready) {                            // the session table made whole, after ready
+      if ((t === 'profile' || t === 'deltaTable') && !hasSub && load.ready) {    // the session table made whole (0.6.25: the delta table read back), after ready
         load.late.push({ at: load.live.base + load.live.n, m });
         for (const V of L.clients) if (V.load === load && !V.replaying) V._deliver(m);
         return;
@@ -314,6 +318,7 @@ function create(options) {
     if (sub !== null) msg.sub = sub;
     if (L.windowed && need.tickHours > 0) msg.liveFirst = true;
     if (need.profile) msg.profile = true;
+    if (need.deltaTable) msg.deltaTable = true;
     counts.subscribes++;
     try { L.ws.send(JSON.stringify(msg)); } catch (e) { /* the close follows */ }
     for (const V of asking) attach(V, load);

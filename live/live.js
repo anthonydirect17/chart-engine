@@ -1386,6 +1386,8 @@ function mount(container, options) {
     // the delta pane (1.7.0): the number of tick backfill trades (the store's trades before the first live one), and the
     // window the current delta was built with ({ from, by, why, journal })
     backfill: 0, deltaCov: null,
+    // ChartBridge 0.6.25's delta table (BB.decodeDeltaTable, with `at`: the store's length when it came), null without one
+    dtab: null,
     sub: 0, window: false, table: null, vpTable: null, sync: null,
     loadAt: 0, loadMsgAt: 0 };   // 1.38.1: when the load began, and its last message   // served window and session table (1.8.0): see "Served window" below
   /* 1.15.0: this chart's 4h, 1D or 1W bars from ChartBridge (htfSync below): asked for which root and timeframe, and how it went */
@@ -1442,7 +1444,7 @@ function mount(container, options) {
     D.lv = []; D.lvSrc = null; D.ib = null; D.ibKey = ''; D.on = null; D.onKey = ''; ibNote(null);
     D.vp = null; D.liveFrom = null; if (!keep) chart.setProfile(null); vpNote();
     D.window = false; D.table = null; D.sync = null; rangeNote();
-    D.backfill = 0; D.deltaCov = null;
+    D.backfill = 0; D.deltaCov = null; D.dtab = null;
     deltaJob = null; D.delta = null; if (!keep) chart.setDelta(null); deltaView();   // a build of the old load stops
     if (SIG.job || SIG.absorption || SIG.bubbles || SIG.divergence) { SIG.job = null; SIG.absorption = SIG.bubbles = SIG.divergence = SIG.cd = null; SIG.version++; }   // made again with the bars
     const inst = instruments[root];
@@ -1584,6 +1586,17 @@ function mount(container, options) {
       vpBuild();
       if (D.window && tickView()) rebuild();              // the VWAP from the table now (the backfill made it whole)
     }
+  }
+
+  /* ChartBridge 0.6.25's "deltaTable": the session's buy, sell and unknown volume per second, exactly the trades before the
+     store's current end (the ones after come as live ticks). A table pushed after ready (ChartBridge read the session's saved
+     table back after this load) builds the delta again, the one shown kept until the new one is in. No session (no trade
+     since ChartBridge started): the count of an older ChartBridge's page. */
+  function onDeltaTable(m) {
+    const T = m.session ? BB.decodeDeltaTable(m.session) : null;
+    if (T) T.at = D.ticks.length;
+    D.dtab = T;
+    if (D.ready) deltaStart({ keep: true });
   }
 
   function updateLevels() {
@@ -1921,6 +1934,12 @@ function mount(container, options) {
   const countMissed = () => K.started && K.root === D.root ? K.missed : 0;
   /* The window a build counts from: the count's, when it began on an earlier load of this instrument, else this store's. */
   function deltaCoverage() {
+    // ChartBridge's delta table (0.6.25): every trade of the session (from 18:00 ET, or from when ChartBridge started) to the
+    // store's `at`, then the store's trades: the same count on every load, reload, timeframe, instrument or layout switch
+    if (D.dtab) {
+      const T = D.dtab;
+      return { from: T.coveredFrom, by: 'table', why: T.why === 'start' ? 'ChartBridge started' : T.why === 'feed' ? 'data connection down at 18:00' : '', index: T.at, table: true, missed: T.missed };
+    }
     if (!(K.started && K.root === D.root && K.load !== loadSeq)) return storeCoverage();
     const live = K.liveFrom + liveLate(), first = K.firstT !== null ? K.firstT : Infinity;
     let cov = !K.open ? { from: K.fixedFrom, by: 'store', why: '' } : live < first ? { from: live, by: 'live', why: K.openWhy } : { from: first, by: 'first', why: K.openWhy };
@@ -1962,7 +1981,11 @@ function mount(container, options) {
     const cov = deltaCoverage();
     const cd = new CE.CumulativeDelta({ sessionStart: SESSION, seconds: range ? 0 : tf.sec, coveredFrom: cov.from, byTime: !range && tf.sec >= 300 });
     let job;
-    if (cov.journal) {
+    if (cov.table) {
+      // from ChartBridge's delta table (BB.TableReplay): its seconds, then the store's trades after it; on range bars the
+      // window's sided trades in the bars they made
+      job = deltaJob = { cd, cov, tr: new BB.TableReplay(D.ticks, D.dtab, cd, range ? rangeBuilder() : null) };
+    } else if (cov.journal) {
       // from the count (a later load of the same instrument): its trades on this load's bars; on range bars by their order
       // in this load's store, as the chart's range bars were built (BB.RangeReplay, round 6), never by their time
       const segs = (K.base ? [{ st: K.base.store, i: K.base.from, end: K.base.to }] : []).concat({ st: K.trades, i: 0, end: null });
@@ -1979,6 +2002,16 @@ function mount(container, options) {
     const slice = () => {
       if (destroyed || job !== deltaJob) return;
       const t0 = performance.now();
+      if (job.tr) {                                         // the delta table (0.6.25)
+        let done;
+        do done = job.tr.step(DELTA_SLICE_TRADES);
+        while (!done && performance.now() - t0 < DELTA_SLICE_MS);
+        if (!done) { later(slice, 0); return; }
+        deltaJob = null;
+        D.deltaCov = job.cov;
+        deltaSet(job.cd);
+        return;
+      }
       if (job.i === null) {                                 // BB.rangeStartIndex, a slice at a time
         const n = D.ticks.length;
         let j = job.scan;
@@ -2021,7 +2054,12 @@ function mount(container, options) {
   const deltaBuilding = () => deltaJob !== null;
   /* Why a session may count from later than 18:00, for the pane's title (the page sets no note since 1.21.0). */
   const deltaWhy = () => D.deltaCov ? D.deltaCov.why : '';
-  function deltaView() { chart.setDeltaView({ note: '', reason: deltaWhy(), missed: countMissed() }); }
+  /* 0.6.25: a count from ChartBridge's delta table says from when it counts even from 18:00 ("since 18:00 ET"), and the seconds
+     ChartBridge did not see (a feed drop, a NinjaTrader restart) as its missed seconds */
+  function deltaView() {
+    const tab = D.deltaCov && D.deltaCov.table ? D.deltaCov : null;
+    chart.setDeltaView({ note: '', reason: deltaWhy(), missed: tab ? tab.missed : countMissed(), start: !!tab });
+  }
   /* Written only when it changes (the badge, the notes): no layout for an unchanged value. */
   const put = (el, k, v) => { if (el && el[k] !== v) el[k] = v; };
   /*
@@ -2217,6 +2255,7 @@ function mount(container, options) {
     if (drop > 0) {
       D.ticks.dropFirst(drop); D.tickFrom = D.ticks.time(0) + 0.001; D.trimmed = true;
       if (D.table) D.table.at = Math.max(0, D.table.at - drop);
+      if (D.dtab) D.dtab.at = Math.max(0, D.dtab.at - drop);
       D.backfill = Math.max(0, D.backfill - drop); countStoreTrimmed(drop);
       if (deltaBuilding()) { deltaStart(); deltaFed = true; }   // the store (or the count's part of it) moved under a build: start it over
     }
@@ -2351,7 +2390,7 @@ function mount(container, options) {
   /* ChartBridge 0.3.5 lists "liveFirst" and "profile" in hello's `features`. Only then does the page send its subscribe id,
      ask for the served window on seconds and range views, and ask for the session table ("profile"); ChartBridge 0.3.4 and
      older get the subscribe of 1.6.0. */
-  let LIVE_FIRST = false, PROFILE = false, HTF_OK = false, subSeq = 0;
+  let LIVE_FIRST = false, PROFILE = false, HTF_OK = false, DELTA_TABLE = false, subSeq = 0;   // DELTA_TABLE: ChartBridge 0.6.25's delta table
   const shownUrl = u => u ? String(u).split('?')[0] : 'ChartBridge';
 
   function connect() {
@@ -2407,6 +2446,7 @@ function mount(container, options) {
     if (D.sub) msg.sub = D.sub;
     if (LIVE_FIRST && D.tickHours > 0) { msg.liveFirst = true; D.window = true; }
     if (PROFILE) msg.profile = true;
+    if (DELTA_TABLE) msg.deltaTable = true;            // the session's delta from 18:00 ET (ChartBridge 0.6.25), and sides in the served window
     send(msg);
     htfSync(true);                                      // 1.15.0: a new load (or connection) asks for its htf bars again, the ones shown kept
   }
@@ -2550,6 +2590,7 @@ function mount(container, options) {
         LIVE_FIRST = Array.isArray(m.features) && m.features.includes('liveFirst');
         PROFILE = Array.isArray(m.features) && m.features.includes('profile');
         HTF_OK = Array.isArray(m.features) && m.features.includes('htf');   // 0.3.7: 4h, 1D and 1W bars
+        DELTA_TABLE = Array.isArray(m.features) && m.features.includes('deltaTable');   // 0.6.25: the delta table
         instruments = {};
         for (const i of m.instruments || []) instruments[i.root] = i;
         readouts();
@@ -2593,6 +2634,11 @@ function mount(container, options) {
         // with this load's id before its "ready"; without one when the table's backfill made it whole (only once live)
         if (m.root !== D.root || (m.sub !== undefined && m.sub !== null ? stale(m) : !D.ready)) return;
         onProfile(m);
+        break;
+      case 'deltaTable':
+        // 0.6.25: with this load's id before its "ready"; without one when ChartBridge read the session's saved table back after it
+        if (m.root !== D.root || (m.sub !== undefined && m.sub !== null ? stale(m) : !D.ready)) return;
+        onDeltaTable(m);
         break;
       case 'tick': onTick(m); break;
       case 'htf': onHtf(m); break;                         // 1.15.0: NinjaTrader's 4h, 1D or 1W bars (ChartBridge 0.3.7)

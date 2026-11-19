@@ -104,6 +104,14 @@
 //   new connections; POST /test/tape?root=NQ&from=<t> the tape's trades from that time; /test/books what the fake's
 //   "ChartBridge" did per instrument (windows asked and served, the table's state); /test/feed-drop a data connection drop
 //   (every table not whole from then on, the served windows dropped, live pages get the profile again).
+// --delta-table (ChartBridge 0.6.25, nt8/PROTOCOL.md "The delta table"; with --live-first): hello lists "deltaTable"; a subscribe
+//   with deltaTable gets the "deltaTable" message after its profile and before ready: the tape's trades of the session per second
+//   (buy, sell, unknown volume by the fake's sides), exactly the trades before the ones the page gets next, and its served window
+//   has the trades the fake made live after "NinjaTrader" answered as [t, p, v, s, sm] (or with q), the answer's as before.
+//   --delta-started: ChartBridge started mid-session (the fake's start): the table counts from then ("why": "start").
+//   With --test-controls, POST /test/delta-push sends every live page that asked a new table (no sub), as ChartBridge does when
+//   it reads the session's saved table back after a load; /test/delta-missed?s=8 sets the seconds it reports missed; /test/pause
+//   (?on=0 to resume) stops every live trade, so a count can be checked to the trade. Sample data.
 // --quote-hours=N (ChartBridge 0.3.4.1's config.txt quoteHours): only the backfill's last N hours have measured sides
 // (sm 2); every trade before them gets a tick-rule side (sm 3), as when NinjaTrader is asked for no historical quotes
 // there. 0 is 0.3.4.1's default (no measured side in the backfill); without the flag, every backfill trade is measured
@@ -206,6 +214,8 @@ const TEST_CONTROLS = !!flag('test-controls'), ALLOW_FRAMES = !!flag('allow-fram
 const TICK_HOURS_MAX = flagValue('tick-hours-max') ? +flagValue('tick-hours-max') : Infinity;
 const TICK_RATE = +flagValue('tick-rate') || 0, LIVE_RATE = +flagValue('live-rate') || 0;
 const LIVE_FIRST = !!flag('live-first'), CALENDAR = !!flag('calendar');
+const DELTA_TABLE = LIVE_FIRST && !!flag('delta-table'), DELTA_STARTED = !!flag('delta-started');   // 0.6.25
+let deltaMissed = 0;                               // /test/delta-missed
 let liveFirstOn = LIVE_FIRST;                      // /test/features can turn it off for new connections
 const RANGE_HOURS = +flagValue('range-hours') || 2, WINDOW_MS = flagValue('window-ms') === '' ? 300 : +flagValue('window-ms');
 const TABLE_BUILDING_MS = flagValue('table-building') === '' ? -1 : +flagValue('table-building');
@@ -438,6 +448,32 @@ function profileMsg(r, end, sub) {
     last: p0 < a ? { from: sessionOf(s0 - 1), whole: true, coveredFrom: sessionOf(s0 - 1), rows: tableRows(r, p0, a) } : null };
   if (sub !== undefined) msg.sub = sub;
   books[r].profiles++;
+  return msg;
+}
+/* 0.6.25: the "deltaTable" message: the session of the tape's last trade up to trade `end`, per second, delta coded. */
+const deltaBooks = {};                               // root -> { s0, upTo, m }: kept as the tape grows, as ChartBridge keeps its table
+function deltaTableMsg(r, end, sub) {
+  const k = tapes[r], lastT = end > 0 ? k.t[end - 1] : etNow(), s0 = sessionOf(lastT), a = DELTA_STARTED ? Math.max(k.at(s0), startN[r]) : k.at(s0);
+  let d = deltaBooks[r];
+  if (!d || d.s0 !== s0 || d.upTo > end) d = deltaBooks[r] = { s0, upTo: a, m: new Map() };
+  for (let i = d.upTo; i < end; i++) {
+    const sec = Math.floor(k.t[i]);
+    let x = d.m.get(sec);
+    if (!x) { x = [0, 0, 0]; d.m.set(sec, x); }
+    x[k.s[i] === 1 ? 0 : k.s[i] === -1 ? 1 : 2] += k.v[i];
+  }
+  d.upTo = end;
+  const m = d.m, secs = [...m.keys()], rows = [], unknown = [];   // in time order: the tape is
+  let pr = s0, pu = s0;
+  for (const sec of secs) {
+    const x = m.get(sec);
+    if (x[0] || x[1]) { rows.push(sec - pr, x[0], x[1]); pr = sec; }
+    if (x[2]) { unknown.push(sec - pu, x[2]); pu = sec; }
+  }
+  const started = DELTA_STARTED && startN[r] > k.at(s0);
+  const msg = { type: 'deltaTable', root: r, session: { from: s0, coveredFrom: started ? +k.t[startN[r]].toFixed(3) : s0, why: started ? 'start' : null, missed: deltaMissed, rows, unknown } };
+  if (sub !== undefined) msg.sub = sub;
+  books[r].deltas = (books[r].deltas || 0) + 1;
   return msg;
 }
 if (LIVE_FIRST && TABLE_BUILDING_MS >= 0) setTimeout(() => {
@@ -676,7 +712,7 @@ function subscribe(c, m) {
 function subscribeTape(c, m, r) {
   const sub = Number.isInteger(m.sub) ? m.sub : undefined, k = tapes[r], bars = lagged(data[r], m.tickHours !== undefined && !(+m.tickHours > 0)), b = books[r];
   const tag = o => (sub !== undefined ? Object.assign(o, { sub }) : o);
-  c.seq = (c.seq || 0) + 1; c.profile = m.profile === true;
+  c.seq = (c.seq || 0) + 1; c.profile = m.profile === true; c.delta = DELTA_TABLE && m.deltaTable === true;
   const seq = c.seq;
   for (let i = 0; i < bars.length; i += 4000) {
     const chunk = bars.slice(i, i + 4000).map(x => [x.t, x.o, x.h, x.l, x.c, x.v]);
@@ -685,12 +721,16 @@ function subscribeTape(c, m, r) {
   const hours = Math.min(TICK_HOURS_MAX, m.tickHours === undefined ? 8 : m.tickHours);
   const sendTicks = (a, e) => {
     // the served window's trades carry no side (ChartBridge 0.3.5 sends [t, p, v]); an old bridge's full load does
-    for (let i = a; i < e || i === a; i += 20000) { send(c, tag({ type: 'ticks', root: r, ticks: k.rows(i, Math.min(e, i + 20000), liveFirstOn), done: i + 20000 >= e })); if (e <= a) break; }
+    // 0.6.25: a page that asked for the delta table gets the trades made live after the window's answer with their sides
+    const sided = c.delta && b.window ? b.window.liveFrom : Infinity;
+    const rowsOf = (x, y) => { const out = k.rows(x, y, liveFirstOn); if (sided < y) for (let i = Math.max(x, sided); i < y; i++) out[i - x] = k.row(i); return out; };
+    for (let i = a; i < e || i === a; i += 20000) { send(c, tag({ type: 'ticks', root: r, ticks: rowsOf(i, Math.min(e, i + 20000)), done: i + 20000 >= e })); if (e <= a) break; }
   };
   const finish = from => {                          // the trades from `from` up to now, the profile of exactly those before, ready
     const end = k.n;
     if (from !== null) sendTicks(from, end);
     if (c.profile) send(c, tag(profileMsg(r, end)));
+    if (c.delta) send(c, tag(deltaTableMsg(r, end)));
     send(c, tag({ type: 'ready', root: r })); c.ready = true; sceneReady(r);
   };
   if (!(hours > 0)) { finish(null); return; }       // a minute chart: no trades
@@ -701,7 +741,7 @@ function subscribeTape(c, m, r) {
   b.asked++;
   setTimeout(() => {                                 // "NinjaTrader" answers; the live trades meanwhile are held, then in the window
     if (c.seq !== seq || c.sock.destroyed) return;
-    if (!b.window) b.window = { from: k.at(etNow() - RANGE_HOURS * 3600), session: sessionOf(k.t[k.n - 1]) };
+    if (!b.window) b.window = { from: k.at(etNow() - RANGE_HOURS * 3600), session: sessionOf(k.t[k.n - 1]), liveFrom: k.n };   // liveFrom (0.6.25): the trades after the answer
     finish(b.window.from);
   }, WINDOW_MS);
 }
@@ -709,7 +749,9 @@ function subscribeTape(c, m, r) {
 const last = {}, held = {}, lastSide = {};
 for (const r of Object.keys(INSTR)) { last[r] = data[r][data[r].length - 1].c; desk.tick(r, last[r]); }
 if (LIVE_FIRST) for (const r of Object.keys(INSTR)) { const k = tapes[r]; if (k.n) { last[r] = k.p[k.n - 1]; lastSide[r] = k.s[k.n - 1]; } }
+let paused = false;                                // /test/pause: no live trade at all (a frozen market, for exact counts)
 function trade(r, p) {
+  if (paused) return;
   if (CME_HOURS && cmeClosed(etNow())) return;          // nothing trades while CME is closed
   const [s, sm] = sideOf(p, last[r], lastSide[r]);
   const q = last[r] !== undefined ? qOf(p, last[r], sm) : null;   // 0.3.8
@@ -827,6 +869,9 @@ const server = http.createServer((req, res) => {
     else if (p === '/test/drop') { for (const c of clients) c.sock.destroy(); }
     else if (p === '/test/received') { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(received)); }
     else if (p === '/test/features') liveFirstOn = LIVE_FIRST && q.get('liveFirst') !== '0';
+    else if (p === '/test/delta-push') { for (const c of clients) if (c.ready && c.delta && tapes[c.root]) send(c, deltaTableMsg(c.root, tapes[c.root].n)); }   // 0.6.25
+    else if (p === '/test/delta-missed') deltaMissed = Math.max(0, +q.get('s') || 0);
+    else if (p === '/test/pause') paused = q.get('on') !== '0';
     else if (p === '/test/feed-drop') {
       dropAt = +etNow().toFixed(3);
       for (const x of Object.values(books)) if (x.window && !x.gapAsked) { x.window = null; x.gapAsked = true; }   // asked again once (ChartBridge: at most once in 10 minutes)
@@ -919,6 +964,7 @@ server.on('upgrade', (req, sock) => {
   hello.trading = desk.helloTrading(c);
   if (pcClock) hello.pcClock = pcClock;             // --pc-clock: ChartBridge 0.5.6's time check
   if (liveFirstOn) { hello.features = ['liveFirst', 'profile']; hello.version = 'fake-0.3.5'; }
+  if (liveFirstOn && DELTA_TABLE) hello.features.push('deltaTable');   // 0.6.25
   if (DATA_037) {                                   // 0.3.7: the prior settlement per instrument (sample), and the new features
     for (const i of hello.instruments) { i.settlement = settlement[i.root]; i.settlementDate = settlementDate[i.root]; }
     hello.features = (hello.features || []).concat(['settlement', 'htf', 'weekProfile']); hello.version = 'fake-0.3.7';

@@ -3268,15 +3268,14 @@ namespace NinjaTrader.NinjaScript.AddOns
             return now;
         }
 
-        private static void Subscribe(ChartBridgeClient client, string root, int days, int tickHours) { StartLoad(client, root, days, tickHours, null, false, false, false); }
+        private static void Subscribe(ChartBridgeClient client, string root, int days, int tickHours) { StartLoad(client, root, days, tickHours, null, false, false, false, false); }
 
         // 0.5.0 agents: an agent's subscribe, answered as a page's (history, ticks, ready, then live tick for that root).
         // 0.6.8 (review): an agent waits for NinjaTrader's full history as in 0.6.7: no time limits, no stand-in history.
-        public static void AgentSubscribe(ChartBridgeClient client, string root, int days, int tickHours, string sub) { StartLoad(client, root, days, tickHours, sub, false, false, true); }
+        public static void AgentSubscribe(ChartBridgeClient client, string root, int days, int tickHours, string sub) { StartLoad(client, root, days, tickHours, sub, false, false, true, false); }
 
         // sub: the page's subscribe id (digits), or null to number the loads here. window (0.3.5, subscribe "liveFirst"): ignored
         // since 0.3.5, every tick chart gets the served window. profile (0.3.5): the page wants "profile" messages.
-        private static void StartLoad(ChartBridgeClient client, string root, int days, int tickHours, string sub, bool window, bool profile, bool agent) { StartLoad(client, root, days, tickHours, sub, window, profile, agent, false); }
         // delta (0.6.25): the page wants the "deltaTable" message before ready, and the served window's live trades with their sides.
         private static void StartLoad(ChartBridgeClient client, string root, int days, int tickHours, string sub, bool window, bool profile, bool agent, bool delta)
         {

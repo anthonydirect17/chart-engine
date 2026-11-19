@@ -9,7 +9,9 @@
 // 82,500 seconds of it, nearly every one with trades at --tick-rate 15). Each view is loaded once to warm the bridge (the
 // first served window is "asked of NinjaTrader"), then --runs times in a fresh tab. For each load: the milliseconds from
 // navigation to the chart's LIVE badge, to the delta pane built (its core handed to the chart), the bytes the page's
-// WebSocket received up to and including `ready` (with the delta table message's own bytes), and the trades the window held.
+// WebSocket received up to and including `ready` (with the delta table message's own bytes), and the trades the window held;
+// and, in the page, the time its message handlers took up to ready (by type, JSON.parse included) and from ready to the delta
+// pane's core built (the wall-clock times include the fake's own work, which is noisy: the page's are the change's cost).
 // --serve-root serves the page from another checkout (to measure the page before a change on the same fake);
 // --bridge-flags passes flags to the fake (comma separated), for example --delta-table to serve the table.
 import { chromium } from 'playwright';
@@ -46,6 +48,25 @@ const init = tf => `(() => {
     localStorage.setItem('live-settings-v2', JSON.stringify(s));
     localStorage.setItem('live-range-v2', JSON.stringify({ NQ: 40 }));
   } catch (e) {}
+  // the page's own time per message type up to ready (the handler, its JSON.parse included), and from ready handled to the
+  // delta pane's core handed to the chart (checked every frame and every ms)
+  const W = window.__perf = { ms: {}, readyAt: 0, deltaAt: 0 };
+  const Real = window.WebSocket;
+  window.WebSocket = function (url, p) {
+    const ws = new Real(url, p);
+    let h = null;
+    Object.defineProperty(ws, 'onmessage', { configurable: true, get() { return h; }, set(f) { h = f; ws.addEventListener('message', ev => {
+      if (!h) return;
+      const m = /"type":"([A-Za-z]+)"/.exec(typeof ev.data === 'string' ? ev.data.slice(0, 40) : ''), t = m ? m[1] : '?';
+      const t0 = performance.now(); h.call(ws, ev); const d = performance.now() - t0;
+      if (!W.readyAt || t === 'deltaTable') W.ms[t] = (W.ms[t] || 0) + d;
+      if (t === 'ready' && !W.readyAt) W.readyAt = performance.now();
+    }); } });
+    return ws;
+  };
+  window.WebSocket.prototype = Real.prototype; Object.assign(window.WebSocket, { CONNECTING: 0, OPEN: 1, CLOSING: 2, CLOSED: 3 });
+  const poll = () => { if (!W.deltaAt && W.readyAt && window.liveMount && window.liveMount.data().delta) W.deltaAt = performance.now(); if (!W.deltaAt) setTimeout(poll, 1); };
+  poll();
 })();`;
 
 const median = a => { const s = a.slice().sort((x, y) => x - y); return s.length ? s[Math.floor(s.length / 2)] : null; };
@@ -60,32 +81,39 @@ try {
       await ctx.addInitScript(init(view));
       await ctx.route(/fonts\.(googleapis|gstatic)\.com/, r => r.abort());
       const page = await ctx.newPage();
-      const wire = { bytes: 0, deltaBytes: 0, ticksBytes: 0, done: false, types: {} };
-      page.on('websocket', ws => ws.on('framereceived', f => {
+      const wire = { bytes: 0, deltaBytes: 0, ticksBytes: 0, done: false, types: {}, at: {} };
+      page.on('websocket', ws => { ws.on('framesent', f => { const m = /"type":"([A-Za-z]+)"/.exec(String(f.payload)); if (m && wire.at['sent:' + m[1]] === undefined) wire.at['sent:' + m[1]] = Date.now() - t0; }); ws.on('framereceived', f => {
         if (wire.done) return;
         const s = typeof f.payload === 'string' ? f.payload : '';
         const len = Buffer.byteLength(s);
         const m = /"type":"([A-Za-z]+)"/.exec(s), t = m ? m[1] : '?';
+        if (wire.at[t] === undefined) wire.at[t] = Date.now() - t0;
         if (t === 'tick') return;                         // live trades are not the load
         wire.bytes += len; wire.types[t] = (wire.types[t] || 0) + len;
         if (t === 'deltaTable') wire.deltaBytes += len;
         if (t === 'ticks') wire.ticksBytes += len;
         if (t === 'ready') wire.done = true;
-      }));
-      const t0 = Date.now();
+      }); });
+      let t0 = Date.now();
       await page.goto(hostUrl(PORT));
       await page.waitForFunction(() => { const b = document.querySelector('[id$="-badge"]'); return !!b && b.dataset.conn === 'live'; }, null, { timeout: 180000, polling: 10 });
       const live = Date.now() - t0;
       await page.waitForFunction(() => { const D = window.liveMount.data(); return !!D.delta; }, null, { timeout: 180000, polling: 10 });
       const delta = Date.now() - t0;
-      const info = await page.evaluate(() => { const D = window.liveMount.data(); return { trades: D.ticks.length, backfill: D.backfill, bars: D.delta ? D.delta.bars.length : 0, cum: D.delta && D.delta.last ? D.delta.last.c : null, by: D.deltaCov ? D.deltaCov.by : '' }; });
+      const info = await page.evaluate(() => { const D = window.liveMount.data(), W = window.__perf; return { trades: D.ticks.length, backfill: D.backfill, bars: D.delta ? D.delta.bars.length : 0, cum: D.delta && D.delta.last ? D.delta.last.c : null, by: D.deltaCov ? D.deltaCov.by : '',
+        pageMs: W.ms, buildMs: W.deltaAt && W.readyAt ? W.deltaAt - W.readyAt : null }; });
       await ctx.close();
       if (k === 0) continue;                              // the warm-up
-      runs.push({ liveMs: live, deltaMs: delta, bytes: wire.bytes, deltaBytes: wire.deltaBytes, ticksBytes: wire.ticksBytes, types: wire.types, info });
+      runs.push({ liveMs: live, deltaMs: delta, bytes: wire.bytes, deltaBytes: wire.deltaBytes, ticksBytes: wire.ticksBytes, types: wire.types, at: wire.at, info });
+      if (process.env.PERF_AT) console.log('   first of each (ms from navigation): ' + JSON.stringify(wire.at));
+      const pm = info.pageMs || {}, r1 = x => Math.round(x * 10) / 10;
+      console.log('   page: history ' + r1(pm.history || 0) + ' ms, ticks ' + r1(pm.ticks || 0) + ' ms, profile ' + r1(pm.profile || 0) + ' ms, deltaTable ' + r1(pm.deltaTable || 0) + ' ms, ready ' + r1(pm.ready || 0) + ' ms; ready to delta built ' + r1(info.buildMs || 0) + ' ms');
       console.log(view + ' run ' + k + ': live ' + live + ' ms, delta built ' + delta + ' ms, ' + (wire.bytes / 1e6).toFixed(3) + ' MB to ready (table ' + (wire.deltaBytes / 1e6).toFixed(3) + ' MB, ticks ' + (wire.ticksBytes / 1e6).toFixed(3) + ' MB), store ' + info.trades + ' trades, delta by ' + info.by + ', ' + info.bars + ' delta bars');
     }
-    results[view] = { liveMs: median(runs.map(r => r.liveMs)), deltaMs: median(runs.map(r => r.deltaMs)), bytes: median(runs.map(r => r.bytes)), deltaBytes: median(runs.map(r => r.deltaBytes)), ticksBytes: median(runs.map(r => r.ticksBytes)), runs };
-    console.log(view + ' median: live ' + results[view].liveMs + ' ms, delta ' + results[view].deltaMs + ' ms, ' + (results[view].bytes / 1e6).toFixed(3) + ' MB');
+    const pageOf = r => { const pm = r.info.pageMs || {}; return (pm.history || 0) + (pm.ticks || 0) + (pm.profile || 0) + (pm.deltaTable || 0) + (pm.ready || 0); };
+    results[view] = { pageMs: median(runs.map(pageOf)), deltaMsgMs: median(runs.map(r => (r.info.pageMs || {}).deltaTable || 0)), buildMs: median(runs.map(r => r.info.buildMs || 0)), liveMs: median(runs.map(r => r.liveMs)), deltaMs: median(runs.map(r => r.deltaMs)), bytes: median(runs.map(r => r.bytes)), deltaBytes: median(runs.map(r => r.deltaBytes)), ticksBytes: median(runs.map(r => r.ticksBytes)), runs };
+    const R = results[view], f1 = x => (Math.round(x * 10) / 10).toFixed(1);
+    console.log(view + ' median: page work to ready ' + f1(R.pageMs) + ' ms (deltaTable ' + f1(R.deltaMsgMs) + '), ready to delta built ' + f1(R.buildMs) + ' ms, live ' + R.liveMs + ' ms, delta ' + R.deltaMs + ' ms, ' + (R.bytes / 1e6).toFixed(3) + ' MB (table ' + (R.deltaBytes / 1e6).toFixed(3) + ')');
   }
 } finally {
   if (browser) await browser.close();

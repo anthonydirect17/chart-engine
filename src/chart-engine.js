@@ -1403,7 +1403,7 @@ function create(container, options) {
   /* Chart signals (G1c): { absorption (an Absorption), bubbles (a LargePrints), divergence (a DeltaDivergence), version }
      the page keeps feeding; each drawn while its layer is on (the arrows with the delta pane). */
   let signals = null, sigVer = -1;
-  const pane = { mode: 'cum', ratio: PANE_RATIO, note: '', reason: '', missed: 0, title: '', lo: -1, hi: 1, init: false, ver: -1, drag: null, tkey: '', tclosed: null, cid: 0, cc: null, widths: new Map() };
+  const pane = { mode: 'cum', ratio: PANE_RATIO, note: '', reason: '', missed: 0, start: false, title: '', lo: -1, hi: 1, init: false, ver: -1, drag: null, tkey: '', tclosed: null, cid: 0, cc: null, widths: new Map() };
   /* Levels as drawn: on a ground other than the default each level's color is moved until its name reads (1.5.3).
      Rebuilt when the levels or the theme change, never per frame. A level with `layer` ('ib') shows with that layer,
      the rest with 'levels'. */
@@ -2360,7 +2360,7 @@ function create(container, options) {
     // more: "since 10:04 ET (page opened), missed 32 s", or "since 18:00 ET, missed 32 s" for a session held from its start
     const missed = pane.missed >= 1 && lses && lses === delta.session ? Math.round(pane.missed) : 0;
     const since = !show ? '' : !delta.bars.length ? 'starts with the next full bar'
-      : pane.mode !== 'bar' && lses && (lses.partial || missed) ? 'since ' + fmtExact(lses.partial ? lses.from : lses.start) + ' ET' +
+      : pane.mode !== 'bar' && lses && (lses.partial || missed || (pane.start && lses === delta.session)) ? 'since ' + fmtExact(lses.partial ? lses.from : lses.start) + ' ET' +
         (lses.partial && pane.reason ? ' (' + pane.reason + ')' : '') + (missed ? ', missed ' + missed + ' s' : '') : '';
     pane.title = [title, val, since, pane.note].filter(Boolean).join(' ');
     ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
@@ -3525,8 +3525,9 @@ function create(container, options) {
      * The delta pane's view: { mode: 'cum' (candles, the default) or 'bar' (each bar's delta around zero), ratio (its
      * share of the chart's height, PANE_RATIO_MIN to PANE_RATIO_MAX; about 20% by default), note (drawn instead of any
      * delta, '' for none), reason (why a session counts from later than its start, in brackets after "since 21:40 ET",
-     * for example 'page opened'), missed (seconds the newest session's count missed; shown from 1 s: "missed 32 s") }. Only
-     * the fields given change.
+     * for example 'page opened'), missed (seconds the newest session's count missed; shown from 1 s: "missed 32 s"), start
+     * (0.6.25's delta table: the newest session says from when it counts even when that is its start, "since 18:00 ET") }.
+     * Only the fields given change.
      */
     setDeltaView(v) {
       if (!v) return;
@@ -3534,6 +3535,7 @@ function create(container, options) {
       if (typeof v.note === 'string') pane.note = v.note;
       if (typeof v.reason === 'string') pane.reason = v.reason;
       if (typeof v.missed === 'number' && isFinite(v.missed)) pane.missed = Math.max(0, v.missed);
+      if (typeof v.start === 'boolean') pane.start = v.start;
       if (typeof v.ratio === 'number' && isFinite(v.ratio)) { pane.ratio = clamp(v.ratio, PANE_RATIO_MIN, PANE_RATIO_MAX); layout(); clampRight(); }
       dirty = true;
     },
@@ -4220,26 +4222,8 @@ class CumulativeDelta {
    */
   add(t, v, s, barT, sm) {
     if (typeof t !== 'number' || !isFinite(t) || typeof v !== 'number' || !(v > 0 && v < Infinity)) { this.skipped++; return false; }
-    const last = this.bars.length ? this.bars[this.bars.length - 1] : null;
-    let bt = typeof barT === 'number' && isFinite(barT) ? barT : this.seconds ? Math.floor(t / this.seconds) * this.seconds : t;
-    if (last && bt < last.t) bt = last.t;                  // a late trade folds into the newest bar, as the bar builders do
-    if (bt < this.coveredFrom && !(this.byTime && t >= this.coveredFrom)) { this.uncovered++; return false; }
-    let bar = last;
-    if (!bar || bt > bar.t) {
-      const day = tradeDay(bt, this.sessionStart);
-      let ses = this.sessions.length ? this.sessions[this.sessions.length - 1] : null;
-      if (ses && day < ses.day) { this.skipped++; return false; }
-      if (!ses || day !== ses.day) {
-        const start = this.startOf(bt);
-        ses = { day, start, from: bt < this.coveredFrom ? this.coveredFrom : bt, partial: this.coveredFrom > start, buy: 0, sell: 0, unknown: 0, unknownTrades: 0, missing: 0, byRule: 0, trades: 0,
-          first: this.bars.length, last: this.bars.length };
-        this.sessions.push(ses);
-        this._cum = 0;
-      }
-      bar = { t: bt, o: this._cum, h: this._cum, l: this._cum, c: this._cum, buy: 0, sell: 0, unknown: 0, n: 0, big: 0, s: this.sessions.length - 1 };
-      this.bars.push(bar);
-      ses.last = this.bars.length - 1;
-    }
+    const bar = this._barFor(t, barT);
+    if (!bar) return false;
     const ses = this.sessions[bar.s];
     if (s === 1) { bar.buy += v; ses.buy += v; this._cum += v; }
     else if (s === -1) { bar.sell += v; ses.sell += v; this._cum -= v; }
@@ -4252,6 +4236,52 @@ class CumulativeDelta {
     if (v > bar.big) bar.big = v;                         // 1.16.0: the bar's largest single trade (the Data Box)
     this._ver++;
     return true;
+  }
+  /**
+   * One second of trades from ChartBridge's delta table (0.6.25, nt8/PROTOCOL.md "The delta table"): its buy, sell and unknown
+   * volume, in the price bar starting at barT (as add). The cumulative moves once, by buy minus sell, so inside a bar its high
+   * and low are known to the second (the table has no order inside a second); the bar's largest single trade stays unknown
+   * (big is not changed). Returns true when it was counted. Left out as add leaves a trade out.
+   */
+  addSecond(t, buy, sell, unknown, barT) {
+    const b = +buy || 0, s = +sell || 0, u = +unknown || 0;
+    if (typeof t !== 'number' || !isFinite(t) || !(b >= 0 && s >= 0 && u >= 0) || !(b + s + u > 0 && b + s + u < Infinity)) { this.skipped++; return false; }
+    const bar = this._barFor(t, barT);
+    if (!bar) return false;
+    const ses = this.sessions[bar.s];
+    bar.buy += b; ses.buy += b; bar.sell += s; ses.sell += s;
+    if (u) { bar.unknown += u; ses.unknown += u; ses.unknownTrades++; }
+    this._cum += b - s;
+    const c = this._cum;
+    if (c > bar.h) bar.h = c;
+    if (c < bar.l) bar.l = c;
+    bar.c = c; bar.n++; ses.trades++; this.trades++;
+    this._ver++;
+    return true;
+  }
+  /* The bar (made when new) a trade at t in the price bar barT goes in, or null when it is left out (counted). */
+  _barFor(t, barT) {
+    const last = this.bars.length ? this.bars[this.bars.length - 1] : null;
+    let bt = typeof barT === 'number' && isFinite(barT) ? barT : this.seconds ? Math.floor(t / this.seconds) * this.seconds : t;
+    if (last && bt < last.t) bt = last.t;                  // a late trade folds into the newest bar, as the bar builders do
+    if (bt < this.coveredFrom && !(this.byTime && t >= this.coveredFrom)) { this.uncovered++; return null; }
+    let bar = last;
+    if (!bar || bt > bar.t) {
+      const day = tradeDay(bt, this.sessionStart);
+      let ses = this.sessions.length ? this.sessions[this.sessions.length - 1] : null;
+      if (ses && day < ses.day) { this.skipped++; return null; }
+      if (!ses || day !== ses.day) {
+        const start = this.startOf(bt);
+        ses = { day, start, from: bt < this.coveredFrom ? this.coveredFrom : bt, partial: this.coveredFrom > start, buy: 0, sell: 0, unknown: 0, unknownTrades: 0, missing: 0, byRule: 0, trades: 0,
+          first: this.bars.length, last: this.bars.length };
+        this.sessions.push(ses);
+        this._cum = 0;
+      }
+      bar = { t: bt, o: this._cum, h: this._cum, l: this._cum, c: this._cum, buy: 0, sell: 0, unknown: 0, n: 0, big: 0, s: this.sessions.length - 1 };
+      this.bars.push(bar);
+      ses.last = this.bars.length - 1;
+    }
+    return bar;
   }
   /** add() for TickStore.feedSides(delta, from, minT): trades bucketed by `seconds` (time bars). */
   addQuiet(t, p, v, s, sm) { this.add(t, v, s, undefined, sm); }

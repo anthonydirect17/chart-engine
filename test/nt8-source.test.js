@@ -515,7 +515,7 @@ test('0.3.3: held live trades are matched against the backfill on NinjaTrader ti
   assert.match(ready, /foreach \(SeamTick h in r\.Release\) burst\.Add\(h\.Json\);\s*client\.SendAll\(burst\);/);
   assert.ok(!/foreach \(SeamTick h in client\.Pending\)/.test(code), 'held trades only go out through Dedupe');
   // 0.6.8: under the book's lock then the Pending lock (OnMarketData's order), the minute book copied as the held trades are cleared
-  assert.match(bodyOf(code, 'private static void StartLoad('), /lock \(book\.Sync\)\s*lock \(client\.Pending\)[^{]*\{\s*L\.Seq = \+\+client\.SubscribeSeq;\s*L\.Sub = [^;]+;\s*client\.Ready = false;\s*client\.Pending\.Clear\(\);\s*client\.Root = root;\s*client\.WantsProfile = profile;\s*L\.Book = book\.Minutes\.Snap\(\);[^\n]*\s*\}/);   // 0.3.5: and whether it wants "profile"; 0.6.8: the minute book
+  assert.match(bodyOf(code, 'private static void StartLoad('), /lock \(book\.Sync\)\s*lock \(client\.Pending\)[^{]*\{\s*L\.Seq = \+\+client\.SubscribeSeq;\s*L\.Sub = [^;]+;\s*client\.Ready = false;\s*client\.Pending\.Clear\(\);\s*client\.Root = root;\s*client\.WantsProfile = profile;\s*(client\.WantsDelta = L\.Delta;\s*)?L\.Book = book\.Minutes\.Snap\(\);[^\n]*\s*\}/);   // 0.3.5: and whether it wants "profile"; 0.6.8: the minute book
   assert.match(bodyOf(code, 'private static string DiagJson()'), /b\.Append\(",\\"seams\\":"\)\.Append\(SeamsJson\(\)\);/);
   // review of 0.3.3: only trades held when NinjaTrader answered can match at T; every chunk checks the subscribe is current
   assert.match(ready, /client\.Pending, L\.HeldAtAnswer\)/);
@@ -546,8 +546,9 @@ test('0.3.4: every trade carries its side, additively, and the seam match ignore
   assert.match(md, /",\\"p\\":" \+ CbJson\.Num\(e\.Price\) \+ ",\\"v\\":" \+ e\.Volume\.ToString\(CultureInfo\.InvariantCulture\) \+\s*",\\"s\\":" \+ side\.ToString\(CultureInfo\.InvariantCulture\) \+ ",\\"sm\\":" \+ method\.ToString\(CultureInfo\.InvariantCulture\) \+ ChartBridgeSides\.QJson\(cat\) \+ "\}"/);   // 0.3.8: then q, when known
   // backfill trades: t, p, v first, then s and sm
   // (0.3.5: written by AppendTrade with no string per number; WindowHarness.cs checks the text is 0.3.4's)
-  assert.match(bodyOf(code, 'private static void SendTicks(Load L, RawBars bars, int from)'), /AppendTrade\(b, bars, i, et\);/);
-  assert.match(bodyOf(code, 'public static void AppendTrade('), /CbJson\.AppendNum3\(b, et\.Seconds\(bars\.Time\[i\]\)\);\s*b\.Append\(','\);\s*CbJson\.AppendNum\(b, bars\.Close\[i\]\);\s*b\.Append\(','\);\s*CbJson\.AppendLong\(b, bars\.Volume\[i\]\);\s*int q = bars\.QCode != null \? ChartBridgeSides\.QOf\(bars\.QCode\[i\]\) : ChartBridgeSides\.NoQ;\s*if \(q != ChartBridgeSides\.NoQ\) \{ b\.Append\(",null,null,"\); CbJson\.AppendLong\(b, q\); \}\s*b\.Append\(']'\);/);   // 0.3.7: [t, p, v] only (the sided by-date backfill is removed); 0.3.8: [t, p, v, null, null, q] when q is known
+  assert.match(bodyOf(code, 'private static void SendTicks(Load L, RawBars bars, int from)'), /AppendTrade\(b, bars, i, et(, L\.Delta)?\);/);
+  assert.match(bodyOf(code, 'public static void AppendTrade(StringBuilder b, RawBars bars, int i, ChartBridgeTime.EtCache et, bool sides)'), /CbJson\.AppendNum3\(b, et\.Seconds\(bars\.Time\[i\]\)\);\s*b\.Append\(','\);\s*CbJson\.AppendNum\(b, bars\.Close\[i\]\);\s*b\.Append\(','\);\s*CbJson\.AppendLong\(b, bars\.Volume\[i\]\);\s*int q = bars\.QCode != null \? ChartBridgeSides\.QOf\(bars\.QCode\[i\]\) : ChartBridgeSides\.NoQ;\s*byte sc = sides && bars\.SideCode != null \? bars\.SideCode\[i\] : \(byte\)0;[\s\S]*else if \(q != ChartBridgeSides\.NoQ\) \{ b\.Append\(",null,null,"\); CbJson\.AppendLong\(b, q\); \}\s*b\.Append\(']'\);/);
+  assert.match(code, /public static void AppendTrade\(StringBuilder b, RawBars bars, int i, ChartBridgeTime\.EtCache et\) \{ AppendTrade\(b, bars, i, et, false\); \}/, '0.6.25: sides only for a load that asked for the delta table');   // 0.3.7: [t, p, v] only (the sided by-date backfill is removed); 0.3.8: [t, p, v, null, null, q] when q is known
   // the seam's match key is still price and volume only
   assert.match(code, /private static string TradeKey\(double p, long v\)/);
   assert.match(code, /public struct SeamTick\s*\{\s*public DateTime Time;\s*public double Price;\s*public long Volume;\s*public string Json;/);
@@ -583,7 +584,7 @@ test('0.3.4: every trade carries its side, additively, and the seam match ignore
 test('0.3.5: every tick chart gets the served window by count, one request at a time; the profile comes from the session table', () => {
   assert.match(src, /^\/\/ ChartBridge for NinjaTrader 8 \(its version is ChartBridgeServer\.Version, below\)/);   // 0.5.5: the header names no version   // 0.3.6 adds the daily bars on top
   assert.match(code, /public const string Version = "0\.(3\.[5-9]|4\.[0-9]+|5\.[0-9]+|6\.[0-9]+)";/);
-  assert.match(bodyOf(code, 'private static string HelloJsonFor('), /\\"features\\":\[\\"liveFirst\\",\\"profile\\",\\"settlement\\",\\"htf\\",\\"weekProfile\\",\\"v3\\",\\"cutHalf\\"\]/);   // 0.3.7 adds three; 0.4.0 v3; release 1 (1.6c) cutHalf
+  assert.match(bodyOf(code, 'private static string HelloJsonFor('), /\\"features\\":\[\\"liveFirst\\",\\"profile\\",\\"settlement\\",\\"htf\\",\\"weekProfile\\",\\"v3\\",\\"cutHalf\\"(,\\"deltaTable\\")?\]/);   // 0.3.7 adds three; 0.4.0 v3; release 1 (1.6c) cutHalf
   // S6: every tick chart (liveFirst or not) gets the served window; 0.3.7: the by-date tick load is gone
   assert.match(bodyOf(code, 'private static void StartLoad('), /Window = tickHours > 0, /);
   assert.ok(!/ByDateTickLoads/.test(code));
@@ -659,9 +660,9 @@ test('0.3.5: every tick chart gets the served window by count, one request at a 
   assert.ok(md.indexOf('book.OnTrade(') < md.indexOf('c.Pending.Add('), 'the book takes the trade before any page holds it');
   // S4: ready: the profile copied under the lock, formatted with none held; then ready, then the released trades
   const ready = bodyOf(code, 'private static void MarkReady(Load L, RawBars seam)');
-  assert.match(ready, /snap = book\.Snap\(\);\s*before = new List<SeamTick>\(client\.Pending\);\s*\}/);
-  assert.match(ready, /profile = snap\.Json\(L\.Sub, early\.Release\);\s*\}\s*lock \(client\.Pending\)/);
-  assert.match(ready, /if \(profile != null\) burst\.Add\(profile\);\s*burst\.Add\("\{\\"type\\":\\"ready\\"/);
+  assert.match(ready, /snap = book\.Snap\(\);\s*(if \(L\.Delta[^\n]*\n\s*)?before = new List<SeamTick>\(client\.Pending\);\s*\}/);   // 0.6.25: the delta table copied in the same moment
+  assert.match(ready, /profile = snap\.Json\(L\.Sub, early\.Release\);[\s\S]{0,400}?if \(L\.Delta\) delta = dsnap != null \? dsnap\.Json\(L\.Root, L\.Sub, early\.Release\)[^\n]*\s*\}\s*lock \(client\.Pending\)/);
+  assert.match(ready, /if \(profile != null\) burst\.Add\(profile\);\s*(if \(delta != null\) burst\.Add\(delta\);\s*)?burst\.Add\("\{\\"type\\":\\"ready\\"/);
   // the one backfill: profileRoots only, not for a whole table, by date from the session start; one retry, then given up
   assert.match(code, /public static string\[\] ProfileRoots = new string\[\] \{ "MNQ", "NQ", "ES", "MES" \};/);
   assert.match(code, /public static bool BackfillOn = true;/);
@@ -746,7 +747,7 @@ test('0.3.8 q: the Time and Sales category comes from the side tagger\'s quote, 
   assert.match(code, /\+ ChartBridgeSides\.QJson\(cat\) \+ "\}";/, 'the live tick ends with the q field from QJson');
   assert.match(code, /private static readonly string\[\] QFields = /, 'the five q fields are made once');
   assert.ok(!/cat\.ToString\(|QJson\([^)]*\)\.ToString|"\\"q\\":" \+/.test(code), 'no q string made per trade');
-  assert.match(code, /cache\.Add\(h\.Time, h\.Price, h\.Volume, h\.QCode\)/, 'the held live trades keep their q in the served window');
+  assert.match(code, /cache\.Add\(h\.Time, h\.Price, h\.Volume, h\.QCode[,)]/, 'the held live trades keep their q in the served window');
   assert.match(code, /for \(int i = start; i < raw\.Count; i\+\+\) cache\.Add\(raw\.Time\[i\], raw\.Close\[i\], raw\.Volume\[i\]\);/, 'NinjaTrader\'s answer has no stored quote: unknown');
 });
 
@@ -1487,4 +1488,19 @@ test('ChartBridge 0.6.6 (Anthony 2026-10-21): the stop record ships, is compile-
   const cb = read('ChartBridge.cs');
   assert.match(cb, /try \{ ChartBridgeOrders\.OnOrderUpdate\(a, e\); \} catch[^\n]*\n\s*try \{ ChartBridgeStops\.Observe\(a, e\); \} catch/, 'after the order path, never in its way');
   assert.match(cb, /else if \(ChartBridgeStops\.ReadConfig\(key, val\)\) \{ \}/);
+});
+
+// ---- 0.6.25: the delta table (behaviour: nt8/check/DeltaHarness.cs under Mono; the page: test/delta.test.js, test/delta-held-smoke.mjs)
+test('0.6.25: the delta table is fed by every live trade under the book\'s lock with its tagged side, asks NinjaTrader for nothing, and goes only to a page that asks', () => {
+  const md = bodyOf(code, 'private static void OnMarketData(');
+  assert.match(md, /lock \(book\.Sync\)\s*\{[\s\S]*book\.OnTrade\([^;]*ChartBridgeSides\.QCode\(cat\), side, method\);/, 'OnTrade takes the side under the book\'s lock');
+  assert.match(code, /if \(Delta != null && Delta\.Start == Table\.Start\) Delta\.Add\(et, side, volume\);/);
+  const table = code.slice(code.indexOf('public class DeltaTable'), code.indexOf('public class LiveQuoteSide'));
+  assert.ok(table.length > 1000 && !/BarsRequest|MarketDataType|File\./.test(table), 'the table and its message make no request and touch no file');
+  for (const f of ['public static void SaveDeltas(', 'private static void ReadDelta(', 'public static void PushDelta('])
+    assert.ok(!/BarsRequest|Account|Order/.test(bodyOf(code, f)), f + ': no NinjaTrader request, no order or account');
+  assert.match(code, /DeltaRx = new Regex\("\\"deltaTable\\"\\\\s\*:\\\\s\*\(true\|1\)/);
+  assert.match(bodyOf(code, 'private static string HelloJsonFor('), /\\"deltaTable\\"\]/);
+  assert.match(code, /Delta = delta && !agent/, 'never to an agent: an agent\'s load is as before');
+  assert.match(code, /Task\.Run\(\(\) => SaveDeltas\(\)\)/, 'written off the market data thread, on the 10 s timer');
 });

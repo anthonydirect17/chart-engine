@@ -23,6 +23,7 @@
     "smoke:vp": "node test/vp-smoke.mjs",
     "smoke:live-first": "node test/live-first-smoke.mjs",
     "smoke:delta": "node test/delta-smoke.mjs",
+    "smoke:delta-held": "node test/delta-held-smoke.mjs",
     "smoke:update": "node test/update-notice-smoke.mjs",
     "smoke:presets": "node test/presets-smoke.mjs",
     "smoke:hotkeys": "node test/hotkeys-smoke.mjs",

@@ -567,3 +567,92 @@ test('util.fmtExact: whole minutes as HH:MM, whole seconds with seconds, else te
   const T = Date.UTC(2026, 8, 29, 18, 0) / 1000;
   assert.deepEqual([U.fmtExact(T), U.fmtExact(T + 15), U.fmtExact(T + 0.3), U.fmtExact(T + 3 * 3600 + 40 * 60), U.fmtExact(T + 3.87)], ['18:00', '18:00:15', '18:00:00.3', '21:40', '18:00:03.8']);
 });
+
+/* ---------------- ChartBridge 0.6.25: the delta table (nt8/PROTOCOL.md "The delta table") */
+/* A made-up session's trades with sides, from 18:00 ET: [t, p, v, s, sm]. */
+function sidedTape(from, n, stepMs) {
+  const out = []; let t = from + 0.137, p = 20000;
+  for (let i = 0; i < n; i++) {
+    t += Math.round(rnd() * stepMs) / 1000;
+    p += (Math.floor(rnd() * 3) - 1) * 0.25;
+    const k = rnd(), s = k < 0.46 ? 1 : k < 0.93 ? -1 : 0;
+    out.push([Math.round(t * 1000) / 1000, p, 1 + Math.floor(rnd() * 9), s, s ? 2 : 0]);
+  }
+  return out;
+}
+/* ChartBridge's message for these trades (its DeltaSnap.Json): rows [dt, buy, sell], unknown [dt, v], dt from `from`. */
+function tableMsg(from, trades, cov, why, missed) {
+  const m = new Map();
+  for (const x of trades) { const sec = Math.floor(x[0]), a = m.get(sec) || [0, 0, 0]; a[x[3] === 1 ? 0 : x[3] === -1 ? 1 : 2] += x[2]; m.set(sec, a); }
+  const rows = [], unknown = []; let pr = from, pu = from;
+  for (const sec of [...m.keys()].sort((a, b) => a - b)) {
+    const a = m.get(sec);
+    if (a[0] || a[1]) { rows.push(sec - pr, a[0], a[1]); pr = sec; }
+    if (a[2]) { unknown.push(sec - pu, a[2]); pu = sec; }
+  }
+  return { from, coveredFrom: cov === undefined ? from : cov, why: why || null, missed: missed || 0, rows, unknown };
+}
+const cumOf = cd => cd.bars.map(b => [b.t, b.o, b.c, b.buy, b.sell, b.unknown]);
+
+test('delta table: decoded into columns by second, the rows and the unknowns merged (a second in both is one row)', () => {
+  const T = BB.decodeDeltaTable({ from: 1000, coveredFrom: 1000, why: 'start', missed: 8, rows: [0, 5, 3, 2, 1, 0, 10, 4, 4], unknown: [2, 7, 9, 1] });
+  assert.deepEqual([...T.sec], [1000, 1002, 1011, 1012]);
+  assert.deepEqual([...T.buy], [5, 1, 0, 4]);
+  assert.deepEqual([...T.sell], [3, 0, 0, 4]);
+  assert.deepEqual([...T.unk], [0, 7, 1, 0]);
+  assert.equal(T.why, 'start'); assert.equal(T.missed, 8);
+  assert.equal(BB.decodeDeltaTable({ from: 'x', rows: [], unknown: [] }), null);
+  assert.equal(BB.decodeDeltaTable(null), null);
+});
+
+test('delta table: on time bars (15s, 1m, 5m) the table and the trades after it make the same cumulative delta as every trade one by one, and the same on every load', () => {
+  const from = et(2026, 9, 28, 18, 0), all = sidedTape(from, 30000, 1200);   // about 10 hours
+  for (const [sec, byTime] of [[15, false], [60, false], [300, true]]) {
+    const truth = new CE.CumulativeDelta({ sessionStart: S18, seconds: sec, coveredFrom: from, byTime });
+    for (const x of all) truth.add(x[0], x[2], x[3], undefined, x[4]);
+    for (const cut of [5000, 17777, 29990]) {                // three loads at different moments: the same count each time
+      const T = BB.decodeDeltaTable(tableMsg(from, all.slice(0, cut))), st = new BB.TickStore();
+      for (const x of all.slice(cut)) st.push(...x);
+      T.at = 0;
+      const cd = new CE.CumulativeDelta({ sessionStart: S18, seconds: sec, coveredFrom: T.coveredFrom, byTime });
+      const tr = new BB.TableReplay(st, T, cd, null);
+      while (!tr.step(1000));
+      assert.deepEqual(cumOf(cd), cumOf(truth), sec + ' s bars, load at trade ' + cut);
+    }
+  }
+});
+
+test('delta table: on range bars the total is the table\'s exactly, the window\'s sided trades are in the bars they made, and the bars are the chart\'s', () => {
+  const from = et(2026, 9, 28, 18, 0), all = sidedTape(from, 40000, 900);
+  const w0 = 25000, live = 31000, at = 36000;                // the window from trade w0; NinjaTrader's answer to `live` (no sides), live after
+  const st = new BB.TickStore();
+  for (let i = w0; i < all.length; i++) { const x = all[i]; if (i < live) st.push(x[0], x[1], x[2]); else st.push(...x); }
+  const T = BB.decodeDeltaTable(tableMsg(from, all.slice(0, at)));
+  T.at = at - w0;
+  const rb = () => new BB.BarBuilder({ mode: 'range', rangeTicks: 16, rangeMode: 'nt', tick: 0.25, sessionStart: S18 });
+  const cd = new CE.CumulativeDelta({ sessionStart: S18, seconds: 0, coveredFrom: T.coveredFrom });
+  const tr = new BB.TableReplay(st, T, cd, rb());
+  let steps = 0; while (!tr.step(997)) steps++;
+  assert.ok(steps > 10, 'in steps');
+  const net = all.reduce((a, x) => a + (x[3] === 1 ? x[2] : x[3] === -1 ? -x[2] : 0), 0);
+  assert.equal(cd.last.c, net, 'the session\'s delta, to the trade');
+  // the chart's bars: the same builder fed the store from its first trade
+  const chartBars = rb(); st.feed(chartBars, 0);
+  const shown = new Set(chartBars.bars.map(b => b.t));
+  assert.ok(cd.bars.slice(1).every(b => shown.has(b.t)), 'every delta bar but the one before the window is a chart bar');
+  // from the first sided trade on, each bar's delta is exactly its trades' (built trade by trade with the sides)
+  const ref = new CE.CumulativeDelta({ sessionStart: S18, seconds: 0, coveredFrom: T.coveredFrom }), b2 = rb();
+  for (let i = 0; i < st.length; i++) { b2.addQuiet(st.time(i), st.price(i), st.volume(i)); if (st.side(i) !== undefined) ref.add(st.time(i), st.volume(i), st.side(i), b2.bars[b2.bars.length - 1].t, st.method(i)); }
+  const firstSided = ref.bars[1].t;                          // the bar the first sided trade made can also hold residual seconds
+  const own = cd.bars.filter(b => b.t > firstSided).map(b => [b.t, b.buy - b.sell]), want = ref.bars.filter(b => b.t > firstSided).map(b => [b.t, b.buy - b.sell]);
+  assert.deepEqual(own, want);
+});
+
+test('delta table: the engine\'s addSecond moves the cumulative once per second and leaves the largest trade unknown; the pane says "since 18:00 ET"', () => {
+  const T0 = et(2026, 9, 29, 10, 0);
+  const cd = new CE.CumulativeDelta({ seconds: 60 });
+  assert.equal(cd.addSecond(T0 + 1, 10, 4, 0), true);
+  assert.equal(cd.addSecond(T0 + 2, 0, 9, 2), true);
+  assert.equal(cd.addSecond(T0 + 3, 0, 0, 0), false);
+  assert.deepEqual([cd.last.o, cd.last.h, cd.last.l, cd.last.c, cd.last.buy, cd.last.sell, cd.last.unknown, cd.last.big], [0, 6, -3, -3, 10, 13, 2, 0]);
+});
