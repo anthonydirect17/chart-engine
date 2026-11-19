@@ -1,0 +1,147 @@
+/*
+ * Legion's own look (plan step 3.2): the Imperial look of the Legion mockup (version 8) on the page's own tokens (workspace.css,
+ * house style V2): black and charcoal, gold trim with bronze beside it, cut corners, Roman numerals in Cinzel. No purple (the
+ * Colosseum's Opus seat keeps its violet, Anthony's exception of 2026-10-31, kept 2026-11-19), no crimson; green and red only for P&L and trade sides, and the page's sell tone for the one stop button (as the chart page's
+ * Flatten all). Wide pages, the page itself scrolls and nothing inside it does; on a phone the tables stack.
+ */
+:root {
+  --lx-ground: #07070a; --lx-grid: rgba(212, 173, 85, .035); --lx-halo: rgba(212, 173, 85, .10);
+  --lx-panel: rgba(18, 16, 12, .88); --lx-panel2: rgba(28, 25, 18, .92);
+  --lx-line: rgba(212, 173, 85, .26); --lx-line2: rgba(212, 173, 85, .12);
+  --lx-gold: var(--ws-gold, #C9A55C); --lx-gold-hot: var(--ws-gold-text, #E2C687); --lx-gold-bg: rgba(201, 165, 92, .10);
+  --lx-bronze: #B07A3C;
+  --lx-fg: var(--ws-text, #ECE9E2); --lx-muted: var(--ws-text2, #A6A196); --lx-dim: var(--ws-muted, #8A857B);
+  --lx-head: "Chakra Petch", "IBM Plex Sans Condensed", system-ui, sans-serif;
+  --lx-cut: 12px; --lx-glow: 0 0 18px rgba(212, 173, 85, .14);
+}
+html, body.lx { margin: 0; min-height: 100%; background: var(--lx-ground); color: var(--lx-fg); }
+body.lx { font: 14px/1.45 "IBM Plex Sans", system-ui, sans-serif; overflow-y: auto; overflow-x: hidden; }
+.lx-app {
+  min-height: 100vh; box-sizing: border-box;
+  padding: 0 max(16px, env(safe-area-inset-right, 0px)) 56px max(16px, env(safe-area-inset-left, 0px));
+  background-color: var(--lx-ground);
+  background-image: radial-gradient(ellipse at 50% -10%, var(--lx-halo), transparent 55%), linear-gradient(var(--lx-grid) 1px, transparent 1px), linear-gradient(90deg, var(--lx-grid) 1px, transparent 1px);
+  background-size: auto, 44px 44px, 44px 44px;
+}
+.lx-app > * { max-width: 1560px; margin-left: auto; margin-right: auto; }
+
+/* the header: the standard and the wordmark, the five tabs, the clock, ChartBridge, Charts and Stop all automation */
+/* stacking, low to high (the R12 delta review of 3.3): the page; the floating lines (40); the lanes' controls on Cohorts (42); this header
+   (44); Stop all's question (45). test/legion.test.js holds the order */
+.lx-head { position: sticky; top: 0; z-index: 44; background: var(--lx-ground); display: flex; flex-wrap: wrap; align-items: center; gap: 10px 20px; padding: 12px 0; border-bottom: 1px solid var(--lx-line); }
+.lx-brand { display: flex; align-items: center; gap: 10px; color: var(--lx-gold); }
+.lx-standard { width: 26px; height: 34px; flex: none; }
+.lx-standard-hot { fill: var(--lx-gold-hot); }
+.lx-word { display: flex; flex-direction: column; font-family: var(--ws-title-font); font-weight: 700; line-height: 1; }
+.lx-word-suite { font-size: 9.5px; letter-spacing: .3em; color: var(--lx-bronze); font-weight: 600; }
+.lx-word-name { font-size: 21px; letter-spacing: .32em; color: var(--lx-gold-hot); margin-top: 3px; text-shadow: 0 0 10px rgba(242, 212, 138, .35); }
+.lx-nav { display: flex; gap: 2px; flex-wrap: wrap; }
+.lx-nav button { font: 600 13px var(--lx-head); letter-spacing: .1em; text-transform: uppercase; background: none; border: 0; color: var(--lx-muted); padding: 8px 12px; cursor: pointer; border-bottom: 2px solid transparent; display: inline-flex; align-items: baseline; gap: 7px; }
+.lx-nav button:hover { color: var(--lx-fg); }
+.lx-nav button[aria-selected="true"] { color: var(--lx-gold-hot); border-bottom-color: var(--lx-gold); box-shadow: 0 8px 14px -12px var(--lx-gold); }
+.lx-nav button:focus-visible, .lx-sub button:focus-visible, .lx-btn:focus-visible { outline: 1px solid var(--lx-gold-hot); outline-offset: 2px; }
+.lx-rn { font-family: var(--ws-title-font); font-weight: 700; color: var(--lx-bronze); letter-spacing: .04em; font-size: 12px; }
+.lx-nav button[aria-selected="true"] .lx-rn { color: var(--lx-gold); }
+/* the standing word beside Stop all: fixed room (one line, a fixed width, the rest in its title), there even when empty, so the
+   header never changes size when it comes or goes */
+.lx-stopnote { display: block; width: 240px; height: 1.35em; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 11px; line-height: 1.35em; color: var(--lx-muted); text-align: right; }
+.lx-stopnote.bad { color: var(--lx-fg); }
+@media (max-width: 720px) { .lx-stopnote { width: 100%; order: 9; text-align: left; } }
+.lx-right { margin-left: auto; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.lx-clock { font: 500 12px "IBM Plex Mono", monospace; color: var(--lx-fg); font-variant-numeric: tabular-nums; }
+.lx-et { color: var(--lx-dim); }
+.lx-pill { font: 500 11.5px var(--lx-head); letter-spacing: .05em; padding: 4px 10px; border: 1px solid var(--lx-line); color: var(--lx-muted); white-space: nowrap; }
+.lx-pill[data-state="on"] { color: var(--lx-gold-hot); }
+.lx-pill[data-state="off"] { color: var(--lx-dim); }
+
+/* buttons: cut corners */
+.lx-btn { font: 600 12px var(--lx-head); letter-spacing: .08em; text-transform: uppercase; color: var(--lx-fg); background: var(--lx-panel2); border: 1px solid var(--lx-line); padding: 8px 12px; cursor: pointer; text-decoration: none; display: inline-block;
+  clip-path: polygon(0 0, calc(100% - 7px) 0, 100% 7px, 100% 100%, 7px 100%, 0 calc(100% - 7px)); }
+.lx-btn:hover { border-color: var(--lx-gold); }
+.lx-btn:disabled { opacity: .45; cursor: not-allowed; }
+/* the one stop button: the chart page's own exit tone (ws-flat: the sell colour on its ground), never a new red */
+.lx-btn.lx-stop { color: var(--ws-sell, #E2685D); border-color: color-mix(in srgb, var(--ws-sell, #E2685D) 55%, transparent); background: var(--ws-sell-ground, #1e0d0b); }
+.lx-btn.lx-stop:hover:not(:disabled) { color: var(--lx-fg); }
+.lx-ask { position: fixed; z-index: 45; right: 12px; top: var(--lx-ask-top, 64px); box-sizing: border-box; width: min(640px, calc(100vw - 24px));   /* border-box: whole in a phone's width (the R12 delta) */ box-shadow: 0 10px 28px rgba(0, 0, 0, .55); display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--ws-sell, #E2685D) 45%, transparent); background: var(--ws-sell-ground, #1e0d0b); color: var(--lx-fg); font-size: 13px; }
+.lx-ask > span { flex: 1 1 320px; }
+.lx-said { margin: 10px 0 0; padding: 8px 12px; border: 1px solid var(--lx-line2); background: var(--lx-panel); font-size: 12.5px; color: var(--lx-muted); white-space: pre-wrap; overflow-wrap: anywhere; }
+.lx-said.bad { color: var(--lx-fg); border-color: color-mix(in srgb, var(--ws-sell, #E2685D) 45%, transparent); }
+
+/* the R12 review of plan step 3.2 (S2): the question floats under the header beside Stop all; Stop all's line, the note line and
+   ChartBridge's alert line (workspace.css draws it) float over the bottom of the window. Nothing in the page's flow moves when one
+   comes or goes; the page keeps that much room below its last line (live/legion.js sets --lx-float-room) */
+.lx-float { position: fixed; z-index: 40; left: 12px; right: 12px; bottom: 10px; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; max-height: 45vh; overflow-y: auto; pointer-events: none; }
+.lx-float > :not([hidden]) { pointer-events: auto; box-sizing: border-box; width: min(760px, 100%);   /* border-box: whole in a phone's width */ box-shadow: 0 8px 24px rgba(0, 0, 0, .5); }
+.lx-float .lx-said { margin: 0; background: var(--lx-ground); cursor: default; }
+.lx-float .lx-said.lx-put { cursor: pointer; }
+.lx-float .lx-alerts { position: static; padding: 0; margin: 0; }
+.lx-float .lx-alerts:not(:has(> :not([hidden]))) { display: none; }
+.lx-float .ws-alert { margin-top: 0; }
+.lx-main { padding-bottom: var(--lx-float-room, 0px); }
+/* no confirm is ever under the floating lines (the R12 delta reviews of 3.3). The lanes' controls on Cohorts (Kill all, Armed and both
+   their questions) stack above them, wherever they sit and whether a question is open or not; the head's lines of words do not. The lines are never hidden: they keep to a
+   band of the window clear of the head and of every question open in the page, and scroll inside it (live/legion.js, floatFit).
+   The head is not sticky here: stuck, it sat under Legion's header (Kill all's row hidden, Stop all always in sight there) with its
+   lower rows lying over the cohort cards and their drop targets */
+.lx-fl .fl-top { position: relative; top: auto; z-index: auto; }   /* no layer of its own, so its controls' 42 counts against the lines */
+.lx-fl .fl-head, .lx-fl .fl-armrow, .lx-fl .fl-top > .fl-ask { position: relative; z-index: 42; }
+/* the narrowest phones (320 px): Kill all, Yes and Cancel keep one row (the head row never wraps) and stay whole in the window, their
+   words on two lines; the tab's title gives way first */
+@media (max-width: 360px) {
+  .lx-fl .fl-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .lx-fl .fl-head > .ws-btn { height: auto; white-space: normal; max-width: 8.5em; line-height: 1.25; padding: 4px 10px; text-align: center; }
+  .lx-fl .fl-lanegrid { grid-template-columns: minmax(0, 1fr); }   /* a lane's 330 px floor ran past the window here */
+}
+body.lx-pr .lx-main { padding-bottom: 0; }   /* Praetorian's desk is one screen: a passing line covers its foot a moment, the page never scrolls */
+
+/* the tabs' pages: the page scrolls, never a box inside it */
+.lx-main { padding-top: 18px; }
+.lx-view[hidden], [data-lx-subview][hidden] { display: none !important; }
+.lx-sub { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 14px; }
+.lx-sub button { font: 12px var(--lx-head); letter-spacing: .06em; text-transform: uppercase; background: var(--lx-panel); border: 1px solid var(--lx-line2); color: var(--lx-muted); padding: 6px 11px; cursor: pointer; }
+.lx-sub button[aria-selected="true"] { color: var(--lx-gold-hot); border-color: var(--lx-line); background: var(--lx-gold-bg); }
+.lx-card { position: relative; background: var(--lx-panel); border: 1px solid var(--lx-line); padding: 14px; min-width: 0; box-shadow: var(--lx-glow);
+  clip-path: polygon(0 0, calc(100% - var(--lx-cut)) 0, 100% var(--lx-cut), 100% 100%, var(--lx-cut) 100%, 0 calc(100% - var(--lx-cut))); }
+.lx-card > h2 { margin: -2px 0 10px; padding-bottom: 8px; border-bottom: 1px solid var(--lx-line2); font: 600 13.5px var(--lx-head); letter-spacing: .08em; text-transform: uppercase; color: var(--lx-gold); display: flex; align-items: center; gap: 10px; }
+.lx-card > h2 .lx-rn { font-size: 18px; color: var(--lx-gold-hot); }
+.lx-card p { margin: 6px 0; max-width: 96ch; }
+.lx-muted { color: var(--lx-muted); }
+.lx-todo { border-style: dashed; }
+
+/* the tabs moved from the chart page keep their own drawing; here they sit in the page's flow instead of covering a grid, so the
+   page scrolls and nothing inside them does (their own fixed heights and inner scrolls are let go) */
+.lx-fl.fl-view, .lx-lg.lg-view, .lx-ag.ag-view { position: static; inset: auto; height: auto; min-height: 0; max-height: none; overflow: visible; display: block; }
+.lx-fl .fl-scroll, .lx-lg .lg-scroll { overflow: visible; max-height: none; height: auto; }
+/* Praetorian's Agent desk is one screen with no page scroll (its Layout 5, Anthony's rule on the chart page): while it is shown
+   Legion's chrome is compact (body.lx-pr) and the desk takes exactly the window below it (live/legion.js sets its height) */
+.lx-ag.ag-view { display: flex; flex-direction: column; min-height: 0; }
+body.lx-pr .lx-app { padding: 0 6px; }
+body.lx-pr .lx-app > * { max-width: none; }
+body.lx-pr .lx-head { padding: 4px 0; gap: 4px 14px; }
+body.lx-pr .lx-standard, body.lx-pr .lx-word-suite, body.lx-pr .lx-clock { display: none; }
+body.lx-pr .lx-word-name { font-size: 16px; margin-top: 0; }
+body.lx-pr .lx-nav button { padding: 5px 10px; }
+body.lx-pr .lx-btn { padding: 5px 10px; }
+body.lx-pr .lx-main { padding-top: 0; }
+body.lx-pr .lx-sub { margin: 0; flex-wrap: nowrap; }
+body.lx-pr .lx-sub-long, body.lx-pr .lx-pill { display: none; }
+.lx-subslot:empty { display: none; }
+body.lx-pr .lx-sub button { padding: 3px 9px; }
+body.lx-pr .lx-stopnote { display: none; }   /* the standing word is the Stop button's title meanwhile; an answer still shows */
+
+/* tables in Legion's own content stack on a phone, each cell with its column's name (the mockup's .tbl) */
+@media (max-width: 760px) {
+  .lx-tbl table, .lx-tbl tbody, .lx-tbl tr, .lx-tbl td { display: block; width: 100%; box-sizing: border-box; }
+  .lx-tbl thead, .lx-tbl tr:has(th) { display: none; }
+  .lx-tbl tr { border-bottom: 1px solid var(--lx-line2); padding: 6px 0; }
+  .lx-tbl td { border: 0; padding: 3px 0; display: flex; justify-content: space-between; gap: 12px; text-align: right; }
+  .lx-tbl td::before { content: attr(data-l); font: 10.5px var(--lx-head); letter-spacing: .08em; text-transform: uppercase; color: var(--lx-muted); text-align: left; }
+}
+@media (max-width: 560px) {
+  .lx-word-suite { display: none; }
+  .lx-pill, .lx-clock { display: none; }
+  .lx-right { margin-left: 0; width: 100%; }
+  .lx-right .lx-stop { flex: 1 1 auto; }
+  .lx-nav { width: 100%; }
+  .lx-nav button { padding: 8px 8px; font-size: 12px; }
+}

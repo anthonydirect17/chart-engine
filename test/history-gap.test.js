@@ -36,7 +36,7 @@ test('1.38.1 (Anthony 2026-10-23): the Drone sky is NQ 1 min; the seats\' MNQ pr
 
 test('0.6.8: ChartBridge keeps a minute book per instrument and joins it to NinjaTrader\'s minute answer at one seam', () => {
   const cs = read('nt8/ChartBridge.cs');
-  assert.match(cs, /public const string Version = "0\.6\.([89]|1[0-9]|2[0-3])";/);   // 0.6.21: the pick and profitToday (no history change); 0.6.20: the roster served (no history change); 0.6.19: the day's profit stop (no history change); 0.6.18: entry rules per trader (no history change); 0.6.17: Kill all for the prop accounts (no history change); 0.6.16: prop accounts (no history change); 0.6.15: the 1 second pull retired (no history change); 0.6.14: the tick day check rule; 0.6.9: the history path unchanged (recording only); 0.6.10: the account lifecycle (no history change); 0.6.11: the bar trail, the 1 second request (no history change); 0.6.12: the bar trail follow-ups (no history change)
+  assert.match(cs, /public const string Version = "0\.6\.([89]|1[0-9]|2[0-5])";/);   // 0.6.25: the combined release (no history change); 0.6.24: release 1 (no history change); 0.6.21: the pick and profitToday (no history change); 0.6.20: the roster served (no history change); 0.6.19: the day's profit stop (no history change); 0.6.18: entry rules per trader (no history change); 0.6.17: Kill all for the prop accounts (no history change); 0.6.16: prop accounts (no history change); 0.6.15: the 1 second pull retired (no history change); 0.6.14: the tick day check rule; 0.6.9: the history path unchanged (recording only); 0.6.10: the account lifecycle (no history change); 0.6.11: the bar trail, the 1 second request (no history change); 0.6.12: the bar trail follow-ups (no history change)
   // stamped at the close, end-inclusive, as TailFromTicks and NinjaTrader
   assert.match(cs, /public static long CloseOf\(long t\) \{ long rem = t % Minute; return rem == 0 \? t : t - rem \+ Minute; \}/);
   // fed under the book's lock in OnMarketData, reset on a feed drop
@@ -53,7 +53,7 @@ test('0.6.8: ChartBridge keeps a minute book per instrument and joins it to Ninj
   assert.match(cs, /if \(!Started \|\| Bars == null \|\| Bars\.Count == 0\) return null;/, 'item 1: no join in the book\'s first minute');
   assert.match(cs, /if \(!CanStandIn\(L, book\)\)/, 'item 2: the time limit gives up only when history can stand in');
   assert.match(cs, /\\"type\\":\\"historyLate\\"/, 'item 2: the page is told when the real answer comes');
-  assert.match(cs, /StartLoad\(client, root, days, tickHours, sub, false, false, true\); \}/, 'item 3: an agent\'s subscribe');
+  assert.match(cs, /StartLoad\(client, root, days, tickHours, sub, false, false, true(, false)?\); \}/, 'item 3: an agent\'s subscribe');
   assert.match(cs, /if \(!L\.Agent\) Task\.Delay\(MinuteTimeoutMs\)/, 'item 3: no minute time limit for an agent');
   assert.match(cs, /if \(!L\.Agent\) Task\.Delay\(TailTimeoutMs\)/, 'item 3: no last-trades time limit for an agent');
   assert.match(cs, /\\"minuteTimedOut\\":" \+ \(L\.MinuteTimedOut/, 'item 3: ready says it');

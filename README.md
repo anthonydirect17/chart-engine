@@ -447,6 +447,22 @@ it: after F5, run `update` (or `status`, which notes the new version for the nex
 installs at once; if it cannot be written right then, the ChartBridge part still counts and the page follows on the
 next update. `-InstallChartBridge` also moves the task's copy of the updater to that commit (never to an older one).
 
+**Put the last ChartBridge back** (release 1; while flat in every account, with the NinjaScript Editor closed), when a new
+ChartBridge misbehaves after its F5:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File $u rollback-chartbridge -Flat
+```
+
+It copies the files the last `-InstallChartBridge` replaced (kept in `updater\previous-addons\`) back over AddOns, through
+the same all-or-nothing copy, then says to press **F5** while flat and check `/diag`. `-Flat` is your word that you are flat:
+the updater cannot check NinjaTrader's positions while NinjaTrader is closed, so without it nothing is done; then it asks
+once (type `y`). Each install records the set it kept and every file's sha256 in `updater\state.json`; the command refuses,
+saying why, when that record is missing (a set kept by an older updater), the set is gone or incomplete, a file does not
+match its sha256, AddOns changed since that install, or the kept set is the same as AddOns (an install run twice keeps the
+earlier set). The files it replaces are kept first, so running it again goes forward again. It never changes the page
+(`rollback` does that).
+
 **Pause, roll back, and the rest:**
 
 | Command (`powershell -NoProfile -ExecutionPolicy Bypass -File $u ...`) | What it does |
@@ -455,6 +471,7 @@ next update. `-InstallChartBridge` also moves the task's copy of the updater to 
 | `check` | dry run: what `update` would do now |
 | `update` | the automatic path, by hand |
 | `rollback` | puts the previous page files back; that commit is skipped until a newer one is on `main`. `rollback` again goes forward again |
+| `rollback-chartbridge -Flat` | puts the ChartBridge files the last `-InstallChartBridge` replaced back (above), then F5 while flat; again goes forward again |
 | `repair` | page files only, never ChartBridge: finishes or undoes a cut-off install, or writes a whole page (staged, previous, or the clone's page files; the clone's only when its `live/COMPAT.json` allows the ChartBridge compiled here, or it says plainly that it could not check) |
 | `pause` / `resume` | turns the automatic update off and on (off is never the default; a cut-off install is still repaired while paused) |
 | `register` / `unregister` | the scheduled task "ChartEngine Updater" for this Windows user: at sign-in and daily at 9:00 AM and 5:00 PM New York time (`-DailyAt`), started hidden (wscript.exe //B and a one-line launcher) |
@@ -841,8 +858,10 @@ auto, tick })` and `new ChartEngine.DeltaDivergence({ settings })`, fed by the p
 Cumulative delta (1.7.0): `new ChartEngine.CumulativeDelta({ sessionStart, seconds, coveredFrom })` counts trades
 (`add(t, v, side, barT, method)`, side 1 buy, -1 sell, 0 or none unknown) into one candle per price bar of the
 running buys minus sells, from 0 at each 18:00 ET session, from `coveredFrom` on (the start of the page's
-window of trades with measured sides). `setDelta(delta | null)` hands one to the chart, drawn in a pane below the plot while the `delta` layer is on;
-`setDeltaView({ mode: 'cum' | 'bar', ratio, note, reason })`, `deltaPane()`, `deltaToY(v)` and
+window of trades with measured sides). `addSecond(t, buy, sell, unknown, barT, big)` counts one second of ChartBridge 0.6.25's delta
+table at once (the cumulative moves once by buy minus sell; `big` the second's largest trade, the bar's `big` the largest of them,
+`bigMissing` when one was not known). `setDelta(delta | null)` hands one to the chart, drawn in a pane below the plot while the `delta` layer is on;
+`setDeltaView({ mode: 'cum' | 'bar', ratio, note, reason, missed, start })` (`start`: say "since 18:00 ET" also for a session counted from its start), `deltaPane()`, `deltaToY(v)` and
 `on('paneResize', { ratio, height, done })` for the divider.
 
 Studies (1.34.0): `setStudies({ ema: [9, 21, 0], sma: [20, 50, 200], bands: { len, dev, basis, fill }, rsi: { len, lo, hi } })`

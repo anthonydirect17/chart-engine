@@ -638,16 +638,38 @@ function cleanFirmMins(raw) {
   }
   return out;
 }
+/** The gap between NinjaTrader's floor figure and ChartBridge's that is worth a word: more than $25. */
+const FLOOR_GAP = 25;
 /** Whether to flag "NinjaTrader shows X to the floor, ChartBridge Y" for account a: only when no firm minimum was set for it. */
 function ntFloorFlag(a, firmMins) {
-  if (!a || !isNum(a.roomFloorNt) || !isNum(a.roomFloor) || Math.abs(a.roomFloor - a.roomFloorNt) <= 25) return false;
+  if (!a || !isNum(a.roomFloorNt) || !isNum(a.roomFloor) || Math.abs(a.roomFloor - a.roomFloorNt) <= FLOOR_GAP) return false;
   if (a.src && a.src.roomFloor === 'ninjatrader') return false;
   return !(firmMins && firmMins[a.name]);
+}
+/**
+ * Unreleased (Anthony 2026-11-18, the floor fix): the one warning when a join must start an account's highs at its account size
+ * (no seed from The Desk, no end-of-day high kept by ChartBridge, the balance not above the size): its floor then starts at the
+ * size less the drawdown, which is below the firm's when the account closed higher before ChartBridge kept its closes. Quiet when
+ * NinjaTrader's own figure puts the floor within FLOOR_GAP of that (the same gap as the floor flag), for a static drawdown (its floor
+ * never trails) and when the start typed is above the size. a: ChartBridge's accounts entry; rules: { size, drawdown, drawdownType };
+ * startText: the highest close the join will send. '' or the words.
+ */
+function sizeStartWarn(a, rules, startText) {
+  const r = rules || {}, size = isNum(r.size) ? r.size : 0, dd = isNum(r.drawdown) ? r.drawdown : 0;
+  const start = parseFloat(String(startText === undefined || startText === null ? '' : startText).replace(/[$,\s]/g, ''));
+  if (!a || !(size > 0) || !(dd > 0) || r.drawdownType === 'static' || !(start > 0) || start > size + 0.004) return '';
+  const floor = size - dd;
+  const eq = isNum(a.balance) && isNum(a.unrealized) ? a.balance + a.unrealized : null;
+  const nt = eq !== null && isNum(a.roomFloorNt) ? Math.round((eq - a.roomFloorNt) * 100) / 100 : null;
+  if (nt !== null && Math.abs(nt - floor) <= FLOOR_GAP) return '';
+  return 'No close above the account size is known for ' + a.name + ' (none from The Desk, none kept by ChartBridge): its floor starts at ' + fmtUsdPlain(floor) +
+    ', the account size less the drawdown' + (nt !== null ? ', and NinjaTrader puts it at ' + fmtUsdPlain(nt) : '') +
+    '. If the firm\'s dashboard shows a higher minimum balance, type its highest close here (that minimum plus ' + fmtUsdPlain(dd) + ').';
 }
 
 return { QUOTE_ONLY, quoteRoots, decimalsOf, fmtNum, fmt32, priceText, changeText, fmtUsd, fmtUsdPlain, AMBER, RED, limitState, limitText,
   tradeDayOf, dayText, roundTrips, netOf, tradesToday, cleanDesk, reviewUrl, FOLLOWER_DEFAULT, leaderSet, accountMark, followerRows, followerMessage,
-  accountMark, accountChange, logText, keptChange, orderName, attachedLegs, isWorking, heroOf, floorPlan, FIRM_MIN_KEY, cleanFirmMins, ntFloorFlag,
+  accountMark, accountChange, logText, keptChange, orderName, attachedLegs, isWorking, heroOf, floorPlan, FIRM_MIN_KEY, cleanFirmMins, ntFloorFlag, FLOOR_GAP, sizeStartWarn,
   roomParts, labelRefusal, deskSendLines, OUTCOMES, OUTCOME_WORD, propRow, listedNames, listedPlan, LISTED_MAX, lifecycleStep, lifecycleBusy, flatRetry, FLAT_RETRIES, STEP_WORDS, notListedRows, notListedWords, outcomeBody };
 });
 
@@ -1067,15 +1089,19 @@ function createFeed(env) {
   }
   function joinPlan(name, g, acc) {
     const GC = GroupsCore, base = { account: name, group: g.id };
-    if (!g.perMember) return Object.assign(base, { mode: 'old', prefill: String(+GC.highCloseDefault(g, acc).toFixed(2)) });
+    /* the floor fix (unreleased): every prefill is never below the end-of-day high ChartBridge keeps for the account (GC.keptHigh),
+       and a join that must start at the account size carries the one warning (AC.sizeStartWarn) */
+    const warned = (p, rules) => { const k = GC.keptHigh(acc); return Object.assign(p, { kept: k > 0 && +p.prefill <= k + 0.004, warn: AC.sizeStartWarn(acc, rules, p.prefill) }); };
+    if (!g.perMember) return warned(Object.assign(base, { mode: 'old', prefill: String(+GC.highCloseDefault(g, acc).toFixed(2)) }), g);
     const row = S.desk.get(name);
     const dr = !S.deskAt ? { error: 'The Desk is not reachable, so its account type cannot be read' } : !S.types ? { error: 'The Desk\'s account types are not known' } : GC.deskRules(row, S.types);
     if (dr.error) {
       const form = GC.rulesForm(g);
-      return Object.assign(base, { mode: 'form', form, why: dr.error, prefill: String(+GC.highCloseDefault(g, acc).toFixed(2)), seed: null });
+      return warned(Object.assign(base, { mode: 'form', form, why: dr.error, prefill: String(+GC.highCloseDefault(g, acc).toFixed(2)), seed: null }), g);
     }
-    const seed = GC.seedHigh(row, dr.rules);
-    return Object.assign(base, { mode: 'auto', rules: dr.rules, from: dr.from, overrides: dr.overrides, seed, prefill: seed ? String(seed.value) : String(+GC.highCloseDefault(dr.rules, acc).toFixed(2)) });
+    const seed = GC.seedHigh(row, dr.rules), sk = seed ? GC.seedOrKept(seed, acc) : null;
+    return warned(Object.assign(base, { mode: 'auto', rules: dr.rules, from: dr.from, overrides: dr.overrides, seed: sk && sk.kept ? null : seed,
+      prefill: sk ? String(+sk.value.toFixed(2)) : String(+GC.highCloseDefault(dr.rules, acc).toFixed(2)) }), dr.rules);
   }
   /** an auto join's words: "Put SIM-E in Lucid with its rules from <type>: <rules> · risk 5% ...: $100." */
   function joinWords(j) {
@@ -1640,7 +1666,8 @@ function mount(v, host) {
       const askJoin = a => {
         if (!P.join || P.join.account !== a.name) return '';
         const j = P.join, jg = (S.groups || []).find(x => x.id === j.group), hw = GroupsCore.highWord(j.mode === 'auto' ? j.rules : jg), gn = gName(j.group);
-        const high = `${esc(hw)} <input type="text" inputmode="decimal" class="oin apg-ll-in apg-high" data-act="join-high" value="${esc(j.prefill)}" aria-label="${esc(hw.charAt(0).toUpperCase() + hw.slice(1))} for ${esc(a.name)}, from the firm's dashboard" title="${esc(j.seed ? 'From ' + j.seed.words + '. ' : 'From the firm\'s dashboard. ')}Optional: empty takes the larger of the account size and its balance. ChartBridge starts the trailing floor from it."> <span class="mut">(${esc(j.seed ? (hw.startsWith('highest balance') ? 'highest balance' : 'highest close') + ' from The Desk\'s seed' + (j.seed.date ? ' of ' + j.seed.date : '') : 'the firm\'s dashboard; optional')})</span>`;
+        const high = `${esc(hw)} <input type="text" inputmode="decimal" class="oin apg-ll-in apg-high" data-act="join-high" data-id="${esc(a.name + '|' + j.group + '|' + j.mode)}" value="${esc(j.prefill)}" aria-label="${esc(hw.charAt(0).toUpperCase() + hw.slice(1))} for ${esc(a.name)}, from the firm's dashboard" title="${esc(j.seed ? 'From ' + j.seed.words + '. ' : j.kept ? 'From the end-of-day high ChartBridge keeps for it. ' : 'From the firm\'s dashboard. ')}Optional: empty takes the larger of its kept end-of-day high, the account size and its balance. ChartBridge starts the trailing floor from it."> <span class="mut">(${esc(j.seed ? (hw.startsWith('highest balance') ? 'highest balance' : 'highest close') + ' from The Desk\'s seed' + (j.seed.date ? ' of ' + j.seed.date : '') : j.kept ? 'the close ChartBridge kept; the firm\'s dashboard wins' : 'the firm\'s dashboard; optional')})</span>` +
+          (j.warn ? ` <span class="apg-twarn apg-jwarn">${esc(j.warn)}</span>` : '');
         const yes = `<button type="button" class="ac-btn apg-yes" data-act="join-yes" data-id="${esc(a.name)}">Put in ${esc(gn)}</button>`, no = `<button type="button" class="ac-btn" data-act="join-no" data-id="${esc(a.name)}">Cancel</button>`;
         if (j.mode === 'old') return row('join|' + a.name + '|' + j.group, `<span role="cell" class="apg-confirm apg-join">Put ${esc(a.name)} in ${esc(gn)}: ${high} ${yes}${no}</span>`, 'apg-ask');
         /* 1.33.0: one compact row: the rules taken from The Desk (and what the account's own Desk numbers changed), the highest close */
@@ -1835,7 +1862,7 @@ function mount(v, host) {
           ` <button type="button" class="ac-btn apg-yes" data-act="personal-yes" data-id="${esc(a.name)}">${pq.clear ? 'Take it away' : 'Yes, it is mine'}</button><button type="button" class="ac-btn" data-act="personal-no" data-id="${esc(a.name)}">Cancel</button></span>`, 'apg-ask');
         const hideBtn = canAct && a.canHide === true ? `<button type="button" class="ac-btn apg-hide" data-act="archive" data-id="${esc(a.name)}" title="Hide ${esc(a.name)}: it leaves every list until you Show it; its fills and history stay">Hide</button>` : '';
         const drawer = row('dr|' + a.name, `<span role="cell" class="apg-drawer">` + fld('Group', unrole(grp)) + fld('Account type', unrole(typeCell(a))) + fld('Limits', unrole(lims)) +
-          fld('Firm minimum', firm) + fld('Label', labBox) + fld('', hideBtn) + fld('Prop', outcomeCell(a.name)) + fld('Personal', personalCell) + (flags.length ? `<span class="apg-dflags">${esc(flags.join(' · '))}</span>` : '') + '</span>', 'apg-ask apg-drawerrow');
+          fld('Firm minimum', firm) + fld('Label', labBox) + fld('', hideBtn) + fld('Prop', outcomeCell(a.name)) + fld('Personal', personalCell) + (flags.length ? ci(flags.join(' · '), 'apg-dflags') : '') + '</span>', 'apg-ask apg-drawerrow');
         return main + drawer + askPersonal + ask(a) + askOutcome(a.name) + askJoin(a) + askRules(a) + typeRow(a) + askApply(a);
       };
       /* the sections: each group (its members), then the accounts in no group, then the Sim accounts (folded until opened) */
@@ -1968,9 +1995,12 @@ function mount(v, host) {
     /* 1.32.0 (review): a control with the focus keeps it when the list is rebuilt (the same data-act and data-id), so an arrow key
        on the Change row's Firm or Plan moves through the list there */
     const had = document.activeElement, keep = had && had !== listEl && listEl.contains(had) && had.dataset && had.dataset.act ? { act: had.dataset.act, id: had.dataset.id || '' } : null;
-    let rebuilt = false;
+    let rebuilt = false, typed = [];
     if (P.key !== html) {
       rebuilt = true;
+      /* a box with no value of its own in the html (the firm's minimum, the join's highest close) keeps what was typed in it when
+         the list is rebuilt, so Set or Put in never reads an empty box Anthony did not empty */
+      typed = [...listEl.querySelectorAll('input[type="text"][data-act]:not([data-p])')].filter(e => e.value !== e.defaultValue).map(e => ({ act: e.dataset.act, id: e.dataset.id || '', v: e.value }));
       P.key = html; const top = listEl.scrollTop; listEl.innerHTML = html; listEl.scrollTop = top;
       P.cells = []; for (const e of listEl.querySelectorAll('[data-c]')) P.cells[+e.dataset.c] = e;
       P.props = []; for (const e of listEl.querySelectorAll('[data-p]')) P.props[+e.dataset.p] = e;
@@ -1989,6 +2019,15 @@ function mount(v, host) {
       if ('value' in x && e !== document.activeElement && e.value !== x.value) e.value = x.value;
     }
     const findAct = (act, id) => [...listEl.querySelectorAll(`[data-act="${act}"]`)].find(e => (e.dataset.id || '') === id) || null;
+    /* only into the same box (the same data-act and the same whole data-id: a join's box is keyed by its account, group and mode), and
+       never into a join's box once the join itself was replaced (another account or group chosen): its own prefill stands (the R12
+       review of f02fbb6, B1) */
+    const joinSame = P.join === P.joinDrawn;
+    for (const t of typed) {
+      if (!t.id || (t.act === 'join-high' && !joinSame)) continue;
+      const e = findAct(t.act, t.id); if (e && !e.dataset.p && e.value === e.defaultValue) e.value = t.v;
+    }
+    P.joinDrawn = P.join;
     if (rebuilt && keep) { const e = findAct(keep.act, keep.id); if (e && !e.disabled) e.focus(); }
     /* after Cancel, Not set or Save: the account's Change or Set button (once it is back, after a save; only while nothing else
        has the focus) */

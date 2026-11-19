@@ -349,7 +349,8 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
     IB's note when both show). Nothing either when ChartBridge reports the data connection down inside the window (its
     profile's drop), or locked with no trade in the window. Quiet overnight minutes with no trade are normal, so a
     missing minute is not taken as a hole. No Globex session that trading day (weekends, New Year's Day, Good Friday,
-    Christmas): nothing, no note. NYSE-only holidays (Globex trades, as Thanksgiving) have their overnight, locked at 9:30.
+    Christmas): nothing, no note. NYSE-only holidays (Globex trades, as Thanksgiving) have their overnight, locked at 9:30;
+    so does Good Friday 2026, CME's abbreviated session to 09:15 ET (`cmeShortSessions`, Anthony's ruling 2026-11-18).
 - **Levels' lines, each its own toggle (1.14.0, Anthony):** the Levels gear lists PDH, PDL, Prior close, ONH, ONL,
   PD VAH, PD VAL, PD POC, IBH and IBL as a row of small toggles (`.ind-tog`, 24 px, 600 11px mono, styled as the chips: on = solid border on `--s3`,
   off = dashed in the quiet grey), all on
@@ -752,10 +753,13 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   the loss red of the NO STOP tag.
 - **The order ticket**: the order bar's own controls and colors (live.css) in a column, 6 px gaps, 28 px controls:
   instrument and account; Armed (the crimson switch, the ticket outlined in `--crimson-word` while Armed, 1.13.0); Qty with "max N" and the
-  bracket preset; Bracket, stop, target and t / pt; Buy MKT and Sell MKT, half each; B/E, Close and Cancel all, a
-  third each; then the position and P&L, the stop and target cover, the last fill (buy green, sell red), "Also open"
+  bracket preset; Bracket, stop, target and t / pt; Buy MKT and Sell MKT, half each; B/E, Flatten, Cut half, Cancel all
+  and Merge in a grid of three (release 1); then the position and P&L, the stop and target cover, the last fill (buy green, sell red), "Also open"
   lines in warn amber each with its Close, the account note, the Cancel all line and the notes line (11 px; warn and
-  loss colors). It fits a 2 x 3 panel at 1366x768 without scrolling; a shorter panel scrolls inside. The placeholder
+  loss colors). A ticket panel under 400 px tall (the default 2 x 3 at 1366x768) is compact, 4 px gaps and 24 px controls,
+  so the managed line and its bar trail warning stay inside it (1.42); it follows the panel's size, never the ticket's
+  content, so nothing moves when a trade opens. It fits a 2 x 3 panel at 1366x768 without scrolling; a shorter panel
+  scrolls inside. The placeholder
   in another window says "Ticket is in the other window" with Move the ticket here; with no ticket anywhere "No window
   has the ticket" with Use the ticket here.
 
@@ -764,13 +768,9 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   older one). No RTH shading or delta pane on them; VWAP (the session's, from the 1-minute bars) and levels on 4h; on 1D and
   1W no VWAP, levels or profile, and the chart's note says so. Daily labels as for daily bars.
 - **History (1.15.0):** a 1 hour chart loads 30 days of 1-minute history, a 15 minute chart 10, the rest 5.
-- **Account panel (1.15.0, Anthony's consolidated form):** a 28 px header (Account and the ticket's account in 500 11px mono),
-  a summary strip of four (Open, Realized, Day in 600 14px mono in the buy green or sell red, Trades), tabs (600 11px,
-  the selected one with a 2 px accent underline and a count badge), the rows (12px mono, a hairline `#121922` between, the
-  only scroll), a quiet foot. Positions with a Close (the sell red border), Orders with an x, Fills with each flat-to-flat
-  trade's P&L on the fill that went flat ("open", or "n/a" for a trade begun before today); its x cancels an order of any
-  instrument (Armed). On a narrow panel (under 360 px)
-  the summary goes two by two and each pair of columns stacks in one cell, so nothing is cut at 1366 px.
+- **Account panel (1.15.0; removed in release 1):** the old Account panel (today's figures, Positions with Close, Orders
+  with x, Fills on the ticket's account) is gone; it had not been offered since 1.34.0, and a saved layout that still holds
+  one opens without it, quietly. The Account page has its figures.
 - **Quote board (1.15.0):** NQ and ES (1.16.0, Anthony 2026-10-05: the MNQ and MES rows went; display only): last, change and % from the prior settlement (buy green or sell red; blank
   without one), the session's high and low, in the same rows; under 400 px the change and %, and the high and low,
   stack; a 2 x 1 board shows the last, change and % (at 1366 px the last and %), the rest in the row's tooltip.
@@ -784,16 +784,36 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   left like the rows', a 22 px field-colored box, the accent border while it has the focus, at most 200 characters); Enter or
   leaving the box saves it. A loss of records shows as one amber line at the top of the panel (under the trade line) saying
   when and why, with a small Seen button; it goes once seen.
-- **The League tab (1.35.0, Anthony 2026-10-21):** the top bar's League button, right after the Agent tab (the Agent tab's
-  look, pressed = the tint), opens the league view in place of the grid. It shows only once The Desk serves the league, so the
-  top bar's room is never taken without it. A head line: "Shadow league", "SHADOW: no orders" (11 px mono capitals in a dashed
+- **Legion, its own page (plan step 3.2):** the chart page's top bar keeps Chart, the Bot button and a small **Legion** link
+  between them (the top bar's button look, `ws-legionlink`, shown with a v3 ChartBridge); it opens `legion.html` in its own window
+  (named `legion`), and Legion's **Charts** opens the chart page in the window named `chart`. The chart page has no Legion,
+  Colosseum, Praetorian or Agent tab any more, and a chart's ⋯ has no League trades switch; an old `?tab=` address forwards to
+  Legion (`?tab=praetorian` opens the Bot tab here when the Bot was the side used last). Legion's look (`live/legion.css`, the
+  Legion mockup version 8 on the house style V2 tokens): the ground `#07070a` with a faint gold grid and a gold halo at the top,
+  gold trim (`--ws-gold`) with bronze `#B07A3C` beside it (the Roman numerals and the IMPERIUM suite word), 12 px cut corners on
+  its cards, the wordmark LEGION in the title font (Cinzel) in the hot gold, the five tabs in 600 13 px Chakra Petch capitals
+  with their numerals (I Castra, II Cohorts, III Colosseum, IV Ludus, V Go live), the selected one in gold with a gold underline.
+  The sticky header holds the clock, ChartBridge's state pill, Charts and **Stop all automation** (the chart page's sell tone on
+  its ground, the one stop button), on every tab. Its question floats under the header beside the button; Stop all's answer
+  line, the panels' note line and ChartBridge's alert line float over the bottom of the window (the page keeps that much room
+  below its last line), so nothing under the pointer ever moves. No confirm is ever under those lines (the R12 delta review of
+  plan step 3.3): on Cohorts the lanes' head (Armed, Kill all and their questions) comes first, above the cohort model and the
+  Drone sky (Anthony 2026-11-19: "Yes, Kill all at the top"), scrolls with the page, and stacks above the lines. The lines are
+  never hidden (Stop all's answer and ChartBridge's errors stay in sight and announced): they take the lowest band of the window
+  clear of the lanes' head and of every question open in the page (a Copilot proposal, "Trade a LIVE account", "Flatten and turn
+  him off"), and scroll inside it. Stacking, low to high: the lines, the lanes' head, the header, Stop all's question. The Kill
+  all question says Yes and Cancel are in the row above, where Kill all was; on a 320 px phone their words take two lines. Praetorian's side shows the Agent desk on one screen: Legion's
+  chrome goes compact (the Cohorts sides move into the header) while it is shown. The moved views keep their own drawing.
+- **The League tab (1.35.0, Anthony 2026-10-21; from plan step 3.2 Legion's Colosseum, its third tab):** on the chart page it
+  was the top bar's League button, right after the Agent tab, opening the league view in place of the grid. A head line: "Shadow league", "SHADOW: no orders" (11 px mono capitals in a dashed
   purple box), the legend strip (each seat's letter in an 18 px ring of its color, then its name: H Haiku amber `#FFC266`, S
   Sonnet cyan `#5DE0F0`, O Opus violet `#B69CFF`), and on the right the date, the time and "day closed, recording to 17:00"
   after the close. Then one MNQ chart (the chart as everywhere) and a 420 px column: each seat's day (a 3 px left edge in its
   color), the API spend against the caps, the week and month table, the decision log (a refusal in amber). The seat colors are
   used only for the league's letters, legend and marks; no green or red in the view.
-- **A past day in the League view (1.41.0, Anthony's task "League view opens a given past day"):** the page's address
-  `?tab=league&day=YYYY-MM-DD` (The Desk's Agent Stats day rows link to it) opens the view on that session date, read only.
+- **A past day in the League view (1.41.0, Anthony's task "League view opens a given past day"):** Legion's address
+  `legion.html?tab=colosseum&day=YYYY-MM-DD` (The Desk's Agent Stats day rows link to the chart page's old
+  `?tab=league&day=`, which forwards there) opens the view on that session date, read only.
   After the legend: "Past day YYYY-MM-DD · read only" in the same dashed tint box as SHADOW (11 px mono), then a "Back to
   today" button (the top bar's button look). The chart head says whether the chart's history (its 5 days) holds the day ("...
   is in the chart's history: drag the chart back to it.", or that the history starts after it); the chart itself opens at
@@ -807,11 +827,12 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   own canvas and look untouched): a hollow circle at a paper fill and a hollow diamond at its exit, 8 px, 1.5 px stroke in the
   seat's color with its letter inside (600 10 px mono); the stop as a dashed line (4 3) and the target as a dotted line (1 3) at
   50 % from the fill to the exit (to the right edge while open). Faint (a chart's ⋯ "League trades (faint)", off by default,
-  NQ and MNQ only): 6 px marks, 8 px letters, the marks at 55 % and the lines at 30 %.
+  NQ and MNQ only): 6 px marks, 8 px letters, the marks at 55 % and the lines at 30 %. Plan step 3.2: the chart page reads no
+  league any more, so the faint switch is gone with its read.
 - **The Bot as a panel (1.35.0, Anthony 2026-10-21; removed in 1.36.0, merged into the Agents strip as its bot card; from 1.36.0 the Bot button stays in the top bar on every layout):** "Bot" in + Add panel, at most one a layout: a 28 px header with the
   name, then the very Bot button the top bar had and one muted line. While a view is open (Bot, Agent, League), or while the
   button carries its red alert, it sits in the top bar where the Bot tab was, with or without a Bot panel. With no room on the grid, the menu item opens the Bot view itself and says so. The Bot view
-  is unchanged, and so is the Agent tab, in the top bar where it was.
+  is unchanged, and so was the Agent tab, in the top bar where it was (plan step 3.2: it is Praetorian on Legion now).
 - **The Agents strip (1.36.0, Anthony 2026-10-22):** a placeable panel (+ Add panel, one a layout), a 28 px header ("Agents",
   "read only" in muted mono), then one row of cards 240 to 360 px wide (the row scrolls sideways when they no longer fit). A card:
   the panel color, a 1 px line, 6 px corners and a 3 px left edge in the seat's color (a live agent's in the second line color);
@@ -820,6 +841,9 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   with a muted 10 px uppercase label at the left (as Trade tags; the Thoughts label above its lines, which take the card's width), figures in 11 px mono; a thought is its time, action (10 px mono capitals), confidence and first line. Green and red only for the side word
   (LONG, SHORT) and P&L, and the bot card's red alert in the Bot button's own alert look (`bt-alert`: the border at 60 % of the
   sell red, the chip's ink `#FFC9D3` on the sell ground). The bot card's Rails row takes the Spend row's place. A thought's full reasoning opens in a box over the strip's foot (the pop color, 8 px corners). No motion.
+- **The Agents panel with no league (plan step 3.2):** the chart page reads no league, so the Drone sky below has no seat drones
+  and no league warning: one drone per live agent and the bot, in the strip's own `#9AA8B8`. A click on an agent's drone, or its
+  name in the corner line, opens Praetorian on Legion on that agent; the bot's still opens the Bot view here.
 - **The Agents panel, Drone sky (1.38.0, Anthony 2026-10-23, the approved mockup version 4, style "drones"):** the same panel
   (+ Add panel "Agents", one a layout, the header "Agents" and "read only"); the 1.36.0 cards above are now each drone's hover card.
   One canvas on the ground color `--ws-bg`, then a 30 px feed line (a 1 px top line, 12.5 px mono, a purple wash from the left at
@@ -882,7 +906,7 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
 - **Screens (1.35.0):** when the browser hides where its windows are (Brave's Shields), or Window management is blocked or not
   offered, or the pop-ups were blocked, the Screens pop-up (380 px) starts with a numbered list of what to allow, in a box
   with an amber edge.
-- **Text panels never cost the charts (Anthony's ruling for 1.15.0):** the Quote board's and the Account panel's figures
+- **Text panels never cost the charts (Anthony's ruling for 1.15.0):** the Quote board's and the Account page's figures
   are written at most 4 times a second, in one animation frame, only the cells that changed; a trade only notes the price.
 
 ## Honesty rules

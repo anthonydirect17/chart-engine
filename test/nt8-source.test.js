@@ -106,15 +106,21 @@ const fnBodies = name => {
 const fnBody = name => fnBodies(name).join('\n');
 
 test('order calls appear only in the gated functions and the bracket upkeep of ChartBridgeOrders.cs', () => {
-  const fromPage = ['PlaceOrderLocked', 'ChangeOrder', 'CancelOrder', 'Flatten'];
-  const upkeep = ['PlaceLegs', 'KeepPartner', 'CancelLeftoverLegs', 'CheckLegs', 'GroupCancelLeftover'];   // 0.5.8 Q-EXIT (b): a cancel only (checked below)
+  const fromPage = ['PlaceOrderLocked', 'ChangeOrder', 'CancelOrder', 'Flatten', 'CutHalf'];   // release 1 (1.6c): Cut half, the close and its legs' shrink
+  const upkeep = ['PlaceLegs', 'KeepPartner', 'CancelLeftoverLegs', 'CheckLegs', 'GroupCancelLeftover', 'CutLegUpdate'];   // 0.5.8 Q-EXIT (b): a cancel only (checked below); release 1 (1.6c, R12 F2): Cut half's shrink again, cancel and change only
+  const botClose = ['BotCloseCancel', 'BotCloseSend'];   // release 1 (decision 3a): the bot's close of its own share only (checked below)
   let rest = ocode;
-  for (const f of fromPage.concat(upkeep)) for (const b of fnBodies(f)) rest = rest.replace(b, '');
+  for (const f of fromPage.concat(upkeep, botClose)) for (const b of fnBodies(f)) rest = rest.replace(b, '');
+  assert.ok(!/\.Submit\s*\(|\.CreateOrder\s*\(|\.Change\s*\(|\.Flatten\s*\(/.test(fnBody('BotCloseCancel')), 'BotCloseCancel only cancels');
+  const bcs = fnBody('BotCloseSend');
+  assert.match(bcs, /OrderType\.Market, OrderEntry\.Manual, TimeInForce\.Day, qty, 0, 0, "",\s*"CB#" \+ tag \+ " bot close"/, 'the bot\'s close: one market order, named for the bot\'s trade');
+  assert.ok(bcs.indexOf('if (qty > cover) return') < bcs.indexOf('.CreateOrder('), 'never more than the position holds on the bot\'s side');
+  assert.ok(!/\.Cancel\s*\(|\.Change\s*\(|\.Flatten\s*\(/.test(bcs), 'BotCloseSend only sends its close');
   for (const re of [/\.Submit\s*\(/, /\.CreateOrder\s*\(/, /\.Change\s*\(/, /\.Cancel\s*\(/, /\.Flatten\s*\(/])
     assert.ok(!re.test(rest), 'order call outside the gated functions: ' + re);
   assert.ok(!/CancelAllOrders|StartAtmStrategy|\bAtm\w*\./.test(ocode), 'no ATM or cancel-all calls');
   // only PlaceOrderLocked and PlaceLegs create orders; the rest of the upkeep only cancels or shrinks
-  for (const f of ['ChangeOrder', 'PlanOrder', 'CancelOrder', 'Flatten', 'KeepPartner', 'CancelLeftoverLegs', 'CheckLegs', 'KeepBracket', 'ScanEntries', 'GroupCancelLeftover'])
+  for (const f of ['ChangeOrder', 'PlanOrder', 'CancelOrder', 'Flatten', 'KeepPartner', 'CancelLeftoverLegs', 'CheckLegs', 'KeepBracket', 'ScanEntries', 'GroupCancelLeftover', 'CutLegUpdate'])
     assert.ok(!/\.CreateOrder\s*\(|\.Submit\s*\(/.test(fnBody(f)), f + ' creates orders');
   assert.match(fnBody('PlaceOrder'), /lock \(PlaceLock\) why = PlaceOrderLocked\(/);
   // 0.3.7: planned_brackets.txt is written outside PlaceLock, and only WritePlans touches it; NinjaTrader's paths only read memory
@@ -244,7 +250,7 @@ test('accounts: off by default, exact names only, never Backtest or Playback', (
 
 test('the main file routes order messages only to ChartBridgeOrders, and ships both files', () => {
   assert.match(code, /ChartBridgeOrders\.OnMessage\(client, type, text\)/);
-  assert.match(code, /type == "auth" \|\| type == "order" \|\| type == "change" \|\| type == "plan" \|\| type == "cancel" \|\| type == "flatten" \|\| type == "groupPreview" \|\| type == "groupOrder"\)[^\n]*\s*ChartBridgeOrders\.OnMessage/);   // 0.3.7: plan
+  assert.match(code, /type == "auth" \|\| type == "order" \|\| type == "change" \|\| type == "plan" \|\| type == "cancel" \|\| type == "flatten" \|\| type == "groupPreview" \|\| type == "groupOrder" \|\| type == "cutHalf"\)[^\n]*\s*ChartBridgeOrders\.OnMessage/);   // 0.3.7: plan; release 1 (1.6c): cutHalf
   // /session: the Host check, then (0.3.2) the PIN unlock, then the order sign-in token
   assert.match(code, /if \(path == "\/session"\)[^\n]*\n\s*\{\s*if \(ctx\.Request\.Headers\["Host"\] != "localhost:" \+ ChartBridgeConfig\.Port\) \{ ctx\.Response\.StatusCode = 403;[^\n]*\n\s*if \(!ChartBridgePin\.TokenValid\(ctx\.Request\.Headers\[ChartBridgePin\.Header\]\)\) \{ Refuse\(ctx\); return; \}[^\n]*\n\s*ServeText\(ctx, ChartBridgeOrders\.SessionJson\(\), "application\/json"\);/);
   assert.match(code, /ChartBridgeOrders\.WatchConnections\(\);\s*try \{ ChartBridgeOrders\.Resume\(\); \}/);
@@ -509,7 +515,7 @@ test('0.3.3: held live trades are matched against the backfill on NinjaTrader ti
   assert.match(ready, /foreach \(SeamTick h in r\.Release\) burst\.Add\(h\.Json\);\s*client\.SendAll\(burst\);/);
   assert.ok(!/foreach \(SeamTick h in client\.Pending\)/.test(code), 'held trades only go out through Dedupe');
   // 0.6.8: under the book's lock then the Pending lock (OnMarketData's order), the minute book copied as the held trades are cleared
-  assert.match(bodyOf(code, 'private static void StartLoad('), /lock \(book\.Sync\)\s*lock \(client\.Pending\)[^{]*\{\s*L\.Seq = \+\+client\.SubscribeSeq;\s*L\.Sub = [^;]+;\s*client\.Ready = false;\s*client\.Pending\.Clear\(\);\s*client\.Root = root;\s*client\.WantsProfile = profile;\s*L\.Book = book\.Minutes\.Snap\(\);[^\n]*\s*\}/);   // 0.3.5: and whether it wants "profile"; 0.6.8: the minute book
+  assert.match(bodyOf(code, 'private static void StartLoad('), /lock \(book\.Sync\)\s*lock \(client\.Pending\)[^{]*\{\s*L\.Seq = \+\+client\.SubscribeSeq;\s*L\.Sub = [^;]+;\s*client\.Ready = false;\s*client\.Pending\.Clear\(\);\s*client\.Root = root;\s*client\.WantsProfile = profile;\s*(client\.WantsDelta = L\.Delta;\s*)?L\.Book = book\.Minutes\.Snap\(\);[^\n]*\s*\}/);   // 0.3.5: and whether it wants "profile"; 0.6.8: the minute book
   assert.match(bodyOf(code, 'private static string DiagJson()'), /b\.Append\(",\\"seams\\":"\)\.Append\(SeamsJson\(\)\);/);
   // review of 0.3.3: only trades held when NinjaTrader answered can match at T; every chunk checks the subscribe is current
   assert.match(ready, /client\.Pending, L\.HeldAtAnswer\)/);
@@ -540,8 +546,9 @@ test('0.3.4: every trade carries its side, additively, and the seam match ignore
   assert.match(md, /",\\"p\\":" \+ CbJson\.Num\(e\.Price\) \+ ",\\"v\\":" \+ e\.Volume\.ToString\(CultureInfo\.InvariantCulture\) \+\s*",\\"s\\":" \+ side\.ToString\(CultureInfo\.InvariantCulture\) \+ ",\\"sm\\":" \+ method\.ToString\(CultureInfo\.InvariantCulture\) \+ ChartBridgeSides\.QJson\(cat\) \+ "\}"/);   // 0.3.8: then q, when known
   // backfill trades: t, p, v first, then s and sm
   // (0.3.5: written by AppendTrade with no string per number; WindowHarness.cs checks the text is 0.3.4's)
-  assert.match(bodyOf(code, 'private static void SendTicks(Load L, RawBars bars, int from)'), /AppendTrade\(b, bars, i, et\);/);
-  assert.match(bodyOf(code, 'public static void AppendTrade('), /CbJson\.AppendNum3\(b, et\.Seconds\(bars\.Time\[i\]\)\);\s*b\.Append\(','\);\s*CbJson\.AppendNum\(b, bars\.Close\[i\]\);\s*b\.Append\(','\);\s*CbJson\.AppendLong\(b, bars\.Volume\[i\]\);\s*int q = bars\.QCode != null \? ChartBridgeSides\.QOf\(bars\.QCode\[i\]\) : ChartBridgeSides\.NoQ;\s*if \(q != ChartBridgeSides\.NoQ\) \{ b\.Append\(",null,null,"\); CbJson\.AppendLong\(b, q\); \}\s*b\.Append\(']'\);/);   // 0.3.7: [t, p, v] only (the sided by-date backfill is removed); 0.3.8: [t, p, v, null, null, q] when q is known
+  assert.match(bodyOf(code, 'private static void SendTicks(Load L, RawBars bars, int from)'), /AppendTrade\(b, bars, i, et(, L\.Delta)?\);/);
+  assert.match(bodyOf(code, 'public static void AppendTrade(StringBuilder b, RawBars bars, int i, ChartBridgeTime.EtCache et, bool sides)'), /CbJson\.AppendNum3\(b, et\.Seconds\(bars\.Time\[i\]\)\);\s*b\.Append\(','\);\s*CbJson\.AppendNum\(b, bars\.Close\[i\]\);\s*b\.Append\(','\);\s*CbJson\.AppendLong\(b, bars\.Volume\[i\]\);\s*int q = bars\.QCode != null \? ChartBridgeSides\.QOf\(bars\.QCode\[i\]\) : ChartBridgeSides\.NoQ;\s*byte sc = sides && bars\.SideCode != null \? bars\.SideCode\[i\] : \(byte\)0;[\s\S]*else if \(q != ChartBridgeSides\.NoQ\) \{ b\.Append\(",null,null,"\); CbJson\.AppendLong\(b, q\); \}\s*b\.Append\(']'\);/);
+  assert.match(code, /public static void AppendTrade\(StringBuilder b, RawBars bars, int i, ChartBridgeTime\.EtCache et\) \{ AppendTrade\(b, bars, i, et, false\); \}/, '0.6.25: sides only for a load that asked for the delta table');   // 0.3.7: [t, p, v] only (the sided by-date backfill is removed); 0.3.8: [t, p, v, null, null, q] when q is known
   // the seam's match key is still price and volume only
   assert.match(code, /private static string TradeKey\(double p, long v\)/);
   assert.match(code, /public struct SeamTick\s*\{\s*public DateTime Time;\s*public double Price;\s*public long Volume;\s*public string Json;/);
@@ -577,7 +584,7 @@ test('0.3.4: every trade carries its side, additively, and the seam match ignore
 test('0.3.5: every tick chart gets the served window by count, one request at a time; the profile comes from the session table', () => {
   assert.match(src, /^\/\/ ChartBridge for NinjaTrader 8 \(its version is ChartBridgeServer\.Version, below\)/);   // 0.5.5: the header names no version   // 0.3.6 adds the daily bars on top
   assert.match(code, /public const string Version = "0\.(3\.[5-9]|4\.[0-9]+|5\.[0-9]+|6\.[0-9]+)";/);
-  assert.match(bodyOf(code, 'private static string HelloJsonFor('), /\\"features\\":\[\\"liveFirst\\",\\"profile\\",\\"settlement\\",\\"htf\\",\\"weekProfile\\",\\"v3\\"\]/);   // 0.3.7 adds three; 0.4.0 v3
+  assert.match(bodyOf(code, 'private static string HelloJsonFor('), /\\"features\\":\[\\"liveFirst\\",\\"profile\\",\\"settlement\\",\\"htf\\",\\"weekProfile\\",\\"v3\\",\\"cutHalf\\"(,\\"deltaTable\\")?\]/);   // 0.3.7 adds three; 0.4.0 v3; release 1 (1.6c) cutHalf
   // S6: every tick chart (liveFirst or not) gets the served window; 0.3.7: the by-date tick load is gone
   assert.match(bodyOf(code, 'private static void StartLoad('), /Window = tickHours > 0, /);
   assert.ok(!/ByDateTickLoads/.test(code));
@@ -653,9 +660,9 @@ test('0.3.5: every tick chart gets the served window by count, one request at a 
   assert.ok(md.indexOf('book.OnTrade(') < md.indexOf('c.Pending.Add('), 'the book takes the trade before any page holds it');
   // S4: ready: the profile copied under the lock, formatted with none held; then ready, then the released trades
   const ready = bodyOf(code, 'private static void MarkReady(Load L, RawBars seam)');
-  assert.match(ready, /snap = book\.Snap\(\);\s*before = new List<SeamTick>\(client\.Pending\);\s*\}/);
-  assert.match(ready, /profile = snap\.Json\(L\.Sub, early\.Release\);\s*\}\s*lock \(client\.Pending\)/);
-  assert.match(ready, /if \(profile != null\) burst\.Add\(profile\);\s*burst\.Add\("\{\\"type\\":\\"ready\\"/);
+  assert.match(ready, /snap = book\.Snap\(\);\s*(if \(L\.Delta[^\n]*\n\s*)?before = new List<SeamTick>\(client\.Pending\);\s*\}/);   // 0.6.25: the delta table copied in the same moment
+  assert.match(ready, /profile = snap\.Json\(L\.Sub, early\.Release\);[\s\S]{0,400}?if \(L\.Delta\) delta = dsnap != null \? dsnap\.Json\(L\.Root, L\.Sub, early\.Release\)[^\n]*\s*\}\s*lock \(client\.Pending\)/);
+  assert.match(ready, /if \(profile != null\) burst\.Add\(profile\);\s*(if \(delta != null\) burst\.Add\(delta\);\s*)?burst\.Add\("\{\\"type\\":\\"ready\\"/);
   // the one backfill: profileRoots only, not for a whole table, by date from the session start; one retry, then given up
   assert.match(code, /public static string\[\] ProfileRoots = new string\[\] \{ "MNQ", "NQ", "ES", "MES" \};/);
   assert.match(code, /public static bool BackfillOn = true;/);
@@ -740,7 +747,7 @@ test('0.3.8 q: the Time and Sales category comes from the side tagger\'s quote, 
   assert.match(code, /\+ ChartBridgeSides\.QJson\(cat\) \+ "\}";/, 'the live tick ends with the q field from QJson');
   assert.match(code, /private static readonly string\[\] QFields = /, 'the five q fields are made once');
   assert.ok(!/cat\.ToString\(|QJson\([^)]*\)\.ToString|"\\"q\\":" \+/.test(code), 'no q string made per trade');
-  assert.match(code, /cache\.Add\(h\.Time, h\.Price, h\.Volume, h\.QCode\)/, 'the held live trades keep their q in the served window');
+  assert.match(code, /cache\.Add\(h\.Time, h\.Price, h\.Volume, h\.QCode[,)]/, 'the held live trades keep their q in the served window');
   assert.match(code, /for \(int i = start; i < raw\.Count; i\+\+\) cache\.Add\(raw\.Time\[i\], raw\.Close\[i\], raw\.Volume\[i\]\);/, 'NinjaTrader\'s answer has no stored quote: unknown');
 });
 
@@ -1103,17 +1110,35 @@ test('0.4.0 bot: on by default, the account Anthony chooses (None until then, 0.
   assert.match(bodyOf(bcode, 'private static string SaveAccount(string name)'), /ChartBridgeFiles\.WriteLines\(AccountFile, /);
   const prob = bodyOf(bcode, 'private static string AccountProblemFor(string name, bool gates)');
   for (const re of [/IsNeverTradable\(name \?\? ""\)/, /if \(gates && !ChartBridgeOrders\.AccountTradable\(name\)\)/, /a\.Connection\.Status != ConnectionStatus\.Connected/]) assert.match(prob, re, 'AccountProblemFor: ' + re);
-  assert.ok(!/IsSim\(/.test(prob), 'no Sim lock');
-  assert.match(bcode, /public const int MaxQty = 1;/);
-  assert.match(bcode, /public const int MaxTradesLimit = 5, MaxLossesLimit = 3;/);
+  // release 1 (1.6b, Anthony 2026-11-18 "Personal only, Sim later"): Sim refused for now, then the personal account only
+  assert.match(prob, /if \(IsSim\(a\) \|\| ChartBridgeAccounts\.IsSim\(a\)\) return name \+ " is a Sim account: the bot trades the personal account only/);
+  assert.match(prob, /string own = PersonalProblem\(name\);/);
+  assert.match(bodyOf(bcode, 'private static string PersonalProblem(string name)'), /if \(!ChartBridgeBranches\.PersonalNamed\) return "no personal account is picked[^"]*";\s*if \(!ChartBridgeBranches\.IsPersonal\(name\)\)/);
+  // release 1 (1.6b, "Bot tab + hard ceiling"): no fixed size, trades or losses; the size is capped only by the hard ceiling
+  assert.ok(!/public const int MaxQty\b|MaxTradesLimit|MaxLossesLimit/.test(bcode), 'no fixed rail left');
+  assert.match(bcode, /public const int RailCountMax = 100;/);
+  assert.match(bodyOf(bcode, 'public static int EntryCap(string root, out string why)'), /return Math\.Min\(z, ceil\);/);
+  assert.match(bodyOf(bcode, 'public static int EntryCap(string root, out string why)'), /int z, ceil = ChartBridgeAgents\.HardCeiling\(root\);/);
   assert.match(bcode, /public const double SilenceMs = 5000/);
   // never places, changes or flattens by itself: the only order calls are a cancel of a bot entry and the two ChartBridgeOrders entry points
   for (const re of [/\.Submit\s*\(/, /\.CreateOrder\s*\(/, /\.Change\s*\(/, /\.Flatten\s*\(/, /OrderAction\./, /\bAtm\w*\./]) assert.ok(!re.test(bcode), 'ChartBridgeBot.cs: ' + re);
   assert.equal((bcode.match(/\.Cancel\(/g) || []).length, 1, 'one cancel call');
   assert.match(bodyOf(bcode, 'private static bool Cancel(Order o)'), /!IsBotEntry\(o\)\) return false;/, 'it cancels only a bot entry, never a stop or target');
-  assert.deepEqual([...new Set(bcode.match(/ChartBridgeOrders\.(PlaceBotEntry|FlattenForBot)/g))].sort(), ['ChartBridgeOrders.FlattenForBot', 'ChartBridgeOrders.PlaceBotEntry']);
+  // release 1 (decision 3a, 2026-11-18, "bot only"): the bot's close goes through ChartBridgeOrders' two close entry points (its own
+  // orders cancelled, then one market close of its own share); NinjaTrader's Flatten of the whole root (FlattenForBot) is gone
+  assert.deepEqual([...new Set(bcode.match(/ChartBridgeOrders\.(PlaceBotEntry|FlattenForBot|BotCloseCancel|BotCloseSend)/g))].sort(), ['ChartBridgeOrders.BotCloseCancel', 'ChartBridgeOrders.BotCloseSend', 'ChartBridgeOrders.PlaceBotEntry']);
+  assert.ok(!/FlattenForBot/.test(ocode), 'no Flatten of the bot\'s whole root left');
+  for (const [fn, re] of [['BotCloseCancel', /StartsWith\("CB#" \+ tag \+ " ", StringComparison\.Ordinal\) \|\| BotEntryNameRx\.IsMatch/], ['BotCloseSend', /if \(qty > cover\) return /]])
+    assert.match(ocode.slice(ocode.indexOf('internal static ' + (fn === 'BotCloseCancel' ? 'int ' : 'string ') + fn + '(')), re, fn + ': only the bot\'s own orders, never more than the position holds');
+  const share = bodyOf(bcode, 'private static string CloseShare(string root, out int kind, out int qty)');
+  assert.match(share, /qty = Math\.Min\(Math\.Min\(left, Math\.Abs\(q\)\), cover\);/, 'the close: the smallest of what is left to prove, the ledger and the position');
+  assert.match(share, /left = proof - used;/, 'R12 of decision 3, finding 1: the proof is a budget, what its legs and its closes filled is used up');
+  assert.ok(share.indexOf('if (left <= 0) return') < share.indexOf('ChartBridgeOrders.BotCloseSend('), 'nothing left to prove: never closed again');
+  assert.ok(share.indexOf('if (legs.Count > 0)') < share.indexOf('ChartBridgeOrders.BotCloseSend('), 'its legs cancelled before its close');
+  assert.match(bodyOf(bcode, 'private static string RailsProblem()'), /return OwnerGuard\(FindAccount\(\), EffectiveRoot\(\)\);/, 'decision 3b: the owner guard');
+  assert.match(ocode, /if \(bot\) \{ string guard = ChartBridgeBot\.OwnerGuard\(account, root\); if \(guard != null\) return guard; \}/, 'decision 3b: asked again under the order lock');
   assert.match(bodyOf(bcode, 'private static void OnBotFlatten()'), /if \(m != "auto"\) why = "flatten is for auto mode only";/, 'the bot\'s own flatten: auto only');
-  assert.ok(!/ChartBridgeOrders\.FlattenForBot/.test(bodyOf(bcode, 'private static void Lose(ChartBridgeClient c, string why, bool heartbeat)')), 'heartbeat loss never flattens');
+  assert.ok(!/ChartBridgeOrders\.BotClose/.test(bodyOf(bcode, 'private static void Lose(ChartBridgeClient c, string why, bool heartbeat)')), 'heartbeat loss never closes');
   assert.ok(!/trading = false|Enabled = true/.test(bcode), 'never turns trading or itself on or off');
   // the order is always built from the bot's account and root, quantity 1; a proposal is placed only on the account it named
   const place = bodyOf(bcode, 'private static string Place(Signal s, string forAccount, out Order placed)');
@@ -1137,12 +1162,15 @@ test('0.4.0 bot: the hooks in ChartBridge.cs and ChartBridgeOrders.cs', () => {
   assert.match(code, /ChartBridgeOrders\.StartPlans\(\);[^\n]*\n(?:\s*ChartBridge\w+\.Start\(\);[^\n]*\n)*\s*ChartBridgeBot\.Start\(\);/);
   assert.match(code, /ChartBridgeBot\.Stop\(\);/);
   assert.match(code, /ChartBridgeBot\.OnTick\(json\);/);
-  assert.match(code, /try \{ ChartBridgeBot\.OnExec\(account, inst, side, qty, price, orderId, json\); \} catch/);
+  assert.match(code, /try \{ ChartBridgeBot\.OnExec\(account, inst, side, qty, price, orderId, json, ExecKey\(account, id, time, price, qty, orderId\), time\); \} catch/);   // release 1 (decision 3, R12 finding 2): with its key (the replay fence)
+  assert.match(code, /ChartBridgeBot\.NoteWatched\(a\);[^\n]*n \+= CatchUp\(a\);/, 'the replay fence before the first catch-up');
   assert.match(code, /try \{ ChartBridgeBot\.OnPosition\(a, e\); \} catch/);
   assert.match(code, /if \(ChartBridgeBot\.Enabled\) b\.Append\(",\\"bot\\":"\)\.Append\(ChartBridgeBot\.DiagJson\(\)\);/);
   assert.ok(!/SendToV3Traders|IsV3Stub/.test(code), 'the main file has no v3 send of its own (ChartBridgeV3.cs has the one)');
   assert.match(ocode, /new Regex\("\^CB#\(\[0-9a-f\]\{8\}\)\(\?: bot\)\? s/);
-  assert.match(ocode, /if \(bot\) cap = Math\.Min\(cap, ChartBridgeBot\.MaxQty\);/);
+  assert.match(ocode, /if \(bot\) cap = ChartBridgeBot\.EntryCap\(root, out capWhy\);/, 'release 1 (1.6b): the bot\'s cap is its size and the hard ceiling, never config.txt\'s maxQty');
+  assert.match(ocode, /if \(agent != null\) cap = AgentEntryCap\(agent, root, out capWhy\);/, 'the agents\' cap unchanged');
+  assert.match(ocode, /int cap = CapFor\(root\), pos = /, 'the ticket\'s cap unchanged');
   assert.match(ocode, /ChartBridgeBot\.AfterAuth\(client\);/);
   assert.match(ocode, /try \{ if \(ChartBridgeBot\.Watching\(o\)\) ChartBridgeBot\.OnOrderUpdate\(account, o, OrderJson\(o, failed/);
   // PlaceBotEntry reads its own message strictly and runs the quote-only check, then the page's path with bot = true
@@ -1283,7 +1311,7 @@ test('0.4.0 B1: order calls only where the gates and the upkeep are; legs GTC; n
 
 test('ChartBridge 0.5.1: connected accounts only; the accounts line no longer filters; accounts.txt keeps 0.5.0\'s format', () => {
   const asrc = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'ChartBridgeAccounts.cs'), 'utf8');
-  assert.match(code, /public const string Version = "0\.(5\.[1-8]|6\.([0-9]|1[0-9]|2[0-3]))";/);
+  assert.match(code, /public const string Version = "0\.(5\.[1-8]|6\.([0-9]|1[0-9]|2[0-5]))";/);   // 0.6.25: the combined release
   // the 10 s watch (fills to The Desk) takes only accounts seen Connected this NinjaTrader session
   assert.match(bodyOf(code, 'private static void WatchAccounts()'), /fresh = fresh\.Where\(ChartBridgeAccounts\.SeenConnected\)\.ToList\(\);/);
   // AccountAllowed is never Backtest or Playback and reads no list
@@ -1312,7 +1340,7 @@ test('ChartBridge 0.5.5: the accounts line\'s one-time conversion and notConnect
 });
 
 test('ChartBridge 0.5.6: the time check (build list #77) only measures, on its own thread, and tells hello, the pages and /diag', () => {
-  assert.match(code, /public const string Version = "0\.(5\.[6-8]|6\.([0-9]|1[0-9]|2[0-3]))";/);
+  assert.match(code, /public const string Version = "0\.(5\.[6-8]|6\.([0-9]|1[0-9]|2[0-5]))";/);   // 0.6.25: the combined release
   const clk = code.slice(code.indexOf('public static class ChartBridgeClock'));
   assert.ok(code.indexOf('public static class ChartBridgeClock') > code.indexOf('public static class ChartBridgeServer') && clk.length > 1000, 'ChartBridgeClock is the last class of ChartBridge.cs');
   // never sets the clock or a setting: no Win32 time call, no w32tm, no process, no registry, in any add-on file
@@ -1386,7 +1414,8 @@ test('ChartBridge 0.5.8: ChartBridgeGroups.cs ships, never places an order, and 
   const elig = c.slice(c.indexOf('private static Account Eligible('), c.indexOf('private static void Skip('));
   assert.match(elig, /string grp = ChartBridgeGroups\.EntryCheck\("copier", a, fRoot, le\.Buy, fq, true, false\);[^\n]*\n\s*if \(grp != null\) \{ label = "group"; why = grp; return null; \}\s*double\? risk = [^\n]*\n\s*string hold = ChartBridgeOrders\.MachineHold\("the copier", "skipped", a, fRoot, fq, 0, risk\);\s*if \(hold != null\) \{ label = "limit"; why = hold; return null; \}\s*return a;/);   // 0.6.6: the firm's limits last
   const a = strip(read('ChartBridgeAgents.cs'));
-  assert.ok(a.indexOf('ChartBridgeGroups.EntryCheck("agent:" + Id') > a.indexOf('// 10. the owner lock') || /string groupWhy = ChartBridgeGroups\.EntryCheck\("agent:" \+ Id, a, root, p\.Side == "buy", p\.Qty, true, false\);/.test(a), 'check 10b');
+  // plan step 3.5 (the R12 review, nit 3): check 10b asks the same rules through AdvisoryEntryCheck (no Output line there)
+  assert.ok(a.indexOf('ChartBridgeGroups.AdvisoryEntryCheck("agent:" + Id') > a.indexOf('// 10. the owner lock') || /string groupWhy = ChartBridgeGroups\.AdvisoryEntryCheck\("agent:" \+ Id, a, root, p\.Side == "buy", p\.Qty, true, false\);/.test(a), 'check 10b');
   // accountState after the snapshot, from the 1 s pass and on every change; the end-of-day highs in the 17:00 ET break
   assert.match(a, /Snapshot\(served\);\s*lock \(Sync\) snapshotSent = true;[^\n]*\n\s*SendAccountState\(true\);/);
   assert.match(a, /SendState\(false\);[^\n]*\n\s*SendAccountState\(false\);/);
@@ -1460,4 +1489,31 @@ test('ChartBridge 0.6.6 (Anthony 2026-10-21): the stop record ships, is compile-
   const cb = read('ChartBridge.cs');
   assert.match(cb, /try \{ ChartBridgeOrders\.OnOrderUpdate\(a, e\); \} catch[^\n]*\n\s*try \{ ChartBridgeStops\.Observe\(a, e\); \} catch/, 'after the order path, never in its way');
   assert.match(cb, /else if \(ChartBridgeStops\.ReadConfig\(key, val\)\) \{ \}/);
+});
+
+// ---- 0.6.25: the delta table (behaviour: nt8/check/DeltaHarness.cs under Mono; the page: test/delta.test.js, test/delta-held-smoke.mjs)
+test('0.6.25: the delta table is fed by every live trade under the book\'s lock with its tagged side, asks NinjaTrader for nothing, and goes only to a page that asks', () => {
+  const md = bodyOf(code, 'private static void OnMarketData(');
+  assert.match(md, /lock \(book\.Sync\)\s*\{[\s\S]*book\.OnTrade\([^;]*ChartBridgeSides\.QCode\(cat\), side, method\);/, 'OnTrade takes the side under the book\'s lock');
+  assert.match(code, /if \(Delta != null && Delta\.Start == Table\.Start && !\(Delta\.Restored && [^\n]*\)\) Delta\.Add\(et, side, volume\);/);   // review round 2, item 5: a replayed trade of a read-back table is not counted twice
+  const table = code.slice(code.indexOf('public class DeltaTable'), code.indexOf('public class LiveQuoteSide'));
+  assert.ok(table.length > 1000 && !/BarsRequest|MarketDataType|File\./.test(table), 'the table and its message make no request and touch no file');
+  for (const f of ['public static void SaveDeltas(', 'private static void ReadDelta(', 'public static void PushDelta('])
+    assert.ok(!/BarsRequest|Account|Order/.test(bodyOf(code, f)), f + ': no NinjaTrader request, no order or account');
+  assert.match(code, /DeltaRx = new Regex\("\\"deltaTable\\"\\\\s\*:\\\\s\*\(true\|1\)/);
+  assert.match(bodyOf(code, 'private static string HelloJsonFor('), /\\"deltaTable\\"\]/);
+  assert.match(code, /Delta = delta && !agent/, 'never to an agent: an agent\'s load is as before');
+  assert.match(code, /Task\.Run\(\(\) => SaveDeltas\(\)\)/, 'written off the market data thread, on the 10 s timer');
+});
+
+test('review round 2, item 3: Stop writes every delta table to its last second after the feeds are unhooked and before the books go', () => {
+  const stop = bodyOf(code, 'public static void Stop()');
+  const unhook = stop.indexOf('md.Update -= OnMarketData'), save = stop.indexOf('SaveDeltas(true)'), clear = stop.indexOf('lock (Books) Books.Clear();');
+  assert.ok(unhook > 0 && save > unhook && clear > save, 'unhook, then SaveDeltas(true), then Books.Clear()');
+  assert.match(bodyOf(code, 'public static void SaveDeltas(bool final)'), /upTo = done \|\| final \|\| closedNow \|\| over \? d\.Hi : d\.Hi - 1;/);
+});
+
+test('R12 follow-up 1: a start clears the cut backs an earlier run in this process noted', () => {
+  assert.match(bodyOf(code, 'public static bool Start()'), /lock \(DeltaCutBack\) DeltaCutBack\.Clear\(\);/);
+  assert.match(bodyOf(code, 'private static void ReadDelta(RootBook book)'), /lock \(DeltaCutBack\) DeltaCutBack\.Remove\(f\);/);
 });

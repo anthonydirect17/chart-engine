@@ -1,0 +1,1579 @@
+{
+ "schema": 1,
+ "name": "The New York clock and session-date table (Bot-Lab plan step 1.6)",
+ "rule": "Anthony's rule (plan step 1.6): a session runs from 18:00 New York the evening before to 17:00 New York on its session date, and a weekend rolls to Monday. From 17:00 a moment is dated the next day; a Saturday or Sunday date rolls to Monday; with the shared calendar, a closed day rolls on as a weekend does.",
+ "how_made": "Every expected value was computed with zoneinfo (America/New_York) and session windows, never by the module it proves; each repo's test computes them again the same way. Labels are made up. Every date in the table was chosen by code clear of both fences (Bot-Lab botlab/reserved.py and market-data caretaker/holdout.py), the day before it and the next weekday included; the tests check it again.",
+ "fields": {
+  "utc": "the input moment, UTC",
+  "utc_ms": "the same as Unix epoch ms",
+  "ny": "the New York wall time with its offset",
+  "ny_date": "the New York calendar date",
+  "offset_minutes": "New York's offset from UTC",
+  "ny_wall_ms": "the New York wall clock as ms stored as if UTC",
+  "session_date": "the session date by the rule alone",
+  "in_session": "inside 18:00 the evening before to 17:00",
+  "weekend": "from Friday 17:00 to Sunday 18:00 New York",
+  "calendar": "the session date and in_session with shared/cme_calendar.json, or 'not covered' when the calendar does not cover the dates the answer needs",
+  "start_utc": "18:00 New York the evening before",
+  "end_utc": "17:00 New York on the session date",
+  "calendar_end_utc": "the calendar's close on the session date"
+ },
+ "cases": [
+  {
+   "label": "2022 spring switch: Friday 16:59 (still Friday's session)",
+   "utc": "2022-03-11T21:59:00.000Z",
+   "utc_ms": 1647035940000,
+   "ny": "2022-03-11T16:59:00.000-05:00",
+   "ny_date": "2022-03-11",
+   "offset_minutes": -300,
+   "ny_wall_ms": 1647017940000,
+   "session_date": "2022-03-11",
+   "in_session": true,
+   "weekend": false,
+   "calendar": "not covered"
+  },
+  {
+   "label": "2022 spring switch: Friday 17:00 (the weekend starts, rolls to Monday)",
+   "utc": "2022-03-11T22:00:00.000Z",
+   "utc_ms": 1647036000000,
+   "ny": "2022-03-11T17:00:00.000-05:00",
+   "ny_date": "2022-03-11",
+   "offset_minutes": -300,
+   "ny_wall_ms": 1647018000000,
+   "session_date": "2022-03-14",
+   "in_session": false,
+   "weekend": true,
+   "calendar": "not covered"
+  },
+  {
+   "label": "2022 spring switch: Saturday noon",
+   "utc": "2022-03-12T17:00:00.000Z",
+   "utc_ms": 1647104400000,
+   "ny": "2022-03-12T12:00:00.000-05:00",
+   "ny_date": "2022-03-12",
+   "offset_minutes": -300,
+   "ny_wall_ms": 1647086400000,
+   "session_date": "2022-03-14",
+   "in_session": false,
+   "weekend": true,
+   "calendar": "not covered"
+  },
+  {
+   "label": "2022 spring switch: Sunday 01:59:59.999 standard time, the last moment before the switch",
+   "utc": "2022-03-13T06:59:59.999Z",
+   "utc_ms": 1647154799999,
+   "ny": "2022-03-13T01:59:59.999-05:00",
+   "ny_date": "2022-03-13",
+   "offset_minutes": -300,
+   "ny_wall_ms": 1647136799999,
+   "session_date": "2022-03-14",
+   "in_session": false,
+   "weekend": true,
+   "calendar": "not covered"
+  },
+  {
+   "label": "2022 spring switch: Sunday 03:00 daylight time, the first moment after the switch",
+   "utc": "2022-03-13T07:00:00.000Z",
+   "utc_ms": 1647154800000,
+   "ny": "2022-03-13T03:00:00.000-04:00",
+   "ny_date": "2022-03-13",
+   "offset_minutes": -240,
+   "ny_wall_ms": 1647140400000,
+   "session_date": "2022-03-14",
+   "in_session": false,
+   "weekend": true,
+   "calendar": "not covered"
+  },
+  {
+   "label": "2022 spring switch: Sunday 17:59",
+   "utc": "2022-03-13T21:59:00.000Z",
+   "utc_ms": 1647208740000,
+   "ny": "2022-03-13T17:59:00.000-04:00",
+   "ny_date": "2022-03-13",
+   "offset_minutes": -240,
+   "ny_wall_ms": 1647194340000,
+   "session_date": "2022-03-14",
+   "in_session": false,
+   "weekend": true,
+   "calendar": "not covered"
+  },
+  {
+   "label": "2022 spring switch: Sunday 18:00 (Monday's session opens)",
+   "utc": "2022-03-13T22:00:00.000Z",
+   "utc_ms": 1647208800000,
+   "ny": "2022-03-13T18:00:00.000-04:00",
+   "ny_date": "2022-03-13",
+   "offset_minutes": -240,
+   "ny_wall_ms": 1647194400000,
+   "session_date": "2022-03-14",
+   "in_session": true,
+   "weekend": false,
+   "calendar": "not covered"
+  },
+  {
+   "label": "2022 spring switch: Monday 16:59",
+   "utc": "2022-03-14T20:59:00.000Z",
+   "utc_ms": 1647291540000,
+   "ny": "2022-03-14T16:59:00.000-04:00",
+   "ny_date": "2022-03-14",
+   "offset_minutes": -240,
+   "ny_wall_ms": 1647277140000,
+   "session_date": "2022-03-14",
+   "in_session": true,
+   "weekend": false,
+   "calendar": "not covered"
+  },
+  {
+   "label": "2022 spring switch: Monday 17:00 (the daily break, dated Tuesday)",
+   "utc": "2022-03-14T21:00:00.000Z",
+   "utc_ms": 1647291600000,
+   "ny": "2022-03-14T17:00:00.000-04:00",
+   "ny_date": "2022-03-14",
+   "offset_minutes": -240,
+   "ny_wall_ms": 1647277200000,
+   "session_date": "2022-03-15",
+   "in_session": false,
+   "weekend": false,
+   "calendar": "not covered"
+  },
+  {
+   "label": "2022 spring switch: Monday 17:59",
+   "utc": "2022-03-14T21:59:00.000Z",
+   "utc_ms": 1647295140000,
+   "ny": "2022-03-14T17:59:00.000-04:00",
+   "ny_date": "2022-03-14",
+   "offset_minutes": -240,
+   "ny_wall_ms": 1647280740000,
+   "session_date": "2022-03-15",
+   "in_session": false,
+   "weekend": false,
+   "calendar": "not covered"
+  },
+  {
+   "label": "2022 spring switch: Monday 18:00 (Tuesday's session opens)",
+   "utc": "2022-03-14T22:00:00.000Z",
+   "utc_ms": 1647295200000,
+   "ny": "2022-03-14T18:00:00.000-04:00",
+   "ny_date": "2022-03-14",
+   "offset_minutes": -240,
+   "ny_wall_ms": 1647280800000,
+   "session_date": "2022-03-15",
+   "in_session": true,
+   "weekend": false,
+   "calendar": "not covered"
+  },
+  {
+   "label": "2020 spring switch: Friday 16:59 (still Friday's session)",
+   "utc": "2020-03-06T21:59:00.000Z",
+   "utc_ms": 1583531940000,
+   "ny": "2020-03-06T16:59:00.000-05:00",
+   "ny_date": "2020-03-06",
+   "offset_minutes": -300,
+   "ny_wall_ms": 1583513940000,
+   "session_date": "2020-03-06",
+   "in_session": true,
+   "weekend": false,
+   "calendar": "not covered"
+  },
+  {
+   "label": "2020 spring switch: Friday 17:00 (the weekend starts, rolls to Monday)",
+   "utc": "2020-03-06T22:00:00.000Z",
+   "utc_ms": 1583532000000,
+   "ny": "2020-03-06T17:00:00.000-05:00",
+   "ny_date": "2020-03-06",
+   "offset_minutes": -300,
+   "ny_wall_ms": 1583514000000,
+   "session_date": "2020-03-09",
+   "in_session": false,
+   "weekend": true,
+   "calendar": "not covered"
+  },
+  {
+   "label": "2020 spring switch: Saturday noon",
+   "utc": "2020-03-07T17:00:00.000Z",
+   "utc_ms": 1583600400000,
+   "ny": "2020-03-07T12:00:00.000-05:00",
+   "ny_date": "2020-03-07",
+   "offset_minutes": -300,
+   "ny_wall_ms": 1583582400000,
+   "session_date": "2020-03-09",
+   "in_session": false,
+   "weekend": true,
+   "calendar": "not covered"
+  },
+  {
+   "label": "2020 spring switch: Sunday 01:59:59.999 standard time, the last moment before the switch",
+   "utc": "2020-03-08T06:59:59.999Z",
+   "utc_ms": 1583650799999,
+   "ny": "2020-03-08T01:59:59.999-05:00",
+   "ny_date": "2020-03-08",
+   "offset_minutes": -300,
+   "ny_wall_ms": 1583632799999,
+   "session_date": "2020-03-09",
+   "in_session": false,
+   "weekend": true,
+   "calendar": "not covered"
+  },
+  {
+   "label": "2020 spring switch: Sunday 03:00 daylight time, the first moment after the switch",
+   "utc": "2020-03-08T07:00:00.000Z",
+   "utc_ms": 1583650800000,
+   "ny": "2020-03-08T03:00:00.000-04:00",
+   "ny_date": "2020-03-08",
+   "offset_minutes": -240,
+   "ny_wall_ms": 1583636400000,
+   "session_date": "2020-03-09",
+   "in_session": false,
+   "weekend": true,
+   "calendar": "not covered"
+  },
+  {
+   "label": "2020 spring switch: Sunday 17:59",
+   "utc": "2020-03-08T21:59:00.000Z",
+   "utc_ms": 1583704740000,
+   "ny": "2020-03-08T17:59:00.000-04:00",
+   "ny_date": "2020-03-08",
+   "offset_minutes": -240,
+   "ny_wall_ms": 1583690340000,
+   "session_date": "2020-03-09",
+   "in_session": false,
+   "weekend": true,
+   "calendar": "not covered"
+  },
+  {
+   "label": "2020 spring switch: Sunday 18:00 (Monday's session opens)",
+   "utc": "2020-03-08T22:00:00.000Z",
+   "utc_ms": 1583704800000,
+   "ny": "2020-03-08T18:00:00.000-04:00",
+   "ny_date": "2020-03-08",
+   "offset_minutes": -240,
+   "ny_wall_ms": 1583690400000,
+   "session_date": "2020-03-09",
+   "in_session": true,
+   "weekend": false,
+   "calendar": "not covered"
+  },
+  {
+   "label": "2020 spring switch: Monday 16:59",
+   "utc": "2020-03-09T20:59:00.000Z",
+   "utc_ms": 1583787540000,
+   "ny": "2020-03-09T16:59:00.000-04:00",
+   "ny_date": "2020-03-09",
+   "offset_minutes": -240,
+   "ny_wall_ms": 1583773140000,
+   "session_date": "2020-03-09",
+   "in_session": true,
+   "weekend": false,
+   "calendar": "not covered"
+  },
+  {
+   "label": "2020 spring switch: Monday 17:00 (the daily break, dated Tuesday)",
+   "utc": "2020-03-09T21:00:00.000Z",
+   "utc_ms": 1583787600000,
+   "ny": "2020-03-09T17:00:00.000-04:00",
+   "ny_date": "2020-03-09",
+   "offset_minutes": -240,
+   "ny_wall_ms": 1583773200000,
+   "session_date": "2020-03-10",
+   "in_session": false,
+   "weekend": false,
+   "calendar": "not covered"
+  },
+  {
+   "label": "2020 spring switch: Monday 17:59",
+   "utc": "2020-03-09T21:59:00.000Z",
+   "utc_ms": 1583791140000,
+   "ny": "2020-03-09T17:59:00.000-04:00",
+   "ny_date": "2020-03-09",
+   "offset_minutes": -240,
+   "ny_wall_ms": 1583776740000,
+   "session_date": "2020-03-10",
+   "in_session": false,
+   "weekend": false,
+   "calendar": "not covered"
+  },
+  {
+   "label": "2020 spring switch: Monday 18:00 (Tuesday's session opens)",
+   "utc": "2020-03-09T22:00:00.000Z",
+   "utc_ms": 1583791200000,
+   "ny": "2020-03-09T18:00:00.000-04:00",
+   "ny_date": "2020-03-09",
+   "offset_minutes": -240,
+   "ny_wall_ms": 1583776800000,
+   "session_date": "2020-03-10",
+   "in_session": true,
+   "weekend": false,
+   "calendar": "not covered"
+  },
+  {
+   "label": "2018 spring switch: Friday 16:59 (still Friday's session)",
+   "utc": "2018-03-09T21:59:00.000Z",
+   "utc_ms": 1520632740000,
+   "ny": "2018-03-09T16:59:00.000-05:00",
+   "ny_date": "2018-03-09",
+   "offset_minutes": -300,
+   "ny_wall_ms": 1520614740000,
+   "session_date": "2018-03-09",
+   "in_session": true,
+   "weekend": false,
+   "calendar": "not covered"
+  },
+  {
+   "label": "2018 spring switch: Friday 17:00 (the weekend starts, rolls to Monday)",
+   "utc": "2018-03-09T22:00:00.000Z",
+   "utc_ms": 1520632800000,
+   "ny": "2018-03-09T17:00:00.000-05:00",
+   "ny_date": "2018-03-09",
+   "offset_minutes": -300,
+   "ny_wall_ms": 1520614800000,
+   "session_date": "2018-03-12",
+   "in_session": false,
+   "weekend": true,
+   "calendar": "not covered"
+  },
+  {
+   "label": "2018 spring switch: Saturday noon",
+   "utc": "2018-03-10T17:00:00.000Z",
+   "utc_ms": 1520701200000,
+   "ny": "2018-03-10T12:00:00.000-05:00",
+   "ny_date": "2018-03-10",
+   "offset_minutes": -300,
+   "ny_wall_ms": 1520683200000,
+   "session_date": "2018-03-12",
+   "in_session": false,
+   "weekend": true,
+   "calendar": "not covered"
+  },
+  {
+   "label": "2018 spring switch: Sunday 01:59:59.999 standard time, the last moment before the switch",
+   "utc": "2018-03-11T06:59:59.999Z",
+   "utc_ms": 1520751599999,
+   "ny": "2018-03-11T01:59:59.999-05:00",
+   "ny_date": "2018-03-11",
+   "offset_minutes": -300,
+   "ny_wall_ms": 1520733599999,
+   "session_date": "2018-03-12",
+   "in_session": false,
+   "weekend": true,
+   "calendar": "not covered"
+  },
+  {
+   "label": "2018 spring switch: Sunday 03:00 daylight time, the first moment after the switch",
+   "utc": "2018-03-11T07:00:00.000Z",
+   "utc_ms": 1520751600000,
+   "ny": "2018-03-11T03:00:00.000-04:00",
+   "ny_date": "2018-03-11",
+   "offset_minutes": -240,
+   "ny_wall_ms": 1520737200000,
+   "session_date": "2018-03-12",
+   "in_session": false,
+   "weekend": true,
+   "calendar": "not covered"
+  },
+  {
+   "label": "2018 spring switch: Sunday 17:59",
+   "utc": "2018-03-11T21:59:00.000Z",
+   "utc_ms": 1520805540000,
+   "ny": "2018-03-11T17:59:00.000-04:00",
+   "ny_date": "2018-03-11",
+   "offset_minutes": -240,
+   "ny_wall_ms": 1520791140000,
+   "session_date": "2018-03-12",
+   "in_session": false,
+   "weekend": true,
+   "calendar": "not covered"
+  },
+  {
+   "label": "2018 spring switch: Sunday 18:00 (Monday's session opens)",
+   "utc": "2018-03-11T22:00:00.000Z",
+   "utc_ms": 1520805600000,
+   "ny": "2018-03-11T18:00:00.000-04:00",
+   "ny_date": "2018-03-11",
+   "offset_minutes": -240,
+   "ny_wall_ms": 1520791200000,
+   "session_date": "2018-03-12",
+   "in_session": true,
+   "weekend": false,
+   "calendar": "not covered"
+  },
+  {
+   "label": "2018 spring switch: Monday 16:59",
+   "utc": "2018-03-12T20:59:00.000Z",
+   "utc_ms": 1520888340000,
+   "ny": "2018-03-12T16:59:00.000-04:00",
+   "ny_date": "2018-03-12",
+   "offset_minutes": -240,
+   "ny_wall_ms": 1520873940000,
+   "session_date": "2018-03-12",
+   "in_session": true,
+   "weekend": false,
+   "calendar": "not covered"
+  },
+  {
+   "label": "2018 spring switch: Monday 17:00 (the daily break, dated Tuesday)",
+   "utc": "2018-03-12T21:00:00.000Z",
+   "utc_ms": 1520888400000,
+   "ny": "2018-03-12T17:00:00.000-04:00",
+   "ny_date": "2018-03-12",
+   "offset_minutes": -240,
+   "ny_wall_ms": 1520874000000,
+   "session_date": "2018-03-13",
+   "in_session": false,
+   "weekend": false,
+   "calendar": "not covered"
+  },
+  {
+   "label": "2018 spring switch: Monday 17:59",
+   "utc": "2018-03-12T21:59:00.000Z",
+   "utc_ms": 1520891940000,
+   "ny": "2018-03-12T17:59:00.000-04:00",
+   "ny_date": "2018-03-12",
+   "offset_minutes": -240,
+   "ny_wall_ms": 1520877540000,
+   "session_date": "2018-03-13",
+   "in_session": false,
+   "weekend": false,
+   "calendar": "not covered"
+  },
+  {
+   "label": "2018 spring switch: Monday 18:00 (Tuesday's session opens)",
+   "utc": "2018-03-12T22:00:00.000Z",
+   "utc_ms": 1520892000000,
+   "ny": "2018-03-12T18:00:00.000-04:00",
+   "ny_date": "2018-03-12",
+   "offset_minutes": -240,
+   "ny_wall_ms": 1520877600000,
+   "session_date": "2018-03-13",
+   "in_session": true,
+   "weekend": false,
+   "calendar": "not covered"
+  },
+  {
+   "label": "2025 autumn switch: Friday 16:59",
+   "utc": "2025-10-31T20:59:00.000Z",
+   "utc_ms": 1761944340000,
+   "ny": "2025-10-31T16:59:00.000-04:00",
+   "ny_date": "2025-10-31",
+   "offset_minutes": -240,
+   "ny_wall_ms": 1761929940000,
+   "session_date": "2025-10-31",
+   "in_session": true,
+   "weekend": false,
+   "calendar": {
+    "session_date": "2025-10-31",
+    "in_session": true
+   }
+  },
+  {
+   "label": "2025 autumn switch: Friday 17:00 (the weekend starts, rolls to Monday)",
+   "utc": "2025-10-31T21:00:00.000Z",
+   "utc_ms": 1761944400000,
+   "ny": "2025-10-31T17:00:00.000-04:00",
+   "ny_date": "2025-10-31",
+   "offset_minutes": -240,
+   "ny_wall_ms": 1761930000000,
+   "session_date": "2025-11-03",
+   "in_session": false,
+   "weekend": true,
+   "calendar": {
+    "session_date": "2025-11-03",
+    "in_session": false
+   }
+  },
+  {
+   "label": "2025 autumn switch: Sunday 01:30 daylight time (the first 01:30)",
+   "utc": "2025-11-02T05:30:00.000Z",
+   "utc_ms": 1762061400000,
+   "ny": "2025-11-02T01:30:00.000-04:00",
+   "ny_date": "2025-11-02",
+   "offset_minutes": -240,
+   "ny_wall_ms": 1762047000000,
+   "session_date": "2025-11-03",
+   "in_session": false,
+   "weekend": true,
+   "calendar": {
+    "session_date": "2025-11-03",
+    "in_session": false
+   }
+  },
+  {
+   "label": "2025 autumn switch: Sunday 01:30 standard time (the second 01:30)",
+   "utc": "2025-11-02T06:30:00.000Z",
+   "utc_ms": 1762065000000,
+   "ny": "2025-11-02T01:30:00.000-05:00",
+   "ny_date": "2025-11-02",
+   "offset_minutes": -300,
+   "ny_wall_ms": 1762047000000,
+   "session_date": "2025-11-03",
+   "in_session": false,
+   "weekend": true,
+   "calendar": {
+    "session_date": "2025-11-03",
+    "in_session": false
+   }
+  },
+  {
+   "label": "2025 autumn switch: Sunday 17:59",
+   "utc": "2025-11-02T22:59:00.000Z",
+   "utc_ms": 1762124340000,
+   "ny": "2025-11-02T17:59:00.000-05:00",
+   "ny_date": "2025-11-02",
+   "offset_minutes": -300,
+   "ny_wall_ms": 1762106340000,
+   "session_date": "2025-11-03",
+   "in_session": false,
+   "weekend": true,
+   "calendar": {
+    "session_date": "2025-11-03",
+    "in_session": false
+   }
+  },
+  {
+   "label": "2025 autumn switch: Sunday 18:00 (Monday's session opens)",
+   "utc": "2025-11-02T23:00:00.000Z",
+   "utc_ms": 1762124400000,
+   "ny": "2025-11-02T18:00:00.000-05:00",
+   "ny_date": "2025-11-02",
+   "offset_minutes": -300,
+   "ny_wall_ms": 1762106400000,
+   "session_date": "2025-11-03",
+   "in_session": true,
+   "weekend": false,
+   "calendar": {
+    "session_date": "2025-11-03",
+    "in_session": true
+   }
+  },
+  {
+   "label": "2025 autumn switch: Monday 16:59",
+   "utc": "2025-11-03T21:59:00.000Z",
+   "utc_ms": 1762207140000,
+   "ny": "2025-11-03T16:59:00.000-05:00",
+   "ny_date": "2025-11-03",
+   "offset_minutes": -300,
+   "ny_wall_ms": 1762189140000,
+   "session_date": "2025-11-03",
+   "in_session": true,
+   "weekend": false,
+   "calendar": {
+    "session_date": "2025-11-03",
+    "in_session": true
+   }
+  },
+  {
+   "label": "2025 autumn switch: Monday 17:00 (the daily break, dated Tuesday)",
+   "utc": "2025-11-03T22:00:00.000Z",
+   "utc_ms": 1762207200000,
+   "ny": "2025-11-03T17:00:00.000-05:00",
+   "ny_date": "2025-11-03",
+   "offset_minutes": -300,
+   "ny_wall_ms": 1762189200000,
+   "session_date": "2025-11-04",
+   "in_session": false,
+   "weekend": false,
+   "calendar": {
+    "session_date": "2025-11-04",
+    "in_session": false
+   }
+  },
+  {
+   "label": "2025 autumn switch: Monday 17:59",
+   "utc": "2025-11-03T22:59:00.000Z",
+   "utc_ms": 1762210740000,
+   "ny": "2025-11-03T17:59:00.000-05:00",
+   "ny_date": "2025-11-03",
+   "offset_minutes": -300,
+   "ny_wall_ms": 1762192740000,
+   "session_date": "2025-11-04",
+   "in_session": false,
+   "weekend": false,
+   "calendar": {
+    "session_date": "2025-11-04",
+    "in_session": false
+   }
+  },
+  {
+   "label": "2025 autumn switch: Monday 18:00 (Tuesday's session opens)",
+   "utc": "2025-11-03T23:00:00.000Z",
+   "utc_ms": 1762210800000,
+   "ny": "2025-11-03T18:00:00.000-05:00",
+   "ny_date": "2025-11-03",
+   "offset_minutes": -300,
+   "ny_wall_ms": 1762192800000,
+   "session_date": "2025-11-04",
+   "in_session": true,
+   "weekend": false,
+   "calendar": {
+    "session_date": "2025-11-04",
+    "in_session": true
+   }
+  },
+  {
+   "label": "2024 autumn switch: Friday 16:59",
+   "utc": "2024-11-01T20:59:00.000Z",
+   "utc_ms": 1730494740000,
+   "ny": "2024-11-01T16:59:00.000-04:00",
+   "ny_date": "2024-11-01",
+   "offset_minutes": -240,
+   "ny_wall_ms": 1730480340000,
+   "session_date": "2024-11-01",
+   "in_session": true,
+   "weekend": false,
+   "calendar": {
+    "session_date": "2024-11-01",
+    "in_session": true
+   }
+  },
+  {
+   "label": "2024 autumn switch: Friday 17:00 (the weekend starts, rolls to Monday)",
+   "utc": "2024-11-01T21:00:00.000Z",
+   "utc_ms": 1730494800000,
+   "ny": "2024-11-01T17:00:00.000-04:00",
+   "ny_date": "2024-11-01",
+   "offset_minutes": -240,
+   "ny_wall_ms": 1730480400000,
+   "session_date": "2024-11-04",
+   "in_session": false,
+   "weekend": true,
+   "calendar": {
+    "session_date": "2024-11-04",
+    "in_session": false
+   }
+  },
+  {
+   "label": "2024 autumn switch: Sunday 01:30 daylight time (the first 01:30)",
+   "utc": "2024-11-03T05:30:00.000Z",
+   "utc_ms": 1730611800000,
+   "ny": "2024-11-03T01:30:00.000-04:00",
+   "ny_date": "2024-11-03",
+   "offset_minutes": -240,
+   "ny_wall_ms": 1730597400000,
+   "session_date": "2024-11-04",
+   "in_session": false,
+   "weekend": true,
+   "calendar": {
+    "session_date": "2024-11-04",
+    "in_session": false
+   }
+  },
+  {
+   "label": "2024 autumn switch: Sunday 01:30 standard time (the second 01:30)",
+   "utc": "2024-11-03T06:30:00.000Z",
+   "utc_ms": 1730615400000,
+   "ny": "2024-11-03T01:30:00.000-05:00",
+   "ny_date": "2024-11-03",
+   "offset_minutes": -300,
+   "ny_wall_ms": 1730597400000,
+   "session_date": "2024-11-04",
+   "in_session": false,
+   "weekend": true,
+   "calendar": {
+    "session_date": "2024-11-04",
+    "in_session": false
+   }
+  },
+  {
+   "label": "2024 autumn switch: Sunday 17:59",
+   "utc": "2024-11-03T22:59:00.000Z",
+   "utc_ms": 1730674740000,
+   "ny": "2024-11-03T17:59:00.000-05:00",
+   "ny_date": "2024-11-03",
+   "offset_minutes": -300,
+   "ny_wall_ms": 1730656740000,
+   "session_date": "2024-11-04",
+   "in_session": false,
+   "weekend": true,
+   "calendar": {
+    "session_date": "2024-11-04",
+    "in_session": false
+   }
+  },
+  {
+   "label": "2024 autumn switch: Sunday 18:00 (Monday's session opens)",
+   "utc": "2024-11-03T23:00:00.000Z",
+   "utc_ms": 1730674800000,
+   "ny": "2024-11-03T18:00:00.000-05:00",
+   "ny_date": "2024-11-03",
+   "offset_minutes": -300,
+   "ny_wall_ms": 1730656800000,
+   "session_date": "2024-11-04",
+   "in_session": true,
+   "weekend": false,
+   "calendar": {
+    "session_date": "2024-11-04",
+    "in_session": true
+   }
+  },
+  {
+   "label": "2024 autumn switch: Monday 16:59",
+   "utc": "2024-11-04T21:59:00.000Z",
+   "utc_ms": 1730757540000,
+   "ny": "2024-11-04T16:59:00.000-05:00",
+   "ny_date": "2024-11-04",
+   "offset_minutes": -300,
+   "ny_wall_ms": 1730739540000,
+   "session_date": "2024-11-04",
+   "in_session": true,
+   "weekend": false,
+   "calendar": {
+    "session_date": "2024-11-04",
+    "in_session": true
+   }
+  },
+  {
+   "label": "2024 autumn switch: Monday 17:00 (the daily break, dated Tuesday)",
+   "utc": "2024-11-04T22:00:00.000Z",
+   "utc_ms": 1730757600000,
+   "ny": "2024-11-04T17:00:00.000-05:00",
+   "ny_date": "2024-11-04",
+   "offset_minutes": -300,
+   "ny_wall_ms": 1730739600000,
+   "session_date": "2024-11-05",
+   "in_session": false,
+   "weekend": false,
+   "calendar": {
+    "session_date": "2024-11-05",
+    "in_session": false
+   }
+  },
+  {
+   "label": "2024 autumn switch: Monday 17:59",
+   "utc": "2024-11-04T22:59:00.000Z",
+   "utc_ms": 1730761140000,
+   "ny": "2024-11-04T17:59:00.000-05:00",
+   "ny_date": "2024-11-04",
+   "offset_minutes": -300,
+   "ny_wall_ms": 1730743140000,
+   "session_date": "2024-11-05",
+   "in_session": false,
+   "weekend": false,
+   "calendar": {
+    "session_date": "2024-11-05",
+    "in_session": false
+   }
+  },
+  {
+   "label": "2024 autumn switch: Monday 18:00 (Tuesday's session opens)",
+   "utc": "2024-11-04T23:00:00.000Z",
+   "utc_ms": 1730761200000,
+   "ny": "2024-11-04T18:00:00.000-05:00",
+   "ny_date": "2024-11-04",
+   "offset_minutes": -300,
+   "ny_wall_ms": 1730743200000,
+   "session_date": "2024-11-05",
+   "in_session": true,
+   "weekend": false,
+   "calendar": {
+    "session_date": "2024-11-05",
+    "in_session": true
+   }
+  },
+  {
+   "label": "2021 autumn switch: Friday 16:59",
+   "utc": "2021-11-05T20:59:00.000Z",
+   "utc_ms": 1636145940000,
+   "ny": "2021-11-05T16:59:00.000-04:00",
+   "ny_date": "2021-11-05",
+   "offset_minutes": -240,
+   "ny_wall_ms": 1636131540000,
+   "session_date": "2021-11-05",
+   "in_session": true,
+   "weekend": false,
+   "calendar": "not covered"
+  },
+  {
+   "label": "2021 autumn switch: Friday 17:00 (the weekend starts, rolls to Monday)",
+   "utc": "2021-11-05T21:00:00.000Z",
+   "utc_ms": 1636146000000,
+   "ny": "2021-11-05T17:00:00.000-04:00",
+   "ny_date": "2021-11-05",
+   "offset_minutes": -240,
+   "ny_wall_ms": 1636131600000,
+   "session_date": "2021-11-08",
+   "in_session": false,
+   "weekend": true,
+   "calendar": "not covered"
+  },
+  {
+   "label": "2021 autumn switch: Sunday 01:30 daylight time (the first 01:30)",
+   "utc": "2021-11-07T05:30:00.000Z",
+   "utc_ms": 1636263000000,
+   "ny": "2021-11-07T01:30:00.000-04:00",
+   "ny_date": "2021-11-07",
+   "offset_minutes": -240,
+   "ny_wall_ms": 1636248600000,
+   "session_date": "2021-11-08",
+   "in_session": false,
+   "weekend": true,
+   "calendar": "not covered"
+  },
+  {
+   "label": "2021 autumn switch: Sunday 01:30 standard time (the second 01:30)",
+   "utc": "2021-11-07T06:30:00.000Z",
+   "utc_ms": 1636266600000,
+   "ny": "2021-11-07T01:30:00.000-05:00",
+   "ny_date": "2021-11-07",
+   "offset_minutes": -300,
+   "ny_wall_ms": 1636248600000,
+   "session_date": "2021-11-08",
+   "in_session": false,
+   "weekend": true,
+   "calendar": "not covered"
+  },
+  {
+   "label": "2021 autumn switch: Sunday 17:59",
+   "utc": "2021-11-07T22:59:00.000Z",
+   "utc_ms": 1636325940000,
+   "ny": "2021-11-07T17:59:00.000-05:00",
+   "ny_date": "2021-11-07",
+   "offset_minutes": -300,
+   "ny_wall_ms": 1636307940000,
+   "session_date": "2021-11-08",
+   "in_session": false,
+   "weekend": true,
+   "calendar": "not covered"
+  },
+  {
+   "label": "2021 autumn switch: Sunday 18:00 (Monday's session opens)",
+   "utc": "2021-11-07T23:00:00.000Z",
+   "utc_ms": 1636326000000,
+   "ny": "2021-11-07T18:00:00.000-05:00",
+   "ny_date": "2021-11-07",
+   "offset_minutes": -300,
+   "ny_wall_ms": 1636308000000,
+   "session_date": "2021-11-08",
+   "in_session": true,
+   "weekend": false,
+   "calendar": "not covered"
+  },
+  {
+   "label": "2021 autumn switch: Monday 16:59",
+   "utc": "2021-11-08T21:59:00.000Z",
+   "utc_ms": 1636408740000,
+   "ny": "2021-11-08T16:59:00.000-05:00",
+   "ny_date": "2021-11-08",
+   "offset_minutes": -300,
+   "ny_wall_ms": 1636390740000,
+   "session_date": "2021-11-08",
+   "in_session": true,
+   "weekend": false,
+   "calendar": "not covered"
+  },
+  {
+   "label": "2021 autumn switch: Monday 17:00 (the daily break, dated Tuesday)",
+   "utc": "2021-11-08T22:00:00.000Z",
+   "utc_ms": 1636408800000,
+   "ny": "2021-11-08T17:00:00.000-05:00",
+   "ny_date": "2021-11-08",
+   "offset_minutes": -300,
+   "ny_wall_ms": 1636390800000,
+   "session_date": "2021-11-09",
+   "in_session": false,
+   "weekend": false,
+   "calendar": "not covered"
+  },
+  {
+   "label": "2021 autumn switch: Monday 17:59",
+   "utc": "2021-11-08T22:59:00.000Z",
+   "utc_ms": 1636412340000,
+   "ny": "2021-11-08T17:59:00.000-05:00",
+   "ny_date": "2021-11-08",
+   "offset_minutes": -300,
+   "ny_wall_ms": 1636394340000,
+   "session_date": "2021-11-09",
+   "in_session": false,
+   "weekend": false,
+   "calendar": "not covered"
+  },
+  {
+   "label": "2021 autumn switch: Monday 18:00 (Tuesday's session opens)",
+   "utc": "2021-11-08T23:00:00.000Z",
+   "utc_ms": 1636412400000,
+   "ny": "2021-11-08T18:00:00.000-05:00",
+   "ny_date": "2021-11-08",
+   "offset_minutes": -300,
+   "ny_wall_ms": 1636394400000,
+   "session_date": "2021-11-09",
+   "in_session": true,
+   "weekend": false,
+   "calendar": "not covered"
+  },
+  {
+   "label": "winter week: Tuesday 00:00 (midnight inside Tuesday's session)",
+   "utc": "2026-01-06T05:00:00.000Z",
+   "utc_ms": 1767675600000,
+   "ny": "2026-01-06T00:00:00.000-05:00",
+   "ny_date": "2026-01-06",
+   "offset_minutes": -300,
+   "ny_wall_ms": 1767657600000,
+   "session_date": "2026-01-06",
+   "in_session": true,
+   "weekend": false,
+   "calendar": {
+    "session_date": "2026-01-06",
+    "in_session": true
+   }
+  },
+  {
+   "label": "winter week: Wednesday 23:59:59.999",
+   "utc": "2026-01-08T04:59:59.999Z",
+   "utc_ms": 1767848399999,
+   "ny": "2026-01-07T23:59:59.999-05:00",
+   "ny_date": "2026-01-07",
+   "offset_minutes": -300,
+   "ny_wall_ms": 1767830399999,
+   "session_date": "2026-01-08",
+   "in_session": true,
+   "weekend": false,
+   "calendar": {
+    "session_date": "2026-01-08",
+    "in_session": true
+   }
+  },
+  {
+   "label": "winter week: Friday 16:59:59.999 (the last moment of Friday's session)",
+   "utc": "2026-01-09T21:59:59.999Z",
+   "utc_ms": 1767995999999,
+   "ny": "2026-01-09T16:59:59.999-05:00",
+   "ny_date": "2026-01-09",
+   "offset_minutes": -300,
+   "ny_wall_ms": 1767977999999,
+   "session_date": "2026-01-09",
+   "in_session": true,
+   "weekend": false,
+   "calendar": {
+    "session_date": "2026-01-09",
+    "in_session": true
+   }
+  },
+  {
+   "label": "winter week: Friday 17:00 (the weekend starts)",
+   "utc": "2026-01-09T22:00:00.000Z",
+   "utc_ms": 1767996000000,
+   "ny": "2026-01-09T17:00:00.000-05:00",
+   "ny_date": "2026-01-09",
+   "offset_minutes": -300,
+   "ny_wall_ms": 1767978000000,
+   "session_date": "2026-01-12",
+   "in_session": false,
+   "weekend": true,
+   "calendar": {
+    "session_date": "2026-01-12",
+    "in_session": false
+   }
+  },
+  {
+   "label": "winter week: Friday 18:00 (no Saturday session: Monday)",
+   "utc": "2026-01-09T23:00:00.000Z",
+   "utc_ms": 1767999600000,
+   "ny": "2026-01-09T18:00:00.000-05:00",
+   "ny_date": "2026-01-09",
+   "offset_minutes": -300,
+   "ny_wall_ms": 1767981600000,
+   "session_date": "2026-01-12",
+   "in_session": false,
+   "weekend": true,
+   "calendar": {
+    "session_date": "2026-01-12",
+    "in_session": false
+   }
+  },
+  {
+   "label": "winter week: Saturday 00:00 (midnight)",
+   "utc": "2026-01-10T05:00:00.000Z",
+   "utc_ms": 1768021200000,
+   "ny": "2026-01-10T00:00:00.000-05:00",
+   "ny_date": "2026-01-10",
+   "offset_minutes": -300,
+   "ny_wall_ms": 1768003200000,
+   "session_date": "2026-01-12",
+   "in_session": false,
+   "weekend": true,
+   "calendar": {
+    "session_date": "2026-01-12",
+    "in_session": false
+   }
+  },
+  {
+   "label": "winter week: Sunday 00:00 (midnight)",
+   "utc": "2026-01-11T05:00:00.000Z",
+   "utc_ms": 1768107600000,
+   "ny": "2026-01-11T00:00:00.000-05:00",
+   "ny_date": "2026-01-11",
+   "offset_minutes": -300,
+   "ny_wall_ms": 1768089600000,
+   "session_date": "2026-01-12",
+   "in_session": false,
+   "weekend": true,
+   "calendar": {
+    "session_date": "2026-01-12",
+    "in_session": false
+   }
+  },
+  {
+   "label": "winter week: Sunday 17:59:59.999 (the last moment of the weekend)",
+   "utc": "2026-01-11T22:59:59.999Z",
+   "utc_ms": 1768172399999,
+   "ny": "2026-01-11T17:59:59.999-05:00",
+   "ny_date": "2026-01-11",
+   "offset_minutes": -300,
+   "ny_wall_ms": 1768154399999,
+   "session_date": "2026-01-12",
+   "in_session": false,
+   "weekend": true,
+   "calendar": {
+    "session_date": "2026-01-12",
+    "in_session": false
+   }
+  },
+  {
+   "label": "winter week: Sunday 18:00 (Monday's session opens)",
+   "utc": "2026-01-11T23:00:00.000Z",
+   "utc_ms": 1768172400000,
+   "ny": "2026-01-11T18:00:00.000-05:00",
+   "ny_date": "2026-01-11",
+   "offset_minutes": -300,
+   "ny_wall_ms": 1768154400000,
+   "session_date": "2026-01-12",
+   "in_session": true,
+   "weekend": false,
+   "calendar": {
+    "session_date": "2026-01-12",
+    "in_session": true
+   }
+  },
+  {
+   "label": "winter week: Monday 00:00 (midnight)",
+   "utc": "2026-01-12T05:00:00.000Z",
+   "utc_ms": 1768194000000,
+   "ny": "2026-01-12T00:00:00.000-05:00",
+   "ny_date": "2026-01-12",
+   "offset_minutes": -300,
+   "ny_wall_ms": 1768176000000,
+   "session_date": "2026-01-12",
+   "in_session": true,
+   "weekend": false,
+   "calendar": {
+    "session_date": "2026-01-12",
+    "in_session": true
+   }
+  },
+  {
+   "label": "UTC input: 23:00Z on a winter Tuesday is 18:00 New York, Wednesday's session",
+   "utc": "2026-01-06T23:00:00.000Z",
+   "utc_ms": 1767740400000,
+   "ny": "2026-01-06T18:00:00.000-05:00",
+   "ny_date": "2026-01-06",
+   "offset_minutes": -300,
+   "ny_wall_ms": 1767722400000,
+   "session_date": "2026-01-07",
+   "in_session": true,
+   "weekend": false,
+   "calendar": {
+    "session_date": "2026-01-07",
+    "in_session": true
+   }
+  },
+  {
+   "label": "UTC input: 00:00Z on a winter Wednesday is 19:00 New York the evening before",
+   "utc": "2026-01-07T00:00:00.000Z",
+   "utc_ms": 1767744000000,
+   "ny": "2026-01-06T19:00:00.000-05:00",
+   "ny_date": "2026-01-06",
+   "offset_minutes": -300,
+   "ny_wall_ms": 1767726000000,
+   "session_date": "2026-01-07",
+   "in_session": true,
+   "weekend": false,
+   "calendar": {
+    "session_date": "2026-01-07",
+    "in_session": true
+   }
+  },
+  {
+   "label": "UTC input: 04:59:59.999Z on a winter Wednesday is 23:59:59.999 New York the evening before",
+   "utc": "2026-01-07T04:59:59.999Z",
+   "utc_ms": 1767761999999,
+   "ny": "2026-01-06T23:59:59.999-05:00",
+   "ny_date": "2026-01-06",
+   "offset_minutes": -300,
+   "ny_wall_ms": 1767743999999,
+   "session_date": "2026-01-07",
+   "in_session": true,
+   "weekend": false,
+   "calendar": {
+    "session_date": "2026-01-07",
+    "in_session": true
+   }
+  },
+  {
+   "label": "UTC input: 20:59:59.999Z on a summer Wednesday is 16:59:59.999 New York",
+   "utc": "2026-06-10T20:59:59.999Z",
+   "utc_ms": 1781125199999,
+   "ny": "2026-06-10T16:59:59.999-04:00",
+   "ny_date": "2026-06-10",
+   "offset_minutes": -240,
+   "ny_wall_ms": 1781110799999,
+   "session_date": "2026-06-10",
+   "in_session": true,
+   "weekend": false,
+   "calendar": {
+    "session_date": "2026-06-10",
+    "in_session": true
+   }
+  },
+  {
+   "label": "UTC input: 21:00Z on a summer Wednesday is 17:00 New York, the daily break",
+   "utc": "2026-06-10T21:00:00.000Z",
+   "utc_ms": 1781125200000,
+   "ny": "2026-06-10T17:00:00.000-04:00",
+   "ny_date": "2026-06-10",
+   "offset_minutes": -240,
+   "ny_wall_ms": 1781110800000,
+   "session_date": "2026-06-11",
+   "in_session": false,
+   "weekend": false,
+   "calendar": {
+    "session_date": "2026-06-11",
+    "in_session": false
+   }
+  },
+  {
+   "label": "UTC input: 22:00Z on a summer Wednesday is 18:00 New York, Thursday's session",
+   "utc": "2026-06-10T22:00:00.000Z",
+   "utc_ms": 1781128800000,
+   "ny": "2026-06-10T18:00:00.000-04:00",
+   "ny_date": "2026-06-10",
+   "offset_minutes": -240,
+   "ny_wall_ms": 1781114400000,
+   "session_date": "2026-06-11",
+   "in_session": true,
+   "weekend": false,
+   "calendar": {
+    "session_date": "2026-06-11",
+    "in_session": true
+   }
+  },
+  {
+   "label": "UTC input: 03:00Z on a summer Saturday is Friday 23:00 New York, the weekend",
+   "utc": "2026-06-13T03:00:00.000Z",
+   "utc_ms": 1781319600000,
+   "ny": "2026-06-12T23:00:00.000-04:00",
+   "ny_date": "2026-06-12",
+   "offset_minutes": -240,
+   "ny_wall_ms": 1781305200000,
+   "session_date": "2026-06-15",
+   "in_session": false,
+   "weekend": true,
+   "calendar": {
+    "session_date": "2026-06-15",
+    "in_session": false
+   }
+  },
+  {
+   "label": "holiday A: Sunday 18:00 before a Monday holiday halt",
+   "utc": "2026-09-06T22:00:00.000Z",
+   "utc_ms": 1788732000000,
+   "ny": "2026-09-06T18:00:00.000-04:00",
+   "ny_date": "2026-09-06",
+   "offset_minutes": -240,
+   "ny_wall_ms": 1788717600000,
+   "session_date": "2026-09-07",
+   "in_session": true,
+   "weekend": false,
+   "calendar": {
+    "session_date": "2026-09-07",
+    "in_session": true
+   }
+  },
+  {
+   "label": "holiday A: Monday 12:59 inside the halt day's session",
+   "utc": "2026-09-07T16:59:00.000Z",
+   "utc_ms": 1788800340000,
+   "ny": "2026-09-07T12:59:00.000-04:00",
+   "ny_date": "2026-09-07",
+   "offset_minutes": -240,
+   "ny_wall_ms": 1788785940000,
+   "session_date": "2026-09-07",
+   "in_session": true,
+   "weekend": false,
+   "calendar": {
+    "session_date": "2026-09-07",
+    "in_session": true
+   }
+  },
+  {
+   "label": "holiday A: Monday 13:00, the holiday halt",
+   "utc": "2026-09-07T17:00:00.000Z",
+   "utc_ms": 1788800400000,
+   "ny": "2026-09-07T13:00:00.000-04:00",
+   "ny_date": "2026-09-07",
+   "offset_minutes": -240,
+   "ny_wall_ms": 1788786000000,
+   "session_date": "2026-09-07",
+   "in_session": true,
+   "weekend": false,
+   "calendar": {
+    "session_date": "2026-09-07",
+    "in_session": false
+   }
+  },
+  {
+   "label": "holiday A: Monday 17:00, the holiday's evening break",
+   "utc": "2026-09-07T21:00:00.000Z",
+   "utc_ms": 1788814800000,
+   "ny": "2026-09-07T17:00:00.000-04:00",
+   "ny_date": "2026-09-07",
+   "offset_minutes": -240,
+   "ny_wall_ms": 1788800400000,
+   "session_date": "2026-09-08",
+   "in_session": false,
+   "weekend": false,
+   "calendar": {
+    "session_date": "2026-09-08",
+    "in_session": false
+   }
+  },
+  {
+   "label": "holiday A: Monday 18:00, Tuesday's session opens after the halt",
+   "utc": "2026-09-07T22:00:00.000Z",
+   "utc_ms": 1788818400000,
+   "ny": "2026-09-07T18:00:00.000-04:00",
+   "ny_date": "2026-09-07",
+   "offset_minutes": -240,
+   "ny_wall_ms": 1788804000000,
+   "session_date": "2026-09-08",
+   "in_session": true,
+   "weekend": false,
+   "calendar": {
+    "session_date": "2026-09-08",
+    "in_session": true
+   }
+  },
+  {
+   "label": "holiday B: Thursday 18:00, the halt day's session opens",
+   "utc": "2026-06-18T22:00:00.000Z",
+   "utc_ms": 1781820000000,
+   "ny": "2026-06-18T18:00:00.000-04:00",
+   "ny_date": "2026-06-18",
+   "offset_minutes": -240,
+   "ny_wall_ms": 1781805600000,
+   "session_date": "2026-06-19",
+   "in_session": true,
+   "weekend": false,
+   "calendar": {
+    "session_date": "2026-06-19",
+    "in_session": true
+   }
+  },
+  {
+   "label": "holiday B: Friday 13:00, a Friday holiday halt",
+   "utc": "2026-06-19T17:00:00.000Z",
+   "utc_ms": 1781888400000,
+   "ny": "2026-06-19T13:00:00.000-04:00",
+   "ny_date": "2026-06-19",
+   "offset_minutes": -240,
+   "ny_wall_ms": 1781874000000,
+   "session_date": "2026-06-19",
+   "in_session": true,
+   "weekend": false,
+   "calendar": {
+    "session_date": "2026-06-19",
+    "in_session": false
+   }
+  },
+  {
+   "label": "holiday B: Friday 17:00, the weekend after a halt",
+   "utc": "2026-06-19T21:00:00.000Z",
+   "utc_ms": 1781902800000,
+   "ny": "2026-06-19T17:00:00.000-04:00",
+   "ny_date": "2026-06-19",
+   "offset_minutes": -240,
+   "ny_wall_ms": 1781888400000,
+   "session_date": "2026-06-22",
+   "in_session": false,
+   "weekend": true,
+   "calendar": {
+    "session_date": "2026-06-22",
+    "in_session": false
+   }
+  },
+  {
+   "label": "holiday C: Thursday 18:00, the early-close session opens",
+   "utc": "2026-04-02T22:00:00.000Z",
+   "utc_ms": 1775167200000,
+   "ny": "2026-04-02T18:00:00.000-04:00",
+   "ny_date": "2026-04-02",
+   "offset_minutes": -240,
+   "ny_wall_ms": 1775152800000,
+   "session_date": "2026-04-03",
+   "in_session": true,
+   "weekend": false,
+   "calendar": {
+    "session_date": "2026-04-03",
+    "in_session": true
+   }
+  },
+  {
+   "label": "holiday C: Friday 09:14 inside a 09:15 early close",
+   "utc": "2026-04-03T13:14:00.000Z",
+   "utc_ms": 1775222040000,
+   "ny": "2026-04-03T09:14:00.000-04:00",
+   "ny_date": "2026-04-03",
+   "offset_minutes": -240,
+   "ny_wall_ms": 1775207640000,
+   "session_date": "2026-04-03",
+   "in_session": true,
+   "weekend": false,
+   "calendar": {
+    "session_date": "2026-04-03",
+    "in_session": true
+   }
+  },
+  {
+   "label": "holiday C: Friday 09:15, the 09:15 early close",
+   "utc": "2026-04-03T13:15:00.000Z",
+   "utc_ms": 1775222100000,
+   "ny": "2026-04-03T09:15:00.000-04:00",
+   "ny_date": "2026-04-03",
+   "offset_minutes": -240,
+   "ny_wall_ms": 1775207700000,
+   "session_date": "2026-04-03",
+   "in_session": true,
+   "weekend": false,
+   "calendar": {
+    "session_date": "2026-04-03",
+    "in_session": false
+   }
+  },
+  {
+   "label": "holiday C: Friday 17:00 (the weekend)",
+   "utc": "2026-04-03T21:00:00.000Z",
+   "utc_ms": 1775250000000,
+   "ny": "2026-04-03T17:00:00.000-04:00",
+   "ny_date": "2026-04-03",
+   "offset_minutes": -240,
+   "ny_wall_ms": 1775235600000,
+   "session_date": "2026-04-06",
+   "in_session": false,
+   "weekend": true,
+   "calendar": {
+    "session_date": "2026-04-06",
+    "in_session": false
+   }
+  },
+  {
+   "label": "holiday D: Wednesday 17:00, the evening before a closed day",
+   "utc": "2025-12-31T22:00:00.000Z",
+   "utc_ms": 1767218400000,
+   "ny": "2025-12-31T17:00:00.000-05:00",
+   "ny_date": "2025-12-31",
+   "offset_minutes": -300,
+   "ny_wall_ms": 1767200400000,
+   "session_date": "2026-01-01",
+   "in_session": false,
+   "weekend": false,
+   "calendar": {
+    "session_date": "2026-01-02",
+    "in_session": false
+   }
+  },
+  {
+   "label": "holiday D: Wednesday 18:00, no session opens before the closed day",
+   "utc": "2025-12-31T23:00:00.000Z",
+   "utc_ms": 1767222000000,
+   "ny": "2025-12-31T18:00:00.000-05:00",
+   "ny_date": "2025-12-31",
+   "offset_minutes": -300,
+   "ny_wall_ms": 1767204000000,
+   "session_date": "2026-01-01",
+   "in_session": true,
+   "weekend": false,
+   "calendar": {
+    "session_date": "2026-01-02",
+    "in_session": false
+   }
+  },
+  {
+   "label": "holiday D: the closed day at 00:00, the calendar's first moment",
+   "utc": "2026-01-01T05:00:00.000Z",
+   "utc_ms": 1767243600000,
+   "ny": "2026-01-01T00:00:00.000-05:00",
+   "ny_date": "2026-01-01",
+   "offset_minutes": -300,
+   "ny_wall_ms": 1767225600000,
+   "session_date": "2026-01-01",
+   "in_session": true,
+   "weekend": false,
+   "calendar": {
+    "session_date": "2026-01-02",
+    "in_session": false
+   }
+  },
+  {
+   "label": "holiday D: the closed day 18:00, Friday's session opens",
+   "utc": "2026-01-01T23:00:00.000Z",
+   "utc_ms": 1767308400000,
+   "ny": "2026-01-01T18:00:00.000-05:00",
+   "ny_date": "2026-01-01",
+   "offset_minutes": -300,
+   "ny_wall_ms": 1767290400000,
+   "session_date": "2026-01-02",
+   "in_session": true,
+   "weekend": false,
+   "calendar": {
+    "session_date": "2026-01-02",
+    "in_session": true
+   }
+  }
+ ],
+ "bounds": [
+  {
+   "label": "2022 spring switch: the Friday before",
+   "session_date": "2022-03-11",
+   "start_utc": "2022-03-10T23:00:00.000Z",
+   "end_utc": "2022-03-11T22:00:00.000Z",
+   "calendar_end_utc": "not covered"
+  },
+  {
+   "label": "2022 spring switch: Monday (opens Sunday 18:00 daylight time)",
+   "session_date": "2022-03-14",
+   "start_utc": "2022-03-13T22:00:00.000Z",
+   "end_utc": "2022-03-14T21:00:00.000Z",
+   "calendar_end_utc": "not covered"
+  },
+  {
+   "label": "2020 spring switch: the Friday before",
+   "session_date": "2020-03-06",
+   "start_utc": "2020-03-05T23:00:00.000Z",
+   "end_utc": "2020-03-06T22:00:00.000Z",
+   "calendar_end_utc": "not covered"
+  },
+  {
+   "label": "2020 spring switch: Monday (opens Sunday 18:00 daylight time)",
+   "session_date": "2020-03-09",
+   "start_utc": "2020-03-08T22:00:00.000Z",
+   "end_utc": "2020-03-09T21:00:00.000Z",
+   "calendar_end_utc": "not covered"
+  },
+  {
+   "label": "2018 spring switch: the Friday before",
+   "session_date": "2018-03-09",
+   "start_utc": "2018-03-08T23:00:00.000Z",
+   "end_utc": "2018-03-09T22:00:00.000Z",
+   "calendar_end_utc": "not covered"
+  },
+  {
+   "label": "2018 spring switch: Monday (opens Sunday 18:00 daylight time)",
+   "session_date": "2018-03-12",
+   "start_utc": "2018-03-11T22:00:00.000Z",
+   "end_utc": "2018-03-12T21:00:00.000Z",
+   "calendar_end_utc": "not covered"
+  },
+  {
+   "label": "2025 autumn switch: the Friday before",
+   "session_date": "2025-10-31",
+   "start_utc": "2025-10-30T22:00:00.000Z",
+   "end_utc": "2025-10-31T21:00:00.000Z",
+   "calendar_end_utc": "2025-10-31T21:00:00.000Z"
+  },
+  {
+   "label": "2025 autumn switch: Monday (opens Sunday 18:00 standard time)",
+   "session_date": "2025-11-03",
+   "start_utc": "2025-11-02T23:00:00.000Z",
+   "end_utc": "2025-11-03T22:00:00.000Z",
+   "calendar_end_utc": "2025-11-03T22:00:00.000Z"
+  },
+  {
+   "label": "2024 autumn switch: the Friday before",
+   "session_date": "2024-11-01",
+   "start_utc": "2024-10-31T22:00:00.000Z",
+   "end_utc": "2024-11-01T21:00:00.000Z",
+   "calendar_end_utc": "2024-11-01T21:00:00.000Z"
+  },
+  {
+   "label": "2024 autumn switch: Monday (opens Sunday 18:00 standard time)",
+   "session_date": "2024-11-04",
+   "start_utc": "2024-11-03T23:00:00.000Z",
+   "end_utc": "2024-11-04T22:00:00.000Z",
+   "calendar_end_utc": "2024-11-04T22:00:00.000Z"
+  },
+  {
+   "label": "2021 autumn switch: the Friday before",
+   "session_date": "2021-11-05",
+   "start_utc": "2021-11-04T22:00:00.000Z",
+   "end_utc": "2021-11-05T21:00:00.000Z",
+   "calendar_end_utc": "not covered"
+  },
+  {
+   "label": "2021 autumn switch: Monday (opens Sunday 18:00 standard time)",
+   "session_date": "2021-11-08",
+   "start_utc": "2021-11-07T23:00:00.000Z",
+   "end_utc": "2021-11-08T22:00:00.000Z",
+   "calendar_end_utc": "not covered"
+  },
+  {
+   "label": "a Saturday",
+   "session_date": "2026-01-10",
+   "start_utc": "no session",
+   "end_utc": "no session",
+   "calendar_end_utc": "no session"
+  },
+  {
+   "label": "a Sunday",
+   "session_date": "2026-01-11",
+   "start_utc": "no session",
+   "end_utc": "no session",
+   "calendar_end_utc": "no session"
+  },
+  {
+   "label": "holiday A: the Monday halt",
+   "session_date": "2026-09-07",
+   "start_utc": "2026-09-06T22:00:00.000Z",
+   "end_utc": "2026-09-07T21:00:00.000Z",
+   "calendar_end_utc": "2026-09-07T17:00:00.000Z"
+  },
+  {
+   "label": "holiday A: the Tuesday after",
+   "session_date": "2026-09-08",
+   "start_utc": "2026-09-07T22:00:00.000Z",
+   "end_utc": "2026-09-08T21:00:00.000Z",
+   "calendar_end_utc": "2026-09-08T21:00:00.000Z"
+  },
+  {
+   "label": "holiday B: the Friday halt",
+   "session_date": "2026-06-19",
+   "start_utc": "2026-06-18T22:00:00.000Z",
+   "end_utc": "2026-06-19T21:00:00.000Z",
+   "calendar_end_utc": "2026-06-19T17:00:00.000Z"
+  },
+  {
+   "label": "holiday C: the 09:15 early close",
+   "session_date": "2026-04-03",
+   "start_utc": "2026-04-02T22:00:00.000Z",
+   "end_utc": "2026-04-03T21:00:00.000Z",
+   "calendar_end_utc": "2026-04-03T13:15:00.000Z"
+  },
+  {
+   "label": "holiday D: the closed day",
+   "session_date": "2026-01-01",
+   "start_utc": "2025-12-31T23:00:00.000Z",
+   "end_utc": "2026-01-01T22:00:00.000Z",
+   "calendar_end_utc": "no session"
+  },
+  {
+   "label": "holiday D: the Friday after",
+   "session_date": "2026-01-02",
+   "start_utc": "2026-01-01T23:00:00.000Z",
+   "end_utc": "2026-01-02T22:00:00.000Z",
+   "calendar_end_utc": "2026-01-02T22:00:00.000Z"
+  },
+  {
+   "label": "a Monday of 2025, inside the calendar since 2024 and 2025 were added",
+   "session_date": "2025-05-19",
+   "start_utc": "2025-05-18T22:00:00.000Z",
+   "end_utc": "2025-05-19T21:00:00.000Z",
+   "calendar_end_utc": "2025-05-19T21:00:00.000Z"
+  }
+ ]
+}

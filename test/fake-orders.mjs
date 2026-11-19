@@ -30,6 +30,7 @@ export const KEYS = {
   plan: ['type', 'cid', 'id', 'stopTicks', 'targetTicks'],   // 0.3.8: a resting entry's planned stop and target distances
   cancel: ['type', 'cid', 'id'],
   flatten: ['type', 'cid', 'account', 'root'],
+  cutHalf: ['type', 'cid', 'account', 'root', 'position'],   // release 1 (1.6c): Cut half, the signed position the page showed
 };
 function checkKeys(m) {
   const allowed = KEYS[m.type];
@@ -227,6 +228,37 @@ export class OrderDesk {
     const o = this.orders.get(m.id);
     if (!o || !isWorking(o) || !this.accounts.includes(o.account)) return 'No working order ' + m.id + '.';
     return null;
+  }
+  /** Release 1 (1.6c), PROTOCOL.md "Cut half": an exit like Flatten; the position the page showed must be the position, 2 or more. */
+  check_cutHalf(m) {
+    const why = this.check_flatten(m); if (why) return why;
+    if (!Number.isInteger(m.position)) return 'position must be the signed position the page shows, a plain whole number';
+    const p = this.pos(m.account, m.root).qty;
+    if (p !== m.position) return 'Cut half: the position on ' + m.root + ' ' + m.account + ' is ' + p + ' now, not ' + m.position + '; nothing was sent, look again';
+    if (Math.abs(p) < 2) return 'Cut half needs 2 or more contracts; ' + m.root + ' ' + m.account + ' holds ' + Math.abs(p) + (Math.abs(p) === 1 ? ' (use Flatten)' : '');
+    return null;
+  }
+  /** The legs first (to the size left, newest first, as the legs check), then half at market (the smaller part on an odd size). */
+  do_cutHalf(m) {
+    const p = this.pos(m.account, m.root), held = Math.abs(p.qty), cut = Math.floor(held / 2), keep = held - cut, exit = p.qty > 0 ? 'sell' : 'buy';
+    const units = [];
+    for (const o of this.orders.values()) {
+      if (!isLeg(o) || !isWorking(o) || o.account !== m.account || o.root !== m.root || o.side !== exit) continue;
+      let u = o.oco ? units.find(x => x.oco === o.oco) : null;
+      if (!u) units.push(u = { oco: o.oco, legs: [], left: 0 });
+      u.legs.push(o); u.left = Math.max(u.left, o.qty - o.filled);
+    }
+    let excess = units.reduce((t, u) => t + u.left, 0) - keep;
+    for (let i = units.length - 1; i >= 0 && excess > 0; i--) {
+      const u = units[i];
+      if (u.left <= excess) { for (const o of u.legs) this.cancelOne(o); excess -= u.left; continue; }
+      const k = u.left - excess;
+      for (const o of u.legs) if (o.qty - o.filled > k) { o.qty = o.filled + k; this.emitOrder(o); }
+      excess = 0;
+    }
+    const o = this.newOrder({ cid: m.cid || null, account: m.account, root: m.root, side: exit, kind: 'market', qty: cut, price: null, role: 'other' });
+    this.emitOrder(o);
+    this.matchOne(o, this.last[o.root], true);
   }
   check_flatten(m) {
     if (!this.accounts.includes(m.account)) return 'Account ' + m.account + ' is not allowed to trade (tradeAccounts in config.txt).';

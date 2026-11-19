@@ -78,7 +78,10 @@ function parseRange(v) { const n = typeof v === 'string' && v.trim() !== '' ? Nu
    into this"): a saved layout that had one opens without it (cleanPanel drops a type it does not know). */
 /* 1.37.0 (Anthony 2026-10-22): the Multi-Account panel (live/multi-account.js): the groups' chips and bench, and the copier; at most one
    per layout */
-const TYPES = ['chart', 'tape', 'ticket', 'account', 'quotes', 'databox', 'accounts', 'tags', 'agents', 'multi'];
+/* Release 1 (the lock of 2026-11-15, topic 2): the old Account panel (1.15.0, offered no more since 1.34.0) is removed: a saved
+   layout that still holds one opens without it, quietly (cleanPanel drops a type it does not know, as the Bot panel of 1.35.0).
+   The Account page (live/accounts.js) has its figures. */
+const TYPES = ['chart', 'tape', 'ticket', 'quotes', 'databox', 'accounts', 'tags', 'agents', 'multi'];
 const ONE_EACH = ['ticket', 'agents', 'multi'];
 /* 1.16.0 (Anthony 2026-10-07): the rows a Quote board hides, saved with its panel. Any root name ChartBridge could list (NQ,
    ES, or a quote-only market from hello, such as YM or 6E): kept as typed by the menu, so a root hello no longer lists is
@@ -705,6 +708,7 @@ const TK = {
   price: null, last: {}, priceSeq: 0,                // the ticket's price feed: { root: { p, at, seq } } (its instrument's last trade)
   noteTimer: 0, published: '',
 };
+const MINIS = new Set();                              // release 1 (1.6c): the mini tickets on this window's charts (mountMini, below)
 const FRAMED = (() => { try { return window.top !== window.self; } catch (e) { return true; } })();
 let tws = null, tTries = 0, tTimer = 0, instruments = {};
 const tfills = new Map();                             // 'account|id' -> fill (the order connection's execs)
@@ -738,11 +742,17 @@ const accountPick = () => { try { const v = JSON.parse(store.getItem('live-accou
 const PICK_AT_KEY = 'live-account-at-v1';
 function notePick(a) { try { store.setItem('live-account-v1', JSON.stringify(a)); store.setItem(PICK_AT_KEY, String(Date.now())); } catch (e) { /* blocked */ } }
 
-/* notes: the ticket's own line in the ticket's window, else the top bar's */
+/* the account pickers of the ticket and of this window's mini tickets (release 1, 1.6c: the same choice) */
+function syncBars() {
+  if (TK.bar) TK.bar.syncTradeAccounts();
+  for (const m of MINIS) if (m.bar) m.bar.syncTradeAccounts();
+}
+/* notes: the ticket's own line in the ticket's window, else the top bar's; release 1: a mini ticket shows the ticket's notes too */
 function tnote(text, level) {
   if (capture) capture.push(text);
   // the ticket shows its last fill on its own line: a "Filled ..." note would only repeat it (1.13.0, Anthony)
   if (holds() && TK.el && !level && /^(Part filled|Filled) /.test(text || '')) return;
+  if (holds()) for (const m of MINIS) if (m.mode === 'live') miniNote(m, text, level);
   if (holds() && TK.el) {
     const el = tk('note');
     el.textContent = text || ''; el.className = 'tk-note' + (level ? ' ' + level : ''); el.title = text || '';
@@ -772,7 +782,7 @@ function syncGroupPicks() {
   try { core.groupsChanged(); } catch (e) { /* the ticket's notes only */ }   // review 7: a member that left the group mid trade
   if (k === groupPickKey) return;
   groupPickKey = k;
-  if (TK.bar) TK.bar.syncTradeAccounts();
+  syncBars();
   try { followHolder(); noTicketAccount(); } catch (e) { /* core is made below; the feed may call this first */ }
 }
 /* the v3 connection's switches to the ticket (each control shows only while its switch is on), only when they change */
@@ -796,8 +806,8 @@ const core = TC.create({
   tick: tickOf, served: r => !Object.keys(instruments).length || !!instruments[r], fmt: p => fmtPx(p),
   flash: tnote, later: tlater, destroyed: () => false,
   changed: () => renderOrders(), armed: on => ticketArmedUi(on),
-  applied: (pick, cameOn) => { if (TK.bar) TK.bar.syncTradeAccounts(); if (holds() && core.TR.enabled && (cameOn || pick.missed)) ticketAccountNote(pick); /* None too: it says pick an account */ deskCheck(); renderOrders(); },
-  lost: () => {}, syncAccounts: () => { if (TK.bar) TK.bar.syncTradeAccounts(); },
+  applied: (pick, cameOn) => { syncBars(); if (holds() && core.TR.enabled && (cameOn || pick.missed)) ticketAccountNote(pick); /* None too: it says pick an account */ deskCheck(); renderOrders(); },
+  lost: () => {}, syncAccounts: () => syncBars(),
   batch: () => { if (TK.bar) TK.bar.renderBatch(); }, unsent: renderUnsent, positionChanged: () => {},
   armBlocked: () => (holds() ? '' : 'The order ticket is in another window: arm it there.'),
   /* NO STOP (1.13.0): asked in this window (the one Anthony is looking at); a click forwarded from another window was
@@ -890,9 +900,11 @@ function tmessage(m) {
       if (AF) AF.start(bridgeFeatures);                  // 1.16.0: the window's v3 connection (only when ChartBridge speaks v3)
       for (const v of views.values()) if (v.quotes && v.quotes.sync) v.quotes.sync();   // the quote-only markets hello lists
       renderOrders();
-      if (botDesk) botDesk.hello(m);                      // 1.16.0: the Bot tab says what an older ChartBridge lacks
-      if (agentDesk) agentDesk.hello(m);                  // 1.17.0: the Agent tab too (agents need ChartBridge 0.5.0)
-      if (fleetView) fleetView.hello(m);                  // 1.45.0: the Legion tab shows with ChartBridge 0.6.17
+      /* release 1: the ticket has its hello above; each tab hears it inside its own guard */
+      if (botDesk) startGuard('Bot tab', () => botDesk.hello(m));        // 1.16.0: the Bot tab says what an older ChartBridge lacks
+      if (agentDesk) startGuard('Agent tab', () => agentDesk.hello(m));  // 1.17.0: the Agent tab too (agents need ChartBridge 0.5.0)
+      /* plan step 3.2: Legion is its own page (legion.html); its link is offered with a ChartBridge that speaks v3 */
+      if ($('wsLegion')) $('wsLegion').hidden = !(Array.isArray(m.features) && m.features.includes('v3'));
       return;
     case 'execs': tfills.clear(); for (const f of m.list || []) if (f && f.id) tfills.set(f.account + '|' + f.id, f); renderOrders(); return;
     case 'pcClock': pcClock = pcClockOf(m); syncStats(); return;   // 1.24.0: a new check of this PC's clock (every 5 minutes)
@@ -979,9 +991,9 @@ function chartTrade(v) {
 function renderCharts() { for (const v of chartViews()) v.pane.setTrade(chartTrade(v)); }
 function renderOrders() {
   if (holds() && TK.bar) { TK.bar.render(); renderTicketExtras(); publish(); }
+  renderMinis();                                         // release 1 (1.6c): the mini tickets on this window's charts
   renderCharts();
   renderLimits();                                        // 1.16.0: the ticket's account may have changed
-  renderAccounts();                                      // 1.15.0: the Account panels
   renderTags();                                          // 1.34.0: the Trade tags panels
   renderFlat();
   syncTitle();
@@ -1044,8 +1056,9 @@ function chartAction(action) {
   if (holds()) { actHere(action); renderOrders(); return; }  // its note is on the ticket's notes line
   forward(withMembers(action));                                // 1.43.0: a group line's members as this window drew them
 }
-function forward(action) {
-  if (!link) { note(TL.NO_CHANNEL, true, 8000); renderCharts(); return; }
+function forward(action, done) {
+  const told = r => { if (typeof done === 'function') done(r); };   // release 1 (1.6c): the mini ticket's note says the answer too
+  if (!link) { note(TL.NO_CHANNEL, true, 8000); told({ answered: false, sent: 0, note: TL.NO_CHANNEL }); renderCharts(); return; }
   /* NO STOP: the ticket's window has a stop of 0 and has not been told "Send" yet; an order that opens or adds is asked
      about here, where Anthony clicked, and goes with his answer (the ticket's window never asks for another window) */
   const hd = holder(), side = action.kind === 'place' ? action.side : action.kind === 'buy' || action.kind === 'sell' ? action.kind : '';
@@ -1056,13 +1069,14 @@ function forward(action) {
          window refuses it for another, or after a Close or Flatten of that instrument since (F2 review, re-review) */
       const asked = { root: hd.root, account: hd.account, askedAt: Date.now() };
       askNoStop('The ' + hd.root + ' order has no stop (the order ticket\'s bracket stop is 0). Later orders with no stop go without asking.',
-        () => forward(Object.assign({}, action, { noStopOk: true }, asked)), () => { note('Not sent: no stop.', true); renderCharts(); }, Object.assign({ fwd: true }, asked));
+        () => forward(Object.assign({}, action, { noStopOk: true }, asked), done), () => { note('Not sent: no stop.', true); told({ answered: false, sent: 0, note: 'Not sent: no stop.' }); renderCharts(); }, Object.assign({ fwd: true }, asked));
       return;
     }
   }
   link.forward(action).then(r => {
     if (!r.answered || !r.sent) note(r.note || 'Nothing was sent.', true, 8000);
     else note(r.note, false, 6000);
+    told(r);
     /* 1.22.0 (F2 in this window too): an entry's move the ticket's window sent waits here as there, drawn at the dropped
        price, so a planned line dragged here meanwhile is measured from it. Ended by this window's own order messages,
        orders list or drop, or the 5 s limit (a refusal comes back as the note above, from the ticket's window) */
@@ -1078,7 +1092,7 @@ function actHere(a) {
   try {
     const R = ticketRoot(), plan = typeof a.id === 'string' ? OT.planIdOf(a.id) : null, oid = plan ? plan.entry : a.id;
     const mem = Array.isArray(a.members) ? a.members.filter(x => typeof x === 'string').slice(0, 200) : undefined;   // 1.43.0: a group line's members as drawn
-    const otherRoot = !!a.root && a.root !== R && ['place', 'placeTyped', 'move', 'cancel', 'planAdd', 'buy', 'sell'].includes(a.kind);
+    const otherRoot = !!a.root && a.root !== R && ['place', 'placeTyped', 'move', 'cancel', 'planAdd', 'buy', 'sell', 'be', 'merge', 'cutHalf', 'cancelAll'].includes(a.kind);   // release 1: the mini ticket's buttons name its chart's instrument
     // asked in the window it came from, and Anthony said Send: only for the instrument and account he was asked about,
     // and not when a Close or Flatten of it went out after he was asked (F2 review, re-review)
     const otherAcct = a.noStopOk === true && !!a.account && a.account !== core.TR.account;
@@ -1086,7 +1100,7 @@ function actHere(a) {
     if (a.noStopOk === true && !otherRoot && !otherAcct && !stale) core.allowNoStop();
     if (otherRoot) tnote('Not sent: the order ticket is on ' + R + ' now, not ' + a.root + '.', 'warn');
     else if (otherAcct) tnote('Not sent: the order ticket is on ' + core.TR.account + ' now, not ' + a.account + '.', 'warn');
-    else if (stale) tnote('Not sent: a Close or Flatten of ' + R + ' went out after that order was asked about. Send it again to be asked.', 'warn');
+    else if (stale) tnote('Not sent: a Flatten of ' + R + ' went out after that order was asked about. Send it again to be asked.', 'warn');
     else if ((a.kind === 'move' || a.kind === 'cancel' || a.kind === 'planAdd') && core.TR.orders.has(oid) && core.TR.orders.get(oid).root !== R) tnote('Not sent: that order is not on ' + R + '.', 'warn');
     else if (a.kind === 'place' && (a.side === 'buy' || a.side === 'sell') && isFinite(a.price)) core.placeChecked(a.side, ['limit', 'stop', 'stopLimit', 'mit'].includes(a.orderKind) ? a.orderKind : null, +a.price);
     /* 1.16.0: a Buy or Sell key with an entry-type modifier held, at the price under the mouse: the kind by the ticket's own
@@ -1102,6 +1116,8 @@ function actHere(a) {
     else if (a.kind === 'buy') core.sendOrder('buy', 'market', null);
     else if (a.kind === 'sell') core.sendOrder('sell', 'market', null);
     else if (a.kind === 'be') core.breakEven();
+    else if (a.kind === 'cutHalf') core.cutHalf();                 // release 1 (1.6c): the Cut half key or a mini ticket in another window
+    else if (a.kind === 'cancelAll') core.cancelAll();             // release 1 (1.6c): a mini ticket's Cancel all in another window
   } finally { capture = was; }
   const cid = core.lastCid() !== cid0 ? core.lastCid() : '';
   return { sent: sentCount - before, note: notes.length ? notes[notes.length - 1] : '', cid };
@@ -1124,6 +1140,7 @@ function pressOffText(root) {
 }
 const tradeHost = {
   pressOff: root => pressOffText(root),
+  mini: o => mountMini(o),                                      // release 1 (1.6c): the mini ticket indicator on a chart
   /* 1.16.0: an entry-type modifier held on the click (orderTypes on) turns the chart's limit or stop into that entry type,
      on the same side of the market (OrderStrategies.kindFor); Shift+click alone places what it always has */
   place: (side, price, root, kind, mods) => {
@@ -1283,6 +1300,10 @@ function holdLine(v) {
 }
 const placeholderKind = () => !(link && locks) ? 'none' : holder() ? 'elsewhere' : 'free';
 const tk = id => TK.view ? TK.view[id] || null : null;
+/* the ticket panel's height (its content box, the header in it) under which the ticket is compact: a strategy's ticket (its
+   description, the position and a managed line of two) needs about 400 px at full size; the default 2 x 3 panel is 353 px at
+   1366 x 768 (compact) and taller at 1920 x 1080 (as before) */
+const TICKET_SHORT = 400;
 function mountTicket(v) {
   v.mode = 'live';
   const opt = r => `<option value="${r}">${r}</option>`;
@@ -1301,7 +1322,7 @@ function mountTicket(v) {
       <span class="seg sans bunit" data-tk-id="bUnit" role="group" aria-label="Bracket stop and target in ticks or points"><button type="button" data-v="t" title="Ticks">t</button><button type="button" data-v="pt" title="Points">pt</button></span>
       <span class="nostop" data-tk-id="bNoStop" title="The stop is 0: an order sent now has no stop" hidden>NO STOP</span></div>
     <div class="tk-row tk-two"><button type="button" class="obtn buy" data-tk-id="buyMkt">Buy MKT</button><button type="button" class="obtn sell" data-tk-id="sellMkt">Sell MKT</button></div>
-    <div class="tk-row tk-three"><button type="button" class="btn" data-tk-id="beBtn" title="Move the stop to break-even">B/E</button><button type="button" class="btn" data-tk-id="flattenBtn" title="Close: cancel every working order on this account and instrument, then close the position at market. Works with Armed off.">Close</button><button type="button" class="btn" data-tk-id="cancelAllBtn" title="Cancel every working order on this account and instrument">Cancel all</button><button type="button" class="btn" data-tk-id="mergeBtn" hidden>Merge</button></div>
+    <div class="tk-row tk-three"><button type="button" class="btn" data-tk-id="beBtn" title="Move the stop to break-even">B/E</button><button type="button" class="btn" data-tk-id="flattenBtn" title="Flatten: cancel every working order on this account and instrument, then close the position at market. Works with Armed off.">Flatten</button><button type="button" class="btn" data-tk-id="cutHalfBtn" title="Cut half">Cut half</button><button type="button" class="btn" data-tk-id="cancelAllBtn" title="Cancel every working order on this account and instrument">Cancel all</button><button type="button" class="btn" data-tk-id="mergeBtn" hidden>Merge</button></div>
     <div class="tk-state ostate">
       <span class="oinfo" data-tk-id="oPos"></span><span class="oinfo olegs" data-tk-id="oLegs"></span><span class="oinfo dim tk-room" data-tk-id="room"></span>
       <span class="oinfo tk-v3" data-tk-id="managed" role="status"></span><span class="oinfo tk-v3" data-tk-id="mergeLine" role="status"></span><span class="oinfo tk-fill" data-tk-id="fill"></span>
@@ -1313,13 +1334,18 @@ function mountTicket(v) {
   const map = {};
   for (const el of v.body.querySelectorAll('[data-tk-id]')) map[el.dataset.tkId] = el;
   map.unsentBar = $('wsUnsent'); map.unsentText = $('wsUnsentText'); map.unsentClose = document.createElement('button');   // the window's own note (one per window)
-  TK.view = map; TK.el = v.body.firstChild;
+  TK.view = map; TK.el = v.body.firstChild; TK.v3 = {};
+  /* a short ticket panel (the default 2 x 3 at 1366 x 768) is compact: release 1 (1.6c) put B/E, Flatten, Cut half, Cancel all
+     and Merge in a grid of three, a second row of buttons, and the managed line (the bar trail warning, 1.42) went below the
+     panel. Compact gives the room back: by the panel's size only, never by what the ticket shows, so no control moves mid-trade */
+  const unfit = fitPanel(v, (w, h) => ({ 'tk-short': h < TICKET_SHORT }));
+  v.cleanups.push(() => { unfit(); v.el.classList.remove('tk-short'); });
   map.root.value = TK.root;
   TK.bar = TC.wire(id => map[id] || null, core, {
     U, LP, prefix: PREFIX, ticket: true, root: () => TK.root, flash: tnote, render: () => renderOrders(), listen: (t, type, fn) => { t.addEventListener(type, fn); v.cleanups.push(() => t.removeEventListener(type, fn)); },
     tick: tickOf, lastPrice: () => (TK.last[TK.root] ? TK.last[TK.root].p : null), pointValue: r => (instruments[r] || {}).pointValue || 0, precision: () => precisionOf(TK.root),
     pickViewAccount: a => { notePick(a); renderOrders(); },
-    accountPicked: a => { notePick(a); renderOrders(); },
+    accountPicked: a => { notePick(a); syncBars(); renderOrders(); },   // release 1 (1.6c): the mini tickets' pickers show it too
     clearAccountNote: () => { map.oAcctNote.textContent = ''; map.oAcctNote.title = ''; },
     armBlocked: () => (holds() ? '' : 'The order ticket is in another window: arm it there.'),
   });
@@ -1332,7 +1358,7 @@ function mountTicket(v) {
     startTicketPrice();
     renderOrders();
   });
-  /* "Also open": the ticket's account on another instrument, each with its own Close */
+  /* "Also open": the ticket's account on another instrument, each with its own Flatten (Close until release 1) */
   map.also.addEventListener('click', e => {
     const b = e.target.closest('button[data-close]');
     if (!b) return;
@@ -1390,7 +1416,7 @@ function renderTicketExtras() {
   const el = tk('also');
   if (el.dataset.key === key) return;
   el.dataset.key = key;
-  el.innerHTML = rows.map(x => `<span class="tk-also-row"><span>Also open: ${esc(x.text)}</span><button type="button" class="btn" data-close="${x.root}" title="Close ${x.root}: cancel its orders and close its position at market on ${esc(acct)}">Close</button></span>`).join('');
+  el.innerHTML = rows.map(x => `<span class="tk-also-row"><span>Also open: ${esc(x.text)}</span><button type="button" class="btn" data-close="${x.root}" title="Flatten ${x.root}: cancel its orders and close its position at market on ${esc(acct)}">Flatten</button></span>`).join('');
 }
 /* 1.34.0 (Anthony 2026-10-20): the ticket says the account's room where its rules give it (ChartBridge's own numbers: the daily
    room and the room to the floor, as the Account page's Room column), and this entry's risk at its stop (Qty x the bracket's stop,
@@ -1438,9 +1464,218 @@ function stopTicketPrice() {
   const P = TK.price; TK.price = null;
   if (P) { P.sock.onmessage = P.sock.onclose = null; try { P.sock.close(); } catch (e) { /* closed */ } }
 }
-setInterval(() => { if (holds() && TK.bar) { core.groupProjectTick(); TK.bar.renderPositionInfo(); renderRoom(); } }, 500);   // 1.34.0: the room as ChartBridge's numbers change   // the P&L, as the single chart page's; 1.34.0: a group's projected sizes
+setInterval(() => { if (holds() && TK.bar) { core.groupProjectTick(); TK.bar.renderPositionInfo(); renderRoom(); for (const m of MINIS) if (m.mode === 'live' && m.bar) m.bar.renderPositionInfo(); } }, 500);   // 1.34.0: the room as ChartBridge's numbers change   // the P&L, as the single chart page's; 1.34.0: a group's projected sizes
 
-/* ---------------- hotkeys: in either window. Buy, Sell and B/E go to the ticket's window; Close and Flatten all go from
+/* ======================================================================== the mini ticket (release 1, Bot-Lab plan step 1.6c)
+ * Anthony 2026-11-17 (the mockup; "lets lock this in as part of the larger build"): an indicator added from a chart's
+ * Indicators menu (Mini ticket, under Trades), dragged anywhere on the chart by its grip, its spot kept per chart
+ * (live-mini-ticket-v1 { <paneId>: { x, y } }, CSS px from the chart's top left corner). Compact by default: Armed, Qty, Buy MKT,
+ * Sell MKT, Flatten, Cut half, Merge and the position, with no account picker; the arrow expands it to every control of the
+ * regular ticket, with the account or group picker (the same choice). It is NOT a second ticket:
+ *   - in the ticket's window its controls are the ticket's own, wired a second time to the same TradeCore (TC.wire): the same
+ *     account or group, Armed switch, Qty, bracket and strategy, the same order path and the same checks;
+ *   - in a window without the ticket its order buttons are forwarded to the ticket's window like the ticket's chart clicks and
+ *     keys (TicketLink: Buy, Sell, B/E, Cut half, Cancel all, Merge), and Flatten goes from this window as the Flatten key
+ *     does; what only the ticket's window sets (Armed, the account, Qty, the bracket, the strategy) is shown, and set there.
+ * It acts only while its chart is on the ticket's instrument; on another it says so and every order button is off.
+ * Merge shows in both views, gated as on the ticket (the merge switch on; Armed; two or more stops working).
+ */
+const MINI_KEY = 'live-mini-ticket-v1';
+const MINI_W = 272, MINI_W_OPEN = 300, MINI_AXIS = 72;   // the mockup's widths; the default spot keeps clear of the price axis
+const miniSpots = () => { try { const v = JSON.parse(store.getItem(MINI_KEY)); return v && typeof v === 'object' && !Array.isArray(v) ? v : {}; } catch (e) { return {}; } };
+function saveMiniSpot(id, x, y) {
+  const all = miniSpots();                              // read fresh: another chart's spot is kept
+  all[id] = { x: Math.round(x), y: Math.round(y) };
+  try { store.setItem(MINI_KEY, JSON.stringify(all)); } catch (e) { /* blocked: the spot holds for this page load */ }
+}
+const MINI_GRIP = '<svg width="12" height="16" viewBox="0 0 12 16" aria-hidden="true"><g fill="currentColor"><circle cx="3" cy="3" r="1.4"/><circle cx="9" cy="3" r="1.4"/><circle cx="3" cy="8" r="1.4"/><circle cx="9" cy="8" r="1.4"/><circle cx="3" cy="13" r="1.4"/><circle cx="9" cy="13" r="1.4"/></g></svg>';
+const MINI_CHEV = '<svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M3 5l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+/* One DOM for both views: .mt-x is shown expanded only; expanded, the Qty row and the Buy and Sell row take their own lines in the
+   ticket's order (live/workspace.css .mini-tk). The ids are the ticket's (TradeCore.wire reads them). */
+function miniMarkup() {
+  const qty = [1, 2, 3, 4, 5, 6, 7, 8, 9].map(n => '<option value="' + n + '">' + n + '</option>').join('');
+  return `<div class="tk-row mt-head"><button type="button" class="mt-ic mt-grip" data-mt-id="grip" data-keep aria-label="Drag the mini ticket" title="Drag to move. The spot is kept for this chart.">${MINI_GRIP}</button><span class="mt-root" data-mt-id="rootName"></span><span class="mt-fill"></span><button type="button" class="mt-ic mt-chev" data-mt-id="chev" data-keep aria-expanded="false">${MINI_CHEV}</button></div>
+    <div class="tk-row"><button type="button" class="arm" data-mt-id="armBtn" role="switch" aria-checked="false" title="Armed: the order ticket's own switch. One click trades, no confirmation."><span class="knob" aria-hidden="true"></span><span class="arm-text"><span data-mt-id="armText">Armed off</span></span></button></div>
+    <div class="tk-row tk-acct mt-x mt-acct"><span class="glabel">Account</span><select class="acct-sel acct-main" data-mt-id="oAcct" aria-label="Account or group, the order ticket's: the same choice" title="The order ticket's account or group: changing it here changes it there"></select></div>
+    <div class="tk-row mt-trade"><div class="tk-row mt-qrow"><span class="glabel mt-x">Qty</span><select class="acct-sel oqty" data-mt-id="oQty" aria-label="Order quantity">${qty}</select><span class="ounit mt-x" data-mt-id="oQtyCap"></span>
+      <select class="acct-sel bpre mt-x" data-mt-id="bPreset" aria-label="Bracket preset" title="Bracket preset: a ratio links the target to the stop"></select>
+      <span class="bsave mt-x" data-mt-id="bSaveBox" hidden><input class="oin bname" data-mt-id="bSaveName" type="text" maxlength="24" spellcheck="false" autocomplete="off" aria-label="Name for the bracket preset"><button type="button" class="btn" data-mt-id="bSaveOk">Save</button><button type="button" class="btn" data-mt-id="bSaveNo" aria-label="Do not save">x</button></span></div>
+      <div class="tk-row tk-two mt-bs"><button type="button" class="obtn buy" data-mt-id="buyMkt">Buy MKT</button><button type="button" class="obtn sell" data-mt-id="sellMkt">Sell MKT</button></div></div>
+    <div class="tk-row tk-strat mt-x mt-strat" data-mt-id="stratRow" hidden><span class="glabel">Strategy</span><select class="acct-sel tk-ssel" data-mt-id="strat" aria-label="Order Strategy: Shift+click and the order keys send it" title="Order Strategy: Shift+click, Buy MKT, Sell MKT and their keys send it in place of the bracket. None: the bracket."></select></div>
+    <div class="tk-sdesc mt-x mt-sdesc" data-mt-id="stratDesc" hidden></div>
+    <div class="tk-row tk-bk mt-x mt-bk"><span class="glabel" title="Stop and target from the fill (0 = none)">Bracket</span><input class="oin" data-mt-id="bStop" type="number" min="0" max="200" step="1" inputmode="decimal" aria-label="Bracket stop in ticks, 0 for none" title="Stop, from the fill (0 = none)">
+      <input class="oin" data-mt-id="bTarget" type="number" min="0" max="200" step="1" inputmode="decimal" aria-label="Bracket target in ticks, 0 for none" title="Target, from the fill (0 = none)">
+      <span class="seg sans bunit" data-mt-id="bUnit" role="group" aria-label="Bracket stop and target in ticks or points"><button type="button" data-v="t" title="Ticks">t</button><button type="button" data-v="pt" title="Points">pt</button></span>
+      <span class="nostop" data-mt-id="bNoStop" title="The stop is 0: an order sent now has no stop" hidden>NO STOP</span></div>
+    <div class="tk-row tk-three mt-btns"><button type="button" class="btn mt-x" data-mt-id="beBtn" title="Move the stop to break-even">B/E</button><button type="button" class="btn" data-mt-id="flattenBtn" title="Flatten: cancel every working order on this account and instrument, then close the position at market. Works with Armed off.">Flatten</button><button type="button" class="btn" data-mt-id="cutHalfBtn" title="Cut half">Cut half</button><button type="button" class="btn mt-x" data-mt-id="cancelAllBtn" title="Cancel every working order on this account and instrument">Cancel all</button><button type="button" class="btn" data-mt-id="mergeBtn" hidden>Merge</button></div>
+    <div class="tk-state ostate mt-state"><span class="oinfo" data-mt-id="oPos"></span><span class="oinfo olegs" data-mt-id="oLegs"></span><span class="oinfo tk-v3 mt-x" data-mt-id="managed" role="status"></span><span class="oinfo tk-v3" data-mt-id="mergeLine" role="status"></span>
+      <span class="oinfo dim oother mt-x" data-mt-id="oOther"></span><span class="oinfo acct-note mt-x" data-mt-id="oAcctNote" role="status"></span><span class="oinfo acct-note batch-note mt-x" data-mt-id="oCancel" role="status"></span><span class="ooff" data-mt-id="oOff"></span>
+      <span class="oinfo mt-away" data-mt-id="away" role="status"></span><span class="tk-note" data-mt-id="note" role="status"></span></div>`;
+}
+/* the instrument the ticket is on is not this chart's: the mini ticket sends nothing */
+const miniAway = m => m.root() !== ticketRoot();
+function miniNote(m, text, level) {
+  const el = m.map && m.map.note;
+  if (!el) return;
+  el.textContent = text || ''; el.className = 'tk-note' + (level ? ' ' + level : ''); el.title = text || '';
+  clearTimeout(m.noteTimer);
+  if (text) m.noteTimer = setTimeout(() => { if (el.textContent === text) { el.textContent = ''; el.title = ''; } }, level === 'error' ? 12000 : 6000);
+}
+/** Draw a mini ticket in a chart's stage (ChartLive.mount's trade.mini): { stage, paneId, root }. Returns its undo. */
+function mountMini(o) {
+  const m = { paneId: o.paneId, root: typeof o.root === 'function' ? o.root : () => 'MNQ', stage: o.stage, open: false, mode: '', map: null, bar: null, cleanups: [], outer: [], spot: null, noteTimer: 0, v3: {} };
+  const s = miniSpots()[m.paneId];
+  if (s && isFinite(s.x) && isFinite(s.y)) m.spot = { x: +s.x, y: +s.y };
+  m.el = document.createElement('section');
+  m.el.className = 'obar tk-bar mini-tk';
+  m.el.setAttribute('aria-label', 'Mini order ticket');
+  o.stage.appendChild(m.el);
+  if (typeof ResizeObserver === 'function') { const ro = new ResizeObserver(() => placeMini(m)); ro.observe(o.stage); m.outer.push(() => ro.disconnect()); }
+  MINIS.add(m);
+  buildMini(m);
+  renderMini(m);
+  return () => { for (const f of m.cleanups.splice(0)) f(); for (const f of m.outer.splice(0)) f(); clearTimeout(m.noteTimer); MINIS.delete(m); m.el.remove(); };
+}
+/* Its spot: the saved one, kept inside the chart (clamped when the chart is smaller); first time: the top right, clear of the axis */
+function placeMini(m) {
+  const sw = m.stage.clientWidth, sh = m.stage.clientHeight, w = m.el.offsetWidth || (m.open ? MINI_W_OPEN : MINI_W), h = m.el.offsetHeight || 0;
+  const want = m.spot || { x: sw - w - MINI_AXIS, y: 8 };
+  const x = Math.max(0, Math.min(Math.max(0, sw - w), want.x)), y = Math.max(0, Math.min(Math.max(0, sh - h), want.y));
+  m.el.style.left = x + 'px'; m.el.style.top = y + 'px';
+}
+function buildMini(m) {
+  for (const f of m.cleanups.splice(0)) f();
+  m.mode = holds() ? 'live' : 'remote';
+  m.v3 = {};
+  m.el.innerHTML = miniMarkup();
+  const map = {};
+  for (const el of m.el.querySelectorAll('[data-mt-id]')) map[el.dataset.mtId] = el;
+  map.obar = m.el;
+  map.unsentBar = $('wsUnsent'); map.unsentText = $('wsUnsentText'); map.unsentClose = document.createElement('button');   // the window's own note
+  m.map = map; m.bar = null;
+  const listen = (t, type, fn, cap) => { t.addEventListener(type, fn, cap); m.cleanups.push(() => t.removeEventListener(type, fn, cap)); };
+  /* the arrow: compact or every control */
+  listen(map.chev, 'click', e => { e.currentTarget.blur(); m.open = !m.open; renderMini(m); });
+  /* the grip: drag anywhere on the chart, kept for this chart */
+  listen(map.grip, 'pointerdown', e => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    try { map.grip.setPointerCapture(e.pointerId); } catch (err) { /* not capturable: the moves still come while over it */ }
+    const r = m.el.getBoundingClientRect(), sr = m.stage.getBoundingClientRect();
+    m.drag = { dx: e.clientX - r.left, dy: e.clientY - r.top, sx: sr.left, sy: sr.top };
+    m.el.classList.add('is-drag');
+  });
+  listen(map.grip, 'pointermove', e => {
+    if (!m.drag) return;
+    m.spot = { x: e.clientX - m.drag.sx - m.drag.dx, y: e.clientY - m.drag.sy - m.drag.dy };
+    placeMini(m);
+  });
+  const drop = () => {
+    if (!m.drag) return;
+    m.drag = null; m.el.classList.remove('is-drag');
+    m.spot = { x: parseFloat(m.el.style.left) || 0, y: parseFloat(m.el.style.top) || 0 };   // where it was kept inside the chart
+    saveMiniSpot(m.paneId, m.spot.x, m.spot.y);
+  };
+  listen(map.grip, 'pointerup', drop); listen(map.grip, 'pointercancel', drop); listen(map.grip, 'lostpointercapture', drop);
+  /* a chart not on the ticket's instrument sends nothing: caught before any order button's own handler (capture) */
+  listen(m.el, 'click', e => {
+    const b = e.target.closest('button');
+    if (!b || b.hasAttribute('data-keep') || !miniAway(m)) return;
+    e.stopImmediatePropagation(); e.preventDefault(); b.blur();
+    miniNote(m, miniAwayText(m), 'warn');
+  }, true);
+  if (m.mode === 'live') {
+    m.bar = TC.wire(id => map[id] || null, core, {
+      U, LP, prefix: PREFIX, ticket: true, root: () => TK.root, flash: tnote, render: () => renderOrders(), listen,
+      tick: tickOf, lastPrice: () => (TK.last[TK.root] ? TK.last[TK.root].p : null), pointValue: r => (instruments[r] || {}).pointValue || 0, precision: () => precisionOf(TK.root),
+      pickViewAccount: a => { notePick(a); renderOrders(); },
+      accountPicked: a => { notePick(a); syncBars(); renderOrders(); },   // release 1 (1.6c): the mini tickets' pickers show it too
+      clearAccountNote: () => { if (TK.view) { tk('oAcctNote').textContent = ''; tk('oAcctNote').title = ''; } },
+      armBlocked: () => (holds() ? '' : 'The order ticket is in another window: arm it there.'),
+    });
+    listen(map.strat, 'change', () => { m.bar.handBack(map.strat); pickStrategy(map.strat.value); });
+    listen(map.mergeBtn, 'click', e => {
+      e.currentTarget.blur();
+      if (e.detail === 0) { tnote('Order buttons work by click only, not by keyboard.', 'warn'); return; }
+      core.merge();
+    });
+    for (const k of ['bStop', 'bTarget', 'bPreset']) for (const t of ['input', 'change']) listen(map[k], t, () => setTimeout(publish, 0));
+    m.bar.syncTradeAccounts();
+  } else {
+    /* another window has the ticket (or none has): forwarded there, as its chart clicks and keys; Flatten goes from here, as the key */
+    const click = fn => e => { e.currentTarget.blur(); if (e.detail === 0) { miniNote(m, 'Order buttons work by click only, not by keyboard.', 'warn'); return; } fn(); };
+    const fwd = kind => click(() => forward({ kind, root: m.root() }, r => miniNote(m, r.note || (r.sent ? '' : 'Nothing was sent.'), r.answered && r.sent ? '' : 'warn')));
+    listen(map.buyMkt, 'click', fwd('buy')); listen(map.sellMkt, 'click', fwd('sell')); listen(map.beBtn, 'click', fwd('be'));
+    listen(map.cutHalfBtn, 'click', fwd('cutHalf')); listen(map.cancelAllBtn, 'click', fwd('cancelAll')); listen(map.mergeBtn, 'click', fwd('merge'));
+    listen(map.flattenBtn, 'click', click(() => { const was = capture, notes = []; capture = notes; try { core.flattenHere(); } finally { capture = was; } miniNote(m, notes[notes.length - 1] || '', ''); renderOrders(); }));
+    listen(map.armBtn, 'click', e => { e.currentTarget.blur(); miniNote(m, holder() ? 'Armed is the order ticket\'s: arm it in the ticket\'s window.' : TL.NO_TICKET, 'warn'); });
+  }
+}
+function miniAwayText(m) { return 'The order ticket is on ' + ticketRoot() + ': this chart is ' + m.root() + '. Switch the ticket to ' + m.root() + ' to trade from here.'; }
+function renderMinis() { for (const m of MINIS) renderMini(m); }
+function renderMini(m) {
+  if (m.mode !== (holds() ? 'live' : 'remote')) buildMini(m);   // the ticket came or went: the other wiring
+  const map = m.map, away = miniAway(m), R = m.root();
+  m.el.classList.toggle('is-open', m.open);
+  if (map.rootName.textContent !== R) map.rootName.textContent = R;
+  const ct = m.open ? 'Show less' : 'Show every control';
+  map.chev.setAttribute('aria-expanded', String(m.open)); map.chev.setAttribute('aria-label', ct); map.chev.title = ct;
+  if (m.mode === 'live') {
+    m.bar.render();
+    renderV3Into(id => map[id] || null, m.v3);
+    miniArmed(m, core.TR.armed);
+  } else miniRemote(m);
+  const at = away ? miniAwayText(m) : '';
+  if (map.away.textContent !== at) { map.away.textContent = at; map.away.title = at; }
+  map.away.classList.toggle('warn', away);
+  if (away) for (const el of m.el.querySelectorAll('button, input, select')) if (!el.hasAttribute('data-keep')) el.disabled = true;
+  placeMini(m);
+}
+function miniArmed(m, on) {
+  m.map.armBtn.setAttribute('aria-checked', String(on));
+  m.map.armText.textContent = on ? 'ARMED' : 'Armed off';
+  m.el.classList.toggle('armed', on);
+}
+/* A window without the ticket: the ticket's state as its window announces it, this window's own positions and orders (its own
+   connection follows the ticket's account), nothing set from here. */
+function miniRemote(m) {
+  const map = m.map, TR = core.TR, hd = holder(), R = ticketRoot(), acct = ticketAccount(), on = TR.enabled && !!hd && !!acct, armed = !!(hd && hd.armed);
+  miniArmed(m, armed);
+  map.armBtn.disabled = !TR.enabled;
+  const label = acct ? String(acct).replace(/^group:/, 'group ') : 'None';
+  if (map.oAcct.dataset.v !== acct) { map.oAcct.dataset.v = acct; map.oAcct.replaceChildren(new Option(label, acct)); }
+  map.oAcct.disabled = true; map.oAcct.title = 'The order ticket\'s account or group: change it in the ticket\'s window';
+  const q = hd && Number.isInteger(hd.qty) ? hd.qty : 1;
+  map.oQty.value = String(Math.min(9, Math.max(1, q))); map.oQty.disabled = true; map.oQty.title = 'The order ticket\'s Qty: change it in the ticket\'s window';
+  map.oQtyCap.textContent = '';
+  renderV3Into(id => map[id] || null, m.v3, armed);                // the strategy shown (set in the ticket's window) and Merge
+  for (const k of ['bPreset', 'bStop', 'bTarget', 'strat']) { map[k].disabled = true; map[k].title = 'The order ticket\'s: change it in the ticket\'s window'; }
+  for (const b of map.bUnit.querySelectorAll('button')) b.disabled = true;
+  map.bStop.value = hd && Number.isFinite(hd.stop) ? String(hd.stop) : ''; map.bTarget.value = '';
+  map.bNoStop.hidden = !(hd && hd.stop === 0);
+  for (const id of ['buyMkt', 'sellMkt', 'cancelAllBtn']) { map[id].disabled = !on; map[id].classList.toggle('is-off', !armed); }
+  map.flattenBtn.disabled = !TR.enabled || !acct;
+  const pos = TR.positions.get(acct + '|' + R), legs = pos && pos.qty ? OT.breakEvenLegs(TR.orders.values(), acct, R, pos.qty, null) : null;
+  map.beBtn.disabled = !on || !(legs && legs.ids.length > 0); map.beBtn.classList.toggle('is-off', !armed);
+  const st = core.cutHalfState(R);
+  map.cutHalfBtn.disabled = !st.ok; if (map.cutHalfBtn.title !== st.title) map.cutHalfBtn.title = st.title;
+  map.mergeBtn.disabled = map.mergeBtn.disabled || !hd;
+  /* the position on the ticket's account and instrument, and its stop and target cover (a group: each member's) */
+  let text = 'Flat', lines = '';
+  if (core.isGroup(acct)) text = core.groupMembers(acct).map(a => { const p = TR.positions.get(a + '|' + R); return a + ' ' + (p && p.qty ? (p.qty > 0 ? '+' : '') + p.qty : 'flat'); }).join(' · ');
+  else if (pos && pos.qty) {
+    text = (pos.qty > 0 ? 'LONG ' : 'SHORT ') + Math.abs(pos.qty) + ' at ' + fmtPx(pos.avgPrice, R);
+    lines = OT.protectionLine(OT.legSummary(TR.orders.values(), acct, R, pos.qty)).text;
+  }
+  if (!hd) text = 'No window has the order ticket';
+  if (map.oPos.textContent !== text) { map.oPos.textContent = text; map.oPos.title = text; }
+  map.oPos.className = 'oinfo pz' + (pos && pos.qty && hd ? '' : ' flat');
+  if (map.oLegs.textContent !== lines) map.oLegs.textContent = lines;
+  map.oOff.textContent = TR.enabled ? '' : 'Trading off: ' + TR.reason; map.oOff.hidden = TR.enabled;
+}
+
+/* ---------------- hotkeys: in either window. Buy, Sell, B/E and Cut half (release 1) go to the ticket's window; Flatten (Close until
+   release 1) and Flatten all go from
    this one, on the ticket's account (Anthony 2026-10-01). */
 let HK = OT.cleanHotkeys(prefs.raw.get(LP.KEYS.hotkeys));
 const busy = () => !!pop || $('wsDialog').open || !!document.querySelector('.ws-panel .ind-panel:not([hidden]), .ce-theme-panel:not([hidden]), .ind-chip-list:not([hidden]), .chip-pop:not([hidden]), .cb-pin') || !$('wsSettings').hidden;
@@ -1452,15 +1687,17 @@ const busy = () => !!pop || $('wsDialog').open || !!document.querySelector('.ws-
    proposal it would answer, the Agent tab and the Bot tab (as before this release), and is off under Legion and League.
    Not clearly one or the other, so off under a tab until Anthony rules (the careful side): B/E, Merge, and a strategy's key.
    With no tab open nothing here changes anything. ONE place: both hotkey handlers below go through underTab. */
-/* 1.50.0: the League tab is the Colosseum (its name in the note); 1.51.0: the Agent and Bot tabs are Praetorian's two sides */
-const COVERING_TABS = { 'fl-on': 'Legion', 'ag-on': 'Praetorian', 'bt-on': 'Praetorian', 'lg-on': 'Colosseum' };
+/* plan step 3.2: Legion, the Colosseum and Praetorian's Agent side moved to Legion's own page (legion.html); the Bot tab is the one
+   tab left on the chart page, and it shows the bot's proposal, so Accept stays live under it as before */
+const COVERING_TABS = { 'bt-on': 'Bot' };
 const coveringTab = () => { for (const c of Object.keys(COVERING_TABS)) if (document.body.classList.contains(c)) return COVERING_TABS[c]; return ''; };
-const LIVE_UNDER_TAB = new Set(['close', 'flattenAll', 'reject']);
-const ACCEPT_SHOWN_ON = new Set(['Praetorian']);         // the tabs that show the proposal the Accept key answers
+/* release 1 (1.6c): Cut half only reduces, so it is live under a tab too */
+const LIVE_UNDER_TAB = new Set(['close', 'flattenAll', 'reject', 'cutHalf']);
+const ACCEPT_SHOWN_ON = new Set(['Bot']);                // the tab that shows the proposal the Accept key answers
 const underTab = (id, fn) => () => {
   const t = coveringTab();
   if (t && !LIVE_UNDER_TAB.has(id) && !(id === 'accept' && ACCEPT_SHOWN_ON.has(t))) {
-    note('Hotkey ignored: the ' + t + ' tab covers the chart. Only Close, Flatten all and Reject work under ' + (ACCEPT_SHOWN_ON.has(t) ? 'it, and Accept for a proposal shown on it.' : 'a tab.'), true);
+    note('Hotkey ignored: the ' + t + ' tab covers the chart. Only Flatten, Cut half, Flatten all and Reject work under ' + (ACCEPT_SHOWN_ON.has(t) ? 'it, and Accept for a proposal shown on it.' : 'a tab.'), true);
     return;
   }
   fn();
@@ -1469,7 +1706,7 @@ const underTab = (id, fn) => () => {
 const keyAct = kind => { if (holds()) { actHere({ kind }); renderOrders(); } else { const hd = holder(); forward(kind === 'be' || !hd || !hd.root ? { kind } : { kind, root: hd.root }); } };
 document.addEventListener('keydown', window.ChartLive.hotkeyHandler({
   keys: () => HK, root: document.body, busy,
-  actions: { buy: underTab('buy', () => keyAct('buy')), sell: underTab('sell', () => keyAct('sell')), be: underTab('be', () => keyAct('be')), close: underTab('close', () => core.flattenHere()), flattenAll: underTab('flattenAll', () => core.flattenAll()) },
+  actions: { buy: underTab('buy', () => keyAct('buy')), sell: underTab('sell', () => keyAct('sell')), be: underTab('be', () => keyAct('be')), close: underTab('close', () => core.flattenHere()), flattenAll: underTab('flattenAll', () => core.flattenAll()), cutHalf: underTab('cutHalf', () => keyAct('cutHalf')) },
   ignored: () => note(window.ChartLive.HOTKEY_IN_BOX, true),
 }));
 /* 1.16.0: the workspace's own hotkeys (Maximize panel), kept apart from the trading ones (live-ws-keys-v1) and never one
@@ -1502,7 +1739,7 @@ function syncKeys() {
   el.textContent = on ? 'KEYS ON' : 'KEYS OFF';
   el.className = 'ws-keys' + (on ? ' on' : '');
   el.title = (on ? 'A hotkey pressed now works in this window' : 'Hotkeys do nothing now: this window does not have the focus, or a box, menu or dialog has it. Click the page (not a box) to turn them on.') +
-    (core.TR.enabled ? '\nClose: ' + closeTarget() + '. Flatten all: ' + ticketAccount() + '.' : '');
+    (core.TR.enabled ? '\nFlatten: ' + closeTarget() + '. Flatten all: ' + ticketAccount() + '.' : '');
 }
 for (const t of ['focusin', 'focusout', 'pointerup', 'keyup']) document.addEventListener(t, () => setTimeout(syncKeys, 0), true);
 window.addEventListener('focus', syncKeys); window.addEventListener('blur', syncKeys);
@@ -1696,41 +1933,46 @@ function setText(el, text, level, tip) {
   const c = 'oinfo tk-v3' + (level ? ' ' + level : '');
   if (el.className !== c) el.className = c;
 }
-let stratOptsKey = '';
 function renderTicketV3() {
   if (!TK.view) return;
-  const TR = core.TR, sOn = core.switchOn('strategies'), sg = activeStrategy();
-  tk('stratRow').hidden = !sOn;
+  renderV3Into(tk, TK.v3 || (TK.v3 = {}));
+}
+/* release 1 (1.6c): the ticket's and each mini ticket's (get: the control by its id; cache: that view's own; armedShown: the
+   Armed it shows, the ticket's window's when it is another window's) */
+function renderV3Into(get, cache, armedShown) {
+  const TR = core.TR, sOn = core.switchOn('strategies'), sg = activeStrategy(), R = ticketRoot(), acct = ticketAccount();
+  const armed = armedShown === undefined ? TR.armed : armedShown;
+  get('stratRow').hidden = !sOn;
   if (sOn) {
     const list = stratList(), key = list.map(x => x.id + '|' + x.name).join(',');
-    if (key !== stratOptsKey) {
-      stratOptsKey = key;
-      tk('strat').replaceChildren(new Option('None (the bracket)', ''), ...list.map(x => new Option(x.name + (x.hotkey ? ' (' + x.hotkey + ')' : ''), x.id)));
+    if (key !== cache.strat) {
+      cache.strat = key;
+      get('strat').replaceChildren(new Option('None (the bracket)', ''), ...list.map(x => new Option(x.name + (x.hotkey ? ' (' + x.hotkey + ')' : ''), x.id)));
     }
     const v = sg ? sg.id : '';
-    if (tk('strat').value !== v) tk('strat').value = v;
+    if (get('strat').value !== v) get('strat').value = v;
   }
-  tk('stratDesc').hidden = !sg;
-  if (sg) setText(tk('stratDesc'), OS.describe(sg), '');
-  tk('stratDesc').className = 'tk-sdesc';
-  tk('obar').classList.toggle('tk-has-strat', !!sg);           // the bracket boxes and presets step aside (the strategy has its own)
-  const mb = tk('mergeBtn'), mOn = core.switchOn('merge');
+  get('stratDesc').hidden = !sg;
+  if (sg) setText(get('stratDesc'), OS.describe(sg), '');
+  get('stratDesc').className = 'tk-sdesc' + (get('stratDesc').classList.contains('mt-x') ? ' mt-x mt-sdesc' : '');
+  get('obar').classList.toggle('tk-has-strat', !!sg);           // the bracket boxes and presets step aside (the strategy has its own)
+  const mb = get('mergeBtn'), mOn = core.switchOn('merge');
   mb.hidden = !mOn;
   if (mOn) {
-    const pos = TR.positions.get(TR.account + '|' + TK.root), legs = pos && pos.qty ? OT.legSummary(TR.orders.values(), TR.account, TK.root, pos.qty) : null;
+    const pos = TR.positions.get(acct + '|' + R), legs = pos && pos.qty ? OT.legSummary(TR.orders.values(), acct, R, pos.qty) : null;
     const ok = TR.enabled && !!legs && legs.stopLegs >= 2;
     mb.disabled = !ok;
-    mb.classList.toggle('is-off', !TR.armed);
-    const t = ok ? 'Merge: one stop and one target set for the whole ' + TK.root + ' position at the first leg\'s prices (ChartBridge does the swap and puts the brackets back if anything fails)'
+    mb.classList.toggle('is-off', !armed);
+    const t = ok ? 'Merge: one stop and one target set for the whole ' + R + ' position at the first leg\'s prices (ChartBridge does the swap and puts the brackets back if anything fails)'
       : 'Merge needs an open position here with two or more stops working';
     if (mb.title !== t) mb.title = t;
   }
-  const mg = core.managedOf(TR.account, TK.root).map(OS.managedLine).filter(x => x.text);
-  setText(tk('managed'), mg.map(x => x.text).join(' · '), mg.some(x => x.level === 'error') ? 'error' : mg.some(x => x.level === 'warn') ? 'warn' : '', mg.map(x => x.tip || x.text).join(' · '));
-  const pos = TR.positions.get(TR.account + '|' + TK.root);
-  if (!(pos && pos.qty)) TR.merges.delete(TR.account + '|' + TK.root);   // the last Merge is shown while its position is open
-  const ml = OS.mergeLine(TR.merges.get(TR.account + '|' + TK.root));
-  setText(tk('mergeLine'), ml.text, ml.level);
+  const mg = core.managedOf(acct, R).map(OS.managedLine).filter(x => x.text);
+  setText(get('managed'), mg.map(x => x.text).join(' · '), mg.some(x => x.level === 'error') ? 'error' : mg.some(x => x.level === 'warn') ? 'warn' : '', mg.map(x => x.tip || x.text).join(' · '));
+  const pos = TR.positions.get(acct + '|' + R);
+  if (!(pos && pos.qty)) TR.merges.delete(acct + '|' + R);   // the last Merge is shown while its position is open
+  const ml = OS.mergeLine(TR.merges.get(acct + '|' + R));
+  setText(get('mergeLine'), ml.text, ml.level);
 }
 /* another window picked a strategy, or read The Desk */
 window.addEventListener('storage', e => {
@@ -2031,8 +2273,7 @@ function addView(p) {
     mid = '<span class="ws-name">Time and Sales</span><select class="ws-sel" data-act="root" aria-label="Time and Sales instrument">' +
       W.ROOTS.map(r => `<option value="${r}">${r}</option>`).join('') + '</select><span class="ws-fill"></span>' +
       '<button type="button" class="ws-ic" data-act="gear" aria-label="Time and Sales settings: large prints and colors" title="Large prints and colors" aria-expanded="false">⚙</button>';
-  } else if (p.type === 'account') mid = '<span class="ws-name">Account</span><span class="ws-acct" title="The order ticket\'s account"></span><span class="ws-fill"></span>';
-  else if (p.type === 'quotes') mid = '<span class="ws-name">Quote board</span><span class="ws-fill"></span>' +
+  } else if (p.type === 'quotes') mid = '<span class="ws-name">Quote board</span><span class="ws-fill"></span>' +
     '<button type="button" class="ws-ic ws-more" data-act="qbrows" aria-haspopup="true" aria-expanded="false" aria-label="Markets shown on this Quote board" title="Markets shown on this board">⋯</button>';
   else if (p.type === 'databox') mid = '<span class="ws-name">Data Box</span><span class="ws-db-src" title="The chart it follows: the one under the mouse, else the last one"></span><span class="ws-fill"></span>';
   else if (p.type === 'accounts') mid = '<span class="ws-name">Account page</span><span class="ws-fill"></span>';
@@ -2051,7 +2292,6 @@ function addView(p) {
   views.set(p.id, v);
   if (p.type === 'chart') mountChart(v);
   else if (p.type === 'tape') mountTape(v);
-  else if (p.type === 'account') mountAccount(v);        // 1.15.0
   else if (p.type === 'quotes') mountQuotes(v);
   else if (p.type === 'databox') mountDataBox(v);        // 1.16.0
   else if (p.type === 'accounts') mountAccountsPage(v);  // 1.16.0
@@ -2141,7 +2381,7 @@ function addPanel(type) {
   if (type === 'multi' && panels.some(q => q.type === type)) { note('This layout has its Multi-Account panel already', true); return; }
   const r = W.largestFree(panels);
   if (!r) { note('No free space: close or shrink a panel', true); return; }
-  const base = type === 'tape' ? { type: 'tape', root: 'MNQ' } : ['ticket', 'account', 'quotes', 'databox', 'accounts', 'tags', 'agents', 'multi'].includes(type) ? { type } : { type: 'chart', root: 'MNQ', tf: 'm1' };
+  const base = type === 'tape' ? { type: 'tape', root: 'MNQ' } : ['ticket', 'quotes', 'databox', 'accounts', 'tags', 'agents', 'multi'].includes(type) ? { type } : { type: 'chart', root: 'MNQ', tf: 'm1' };
   const p = Object.assign({ id: W.newId() }, base, r);
   panels.push(p);
   addView(p);
@@ -2552,11 +2792,6 @@ function fitPanel(v, classes) {
   return () => ro.disconnect();
 }
 
-/* ---------------- the Account panel: a summary strip for the ticket's account, then Positions, Orders and Fills */
-/* The tabs, in order. A fourth, "Accounts" (the copier, after the cruise: a row per account with its position, P&L and
-   copy on or off), goes here as one more entry with its own render; it is not built. */
-const ACCOUNT_TABS = [{ id: 'pos', name: 'Positions' }, { id: 'ord', name: 'Orders' }, { id: 'fil', name: 'Fills' }];
-const accountViews = () => [...views.values()].filter(v => v.account);
 /* ---------------- 1.34.0 (Anthony 2026-10-21): Trade tags (live/trade-tags.js): one-click chips for what he entered on, with their
    phase from the ticket's account and instrument; records to The Desk. Clicks only; nothing here sends an order. */
 const tagViews = () => [...views.values()].filter(v => v.tags);
@@ -2631,8 +2866,10 @@ function mountAgentsStrip(v) {
   if (!window.AgentsSky || !window.AgentsStrip || !window.AgentsStripCore) { v.body.innerHTML = '<p class="tt-foot warn">Reload this window: its agents-strip.js or agents-sky.js is missing.</p>'; v.destroy = () => {}; return; }
   const offQuote = watchQuote('NQ');   // 1.38.1: NQ (Anthony 2026-10-23); the Quote board watches it too
   const strip = window.AgentsSky.mount(v.body, {
-    day: () => leagueGhostDay(),
-    reach: () => (leagueView && leagueView.shown() ? { problem: leagueView.state().problem, at: 0 } : { problem: LG.problem, at: LG.at }),
+    /* plan step 3.2: the chart page's league poll went with the Colosseum to Legion: no seats here and no league warning */
+    league: false,
+    day: () => null,
+    reach: () => ({}),
     agents: () => (agentDesk && agentDesk.glances ? agentDesk.glances().map(g => ({ a: g.agent, g })) : []),   // one read of the day's fills a tick, for every agent
     nowMs: () => etNowSec() * 1000,
     zoneSec: ms => U.zoneSeconds(ms / 1000),
@@ -2640,137 +2877,18 @@ function mountAgentsStrip(v) {
     pv: r => (instruments[r] && +instruments[r].pointValue > 0 ? +instruments[r].pointValue : null),
     bars: () => { const x = quoteOf('NQ'); return x && x.bars.length ? { root: 'NQ', name: x.name, bars: x.bars } : null; },
     mine: () => myEntries(),
-    openLeague: () => { if (leagueView) leagueView.showTab(true); else note('The Colosseum tab did not start: reload this window', true); },
-    openAgent: id => { if (agentDesk) { agentDesk.choose(id); agentDesk.showTab(true); } },
+    openLeague: () => openLegion('colosseum', ''),
+    openAgent: id => { if (agentDesk) agentDesk.choose(id); openLegion('cohorts', 'praetorian', id); },   // Praetorian's Agent desk is on Legion, on him
     bot: () => (botDesk && botDesk.glance ? botDesk.glance() : null),
     openBot: () => { if (botDesk) botDesk.showTab(true); else note('The Bot tab did not start: reload this window', true); },
   });
   v.strip = strip;
-  syncLeagueGhosts();                                       // the league read runs while a strip is placed
-  v.destroy = () => { offQuote(); strip.destroy(); v.strip = null; setTimeout(syncLeagueGhosts, 0); };
+  v.destroy = () => { offQuote(); strip.destroy(); v.strip = null; };
 }
 setInterval(() => { for (const v of stripViews()) v.strip.render(); }, 1000);   // its clocks and the Agent tab's news (the sky's frames run on their own, only while seen)
 var tagsRaf = 0;                                          // var: renderOrders may run before this line
 function renderTags() { if (!tagsRaf && tagViews().length) tagsRaf = requestAnimationFrame(() => { tagsRaf = 0; for (const v of tagViews()) v.tags.render(); }); }
 setInterval(renderTags, 1000);                            // the session's start and the Desk's answers
-const SIDE_WORD = { buy: 'Buy', sell: 'Sell' };
-function orderTypeName(o) {
-  if (o.plan) return 'Planned ' + (o.plan.role === 'stop' ? 'stop' : 'target');
-  const kind = o.role === 'target' ? 'target' : o.role === 'stop' ? 'stop' : o.kind === 'limit' ? 'limit' : o.kind === 'stop' ? 'stop' : o.kind === 'stopLimit' ? 'stop limit' : o.kind === 'mit' ? 'MIT' : o.kind === 'market' ? 'market' : String(o.kind || 'order');
-  return SIDE_WORD[o.side] + ' ' + kind;
-}
-function mountAccount(v) {
-  v.body.innerHTML = `<div class="ac">
-    <div class="ac-sum" role="group" aria-label="Today on the ticket's account">
-      <div title="Open P&amp;L of the positions now"><span>Open</span><b data-a="open"></b></div><div title="Realized today, from the fills (before commissions)"><span><span class="lb-full">Realized</span><span class="lb-short">Real.</span></span><b data-a="real"></b></div>
-      <div title="Realized and open together"><span>Day</span><b data-a="day"></b></div><div title="Trades today, flat to flat"><span>Trades</span><b data-a="trades"></b></div></div>
-    <div class="ac-tabs" role="tablist" aria-label="Account">${ACCOUNT_TABS.map((t, i) => `<button type="button" role="tab" class="ac-tab" data-tab="${t.id}" aria-selected="${i === 0}">${t.name}<span class="ac-ct" data-ct="${t.id}"></span></button>`).join('')}</div>
-    <div class="ac-list" data-list role="tabpanel"></div>
-    <p class="ac-foot" data-a="foot" title="Close works with Armed off. × needs Armed, as on the chart.">Close works with Armed off. × needs Armed, as on the chart.</p>
-  </div>`;
-  const q = sel => v.body.querySelector(sel);
-  const A = v.account = { tab: 'pos', keys: {}, offs: new Map(), render: null };
-  v.state = 'live';
-  q('.ac-tabs').addEventListener('click', e => {
-    const b = e.target.closest('button[data-tab]'); if (!b) return;
-    b.blur();                                            // the hotkeys work at once (handBack)
-    A.tab = b.dataset.tab;
-    for (const t of v.body.querySelectorAll('.ac-tab[data-tab]')) t.setAttribute('aria-selected', String(t === b));
-    A.keys.list = ''; A.render();
-  });
-  q('[data-list]').addEventListener('click', e => {
-    const b = e.target.closest('button[data-close], button[data-cancel]'); if (!b) return;
-    b.blur();
-    if (e.detail === 0) { note('Order buttons work by click only, not by keyboard.', true); return; }
-    if (b.dataset.close) core.flattenHere(b.dataset.close);                          // the ticket's "Also open" Close
-    /* Anthony (1.15.0): the x cancels an order of ANY instrument: TradeCore's own cancel (needs Armed, the order on the
-       ticket's account and still working), in the ticket's window or forwarded to it as the chart's x is */
-    else chartAction({ kind: 'cancelAny', id: b.dataset.cancel, root: b.dataset.root });
-  });
-  const put = (k, el, text, cls) => { const key = text + '|' + cls; if (A.keys[k] === key) return; A.keys[k] = key; el.textContent = text; el.className = cls || ''; };
-  A.render = () => {
-    const TR = core.TR, acct = ticketAccount(), on = TR.enabled && !!acct, now = etNowSec();
-    /* the prices of the instruments with a position (their open P&L): watched while open */
-    const roots = on ? W.ROOTS.filter(r => { const p = TR.positions.get(acct + '|' + r); return p && p.qty; }) : [];
-    for (const r of roots) if (!A.offs.has(r)) A.offs.set(r, watchQuote(r));
-    for (const [r, off] of A.offs) if (!roots.includes(r)) { off(); A.offs.delete(r); }
-    const pv = r => (instruments[r] || {}).pointValue || 0;
-    let open = 0, openKnown = true;
-    const posRows = roots.map(r => {
-      const p = TR.positions.get(acct + '|' + r), qq = quoteOf(r), last = qq && qq.last !== null ? qq.last : r === ticketRoot() ? ticketPrice(r) : null;
-      const pn = last !== null && last !== undefined ? U.openPnl(p.qty, p.avgPrice, last, pv(r)) : null;
-      if (pn && pn.dollars !== null) open += pn.dollars; else openKnown = false;
-      return { r, p, pn };
-    });
-    const today = on ? W.fillsToday([...tfills.values()], acct, now).map(f => Object.assign({}, f, { qty: +f.qty, p: +f.p, t: +f.t })) : [];
-    /* each instrument's position before today's first fill: what it is now less today's fills (not flat: that first
-       trade began before today and its P&L is not known) */
-    const start = {};
-    for (const r of W.ROOTS) {
-      const p = on ? TR.positions.get(acct + '|' + r) : null, net = today.filter(f => f.root === r).reduce((a, f) => a + (f.side === 'buy' ? 1 : -1) * f.qty, 0);
-      start[r] = (p ? p.qty : 0) - net;
-    }
-    const rt = W.roundTrips(today, pv, start);
-    const day = rt.realized !== null && openKnown ? rt.realized + open : null;
-    const pc = x => (x > 0.004 ? 'up' : x < -0.004 ? 'dn' : '');
-    put('open', q('[data-a="open"]'), !on ? '-' : openKnown ? W.fmtUsd(open) : 'waiting', on && openKnown ? pc(open) : '');
-    put('real', q('[data-a="real"]'), !on ? '-' : rt.realized === null ? 'n/a' : W.fmtUsd(rt.realized), on ? pc(rt.realized) : '');
-    put('day', q('[data-a="day"]'), !on || day === null ? '-' : W.fmtUsd(day), on && day !== null ? pc(day) : '');
-    put('trades', q('[data-a="trades"]'), on ? String(rt.trades) : '-', '');
-    const orders = on ? W.ROOTS.flatMap(r => core.chartOrders(acct, r).map(o => (o.root ? o : Object.assign({}, o, { root: r })))) : [];   // a planned line has no root of its own
-    const counts = { pos: posRows.length, ord: orders.length, fil: today.length };
-    for (const t of ACCOUNT_TABS) put('ct-' + t.id, q(`[data-ct="${t.id}"]`), String(counts[t.id]), 'ac-ct');
-    put('acct', v.el.querySelector('.ws-acct'), acct || 'No account', 'ws-acct');
-    /* the list of the tab shown */
-    /* rows as small grids (as the Quote board): on a narrow panel each pair (.pr) stacks in one cell.
-       1.15.0 (orders review: a Close replaced between press and release lost the click): the rows are built only when the
-       set of rows changes (instruments, order ids, fills); a price or P&L change writes only the text of its cell, so a
-       button is never replaced under the mouse. */
-    const vals = [];
-    const row = (k, cells) => `<div class="gr-row" role="row" data-k="${esc(k)}">${cells}</div>`, head = cells => `<div class="gr-row gr-h" role="row">${cells}</div>`;
-    const c = (text, cls, tip) => `<span role="cell" data-c="${vals.push({ text, cls: cls || '', tip: tip || '' }) - 1}"></span>`;   // a cell whose text changes
-    const pr = (a, b, cls) => `<span class="pr${cls ? ' ' + cls : ''}">${a}${b}</span>`;
-    const st = (html, cls) => `<span class="${cls || ''}" role="cell">${html}</span>`;           // a fixed cell (a button)
-    const h = (text, cls) => `<span class="${cls || ''}" role="columnheader">${text}</span>`;
-    let html;
-    if (!on) html = `<p class="ac-empty">${esc(core.TR.reason || 'Not connected to ChartBridge yet.')}</p>`;
-    else if (A.tab === 'pos') html = !posRows.length ? '<p class="ac-empty">Flat on every instrument.</p>' : '<div class="gr gr-pos" role="table" aria-label="Positions">' +
-      head(pr(h('Inst'), h('Qty', 'r')) + h('Avg', 'r') + pr(h('Open pt', 'r'), h('Open $', 'r'), 'r') + h('<span class="visually-hidden">Close</span>')) +
-      posRows.map(({ r, p, pn }) => row(r, pr(c(r, 'b'), c((p.qty > 0 ? '+' : '-') + Math.abs(p.qty), 'r ' + (p.qty > 0 ? 'up' : 'dn'))) + c(U.fmtPrice(p.avgPrice, precisionOf(r)), 'r') +
-        pr(c(pn ? W.fmtSignedNum(pn.points, precisionOf(r)) : '', 'r ' + (pn ? pc(pn.points) : '')), c(pn && pn.dollars !== null ? W.fmtUsd(pn.dollars) : '', 'r ' + (pn ? pc(pn.dollars) : '')), 'r') +
-        st(`<button type="button" class="ac-btn ac-close" data-close="${r}" title="Close ${r}: cancel its orders and close its position at market on ${esc(acct)}. Works with Armed off.">Close</button>`, 'r'))).join('') + '</div>';
-    else if (A.tab === 'ord') html = !orders.length ? '<p class="ac-empty">No working orders.</p>' : '<div class="gr gr-ord" role="table" aria-label="Working orders">' +
-      head(pr(h('Inst'), h('Qty', 'r')) + pr(h('Order'), h('Price', 'r'), 'r2') + h('<span class="visually-hidden">Cancel</span>')) +
-      orders.map(o => row(o.id, pr(c(o.root || '', 'b'), c(String(Math.max(0, (+o.qty || 0) - (+o.filled || 0))), 'r')) +
-        pr(c(orderTypeName(o), o.side === 'sell' ? 'dn' : 'up'), c(typeof o.price === 'number' ? U.fmtPrice(o.price, precisionOf(o.root)) : '', 'r'), 'r2') +
-        st(`<button type="button" class="ac-x" data-cancel="${esc(o.id)}" data-root="${esc(o.root || '')}" aria-label="Cancel this ${esc(o.root || '')} order" title="Cancel it (needs Armed, as the chart's x), on any instrument">×</button>`, 'r'))).join('') + '</div>';
-    else html = !today.length ? '<p class="ac-empty">No fills today.</p>' : '<div class="gr gr-fil" role="table" aria-label="Today\'s fills">' +
-      head(pr(h('Time'), h('Inst')) + pr(h('Side', 'r'), h('Price', 'r'), 'r') + h('Trade', 'r')) +
-      today.slice().sort((a, b) => b.t - a.t).map(f => {
-        const x = rt.byFill.get(f.id), trade = !x ? '' : x.open ? 'open' : x.pnl === null ? 'n/a' : W.fmtUsd(x.pnl), cls = !x || x.open || x.pnl === null ? 'mut' : pc(x.pnl);
-        const tip = x && x.pnl === null && !x.open ? 'This trade began before today: its first fills are not in today\'s list' : '';
-        return row(f.account + '|' + f.id, pr(c(W.fmtClock(f.t), 'mut'), c(f.root, 'b')) + pr(c((f.side === 'buy' ? 'B ' : 'S ') + f.qty, 'r ' + (f.side === 'buy' ? 'up' : 'dn')), c(U.fmtPrice(f.p, precisionOf(f.root)), 'r'), 'r') +
-          c(trade, 'r ' + cls, tip));
-      }).join('') + '</div>';
-    const el = q('[data-list]');
-    if (A.keys.list !== html) { A.keys.list = html; const top = el.scrollTop; el.innerHTML = html; el.scrollTop = top; A.cells = [...el.querySelectorAll('[data-c]')]; A.rebuilt = (A.rebuilt || 0) + 1; }
-    const cells = A.cells || [];
-    for (let i = 0; i < vals.length && i < cells.length; i++) {
-      const e = cells[i], x = vals[i];
-      if (e.textContent !== x.text) e.textContent = x.text;
-      if (e.className !== x.cls) e.className = x.cls;
-      if ((e.title || '') !== x.tip) e.title = x.tip;
-    }
-  };
-  A.render();
-  quoteSubs.add(A.render);
-  const unfit = fitPanel(v, (w, h) => ({ 'gr-narrow': w < 360, 'gr-short': h < 170 }));
-  v.destroy = () => { unfit(); quoteSubs.delete(A.render); for (const off of A.offs.values()) off(); A.offs.clear(); };
-}
-/* order events, fills and positions: the Account panels again, once in the next animation frame */
-let accountRaf = 0;
-function renderAccounts() { if (!accountRaf && accountViews().length) accountRaf = requestAnimationFrame(() => { accountRaf = 0; for (const v of accountViews()) v.account.render(); }); }
-setInterval(renderAccounts, 1000);                       // the clock (a new trading day) and the prices without a trade
 
 /* ---------------- the Account page (1.16.0, live/accounts.js): every account ChartBridge watches, on the window's one v3 connection (AF, shared with the ticket's 0.4.0 parts and the Bot tab).
    Its figures follow the feed (accounts at most once a second) and the prices (quoteSubs, at most 4 times a second). */
@@ -2795,41 +2913,8 @@ function mountAccountsPage(v) {
   v.accountPage = ap;
   v.destroy = () => { ap.destroy(); delete v.accountPage; };
 }
-/* 1.47.0 (the reuse map, build answers 17 and 18): the Multi-Account panel mounted a second time, outside the grid (a Legion
-   lane is that panel showing one group). The same factory and the same redraw loop as the grid's panel: no copy of the panel.
-   key: its own panel id (its element ids and its kept group pick carry it). -> { panel, destroy } or null. */
-const lanePanels = new Map();
-function mountLegionLane(el, key, opts) {
-  const FC = window.FleetCore;
-  if (!FC || !AF || !opts || typeof opts.group !== 'string' || !opts.group || typeof opts.locked !== 'function') return null;   // no lock, no panel (F1)
-  const feed = FC.laneFeed(AF, opts.locked, opts.group, opts.otherLocked);           // bound to its lane (F2)
-  const made = mountLanePanel(el, key, feed, { group: opts.group, locked: opts.locked });
-  return made ? Object.assign(made, { refused: feed.refused, feed }) : null;
-}
-/* The Account page's rows-only mount reads the page's feed and sends nothing (the review of 97, F8): this object passes the
-   feed's state and its reading functions, and every other function answers false without calling the feed. */
-const FEED_READS = new Set(['account', 'limit', 'groupOf', 'rulesOf', 'typeOf', 'level', 'listen', 'joinRefusal', 'joinPlan', 'joinWords', 'readTypes', 'readFloors', 'firmMins', 'rateOf']);
-function readOnlyFeed(feed) {
-  const out = {};
-  for (const k of Object.keys(feed)) {
-    const d = Object.getOwnPropertyDescriptor(feed, k);
-    if (d.get) Object.defineProperty(out, k, { enumerable: true, get: () => feed[k] });
-    else if (typeof feed[k] !== 'function') Object.defineProperty(out, k, { enumerable: true, get: () => feed[k] });
-    else out[k] = FEED_READS.has(k) ? (...a) => feed[k](...a) : () => false;
-  }
-  return Object.freeze(out);
-}
-function mountLanePanel(el, key, feed, opts) {
-  if (!feed || !window.MultiAccount || !el || lanePanels.has(key)) return null;
-  const AC = window.AccountsCore;
-  const ma = window.MultiAccount.mount(el, Object.assign({ feed, panelId: key, note: (t, w) => note(t, !!w, w ? 8000 : 4000),
-    working: () => [...feed.S.orders.values()].filter(o => (AC && typeof AC.isWorking === 'function' ? AC.isWorking(o) : true)) }, opts || {}));
-  lanePanels.set(key, ma);
-  renderAccountPages();
-  return { panel: ma, destroy: () => { if (lanePanels.get(key) === ma) { lanePanels.delete(key); ma.destroy(); } } };
-}
 let accountPageRaf = 0;
-function renderAccountPages() { if (!accountPageRaf && (accountPages().length || lanePanels.size)) accountPageRaf = requestAnimationFrame(() => { accountPageRaf = 0; for (const v of accountPages()) v.accountPage.render(); for (const ma of lanePanels.values()) ma.render(); }); }
+function renderAccountPages() { if (!accountPageRaf && accountPages().length) accountPageRaf = requestAnimationFrame(() => { accountPageRaf = 0; for (const v of accountPages()) v.accountPage.render(); }); }
 setInterval(renderAccountPages, 1000);                   // the clock (Gone's since, a new trading day)
 /* Item 15: a chart trading an account near its limit says so in its header (amber at 70 percent of the room used to the
    closer of the daily loss and the trailing drawdown, red at 90). Every chart here shows the ticket's account. Written only
@@ -3082,10 +3167,6 @@ function openMore(v, anchor) {
     const g = $('wsMore').querySelector('[data-do="ghost"]');
     g.hidden = !(botDesk && botDesk.ghostOffered());
     if (!g.hidden) g.textContent = 'Bot trades (faint): ' + (botDesk.ghostOn(v.panel.id) ? 'on' : 'off');
-    /* 1.35.0: the league's paper trades, faint, on this chart (off by default; NQ and MNQ only) */
-    const lg = $('wsMore').querySelector('[data-do="league"]');
-    lg.hidden = !window.LeagueCore || !window.LeagueCore.ROOTS.includes(v.panel.root) || !(leagueView && leagueView.offered());   // offered with The Desk's league only
-    if (!lg.hidden) lg.textContent = 'League trades (faint): ' + (leagueGhosts()[v.panel.id] ? 'on' : 'off');
     openPop($('wsMore'), anchor);
   });
 }
@@ -3094,7 +3175,6 @@ $('wsMore').addEventListener('click', e => {
   if (!b || !v || !v.pane) return;
   if (b.dataset.do === 'reset') v.pane.chart.reset();
   else if (b.dataset.do === 'ghost' && botDesk) botDesk.setGhost(v.panel.id, !botDesk.ghostOn(v.panel.id));
-  else if (b.dataset.do === 'league') setLeagueGhost(v.panel.id, !leagueGhosts()[v.panel.id]);
   closePops();
 });
 
@@ -3473,9 +3553,6 @@ function syncLaptop() {
 $('wsTabs').addEventListener('click', e => {
   const b = e.target.closest('[data-tab]');
   if (b && botDesk && botDesk.shown()) botDesk.showTab(false);   // 1.16.0: from the Bot tab back to a layout
-  if (b && agentDesk && agentDesk.shown()) agentDesk.showTab(false);   // 1.17.0: and from the Agent tab
-  if (b && leagueView && leagueView.shown()) leagueView.showTab(false);   // 1.35.0: and from the League tab
-  if (b && fleetView && fleetView.shown()) fleetView.showTab(false);     // 1.45.0: and from the Legion tab
   if (!b || b.dataset.tab === layout) return;
   save(); openLayout(b.dataset.tab);
 });
@@ -3597,10 +3674,9 @@ function openLayout(name) {
   setUrl(); syncSelect(); syncConn(); placeColors(); syncAddMenu();
   if (holds() && !panels.some(p => p.type === 'ticket')) releaseTicket();   // a layout without the ticket lets it go
   renderOrders();
-  if (botDesk) { botDesk.layoutChanged(layout); botDesk.chartsChanged(); }   // 1.16.0: the strip on Main only; ghost marks
-  if (agentDesk) agentDesk.layoutChanged(layout);                             // 1.17.0: a layout closes the Agent tab
-  if (leagueView && leagueView.shown()) leagueView.showTab(false);            // 1.35.0: and the League tab
-  if (fleetView && fleetView.shown()) fleetView.showTab(false);              // 1.45.0: and the Legion tab
+  /* release 1: each tab told inside its own guard, after the charts and the ticket are placed */
+  if (botDesk) startGuard('Bot tab', () => { botDesk.layoutChanged(layout); botDesk.chartsChanged(); });   // 1.16.0: the strip on Main only; ghost marks
+  if (agentDesk) startGuard('Agent tab', () => agentDesk.layoutChanged(layout));                          // 1.17.0: a layout closes the Agent tab
 }
 
 /* Another window changed something this page uses. Its open layouts stay its own. */
@@ -3638,35 +3714,11 @@ window.workspace = { get layout() { return layout; }, panels: () => panels.map(p
   botReplay: () => !!(botDesk && botDesk.replay()),
   /* 1.17.0: the Agent tab (read it; its actions go through ChartBridge's checks) */
   agent: () => (agentDesk ? agentDesk.state() : null),
-  /* 1.35.0: the League tab, and the charts showing the league's trades faintly (read only) */
-  league: () => (leagueView ? leagueView.state() : null),
-  fleet: () => (fleetView ? fleetView.state() : null),          // 1.45.0: the Legion tab's state (test/fleet-smoke.mjs)
-  leagueGhosts: () => [...LG.overlays.keys()],
   /* 1.37.0: the Multi-Account panel's state (its tab, group, toast), for the smokes */
-  /* 1.47.0: a second Multi-Account panel in any element (the smokes; Legion's lanes are mounted the same way) */
-  /* 1.47.0: the Account page's own rows for the accounts filter() passes, read only, in any element (Legion Live's accounts by
-     group; the smokes). The same mount and redraw as the Accounts panel. -> { destroy } or null */
-  accountRows: (el, key, filter) => {
-    if (!AF || !window.AccountsPage || !el || typeof filter !== 'function' || lanePanels.has(key)) return null;
-    const body = document.createElement('div'); el.appendChild(body);
-    const ap = window.AccountsPage.mount({ el, body, head: document.createElement('div') }, { feed: readOnlyFeed(AF), rows: { filter }, watchQuote, quoteOf, quoteSubs, fitPanel, note: (t, w) => note(t, !!w, w ? 8000 : 4000), now: etNowSec });
-    lanePanels.set(key, ap); renderAccountPages();
-    return { destroy: () => { if (lanePanels.get(key) === ap) { lanePanels.delete(key); ap.destroy(); } } };
-  },
-  lanePanel: (el, key, opts) => {
-    const o = opts || {}, FC = window.FleetCore;
-    /* the whole panel, as on the grid, only for the two-mounts proof (test/lane-panels-smoke.mjs): no Legion code reaches the
-       page's whole feed by leaving the group out (the review of 97, F7) */
-    if (!o.group) return o.twoMountsProof === true ? mountLanePanel(el, key, AF, null) : null;
-    if (!FC || !AF || typeof o.locked !== 'function') return null;                // no lock, no panel (F1)
-    return mountLegionLane(el, key, { group: o.group, locked: o.locked, otherLocked: o.otherLocked });   // one fixed group: the narrow feed, never AF itself
-  },
   multi: () => { const v = [...views.values()].find(x => x.panel.type === 'multi' && x.accountPage); return v ? { tab: v.accountPage.state.tab, gid: v.accountPage.state.gid, toast: v.accountPage.state.toast } : null; },
-  /* 1.36.0: the Agents strip (read only) and how many times this window read the league */
+  /* 1.36.0: the Agents strip (read only) */
   agentsStrip: () => { const v = stripViews()[0]; return v ? v.strip.state() : null; },
-  leagueReads: () => LG.reads,
   quoteLast: r => { const x = quoteOf(r); return x ? x.last : null; },
-  leagueGhostTrades: () => { const d = leagueGhostDay(); return d ? d.trades.length + d.open.length : 0; },
   /* 1.34.0: how many risk alerts sounded in this window (test/flatten-every-smoke.mjs) */
   riskSounds: () => riskSounds };
 
@@ -3680,8 +3732,30 @@ window.workspace = { get layout() { return layout; }, panels: () => panels.map(p
    accountOk). The gate hears ChartBridge before the desks do (it listens first) and forgets everything when the connection
    drops. With no gate (agent-core.js not served) the desks get no connection at all: the careful side. The pop-out windows
    (agent.html, bot.html) build the same link (AgentCore.praetorianLink; the review of 102, F1). test/praetorian.test.js runs it. */
-const praetorianLink = AF && window.AgentCore && typeof window.AgentCore.praetorianLink === 'function'
-  ? window.AgentCore.praetorianLink(AF, m => { if (!m || m.type === 'accounts' || m.type === 'hello') syncPraetorian(); }) : null;   // the review of 102 (F1): one builder, also used by agent.html and bot.html
+/* Release 1 (the start guard, the lock of 2026-11-15, topic 2): the charts and the order ticket start first, and each automation
+   tab (the Bot, the Agent, the Colosseum, Legion, Praetorian's button) starts inside its own guard, so one tab that throws
+   cannot stop the charts, the ticket or another tab. A tab that failed is named in the note line (with any other that failed)
+   and once in the console, its top bar button is hidden, and the rest of the page runs on. The same guard wraps each call the page makes into a tab later
+   (a layout opened, ChartBridge's hello), so one tab that throws there leaves the others and the charts as they are.
+   test/start-guard.test.js runs it. */
+const START_FAILED = new Map();                           // a tab's name -> what it threw, the first time
+function startGuard(name, fn, btnId) {
+  try { fn(); return true; } catch (e) {
+    if (!START_FAILED.has(name)) {
+      START_FAILED.set(name, String(e && e.message ? e.message : e));
+      try { console.error('chart page: the ' + name + ' did not start', e); } catch (x) { /* no console */ }
+      const all = [...START_FAILED.keys()], said = all.length > 1 ? all.slice(0, -1).join(', ') + ' and ' + all[all.length - 1] : all[0];   // every part that failed so far
+      try { note('The ' + said + ' did not start: the charts and the ticket work; reload this window to try it again.', true, 12000); } catch (x) { /* no note line */ }
+    }
+    try { const b = btnId ? $(btnId) : null; if (b) b.hidden = true; } catch (x) { /* no button */ }
+    return false;
+  }
+}
+let praetorianLink = null;
+startGuard('Praetorian link', () => {
+  praetorianLink = AF && window.AgentCore && typeof window.AgentCore.praetorianLink === 'function'
+    ? window.AgentCore.praetorianLink(AF) : null;   // the review of 102 (F1): one builder, also used by agent.html and bot.html
+});   // a link that throws leaves the desks with no connection (null): the careful side, as when agent-core.js is not served
 let botDesk = null;
 function startBot() {
   if (!window.BotDesk) return;
@@ -3691,7 +3765,7 @@ function startBot() {
     charts: () => chartViews().map(v => ({ id: v.panel.id, root: v.panel.root, chart: v.pane.chart })),
     onTab: on => {
       document.body.classList.toggle('bt-on', on);
-      if (on) { closePops(); restoreMax(); if (agentDesk && agentDesk.shown()) agentDesk.showTab(false); if (leagueView && leagueView.shown()) leagueView.showTab(false); if (fleetView && fleetView.shown()) fleetView.showTab(false); }   // one tab at a time
+      if (on) { closePops(); restoreMax(); store.setItem(PR_SIDE_KEY, 'bot'); }   // Praetorian's side used last (an old ?tab=praetorian)
       tabUrl(on ? 'bot' : '');
       placeTabBtn();                                        // 1.35.0: its button in the top bar while open (the way back)
     } });
@@ -3699,136 +3773,46 @@ function startBot() {
 /* the tab in the URL (?tab=bot or ?tab=agent), so a reload keeps it */
 function tabUrl(t) {
   const u = new URL(location.href);
-  if (t) u.searchParams.set('tab', t); else if (!document.body.classList.contains('bt-on') && !document.body.classList.contains('ag-on') && !document.body.classList.contains('lg-on') && !document.body.classList.contains('fl-on')) u.searchParams.delete('tab');
+  if (t) u.searchParams.set('tab', t); else if (!document.body.classList.contains('bt-on')) u.searchParams.delete('tab');
   history.replaceState(null, '', u.pathname + '?' + u.searchParams.toString() + u.hash);
 }
-/* 1.17.0: the Agent tab (live/agent.js) on the same v3 connection (AF); the agents come with ChartBridge 0.5.0, and with an
-   older one the tab says so. It hides the grid while it is open, as the Bot tab does (?tab=agent keeps it on a reload). */
+/* plan step 3.2: Praetorian's Agent tab moved to Legion (legion.html, Cohorts, Praetorian). The Agent desk itself stays on the chart
+   page with no tab (its view is never shown), because the page uses it beyond its tab: the order ticket's owner check
+   (agentOwner: a pair an agent owns is refused here as before), the copilot switch (copilotOn), the Agents panel's cards
+   (glances), and what it showed off its tab: the corner line that counts the agents' open proposals (a name opens Legion's
+   Praetorian on that trader), its corner notices and its alert band. It acknowledges nothing (only a shown desk does) and its
+   copilot keys stay off (off its tab they never answered an agent; the chart page's keys answer the bot). Praetorian's gated
+   link, as before. */
 let agentDesk = null;
 function startAgent() {
   if (!window.AgentDesk) return;
-  agentDesk = window.AgentDesk.create({ v3: praetorianLink, headers: () => (PIN ? PIN.headers() : {}), feed: hub, storage: store, storagePrefix: PREFIX,
-    els: { tab: $('wsAgentTab'), view: $('agView') }, tradingKeys: () => HK,
-    copilotKeys: () => (DS.on && DS.hk ? DS.hk : null),
-    openBot: () => { if (botDesk) botDesk.showTab(true); },        // "Bot: 1 proposal" under the agent's proposal: the Bot tab answers it
-    flatten: (account, root) => core.flattenAgent(account, root),   // On/Off's "Flatten and turn him off?" Yes (1.20.0)
-    onTab: on => {
-      document.body.classList.toggle('ag-on', on);
-      if (on) { closePops(); restoreMax(); if (botDesk && botDesk.shown()) botDesk.showTab(false); if (leagueView && leagueView.shown()) leagueView.showTab(false); if (fleetView && fleetView.shown()) fleetView.showTab(false); }   // one tab at a time
-      tabUrl(on ? 'agent' : '');
-      placeTabBtn();                                        // 1.35.0: its button in the top bar while open (the way back)
-    } });
+  agentDesk = window.AgentDesk.create({ keys: false, v3: praetorianLink, headers: () => (PIN ? PIN.headers() : {}), feed: hub, storage: store, storagePrefix: PREFIX,
+    els: { view: $('agView') }, tradingKeys: () => HK, copilotKeys: () => (DS.on && DS.hk ? DS.hk : null),
+    openBot: () => { if (botDesk) botDesk.showTab(true); },        // "Bot: 1 proposal" in the corner line: the Bot tab answers it
+    openAgent: id => openLegion('cohorts', 'praetorian', id) });   // a name in the corner line: Praetorian on Legion, on that trader
 }
-/* 1.35.0 (Anthony 2026-10-21): the League tab (live/league.js), a second top-level tab beside the Agent tab (which is unchanged):
-   the shadow league's paper trades on one chart, the seats' day,
-   the week and month, the decision log and the API spend, read from The Desk's GET /api/chart-league. It hides the grid while
-   it is open, as the Bot and Agent views do (?tab=league keeps it on a reload). Nothing in it sends an order. */
-let leagueView = null;
-/* 1.50.0 (the Colosseum's watch box): what ChartBridge says of its traders, to read and nothing else. The object has one key,
-   listen: no post, no send, no sendOrder, so nothing on the Colosseum can send a message (test/colosseum.test.js proves the
-   object's keys and that the view never calls a post it is handed). With no feed (accounts.js not served) it is null and the
-   box says ChartBridge's list is not on this page. */
-const colosseumLink = AF ? Object.freeze({ listen: part => AF.listen(part) }) : null;
-function startLeague() {
-  if (!window.LeagueView) return;
-  leagueView = window.LeagueView.create({ view: $('lgView'), tab: $('wsLeagueTab'), feed: hub, storagePrefix: PREFIX, watch: colosseumLink,
-    deskBase: () => window.AccountsPage.deskBase((u, o) => fetch(u, o)), fetch: (u, o) => fetch(u, o),
-    /* a past day in the address (?tab=league&day=YYYY-MM-DD, The Desk's Agent Stats links here), so a reload keeps it */
-    onDay: d => { const u = new URL(location.href); if (d) u.searchParams.set('day', d); else u.searchParams.delete('day'); history.replaceState(null, '', u.pathname + '?' + u.searchParams.toString() + u.hash); },
-    onTab: on => {
-      document.body.classList.toggle('lg-on', on);
-      if (on) { closePops(); restoreMax(); if (botDesk && botDesk.shown()) botDesk.showTab(false); if (agentDesk && agentDesk.shown()) agentDesk.showTab(false); if (fleetView && fleetView.shown()) fleetView.showTab(false); }
-      tabUrl(on ? 'colosseum' : '');                       // 1.50.0: the Colosseum's own word (?tab=league still opens it)
-      placeTabBtn();                                        // the Bot button in the top bar meanwhile (one click to the Bot)
-      if (!on) { if (leagueView.liveDay()) LG.day = leagueView.liveDay(); if (!LG.busy) leaguePoll(); }   // never a past day; the faint marks read on by themselves (a read under way schedules the next itself)
-    } });
-}
-/* 1.45.0 (build answers 7, part D1): the Legion tab (live/fleet.js, drafted as Fleet) on the same v3 connection (AF): the Lab's
-   roster (one GET /roster, ChartBridge 0.6.20, read only), the traders and the prop accounts as ChartBridge says them, and Kill
-   all for the prop accounts (ChartBridge 0.6.17's message, sent by fleet.js alone, asked first). It hides the grid while it is
-   open, as the other views do (?tab=legion keeps it on a reload). Beside the Agent, Bot and League tabs: it replaces none of them yet.
-   The tab is handed a connection that can do two things only: listen, and post what FleetCore.maySend passes (the review of
-   92, N5): agentKillAllProp and, since 1.46.0 (D2), the pick and a trader's mode to Auto or to Shadow, each with exactly its
-   keys. The feed's send and sendOrder never reach it, so "these messages and no other" is true by how it is built. With no
-   feed at all (accounts.js not served: AF is null, as the page has allowed since 1.16.0), or with fleet.js not served, the
-   tab gets no connection and the page starts exactly as before (the second look at 92, FIX A). */
-const legionGate = window.FleetCore && Object.isFrozen(window.FleetCore) ? window.FleetCore.maySend : null;
-const legionLink = AF && legionGate ? { listen: part => AF.listen(part), post: m => legionGate(m) === true && AF.post(m) === true } : null;
-let fleetView = null;
-/* 1.48.1 (B4): Legion reads the PC helper's GET /status for the lanes' runners, and only that: the client's status call is
-   handed over, never the client, so On and Off cannot be reached from the tab */
-const legionHelperStatus = (() => {
-  const AH = window.AgentHelper;
-  if (!AH || typeof AH.createClient !== 'function' || typeof fetch !== 'function') return null;
-  const client = AH.createClient({ fetch: (u, i) => fetch(u, i), headers: () => (PIN ? PIN.headers() : {}) });
-  return () => client.status();
-})();
-function startFleet() {
-  if (!window.FleetView) return;
-  fleetView = window.FleetView.create({ view: $('flView'), tab: $('wsFleetTab'), v3: legionLink, realClick: OT.realClick, headers: () => (PIN ? PIN.headers() : {}),
-    helperStatus: legionHelperStatus,
-    /* 1.49.0 (Legion Live, the reuse map): a real chart as the League tab mounts one (no toolbar, no orders), the Accounts
-       tab's own rows for the prop accounts, and the trading day's start (18:00 New York, chart seconds) for the lanes' marks */
-    liveChart: el => (window.ChartLive && hub ? window.ChartLive.mount(el, { feed: hub, paneId: 'legion', storagePrefix: PREFIX, toolbar: false, compact: true, view: { root: 'MNQ', tf: 'm1' } }) : null),
-    accountRows: (el, key, filter) => window.workspace.accountRows(el, key, filter),
-    sessionStart: () => { const n = etNowSec(); return n - ((((n - 18 * 3600) % 86400) + 86400) % 86400); },
-    /* 1.48.0 (Legion Setup): a lane's accounts are the Multi-Account panel itself, one fixed group, the narrow feed (FleetCore.laneFeed),
-       never the page's feed; the tab hands the group and the lane's lock, the page mounts */
-    lanePanel: (el, key, opts) => (opts && typeof opts.group === 'string' && opts.group && typeof opts.locked === 'function' ? mountLegionLane(el, key, opts) : null),
-    /* the Traders fold of Legion Setup: builder 4's Legion trader desk (chart-engine 103), handed the page's own feed (AF): the desk
-       wraps it in Legion's gate itself and never posts on AF directly. None until live/legion-desk.js is on the page. */
-    traderDesk: el => (window.LegionDesk && typeof window.LegionDesk.mount === 'function' && el
-      ? window.LegionDesk.mount(el, { v3: AF, feed: hub, headers: () => (PIN ? PIN.headers() : {}), storage: store, storagePrefix: PREFIX, flatten: (a, r) => core.flattenAgent(a, r) })
-      : null),
-    onTab: on => {
-      document.body.classList.toggle('fl-on', on);
-      if (on) { closePops(); restoreMax(); if (botDesk && botDesk.shown()) botDesk.showTab(false); if (agentDesk && agentDesk.shown()) agentDesk.showTab(false); if (leagueView && leagueView.shown()) leagueView.showTab(false); }   // one tab at a time
-      tabUrl(on ? 'legion' : '');
-      placeTabBtn();                                        // the Bot button in the top bar meanwhile (one click to the Bot)
-    } });
+/* plan step 3.2: Legion's own page, in its own window (one window, reused), on the tab named; the chart page's old ?tab= words
+   land there by Legion's own mapping (LegionCore.tabFrom) */
+const LEGION_TABS = ['legion', 'fleet', 'league', 'colosseum', 'agent', 'praetorian'];
+const PR_SIDE_KEY = 'live-praetorian-side-v1';   // 1.51.0: Praetorian's side used last, 'bot' or 'agent' (a convenience in this browser)
+function openLegion(tab, sub, agent) {
+  const q = new URLSearchParams(); if (tab) q.set('tab', tab); if (sub) q.set('sub', sub); if (agent) q.set('agent', agent);
+  try { window.open('legion.html?' + q.toString(), 'legion'); } catch (e) { note('Legion did not open: open legion.html from this PC', true); }
 }
 /* 1.50.0 (the top tabs: Chart, Legion, Colosseum, Praetorian): Chart is pressed while no tab covers the grid, and a click on it
    closes whichever tab is open (the same calls a layout tab makes). It reads the tabs' own body classes, so a tab that opens or
    closes by any way (its button, a link, the Agents strip, a layout) moves it. */
-const TAB_CLASSES = ['bt-on', 'ag-on', 'lg-on', 'fl-on'];
+const TAB_CLASSES = ['bt-on'];   // plan step 3.2: the Bot tab is the one tab left on the chart page
 const tabCovering = () => TAB_CLASSES.some(c => document.body.classList.contains(c));
-function closeTabs() { for (const d of [botDesk, agentDesk, leagueView, fleetView]) if (d && d.shown()) d.showTab(false); }
-/* 1.51.0: Praetorian's button: offered when either side is (the Agent desk's or the Bot desk's own button), pressed while
-   either is open, a click opens the side used last (kept in this browser, a convenience) or closes it; its title says whether
-   a personal account is picked (with none, only Sim and None are offered there) */
-const PR_SIDE_KEY = 'live-praetorian-side-v1';
-const prSide = () => { try { return store.getItem(PR_SIDE_KEY) === 'bot' ? 'bot' : 'agent'; } catch (e) { return 'agent'; } };
-const prOpen = () => document.body.classList.contains('ag-on') || document.body.classList.contains('bt-on');
-function syncPraetorian() {
-  const b = $('wsPraetorianTab'); if (!b) return;
-  const offered = !!(($('wsAgentTab') && !$('wsAgentTab').hidden) || ($('wsBotTab') && !$('wsBotTab').hidden)), on = prOpen();
-  if (b.hidden !== !(offered || on)) b.hidden = !(offered || on);
-  if (b.getAttribute('aria-pressed') !== String(on)) b.setAttribute('aria-pressed', String(on));
-  document.body.classList.toggle('pr-tabs-on', on);
-  if (on) { try { store.setItem(PR_SIDE_KEY, document.body.classList.contains('bt-on') ? 'bot' : 'agent'); } catch (e) { /* blocked */ } }
-  /* no head row of its own (the Agent desk's Layout 5 needs the height): the button's title says what Praetorian reaches now */
-  const t = 'Praetorian: your agents and the bot on your personal account, Sim or None. A trader on a prop account is run from Legion; here it can only be stopped. ' +
-    (!praetorianLink ? 'Not connected to ChartBridge: nothing can be sent from here.' : praetorianLink.named() ? 'Your personal account is picked on the Accounts tab.' : 'No personal account is picked yet: Sim and None only (pick it on the Accounts tab).');
-  if (b.title !== t) b.title = t;
-}
-function openPraetorian() {
-  const agentOk = agentDesk && !$('wsAgentTab').hidden, botOk = botDesk && !$('wsBotTab').hidden;
-  const d = prSide() === 'bot' ? (botOk ? botDesk : agentOk ? agentDesk : null) : (agentOk ? agentDesk : botOk ? botDesk : null);
-  if (d) d.showTab(true);
-}
-if ($('wsPraetorianTab')) {
-  $('wsPraetorianTab').addEventListener('click', e => { e.currentTarget.blur(); closePops(); if (prOpen()) closeTabs(); else openPraetorian(); syncPraetorian(); });
-  if (typeof MutationObserver === 'function') for (const id of ['wsAgentTab', 'wsBotTab']) if ($(id)) new MutationObserver(syncPraetorian).observe($(id), { attributes: true, attributeFilter: ['hidden'] });
-}
+function closeTabs() { if (botDesk && botDesk.shown()) botDesk.showTab(false); }
 /* the row shows only while another tab is offered: alone, Chart would mean nothing and take the top bar's room (the status
    line and its clock warning, test/workspace-smoke.mjs at 1366 px) */
-const OTHER_TABS = ['wsFleetTab', 'wsLeagueTab', 'wsAgentTab', 'wsBotTab'];   // 1.51.0: Praetorian is offered when its Agent or Bot side is
+const OTHER_TABS = ['wsBotTab', 'wsLegion'];   // plan step 3.2: the Bot tab, and the link to Legion's own page
 function syncChartTab() {
   const b = $('wsChartTab'), v = String(!tabCovering());
   if (b && b.getAttribute('aria-pressed') !== v) b.setAttribute('aria-pressed', v);
   const row = $('wsTopTabs'), any = OTHER_TABS.some(id => $(id) && !$(id).hidden);
   if (row && row.hidden !== !any) row.hidden = !any;
-  syncPraetorian();
 }
 if ($('wsChartTab')) {
   $('wsChartTab').addEventListener('click', e => { e.currentTarget.blur(); closePops(); closeTabs(); syncChartTab(); });
@@ -3837,62 +3821,16 @@ if ($('wsChartTab')) {
     for (const id of OTHER_TABS) if ($(id)) new MutationObserver(syncChartTab).observe($(id), { attributes: true, attributeFilter: ['hidden'] });
   }
 }
-/* the league's trades, faint, on the charts whose ⋯ switch is on (kept in this browser, off by default): one read of The Desk
-   every 30 seconds while any is on, one overlay per such chart */
-const LG_GHOST_KEY = window.LeagueCore ? window.LeagueCore.GHOST_KEY : 'live-league-ghost-v1';
-const leagueGhosts = () => { try { return window.LeagueCore ? window.LeagueCore.cleanGhosts(store.getItem(LG_GHOST_KEY)) : {}; } catch (e) { return {}; } };
-const LG = { day: null, timer: 0, seq: 0, overlays: new Map(), problem: '', at: 0, reads: 0, busy: false };
-const LG_TIMEOUT_MS = 10000;                              // one league read waits at most this long for The Desk
-/* 1.36.0: the one league read serves the faint marks and the Agents strip: it runs while either is on the page (every 30 s,
-   15 s with a strip), and while the League view is open it reads nothing itself (that view reads every 15 s; its day is used) */
-const leagueWanted = () => LG.overlays.size > 0 || [...views.values()].some(v => v.panel.type === 'agents');
-/* review 3: the faint marks draw the League view's day only while it is open (it reads every 15 s); else this poll's (30 s), so
-   they never freeze on what the view read last */
-const leagueGhostDay = () => (leagueView && leagueView.shown() && leagueView.liveDay()) || LG.day;   // a past day shown is never drawn on the live charts
-function setLeagueGhost(id, on) {
-  const g = leagueGhosts();
-  if (on) g[id] = true; else delete g[id];
-  try { store.setItem(LG_GHOST_KEY, JSON.stringify(g)); } catch (e) { /* blocked: this window only */ }
-  syncLeagueGhosts();
-}
-function syncLeagueGhosts() {
-  if (!window.LeagueOverlay || !window.LeagueCore) return;
-  const g = leagueGhosts(), want = new Set();
-  for (const v of chartViews()) if (g[v.panel.id] && window.LeagueCore.ROOTS.includes(v.panel.root)) want.add(v.panel.id);
-  for (const [id, ov] of LG.overlays) if (!want.has(id) || !views.has(id) || ov.pane !== views.get(id).pane) { ov.o.destroy(); LG.overlays.delete(id); }
-  for (const id of want) if (!LG.overlays.has(id)) { const v = views.get(id); LG.overlays.set(id, { pane: v.pane, o: window.LeagueOverlay.attach(v.pane, v.body, leagueGhostDay, () => v.panel.root, true) }); }
-  if (leagueWanted() && !LG.timer && !LG.busy) leaguePoll();
-  if (!leagueWanted()) { clearTimeout(LG.timer); LG.timer = 0; }
-}
-function leaguePoll() {
-  clearTimeout(LG.timer); LG.timer = 0;
-  if (!leagueWanted()) return;
-  const seq = ++LG.seq;                                    // only the latest read schedules the next (one poll, never two)
-  const next = () => { if (seq === LG.seq && leagueWanted()) LG.timer = setTimeout(leaguePoll, stripViews().length ? 15000 : 30000); };
-  if (leagueView && leagueView.shown()) { next(); return; }   // the League view reads it now: its day is the one used
-  LG.reads++; LG.busy = true;
-  /* review: a Desk that never answers cannot hold the read for good: given up after 10 s (the fetch aborted), and the next read
-     is scheduled. The Desk's address (deskBase, shared by the page) is not aborted: the limit races it instead */
-  const ac = typeof AbortController === 'function' ? new AbortController() : null;
-  let giveUp = 0;
-  const limit = new Promise((_, no) => { giveUp = setTimeout(() => { if (ac) ac.abort(); const e = new Error('timeout'); e.name = 'AbortError'; no(e); }, LG_TIMEOUT_MS); });
-  Promise.race([limit, window.AccountsPage.deskBase((u, o) => fetch(u, o)).then(url => fetch(url + '/api/chart-league', { cache: 'no-store', mode: 'cors', credentials: 'omit', signal: ac ? ac.signal : undefined }))
-    .then(r => (r.ok ? r.json() : Promise.reject(new Error(r.status === 404 ? 'The Desk has no league view yet (it needs The Desk of chart 1.35.0).' : 'The Desk answered ' + r.status))))])
-    .then(j => { LG.day = window.LeagueCore.cleanDay(j); LG.problem = ''; LG.at = Date.now(); },
-      e => { LG.problem = (e && e.name === 'AbortError' ? 'The Desk did not answer in ' + LG_TIMEOUT_MS / 1000 + ' s.' : e && /^The Desk/.test(e.message) ? e.message : 'The Desk is not reachable: ' + (e && e.message ? e.message : 'no answer')) + (LG.day ? ' Showing what it last sent.' : ''); })   // the last marks stay
-    .then(() => { clearTimeout(giveUp); LG.busy = false; for (const x of LG.overlays.values()) x.o.redraw(); for (const v of stripViews()) v.strip.render(); next(); });
-}
-setInterval(syncLeagueGhosts, 3000);                      // a chart's instrument changed, a layout opened: the overlays follow
-window.addEventListener('storage', e => { if (e.key && e.key.endsWith(LG_GHOST_KEY)) syncLeagueGhosts(); });
+/* release 1 (the start guard): the charts and the order ticket first (the layout, the ticket's connection, the ticket taken),
+   then each automation tab inside its own guard, told the layout the charts opened on; then the tab in the address, each in
+   its tab's guard */
 const start = () => {
-  startBot(); startAgent(); startLeague(); startFleet();
   openLayout(new URLSearchParams(location.search).get('layout') || W.DEFAULT_NAME); tconnect(); autoTake();
-  if (botDesk && new URLSearchParams(location.search).get('tab') === 'bot') botDesk.showTab(true);
-  if (agentDesk && new URLSearchParams(location.search).get('tab') === 'agent') agentDesk.showTab(true);
-  if (new URLSearchParams(location.search).get('tab') === 'praetorian') openPraetorian();   // 1.51.0: the side used last
-  if (fleetView && new URLSearchParams(location.search).get('tab') === 'legion') fleetView.showTab(true);   // 1.45.0
-  if (leagueView && ['league', 'colosseum'].includes(new URLSearchParams(location.search).get('tab'))) leagueView.openDay(new URLSearchParams(location.search).get('day'));   // a day checked first: a past one read only; 1.50.0: the old ?tab=league lands on the Colosseum
-  syncLeagueGhosts(); syncChartTab();
+  startGuard('Bot tab', () => { startBot(); if (botDesk) { botDesk.layoutChanged(layout); botDesk.chartsChanged(); } }, 'wsBotTab');
+  startGuard('Agent desk', () => { startAgent(); if (agentDesk) agentDesk.layoutChanged(layout); });
+  const tab = new URLSearchParams(location.search).get('tab');
+  if (botDesk && tab === 'bot') startGuard('Bot tab', () => botDesk.showTab(true));
+  startGuard('Chart button', syncChartTab);
 };
 /* A window that opens (or reloads) with the ticket in its layout takes it when no other window has it (Anthony
    2026-10-01), Armed off. The same `ifAvailable` lock as any take: two windows opening at once give one holder, and a
@@ -3901,5 +3839,13 @@ function autoTake() {
   if (!link || !locks || holds() || !panels.some(p => p.type === 'ticket')) return;
   link.take().then(r => { if (r === 'held') { TK.published = ''; linkChanged(); } });
 }
-if (PIN) PIN.gate().then(start); else start();
+/* plan step 3.2: an old address of a tab that moved (?tab=legion, league or colosseum with its day, agent, praetorian) opens Legion's
+   own page with the same query: LegionCore.tabFrom maps each word to its tab there. Nothing on the chart page starts first. */
+const movedTab = String(new URLSearchParams(location.search).get('tab') || '').toLowerCase();
+/* the R12 review, N4: an old ?tab=praetorian opens the side used last, as 1.51.0 did: the Bot tab here when that was the Bot (kept
+   in this browser: the Bot tab writes it here, Legion's Praetorian side writes the Agent), else Praetorian on Legion */
+const prBotLast = movedTab === 'praetorian' && store.getItem(PR_SIDE_KEY) === 'bot' && !new URLSearchParams(location.search).has('agent');   // a trader named: Legion, on him
+if (prBotLast) { try { const q = new URLSearchParams(location.search); q.set('tab', 'bot'); history.replaceState(null, '', location.pathname + '?' + q.toString() + location.hash); } catch (e) { /* a file page */ } }
+if (LEGION_TABS.includes(movedTab) && !prBotLast) location.replace('legion.html' + location.search + location.hash);
+else if (PIN) PIN.gate().then(start); else start();
 });

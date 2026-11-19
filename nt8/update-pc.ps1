@@ -23,6 +23,13 @@
     -InstallChartBridge   run by Anthony while flat: copies the staged add-on files (and the matching page), then
                           Anthony presses F5 in the NinjaScript Editor while flat
     rollback              puts the previous page files back (and skips that commit until a newer one is on main)
+    rollback-chartbridge -Flat
+                          run by Anthony while flat (release 1): copies the ChartBridge files the last
+                          -InstallChartBridge replaced (kept in previous-addons\, checked against the sha256 recorded
+                          when they were kept) back over AddOns, the files it replaces kept first, so running it again
+                          goes forward again; then Anthony presses F5 in the NinjaScript Editor while flat. -Flat is
+                          his word that he is flat in every account (the updater has no check of NinjaTrader's
+                          positions it can count on while NinjaTrader is closed): without it nothing is done
     repair                page files only, never ChartBridge: finishes or undoes a cut-off install, or writes a whole
                           page from staged\, previous\ or the clone's page files
     pause / resume        a manual switch for the automatic path (off by default)
@@ -106,10 +113,12 @@
 [CmdletBinding()]
 param(
   [Parameter(Position = 0)]
-  [ValidateSet('status', 'check', 'update', 'rollback', 'repair', 'pause', 'resume', 'register', 'unregister', 'install-chartbridge')]
+  [ValidateSet('status', 'check', 'update', 'rollback', 'repair', 'pause', 'resume', 'register', 'unregister', 'install-chartbridge', 'rollback-chartbridge')]
   [string]$Command = 'status',
   [switch]$InstallChartBridge,
   [switch]$Yes,
+  # rollback-chartbridge only: Anthony's word that he is flat in every account (release 1; no other check counts yet).
+  [switch]$Flat,
   # The daily checks, in New York time, as a list: 09:00,17:00 (one argument from a command line) or a PowerShell list.
   # Anthony, 2026-10-23: twice a day, at 09:00 and 17:00, and at sign-in (it was 09:00 alone that morning, 17:05 before).
   # One time given (-DailyAt 08:30) is one daily check. The updater only installs page files (an open page keeps the code
@@ -149,7 +158,7 @@ $script:SelfPath = 'nt8/update-pc.ps1'
 $script:VersionFile = 'update.json'          # the one file the updater writes into www (the page polls it)
 $script:LogMaxBytes = 1000000
 $script:LogKeep = 3
-$script:AddOnWriteAllowed = $false             # only Invoke-InstallChartBridge sets it, after Anthony confirms
+$script:AddOnWriteAllowed = $false             # only Invoke-InstallChartBridge and Invoke-RollbackChartBridge set it, after Anthony confirms
 $script:UpdaterStopped = $false                # the pinned copy failed its own check (Test-PinnedSelf)
 $script:Utf8 = New-Object System.Text.UTF8Encoding($false)
 # 0.3.8: the run at sign-in can come before the network is up ("Failed to connect to github.com port 443"): `update`
@@ -160,7 +169,7 @@ $script:HiddenLauncherName = 'update-pc.hidden.vbs'   # the task's hidden launch
 $script:HandLauncherDir = 'C:\SchwabDesk_bulk\hidden'   # where the hand-made launchers of 2026-10-22 are (Invoke-AutoTaskMigration)
 # This script's own parameters and PowerShell's common ones (CmdletBinding), as PowerShell binds a task's command line to them
 # (Get-CommandOptions; a test checks the list against the param block above)
-$script:OwnParams = @('Command', 'InstallChartBridge', 'Yes', 'DailyAt', 'TaskName', 'Repo', 'NoRun',
+$script:OwnParams = @('Command', 'InstallChartBridge', 'Yes', 'Flat', 'DailyAt', 'TaskName', 'Repo', 'NoRun',
   'Verbose', 'Debug', 'ErrorAction', 'WarningAction', 'InformationAction', 'ErrorVariable', 'WarningVariable', 'InformationVariable',
   'OutVariable', 'OutBuffer', 'PipelineVariable')
 # and the common ones' own short names (-ea Stop binds as -ErrorAction Stop; review of #72)
@@ -1521,6 +1530,8 @@ function Invoke-Status {
   Write-Host "ChartBridge:  $(if ($c.version) { $c.version } else { 'unknown' }) ($($c.detail))"
   if ($n.ready) { Write-Host "              ChartBridge $($n.ready) is staged and ready: when flat, update-pc.ps1 -InstallChartBridge, then F5" }
   if ($n.copied) { Write-Host "              ChartBridge $($n.copied) was copied: press F5 in the NinjaScript Editor while flat" }
+  $ri = Get-Field $state['chartBridge'] 'installed'
+  if ((Get-Field $ri 'rolledBackFrom') -and -not (Get-Field $ri 'confirmed' $false)) { Write-Host "              ChartBridge $(Get-Field $ri 'version') was put back by rollback-chartbridge (from $(Get-Field $ri 'rolledBackFrom')): press F5 in the NinjaScript Editor while flat" }
   $lr = $state['lastRun']
   if (Get-Field $lr 'at') {
     $t0 = [DateTimeOffset]::FromUnixTimeMilliseconds([long](Get-Field $lr 'at')).ToLocalTime()
@@ -1728,8 +1739,11 @@ function Get-RetiredAddOns($State, [string[]]$Names) {
   return @($prev | Where-Object { ([string]$_) -match '^ChartBridge[A-Za-z0-9_]*\.cs$' -and $Names -notcontains $_ -and (Test-Path -LiteralPath (Join-Path $script:P.AddOns $_)) } | Select-Object -Unique)
 }
 
-function Install-AddOnFiles($Stage, $State) {
-  if (-not $script:AddOnWriteAllowed) { throw 'refused: add-on (.cs) files are only copied by update-pc.ps1 -InstallChartBridge, after Anthony confirms he is flat' }
+function Install-AddOnFiles($Stage, $State, [string]$Source = '', [string]$Who = '-InstallChartBridge') {
+  if (-not $script:AddOnWriteAllowed) { throw 'refused: add-on (.cs) files are only copied by update-pc.ps1 -InstallChartBridge or rollback-chartbridge -Flat, after Anthony confirms he is flat' }
+  # where the new files come from: updater\staged\addons (-InstallChartBridge), or a kept set in previous-addons\
+  # (rollback-chartbridge, release 1)
+  if (-not $Source) { $Source = Join-Path $script:P.Staged 'addons' }
   if (-not (Test-Path $script:P.AddOns)) { New-Item -ItemType Directory -Force -Path $script:P.AddOns | Out-Null }
   $names = @(Get-Field $Stage 'addonFiles' @())
   # files the previous install had and this commit drops: backed up and taken out inside the same all-or-nothing copy
@@ -1739,6 +1753,9 @@ function Install-AddOnFiles($Stage, $State) {
   $before = Get-AddOnHashes $all
   foreach ($n in $all) { if ($before[$n] -eq 'unreadable') { throw "$n in AddOns cannot be read (another program holds it): nothing was copied, try again" } }
   $keep = [string](Get-Field (Get-Field $State['chartBridge'] 'mixed') 'backup' '')
+  # release 1: never pruned either: the set the last install kept (rollback-chartbridge goes back to it) and the set
+  # this copy reads from
+  $keepAlso = @(@([string](Get-Field (Get-Field $State['chartBridge'] 'installed') 'backup' ''), $Source) | Where-Object { $_ } | ForEach-Object { [IO.Path]::GetFullPath($_).TrimEnd('\', '/') })
   $backup = Join-Path $script:P.PrevAddOns ((Get-Date).ToString('yyyyMMdd-HHmmss-fff'))
   for ($i = 2; Test-Path -LiteralPath $backup; $i++) { $backup = Join-Path $script:P.PrevAddOns ((Get-Date).ToString('yyyyMMdd-HHmmss-fff') + "-$i") }
   $replaced = New-Object System.Collections.ArrayList
@@ -1756,19 +1773,24 @@ function Install-AddOnFiles($Stage, $State) {
       if ($before[$n] -ne 'missing' -and (Get-FileSha256 (Join-Path $backup $n)) -ne $before[$n]) { throw "the backup of $n does not match the file in AddOns" }
     }
     # the last three backups, and always the one a recorded mix points to
-    Get-ChildItem -Directory $script:P.PrevAddOns | Where-Object { $_.FullName -ne $keep } | Sort-Object Name -Descending | Select-Object -Skip 3 | ForEach-Object { Remove-Dir $_.FullName }
+    Get-ChildItem -Directory $script:P.PrevAddOns | Where-Object { $_.FullName -ne $keep -and $keepAlso -notcontains $_.FullName.TrimEnd('\', '/') } | Sort-Object Name -Descending | Select-Object -Skip 3 | ForEach-Object { Remove-Dir $_.FullName }
     # all new files first under names NinjaTrader does not compile (.upd-tmp), then the replaces back to back
     foreach ($n in $names) {
-      Copy-Item -LiteralPath (Join-Path (Join-Path $script:P.Staged 'addons') $n) -Destination (Join-Path $script:P.AddOns "$n.upd-tmp") -Force
+      $tmpFile = Join-Path $script:P.AddOns "$n.upd-tmp"
+      Copy-Item -LiteralPath (Join-Path $Source $n) -Destination $tmpFile -Force
+      # release 1 (the R12 review of the cut): the bytes written are the bytes checked (the staged commit's, or the kept set's
+      # as recorded), read again here, before any file in AddOns is replaced
+      if (([string]$after[$n]) -match '^[0-9a-f]{64}$' -and (Get-FileSha256 $tmpFile) -ne $after[$n]) { throw "$n as copied does not match its sha256 (it changed after it was checked)" }
     }
     # recorded before the first replace: a run cut off in the middle (a power loss) is found by the next run, which
     # compares AddOns with the set before and the set after (Update-MixedAddOns)
-    $State['chartBridge']['copying'] = @{ at = (Get-NowMs); version = [string](Get-Field $Stage 'chartBridgeVersion'); commit = (Get-Field $Stage 'commit'); files = $all; addonFiles = $names; before = $before; after = $after; backup = $backup }
+    $State['chartBridge']['copying'] = @{ at = (Get-NowMs); version = [string](Get-Field $Stage 'chartBridgeVersion'); commit = (Get-Field $Stage 'commit'); files = $all; addonFiles = $names; before = $before; after = $after; backup = $backup
+      who = $Who; rolledBackFrom = (Get-Field $Stage 'rolledBackFrom') }   # release 1: which command copied, for the next run's words and record
     Save-State $State
     foreach ($n in $retired) {
       Remove-Item -LiteralPath (Join-Path $script:P.AddOns $n) -Force   # its copy is in the backup
       [void]$replaced.Add($n)
-      Write-Log "-InstallChartBridge: $n is not in ChartBridge $(Get-Field $Stage 'chartBridgeVersion')'s file list: taken out of AddOns (kept in $backup)"
+      Write-Log "${Who}: $n is not in ChartBridge $(Get-Field $Stage 'chartBridgeVersion')'s file list: taken out of AddOns (kept in $backup)"
       Invoke-CrashPoint "addon:$($replaced.Count)"
     }
     foreach ($n in $names) {
@@ -1776,10 +1798,10 @@ function Install-AddOnFiles($Stage, $State) {
       [void]$replaced.Add($n)
       Invoke-CrashPoint "addon:$($replaced.Count)"
     }
-    return @{ ok = $true; backup = $backup; after = $after; files = $all; retired = $retired }
+    return @{ ok = $true; backup = $backup; before = $before; after = $after; files = $all; retired = $retired }
   } catch {
     $err = $_.Exception.Message
-    Write-Log "-InstallChartBridge: the add-on copy failed after $($replaced.Count) of $($all.Count) files ($err); putting back: $(@($replaced) -join ', ')" 'ERROR'
+    Write-Log "${Who}: the add-on copy failed after $($replaced.Count) of $($all.Count) files ($err); putting back: $(@($replaced) -join ', ')" 'ERROR'
     $notBack = @()
     foreach ($n in @($replaced)) {
       $dest = Join-Path $script:P.AddOns $n
@@ -1789,7 +1811,7 @@ function Install-AddOnFiles($Stage, $State) {
           Copy-Item -LiteralPath (Join-Path $backup $n) -Destination "$dest.upd-restore" -Force
           Move-FileAtomic "$dest.upd-restore" $dest
         }
-      } catch { $notBack += $n; Write-Log "-InstallChartBridge: $n could not be put back ($($_.Exception.Message))" 'ERROR' }
+      } catch { $notBack += $n; Write-Log "${Who}: $n could not be put back ($($_.Exception.Message))" 'ERROR' }
     }
     foreach ($n in $all) {
       foreach ($x in @("$n.upd-tmp", "$n.upd-restore")) {
@@ -1802,8 +1824,18 @@ function Install-AddOnFiles($Stage, $State) {
     try { $now = Get-AddOnHashes $all } catch { }
     $mixed = @()
     foreach ($n in $all) { if ($null -eq $now -or [string]$now[$n] -ne [string]$before[$n]) { $mixed += $n } }
-    return @{ ok = $false; backup = $backup; error = $err; mixed = $mixed; before = $before; after = $after; notBack = $notBack; files = $all }
+    return @{ ok = $false; backup = $backup; error = $err; mixed = $mixed; before = $before; after = $after; notBack = $notBack; files = $all; who = $Who }
   }
+}
+
+# The install record of a copy found whole by a later run (a copy cut off after its last replace, or a mix put right):
+# the set it kept, the sha256 of each kept file and of each file it wrote, so rollback-chartbridge still works after it
+# (release 1, the R12 review of the cut).
+function New-InstalledRecord($Rec) {
+  $r = @{ version = (Get-Field $Rec 'version'); commit = (Get-Field $Rec 'commit'); at = (Get-NowMs); confirmed = $false; files = @(Get-Field $Rec 'addonFiles' (Get-Field $Rec 'files' @()))
+    backup = (Get-Field $Rec 'backup'); backupHashes = (Get-Field $Rec 'before'); afterHashes = (Get-Field $Rec 'after') }
+  if (Get-Field $Rec 'rolledBackFrom') { $r['rolledBackFrom'] = Get-Field $Rec 'rolledBackFrom' }
+  return $r
 }
 
 # A mix of new and old ChartBridge files recorded by -InstallChartBridge is cleared once AddOns holds one whole set
@@ -1818,10 +1850,10 @@ function Update-MixedAddOns($State) {
     if ($changed.Count -and -not (Test-SameHashes $now (Get-Field $cp 'after')) -and -not (Get-Field $State['chartBridge'] 'mixed')) {
       $cp['changed'] = $changed; $cp['error'] = 'the copy was cut off (a power loss or a closed window?)'
       $State['chartBridge']['mixed'] = $cp
-      Write-Log "STOP: $($script:MixedStop). An -InstallChartBridge of ChartBridge $(Get-Field $cp 'version') was cut off half way: $($changed -join ', ') changed. The files as they were: $(Get-Field $cp 'backup')" 'ERROR'
+      Write-Log "STOP: $($script:MixedStop). A copy of ChartBridge $(Get-Field $cp 'version') by $(Get-Field $cp 'who' '-InstallChartBridge') was cut off half way: $($changed -join ', ') changed. The files as they were: $(Get-Field $cp 'backup')" 'ERROR'
     } elseif ($changed.Count -and (Test-SameHashes $now (Get-Field $cp 'after'))) {
-      $State['chartBridge']['installed'] = @{ version = (Get-Field $cp 'version'); commit = (Get-Field $cp 'commit'); at = (Get-NowMs); confirmed = $false; files = @(Get-Field $cp 'addonFiles' (Get-Field $cp 'files' @())) }
-      Write-Log "an -InstallChartBridge of ChartBridge $(Get-Field $cp 'version') was cut off after its last replace: all files are in; press F5 when flat" 'WARN'
+      $State['chartBridge']['installed'] = New-InstalledRecord $cp
+      Write-Log "a copy of ChartBridge $(Get-Field $cp 'version') by $(Get-Field $cp 'who' '-InstallChartBridge') was cut off after its last replace: all files are in; press F5 when flat" 'WARN'
     }
   }
   $mx = Get-Field $State['chartBridge'] 'mixed'
@@ -1830,10 +1862,10 @@ function Update-MixedAddOns($State) {
   $now = Get-AddOnHashes $names
   if (Test-SameHashes $now (Get-Field $mx 'before')) {
     $State['chartBridge'].Remove('mixed')
-    Write-Log 'the ChartBridge files in AddOns are whole again (all as before -InstallChartBridge)'
+    Write-Log "the ChartBridge files in AddOns are whole again (all as before $(Get-Field $mx 'who' '-InstallChartBridge'))"
   } elseif (Test-SameHashes $now (Get-Field $mx 'after')) {
     $State['chartBridge'].Remove('mixed')
-    $State['chartBridge']['installed'] = @{ version = (Get-Field $mx 'version'); commit = (Get-Field $mx 'commit'); at = (Get-NowMs); confirmed = $false; files = @(Get-Field $mx 'addonFiles' (Get-Field $mx 'files' @())) }
+    $State['chartBridge']['installed'] = New-InstalledRecord $mx
     Write-Log "the ChartBridge files in AddOns are whole again (all of ChartBridge $(Get-Field $mx 'version'))"
   }
 }
@@ -1876,7 +1908,14 @@ function Invoke-InstallChartBridge {
     $backup = $copy.backup
     if (Get-Field $state['chartBridge'] 'mixed') { $state['chartBridge'].Remove('mixed'); Write-Log 'the ChartBridge files in AddOns are one whole set again' }
     # recorded at once: whatever happens next, the notice, status and the F5 bookkeeping know the files were replaced
-    $state['chartBridge']['installed'] = @{ version = $sv; commit = (Get-Field $stage 'commit'); at = (Get-NowMs); confirmed = $false; files = @(Get-Field $stage 'addonFiles' @()) }   # 0.3.7: the list, so a later install knows what it drops
+    # release 1: the set it replaced and each file's sha256 then ('missing': not there), and each file it wrote, for
+    # rollback-chartbridge. The same files copied again (an install run twice) keep the earlier record's kept set, so the
+    # way back is never lost (the R12 review of the cut).
+    $kept = $backup; $keptSums = $copy.before
+    $old = Get-Field $state['chartBridge'] 'installed'
+    if ((Test-SameHashes $copy.before $copy.after) -and (Get-Field $old 'backup') -and (Get-Field $old 'backupHashes')) { $kept = [string](Get-Field $old 'backup'); $keptSums = Get-Field $old 'backupHashes' }
+    $state['chartBridge']['installed'] = @{ version = $sv; commit = (Get-Field $stage 'commit'); at = (Get-NowMs); confirmed = $false; files = @(Get-Field $stage 'addonFiles' @())   # 0.3.7: the list, so a later install knows what it drops
+      backup = $kept; backupHashes = $keptSums; afterHashes = $copy.after }
     $state['chartBridge']['toastedFor'] = $sv
     Save-State $state
     Write-Log "ChartBridge $sv copied into $($script:P.AddOns) from $(Get-Short (Get-Field $stage 'commit')) by hand (-InstallChartBridge); the files it replaced are in $backup"
@@ -1926,14 +1965,14 @@ function Invoke-InstallChartBridge {
 # stop. The put-back failed too: AddOns holds new and old ChartBridge files, and the next F5 would compile that mix on
 # the order path. That is recorded, and said on the console, in update.log, status.json and on the page, until
 # AddOns holds one whole set again.
-function Complete-AddOnFailure($State, $Stage, $Copy, $Pass, $Compiled) {
+function Complete-AddOnFailure($State, $Stage, $Copy, $Pass, $Compiled, [string]$Again = 'update-pc.ps1 -InstallChartBridge') {
   $sv = [string](Get-Field $Stage 'chartBridgeVersion')
   $r2 = New-Result
   $r2.target = $Pass.target; $r2.compiled = $Compiled
   $old = Get-Field $State['chartBridge'] 'mixed'
   if (@($Copy.mixed).Count -eq 0) {
     $r2.outcome = 'chartbridge_not_copied'
-    $r2.reason = "ChartBridge $sv was not copied and nothing changed in AddOns (every file put back): $($Copy.error). Close the NinjaScript Editor (and anything else holding the file), then run update-pc.ps1 -InstallChartBridge again"
+    $r2.reason = "ChartBridge $sv was not copied and nothing changed in AddOns (every file put back): $($Copy.error). Close the NinjaScript Editor (and anything else holding the file), then run $Again again"
     if ($old) { $r2.reason = "$($script:MixedStop). AddOns still holds the mix from before; this copy of ChartBridge $sv failed too ($($Copy.error)) and changed nothing" }
     [void](Complete-Run $State $r2)
     return (Write-Verdict $false $r2.reason)
@@ -1941,7 +1980,8 @@ function Complete-AddOnFailure($State, $Stage, $Copy, $Pass, $Compiled) {
   $after = $Copy.after
   $before = $Copy.before; $backup = $Copy.backup
   if ($old) { $before = Get-Field $old 'before'; $backup = [string](Get-Field $old 'backup') }   # the set before the first failed copy
-  $State['chartBridge']['mixed'] = @{ at = (Get-NowMs); version = $sv; commit = (Get-Field $Stage 'commit'); files = @($(if ($Copy.files) { $Copy.files } else { Get-Field $Stage 'addonFiles' @() })); addonFiles = @(Get-Field $Stage 'addonFiles' @()); before = $before; after = $after; backup = $backup; changed = @($Copy.mixed); error = $Copy.error }
+  $State['chartBridge']['mixed'] = @{ at = (Get-NowMs); version = $sv; commit = (Get-Field $Stage 'commit'); files = @($(if ($Copy.files) { $Copy.files } else { Get-Field $Stage 'addonFiles' @() })); addonFiles = @(Get-Field $Stage 'addonFiles' @()); before = $before; after = $after; backup = $backup; changed = @($Copy.mixed); error = $Copy.error
+    who = $(if ($Copy.who) { $Copy.who } else { '-InstallChartBridge' }); rolledBackFrom = (Get-Field $Stage 'rolledBackFrom') }
   $r2.outcome = 'chartbridge_mixed'
   $r2.reason = "$($script:MixedStop). The copy of ChartBridge $sv failed ($($Copy.error)) and the old files could not all be put back: $(@($Copy.mixed) -join ', ') differ from before. The files as they were before are in $backup"
   Write-Log "STOP: $($r2.reason)" 'ERROR'
@@ -2014,6 +2054,112 @@ function Invoke-Repair {
     $r.compiled = $compiled
     [void](Complete-Run $state $r)
     return (Write-Verdict $true "$($r.reason).$compatNote Reload the page when flat.")
+  } finally { $lock.Dispose() }
+}
+
+# ------------------------------------------------------------------------------------------------ rollback-chartbridge
+
+# Release 1 (plan step 1.1, the audit): the way back after a ChartBridge install, by hand and only while flat. The set
+# the last -InstallChartBridge replaced, kept in previous-addons\<time>\ (Install-AddOnFiles), is copied back over
+# AddOns through the same all-or-nothing copy, which keeps the files it replaces in a new previous-addons\ folder first.
+# The set must be the one state.json names for that install, whole, and every file must have the sha256 recorded when
+# it was kept; a set kept by an updater older than this command has no record and is refused (put it back by hand).
+# Returns @{ ok; why } or @{ ok = $true; backup; stage (the set as Install-AddOnFiles reads a stage); version; from; retired }
+function Get-RollbackSet($State) {
+  $inst = Get-Field $State['chartBridge'] 'installed'
+  if (-not $inst) { return @{ ok = $false; why = 'no ChartBridge install by this tool is recorded on this PC, so there is no previous set to go back to; nothing changed' } }
+  $iv = [string](Get-Field $inst 'version' '')
+  $backup = [string](Get-Field $inst 'backup' '')
+  $sums = Get-Field $inst 'backupHashes'
+  $wrote = Get-Field $inst 'afterHashes'
+  if (-not $backup -or -not ($sums -is [System.Collections.IDictionary]) -or $sums.Count -eq 0 -or -not ($wrote -is [System.Collections.IDictionary]) -or $wrote.Count -eq 0) {
+    return @{ ok = $false; why = "the last install (ChartBridge $iv) has no record of the set it replaced (it was made by an updater older than rollback-chartbridge, or found after a cut-off copy), so that set cannot be checked; nothing changed. The kept sets are in $($script:P.PrevAddOns)" }
+  }
+  $full = [IO.Path]::GetFullPath($backup).TrimEnd('\', '/')
+  if ((Split-Path -Parent $full) -ne [IO.Path]::GetFullPath($script:P.PrevAddOns).TrimEnd('\', '/')) { return @{ ok = $false; why = "the recorded set $backup is not a folder of $($script:P.PrevAddOns); nothing changed" } }
+  if (-not (Test-Path -LiteralPath $full -PathType Container)) { return @{ ok = $false; why = "the set the last install kept ($backup) is no longer there; nothing changed" } }
+  $names = @(); $missing = @(); $bad = @(); $stageSums = @{}
+  foreach ($n in @($sums.Keys | Sort-Object)) {
+    $h = [string]$sums[$n]
+    if ($n -notmatch '^ChartBridge[A-Za-z0-9_]*\.cs$') { return @{ ok = $false; why = "the record of the kept set names $n, which is not a ChartBridge file; nothing changed" } }
+    if ($h -eq 'missing') { continue }   # not in AddOns before that install: taken out again (Get-RetiredAddOns, inside the copy)
+    if ($h -notmatch '^[0-9a-f]{64}$') { return @{ ok = $false; why = "the record of the kept set has no sha256 for $n ('$h'); nothing changed" } }
+    $f = Join-Path $full $n
+    if (-not (Test-Path -LiteralPath $f -PathType Leaf)) { $missing += $n; continue }
+    $got = ''
+    try { $got = Get-FileSha256 $f } catch { $got = 'unreadable' }
+    if ($got -ne $h) { $bad += $n; continue }
+    $names += $n; $stageSums["addons/$n"] = $h
+  }
+  if ($missing.Count) { return @{ ok = $false; why = "the set the last install kept ($backup) is incomplete: $($missing -join ', ') missing; nothing changed" } }
+  if ($bad.Count) { return @{ ok = $false; why = "the set the last install kept ($backup) does not match the sha256 recorded when it was kept: $($bad -join ', '); nothing changed" } }
+  if ($names -notcontains 'ChartBridge.cs') { return @{ ok = $false; why = "the set the last install kept ($backup) holds no ChartBridge.cs (that install was the first on this PC?): there is nothing to go back to; nothing changed" } }
+  $m = [regex]::Match([IO.File]::ReadAllText((Join-Path $full 'ChartBridge.cs')), 'public const string Version = "([^"]+)"')
+  if (-not $m.Success -or -not (ConvertTo-VersionOrNull $m.Groups[1].Value)) { return @{ ok = $false; why = "the ChartBridge.cs kept in $backup has no version this tool can read; nothing changed" } }
+  $v = $m.Groups[1].Value
+  # AddOns must still hold what the last install wrote (the R12 review of the cut): every file it wrote with that sha256, and
+  # no ChartBridge file beside them that neither set names (a hand copy would be compiled with the set put back)
+  $now = Get-AddOnHashes @($wrote.Keys)
+  $diff = @(@($wrote.Keys | Sort-Object) | Where-Object { [string]$now[$_] -ne [string]$wrote[$_] })
+  $known = @($names) + @(Get-Field $inst 'files' @()) + @($wrote.Keys)
+  $extra = @()
+  if (Test-Path -LiteralPath $script:P.AddOns) { $extra = @(Get-ChildItem -LiteralPath $script:P.AddOns -File | Where-Object { $_.Name -match '^ChartBridge[A-Za-z0-9_]*\.cs$' -and $known -notcontains $_.Name } | ForEach-Object { $_.Name } | Sort-Object) }
+  if ($diff.Count -or $extra.Count) {
+    $what = @(); if ($diff.Count) { $what += "$($diff -join ', ') not as it wrote them" }; if ($extra.Count) { $what += "$($extra -join ', ') not in either set" }
+    return @{ ok = $false; why = "AddOns changed since the last install: $($what -join '; '); nothing changed" }
+  }
+  # the kept set is exactly what AddOns holds (an install of the same files): there is no other version to go back to
+  $nowKept = Get-AddOnHashes @($sums.Keys)
+  if (@(@($sums.Keys) | Where-Object { [string]$nowKept[$_] -ne [string]$sums[$_] }).Count -eq 0) { return @{ ok = $false; why = 'the kept set is the same as the files in AddOns: nothing to go back to; nothing changed' } }
+  $stage = @{ addonFiles = $names; sha256 = $stageSums; chartBridgeVersion = $v; commit = ''; rolledBackFrom = $iv }   # the commit of a kept set is not known for sure
+  return @{ ok = $true; backup = $full; stage = $stage; version = $v; from = $iv; retired = @(Get-RetiredAddOns $State $names) }
+}
+
+function Invoke-RollbackChartBridge {
+  $pre = Test-Preflight -NoWwwOk
+  if ($pre) { return (Write-Verdict $false $pre) }
+  # flat: the updater has no check of NinjaTrader's positions that counts while NinjaTrader is closed (and a ChartBridge
+  # that does not load says nothing at all), so the check is Anthony's word, given on the command line
+  if (-not $Flat) { return (Write-Verdict $false 'rollback-chartbridge needs -Flat, your word that you are flat in every account (no position, no working order): run it again with -Flat when you are. Nothing changed') }
+  $lock = Enter-Lock
+  if (-not $lock) { return (Write-Verdict $false (Get-BusyText)) }
+  try {
+    $state = Read-State
+    Update-MixedAddOns $state
+    if (Get-Field $state['chartBridge'] 'mixed') { Save-State $state; return (Write-Verdict $false "$($script:MixedStop). rollback-chartbridge changed nothing") }
+    $set = Get-RollbackSet $state
+    if (-not $set.ok) { return (Write-Verdict $false $set.why) }
+    $compiled = Get-CompiledChartBridge $state
+    Write-Host "this PC:      ChartBridge $(if ($compiled.version) { $compiled.version } else { 'unknown' }) ($($compiled.detail)); the last install copied $($set.from)"
+    Write-Host "back to:      ChartBridge $($set.version), the set kept in $($set.backup) (every file checked against its sha256)"
+    if (@($set.retired).Count) { Write-Host "taken out:    $(@($set.retired) -join ', ') (not in that set; kept with the others)" }
+    Write-Host ''
+    Write-Host 'Before you go on: be flat in every account, and CLOSE the NinjaScript Editor (an open editor compiles as soon as a file changes).'
+    if (-not $Yes) {
+      $answer = Read-Host "Put ChartBridge $($set.version) back now? Type y to go on"
+      if ($answer -ne 'y') { return (Write-Verdict $false 'nothing changed') }
+    }
+    $script:AddOnWriteAllowed = $true
+    try { $copy = Install-AddOnFiles $set.stage $state $set.backup 'rollback-chartbridge' } finally { $script:AddOnWriteAllowed = $false }
+    if ($state['chartBridge'].Contains('copying')) { $state['chartBridge'].Remove('copying') }
+    if (-not $copy.ok) { return (Complete-AddOnFailure $state $set.stage $copy (New-Result) $compiled 'update-pc.ps1 rollback-chartbridge -Flat') }
+    # recorded at once, as an install: the files it replaced are its own kept set, so rollback-chartbridge again goes
+    # forward again
+    $state['chartBridge']['installed'] = @{ version = $set.version; commit = [string](Get-Field $set.stage 'commit' ''); at = (Get-NowMs); confirmed = $false; files = @($set.stage.addonFiles)
+      backup = $copy.backup; backupHashes = $copy.before; afterHashes = $copy.after; rolledBackFrom = $set.from }
+    Save-State $state
+    Write-Log "rollback-chartbridge: ChartBridge $($set.version) put back into $($script:P.AddOns) from $($set.backup) by hand (-Flat); the files it replaced ($($set.from)) are in $($copy.backup)"
+    $r = New-Result
+    $r.outcome = 'chartbridge_rolled_back'; $r.reason = "ChartBridge $($set.version) put back (from $($set.from)); waiting for F5"; $r.compiled = $compiled
+    [void](Complete-Run $state $r)
+    Write-Host ''
+    Write-Host 'Next, while flat: open the NinjaScript Editor (NinjaTrader > New > NinjaScript Editor) and press F5.'
+    Write-Host "Then open http://localhost:$(Get-ChartBridgePort)/diag and check that it says ""version"":""$($set.version)"" (or run update-pc.ps1 status)."
+    Write-Host 'Then reload the chart page when flat. The page files are not changed (update-pc.ps1 rollback puts the previous page back).'
+    Write-Host "The files replaced ($($set.from)) are kept in:"
+    Write-Host "  $($copy.backup)"
+    Write-Host 'update-pc.ps1 rollback-chartbridge -Flat again goes forward again.'
+    return (Write-Verdict $true "ChartBridge $($set.version) put back: open the NinjaScript Editor and press F5 while flat")
   } finally { $lock.Dispose() }
 }
 
@@ -2934,6 +3080,7 @@ function Invoke-Main {
       'register' { return (Invoke-Register) }
       'unregister' { return (Invoke-Unregister) }
       'install-chartbridge' { return (Invoke-InstallChartBridge) }
+      'rollback-chartbridge' { return (Invoke-RollbackChartBridge) }
     }
   } catch {
     Write-Log "$cmd failed: $($_.Exception.Message)" 'ERROR'

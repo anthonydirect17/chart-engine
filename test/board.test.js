@@ -167,7 +167,8 @@ test('the page: Kill all is the existing agentKill per agent; Assign hero is age
   assert.deepEqual(kill, { type: 'agentKill', agent: 'demo', on: true });
   // only messages of the contract leave the board (no new message type)
   const sends = [...js.matchAll(/type: '(agent[A-Za-z]+)'/g)].map(m => m[1]);
-  for (const t of sends) assert.ok(['agentMode', 'agentKill', 'agentSeen', 'agentAnswer', 'agentAccount', 'agentRules'].includes(t), t);
+  // plan step 3.2: agentFlattenOff, "Flatten and turn him off" as one ChartBridge command (nt8/PROTOCOL.md), not a board message
+  for (const t of sends) assert.ok(['agentMode', 'agentKill', 'agentSeen', 'agentAnswer', 'agentAccount', 'agentRules', 'agentFlattenOff'].includes(t), t);
 });
 
 test('Settings: groupSave carries accountType and hero in the shapes ChartBridge 0.6.1 checks; the switch and Rename keep them', () => {

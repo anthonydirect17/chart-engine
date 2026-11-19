@@ -63,6 +63,549 @@
   `test/pc-updater.test.js`: the allowed git subcommands, the box job's name, useHttpPath read before the one ask, the
   token only after a 404 or 401 and then through the Actions API, one place that asks for it and one that sends it.
 
+## ChartBridge 0.6.25 and chart 1.58.0 (2026-11-19): Legion as its own app with Castra and the Ludus, the go-live guards, the delta table, the floor fix, the shared calendar and clock
+
+In plain words: the page goes first, by itself; ChartBridge 0.6.25 is one hand install, later, while flat. Legion becomes
+its own page (Castra, Cohorts with the cohort model, the Colosseum, the Ludus, Go live) with Stop all automation in its
+header; ChartBridge 0.6.25 adds the go-live guards (one direction per firm, one PC per firm, the GO size is the file's),
+Stop all and Flatten and turn off, the delta table (the Cum Delta no longer resets on a timeframe, ticker or layout switch)
+and the floor fix (every prop account's highest close kept); the page and ChartBridge read the shared CME calendar's Good
+Friday 2026 (an abbreviated session to 09:15 ET). Praetorian holds Auto on a Sim account until ChartBridge can tell eval
+and funded accounts from true Sim ones. `live/COMPAT.json` `minChartBridge` stays 0.6.2, so the PC updater installs this
+page beside the ChartBridge each PC runs today.
+
+### Installing: the page first, ChartBridge by hand
+
+- **The page (tonight, by itself).** Once `main` is green the PC updater installs chart 1.58.0 at its overnight check
+  (03:45 New York where `register -DailyAt 03:45` was run). `minChartBridge` is 0.6.2, so it installs beside 0.6.23 (what
+  `main` carried until now) or 0.6.24 (release 1, if a PC has it). ChartBridge is never installed by the updater.
+  `update-pc.ps1 rollback` puts the previous page back.
+- **Before it: The Desk's hotkey change** (release 1's note, unchanged): The Desk must know `cutHalf`, or every hotkey save
+  from the page is refused (nothing else is held by it).
+- **What the page does with an older ChartBridge** (every gate reads ChartBridge's version as exactly a.b.c; anything else
+  counts as no version, so each gate fails closed):
+  - **Go live and Auto on a prop account** need 0.6.25 (`GOLIVE_MIN` in `agent-core.js`, `fleet.js` and `legion.js`): below
+    it Legion's Armed is not offered, its desks refuse Auto, and the Go live tab says "Go live needs ChartBridge 0.6.25 or
+    later (its firm and GO-size guards); this one is <version>". Copilot, Shadow and every stop still go.
+  - **Praetorian's Auto on a Sim account** waits below 0.6.25, every Sim account, with the words that updating to 0.6.25
+    lets a true Sim account test (an older ChartBridge cannot say which Sim-listed accounts the ledger types eval or funded).
+  - **Stop all automation** (Legion's header) and **Kill all** (Cohorts) send Kill all (prop accounts), `agentKillAllProp`,
+    on 0.6.17 to 0.6.24; the question says so: by ChartBridge's own prop rule only, so an eval or funded account
+    NinjaTrader lists as Sim is NOT stopped. `agentStopAll` goes only to 0.6.25.
+  - **Flatten and turn off**: below 0.6.25 the desk sends Shadow first and turns the trader off once he is flattened by hand
+    (NinjaTrader, or Flatten on the chart page's ticket). `agentFlattenOff` goes only to 0.6.25.
+  - **Cut half** needs 0.6.24 (`cutHalf` in hello's features): on 0.6.23 the button greys and says so; nothing is sent.
+  - **The personal bot** on a ChartBridge before 0.6.24 (no `railsMissing`): Copilot and Auto are refused, Shadow stays, and
+    the Bot tab says "This ChartBridge (before 0.6.24) has the old fixed rails ...: install 0.6.24 to arm the bot". A change
+    of the rails there is refused by ChartBridge itself (its strict key list: `unknown key "size" in botRails`) and the old
+    fixed rails stay; nothing is misread.
+  - **The delta table** is asked for only when hello's `features` lists `deltaTable` (0.6.25): with an older one the Cum
+    Delta counts as before (from the load, so it still starts again on a switch).
+  - **The floor fix's page half** reads `highEod` only when ChartBridge sends it (0.6.25): with an older one the join's
+    highest close is prefilled as before (the larger of the account size and the balance), and the join row warns when the
+    floor must start at the account size, with the firm's dashboard as the way to type the real highest close. The kept
+    highs themselves are ChartBridge 0.6.25's: until then a leave, a deleted group or Hide still forgets them.
+  - **Castra, the cohort model and the Ludus** read The Desk only (the cohort model's drag and drop writes only The Desk's
+    `PUT /api/legion/cohorts/members`); none sends ChartBridge anything, so the version does not matter to them. They need
+    The Desk's Legion routes (TheDesk #112, and #120 for Castra's "could not tell" line); a route The Desk does not have
+    yet reads as a failed read, in plain words.
+  - Legion's page itself (`live/legion.html` and its files) is served by any ChartBridge from its www folder.
+- **ChartBridge 0.6.25 (by hand, when Anthony says go and he is flat in every account):** `update-pc.ps1
+  -InstallChartBridge`, then F5 in the NinjaScript Editor while flat; the card is `docs/CUTOVER_chartbridge_0_6_25_golive.md`
+  (first: The Desk's plan step 3.1 with `GET /api/legion/cohorts`, every prop account's type, each firm's PC). From 0.6.23
+  it also brings release 1's ChartBridge (0.6.24): the personal bot does not trade until every rail is set on the Bot tab.
+  The way back is `update-pc.ps1 rollback-chartbridge -Flat`, to the ChartBridge that install replaced (0.6.23 or 0.6.24),
+  then F5; the page keeps its guards for it as above.
+
+### Release 2: the shared CME calendar and New York clock copies, Good Friday 2026 follows CME (2026-11-18)
+
+Release 2's numbers are this release's (chart 1.58.0, ChartBridge 0.6.25). Three parts, each merged whole into `claude/release2`:
+the shared calendar copy (Bot-Lab plan step 1.5), the shared clock copy (step 1.6), and Good Friday 2026.
+
+**The shared CME calendar and contract values, an exact copy (plan step 1.5).** `shared/` and tests only. `shared/`
+holds market-data's four files byte for byte: `cme_calendar.json` (CME Globex equity index holidays and early closes for
+2024 to 2027, a CME source and a check on every row; the 2024 and 2025 rows from Bot-Lab's build
+`claude/build-1-5-calendar-2024-2025`, byte-identical across the repos), `contracts.json` (NQ, MNQ, ES, MES: point value
+and tick size) and their JS and Python loaders. Never edit them here: market-data holds the originals.
+
+- `test/shared-calendar.test.js` pins the four files by sha256 and proves the page's own calendar (`cmeSessionDay`,
+  `nyseHolidays`, `nyseEarlyCloses`, `cmeShortSessions`, `cmeClosed`) agrees with the copy on every day of 2024 to 2027:
+  the sessions, the 13:00 halts and 13:15 early closes, each abbreviated session's close (`cmeShortSessions` holds the
+  copy's close time for every day it lists), and every session day's close from 18:00 the evening before. One day
+  differs and is pinned by name (`KNOWN_PAGE_DIFFERENCES`), never hidden: 2025-01-09, the national day of mourning, when
+  CME's equity session closed at 09:30 New York and the page keeps a full session to 17:00. Good Friday 2026 now agrees
+  (below).
+- `test/test_markup_shared_contracts.py`: the Markup Studio's instrument table matches the shared contract values.
+
+**The shared New York clock and session date, an exact copy (plan step 1.6).** `shared/` and tests only. `shared/` adds
+market-data's three clock files byte for byte: `ny_clock.js` (one rule: a session runs 18:00 New York the evening before
+to 17:00, from 17:00 a moment is dated the next day, a weekend rolls to Monday; now in New York, the session date, the
+session's start and end, in session, the weekend; the US daylight-saving rules in code, never the browser's own zone),
+its Python twin `ny_clock.py`, and `ny_clock_cases.json`, the table both are proved by (the copy from the same Bot-Lab
+build). Never edit them here: market-data holds the originals. It reads the shared calendar for holiday evenings.
+
+- `test/ny-clock.test.js` pins the three files by sha256, computes every value of the table again through the
+  runtime's own America/New_York zone, and holds the module to it. Nothing in the page, the live pages, Legion or
+  ChartBridge reads it yet. It pins where the page stands: the league's `sessionToday` and `sessionOfBar` agree on every
+  row; `tradeDay(t, 18:00)` and the bot's `tradeDay` (18:00, no weekend roll) differ only in the 17:00 to 18:00 break
+  and at weekends; `cmeClosed` agrees with the calendar's in-session answer on every row it covers, Good Friday 2026
+  included.
+- `test/shared-calendar.test.js`: its file list names the three new files.
+- After its review: every date in the table is chosen clear of both fences (market-data and Bot-Lab test that); a
+  moment must be a whole number of UTC ms from 2007-01-01T00:00Z up to the start of the year 2100 (seconds or
+  microseconds passed as ms are refused), and session dates the same range; the US rules answer from the end of
+  daylight time in 2006, so the first session of 2007 opens as in Python.
+
+**Good Friday 2026 is CME's abbreviated session to 09:15 ET, not a closed day.** Anthony ruled on 2026-11-18: "Good
+Friday 2026: follow CME, an abbreviated equity session (The Desk's cme_closed and the chart's cmeClosed change to match,
+each in a reviewed change)". CME's Globex equity index session on Good Friday 2026 ran from 18:00 the evening before to
+09:15 New York, the shared CME calendar's row (`shared/cme_calendar.json`: kind "early", close 09:15).
+
+- **The page** (`src/chart-engine.js`): `cmeShortSessions()` (new in `util`) lists the sessions the rule gets wrong, one
+  row, Good Friday 2026 at 09:15. `cmeClosures(2026)` no longer holds it, `cmeSessionDay` is true for it, and `cmeClosed`
+  is open from 18:00 the evening before to 09:15 and closed from 09:15. `overnightRange` on that day forms and locks as
+  on Thanksgiving instead of `closed`. `rthDay`, `nyseHolidays` and the IB are unchanged (no stock market session that
+  day). Good Friday in every other year is still a full closure.
+- **ChartBridge** (`nt8/ChartBridge.cs`, `ChartBridgeCme`, the C# twin): the same row (`ShortClose`), so `Closed`,
+  `SessionDay`, `SessionClose` (09:15) and `FinishedSessions` (the week profile now counts that session) match the page.
+  CME did not settle equity index futures that day (its clearing memo: the April 2 settlement was used), so
+  `SettledDay` passes over it: no settlement is dated to it, and the prior settlement is Thursday's in that session,
+  after it and on Monday (before, on the day itself it was Wednesday's). `nt8/check/DataHarness.cs` follows.
+- Docs: `CHART_STYLE.md` (the overnight range), `nt8/PROTOCOL.md` (closed, the prior settlement).
+
+### Plan step 3.2: Legion as its own app
+
+Page and ChartBridge (`ChartBridgeAgents.cs` only; `ChartBridge.cs` untouched, its version raised at the release).
+
+- **Legion is its own page** (`live/legion.html`, `legion.js`, `legion-tabs.js`, `legion.css`), behind the same PIN, served by
+  ChartBridge from its www folder: Castra, Cohorts (the cohorts' FleetView and Praetorian's Agent desk), Colosseum, Ludus and
+  Go live, with Stop all automation in its header on every tab. Castra, Ludus and Go live are placeholders that say they are not
+  built yet; no sample numbers.
+- **Stop all automation** (`agentStopAll`, new): ChartBridge stops every bot and agent on a prop account by its own rule and
+  the account ledger, flattens what each owns and latches a mixed trader's prop seats until 18:00 ET. An older ChartBridge (0.6.17
+  or later) gets Kill all (prop accounts) instead, said beside the button.
+- **Kill all on Cohorts** sends `agentStopAll` on a ChartBridge that knows it (the same command as the header's Stop all, so it
+  also reaches the ledger's eval and funded accounts NinjaTrader lists as Sim, and a mixed trader's prop seats); older ones
+  `agentKillAllProp` as before. On an older ChartBridge the header's question itself says the ledger's accounts are not covered.
+- **Flatten and turn off** (`agentFlattenOff`, new): one ChartBridge command puts the trader in Shadow and flattens what he owns;
+  the page says Shadow only once ChartBridge says it, ends the job with ChartBridge's words when it refuses the command, and turns
+  him off only in Shadow and flat. On an older ChartBridge the desk sends Shadow first and turns him off once he is flattened by
+  hand (in NinjaTrader, or Flatten on the chart page's ticket). No desk sends a Flatten of its own any more. Legion's Armed
+  leaves out a lane whose trader a desk in any window of this browser is turning off, until his Off answers.
+- **One version rule:** ChartBridge's version is read as exactly a.b.c on every gate (Stop all, Kill all, Flatten and turn off);
+  anything else counts as no version.
+- **Go live and Auto on a prop account need ChartBridge 0.6.25** (`GOLIVE_MIN` in `agent-core.js`, `fleet.js` and `legion.js`,
+  pinned together): below it Armed is not offered, Legion's desks refuse Auto (Copilot and every stop still go), and the Go live
+  tab says so, each with a plain line naming the version. A PC rolled back to an older ChartBridge never runs a trader past its
+  firm and GO-size guards.
+- **Answers matched by cid:** ChartBridge 0.6.25 puts the press's cid on its Stop all and Kill all status lines; the header and
+  Kill all then take a line only for their own pending press (another window's goes to the alert line). A line with no cid (an
+  older ChartBridge) is matched by its opening words as before.
+- **The turning-off list across windows** keeps an entry 90 s (longer than a hidden window's throttled timer) and a closing window
+  clears its own at once (pagehide). A lane held out of Armed only because an Off failed says "Off was not done on a desk: press
+  Off (or On) for X there".
+- **The chart page** keeps Chart, the Bot tab, the bot strip and a small Legion link (shown with a v3 ChartBridge, opening
+  `legion.html` in its own window). Legion, the Colosseum and Praetorian's Agent tab left it, and so did its league read: the
+  Drone sky shows the agents and the bot only, and a chart's ⋯ has no League trades switch. The Agent desk stays on the chart page
+  with no tab for the ticket's owner check, the copilot switch, the Agents panel's cards and its corner line; a name in the line
+  opens Praetorian on Legion on that trader. Old addresses (`?tab=legion`, `fleet`, `league` with its day, `colosseum`, `agent`,
+  `praetorian`) forward to Legion; `?tab=praetorian` opens the Bot tab when that was the side used last.
+- **Copilot keys** stay on the chart page (they answer the bot); on Legion a proposal is answered with its buttons.
+- **COMPAT:** the release that ships this page raises `live/COMPAT.json` minChartBridge to the ChartBridge that knows
+  agentStopAll and agentFlattenOff (`FLATOFF_MIN` in `agent-core.js` and `STOPALL_MIN` in `legion.js`, pinned to one version by
+  `test/nt8-agents.test.js`).
+  **At this release (1.58.0) it is not raised:** `minChartBridge` stays 0.6.2, so the PC updater installs the page beside
+  the ChartBridge each PC runs until Anthony installs 0.6.25 by hand (Anthony's GO of 2026-11-19: the page first). The two
+  commands are never sent below 0.6.25: `FLATOFF_MIN`, `STOPALL_MIN` and `GOLIVE_MIN` (still pinned to one version) fall back
+  or refuse with their own words, as above and in Installing.
+
+### Plan steps 3.3 and 3.4: Castra, the cohort model and the Ludus (the page only)
+
+Legion's Castra and Ludus tabs, built where the 3.2 page had "Not built yet" (Go live still says it). Each is mounted in its
+own guard in `live/legion-tabs.js`, reads The Desk through its one address (`AccountsPage.deskBase`) only while its tab is
+shown, sends ChartBridge nothing, and reads what only the trading PC knows (the traders, the prop accounts' room and day)
+from FleetView's own state, never a second reader. Every simulated number is labelled simulated; a figure with no sample
+reads "not enough data yet". New files: `live/legion-castra-core.js`, `legion-castra.js`, `legion-castra.css`,
+`legion-cohorts.js`, `ludus-core.js`, `ludus.js`, `ludus.css` (on the install list).
+
+- **Castra** (plan step 3.3, Legion's home tab): ROI first, real money against simulated money per roster build with the
+  money alarm (law 9.2: real profit per $1 under the low end of the Prop Sim's range for the same number of evals shows as
+  tripped; it never trips until that range is served; it decides nothing by itself: the stop is step 3.5's; beside each
+  build's real profit per $1, The Desk's words when it could not tell which account the card had when an entry was booked
+  (TheDesk #120; the number is still shown), and one line for the ledger under the money; a Desk from before #120 gets
+  no line);
+  who goes in today (each build's profit per $1, days to pass and payout speed; the split by zone and regime stays off);
+  running now; Needs you (the one place a decision waits; it keeps its last answer, tells a pending read from a failed one,
+  and is never all clear while a read is pending); last night; today (live only). Centurion's week shows its report; the
+  veto is the next step, and until it ships Centurion changes nothing (Anthony 2026-11-19: Castra ships as built). What is
+  not built says so: Centurion's veto, the dollars per funded slot, a cohort's direction today. The Desk's reads time out
+  after 15 s, in plain words.
+- **The cohort model** (plan step 3.3, on top of Cohorts): each prop account group with its stage, firm, the one PC its
+  firm runs on and its roster pick, the account chips with their live room to the floor and today, and drag and drop (or
+  "Move to", for a phone and the keyboard) to The Desk's `PUT /api/legion/cohorts/members` with the version it read. A move
+  is refused on the page, in plain words, before The Desk is asked: while the cohort or the one it leaves is in Auto, when
+  the account holds a position, and whenever Auto cannot be told (the traders not heard yet, a trader that cannot be read,
+  an account of the tray under Auto). A move that timed out is read again at once and never called unmoved. Under it the
+  Agents strip and the Drone sky.
+- **Kill all at the top of Cohorts** (Anthony 2026-11-19: "Yes, Kill all at the top"): the lanes' head (Armed, Kill all and
+  their questions) comes first, where the tab opens, then the cohort model and the Drone sky, then the lanes. No question
+  can be covered by Legion's floating alert lines, and the lines are never hidden (Stop all's answer and ChartBridge's
+  errors stay in view): Kill all's and Armed's rows and their question stack above the lines, and the lines take the
+  lowest band of the window clear of those rows and of every question open on the page, scrolling inside it; at 360 px
+  and narrower Kill all, Yes and Cancel keep one row (`CHART_STYLE.md`). The lines also keep clear of the trader desk's
+  and Praetorian's Kill switch, Off and "Flatten and turn off" wherever they are in view, so a phone with many lines up
+  never covers a stop.
+- **The Ludus** (plan step 3.4): Pipeline (stations I to VII from the loop's board), Board (the line of 30 and every build,
+  best first, each leading with profit per $1, pass rate, days to pass and payout per funded account beside its sample,
+  each half of the line with its own; with no board the builds come from The Desk's ledger and the page says why),
+  Builder, Seeds and Agents (read only; each edge with its sample, under 20 trades "not enough data yet"), and the build
+  page (per account type its best eval and funded playbooks, the plain-code checks, its trades 20 a page, and one trade on
+  chart-engine's own chart: its own bars first, from Bot-Lab, checked as The Desk checks them, else The Desk's stored bars
+  of its session, said plainly). It reads only The Desk's Legion routes (`/api/legion/board`, `lab`, `ledger`, `roster`,
+  `build/<id>/trades`, `bars`; TheDesk #112), which give Legion's page CORS; no Lab route. The address keeps the view.
+- Tests: `test/legion-castra.test.js`, `test/ludus.test.js`, `npm run smoke:castra`, `npm run smoke:ludus` (made-up data
+  only); `test/legion.test.js` and `npm run smoke:legion` now expect Castra and the Ludus mounted.
+
+### The delta table (ChartBridge and the page; Anthony 2026-11-19)
+
+Anthony, 2026-11-19: "When I switch between chart timeframes or tickers, my Cum Delta resets. That should not be: once the
+data is in there, it should be there." `nt8/PROTOCOL.md`, "The delta table".
+
+- **ChartBridge keeps the session's sides:** per instrument, the buy, sell and unknown volume per second of New York time,
+  and each second's largest single trade (Anthony, "Yes, add it": the Data Box's largest print on bars built from the
+  table), from 18:00 ET (or from ChartBridge's first trade of the session, said as "start" or "feed"), with the missed
+  seconds of open market. It asks NinjaTrader for nothing new and the order path is not touched.
+- **Saved per session** (`delta-<ROOT>-<day>.txt`, kept 14 days, written off the market data thread every 10 s) and read
+  back at a start, so a reload or a NinjaTrader restart keeps the count. The R12 review's fixes: the file never doubles
+  after a restart, a trade that comes while a pass writes is kept, a cut last line is cut back, and missed seconds stay with
+  their session.
+- **The `deltaTable` message:** sent right before `ready` to a subscribe that asks with `deltaTable` (the page asks when
+  hello's `features` lists `deltaTable`; never an agent's load), with the held-trade seam of the `profile` message, so the
+  table plus every trade after `ready` is the session's, every trade once. A load that asked also gets the served window's
+  live trades with their sides.
+- **The page:** the Cum Delta is built from the table and the trades after it, the same on every load, timeframe, ticker,
+  layout or reload; the pane says "since 18:00 ET" (or from when ChartBridge started, or that the data connection was down
+  at 18:00) and the missed seconds. Range bars use the window's sided trades. An older ChartBridge: as before.
+- Tests: `nt8/check/DeltaHarness.cs` (`npm run check:orders`), `test/delta.test.js`, `npm run smoke:delta-held`,
+  `test/perf-delta-load.mjs`.
+
+### Plan step 3.5, the ChartBridge half: the go-live guards
+
+Released here: `Version` in `nt8/ChartBridge.cs` is 0.6.25 (`test/lifecycle.test.js` pins it). `live/COMPAT.json`
+`minChartBridge` stays 0.6.2: the page needs nothing new from these guards, and no other part of the release needs it
+raised (see Installing). ChartBridge only
+(`ChartBridgeGroups.cs`, `ChartBridgeAgents.cs`), and on the page Praetorian's rule for Auto on a Sim account (below). Law 9.2 and 9.3 (Anthony 2026-11-17, items 78,
+111, 113 and 114). Bot-Lab's half (the GO and half size, the account type, the alarms, the funded scaling step in the
+runner's size check) is Bot-Lab's plan step 3.5 build. `nt8/PROTOCOL.md`, "One direction per firm, one PC per firm and
+the GO size"; the cutover card's text with its rollback: `docs/CUTOVER_chartbridge_0_6_25_golive.md`.
+
+- **The firms:** each prop account's firm and each firm's trading PC, read once a minute from The Desk's
+  `GET /api/legion/cohorts` (`prop_accounts`, The Desk's plan step 3.1), strictly; never from NinjaTrader's provider name.
+- **One direction per firm:** every prop account of a firm on this PC, grouped or not, one way, with NQ, MNQ, ES and MES
+  as one market. A new entry against the firm's open direction is refused and logged, from every source; nothing is
+  closed or cancelled, an exit of the account's own position always goes, and the personal account is never bound.
+- **One PC per firm:** a trader's pick, Auto, its restore after a restart and every new entry on a prop account need its
+  prop seats to be of one firm and that firm to run on this PC (`config.txt` `pc`, else the computer name).
+- **Not known:** a trader's or the bot's new entry on a prop account waits for a firm read in the last 10 minutes;
+  Anthony's own ticket and the copier go, and are checked whenever the firm is known.
+- **The GO size is the file's:** a roster file whose GO size is not its playbook's is not served, so it cannot be picked
+  or armed.
+- **`groups` gains `firmGuard`:** each firm, its PC, whether that is this PC, its accounts and its direction.
+- **The R12 review of 2f1ddb3:** a prop account with no firm in the ledger counts against a trader's or the bot's entry on
+  the same market (B1: its firm cannot be known, so it is never taken as another firm's); a GO key (live, playbook, bots,
+  stage, risk_dollars, the stage's playbook) written twice or with an escape refuses the roster file (nit 1); The Desk's
+  answer is checked as whole JSON first (nit 2); the advisory plan check 10b writes no Output line (a trader's refusal is
+  in its own log; nit 3).
+- **From the Legion review (ChartBridge side of step 3.2's commands):** Stop all's and Kill all's status lines carry the
+  press's `cid`; `agentFlattenOff` is never refused for the action rate; a failure of Flatten and turn off after Shadow is
+  a status line saying what was and was not done, not a bare reject.
+- Tests: `check/AgentHarness.cs` `GoLive35`; the older agent parts run with a made-up firm per account on this PC; two
+  exact `groups` message checks in `check/GroupsHarness.cs` allow `firmGuard`.
+- **Praetorian, Auto on a Sim account (the page; Anthony 2026-11-19):** an account The Desk's ledger types eval or funded
+  needs ChartBridge 0.6.25 or later for Auto, whatever NinjaTrader calls it. Below 0.6.25 every Sim account waits (no older
+  ChartBridge says the whole ledger), and the line says that updating to 0.6.25 lets a true Sim account test. On 0.6.25 a
+  Sim account waits until ChartBridge has read The Desk's account types (the groups message's `laneRule`: `state` on with an
+  `outside` list), since before that read it takes a Sim-listed prop account for plain Sim. After that true Sim accounts
+  test in Auto freely. Copilot is not held, nor the stops, Shadow, the personal account or None (`AgentCore.prAutoWhy`,
+  `ledgerReadWhy`; `test/praetorian.test.js`, `test/praetorian-smoke.mjs`).
+
+### The floor fix (2026-11-18): every prop account's highest close kept (ChartBridge and the page)
+
+Anthony's ruling (2026-11-18): ChartBridge showed a 50K account's floor at the account size less the drawdown where the
+firm's was higher, from a close above the size before the join.
+A join with no highest close started the highs at the larger of the account size and the balance, the lane rule's join
+never sent a highest close, and leaving a group, deleting a group or Hide forgot the highs, so a rejoin started over at
+the size. Fixed in `nt8/ChartBridgeGroups.cs`, `live/groups.js`, `live/accounts.js` and `live/multi-account.js`
+(nt8/PROTOCOL.md "The floor's highest close kept").
+
+- **Every prop account's end-of-day high is kept at every close, in a group or not** (`EodMark`): in the 17:00 to 18:00
+  ET break a prop account (ChartBridge's own rule, `IsProp`) with no high starts one at that close, then rises as a
+  member's does. Kept in `account-marks.txt` as today (the same line, no new field).
+- **Kept through a leave, a deleted group, Hide and a restart** (`ForgetHighs` now forgets only an account that is not
+  prop: a Sim or personal account forgets them as before). The restart and missed-close rules (0.6.3) are unchanged.
+- **A join with no highest close** starts from the larger of the kept end-of-day high, the account size and the balance
+  now. A highest close typed on the page is still taken as given (the correction path, with the firm's minimum).
+- **The lane rule's join carries The Desk's highest close** (`highClose` in `/api/lane-accounts`, from The Desk's floor
+  plus the drawdown), raised to the kept high when that is higher; the lane line says where the high started, and says
+  to check the firm's dashboard when it had to start at the account size. A Desk that sends none: the kept high or the
+  size, as above.
+- **The page**: the `accounts` entry's new `highEod`; the join's highest close is prefilled never below it (also above
+  The Desk's seed when that is lower), and the join row (the Accounts tab and the Multi-Account panel) warns once when
+  the join must start at the account size, unless NinjaTrader's own figure is within $25 (`AccountsCore.sizeStartWarn`,
+  the same `FLOOR_GAP` as the floor flag).
+- **The R12 review's changes**: a high started at a close marks the closes before it as not known (`eodMissed`), so an
+  account in no group with the firm's rules applied keeps a null floor and NinjaTrader's own room (the review's probe: a
+  1,800 stop against a room of 1,700 is still held after the first close), with "no end-of-day high is known from before
+  <day>"; the kept high still counts in a join, which clears the mark. With no personal account picked nothing changes at
+  all (no kept high in a join or a move, `highEod` only for a prop account). A lane join never starts below the balance
+  now: The Desk's highest close can only raise the start. PROTOCOL says how a kept high is lowered after a firm reset that
+  keeps the name (a typed highest close or the firm's minimum) and that a `highClose` the reader cannot take as a number
+  (`NaN`, a negative) leaves the whole lane answer unread for that minute.
+- **The delta re-review's change**: a prop account that leaves a group (by hand, the lane rule, a deleted group or Hide)
+  keeps its highs with its earlier closes marked as not known (the empty `eodMissed` and `intradayMissed` set), so in no
+  group with the firm's rules it keeps NinjaTrader's room until its minimum balance is given (the review's P5 and P4a: a
+  1,800 entry against a room of 1,700 is held after the leave); a join or the firm's minimum clears the marks. A group
+  member with no high gets none started at a close (its words stay "no end-of-day high is known for this account").
+- **Unchanged**: an account whose floor is not known trades as before ("Let them through"); payouts; the order path.
+- Tests: `nt8/check/GroupsHarness.cs` `FloorHighs` (the case itself: a close above the account size, then a join at a
+  lower balance gives the floor from that close, not from the size; a leave and rejoin; a restart; a deleted group; Hide; a missed close; the
+  lane rule with The Desk's highest close, without it, below the kept high, with neither, and not a number); 25 of its
+  checks fail on the code before the fix; the review's probes (BLOCKER 1, SHOULD 1, SHOULD 2) fail on 04c741c. `test/floor-highs.test.js` (the prefill, the warning, the join steps).
+
+### A fix on the Accounts tab (the page only)
+
+- Accounts: a typed firm minimum or highest close is no longer cleared while a figure in the open drawer moves (a figure
+  moving about once a second used to rebuild the list, so Set could read an empty box). The drawer's flag text is now a
+  value updated in place (`live/accounts.js`), and a box with no value of its own in the list (the firm minimum, the
+  join's highest close) keeps what was typed if the list is rebuilt, only into the same box: a join's box is keyed by its
+  account, group and mode, and a join replaced by another (another account or group chosen) shows its own prefill. Main had it too; found by an intermittent
+  `test/accounts-smoke.mjs` failure, which now waits 2.5 s after typing and checks the box still holds the minimum.
+
+### A fix on the order ticket (the page only)
+
+- The managed line ("Runner 3T managing: 3 pairs · Bar trail not proven yet") stays inside the ticket's panel at 1366 x 768
+  again (the rule of 1.42). Release 1's grid of three (B/E, Flatten, Cut half, Cancel all and Merge) added a second row of
+  buttons, and in the default 2 x 3 panel the line, with the bar trail warning, went below the panel. A ticket panel under
+  400 px tall (the default 2 x 3 at 1366 x 768) is now compact: its controls 24 px high and 4 px apart (28 px and 6 px
+  elsewhere). It follows the panel's size only, never what the ticket shows, so nothing moves when a trade opens. A taller
+  panel (1920 x 1080) and the mini ticket are unchanged. Found by `test/strategies-smoke.mjs` (3 of its 137 checks failed
+  from release 1 on).
+
+### Tests
+
+- The version pins follow the release: `package.json`, `src/chart-engine.js` (header and `VERSION`), `live/COMPAT.json`
+  (page 1.58.0, `minChartBridge` 0.6.2, its history line), `nt8/ChartBridge.cs` `Version` 0.6.25; the tests that hold a
+  ChartBridge version range now reach 0.6.25 (`test/lifecycle.test.js`, `nt8-bars`, `history-gap`, `multi-account`,
+  `nt8-agents`, `nt8-source`, `nt8-record`: 0.6.25 changes none of the files it pins), and `nt8/check/BarsHarness.cs` S2
+  names 0.6.25.
+- `npm test` (Linux): 1,293 tests, 1,292 pass, 1 skipped (Windows only). `npm run test:markup`: 173 pass.
+  `npm run check:orders` (Mono): 5,170 checks pass; `npm run check:nt8` compiles. The PowerShell tests
+  (`test/pc-updater.tests.ps1`) run on the Windows job only.
+
+## ChartBridge 0.6.24 and chart 1.57.1 (2026-11-18): release 1: the start guard, the personal bot, Cut half and the mini ticket, the way back
+
+In plain words: one hand install for the whole of release 1 (Anthony's answer 2 of 2026-11-17: the personal bot and the mini
+ticket ride with the first part). The page starts the charts and the ticket before anything else; the personal bot trades
+only the personal account, only on the limits Anthony sets on the Bot tab; Cut half closes half the position in one step;
+the mini ticket sits on a chart; and the PC updater gains a command that puts the last ChartBridge back. Plan steps 1.1,
+1.6b and 1.6c (Bot-Lab `notes/BUILD_PLAN_2026-11-16_the_move.md`). ChartBridge 0.6.24 is a recompile (`-InstallChartBridge`,
+then F5 while flat).
+
+**Install The Desk's hotkey change first.** The page sends The Desk its whole hotkey list, and The Desk accepts only its own
+exact list. The Desk must know `cutHalf` (thedesk branch `claude/desk-hotkeys-cut-half`, installed by the SERVER session)
+with or before this release, or every hotkey save from the page is refused. The PC updater installs a page by itself once
+`main` is green, so The Desk's change goes in before this release is merged.
+
+### The personal bot (step 1.6b; ChartBridge, the Bot tab)
+
+Anthony's answers of 2026-11-17 (Q6, Q7) and 2026-11-18. The order path changes for the bot only: one line of gate 3 in
+`ChartBridgeOrders.cs`; the ticket's, the copier's and the agents' caps are unchanged. Full rules: `nt8/PROTOCOL.md`, "The
+personal bot (release 1, step 1.6b)".
+
+- **The personal account only** ("Personal only, Sim later"): `botAccount`, arming (copilot, auto) and every bot entry are
+  refused unless the bot's account is the personal account picked on the chart page's Accounts tab; with no pick nothing
+  trades. A prop account is refused. A Sim account is refused for now; Sim comes back only after the WORK check shows Lucid's
+  accounts do not read as Simulator (a planned change in PROTOCOL.md, not built).
+- **Fails closed, every rail on the Bot tab**: `botRails` carries the size, trades, losing trades, the day's loss stop and the
+  day's profit stop, all required. Nothing has a default: a rail not set, 0, none or unreadable refuses arming and every
+  entry, each named. The fixed 1 contract, 5 trades and 3 losing trades are gone.
+- **The hard ceiling**: the size is the Bot tab's, capped only by 2 minis or 20 micros (`ChartBridgeAgents.HardCeiling`),
+  raised only by a new ChartBridge build. `config.txt`'s `maxQty` no longer caps the bot; the Output line about
+  `maxQty.MNQ` says so.
+- **The day stops latch the day** (realized plus open): reached, the bot's own contracts are closed at once (even with the
+  kill switch on; only the bot's, below), the day is latched in `bot-day.txt` until 18:00 ET and the mode drops to Shadow.
+  Anthony arms it again himself; ChartBridge never re-arms it, and a day stop reached while the page arms the bot refuses the
+  arming. The close is tried again while the bot still holds a trade, at most once every 5 seconds, never twice at once and
+  never while a close may still fill. A late fill of a bot entry whose trade had closed is followed again and counted. A
+  ChartBridge before 0.6.24 stands the bot down on a latched `bot-day.txt` (it does not understand the line).
+- **Bot only** (decision 3a, 2026-11-18; Anthony "whatever you think", the coordinator's call): the bot shares the personal
+  account with Anthony, so a day stop, and the bot's own `flatten` in Auto, cancel only the bot's own working orders (its
+  entry, stop and target) and close only the bot's own contracts; Anthony's own contracts and working orders on the same
+  account and root are never touched. Its stop and target are cancelled first, and the close waits until none of them can
+  fill; then one market order (`CB#<tag> bot close`) of the smallest of what its own stop and target proved and is not closed
+  yet, the bot's followed size, and NinjaTrader's position on its side by both readings. Net long 3 with the bot's 1: it sells 1.
+  NinjaTrader's Flatten of the whole root is no longer used for the bot. The proof is a budget for the whole close (the R12 review
+  of decision 3): once the contracts its stop and target proved are closed, nothing more is ever closed for that trade, and an
+  error says so. The bot's ledger follows its own share: an execution that is not the bot's (a hand order, a Flatten, a Cut half)
+  changes the bot's share only where the position can no longer hold it, so Anthony's own contracts go first; a sell of his
+  beyond his own contracts closes the bot's (Anthony's ruling 1 of 2026-11-18: the bot alone long 2, he sells 1: the bot then
+  holds 1, its stop and target follow 1, and its day counts that contract closed at his price). When the bot's size cannot be
+  told, only what its own stop and target prove is closed; with nothing to prove it (no leg left, or a trade open in
+  `bot-day.txt` that is not followed) nothing is closed, the pages get an error, and the bot stays stood down. A bot close that
+  goes unfilled is an error (its stop and target were cancelled for it) and is sent again within 5 seconds.
+- **After the R12 review of decision 3 and Anthony's rulings of 2026-11-18**:
+  - **The replay fence**: executions already in an account when the bot starts, or when the account is first watched (a
+    NinjaScript recompile delivers the whole session again), and any execution timed before this run began (a connection may
+    add the day's past executions later), are never counted again by the bot; its own fills of this run always are. The
+    times are compared in UTC, whatever NinjaTrader's time zone setting (Tools > Options > General), with 30 seconds of room
+    for the broker's clock and the PC's to differ.
+  - **A close that cannot go** is an error to the pages after 15 seconds, naming the order or the reason, again every 60
+    seconds until the bot is flat, each time with the voice call `BotNotClosed` (ruling 3; the voice calls of 0.6.22, on only
+    with `voice = on`; `BotNotClosed.wav` ships with this release, below). The day stop's words say
+    "being closed", "were NOT closed" or "were closed", whichever is true.
+  - **His own exits too big** after the bot's close (ruling 2): the bot's close goes and an error names his exits; his orders
+    are never changed.
+  - **Pause and cancel** (ruling A): his own position or working order on the bot's account and root cancels a bot entry still
+    resting there (within about a second); the bot's filled contracts and its stop and target stay.
+  - **The standing line** (ruling B): while the owner guard blocks entries in Copilot or Auto, the Bot tab shows, in Anthony's
+    words, "Waiting: you're in this market." (`bot`'s `ownerWait`); the refusals and ChartBridge's own words stay in the log.
+  - Anthony's share starts at the owner guard's own last read (under the order lock), and the guard waits 2 seconds after a
+    fill of his that changed his share, so NinjaTrader's position shows it; a bot order's fill is found before NinjaTrader lists
+    it; a page order ChartBridge has just sent counts for the guard.
+- **The voice files ship with this release** (Anthony's rulings of 2026-11-18): the nine calls ChartBridge can say (voice 4,
+  Sonia: `LongFilled`, `ShortFilled`, `StopFilled`, `TargetFilled`, `TargetOneFilled`, `TargetTwoFilled`, `PositionClosed`,
+  `BreakEvenSet`, `BotNotClosed`) are in `live/voice` (eight byte-copies of HOME's 2026-11-03 set; `BotNotClosed` made in the
+  cloud on 2026-11-18 with the same voice, settings and effect; `live/voice/README.txt` has each file's words, bytes and
+  sha256). The page updater installs them into ChartBridge's `www\voice`, now ChartBridge's default voice folder (before:
+  `Documents\NinjaTrader 8\sounds_voice4`). Nothing is made on a PC any more. A `voiceFolder` line in `config.txt` still wins,
+  so a PC that set one keeps its old folder until the line is removed. The calls still play only with `voice = on` (off by
+  default). The set ships in this public repo by Anthony's choice, knowing the edge-tts terms are unclear.
+- **The owner guard** (decision 3b, 2026-11-18): no new bot entry while Anthony holds his own position (the root's position
+  minus the bot's followed size, by both readings, any contract month) or has his own working order on the bot's account and
+  root. Named, like the agents' owner lock ("OWN-1 MNQ holds 2 contracts long that are not the bot's: no bot entry while Anthony
+  holds his own position or working orders on the bot's account and root (the owner guard; ...)"). Checked for a copilot
+  proposal, an auto entry and an accepted proposal, and again under the order lock. Copilot and Auto stay armed and make no
+  entry until the account is clear; Shadow is unaffected.
+- **A restart follows a bot trade again only by its own legs**: a trade open in `bot-day.txt` after a restart or a recompile
+  is followed again only while a stop or target named for that trade is still working on the bot's account and contract;
+  its size and side come from those legs, and its price from the bot's own entry fill. A position with no such leg (one
+  Anthony opened by hand) is never taken: copilot, auto and new bot entries stay refused, named, until 18:00 ET. While a Cut
+  half close may still fill there, the restore waits.
+- **The day file keeps an open trade's dollars** (R12 of 1.6b, the day file): the open trade's line in `bot-day.txt` holds
+  its dollars closed so far, its size and its price, and is saved on every fill (a part exit, a Cut half, a late entry fill,
+  its close). After a restart the day stops count those dollars. Dollars from a part exit before 18:00 ET stay with that
+  day; a trade still open goes on into the new one. When the dollars cannot be told after a restart (the size changed while
+  ChartBridge was not following the trade, for example a close that filled while it was down), copilot, auto and new bot
+  entries are refused, named, until 18:00 ET. A day file that does not read, or a missing `bot-day.txt` with today's copy
+  left by a cut-off save, refuses them for that run; the refusal names the files to delete to start the day over
+  (`bot-day.txt` and `bot-day.txt.bak`). A ChartBridge before this build does not understand the new line and stands the
+  bot down, never writing over the file.
+- **The Bot tab**: Set the rails asks for every rail; the panel shows the size, both day stops, the rails not set and a day
+  stop reached; Change account offers the personal account only.
+- **The Bot tab fails closed on an older ChartBridge** (the R12 review of the cut): a ChartBridge before 0.6.24 sends no
+  `railsMissing`, size or day stops and would trade the bot on its old fixed rails. Before the F5, and after a rollback,
+  Copilot and Auto are refused (Shadow stays) and the panel says: "This ChartBridge (before 0.6.24) has the old fixed rails
+  (1 contract, 5 trades, 3 losing trades, no day stops): install 0.6.24 to arm the bot". With no bot message yet they are
+  refused too.
+
+### Cut half and the mini ticket (step 1.6c; ChartBridge, the ticket, the charts)
+
+Anthony 2026-11-17 (the mockup, and his answers that night: Cut half only; the smaller part on an odd size; compact by
+default with an arrow; Close renamed Flatten; Cut half with Armed off; no picker when compact; one Armed switch; Merge in
+both views; a hotkey for Cut half). Full rules: `nt8/PROTOCOL.md`, "Cut half (release 1, step 1.6c)".
+
+- **Cut half, one new ChartBridge command** (`cutHalf`, one per account; `hello` lists the feature `cutHalf`): half the
+  position closed at market, the smaller part on an odd size (3 closes 1, 5 closes 2), and ChartBridge's stops and targets
+  there shrunk to the size left in the same step: first, by the legs check's own rule (`ShrinkPlan`, taken out of
+  `CheckLegs` unchanged), at once instead of after its 4 seconds, then the close. An exit like Flatten (no checkmark, Armed
+  off works). Refused, nothing sent: under 2 contracts, the position not what the page showed or its two readings apart, a
+  Cut half close still filling, working exits that would pass the position with it, an agent's pair, an active copier
+  follower, a Merge running. A close NinjaTrader rejects after the legs were shrunk raises an error at once.
+- **After the R12 review of Cut half**: every exit on the closing side that Cut half does not shrink counts (an ATM's or the
+  DOM's bracket, a hand OCO, an agent's legs): with ChartBridge's legs at the size left and the close they may never close
+  more than the position, or it is refused. A stop or target to shrink that is being changed or not yet accepted refuses it.
+  A shrink NinjaTrader does not make raises an error and is shrunk again at once. A refused cancel or change sends no close;
+  a close whose submit throws changes the shrunk legs back. A copier follower that is off but still holds the copier's
+  position or orders is refused (Merge's rule). The Merge check runs again under the order lock, and a Merge that plans
+  while a Cut half is sent there is refused. A Flatten that cancels a Cut half close still filling raises nothing.
+- **The ticket**: Cut half beside Flatten (greyed at 1 contract and when flat, never dimmed by Armed); on a group each member
+  is cut on its own size, and a member at 1 is left alone and named in the note. B/E, Flatten, Cut half, Cancel all and
+  Merge sit in a grid of three. With an older ChartBridge (no `cutHalf` feature) the button greys and says it needs 0.6.24.
+- **Close is renamed Flatten** (the button, the "Also open" rows and the hotkey; the hotkey's saved id stays `close`, so a key
+  already set keeps working). Flatten all is unchanged.
+- **The Cut half hotkey** (Settings, Keys; `cutHalf` in `live-hotkeys-v1` and in The Desk's hotkeys document). Like Buy, Sell
+  and B/E it goes to the ticket's window; it works under a covering tab, as Flatten does (it only reduces). The Hotkeys help
+  says Flatten, and that Cut half goes to the ticket's window with Armed off.
+- **The mini ticket**, an indicator (Indicators, Trades, Mini ticket; listed only on the workspace's charts): dragged anywhere
+  by its grip, its spot kept per chart (`live-mini-ticket-v1`); compact (Armed, Qty, Buy MKT, Sell MKT, Flatten, Cut half,
+  Merge, the position) with an arrow that shows every control of the ticket, the account or group picker included. Not a
+  second ticket: in the ticket's window it is the ticket's own controls wired a second time to the same TradeCore (the same
+  account or group, Armed, Qty, bracket, strategy, order path and checks); in another window its order buttons are forwarded
+  to the ticket's window like the ticket's chart clicks (TicketLink), Flatten goes from that window as the Flatten key does,
+  and Armed, the account, Qty, the bracket and the strategy are shown and set in the ticket's window. On a chart not on the
+  ticket's instrument it says so and sends nothing.
+
+### The first part (step 1.1; page and docs, nothing on the order path)
+
+The non-order parts of release 1 (the lock of 2026-11-15, topic 2).
+
+- **The start guard** (`live/workspace.js` `startGuard`, `start`): the layout, the ticket's connection and the ticket open
+  first; then the Bot, Agent, Colosseum and Legion tabs start, each inside its own guard, and are told the layout the
+  charts opened on; then the tab in the address. A tab that throws is named in the note line ("The Bot tab did not start:
+  the charts and the ticket work; reload this window to try it again.") and in the console, its top bar button stays
+  hidden, and the charts, the ticket and the other tabs run on. The tabs' share of ChartBridge's hello (after the
+  ticket's), a layout change (after the charts and the ticket are placed), Praetorian's link and Legion's helper status
+  go through the same guard.
+- **The old Account panel is removed** (1.15.0; not offered since 1.34.0). A saved layout that still holds one opens
+  without it, quietly, the rest as saved. The Account page has its figures.
+- **ChartKit off the PC install list**: `kit.css`, `kit.js` and `kit.html` leave `nt8/install-files.json` (kept in the
+  repo as the design reference for Legion). The PC updater drops them from a PC's page folder at its next page install.
+  The fonts they name stay installed.
+- **The agent board F snapshot is removed** (`live/kits/agent-board-f/` and `test/agent-kit.test.js`); commit aabb2cb on
+  main (chart 1.57.0) still holds both.
+- **The Studio's work folder** in the examples is `C:\Data\Studio\work` (the task script and `docs/MARKUP_STUDIO.md`; the
+  code sets no default, `--work` is required).
+
+### The way back: `update-pc.ps1 rollback-chartbridge -Flat` (step 1.1, the audit)
+
+- **What it does**: copies the ChartBridge files the last `-InstallChartBridge` replaced (kept in
+  `updater\previous-addons\<time>\`, as before) back over AddOns, then says to press F5 in the NinjaScript Editor while flat.
+  It uses the install's own all-or-nothing copy: a file that cannot be replaced puts back every file already replaced; a
+  file the install added is taken out, and a file it took out comes back.
+- **Nothing is lost**: the files it replaces are kept first, in a new `previous-addons\` folder with their own record, so
+  running it again goes forward again. The set it goes back to, and the set the last install kept, are never pruned.
+- **Checked first**: every `-InstallChartBridge` and every rollback now records the set it kept, each kept file's sha256 and
+  each file it wrote (`chartBridge.installed.backup`, `backupHashes` and `afterHashes` in `state.json`), and so does a copy
+  that a later run finds whole after it was cut off. The rollback refuses, with a plain reason and nothing changed, when no
+  install is recorded, the set has no record (kept by an older updater), the set is gone, a file is missing, a file does not
+  match its sha256, AddOns changed since the last install (a file not as it wrote it, or a ChartBridge file in neither set),
+  or the kept set is the same as AddOns. It never runs over a recorded mix of files (DO NOT press F5).
+- **An install run twice keeps the way back**: the same files copied again keep the earlier record's kept set.
+- **The copy checks again**: each file written beside AddOns is read back and must have the sha256 it was checked with
+  (the staged commit's, or the kept set's), before any file in AddOns is replaced; for an install too.
+- The log lines of a copy name the command that made it (`-InstallChartBridge` or `rollback-chartbridge`).
+- **Flat**: `-Flat` is Anthony's word that he is flat in every account; without it nothing is done. The updater has no check
+  of NinjaTrader's positions that counts while NinjaTrader is closed, so no other check is made for now. Then it asks once
+  (type `y`, or `-Yes`), as `-InstallChartBridge` does. `status` says when a put back ChartBridge waits for F5.
+- The page files are not changed (`update-pc.ps1 rollback` puts the previous page back).
+
+### Tests
+
+`nt8/check/BotHarness.cs` moves from Sim101 to a made-up live personal account and adds FailClosed, SizeCeiling, DayStops,
+LateFill, ReArmRace, OpenAtRestart, CutAtRestart and the day file checks, and for decision 3 OwnerGuardCase, OwnerShare (the loss
+and profit stops, long and short on both sides, Anthony's 2 by hand and his own stop untouched) and OwnerUntold (untold, not followed,
+no leg left, a ledger above its legs' proof, a close rejected, the proof used up) and Review3 (the replay fence, a stuck close
+and its voice call, his oversized exits, the races, rulings A and B, and the re-review's L1, L2 and M8); `test/bot.test.js` (the
+standing line); `test/voice-files.test.js` (every call has its file in the install list, each file mono 16-bit PCM WAV at
+48000 Hz, the README's sha256); `nt8/check/OrdersHarness.cs` (Cut half: even, odd 3 and 5, a short,
+pairs per fill, a Merge set, 1 contract and flat, a stale page, readings apart, a second press, working exits, strict keys
+and the gates, a group's members, a rejected close, trading off, and the R12 section), `nt8/check/AgentHarness.cs` (Cut half
+on an agent's pair), `nt8/check/DataHarness.cs` (the feature); `test/start-guard.test.js` and `npm run smoke:start-guard`,
+`test/cut-half.test.js`, `test/mini-ticket-smoke.mjs` (`npm run smoke:mini-ticket`), `test/bot.test.js`,
+`test/fake-v3.test.js`, `test/nt8-source.test.js` and `test/nt8-record.test.js` (each order path change listed word for
+word); `test/pc-updater.tests.ps1` (rollback-chartbridge: the record, -Flat, every refusal, a held file, back and forward
+again) and `test/pc-updater.test.js` (two hand paths only, each asking first).
+
 ## chart 1.57.0 (2026-11-13): the Colosseum's leaderboard, bots and agents mingled (page only, no F5)
 
 In plain words: the Colosseum opens with one ranked table of every bot and every agent that traded lately, so Anthony sees

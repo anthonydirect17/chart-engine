@@ -132,6 +132,35 @@ try {
   } else check(false, 'on the personal account Auto should be offered');
   await page.screenshot({ path: path.join(SHOTS, 'praetorian-agent-mine.png') });
 
+  /* Anthony 2026-11-19: on a Sim account, Auto from Praetorian below ChartBridge 0.6.25 waits when the ledger types the account
+     eval or funded, or when this ChartBridge cannot say (the careful side); the line names the account and the version */
+  await feed(agent({ account: 'SIM-A', sim: true })); await sleep(150); await clear();
+  await page.evaluate(() => { const b = document.querySelector('#agView [data-mode="auto"]'); b.disabled = false; b.click(); }); await sleep(500);
+  await page.evaluate(() => { const b = document.querySelector('#agView [data-mode="auto"]'); b.disabled = false; b.click(); }); await sleep(300);
+  const simWords = await page.evaluate(() => document.body.innerText);
+  check((await posted()).length === 0 && /Not sent from Praetorian: The Desk's ledger may type SIM-A eval or funded \(NinjaTrader lists it as Sim\) and this ChartBridge cannot say: Auto on a prop account needs ChartBridge 0\.6\.25 or later \(its firm and GO-size guards\); this one is 0\.6\.21\. Update ChartBridge to 0\.6\.25 or later and a true Sim account \(one the ledger does not type eval or funded\) can test in Auto\./.test(simWords),
+    '2026-11-19: Auto on SIM-A on ChartBridge 0.6.21: nothing goes, and the line says why with the version and that 0.6.25 lets a true Sim account test: ' + JSON.stringify(await posted()));
+  await page.screenshot({ path: path.join(SHOTS, 'praetorian-agent-sim-old.png') });
+  await feed({ type: 'groups', list: [], laneRule: { state: 'on', why: null, handOut: [], outside: [{ account: 'SIM-A', kind: 'funded', group: null, copier: null, byHand: false }] } }); await clear();
+  await page.evaluate(() => { const b = document.querySelector('#agView [data-mode="auto"]'); b.disabled = false; b.click(); }); await sleep(500);
+  await page.evaluate(() => { const b = document.querySelector('#agView [data-mode="auto"]'); b.disabled = false; b.click(); }); await sleep(300);
+  check((await posted()).length === 0 && /Not sent from Praetorian: SIM-A is typed funded on The Desk's ledger, though NinjaTrader lists it as Sim: Auto on a prop account needs ChartBridge 0\.6\.25 or later/.test(await page.evaluate(() => document.body.innerText)),
+    '2026-11-19: a Sim account the ledger types funded: refused as prop below 0.6.25, said so');
+  /* on 0.6.25, until ChartBridge has read The Desk's account types (laneRule's outside null: no read since its start), Auto on a
+     Sim account waits too, said plainly (the coordinator 2026-11-19: ChartBridge takes a Sim-listed prop account for plain Sim then) */
+  await feed({ type: 'hello', version: '0.6.25', features: ['v3'], instruments: [{ root: 'MNQ', tick: 0.25, pointValue: 2 }] });
+  await feed({ type: 'groups', list: [], laneRule: { state: 'on', why: null, handOut: [], outside: null } });
+  await feed(agent({ account: 'SIM-A', sim: true })); await sleep(200); await clear();
+  await page.click('#agView [data-mode="auto"]'); await sleep(500); await page.click('#agView [data-mode="auto"]'); await sleep(300);
+  check((await posted()).length === 0 && /Not sent from Praetorian: ChartBridge has not read The Desk's account types yet, so it cannot tell whether SIM-A is a prop account NinjaTrader lists as Sim: Auto on a Sim account waits until it has read them\./.test(await page.evaluate(() => document.body.innerText)),
+    '2026-11-19: on ChartBridge 0.6.25 before its read of The Desk\'s account types: Auto on SIM-A waits, said plainly: ' + JSON.stringify(await posted()));
+  await page.screenshot({ path: path.join(SHOTS, 'praetorian-agent-sim-unread.png') });
+  await feed({ type: 'groups', list: [], laneRule: { state: 'on', why: null, handOut: [], outside: [] } }); await sleep(150); await clear();
+  await page.click('#agView [data-mode="auto"]'); await sleep(500); await page.click('#agView [data-mode="auto"]'); await sleep(200);
+  check(JSON.stringify(await posted()) === JSON.stringify(['agentMode:demo:auto']), '2026-11-19: on ChartBridge 0.6.25 with The Desk\'s account types read, Auto on the Sim account goes as before (ChartBridge guards a typed one): ' + JSON.stringify(await posted()));
+  await feed({ type: 'hello', version: '0.6.21', features: ['v3'], instruments: [{ root: 'MNQ', tick: 0.25, pointValue: 2 }] }); await feed({ type: 'groups', list: [] });
+  await feed(agent({ account: 'MINE-1' })); await sleep(150); await clear();
+
   /* the picker: your personal account and Sim offered; a prop account listed, not offered */
   await page.click('#agView [data-k="acctOpen"]');
   const opts = await page.$$eval('#agView [data-k="acctSel"] option', os => os.map(o => ({ v: o.value, d: o.disabled, t: o.textContent })));
@@ -165,7 +194,8 @@ try {
   await page.evaluate(() => { const h = document.querySelector('#agView [data-k="hAuto"]'); if (h) h.value = '09:30'; const b = document.querySelector('#agView [data-act="hSave"]'); b.disabled = false; b.click(); });
   await sleep(300);
   check(!(await page.evaluate(() => window.helperCalls.includes('POST /settings'))), 'F4: an Auto-On time forced on a prop trader: no POST /settings');
-  /* F2: a prop trader in Auto holding 1 MNQ, his program on: Off asks, "Flatten and turn off" sends Shadow, then the flatten */
+  /* F2: a prop trader in Auto holding 1 MNQ, his program on: Off asks, "Flatten and turn off" sends Shadow, then the line says where
+     to flatten him (the R12 delta: no desk sends a Flatten of its own, even with one offered as here) */
   await page.evaluate(() => { Object.assign(window.helperState.demo, { on: true, running: true, why: 'on', runningBuild: 'sample-build-1' }); });
   await feed(agent({ account: 'PROP-1', mode: 'auto', position: { root: 'MNQ', qty: 1, avg: 25000 } }));
   await sleep(3600);   // the helper's next poll
@@ -176,14 +206,16 @@ try {
   await sleep(300);
   check(JSON.stringify(await posted()) === JSON.stringify(['agentMode:demo:shadow']), 'F2: "Flatten and turn off" on a prop trader in Auto sends Shadow (a stop) through the gate: ' + JSON.stringify(await posted()));
   await feed(agent({ account: 'PROP-1', mode: 'shadow', position: { root: 'MNQ', qty: 1, avg: 25000 } }));
-  await page.waitForFunction(() => window.flattened.length > 0, null, { timeout: 5000 }).catch(() => {});
-  check(JSON.stringify(await page.evaluate(() => window.flattened)) === JSON.stringify(['PROP-1 MNQ']), 'F2: then the flatten of PROP-1 MNQ: ' + JSON.stringify(await page.evaluate(() => window.flattened)));
+  await page.waitForFunction(() => /^He is in Shadow: flatten him in NinjaTrader/.test(document.querySelector('#agView [data-k="hWhy"]').textContent), null, { timeout: 5000 }).catch(() => {});
+  await sleep(1200);
+  check(/^He is in Shadow: flatten him in NinjaTrader/.test(await page.$eval('#agView [data-k="hWhy"]', e => e.textContent)) && JSON.stringify(await page.evaluate(() => window.flattened)) === '[]',
+    'F2: in Shadow, the line says to flatten him by hand, and the desk sends no Flatten of its own: ' + await page.$eval('#agView [data-k="hWhy"]', e => e.textContent));
   await feed(agent({ account: 'PROP-1', mode: 'shadow' }));
   await page.waitForFunction(() => window.helperCalls.includes('POST /off'), null, { timeout: 5000 }).catch(() => {});
   check(await page.evaluate(() => window.helperCalls.includes('POST /off')), 'F2: then Off (POST /off) once he is flat');
   check(!(await posted()).some(x => /^agentMode:demo:(auto|copilot)/.test(x)), 'F2: nothing but Shadow was sent for him');
   /* answers B4-4, G3: a trader on None with a leftover seat (MINE-1 long 1 MNQ, the strip's position being the seat's trade):
-     stops only, said; Off asks, "Flatten and turn off" sends Shadow, then the flatten of that seat only, then Off once flat */
+     stops only, said; Off asks, "Flatten and turn off" sends Shadow, then the line names that seat only, then Off once flat */
   await page.evaluate(() => { Object.assign(window.helperState.demo, { on: true, running: true, why: 'on', runningBuild: 'sample-build-1' }); window.flattened.length = 0; window.helperCalls.length = 0; });
   const left = (mode, qty) => agent({ account: null, mode, owns: !!qty, position: qty ? { root: 'MNQ', qty, avg: 25000 } : null, seats: [{ account: 'MINE-1', owns: !!qty, position: qty ? { root: 'MNQ', qty, avgPrice: 25000 } : null }] });
   await feed(left('auto', 1));
@@ -196,8 +228,9 @@ try {
   await sleep(300);
   check(JSON.stringify(await posted()) === JSON.stringify(['agentMode:demo:shadow']), 'G3: "Flatten and turn off" sends Shadow first: ' + JSON.stringify(await posted()));
   await feed(left('shadow', 1));
-  await page.waitForFunction(() => window.flattened.length > 0, null, { timeout: 5000 }).catch(() => {});
-  check(JSON.stringify(await page.evaluate(() => window.flattened)) === JSON.stringify(['MINE-1 MNQ']), 'G3: then the flatten of that seat only (MINE-1 MNQ): ' + JSON.stringify(await page.evaluate(() => window.flattened)));
+  await page.waitForFunction(() => /^He is in Shadow: flatten MINE-1 MNQ in NinjaTrader/.test(document.querySelector('#agView [data-k="hWhy"]').textContent), null, { timeout: 5000 }).catch(() => {});
+  check(/^He is in Shadow: flatten MINE-1 MNQ in NinjaTrader/.test(await page.$eval('#agView [data-k="hWhy"]', e => e.textContent)) && JSON.stringify(await page.evaluate(() => window.flattened)) === '[]',
+    'G3: then the line names that seat only (MINE-1 MNQ), and no Flatten of the page\'s own: ' + await page.$eval('#agView [data-k="hWhy"]', e => e.textContent));
   await feed(agent({ account: null, mode: 'shadow', owns: false, position: null, seats: [] }));
   await page.waitForFunction(() => window.helperCalls.includes('POST /off'), null, { timeout: 5000 }).catch(() => {});
   check(await page.evaluate(() => window.helperCalls.includes('POST /off')) && JSON.stringify(await posted()) === JSON.stringify(['agentMode:demo:shadow']), 'G3: then Off once flat; nothing but Shadow was sent to ChartBridge');

@@ -180,7 +180,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (Ids().Count == 0) return;
             int n;
             if (ChartBridgeOrders.MaxQty.TryGetValue("MNQ", out n))
-                ChartBridgeServer.Log("config.txt: maxQty.MNQ = " + n + " caps the page's, the bot's and the copier's MNQ orders only; agents use their own MNQ cap of " +
+                ChartBridgeServer.Log("config.txt: maxQty.MNQ = " + n + " caps the page's and the copier's MNQ orders only (release 1: the bot uses its size from the Bot tab); agents use their own MNQ cap of " +
                                       ShippedConfigCap("MNQ") + " (with the agent's rule and the hard ceiling)");
         }
 
@@ -1015,7 +1015,56 @@ namespace NinjaTrader.NinjaScript.AddOns
             { "agentStandDownClear", new[] { "type", "cid", "build", "group" } },   // 0.6.2: Anthony's Clear stand-down (the Board); no agent key: a stand-down is the build's on the group
             { "agentPick", new[] { "type", "cid", "agent", "file" } },   // 0.6.21: the roster file a runner's slot runs (a file name GET /roster serves, or null for none)
             { "agentKillAllProp", new[] { "type", "cid" } },   // 0.6.17: Kill all for the prop accounts: flatten, the kill switch on, Shadow; no agent key: every agent on prop accounts
+            { "agentStopAll", new[] { "type", "cid" } },   // plan step 3.2 (named agent... so ChartBridge.cs routes it here): Legion's Stop all automation: Kill all with the prop accounts found by the account ledger too (StopScope)
+            { "agentFlattenOff", new[] { "type", "cid", "agent" } },   // plan step 3.2: "Flatten and turn him off" as one command: Shadow, its own flatten, no Auto until its program ends
         };
+
+        // Plan step 3.2 (law 9.3; the lock of 2026-11-15, item 90; Anthony 2026-11-17, item 113): what Stop all automation counts as a
+        // prop account. Never the personal account (when one is picked), None, Backtest or Playback. Otherwise in scope when Kill all's
+        // own rule says so (KillScope: every account but the personal one that NinjaTrader does not list as Sim) OR when the account
+        // ledger types it eval or funded (ChartBridgeGroups.InLedger: The Desk's rows, whatever NinjaTrader calls its connection, so a
+        // prop account listed as a simulator is still stopped). It only ever widens Kill all's reach; Kill all itself is unchanged.
+        internal static bool StopScope(string name)
+        {
+            if (string.IsNullOrEmpty(name) || ChartBridgeBranches.IsNone(name)) return false;
+            if (ChartBridgeBranches.PersonalNamed && ChartBridgeBranches.IsPersonal(name)) return false;   // the personal account is never touched
+            if (ChartBridgeOrders.IsNeverTradable(name)) return false;   // Backtest, Playback
+            return ChartBridgeAgent.KillScope(name) || ChartBridgeGroups.InLedger(name);
+        }
+        // A seat Stop all took from a trader that also trades the personal account (item 113): no new entry there until 18:00 ET, for
+        // every trader (the day stops' latch, keyed apart). Read at every plan check: a group plan's seat sits out, a one-account plan is refused.
+        internal static string StopKey(string account) { return "stopall|" + account; }
+
+        // Stop all automation: every trader on prop accounts (StopScope) as Kill all does it (its kill switch on first, Shadow, its saved
+        // Auto removed, then its own flatten on the seats in scope). A trader that also trades the personal account is not killed (the
+        // personal account is never touched): it loses its prop seats for the session instead (StopKey) and its own flatten starts
+        // there. The bot, the copier and every manual order are never touched. With no personal account picked it still acts on the
+        // ledger's accounts; with neither a pick nor the ledger nothing is known to be prop and it is refused. One status line answers.
+        private static string PageStopAll(string cid)
+        {
+            bool ledger = ChartBridgeGroups.LedgerKnown;
+            if (!ChartBridgeBranches.PersonalNamed && !ledger) return "Stop all automation acts on prop accounts, and no personal account is picked (the Accounts tab) and The Desk's account ledger has not been read, so no account is known to be prop: nothing was done. Stop each trader on Legion's Cohorts or in NinjaTrader";
+            List<string> did = new List<string>(), took = new List<string>(), left = new List<string>(), failed = new List<string>();
+            foreach (ChartBridgeAgent a in All())
+            {
+                try
+                {
+                    bool mixed;
+                    string words = a.StopAll(out mixed);
+                    if (words == null) left.Add(a.Id); else if (mixed) took.Add(words); else did.Add(words);
+                }
+                catch (Exception ex) { failed.Add(a.Id); ChartBridgeServer.Log("agent " + a.Id + ": Stop all automation threw (" + ex.Message + "): stop it on Legion's Cohorts now"); }
+            }
+            string text = "Stop all automation: " + (did.Count + took.Count > 0 ? string.Join("; ", did.Concat(took)) : "no bot or agent is on a prop account: nothing was done") +
+                          (failed.Count > 0 ? ". FAILED, stop it on Legion's Cohorts now: " + string.Join(", ", failed) : "") +
+                          (left.Count > 0 ? ". Not touched (not on prop accounts): " + string.Join(", ", left) : "") +
+                          (ledger ? "" : ". The Desk's account ledger has not been read (laneRule off, no deskUrl, or The Desk not reached): prop accounts were found by ChartBridge's own rule only") +
+                          ". Your personal account, the bot and the copier are not touched; only the traders' own orders were cancelled: an order placed by hand stays and can still fill" +
+                          ". On the account and contract a trader holds, its position is closed whole, a contract added by hand included";
+            ChartBridgeServer.Log("agent " + text);
+            ChartBridgeV3.SendToV3Traders(PressStatus(text, cid));   // plan step 3.5 (the Legion review): the press's cid echoed, so a page matches its own press
+            return null;
+        }
 
         // 0.6.17: Kill all for the prop accounts (Anthony's ruling of 2026-11-11, B question 6). Every agent whose accounts are ALL
         // prop (ChartBridgeBranches.IsProp) is flattened (what it owns, by its own flatten: never a manual or copier order), its
@@ -1024,7 +1073,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // None, or a group with a member that is not prop is never touched; the bot, the copier, the order ticket and every
         // manual order are never touched. With no personal account picked nothing is prop: refused, nothing done. The older
         // agentKill (one agent, no flatten) is unchanged.
-        private static string PageKillAllProp()
+        private static string PageKillAllProp(string cid)
         {
             if (!ChartBridgeBranches.PersonalNamed) return "Kill all acts on prop accounts only, and no personal account is picked (the Accounts tab), so no account is prop: nothing was done";
             List<string> did = new List<string>(), left = new List<string>(), mixed = new List<string>(), failed = new List<string>();
@@ -1048,8 +1097,15 @@ namespace NinjaTrader.NinjaScript.AddOns
                           // F7, Anthony 2026-11-11: "When the bot is trading the account, its the bots account for that day. I would never touch it."
                           ". On the account and contract a trader holds, its position is closed whole, a contract added by hand included (an account a bot trades is the bot's for the day)";
             ChartBridgeServer.Log("agent " + text);
-            ChartBridgeV3.SendToV3Traders("{\"type\":\"status\",\"level\":\"warn\",\"text\":" + CbJson.Str(text) + "}");
+            ChartBridgeV3.SendToV3Traders(PressStatus(text, cid));   // plan step 3.5 (the Legion review): the press's cid echoed, so a page matches its own press
             return null;
+        }
+
+        // The status line that answers a press (Stop all, Kill all): the same text as before, with the press's cid after it when it sent
+        // one (plan step 3.5, the Legion review), so a page matches its own press; a page that matches the opening words is unchanged.
+        internal static string PressStatus(string text, string cid)
+        {
+            return "{\"type\":\"status\",\"level\":\"warn\",\"text\":" + CbJson.Str(text) + (cid != null ? ",\"cid\":" + CbJson.Str(cid) : "") + "}";
         }
 
         public static void OnPageMessage(ChartBridgeClient client, string type, string text)
@@ -1070,8 +1126,10 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (odd != null) { PageReject(client, cid, id, "unknown key \"" + odd + "\" in " + type); return; }
                 if (d.ContainsKey("cid") && cid == null) { PageReject(client, cid, id, "cid must be a plain string"); return; }
                 // the review's N2: Kill all is never refused for the action rate (it was, as the 11th action inside a second)
-                if (type == "agentKillAllProp") { why = PageKillAllProp(); if (why != null) PageReject(client, cid, id, why); return; }   // 0.6.17
-                if (!RateOk(client.Actions)) { PageReject(client, cid, id, "too many order actions (more than " + MaxActionsPerSecond + " a second)"); return; }
+                if (type == "agentKillAllProp") { why = PageKillAllProp(cid); if (why != null) PageReject(client, cid, id, why); return; }   // 0.6.17
+                if (type == "agentStopAll") { why = PageStopAll(cid); if (why != null) PageReject(client, cid, id, why); return; }   // plan step 3.2: never refused for the rate either
+                // plan step 3.5 (the Legion review): Flatten and turn off is a stop, never refused for the action rate (as Kill all and Stop all)
+                if (type != "agentFlattenOff" && !RateOk(client.Actions)) { PageReject(client, cid, id, "too many order actions (more than " + MaxActionsPerSecond + " a second)"); return; }
                 if (type == "agentStandDownClear") { why = PageClear(d); if (why != null) PageReject(client, cid, id, why); return; }   // 0.6.2
                 ChartBridgeAgent a = Get(ChartBridgeAgent.S(d, "agent") ?? "");
                 if (a == null) { PageReject(client, cid, id, "there is no agent " + (ChartBridgeAgent.S(d, "agent") ?? "(none)") + " (agents in config.txt)"); return; }
@@ -2107,6 +2165,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private bool startTold;
         private string mode = "shadow";
         private bool killed;
+        private bool offAsked;   // plan step 3.2: agentFlattenOff was asked and its program has not ended yet: Copilot and Auto are refused
         private Rules rules = new Rules();
         private string account = ChartBridgeBranches.None;   // 0.5.7 (DECISION 2026-10-14e): None until chosen; was Sim101
         private bool chosen;   // an account was chosen on the page (agent-<id>-account.txt); false on None
@@ -2359,6 +2418,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (m == "auto") return "agent " + Id + " is in Auto: the pick changes only while it is not (turn Armed off first)";
             if (Exposed()) return "agent " + Id + " has a position, a working entry or a proposal: the pick changes when it is flat";
             if (bad != null) return name + " cannot be picked: " + bad;
+            if (name != null) { string fw = ChartBridgeGroups.SeatsFirmWhy(SeatNames()); if (fw != null) return name + " cannot be picked for agent " + Id + " on this PC: " + fw; }   // plan step 3.5 (0.6.25): one PC per firm
             string was, brokenWas;
             lock (Sync) { was = pick; brokenWas = pickBroken; }
             // FIX 1: None always removes the file, also when it could not be read or understood at the start (memory said none
@@ -2559,11 +2619,12 @@ namespace NinjaTrader.NinjaScript.AddOns
                 else
                 {
                     if (seats.Any(x => ChartBridgeBranches.UnknownWhy(FindAccount(x), x) != null)) return;   // not known yet: this pass does not decide
+                    if (ChartBridgeGroups.FirmsPending) return;   // plan step 3.5 (0.6.25): The Desk's firms not read yet since the start: this pass does not decide
                     List<string> notProp = seats.Where(x => !ChartBridgeBranches.IsProp(x)).ToList();
                     List<string> busy = seats.Where(x => !ChartBridgeBranches.Idle(FindAccount(x))).ToList();
                     if (notProp.Count > 0) no = string.Join(", ", notProp) + (notProp.Count == 1 ? " is" : " are") + " not prop";
                     else if (busy.Count > 0 || Exposed()) no = (busy.Count > 0 ? string.Join(", ", busy) + (busy.Count == 1 ? " has" : " have") : "it has") + " a position or a working order";
-                    else { string why = AutoProblem(); if (why != null) no = why; }
+                    else { string why = AutoProblem() ?? ChartBridgeGroups.SeatsFirmWhy(seats); if (why != null) no = why; }   // plan step 3.5 (0.6.25): one PC per firm
                 }
                 if (no == null && pickNo != null) no = pickNo;
                 if (no == null && PickNow() != livePick) no = "its pick changed during the restore";
@@ -3558,6 +3619,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 if (c == null || client != null) return false;
                 client = c; claimed = false; helloed = false; welcomeSent = false; name = null; build = null; lastMsgMs = Now(); attachedMs = lastMsgMs; Actions.Clear(); lastStateSent = null; lastWelcomeRules = null;
+                offAsked = false;   // plan step 3.2: a program started again (the helper's On) is a new start
             }
             Log("agent " + Id + " connected; it is told nothing until its agentHello");
             Notify();
@@ -3575,6 +3637,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 if (client != c) return;
                 client = null; helloed = false; noClientSinceMs = Now();
+                offAsked = false;   // plan step 3.2: its program ended (the helper's Off): what agentFlattenOff asked is done
                 if (heartbeat) nHeartbeatLost++;
                 expired = ExpireOpenLocked("not answered");
             }
@@ -3913,6 +3976,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                 // 0.6.7: a benched seat sits out whatever size it was sent (read fresh too: a bench since the plan was sized)
                 HashSet<string> benchFresh = ChartBridgeGroups.BenchedOf(gid);
                 for (int i = 0; i < seats.Count; i++) outs[i] = benchNow.Contains(seats[i]) || benchFresh.Contains(seats[i]) ? "benched" : p.Sizes[i] == 0 ? "its size is 0 (no room for 1 contract)" : AccountProblemFor(seats[i], true);
+                // plan step 3.2 (item 113): a seat Stop all automation took sits out until 18:00 ET; the group's other seats trade as before
+                string stopDay = SessionOf(NowEt());
+                for (int i = 0; i < seats.Count; i++) if (outs[i] == null && ChartBridgeAgents.DayReachedWords(stopDay, ChartBridgeAgents.StopKey(seats[i])) != null) outs[i] = "taken off by Stop all automation until 18:00 ET";
             }
             else
             {
@@ -3984,6 +4050,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             // 9c. 0.6.22: the same for the day's LOSS stop
             string lossWhy2 = DayLossRefusal(p, grp ? (IEnumerable<string>)seats : new[] { acct });
             if (lossWhy2 != null) return lossWhy2;
+            // 9d. plan step 3.2: an account Stop all automation took from a trader is closed to every trader until 18:00 ET (a group's seat sits out, above)
+            if (!grp) { string stopWhy = ChartBridgeAgents.DayReachedWords(SessionOf(NowEt()), ChartBridgeAgents.StopKey(acct)); if (stopWhy != null) return stopWhy; }
             if (!grp)
             {
                 // 10. the owner lock
@@ -3991,7 +4059,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 string lockWhy = ChartBridgeAgents.EntryCheck("agent:" + Id, a, root);
                 if (lockWhy != null) return lockWhy;
                 // 10b. 0.5.8 (G3 a): one direction per group (advisory here; the binding check runs under PlaceLock in PlaceOrderLocked)
-                string groupWhy = ChartBridgeGroups.EntryCheck("agent:" + Id, a, root, p.Side == "buy", p.Qty, true, false);
+                string groupWhy = ChartBridgeGroups.AdvisoryEntryCheck("agent:" + Id, a, root, p.Side == "buy", p.Qty, true, false);
                 if (groupWhy != null) return groupWhy;
             }
             else
@@ -4000,7 +4068,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if (outs[i] != null) continue;
                     // 10 and 10b on each seat (0.6.0): a position or order that is not the agent's, or the one-direction check, sits it out
                     Account a = FindAccount(seats[i]);
-                    outs[i] = ChartBridgeAgents.EntryCheck("agent:" + Id, a, root) ?? ChartBridgeGroups.EntryCheck("agent:" + Id, a, root, p.Side == "buy", p.Sizes[i], true, false);
+                    outs[i] = ChartBridgeAgents.EntryCheck("agent:" + Id, a, root) ?? ChartBridgeGroups.AdvisoryEntryCheck("agent:" + Id, a, root, p.Side == "buy", p.Sizes[i], true, false);
                 }
             // 11. the price (v2 gate 5): on the grid, a fresh last trade, the side of the market; a stop-limit's limit within 20 ticks
             bool buy = p.Side == "buy";
@@ -4886,6 +4954,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (type == "agentAccount") return SetAccount(d);
             if (type == "agentRules") return SetRules(d);
             if (type == "agentPick") return SetPick(d);   // 0.6.21
+            if (type == "agentFlattenOff") return FlattenOff();   // plan step 3.2
             return "unknown message type " + type;
         }
 
@@ -4907,6 +4976,9 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             string m = S(d, "mode");
             if (m != "shadow" && m != "copilot" && m != "auto") return "mode must be shadow, copilot or auto";
+            bool off;
+            lock (Sync) off = offAsked;
+            if (off && m != "shadow") return m + " refused: Flatten and turn off was asked for agent " + Id + " and its program has not ended: press Off, then On, to start it again";   // plan step 3.2
             if (m != "auto" && (d.ContainsKey("pick") || d.ContainsKey("pickSha"))) return "pick and pickSha go with mode auto only";
             if (m == "auto")
             {
@@ -4934,6 +5006,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             if (m == "auto" && NoneNow()) return "auto refused: agent " + Id + "'s account is None: no new entries until an account is chosen on the Agent tab";   // 0.5.7
             if (m == "auto") { string why = AutoProblem(); if (why != null) return "auto refused: " + why; }   // auto: its account must be tradable
+            if (m == "auto") { string fw = ChartBridgeGroups.SeatsFirmWhy(SeatNames()); if (fw != null) return "auto refused: " + fw; }   // plan step 3.5 (0.6.25): one PC per firm
             string old;
             List<Proposal> expired = new List<Proposal>();
             lock (Sync)
@@ -5033,6 +5106,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         // The harness only (nt8/check): makes this agent's flatten throw inside Kill all, to show the kill switch is already on (N1).
         // Always null in NinjaTrader.
         internal static string FlattenFaultForCheck;
+        internal static string FlattenOffFaultForCheck;
+        internal static string FlattenOffEarlyFaultForCheck;   // plan step 3.5 (R12 nit): the same, before its saved Auto is removed   // plan step 3.5: the harness makes Flatten and turn off fail after Shadow, before its flatten
         internal string KillProp()
         {
             lock (PlaceGate)
@@ -5050,14 +5125,25 @@ namespace NinjaTrader.NinjaScript.AddOns
                 try { saved = saved || File.Exists(AutoFile) || File.Exists(ChartBridgeFiles.BackupOf(AutoFile)); } catch (Exception) { saved = true; }
                 bool personal = seats.Any(x => ChartBridgeBranches.IsPersonal(x)) || ChartBridgeBranches.IsPersonal(Account);
                 if (personal || (!inScope && !saved)) return null;   // the personal account is never touched (KillMixed names it)
+                return KillInLocked(scope, "Kill all (prop accounts)");
+            }
+        }
+
+        // Kill all's part for one agent, under the placement gate (KillProp, and Stop all automation with its wider scope): FIRST the
+        // kill switch on and Shadow (the review of 90, N1: nothing after can leave it trading), its saved Auto removed; THEN its own
+        // flatten on the seats in scope only, in its own try. Moved here unchanged from KillProp (plan step 3.2); label names the press.
+        private string KillInLocked(List<string> scope, string label)
+        {
+            {   // KillProp's body as it was, under its caller's lock
+                bool inScope = scope.Count > 0;
                 // the review of 90 (N1): the kill switch and Shadow go on FIRST, so nothing here can leave it trading; the flatten
                 // comes after, in its own try
                 string err = KillLocked(true);
                 string old;
                 List<Proposal> expired = new List<Proposal>();
                 lock (Sync) { old = mode; mode = "shadow"; autoDay = null; autoRestorePending = false; if (old == "copilot") expired = ExpireOpenLocked("not answered"); }
-                foreach (Proposal p in expired) { ToPages(ProposalJson(p)); ToAgent(AnswerJson(p.P.Id, "not answered", "Kill all (prop accounts)")); }
-                DropAutoIntent("Kill all (prop accounts)");
+                foreach (Proposal p in expired) { ToPages(ProposalJson(p)); ToAgent(AnswerJson(p.P.Id, "not answered", label)); }
+                DropAutoIntent(label);
                 int roots = 0;
                 string flatErr = null;
                 if (inScope)
@@ -5066,19 +5152,130 @@ namespace NinjaTrader.NinjaScript.AddOns
                     {
                         if (FlattenFaultForCheck == Id) throw new InvalidOperationException("a fault made by the harness");
                         // its own orders only (F2), and only on the prop accounts: a Sim member's trade keeps its stop and target
-                        foreach (string x in scope) roots += StartFlatten("Kill all (prop accounts)", false, x, false, true);
+                        foreach (string x in scope) roots += StartFlatten(label, false, x, false, true);
                     }
                     catch (Exception ex) { flatErr = ex.Message; }
                 }
                 string where = inScope ? AccountWords() : AccountWords() + " (no prop account known now; its saved Auto was waiting)";
                 string flatWords = flatErr != null ? "its flatten could NOT be started (" + flatErr + "): act in NinjaTrader now" :
                                    roots > 0 ? "flattening what it owns" : "nothing of its own to flatten";
-                string say = "Kill all (prop accounts): " + flatWords + " on " + where + "; the kill switch is on; mode shadow" + (old != "shadow" ? " (was " + old + ")" : "") + (err != null ? "; " + err : "");
+                string say = label + ": " + flatWords + " on " + where + "; the kill switch is on; mode shadow" + (old != "shadow" ? " (was " + old + ")" : "") + (err != null ? "; " + err : "");
                 Log("agent " + Id + ": " + say); AgentLog(say);
                 if (flatErr != null) ChartBridgeOrders.AgentAlarm("Agent " + Id + ": " + say);
                 ToAgent(WelcomeJson());
                 Notify();
                 return "agent " + Id + " on " + where + ": " + flatWords + ", the kill switch on, mode shadow";
+            }
+        }
+
+        // Plan step 3.2: this agent's part of Stop all automation (ChartBridgeAgents.PageStopAll). Null (untouched) when none of its
+        // seats is in Stop all's scope (StopScope) and no saved Auto waits. A trader on prop seats only: Kill all's part (KillInLocked),
+        // with the wider scope. A trader that also trades the personal account (mixed) is NOT killed and its mode is not changed (the
+        // personal account is never touched, law 9.3): it loses its prop seats for the session instead (item 113): each seat in scope
+        // is latched (StopKey: no new entry there by any trader until 18:00 ET; a group plan's seat sits out) BEFORE its own flatten
+        // starts there (its own orders only, the position on that account and contract closed whole), so it cannot enter again in
+        // between. Returns the words for the pages.
+        internal string StopAll(out bool mixed)
+        {
+            mixed = false;
+            lock (PlaceGate)
+            {
+                List<string> seats = AllSeats().Select(x => x.Name).ToList();
+                List<string> scope = seats.Where(x => ChartBridgeAgents.StopScope(x)).ToList();
+                bool saved;
+                lock (Sync) saved = autoRestorePending;
+                try { saved = saved || File.Exists(AutoFile) || File.Exists(ChartBridgeFiles.BackupOf(AutoFile)); } catch (Exception) { saved = true; }
+                bool personal = ChartBridgeBranches.PersonalNamed && (seats.Any(x => ChartBridgeBranches.IsPersonal(x)) || ChartBridgeBranches.IsPersonal(Account));
+                if (!personal) return scope.Count > 0 || saved ? KillInLocked(scope, "Stop all automation") : null;
+                if (scope.Count == 0) return null;   // the personal account only (and Sim): never touched
+                mixed = true;
+                string today = SessionOf(NowEt());
+                foreach (string x in scope)
+                    ChartBridgeAgents.NoteDayReached(today, ChartBridgeAgents.StopKey(x), "Stop all automation took " + x + " from the traders this session: no new entry there until 18:00 ET");
+                int roots = 0;
+                string flatErr = null;
+                try
+                {
+                    if (FlattenFaultForCheck == Id) throw new InvalidOperationException("a fault made by the harness");
+                    foreach (string x in scope) roots += StartFlatten("Stop all automation (its prop seats)", false, x, false, true);
+                }
+                catch (Exception ex) { flatErr = ex.Message; }
+                string flatWords = flatErr != null ? "its flatten there could NOT be started (" + flatErr + "): act in NinjaTrader now" :
+                                   roots > 0 ? "flattening what it owns there" : "nothing of its own to flatten there";
+                string say = "Stop all automation: it trades your personal account too, which is not touched; its prop seats " + string.Join(", ", scope) +
+                             " are taken off until 18:00 ET (no new entry there): " + flatWords;
+                Log("agent " + Id + ": " + say); AgentLog(say);
+                if (flatErr != null) ChartBridgeOrders.AgentAlarm("Agent " + Id + ": " + say);
+                Notify();
+                return "agent " + Id + " on " + AccountWords() + ": its prop seats " + string.Join(", ", scope) + " taken off until 18:00 ET, " + flatWords + " (your personal account not touched)";
+            }
+        }
+
+        // Plan step 3.2: "Flatten and turn him off" as one ChartBridge command (agentFlattenOff), so a page closed half way never leaves
+        // it half done. Before, the page did three steps itself (Shadow, the page's Flatten, the PC helper's Off once flat), and a page
+        // closed between them left the trader in Shadow holding a trade, or flat with its program running. Now, at once and under the
+        // placement gate: the mode goes to Shadow (nothing more is placed for it; a Copilot proposal expires as not answered), its saved
+        // Auto is removed, its unfilled entries are cancelled, and its own flatten starts on every seat (its own orders only; the
+        // position on that account and contract closed whole, as the page's Flatten for an agent did). ChartBridge finishes the flatten
+        // whatever the page does. Ending its program stays the PC helper's Off (ChartBridge cannot end a process): until its program
+        // ends or connects again, Copilot and Auto are refused for it (offAsked, sent in its agent message), so it cannot trade again
+        // before Off. With no program connected there is nothing to turn off: the flatten alone. The kill switch is not touched.
+        private string FlattenOff()
+        {
+            lock (PlaceGate)
+            {
+                string old;
+                bool connected;
+                List<Proposal> expired = new List<Proposal>();
+                lock (Sync)
+                {
+                    old = mode; mode = "shadow"; autoDay = null; autoRestorePending = false; autoPick = null; autoPickSha = null;
+                    if (old == "copilot") expired = ExpireOpenLocked("not answered");
+                    connected = client != null;
+                    if (connected) offAsked = true;
+                }
+                // plan step 3.5 (the Legion review): once the mode is Shadow, a failure is answered with a status line saying so and
+                // what was and was not done, never a bare "ChartBridge error" reject (the page's words then stay true)
+                int n = -1, roots = 0;
+                bool dropped = false;
+                string flatErr = null;
+                try
+                {
+                    foreach (Proposal p in expired) { ToPages(ProposalJson(p)); ToAgent(AnswerJson(p.P.Id, "not answered", "Flatten and turn off")); }
+                    if (FlattenOffEarlyFaultForCheck == Id) throw new InvalidOperationException("a fault made by the harness");
+                    DropAutoIntent("Flatten and turn off");
+                    dropped = true;
+                    n = CancelUnfilled("Flatten and turn off");
+                    if (FlattenOffFaultForCheck == Id) throw new InvalidOperationException("a fault made by the harness");
+                    try
+                    {
+                        if (FlattenFaultForCheck == Id) throw new InvalidOperationException("a fault made by the harness");
+                        roots = StartFlatten("Flatten and turn off", false, null, false, true);
+                    }
+                    catch (Exception ex) { flatErr = ex.Message; }
+                }
+                catch (Exception ex)
+                {
+                    string w = "Agent " + Id + ": Flatten and turn off: mode shadow" + (old != "shadow" ? " (was " + old + ")" : "") + ", then ChartBridge failed (" + ex.Message + "): " +
+                               (dropped ? "" : "its saved Auto may NOT be removed (delete agent-" + Id + "-auto.txt); ") +
+                               (n < 0 ? "its unfilled entries may NOT be cancelled" : n + " unfilled entr" + (n == 1 ? "y" : "ies") + " cancelled") + "; " +
+                               "its flatten was NOT started on " + AccountWords() + ": check NinjaTrader and act there now";   // the outer catch fires only before the flatten (its own try catches the flatten's failure)
+                    try { Log("agent " + Id + ": " + w); AgentLog(w); } catch (Exception) { }
+                    ToPages(StatusJson("error", w));
+                    try { ChartBridgeOrders.AgentAlarm(w); } catch (Exception) { }
+                    try { Notify(); } catch (Exception) { }
+                    return null;
+                }
+                string flatWords = flatErr != null ? "its flatten could NOT be started (" + flatErr + "): act in NinjaTrader now" :
+                                   roots > 0 ? "flattening what it owns" : "nothing of its own to flatten";
+                string say = "Agent " + Id + ": Flatten and turn off: mode shadow" + (old != "shadow" ? " (was " + old + ")" : "") + "; " + n + " unfilled entr" + (n == 1 ? "y" : "ies") +
+                             " cancelled; " + flatWords + " on " + AccountWords() + (connected ? "; Copilot and Auto are refused until its program ends (the PC helper's Off)" : "; its program is not connected");
+                Log("agent " + Id + ": " + say); AgentLog(say);
+                ToPages(StatusJson(flatErr != null ? "error" : "warn", say));
+                if (flatErr != null) ChartBridgeOrders.AgentAlarm(say);
+                ToAgent(WelcomeJson());
+                Notify();
+                return null;
             }
         }
 
@@ -5960,6 +6157,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                  .Append(",\"losses\":").Append(LossesLocked())
                  .Append(",\"killed\":").Append(killed ? "true" : "false")
                  .Append(",\"killedAt\":").Append(killed && killedAt > 0 ? Ms(killedAt) : "null")   // 0.6.3 (audit C5)
+                 .Append(offAsked ? ",\"offAsked\":true" : "")   // plan step 3.2: only while agentFlattenOff waits for its program to end
                  .Append(",\"standDown\":").Append(Str(sd))
                  .Append(",\"standDowns\":").Append(sds)   // 0.6.2
                  .Append(",\"owns\":").Append(owns ? "true" : "false")
@@ -6160,6 +6358,163 @@ namespace NinjaTrader.NinjaScript.AddOns
             return null;
         }
 
+        // ---------------------------------------------------------- plan step 3.5 (0.6.25): the GO size is the file's (law 9.3)
+        // A roster file may carry Anthony's GO (`live`, Bot-Lab specrunner/roster.py _check_live): its risk_dollars is the GO size
+        // and must be the file's own playbook risk_dollars for the GO's stage, so a different size is a new roster file with his
+        // word. A file whose GO size differs is not served (GET /roster lists it with why), so it can never be picked, armed or
+        // restored. A lineup: each bot's GO against the lineup's one playbook. No GO (no live, or null): nothing to check. This is
+        // the one rule ChartBridge reads from a roster file; Bot-Lab's runner checks the same and every other part of the GO.
+        internal static string GoSizeProblem(string text, string fmt)
+        {
+            // R12 review nit 1: a key the GO size is read from, written twice or with an escape, is refused (a JSON reader that takes
+            // the last of two, or reads the escape, would see another GO than this one)
+            string kp = KeysProblem(text, "", "live", "playbook", "bots") ?? KeysProblem(JsonMember(text, "playbook"), "playbook.", "eval", "funded");
+            if (kp != null) return kp;
+            string playbook = JsonMember(text, "playbook");
+            if (fmt == FormatBot) return GoWhy(text, playbook, "");
+            string bots = JsonMember(text, "bots");
+            if (bots == null || bots == "null") return null;
+            List<string> items = JsonItems(bots);
+            if (items == null) return "its bots are not a list";
+            for (int i = 0; i < items.Count; i++) { string w = KeysProblem(items[i], "bots[" + i.ToString(CultureInfo.InvariantCulture) + "].", "live") ?? GoWhy(items[i], playbook, "bots[" + i.ToString(CultureInfo.InvariantCulture) + "]: "); if (w != null) return w; }
+            return null;
+        }
+        private static string GoWhy(string holder, string playbook, string where)
+        {
+            string live = JsonMember(holder, "live");
+            if (live == null || live == "null") return null;
+            if (!live.StartsWith("{", StringComparison.Ordinal)) return where + "its GO (live) is not an object: not served";
+            string kp = KeysProblem(live, where + "live.", "stage", "risk_dollars");
+            if (kp != null) return kp;
+            string stage = JsonString(JsonMember(live, "stage"));
+            if (stage != "eval" && stage != "funded") return where + "its GO (live) names no stage (eval or funded): not served";
+            double? go = JsonNumber(JsonMember(live, "risk_dollars"));
+            string pb = playbook == null ? null : JsonMember(playbook, stage);
+            kp = pb == null ? null : KeysProblem(pb, where + "playbook." + stage + ".", "risk_dollars");
+            if (kp != null) return kp;
+            double? want = pb == null ? null : JsonNumber(JsonMember(pb, "risk_dollars"));
+            if (!want.HasValue || want.Value <= 0) return where + "its playbook has no risk_dollars for " + stage + ", so its GO size cannot be checked: not served";
+            if (!go.HasValue || go.Value != want.Value)
+                return where + "its GO size (live.risk_dollars " + (go.HasValue ? go.Value.ToString("0.##", CultureInfo.InvariantCulture) : "missing") + ") is not its playbook's for " + stage + " (" + want.Value.ToString("0.##", CultureInfo.InvariantCulture) +
+                       "): the GO size is the file's (law 9.3); a new size is a new roster file with Anthony's word. Not served";
+            return null;
+        }
+        // R12 review nit 1: null when each of these keys is a top-level key of obj at most once and never written with an escape; else
+        // why the file is not served. obj null or not an object: null (the lookups then find nothing).
+        internal static string KeysProblem(string obj, string where, params string[] keys)
+        {
+            if (obj == null) return null;
+            string t = obj.Trim();
+            if (t.Length == 0 || t[0] != '{') return null;
+            Dictionary<string, int> seen = new Dictionary<string, int>(StringComparer.Ordinal);
+            int n = t.Length, i = 1;
+            while (i < n)
+            {
+                while (i < n && (char.IsWhiteSpace(t[i]) || t[i] == ',')) i++;
+                if (i >= n || t[i] != '"') break;
+                int ke = SkipValue(t, i);
+                string raw = t.Substring(i + 1, Math.Max(0, ke - i - 2)), name = Unescape(raw);
+                if (Array.IndexOf(keys, name) >= 0)
+                {
+                    if (raw != name) return where + name + " is written with an escape: not served";
+                    int c; seen.TryGetValue(name, out c); seen[name] = c + 1;
+                    if (c + 1 > 1) return where + name + " is there twice: not served";
+                }
+                i = ke;
+                while (i < n && char.IsWhiteSpace(t[i])) i++;
+                if (i >= n || t[i] != ':') break;
+                i = SkipValue(t, i + 1);
+            }
+            return null;
+        }
+        private static string Unescape(string raw)
+        {
+            if (raw.IndexOf('\\') < 0) return raw;
+            StringBuilder b = new StringBuilder();
+            for (int i = 0; i < raw.Length; i++)
+            {
+                char c = raw[i];
+                if (c != '\\' || i + 1 >= raw.Length) { b.Append(c); continue; }
+                char e = raw[++i];
+                if (e == 'u' && i + 4 < raw.Length) { int v; if (int.TryParse(raw.Substring(i + 1, 4), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out v)) { b.Append((char)v); i += 4; continue; } }
+                b.Append(e == 'n' ? '\n' : e == 't' ? '\t' : e == 'r' ? '\r' : e == 'b' ? '\b' : e == 'f' ? '\f' : e);
+            }
+            return b.ToString();
+        }
+        // A small reader for valid JSON text (JsonValid passed first): the raw text of a value from its first character.
+        private static int SkipValue(string t, int i)
+        {
+            int n = t.Length;
+            while (i < n && char.IsWhiteSpace(t[i])) i++;
+            if (i >= n) return n;
+            if (t[i] == '"') { int k = i + 1; while (k < n && t[k] != '"') { if (t[k] == '\\') k++; k++; } return Math.Min(n, k + 1); }
+            if (t[i] == '{' || t[i] == '[')
+            {
+                int depth = 0;
+                for (int k = i; k < n; k++)
+                {
+                    char c = t[k];
+                    if (c == '"') { k = SkipValue(t, k) - 1; continue; }
+                    if (c == '{' || c == '[') depth++;
+                    else if (c == '}' || c == ']') { depth--; if (depth == 0) return k + 1; }
+                }
+                return n;
+            }
+            int e = i;
+            while (e < n && t[e] != ',' && t[e] != '}' && t[e] != ']' && !char.IsWhiteSpace(t[e])) e++;
+            return e;
+        }
+        // The raw value of a TOP-LEVEL key of a JSON object (never a key of a nested object, never words inside a string), or null.
+        internal static string JsonMember(string obj, string key)
+        {
+            if (obj == null) return null;
+            int n = obj.Length, i = 0;
+            while (i < n && char.IsWhiteSpace(obj[i])) i++;
+            if (i >= n || obj[i] != '{') return null;
+            i++;
+            while (i < n)
+            {
+                while (i < n && (char.IsWhiteSpace(obj[i]) || obj[i] == ',')) i++;
+                if (i >= n || obj[i] == '}' || obj[i] != '"') return null;
+                int ke = SkipValue(obj, i);
+                string k = obj.Substring(i + 1, Math.Max(0, ke - i - 2));
+                i = ke;
+                while (i < n && char.IsWhiteSpace(obj[i])) i++;
+                if (i >= n || obj[i] != ':') return null;
+                i++;
+                while (i < n && char.IsWhiteSpace(obj[i])) i++;
+                int ve = SkipValue(obj, i);
+                if (k == key) return obj.Substring(i, ve - i).Trim();
+                i = ve;
+            }
+            return null;
+        }
+        // The raw items of a JSON list, or null when it is not one.
+        internal static List<string> JsonItems(string list)
+        {
+            if (list == null) return null;
+            string t = list.Trim();
+            if (t.Length < 2 || t[0] != '[') return null;
+            List<string> items = new List<string>();
+            int i = 1, n = t.Length;
+            while (i < n)
+            {
+                while (i < n && (char.IsWhiteSpace(t[i]) || t[i] == ',')) i++;
+                if (i >= n || t[i] == ']') return items;
+                int e = SkipValue(t, i);
+                items.Add(t.Substring(i, e - i).Trim());
+                i = e;
+            }
+            return items;
+        }
+        private static string JsonString(string raw) { return raw != null && raw.Length >= 2 && raw[0] == '"' && raw.IndexOf('\\') < 0 ? raw.Substring(1, raw.Length - 2) : null; }
+        private static double? JsonNumber(string raw)
+        {
+            double v;
+            if (raw == null || raw.Length == 0 || !(raw[0] == '-' || char.IsDigit(raw[0]))) return null;
+            return double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out v) && !double.IsNaN(v) && !double.IsInfinity(v) ? (double?)v : null;
+        }
+
         // One file's JSON text, or null with why it is not served.
         private static string One(FileInfo f, out string why, out string sha)
         {
@@ -6182,6 +6537,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (!ChartBridgeBot.JsonValid(text)) { why = "not valid JSON"; return null; }
                 string fmt = TopLevelFormat(text);
                 if (fmt != FormatBot && fmt != FormatLineup) { why = "not a roster file (its format is not specrunner.roster/1 or specrunner.lineup/1)"; return null; }
+                string go = GoSizeProblem(text, fmt);   // plan step 3.5 (0.6.25): the GO size is the file's (law 9.3)
+                if (go != null) { why = go; return null; }
                 return text.Trim();
             }
             catch (Exception ex) { why = "could not be read (" + ex.GetType().Name + ")"; return null; }

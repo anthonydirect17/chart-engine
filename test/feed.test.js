@@ -35,16 +35,20 @@ function panel(h, root, need) {
 const types = p => p.got.map(m => m.type);
 
 test('needOf, merge, covers: the least one load that holds what every panel asks', () => {
-  assert.deepStrictEqual(F.needOf({ root: 'MNQ' }), { days: 5, tickHours: 8, liveFirst: false, profile: false }, "ChartBridge's defaults");
-  assert.deepStrictEqual(F.needOf({ days: 1, tickHours: 0, profile: true }), { days: 1, tickHours: 0, liveFirst: false, profile: true });
+  assert.deepStrictEqual(F.needOf({ root: 'MNQ' }), { days: 5, tickHours: 8, liveFirst: false, profile: false, deltaTable: false }, "ChartBridge's defaults");
+  assert.deepStrictEqual(F.needOf({ days: 1, tickHours: 0, profile: true }), { days: 1, tickHours: 0, liveFirst: false, profile: true, deltaTable: false });
   const m = F.merge(F.needOf({ days: 1, tickHours: 0 }), F.needOf({ days: 5, tickHours: 2, liveFirst: true, profile: true }));
-  assert.deepStrictEqual(m, { days: 5, tickHours: 2, liveFirst: true, profile: true });
+  assert.deepStrictEqual(m, { days: 5, tickHours: 2, liveFirst: true, profile: true, deltaTable: false });
   assert.ok(F.covers(m, F.needOf({ days: 1, tickHours: 0 }), true));
   assert.ok(!F.covers(F.needOf({ days: 1, tickHours: 0 }), F.needOf({ days: 5, tickHours: 0 }), true), 'more days');
   assert.ok(!F.covers(F.needOf({ days: 5, tickHours: 0 }), F.needOf({ days: 5, tickHours: 2 }), true), 'ticks wanted, none loaded');
   assert.ok(F.covers(F.needOf({ days: 5, tickHours: 2 }), F.needOf({ days: 5, tickHours: 16 }), true), 'any served window holds any tick view (0.3.5)');
   assert.ok(!F.covers(F.needOf({ days: 5, tickHours: 2 }), F.needOf({ days: 5, tickHours: 16 }), false), 'before 0.3.5 the hours count');
   assert.ok(!F.covers(F.needOf({ days: 5, tickHours: 0 }), F.needOf({ days: 5, tickHours: 0, profile: true }), true), 'the session table');
+  // ChartBridge 0.6.25: the delta table comes only to a load that asked for it
+  assert.equal(F.merge(F.needOf({ deltaTable: true }), F.needOf({})).deltaTable, true);
+  assert.ok(!F.covers(F.needOf({ days: 5, tickHours: 0 }), F.needOf({ days: 5, tickHours: 0, deltaTable: true }), true), 'the delta table');
+  assert.ok(F.covers(F.needOf({ days: 5, tickHours: 0, deltaTable: true }), F.needOf({ days: 5, tickHours: 0 }), true), 'a load with it holds a panel without');
 });
 
 test('one socket and one subscribe per instrument, whatever the number of panels', async () => {

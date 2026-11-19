@@ -58,6 +58,45 @@ const EDGES = ['t', 'r', 'b', 'l'];
 const LIGHT_HTML = '<div class="ag-light" data-parity="LT02" aria-hidden="true">' + EDGES.map(e => '<i class="ag-edge e-' + e + '"><b></b><b></b></i>').join('') +
   EDGES.map(e => '<i class="ag-edge ag-h e-' + e + '"><b></b><b></b></i>').join('') + '</div>';
 
+/* the R12 delta of plan step 3.2, B1r: the traders a desk is turning off (Flatten and turn off under way, and its Off until that
+   answers), so Legion's Armed never puts one of them in Auto meanwhile (FleetCore.lanes reads AgentDesk.turningOff). Each desk is
+   read at the moment it is asked (never a copy made at a render), and the R12 delta X4 shares the list with every window of this
+   origin (AgentHelper.createTurnShare: a browser entry per trader with a short life, and a BroadcastChannel) */
+const TURNING = new Map();   // desk -> () => [{ id, hold }]: the traders it is turning off now (hold: kept only for a failed Off, S2)
+const SHARE = AH && typeof AH.createTurnShare === 'function' ? AH.createTurnShare({
+  storage: () => window.localStorage,
+  channel: () => (typeof BroadcastChannel === 'function' ? new BroadcastChannel('live-agent-turning-v1') : null) }) : null;
+/* id -> held (true only while every desk keeps him for a failed Off alone) */
+function localTurning() {
+  const out = new Map();
+  for (const f of TURNING.values()) { try { for (const e of f()) if (e && e.id) out.set(e.id, out.has(e.id) ? out.get(e.id) && !!e.hold : !!e.hold); } catch (e) { /* a desk gone */ } }
+  return out;
+}
+/* this window's list, written for the others: at once when it changes, and again each second while it is not empty */
+let shareTimer = 0, shareSig = '', shareGone = false;
+function shareSync(force) {
+  if (shareGone) return;                                  // the window is going (pagehide): nothing written again
+  const m = localTurning(), ids = [...m.keys()], held = ids.filter(id => m.get(id)), sig = ids.slice().sort().join(',') + '|' + held.slice().sort().join(',');
+  if (SHARE && (force || sig !== shareSig)) { try { SHARE.set(ids, held); } catch (e) { /* never in the way */ } }
+  shareSig = sig;
+  clearTimeout(shareTimer); shareTimer = 0;
+  if (ids.length) shareTimer = setTimeout(() => shareSync(true), 1000);
+}
+/* round 4, S1: a window closed (or put in the back-forward cache) clears its own entries at once, never left for TURN_TTL_MS. The
+   desks' own list (TURNING) is kept: a window brought back from that cache writes it again (pageshow), so a job still under way is
+   never dropped from Armed's list */
+if (typeof window.addEventListener === 'function') {
+  window.addEventListener('pagehide', () => { clearTimeout(shareTimer); shareTimer = 0; shareSig = ''; shareGone = true; if (SHARE) { try { SHARE.set([]); } catch (e) { /* going anyway */ } } });
+  window.addEventListener('pageshow', e => { if (e && e.persisted) { shareGone = false; shareSync(true); } });
+}
+/** The traders a desk of any window of this origin is turning off: [ids], with .held (not enumerable): the ones kept only because
+ *  their Off failed (round 4, S2: Armed then says so). */
+function turningOff() {
+  const all = localTurning();
+  if (SHARE) { try { const s = SHARE.list(), h = new Set(s.held || []); for (const id of s) all.set(id, all.has(id) ? all.get(id) && h.has(id) : h.has(id)); } catch (e) { /* this window's own only */ } }
+  const ids = [...all.keys()];
+  return AH && typeof AH.heldList === 'function' ? AH.heldList(ids, ids.filter(id => all.get(id))) : ids;
+}
 function create(o) {
   o = o || {};
   const els = o.els || {};
@@ -97,7 +136,11 @@ function create(o) {
      H.lines[agent] until it ends (a give-up's until the next On or Off for that agent) */
   /* 1.29.1: H.okAt, H.misses, H.slow: the missed-poll grace (AgentHelper.pollStep): one missed GET /status keeps the last good
      answer, slow true, and nothing starts on it */
-  const H = { reach: '', why: '', status: null, okAt: 0, misses: 0, slow: false, pick: {}, busy: false, ask: null, job: null, flatSent: false, lines: {}, said: '', saidAt: 0, setFilled: '' };
+  const api0 = {};                                  // this desk, as TURNING knows it
+  /* H.hold: the trader whose Off a Flatten-and-off sent, kept in TURNING until that Off answers ok (a failed Off: until the next
+     On or Off for him), so Armed never takes him between the job's end and his program's end (the R12 delta, nit) */
+  const H = { reach: '', why: '', status: null, okAt: 0, misses: 0, slow: false, pick: {}, busy: false, ask: null, job: null, hold: '', holdFailed: false, lines: {}, said: '', saidAt: 0, setFilled: '' };
+  TURNING.set(api0, () => [H.job && { id: H.job.agent, hold: false }, H.hold && { id: H.hold, hold: H.holdFailed && !(H.job && H.job.agent === H.hold) }]);
   { const v = readJson(K.chart); if (v && TF_NAMES[v.tf]) S.chartTf = v.tf; }
   { const v = readJson(K.feed); if (v && FILTERS.some(f => f[0] === v.filter)) S.feedFilter = v.filter; }
 
@@ -158,7 +201,7 @@ function create(o) {
         '<span class="ag-motion" data-parity="ST13" role="group" aria-label="Motion of the light" title="The light around the panels and the grid: Full moves them, Off keeps them still (kept in this browser). Your system\'s reduced motion keeps them still too."><span class="ag-lbl">Motion</span>' +
           '<button type="button" data-motion="full" data-parity="ST13-full" aria-pressed="true">Full</button><button type="button" data-motion="off" data-parity="ST13-off" aria-pressed="false">Off</button></span>' +
         '<button type="button" class="ws-btn ag-boardbtn" data-act="board" title="Heroes on duty: every agent slot, every group, Kill all agents">Board</button>' +
-        (popout || embedded ? '' : '<button type="button" class="ws-btn ag-popbtn" data-act="popout" data-parity="ST14" title="Open the Agent tab in its own window (for a third monitor)">Pop out</button>') +
+        (popout || embedded ? '' : '<button type="button" class="ws-btn ag-popbtn" data-act="popout" data-parity="ST14" title="Open this desk in its own window (for a third monitor)">Pop out</button>') +
       '</header>' +
       /* the newest word of each step, still (the grid's words in one line); empty steps say nothing */
       '<div class="ag-nowline" data-k="nowline" aria-label="The newest word of each step">' + AC.STEPS.map((x, i) => '<span class="t-' + x[0] + '"><b>' + x[1] + '</b><span class="ag-nw" data-k="nw' + i + '"></span></span>').join('') + '</div>' +
@@ -603,7 +646,7 @@ function create(o) {
     /* the corner's line, off the tab: every agent's open proposals (the bot's are its own cards there) */
     if (cornerLine) {
       const all = openCounts(false, ''), on = !S.shown && all.length > 0;
-      writeLine(cornerLine, lineHtml(all, lineOut, now, false, x => 'Open the Agent tab on ' + x.name + ': its proposals are answered there'));
+      writeLine(cornerLine, lineHtml(all, lineOut, now, false, x => 'Open Praetorian on ' + x.name + ' (Legion, Cohorts): its proposals are answered there'));
       put(cornerLine, 'hidden', !on);
     }
     const next = Math.min(...[...lineIn.up.values(), ...lineOut.up.values()].filter(t => t > now));
@@ -615,6 +658,7 @@ function create(o) {
     const id = key.slice(6);
     if (!key.startsWith('agent:') || !agents.get(id)) return;
     if (S.chosen !== id) { choose(id); unmountChart(); }
+    if (typeof o.openAgent === 'function') { o.openAgent(id); return; }   // plan step 3.2: the chart page's copy opens Legion's Praetorian on him
     if (S.shown) render(); else showTab(true);
   }
   if (cornerLine) cornerLine.addEventListener('click', e => { const b = e.target.closest('button[data-goto]'); if (b) goTo(b.dataset.goto); });
@@ -725,6 +769,17 @@ function create(o) {
     else if (x.kind === 'sdClear') boardSay(why + ' The stand-down stays.');   // 1.29.0
     else if (x.kind === 'startShadow') { if (B.start && B.start.cid === m.cid) { B.start = null; B.starting = false; } boardSay(why + ' He was not put in Shadow, so nothing was started.'); }
     else if (x.kind === 'assign') { if (B.job && B.job.cid === m.cid) B.job = null; boardSay(why + ' Nothing was started.'); }
+    else if (x.kind === 'flatoff') {
+      /* the R12 delta X2: agentFlattenOff refused (the action rate, no such agent, an error): his job ends here, and the line says
+         nothing was done; he stays as he is, in the mode ChartBridge last said */
+      const id = x.agent || (H.job && H.job.cid === m.cid ? H.job.agent : '');
+      if (H.job && H.job.cid === m.cid) { H.job = null; clearTimeout(flatTimer); }
+      if (id && !(H.job && H.job.agent === id)) {
+        const a = agents.get(id);
+        H.lines[id] = 'Refused by ChartBridge: ' + String(m.reason || 'no reason given').replace(/\.+$/, '') + '. Nothing was flattened; he stays on (' + AH.modeWord(a && a.mode) + ').';
+      }
+      renderPanel();
+    }
     else notice({ kind: 'refused', level: 'amber', text: why });
   }
   function onStatus(m) {
@@ -756,7 +811,7 @@ function create(o) {
       tog(tabBtn, 'ag-alert', bad);
       tog(tabBtn, 'ag-waiting', !S.shown && [...cards.values()].some(x => !x.ended));
       put(tabBtn.dataset, 'parity', 'W01 W02' + (bad ? ' W02-alert' : '') + (tabBtn.classList.contains('ag-waiting') ? ' W02-waiting' : ''));
-      attr(tabBtn, 'title', off ? 'Agents: ' + AC.offText(offCtx()) : 'Agent tab: ' + agents.size() + (agents.size() === 1 ? ' agent' : ' agents'));
+      attr(tabBtn, 'title', off ? 'Agents: ' + AC.offText(offCtx()) : 'Praetorian: ' + agents.size() + (agents.size() === 1 ? ' agent' : ' agents'));
     }
     if (view) {
       put(q('[data-k="off"]'), 'hidden', !off); put(q('[data-k="main"]'), 'hidden', off || S.board); put(q('[data-k="board"]'), 'hidden', off || !S.board);
@@ -798,6 +853,7 @@ function create(o) {
     put(q('[data-k="last"]'), 'textContent', m.last); attr(q('[data-k="last"]'), 'title', m.last);   // one line in the column, the whole of it here
   }
   function renderPanel() {
+    shareSync();
     renderBoard();                                // 1.28.0: the board follows the same messages (accounts, groups, the helper)
     if (!view) return;
     const a = cur(); if (!a) return;
@@ -863,7 +919,8 @@ function create(o) {
   const servedRoots = () => AC.RULE_ROOTS.filter(r => S.instruments[r] && !S.instruments[r].quoteOnly);
 
   /* ---------------- On/Off, spend and the picker: the PC helper (Bot-Lab manrae/helper.py) on localhost:8767, behind this
-     page's PIN unlock (AgentHelper). It never sends an order; Flatten-and-off is this page's own Flatten (o.flatten), then Off */
+     page's PIN unlock (AgentHelper). It never sends an order or a Flatten: Flatten-and-off is ChartBridge's agentFlattenOff, or on an
+     older ChartBridge Shadow and a flatten by hand, then Off (the R12 delta: the page's own Flatten, o.flatten, is gone) */
   const HC = AH && typeof fetch === 'function' ? AH.createClient({ fetch: (u, i) => fetch(u, i), headers: () => (typeof o.headers === 'function' ? o.headers() : {}) }) : null;
   function helperOf(id) { return H.status && H.status.agents ? H.status.agents[id] || null : null; }
   /* the group he trades as the groups message has it (its Type and default hero), or null */
@@ -875,6 +932,8 @@ function create(o) {
        401, 403, 400, 409 and every good answer are taken as they come, as before */
     const st = AH.pollStep(H, r, Date.now());
     H.reach = st.reach; H.status = st.status; H.why = st.why; H.okAt = st.okAt; H.misses = st.misses; H.slow = st.slow;
+    /* round 5, S1: a failed Off's hold ends when the helper itself says he is off and not running (done from another window) */
+    if (AH.holdClears(H.hold, H.holdFailed, st.reach, helperOf(H.hold))) { H.hold = ''; H.holdFailed = false; shareSync(); }
     renderPanel();
   }
   /* asked every few seconds while the tab is shown (a timeout set again each time: no interval on this page) */
@@ -934,69 +993,70 @@ function create(o) {
     const held = heldWhy(a.agent); if (held) { helperSay('Not started from ' + tabName + ': ' + held + '.'); renderPanel(); return; }   // 1.51.0
     if (H.slow) { helperSay(SLOW_SENT); renderPanel(); return; }   // 1.29.1: never on an old answer; the press is told why
     delete H.lines[a.agent];
+    if (H.hold === a.agent) { H.hold = ''; H.holdFailed = false; }               // On pressed: he is not being turned off any more
     H.busy = true; helperSay('Asking the PC helper to start him...'); renderPanel();
     const r = await HC.on(a.agent, build, a.mode, a.sim);
     H.busy = false;
     helperSay(r.reach === 'ok' ? 'On: he starts once NinjaTrader is connected.' : r.body && r.body.error ? r.body.error : AH.stateText(null, r.reach));
     await pollHelper();
   }
+  /* the Off of a Flatten-and-off: he stays in TURNING until it answers ok (H.hold) */
+  function offAfter(id, after) { H.hold = id; H.holdFailed = false; return helperOff(id, after); }
   async function helperOff(id, after) {
     H.busy = true; helperSay('Turning him off...'); renderPanel();
     const r = await HC.off(id);
     H.busy = false;
+    if (H.hold === id) { if (r.reach === 'ok') { H.hold = ''; H.holdFailed = false; } else H.holdFailed = true; }   // S2: a failed Off is said as one
     const said = r.reach === 'ok' ? (after || '') + 'Off: his program ends, no more model calls.' : 'Off was not done: ' + (r.body && r.body.error ? r.body.error : AH.stateText(null, r.reach, H.why));
     if (r.reach === 'ok') { delete H.lines[id]; helperSay(said); } else H.lines[id] = said;   // a failure stays until the next On or Off
     await pollHelper();
   }
   function offPressed(a) {
     delete H.lines[a.agent];
+    if (H.hold === a.agent) { H.hold = ''; H.holdFailed = false; }               // a new Off for him: the one that failed is not waited for any more
     if (AH.offStep(a) === 'ask') { H.ask = { agent: a.agent, text: AH.offQuestion(a, AC.agentName(a)) }; renderPanel(); const y = q('[data-act="hAskNo"]'); if (y) y.focus(); return; }
     helperOff(a.agent);
   }
-  /* "Flatten and turn off", for the agent the question was asked about only (H.ask.agent), his position read again now:
-     Shadow first (nothing more placed for him), then this page's own Flatten for his account and root, then Off once flat.
-     The pop-out has no order connection: it says where to flatten. */
+  /* "Flatten and turn off", for the agent the question was asked about only (H.ask.agent), his position read again now. No desk
+     sends a Flatten of its own (none is given one since plan step 3.2: the chart page, Legion and the pop-out): ChartBridge's one
+     command when it knows it, else Shadow first and a flatten by hand, then Off once flat. */
   function flattenThenOff() {
     const ask = H.ask; H.ask = null;
     const a = ask ? agents.get(ask.agent) : null;
     if (!a || a.agent !== S.chosen) { renderPanel(); return; }
-    if (typeof o.flatten !== 'function') { H.lines[a.agent] = 'Flatten him on the main page or in NinjaTrader, then press Off.'; renderPanel(); return; }
+    /* plan step 3.2: with a ChartBridge that knows it, one command (agentFlattenOff): ChartBridge puts him in Shadow and flattens what
+       he owns itself, and refuses Copilot and Auto for him until his program ends, so this page closing half way leaves nothing half
+       done. This page then sends the helper's Off once ChartBridge says he is flat, as before (the same wait and the same lines). */
+    if (AC.FLATOFF_MIN && AC.atLeast(S.version, AC.FLATOFF_MIN)) {
+      if (AH.flat(a)) { offAfter(a.agent); return; }
+      const fm = { type: 'agentFlattenOff', agent: a.agent }, no = refusal(Object.assign({ cid: 'x' }, fm));
+      const c = sendAgent(fm, 'flatoff');
+      if (!c) { H.lines[a.agent] = (no || 'Flatten and turn off could not be sent (not signed in to ChartBridge).') + ' Nothing was flattened and he stays on.'; renderPanel(); return; }
+      /* the R12 delta X2: the job keeps the command's cid (a refusal ends it, onReject) and says Shadow only once ChartBridge says it */
+      H.job = Object.assign(AH.flatOffStart(a, Date.now(), true).job, { cid: c });
+      H.lines[a.agent] = AH.FO_SENT;
+      jobStep(); flatLoop(); return;
+    }
+    /* the R12 review of plan step 3.2, B1: an older ChartBridge: the stop half still goes (Shadow first, nothing more placed for
+       him), he is flattened by hand (where: the line, from his seats or his account), and Off goes once he is flat, in Shadow */
     const st = AH.flatOffStart(a, Date.now());
     if (st.error) { H.lines[a.agent] = st.error; renderPanel(); return; }
-    if (st.action === 'off') { helperOff(a.agent); return; }
-    H.job = st.job; H.flatSent = false;
+    if (st.action === 'off') { offAfter(a.agent); return; }
+    H.job = st.job;
     if (st.action === 'shadow') {
       const sm = AC.modeMsg(a.agent, 'shadow'), no = refusal(sm);   // 1.51.0 (the review of 102, F2): the gate's own words, never "not signed in"
       if (!sendAgent(sm, 'mode')) { H.job = null; H.lines[a.agent] = no ? no + ' Nothing was flattened and he stays on.' : 'Shadow could not be sent (not signed in to ChartBridge): nothing was flattened and he stays on.'; renderPanel(); return; }
-    } else jobFlatten(st.job);                       // in Shadow already: the Flatten at once
-    if (H.job) { jobStep(); flatLoop(); } else renderPanel();
-  }
-  /* the Flatten of a job, his position and account read again right before it goes */
-  function jobFlatten(j) {
-    const a = agents.get(j.agent);
-    if (Array.isArray(j.seats)) {   // 1.27.0: a group: the page's Flatten on every seat that still holds his trade (read again now)
-      const held = a ? AH.seatsHeld(a) : [];
-      const same = held.length === j.seats.length && j.seats.every(x => held.some(h => h.account === x.account && h.root === x.root));
-      if (!a || AH.offStep(a) !== 'ask' || !same) { H.job = null; H.lines[j.agent] = 'His seats changed before the Flatten: nothing was sent. He stays on, in Shadow.'; return; }
-      const failed = j.seats.filter(x => o.flatten(x.account, x.root) === false);
-      if (failed.length === j.seats.length) { H.job = null; H.lines[j.agent] = 'The Flatten was not sent (see the chart\'s line): he stays on, in Shadow.'; }
-      else { H.flatSent = true; if (failed.length) H.lines[j.agent] = 'The Flatten for ' + failed.map(x => x.account + ' ' + x.root).join(', ') + ' was not sent: flatten it in NinjaTrader; he turns off once every seat is flat.'; }
-      return;
-    }
-    // the next release (answers B4-9, N1): never by his own account while a seats list is there (a seat may hold the trade)
-    if (!a || AH.offStep(a) !== 'ask' || a.account !== j.account || !a.position || a.position.root !== j.root || (Array.isArray(a.seats) && a.seats.length > 0)) { H.job = null; H.lines[j.agent] = 'His position changed before the Flatten: nothing was sent. He stays on, in Shadow.'; }
-    else if (o.flatten(j.account, j.root) === false) { H.job = null; H.lines[j.agent] = 'The Flatten was not sent (see the chart\'s line): he stays on, in Shadow.'; }
-    else H.flatSent = true;
+    } else H.lines[a.agent] = AH.handLine(st.job);   // in Shadow already: the wait at once
+    jobStep(); flatLoop();
   }
   /* each second, and at each `agent` message, while a Flatten-and-off is under way */
   let flatTimer = 0;
   function flatLoop() { clearTimeout(flatTimer); if (H.job) flatTimer = setTimeout(() => { jobStep(); flatLoop(); }, 1000); }
   function jobStep() {
     const j = H.job; if (!j) return;
-    const r = AH.flatOffStep(j, agents.get(j.agent) || null, Date.now(), H.flatSent);
+    const r = AH.flatOffStep(j, agents.get(j.agent) || null, Date.now());
     H.job = r.job; H.lines[j.agent] = r.line;
-    if (r.action === 'flatten') { jobFlatten(r.job); if (H.job) H.lines[j.agent] = 'Flatten sent for ' + AH.jobWhere(j) + ' (he is in Shadow): turning him off once flat...'; }
-    else if (r.action === 'off') { H.job = null; helperOff(j.agent, 'Flat. '); }
+    if (r.action === 'off') { H.job = null; offAfter(j.agent, 'Flat. '); }
     if (H.job) flatLoop();
     renderPanel();
   }
@@ -1496,9 +1556,9 @@ function create(o) {
     const no = refusal(m);
     if (no) { notice({ kind: 'refused', level: 'amber', text: no }); return false; }   // 1.51.0: Praetorian's gate, said as it is
     if (!S.signedIn || !sendRaw(m)) { notice({ kind: 'refused', level: 'amber', text: 'Not sent: not signed in to ChartBridge.' }); return false; }
-    S.pending.set(c, { kind });
+    S.pending.set(c, { kind, agent: typeof m.agent === 'string' ? m.agent : '' });
     setTimeout(() => S.pending.delete(c), 15000);
-    return true;
+    return c;                                                  // its cid (truthy): a job keeps it to match a refusal (X2)
   }
   /* a short "Sent." under a button, gone after a few seconds unless something else was written there since */
   function sentLine(k, t) {
@@ -1696,7 +1756,7 @@ function create(o) {
   }
 
   /* ---------------- the Agent tab's chart: a normal live chart on the window's feed, never animated, takes no orders */
-  const chartHost = { pressOff: () => 'The Agent tab\'s chart is for watching: it takes no orders. Its lines are the agent\'s own working orders.', place: () => {}, move: () => {}, cancel: () => {} };
+  const chartHost = { pressOff: () => 'His desk\'s chart is for watching: it takes no orders. Its lines are the agent\'s own working orders.', place: () => {}, move: () => {}, cancel: () => {} };
   /* the chart's root: the one picked here, else the position's, else a working entry's, else the agent's first root */
   function rootFor(a) {
     const roots = (AC.parseRules(a && a.rules) || { roots: [] }).roots.filter(r => S.instruments[r] || !Object.keys(S.instruments).length);
@@ -1820,10 +1880,10 @@ function create(o) {
     board: () => Object.assign({ shown: S.board, line: B.line, job: B.job ? Object.assign({}, B.job) : null }, boardModel()),
     /** Layout 5, read only (tests): the grid canvas, the chart maximized, his trades in R, his heat */
     layout5: () => { const a = cur(); return { grid: GRID ? GRID.state() : null, max: S.max, r: a ? rNow(a) : null, heat: a ? AC.heatNow(a, S.orders.values(), pointValue) : null, risks: risksDay().map }; },
-    destroy() { if (GRID) GRID.destroy(); unlisten(); unroute(); unmountChart(); if (resizeObs) resizeObs.disconnect(); if (rulesObs) rulesObs.disconnect(); clearTimeout(othersTimer); clearTimeout(helperTimer); clearTimeout(flatTimer); clearTimeout(assignTimer); clearTimeout(startTimer); S.shown = false; placeNotes(); if (propBox) propBox.classList.remove('ag-hide'); if (cornerLine) document.body.classList.remove('ag-agents'); if (cornerLine) cornerLine.remove(); clearTimeout(timer); },
+    destroy() { TURNING.delete(api0); shareSync(); if (GRID) GRID.destroy(); unlisten(); unroute(); unmountChart(); if (resizeObs) resizeObs.disconnect(); if (rulesObs) rulesObs.disconnect(); clearTimeout(othersTimer); clearTimeout(helperTimer); clearTimeout(flatTimer); clearTimeout(assignTimer); clearTimeout(startTimer); S.shown = false; placeNotes(); if (propBox) propBox.classList.remove('ag-hide'); if (cornerLine) document.body.classList.remove('ag-agents'); if (cornerLine) cornerLine.remove(); clearTimeout(timer); },
   };
   return api;
 }
 
-window.AgentDesk = { create, VERSION };
+window.AgentDesk = { create, VERSION, turningOff };
 })();

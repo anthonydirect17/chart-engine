@@ -373,6 +373,123 @@ class RangeReplay {
     return false;
   }
 }
+/*
+ * The delta table (ChartBridge 0.6.25, nt8/PROTOCOL.md "The delta table"): the session's buy, sell and unknown volume per second
+ * of New York wall time, from 18:00 ET (or from ChartBridge's first trade when it started later), exactly up to the trades the
+ * page gets after it (its `at`: the store's length when it came). decodeDeltaTable reads the message's session ({ from,
+ * coveredFrom, why, missed, big, rows: [dt, buy, sell, big, ...], unknown: [dt, volume, big, ...] }, dt from `from` and then from
+ * the row before; with `big` true each row ends with the second's largest single trade, any side, 0 when not known (a second
+ * ChartBridge read back from a file saved before it kept it), -1 when it is one of the trades the page gets live after the table
+ * (that second's live trades bring it); a table without `big` has rows of 3 and unknowns of 2 and no
+ * largest trade) into columns sorted by second: { from, coveredFrom, why, missed, n, sec, buy, sell, unk, big }; null when it is
+ * not one.
+ */
+/* Round 2, item 12: a second's largest trade as given in both lists (the same number, as ChartBridge sends it), merged whatever
+   the order: not known (0) stays not known, -1 (it comes live) stays -1 against a known one, else the larger. */
+function mergeBig(cur, v) {
+  if (cur !== cur) return v;                             // NaN: the first value of this second
+  if (cur === 0 || v === 0) return 0;
+  if (cur === -1 || v === -1) return -1;
+  return Math.max(cur, v);
+}
+function decodeDeltaTable(ses) {
+  if (!ses || typeof ses !== 'object' || !Array.isArray(ses.rows) || !Array.isArray(ses.unknown)) return null;
+  const from = +ses.from, cov = +ses.coveredFrom;
+  if (!isFinite(from) || !isFinite(cov)) return null;
+  const G = ses.big === true, RS = G ? 4 : 3, US = G ? 3 : 2;
+  const R = ses.rows, Un = ses.unknown, nr = Math.floor(R.length / RS), nu = Math.floor(Un.length / US);
+  // the two lists are each in time order: merged in one pass into columns (a second in both is one row)
+  const sec = new Float64Array(nr + nu), buy = new Float64Array(nr + nu), sell = new Float64Array(nr + nu), unk = new Float64Array(nr + nu), big = new Float64Array(nr + nu);
+  let i = 0, j = 0, n = 0, tr = from + (nr ? +R[0] : 0), tu = from + (nu ? +Un[0] : 0);
+  while (i < nr || j < nu) {
+    const t = j >= nu || (i < nr && tr <= tu) ? tr : tu;
+    if (n && sec[n - 1] === t) n--;                      // the same second again (never sent so; kept whole if it were)
+    else { sec[n] = t; buy[n] = 0; sell[n] = 0; unk[n] = 0; big[n] = NaN; }
+    if (i < nr && tr === t) { buy[n] += +R[RS * i + 1] || 0; sell[n] += +R[RS * i + 2] || 0; if (G) big[n] = mergeBig(big[n], +R[RS * i + 3] || 0); i++; if (i < nr) tr += +R[RS * i]; }
+    if (j < nu && tu === t) { unk[n] += +Un[US * j + 1] || 0; if (G) big[n] = mergeBig(big[n], +Un[US * j + 2] || 0); j++; if (j < nu) tu += +Un[US * j]; }
+    n++;
+    if (!(isFinite(tr) && isFinite(tu))) return null;
+  }
+  for (let k = 0; k < n; k++) if (big[k] !== big[k]) big[k] = 0;   // NaN: no value came (a table without "big")
+  return { from, coveredFrom: cov, why: typeof ses.why === 'string' ? ses.why : null, missed: +ses.missed > 0 ? +ses.missed : 0, n,
+    sec: sec.subarray(0, n), buy: buy.subarray(0, n), sell: sell.subarray(0, n), unk: unk.subarray(0, n), big: big.subarray(0, n) };
+}
+/*
+ * TableReplay: a cumulative delta (ChartEngine.CumulativeDelta `cd`) from the delta table `T` and the store's trades after it
+ * (from T.at), in steps (step(n) does at most n items and returns true when through; the store may grow meanwhile).
+ *   - Time bars (no builder): every second of the table (cd.addSecond, bucketed by the delta's own seconds), then each trade
+ *     from T.at with its side. Exact on any bar of whole seconds.
+ *   - Range bars (`builder`, a new range builder fed the store from its first trade, as the chart's bars were built): the
+ *     store's trades before T.at that carry a side (ChartBridge's served window: the live trades since NinjaTrader's answer)
+ *     count trade by trade in the bar each one made; the rest of the table (the session before the window, and the window's
+ *     part from NinjaTrader's answer, which has no side) counts a second at a time, in the bar the builder holds once that
+ *     second's trades are in (before the window: in one bar at its start, which no chart bar shows but whose value the
+ *     next bars carry on from). Every trade from T.at counts with its side. The total is the table's, exactly; only inside
+ *     that one part is a second's delta placed by the second.
+ */
+class TableReplay {
+  constructor(store, T, cd, builder) {
+    this.st = store; this.T = T; this.cd = cd; this.bd = builder || null; this.k = 0; this.i = 0;
+    this.at = Math.max(0, Math.min(store.length, T.at | 0));
+    // big: a second's largest trade (0 not known); rm: the largest sided trade the store holds of that second (range bars), so the
+    // residual keeps the largest trade only when it is not one of those (it is then the residual's own: a larger trade is in it)
+    if (this.bd) { this.rb = Float64Array.from(T.buy); this.rs = Float64Array.from(T.sell); this.ru = Float64Array.from(T.unk); this.rm = new Float64Array(T.n); this.r = 0; }
+    else this.i = this.at;
+  }
+  /* The residual, a part at a time (step): the table less the store's sided trades before `at`, each off its own second. */
+  _residual(n) {
+    const st = this.st, T = this.T, sec = T.sec, end = Math.min(this.at, this.r + n);
+    for (let i = this.r; i < end; i++) {
+      const c = st._code(i);
+      if (!c) continue;
+      const t = Math.floor(st.time(i));
+      let lo = 0, hi = T.n - 1, j = -1;
+      while (lo <= hi) { const m = (lo + hi) >> 1; if (sec[m] === t) { j = m; break; } if (sec[m] < t) lo = m + 1; else hi = m - 1; }
+      if (j < 0) continue;                                 // not in the table (another session)
+      const v = st.volume(i), sd = codeSide(c);
+      if (sd === 1) this.rb[j] -= v; else if (sd === -1) this.rs[j] -= v; else this.ru[j] -= v;
+      if (v > this.rm[j]) this.rm[j] = v;
+    }
+    this.r = end;
+    return end >= this.at;
+  }
+  _flush(upTo) {                                         // the residual seconds before `upTo`, in the builder's newest bar
+    const T = this.T, bars = this.bd.bars;
+    while (this.k < T.n && T.sec[this.k] < upTo) {
+      const k = this.k++, b = Math.max(0, this.rb[k]), s = Math.max(0, this.rs[k]), u = Math.max(0, this.ru[k]);
+      if (!(b + s + u > 0)) continue;
+      const last = bars.length ? bars[bars.length - 1].t : -Infinity;
+      if (this.pre === undefined) this.pre = Math.max(T.sec[k], T.coveredFrom);
+      const g = T.big ? T.big[k] : 0;
+      this.cd.addSecond(T.sec[k], b, s, u, last >= T.from ? last : this.pre, g > this.rm[k] ? g : 0);
+    }
+  }
+  step(n) {
+    const st = this.st, T = this.T, cd = this.cd;
+    if (!this.bd) {
+      let k = 0;
+      // the first second can start inside (ChartBridge's start): its trades are from coveredFrom on, so it counts from there
+      for (; k < n && this.k < T.n; k++, this.k++) cd.addSecond(Math.max(T.sec[this.k], T.coveredFrom), T.buy[this.k], T.sell[this.k], T.unk[this.k], undefined, T.big ? T.big[this.k] : 0);
+      if (this.k < T.n) return false;
+      this.i = st.feedSides(cd, this.i, null, this.i + Math.max(1, n - k));
+      return this.i >= st.length;
+    }
+    const bd = this.bd;
+    if (this.r < this.at) return this._residual(n * 4) && false;
+    for (let k = 0; k < n; k++) {
+      if (this.i >= st.length) { this._flush(Infinity); return true; }
+      const i = this.i++, t = st.time(i), p = st.price(i), v = st.volume(i), c = st._code(i);
+      if (i === this.at) this._flush(Infinity); else if (i < this.at) this._flush(Math.floor(t));
+      bd.addQuiet(t, p, v);
+      const bars = bd.bars, barT = bars[bars.length - 1].t;
+      if (c) cd.add(t, v, codeSide(c), barT, codeMethod(c));   // a sided trade, in the bar it made
+      else if (i >= this.at) cd.add(t, v, undefined, barT);     // after the table with no side (an older ChartBridge's live trade): unknown
+    }
+    if (this.i >= st.length) { this._flush(Infinity); return true; }
+    return false;
+  }
+}
+
 /* the time of trade i, in a TickStore or a plain [[t, p, v], ...] list */
 const timeAt = (ticks, i) => typeof ticks.time === 'function' ? ticks.time(i) : ticks[i][0];
 
@@ -466,5 +583,5 @@ function partialStart(ticks, from, s, slack) {
   return t - sessionStartOf(t, s) > (slack === undefined ? 600 : slack) ? t : null;
 }
 
-return { BarBuilder, TickStore, RangeSync, trimCount, sideCode, tradeDay, sessionStartOf, rangeHistoryFrom, rangeTickHours, rangeStartIndex, rangeNeedsReload, partialStart, RangeReplay };
+return { BarBuilder, TickStore, RangeSync, trimCount, sideCode, tradeDay, sessionStartOf, rangeHistoryFrom, rangeTickHours, rangeStartIndex, rangeNeedsReload, partialStart, RangeReplay, decodeDeltaTable, TableReplay };
 });

@@ -34,24 +34,35 @@ test('rails: how close to each limit; amber from 70%, red from 90%', () => {
   assert.equal(BC.rails(null).level, 'ok');
 });
 
-test('rails change as ChartBridge 0.4.0 built it: 1 to 5 trades, 1 to 3 losses, the root or its sibling, all three sent', () => {
-  const cur = { maxTrades: 5, maxLosses: 3, root: 'MNQ', position: { qty: 0, avgPrice: null } };
-  assert.deepEqual(BC.railsChange(cur, { maxTrades: 3, maxLosses: 2 }, 'c1').msg, { type: 'botRails', cid: 'c1', maxTrades: 3, maxLosses: 2, root: 'MNQ' });
-  assert.deepEqual(BC.railsChange(cur, { maxTrades: '4', maxLosses: ' 3 ' }).msg, { type: 'botRails', maxTrades: 4, maxLosses: 3, root: 'MNQ' }, 'typed text');
-  assert.deepEqual(BC.railsChange(cur, { maxTrades: 5, maxLosses: 3, root: 'NQ' }).msg, { type: 'botRails', maxTrades: 5, maxLosses: 3, root: 'NQ' }, 'the mini of the bot\'s micro');
-  assert.match(BC.railsChange(cur, { maxTrades: 5, maxLosses: 3, root: 'ES' }).error, /root must be MNQ or NQ/);
-  assert.match(BC.railsChange(cur, { maxTrades: 6, maxLosses: 3 }).error, /Trades must be a whole number from 1 to 5 \(ChartBridge's limit\)/);
-  assert.match(BC.railsChange(cur, { maxTrades: 5, maxLosses: 4 }).error, /Losing trades must be a whole number from 1 to 3/);
-  assert.match(BC.railsChange(cur, { maxTrades: 0, maxLosses: 3 }).error, /from 1 to 5/);
-  assert.match(BC.railsChange(cur, { maxTrades: 2.5, maxLosses: 3 }).error, /whole number/);
-  assert.match(BC.railsChange(cur, { maxTrades: '', maxLosses: 3 }).error, /whole number/);
-  assert.match(BC.railsChange(cur, { maxTrades: '1e1', maxLosses: 3 }).error, /whole number/);
-  assert.match(BC.railsChange(cur, { maxTrades: 5, maxLosses: 3 }).error, /Nothing to change/);
-  assert.match(BC.railsChange({}, { maxTrades: 1, maxLosses: 1 }).error, /not known/);
-  // ChartBridge keeps them in bot-rails.txt: lowered rails may go back up to its own limits (never above)
-  assert.deepEqual(BC.railsChange({ maxTrades: 3, maxLosses: 2, root: 'MNQ' }, { maxTrades: 5, maxLosses: 3 }).msg, { type: 'botRails', maxTrades: 5, maxLosses: 3, root: 'MNQ' });
+test('rails change (release 1, step 1.6b): every rail sent, all required, fail closed; the size up to the hard ceiling only', () => {
+  const cur = { size: 1, maxTrades: 5, maxLosses: 3, dayLoss: 500, dayProfit: 500, root: 'MNQ', position: { qty: 0, avgPrice: null } };
+  const all = (o) => Object.assign({ size: 1, maxTrades: 5, maxLosses: 3, dayLoss: 500, dayProfit: 500 }, o);
+  assert.deepEqual(BC.railsChange(cur, all({ size: 5, maxTrades: 8, maxLosses: 4, dayLoss: 250.5, dayProfit: 750 }), 'c1').msg,
+    { type: 'botRails', cid: 'c1', size: 5, maxTrades: 8, maxLosses: 4, dayLoss: 250.5, dayProfit: 750, root: 'MNQ' }, 'above the old fixed 5 trades and 3 losses: Anthony sets them');
+  assert.deepEqual(BC.railsChange(cur, { size: ' 20', maxTrades: '4', maxLosses: ' 3 ', dayLoss: '300', dayProfit: '412.25' }).msg,
+    { type: 'botRails', size: 20, maxTrades: 4, maxLosses: 3, dayLoss: 300, dayProfit: 412.25, root: 'MNQ' }, 'typed text; 20 MNQ is the ceiling');
+  assert.deepEqual(BC.railsChange(cur, all({ size: 2, root: 'NQ' })).msg, { type: 'botRails', size: 2, maxTrades: 5, maxLosses: 3, dayLoss: 500, dayProfit: 500, root: 'NQ' }, 'the mini of the bot\'s micro');
+  assert.match(BC.railsChange(cur, all({ size: 3, root: 'NQ' })).error, /Size must be a whole number from 1 to 2 for NQ \(the hard ceiling\)/);
+  assert.match(BC.railsChange(cur, all({ size: 21 })).error, /from 1 to 20 for MNQ/);
+  assert.match(BC.railsChange(cur, all({ root: 'ES' })).error, /root must be MNQ or NQ/);
+  for (const k of ['size', 'maxTrades', 'maxLosses', 'dayLoss', 'dayProfit'])
+    for (const bad of ['', 0, '0', null, undefined, 'none', -1]) assert.ok(BC.railsChange(cur, all({ [k]: bad })).error, k + ' ' + JSON.stringify(bad) + ' is refused: nothing is "no limit"');
+  assert.match(BC.railsChange(cur, all({ maxTrades: 101 })).error, /Trades must be a whole number from 1 to 100/);
+  assert.match(BC.railsChange(cur, all({ maxLosses: 2.5 })).error, /whole number/);
+  assert.match(BC.railsChange(cur, all({ maxTrades: '1e1' })).error, /whole number/);
+  assert.match(BC.railsChange(cur, all({ dayLoss: '12.345' })).error, /The day's loss stop must be dollars above 0, at most 2 decimals/);
+  assert.match(BC.railsChange(cur, all({ dayProfit: 0.001 })).error, /The day's profit stop must be dollars/);
+  assert.match(BC.railsChange(cur, all({})).error, /Nothing to change/);
+  assert.match(BC.railsChange({}, all({})).error, /not known/);
+  // rails not set yet (null in the bot message): every one may be set
+  const unset = { size: null, maxTrades: null, maxLosses: null, dayLoss: null, dayProfit: null, root: 'MNQ', railsMissing: ['size', 'maxTrades', 'maxLosses', 'dayLoss', 'dayProfit'] };
+  assert.deepEqual(BC.railsChange(unset, all({})).msg, { type: 'botRails', size: 1, maxTrades: 5, maxLosses: 3, dayLoss: 500, dayProfit: 500, root: 'MNQ' });
+  assert.equal(BC.railsMissingText(unset), 'the size, the trades a day, the losing trades a day, the day\'s loss stop and the day\'s profit stop');
+  assert.equal(BC.railsMissingText({ railsMissing: ['dayLoss'] }), 'the day\'s loss stop');
+  assert.equal(BC.railsMissingText({ railsMissing: [] }), '');
+  assert.deepEqual(BC.HARD_CEILING, { NQ: 2, ES: 2, MNQ: 20, MES: 20 }, 'ChartBridgeAgents.HardCeiling');
   // refused while the bot has a position (ChartBridge refuses it too, and while an entry works)
-  assert.match(BC.railsChange({ maxTrades: 5, maxLosses: 3, root: 'MNQ', position: { qty: 1, avgPrice: 25400 } }, { maxTrades: 2, maxLosses: 1 }).error, /has a position/);
+  assert.match(BC.railsChange(Object.assign({}, cur, { position: { qty: 1, avgPrice: 25400 } }), all({ size: 2 })).error, /has a position/);
 });
 
 test('the bot\'s orders: only those ChartBridge marks by: "bot" (review 2), never Anthony\'s own Sim101 orders on the bot\'s root', () => {
@@ -85,16 +96,43 @@ test('the bot\'s fills: claimed only against the contracts its own orders fill (
   assert.equal(L.claim(fill('e5', 'buy', 25001)), false, 'cleared');
 });
 
+test('release 1 (the R12 review of the cut): on a ChartBridge before 0.6.24 the Bot tab fails closed: copilot and auto refused, the old rails said', () => {
+  const ready = LIB.bots.find(b => b.shelf === 'ready');
+  const old = { enabled: true, connected: true, mode: 'shadow', account: 'PERS-1', trades: 0, maxTrades: 5, losses: 0, maxLosses: 3 };   // 0.6.23's bot message: no railsMissing, size or day stops
+  const why = 'This ChartBridge (before 0.6.24) has the old fixed rails (1 contract, 5 trades, 3 losing trades, no day stops): install 0.6.24 to arm the bot';
+  assert.equal(BC.OLD_RAILS, why);
+  assert.equal(BC.oldRails(old), true); assert.equal(BC.oldRails({ railsMissing: [] }), false); assert.equal(BC.oldRails(null), false);
+  for (const tradable of [true, false]) {
+    const m = BC.modesAllowed({ entry: ready, tradable, account: 'PERS-1', bot: old });
+    assert.ok(m.shadow.ok, 'Shadow stays');
+    assert.deepEqual(m.copilot, { ok: false, why }); assert.deepEqual(m.auto, { ok: false, why });
+  }
+  assert.deepEqual(BC.modesAllowed({ entry: null, tradable: true, account: 'PERS-1', bot: Object.assign({}, old, { railsMissing: 'size' }) }).auto, { ok: false, why }, 'a railsMissing that is not a list is the old shape too');
+  // no bot message yet: refused as well (fail closed), with its own words
+  const none = BC.modesAllowed({ entry: ready, tradable: true, account: 'PERS-1' });
+  assert.ok(none.shadow.ok && !none.copilot.ok && !none.auto.ok); assert.match(none.auto.why, /No word yet from ChartBridge's bot channel/);
+  // 0.6.24 with every rail set: as before
+  const m = BC.modesAllowed({ entry: ready, tradable: true, account: 'PERS-1', bot: Object.assign({}, old, { railsMissing: [] }) });
+  assert.ok(m.copilot.ok && m.auto.ok);
+  // the panel: the sentence in railMiss, never "Not set" with no warning
+  const src = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'live', 'bot.js'), 'utf8');
+  assert.match(src, /BC\.modesAllowed\(\{ entry: e, tradable: BC\.accountTradable\(S\.accounts, S\.trading, acc\.name\), account: acc\.name, bot: S\.bot \}\)/, 'the panel hands modesAllowed the bot message');
+  assert.match(src, /const old = BC\.oldRails\(S\.bot\), miss = old \? '' : BC\.railsMissingText\(b\);/);
+  assert.match(src, /put\(q\('\[data-k="railMiss"\]'\), 'textContent', old \? BC\.OLD_RAILS \+ '\.' :/);
+  assert.match(src, /put\(q\('\[data-k="railMiss"\]'\), 'hidden', !old && !miss\);/);
+});
+
 test('modes: Research builds run in shadow only; auto only when the bot\'s account is tradable (Sim or LIVE); the bot switch', () => {
   const ready = LIB.bots.find(b => b.shelf === 'ready'), research = LIB.bots.find(b => b.shelf === 'research');
-  let m = BC.modesAllowed({ entry: ready, tradable: true, account: 'EVAL-A' });
+  const cur = { railsMissing: [] };   // release 1: a 0.6.24 bot message
+  let m = BC.modesAllowed({ entry: ready, tradable: true, account: 'EVAL-A', bot: cur });
   assert.ok(m.shadow.ok && m.copilot.ok && m.auto.ok, 'auto on a LIVE account: allowed when ChartBridge says it is tradable');
-  m = BC.modesAllowed({ entry: ready, tradable: false, account: 'EVAL-A' });
+  m = BC.modesAllowed({ entry: ready, tradable: false, account: 'EVAL-A', bot: cur });
   assert.ok(m.copilot.ok); assert.equal(m.auto.ok, false); assert.match(m.auto.why, /Auto needs EVAL-A to be tradable/);
-  assert.match(BC.modesAllowed({ entry: ready, tradable: false }).auto.why, /None: choose its account first/, 'no account: None (DECISION 2026-10-14e)');
-  m = BC.modesAllowed({ entry: research, tradable: true });
+  assert.match(BC.modesAllowed({ entry: ready, tradable: false, bot: cur }).auto.why, /None: choose its account first/, 'no account: None (DECISION 2026-10-14e)');
+  m = BC.modesAllowed({ entry: research, tradable: true, bot: cur });
   assert.ok(m.shadow.ok); assert.equal(m.copilot.ok, false); assert.equal(m.auto.ok, false); assert.match(m.copilot.why, /Shadow only/);
-  m = BC.modesAllowed({ entry: null, tradable: true });
+  m = BC.modesAllowed({ entry: null, tradable: true, bot: cur });
   assert.ok(m.copilot.ok && m.auto.ok, 'a bot not in the library: ChartBridge decides');
   assert.equal(BC.MODE_NAME.auto, 'Auto', 'not "Sim auto": the bot trades the account Anthony chose');
   assert.equal(BC.accountTradable({ list: [{ name: 'Sim101', tradable: true }] }, null), false, 'no account named: None, never tradable (DECISION 2026-10-14e)');
@@ -116,8 +154,8 @@ test('the bot\'s account (Anthony 2026-10-07): SIM or LIVE mark, the accounts to
   assert.deepEqual(BC.botAccount({ account: 'Sim101', sim: true }), { name: 'Sim101', sim: true, mark: 'SIM', none: false, label: 'Sim101' });
   assert.deepEqual(BC.botAccount({ account: 'EVAL-A', sim: false }), { name: 'EVAL-A', sim: false, mark: 'LIVE', none: false, label: 'EVAL-A' });
   const accounts = { list: [
-    { name: 'Sim101', sim: true, tradable: true, state: 'active' }, { name: 'EVAL-A', sim: false, tradable: true, state: 'active' },
-    { name: 'FUNDED-B', sim: false, tradable: false, state: 'active' }, { name: 'EVAL-B', sim: false, tradable: false, state: 'gone' }, { name: 'SIM-F1', sim: true, tradable: true, state: 'active' }] };
+    { name: 'Sim101', sim: true, tradable: true, state: 'active' }, { name: 'EVAL-A', sim: false, tradable: true, state: 'active', personal: true },
+    { name: 'FUNDED-B', sim: false, tradable: false, state: 'active' }, { name: 'EVAL-B', sim: false, tradable: false, state: 'gone' }, { name: 'SIM-F1', sim: true, tradable: true, state: 'active' }] };   // release 1 (1.6b): EVAL-A stands in for the personal account
   const bot = { account: 'Sim101', sim: true, position: { qty: 0, avgPrice: null } };
   const ch = BC.accountChoices(accounts, bot);
   assert.deepEqual(ch.map(c => c.name + ' ' + c.mark), ['SIM-F1 SIM', 'Sim101 SIM', 'EVAL-A LIVE'], 'tradable accounts only, each marked, Sim first');
@@ -127,9 +165,12 @@ test('the bot\'s account (Anthony 2026-10-07): SIM or LIVE mark, the accounts to
   assert.deepEqual(live.msg, { type: 'botAccount', cid: 'c9', account: 'EVAL-A' });
   assert.equal(live.live, true); assert.equal(live.confirm, 'The bot will trade LIVE account EVAL-A in Shadow. Continue?', 'a LIVE account: asked once, in the page, naming the mode it keeps');
   assert.equal(BC.botAccountChange(Object.assign({}, bot, { mode: 'auto' }), 'EVAL-A', ch).confirm, 'The bot will trade LIVE account EVAL-A in Auto. Continue?', '1.18.1: the mode named');
-  const sim = BC.botAccountChange(bot, 'SIM-F1', ch);
-  assert.equal(sim.live, false); assert.equal(sim.confirm, ''); assert.deepEqual(sim.msg, { type: 'botAccount', account: 'SIM-F1' });
-  assert.match(BC.botAccountChange(bot, 'FUNDED-B', ch).error, /not tradable/);
+  // release 1 (1.6b, Anthony 2026-11-18 "Personal only, Sim later"): a Sim account and an account that is not the personal one are refused
+  assert.match(BC.botAccountChange(bot, 'SIM-F1', ch).error, /SIM-F1 is a Sim account: the bot trades your personal account only/);
+  assert.match(BC.botAccountChange(bot, 'FUNDED-B', BC.accountChoices(accounts, { account: 'FUNDED-B', sim: false })).error, /FUNDED-B is not your personal account/);
+  assert.equal(ch.find(c => c.name === 'EVAL-A').personal, true);
+  const notTradable = BC.accountChoices({ list: [{ name: 'EVAL-A', sim: false, tradable: false, state: 'active', personal: true }] }, { account: 'EVAL-A', sim: false });
+  assert.match(BC.botAccountChange(bot, 'EVAL-A', notTradable).error, /not tradable/);
   assert.match(BC.botAccountChange(bot, 'Sim101', ch).error, /already the bot's account/);
   assert.match(BC.botAccountChange(Object.assign({}, bot, { position: { qty: 1, avgPrice: 25000 } }), 'EVAL-A', ch).error, /flat/);
   // None (DECISION 2026-10-14e): account null, never a LIVE question; refused while the bot holds a position
@@ -138,7 +179,7 @@ test('the bot\'s account (Anthony 2026-10-07): SIM or LIVE mark, the accounts to
   assert.match(BC.botAccountChange({ account: null }, '', ch).error, /None is already the bot's account/);
   assert.match(BC.botAccountChange(bot, null, ch).error, /Choose an account, or None/);
   assert.equal(BC.accountTradable(accounts, null, ''), false, 'None is never tradable');
-  assert.deepEqual(BC.modesAllowed({ tradable: false, account: '' }).auto, { ok: false, why: 'The bot\'s account is None: choose its account first (nothing trades on None).' });
+  assert.deepEqual(BC.modesAllowed({ tradable: false, account: '', bot: { railsMissing: ['size'] } }).auto, { ok: false, why: 'The bot\'s account is None: choose its account first (nothing trades on None).' });
   const st = BC.stripModel({ enabled: true, connected: true, name: 'Demo', mode: 'auto', account: 'EVAL-A', sim: false, trades: 0, maxTrades: 5, losses: 0, maxLosses: 3 });
   assert.equal(st.account, 'EVAL-A'); assert.equal(st.accountMark, 'LIVE'); assert.equal(st.mode, 'Auto');
 });
@@ -369,53 +410,60 @@ test('ghosts and options: per chart, off by default; sound off by default', () =
   assert.deepEqual(BC.readOptions(st), { sound: true });
 });
 
-test('fake bridge: botRails as ChartBridgeBot.cs SetRails: limits, root, all keys, flat only, the switch; the rails hold', async () => {
+test('fake bridge: botRails as ChartBridgeBot.cs SetRails (release 1, 1.6b): every rail, fail closed, the hard ceiling, flat only, the switch', async () => {
   const V = await import('./fake-v3.mjs');
   let clock = 1000000;
   const out = [];
   const conn = { origin: 'http://localhost:8765', authed: false, actions: [], v3: true };
-  const desk = new V.OrderDeskV3({ config: { trading: true, tradeAccounts: ['Sim101'], maxQty: { MNQ: 5 }, port: 8765 }, botAccount: 'Sim101', instruments: { MNQ: { name: 'MNQ 12-26', tick: 0.25, pointValue: 2 }, NQ: { name: 'NQ 12-26', tick: 0.25, pointValue: 20 } },
+  const desk = new V.OrderDeskV3({ config: { trading: true, tradeAccounts: ['Sim101'], maxQty: { MNQ: 1 }, port: 8765 }, botAccount: 'Sim101', botRails: null, instruments: { MNQ: { name: 'MNQ 12-26', tick: 0.25, pointValue: 2 }, NQ: { name: 'NQ 12-26', tick: 0.25, pointValue: 20 } },
     knownAccounts: ['Sim101'], token: 'tok', switches: { bot: true }, accountList: [{ name: 'Sim101', sim: true, balance: 1 }], send: (c, m) => out.push(m), conns: () => [conn], now: () => clock, barTime: () => clock / 1000 });
   desk.tick('MNQ', 25400); desk.tick('NQ', 25400); desk.auth(conn, 'tok'); out.length = 0;
   const act = m => { clock += 150; out.length = 0; desk.handle(conn, m, JSON.stringify(m)); return out.slice(); };
   const why = msgs => (msgs.find(m => m.type === 'reject') || {}).reason || null;
-  assert.match(why(act({ type: 'botRails', cid: 'a', maxTrades: 6, maxLosses: 3, root: 'MNQ' })), /^maxTrades must be a whole number from 1 to 5$/);
-  assert.match(why(act({ type: 'botRails', cid: 'a', maxTrades: 5, maxLosses: 4, root: 'MNQ' })), /^maxLosses must be a whole number from 1 to 3$/);
-  assert.match(why(act({ type: 'botRails', cid: 'a', maxTrades: 5, maxLosses: 3 })), /^root must be MNQ or NQ \(botRoot and its micro\/mini sibling\)$/, 'root is required');
-  assert.match(why(act({ type: 'botRails', cid: 'a', maxTrades: 5, maxLosses: 3, root: 'ES' })), /root must be MNQ or NQ/);
-  assert.match(why(act({ type: 'botRails', cid: 'a', maxTrades: 3, maxLosses: 2, root: 'MNQ', extra: 1 })), /Unknown key "extra"/);
-  const ok = act({ type: 'botRails', cid: 'b', maxTrades: 2, maxLosses: 2, root: 'MNQ' });
+  const R = o => Object.assign({ type: 'botRails', cid: 'a', size: 1, maxTrades: 5, maxLosses: 3, dayLoss: 500, dayProfit: 500, root: 'MNQ' }, o);
+  // fail closed: no rails set (botRails: null), nothing arms
+  assert.deepEqual(desk.botMsg().railsMissing, ['size', 'maxTrades', 'maxLosses', 'dayLoss', 'dayProfit']);
+  assert.match(desk.botMsg().standDown, /^the bot's rails are not set: the size, the trades a day, the losing trades a day, the day's loss stop and the day's profit stop/);
+  assert.match(why(act({ type: 'botMode', cid: 'm', mode: 'auto' })), /^auto refused: the bot's rails are not set/);
+  assert.match(why(act(R({ size: 21 }))), /^size must be a whole number from 1 to 20 for MNQ \(the hard ceiling/);
+  assert.match(why(act(R({ size: 3, root: 'NQ' }))), /^size must be a whole number from 1 to 2 for NQ/);
+  assert.match(why(act(R({ maxTrades: 101 }))), /^maxTrades must be a whole number from 1 to 100$/);
+  assert.match(why(act(R({ maxLosses: 0 }))), /^maxLosses must be a whole number from 1 to 100$/);
+  assert.match(why(act(R({ dayLoss: 0 }))), /^dayLoss must be dollars above 0/);
+  assert.match(why(act(R({ dayProfit: 1.234 }))), /^dayProfit must be dollars above 0/);
+  const noSize = R({}); delete noSize.size;
+  assert.match(why(act(noSize)), /^size must be a whole number/, 'size is required');
+  assert.match(why(act(R({ root: 'ES' }))), /root must be MNQ or NQ/);
+  assert.match(why(act(R({ extra: 1 }))), /Unknown key "extra"/);
+  const ok = act(R({ size: 3, maxTrades: 8, maxLosses: 4, dayLoss: 250.5, dayProfit: 750 }));
   assert.equal(why(ok), null);
   const b = ok.find(m => m.type === 'bot');
-  assert.equal(b.maxTrades, 2); assert.equal(b.maxLosses, 2); assert.equal(b.maxQty, 1);
-  // kept, not a ceiling: back up to ChartBridge's own limits is accepted
-  assert.equal(why(act({ type: 'botRails', cid: 'c', maxTrades: 5, maxLosses: 3, root: 'MNQ' })), null);
-  act({ type: 'botRails', cid: 'c2', maxTrades: 2, maxLosses: 2, root: 'MNQ' });
-  desk.bot.trades = 2;
+  assert.equal(b.maxTrades, 8); assert.equal(b.maxLosses, 4); assert.equal(b.size, 3); assert.equal(b.maxQty, 3); assert.equal(b.dayLoss, 250.5); assert.equal(b.dayProfit, 750);
+  assert.deepEqual(b.railsMissing, []); assert.equal(b.standDown, null);
+  desk.bot.trades = 8;
   desk.botMessage({ type: 'botHello', name: 'Sample Bot' });
   act({ type: 'botMode', mode: 'auto' });
   desk.botMessage({ type: 'signal', id: 'a1', action: 'fired', side: 'buy', kind: 'market', stopTicks: 8, targetTicks: 8, reason: 'Sample' });
-  assert.match(desk.bot.lastSignal.result, /2 trades today/);
-  desk.bot.losses = 1;
-  act({ type: 'botRails', cid: 'd', maxTrades: 2, maxLosses: 1, root: 'MNQ' });
-  assert.match(desk.bot.standDown, /1 losing trades/, 'losses at the lower rail: stood down');
-  // the root: its sibling, then the bot's orders go there; a position refuses a change
-  desk.bot.trades = 0; desk.bot.losses = 0; desk.bot.standDown = null;
-  assert.equal(why(act({ type: 'botRails', cid: 'e', maxTrades: 5, maxLosses: 3, root: 'NQ' })), null);
-  assert.equal(desk.botMsg().root, 'NQ');
+  assert.match(desk.bot.lastSignal.result, /8 trades today/);
+  // the size: 3 MNQ placed though config.txt's maxQty.MNQ is 1 (the ticket's cap only)
+  desk.bot.trades = 0;
   desk.botMessage({ type: 'signal', id: 'a2', action: 'fired', side: 'buy', kind: 'market', stopTicks: 8, targetTicks: 8, reason: 'Sample' });
   assert.equal(desk.bot.lastSignal.result, 'placed');
-  assert.ok([...desk.orders.values()].some(o => o.account === 'Sim101' && o.state === 'working' && o.root === 'NQ' && o.role === 'stop'), 'the bot\'s stop on NQ');
-  assert.match(why(act({ type: 'botRails', cid: 'f', maxTrades: 5, maxLosses: 3, root: 'MNQ' })), /the bot has a position or a working entry: change its rails when it is flat/);
+  assert.ok([...desk.orders.values()].some(o => o.account === 'Sim101' && o.by === 'bot' && o.role === 'entry' && o.qty === 3), 'the bot\'s entry is its size');
+  assert.match(why(act(R({}))), /the bot has a position or a working entry: change its rails when it is flat/);
   // what a page sees of the bot's orders (review 2, as ChartBridgeV3.OrderBy): by "bot" on a v3 page, nothing on a v2 page
   const working = [...desk.orders.values()].filter(o => o.account === 'Sim101' && o.state === 'working');
   const seen = working.map(o => desk.orderMsg(o, true)), seen2 = working.map(o => desk.orderMsg(o, false));
-  assert.ok(seen.length && seen.every(m => m.by === 'bot' && m.account === 'Sim101' && m.root === 'NQ'), 'v3: the entry and its legs say by bot');
+  assert.ok(seen.length && seen.every(m => m.by === 'bot' && m.account === 'Sim101' && m.root === 'MNQ'), 'v3: the entry and its legs say by bot');
   assert.ok(seen2.every(m => !('by' in m)), 'v2: no by (0.3.8 byte for byte)');
+  // with a personal account named (--personal), the bot's account must be it, never Sim
+  const own = new V.OrderDeskV3({ config: { trading: true, tradeAccounts: ['Sim101', 'OWN-1'], maxQty: {}, port: 8765 }, botAccount: 'Sim101', personal: 'OWN-1', instruments: { MNQ: { name: 'MNQ 12-26', tick: 0.25, pointValue: 2 } },
+    knownAccounts: ['Sim101', 'OWN-1'], token: 'tok', switches: { bot: true }, accountList: [{ name: 'Sim101', sim: true }, { name: 'OWN-1', sim: false }], send: (c, m) => out.push(m), conns: () => [conn], now: () => clock, barTime: () => clock / 1000 });
+  assert.match(own.botMsg().standDown, /^Sim101 is a Sim account: the bot trades the personal account only/);
   // the switch off: refused
   const off = new V.OrderDeskV3({ config: { trading: true, tradeAccounts: ['Sim101'], maxQty: {}, port: 8765 }, instruments: { MNQ: { name: 'MNQ 12-26', tick: 0.25, pointValue: 2 } },
     knownAccounts: ['Sim101'], token: 'tok', switches: { bot: false }, accountList: [{ name: 'Sim101', sim: true }], send: (c, m) => out.push(m), conns: () => [conn], now: () => clock, barTime: () => clock / 1000 });
-  out.length = 0; off.handle(conn, { type: 'botRails', maxTrades: 1, maxLosses: 1, root: 'MNQ' }, '{}');
+  out.length = 0; off.handle(conn, R({}), '{}');
   assert.match(why(out), /botRails is off \(bot = off in config\.txt\)/);
 });
 
@@ -496,4 +544,17 @@ test('engine: ghost trades are drawn faint with no label; an open trade draws it
     Object.assign(global, { document: saved.document, window: saved.window, requestAnimationFrame: saved.raf, cancelAnimationFrame: saved.caf, Path2D: saved.Path2D });
     delete require.cache[require.resolve('../src/chart-engine.js')];
   }
+});
+
+test('ruling B (Anthony 2026-11-18): the Bot tab\'s standing line while ChartBridge\'s owner guard blocks entries', () => {
+  const w = 'waiting: you hold your own position or order (OWN-1 MNQ holds 1 contract long that is not the bot\'s)';
+  assert.equal(BC.ownerWaitText({ mode: 'auto', ownerWait: w }), 'Waiting: you\'re in this market.', 'Anthony\'s words (2026-11-18), exactly');
+  assert.equal(BC.ownerWaitText({ mode: 'copilot', ownerWait: w }), 'Waiting: you\'re in this market.');
+  assert.equal(BC.ownerWaitText({ mode: 'shadow', ownerWait: w }), '', 'Shadow: no line');
+  assert.equal(BC.ownerWaitText({ mode: 'auto', ownerWait: null }), '');
+  assert.equal(BC.ownerWaitText({ mode: 'auto' }), '', 'an older ChartBridge sends no ownerWait');
+  assert.equal(BC.ownerWaitText(null), '');
+  const js = require('fs').readFileSync(require('path').join(__dirname, '..', 'live', 'bot.js'), 'utf8');
+  assert.match(js, /data-k="ownerWait" role="note" hidden/);
+  assert.match(js, /const ow = BC\.ownerWaitText\(b\);/);
 });

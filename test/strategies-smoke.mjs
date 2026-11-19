@@ -190,7 +190,7 @@ try {
   check(puts().length === 0, 'nothing refused was saved');
   await pressIn('merge', 'Control+KeyM');
   await until(async () => /Saved in The Desk/.test(await hkNote('merge')), 'Merge key saved');
-  check(puts().length === 1 && puts()[0].body.rev === 2 && puts()[0].body.keys.merge === 'Ctrl+M' && JSON.stringify(Object.keys(puts()[0].body.keys)) === JSON.stringify(OS.KEY_IDS), 'one PUT, the whole document with rev 2 and the nine keys');
+  check(puts().length === 1 && puts()[0].body.rev === 2 && puts()[0].body.keys.merge === 'Ctrl+M' && JSON.stringify(Object.keys(puts()[0].body.keys)) === JSON.stringify(OS.KEY_IDS), 'one PUT, the whole document with rev 2 and the ten keys');
   check(desk.docs.hotkeys.rev === 3, 'The Desk is at rev 3');
   // a stale rev: another PC saved first
   desk.bump('hotkeys');

@@ -33,7 +33,8 @@
  *   live-bracket-sel-v1 { MNQ: 'custom' | '1:1' | '1:1.5' | '1:2' | 'p:<preset name>', ... } the preset picked per root
  *   live-bracket-unit-v1  't' | 'pt' the bracket boxes in ticks or points (1.10.0; stored in ticks always)
  *   live-qty-v1         { MNQ: 2, ... } the qty picked last per root, 1 to 9 (1.10.0)
- *   live-hotkeys-v1     { buy, sell, be, close, flattenAll } the trading hotkeys set in Settings (1.11.0), each a combo
+ *   live-hotkeys-v1     { buy, sell, be, close, flattenAll, cutHalf } the trading hotkeys set in Settings (1.11.0; release 1: close
+ *                       is named Flatten, cutHalf is Cut half), each a combo
  *                       such as "Alt+B" or ''; none by default; cleaned on read by OrderTicket.cleanHotkeys
  *   live-indicator-colors-v1  { vwap, prior, overnight, value, close, ibHigh, ibLow, vpPoc } the indicators' colors as set
  *                       in their gears (1.9.0); only colors set by hand. The VWAP color the Colors panel kept in
@@ -127,6 +128,11 @@ const INDICATORS = [
     opt: 'Wilder\'s relative strength index of the bar closes, 0 to 100, in a pane below the chart (under the delta pane when both are on) with its two levels and a faint 50. Drag the line above the pane (or focus it and use the arrow keys) to resize it.' },
   { id: 'fills', name: 'Fills', code: 'FL', short: 'FILLS', letter: 'F', cat: 'trades', sw: 'var(--profit)', alias: 'fills executions trades',
     opt: 'Past fills and trade marks of the account picked (side and size at the fill price). Hiding them never hides the open trade: its entry fills, the position line, working orders and stop and target lines stay.' },
+  /* release 1 (Bot-Lab plan step 1.6c, Anthony 2026-11-17): the mini ticket, the order ticket's own controls on the chart (the host
+     draws it: ChartLive.mount's trade.mini; listed only on a chart whose host has one). No chip: it is a panel, not a line. */
+  { id: 'ticket', name: 'Mini ticket', code: 'MT', short: 'TICKET', letter: 'T', cat: 'trades', sw: 'var(--accent, #C9A55C)', nochip: true,
+    alias: 'mini ticket order ticket orders trade buy sell flatten cut half merge armed',
+    opt: 'The order ticket on this chart, dragged anywhere by its grip (its spot is kept for this chart): Armed, Qty, Buy MKT, Sell MKT, Flatten, Cut half, Merge and the position; the arrow shows every control of the ticket. It is the ticket itself, not a second one: the same account or group, Armed switch, orders and checks. It trades only while this chart is on the ticket\'s instrument.' },
   /* nochip (G1c, Anthony): no chip on the strip and never counted toward it */
   { id: 'absorption', name: 'Absorption bars', code: 'AB', short: 'ABSORB', letter: 'A', cat: 'signals', sw: 'var(--sig-bull)', nochip: true,
     alias: 'absorption absorb combo large trade spike rejection signals bars cyan yellow',
@@ -147,9 +153,9 @@ let api = null;
 const pinMax = () => (api ? api.PIN_MAX : 10);
 /* What the page showed before any choice was made (1.3), plus the 1-hour Initial Balance (1.5.3); the main pane
    starts here, each on the chart, shown and pinned to the chip strip. */
-const DEFAULT_INDICATORS = { volume: true, vwap: true, levels: true, fills: true, vp: false, delta: true, bubbles: false, absorption: false, ema: false, sma: false, bands: false, rsi: false };   // the profile: off on every pane; the delta pane (1.7.0): on for the main pane (Anthony)
+const DEFAULT_INDICATORS = { volume: true, vwap: true, levels: true, fills: true, vp: false, delta: true, bubbles: false, absorption: false, ema: false, sma: false, bands: false, rsi: false, ticket: false };   // the profile: off on every pane; the delta pane (1.7.0): on for the main pane (Anthony)
 /* A new pane (the grid, next step) starts with no indicators on; Anthony picks them per pane (2026-09-29). */
-const NEW_PANE_INDICATORS = { volume: false, vwap: false, levels: false, fills: false, vp: false, delta: false, bubbles: false, absorption: false, ema: false, sma: false, bands: false, rsi: false };
+const NEW_PANE_INDICATORS = { volume: false, vwap: false, levels: false, fills: false, vp: false, delta: false, bubbles: false, absorption: false, ema: false, sma: false, bands: false, rsi: false, ticket: false };   // release 1: the mini ticket off until added
 /* 1.34.0: the studies are off on every pane, also one saved before they existed (cleanPane gives a missing id its default) */
 /* The main pane's own five up to 1.5.3, which a pane saved by 1.4 to 1.5.3 lists (paneFromV1); the IB is part of Levels
    since 1.14.0 (migrateIb). */
@@ -1380,9 +1386,12 @@ function mount(container, options) {
     // the delta pane (1.7.0): the number of tick backfill trades (the store's trades before the first live one), and the
     // window the current delta was built with ({ from, by, why, journal })
     backfill: 0, deltaCov: null,
+    // ChartBridge 0.6.25's delta table (BB.decodeDeltaTable, with `at`: the store's length when it came), null without one
+    dtab: null,
     sub: 0, window: false, table: null, vpTable: null, sync: null,
     loadAt: 0, loadMsgAt: 0 };   // 1.38.1: when the load began, and its last message   // served window and session table (1.8.0): see "Served window" below
   /* 1.15.0: this chart's 4h, 1D or 1W bars from ChartBridge (htfSync below): asked for which root and timeframe, and how it went */
+  let deltaViewDay = null;                                     // the delta session the pane's label was last made for (deltaView)
   const H = { root: null, tf: '', id: 0, state: 'idle', bars: [], error: '', retry: 0, wait: 0, tries: 0, at: 0, retryAt: 0, pending: false, stale: '' };
   let htfSeq = 0;
   /* The chart signals' objects (G1c, see sigReplay below): what the chart draws, made again with the bars. */
@@ -1436,7 +1445,7 @@ function mount(container, options) {
     D.lv = []; D.lvSrc = null; D.ib = null; D.ibKey = ''; D.on = null; D.onKey = ''; ibNote(null);
     D.vp = null; D.liveFrom = null; if (!keep) chart.setProfile(null); vpNote();
     D.window = false; D.table = null; D.sync = null; rangeNote();
-    D.backfill = 0; D.deltaCov = null;
+    D.backfill = 0; D.deltaCov = null; D.dtab = null;
     deltaJob = null; D.delta = null; if (!keep) chart.setDelta(null); deltaView();   // a build of the old load stops
     if (SIG.job || SIG.absorption || SIG.bubbles || SIG.divergence) { SIG.job = null; SIG.absorption = SIG.bubbles = SIG.divergence = SIG.cd = null; SIG.version++; }   // made again with the bars
     const inst = instruments[root];
@@ -1578,6 +1587,17 @@ function mount(container, options) {
       vpBuild();
       if (D.window && tickView()) rebuild();              // the VWAP from the table now (the backfill made it whole)
     }
+  }
+
+  /* ChartBridge 0.6.25's "deltaTable": the session's buy, sell and unknown volume per second, exactly the trades before the
+     store's current end (the ones after come as live ticks). A table pushed after ready (ChartBridge read the session's saved
+     table back after this load) builds the delta again, the one shown kept until the new one is in. No session (no trade
+     since ChartBridge started): the count of an older ChartBridge's page. */
+  function onDeltaTable(m) {
+    const T = m.session ? BB.decodeDeltaTable(m.session) : null;
+    if (T) T.at = D.ticks.length;
+    D.dtab = T;
+    if (D.ready) deltaStart({ keep: true });
   }
 
   function updateLevels() {
@@ -1915,6 +1935,13 @@ function mount(container, options) {
   const countMissed = () => K.started && K.root === D.root ? K.missed : 0;
   /* The window a build counts from: the count's, when it began on an earlier load of this instrument, else this store's. */
   function deltaCoverage() {
+    // ChartBridge's delta table (0.6.25): every trade of the session (from 18:00 ET, or from when ChartBridge started) to the
+    // store's `at`, then the store's trades: the same count on every load, reload, timeframe, instrument or layout switch
+    if (D.dtab) {
+      const T = D.dtab;
+      return { from: T.coveredFrom, by: 'table', why: T.why === 'start' ? 'ChartBridge started' : T.why === 'feed' ? 'data connection down at 18:00' : '', index: T.at, table: true, missed: T.missed,
+        day: U.tradeDay(T.from + 1, SESSION) };   // the table's trading day: its missed seconds are that session's only (R12 S3)
+    }
     if (!(K.started && K.root === D.root && K.load !== loadSeq)) return storeCoverage();
     const live = K.liveFrom + liveLate(), first = K.firstT !== null ? K.firstT : Infinity;
     let cov = !K.open ? { from: K.fixedFrom, by: 'store', why: '' } : live < first ? { from: live, by: 'live', why: K.openWhy } : { from: first, by: 'first', why: K.openWhy };
@@ -1956,7 +1983,11 @@ function mount(container, options) {
     const cov = deltaCoverage();
     const cd = new CE.CumulativeDelta({ sessionStart: SESSION, seconds: range ? 0 : tf.sec, coveredFrom: cov.from, byTime: !range && tf.sec >= 300 });
     let job;
-    if (cov.journal) {
+    if (cov.table) {
+      // from ChartBridge's delta table (BB.TableReplay): its seconds, then the store's trades after it; on range bars the
+      // window's sided trades in the bars they made
+      job = deltaJob = { cd, cov, tr: new BB.TableReplay(D.ticks, D.dtab, cd, range ? rangeBuilder() : null) };
+    } else if (cov.journal) {
       // from the count (a later load of the same instrument): its trades on this load's bars; on range bars by their order
       // in this load's store, as the chart's range bars were built (BB.RangeReplay, round 6), never by their time
       const segs = (K.base ? [{ st: K.base.store, i: K.base.from, end: K.base.to }] : []).concat({ st: K.trades, i: 0, end: null });
@@ -1973,6 +2004,16 @@ function mount(container, options) {
     const slice = () => {
       if (destroyed || job !== deltaJob) return;
       const t0 = performance.now();
+      if (job.tr) {                                         // the delta table (0.6.25)
+        let done;
+        do done = job.tr.step(DELTA_SLICE_TRADES);
+        while (!done && performance.now() - t0 < DELTA_SLICE_MS);
+        if (!done) { later(slice, 0); return; }
+        deltaJob = null;
+        D.deltaCov = job.cov;
+        deltaSet(job.cd);
+        return;
+      }
       if (job.i === null) {                                 // BB.rangeStartIndex, a slice at a time
         const n = D.ticks.length;
         let j = job.scan;
@@ -2015,7 +2056,16 @@ function mount(container, options) {
   const deltaBuilding = () => deltaJob !== null;
   /* Why a session may count from later than 18:00, for the pane's title (the page sets no note since 1.21.0). */
   const deltaWhy = () => D.deltaCov ? D.deltaCov.why : '';
-  function deltaView() { chart.setDeltaView({ note: '', reason: deltaWhy(), missed: countMissed() }); }
+  /* 0.6.25: a count from ChartBridge's delta table says from when it counts even from 18:00 ("since 18:00 ET"), and the seconds
+     ChartBridge did not see (a feed drop, a NinjaTrader restart) as its missed seconds */
+  /* R12 S3: a chart left open across 18:00 counts the new session from the live trades: the table's missed seconds were the
+     session before's, so they show only while the newest session is the table's (onTick calls this at the first trade of a
+     later trading day) */
+  function deltaView() {
+    const tab = D.deltaCov && D.deltaCov.table ? D.deltaCov : null, ses = D.delta && D.delta.session;
+    deltaViewDay = ses ? ses.day : null;
+    chart.setDeltaView({ note: '', reason: deltaWhy(), missed: tab ? (ses && ses.day === tab.day ? tab.missed : 0) : countMissed(), start: !!tab });
+  }
   /* Written only when it changes (the badge, the notes): no layout for an unchanged value. */
   const put = (el, k, v) => { if (el && el[k] !== v) el[k] = v; };
   /*
@@ -2211,6 +2261,7 @@ function mount(container, options) {
     if (drop > 0) {
       D.ticks.dropFirst(drop); D.tickFrom = D.ticks.time(0) + 0.001; D.trimmed = true;
       if (D.table) D.table.at = Math.max(0, D.table.at - drop);
+      if (D.dtab) D.dtab.at = Math.max(0, D.dtab.at - drop);
       D.backfill = Math.max(0, D.backfill - drop); countStoreTrimmed(drop);
       if (deltaBuilding()) { deltaStart(); deltaFed = true; }   // the store (or the count's part of it) moved under a build: start it over
     }
@@ -2245,7 +2296,10 @@ function mount(container, options) {
       else for (let i = 0; i < ch.length; i++) chart.update(ch[i]);   // a finished range bar, phantom bars, the new bar
       barT = r.bar.t;
     }
-    if (D.delta && !deltaFed) D.delta.add(t, v, m.s, barT, m.sm);   // one trade, one bar: never a rebuild per trade
+    if (D.delta && !deltaFed) {
+      D.delta.add(t, v, m.s, barT, m.sm);              // one trade, one bar: never a rebuild per trade
+      if (D.delta.session && D.delta.session.day !== deltaViewDay) deltaView();   // a new session (18:00 ET): its own label (R12 S3)
+    }
     sigTrade(t, p, v, m.s, barT);                      // the chart signals (G1c): O(1) a trade, a step per bar close
     const now = nowMs();
     pushDelay(delays.feed, m.rx - m.u);
@@ -2345,7 +2399,7 @@ function mount(container, options) {
   /* ChartBridge 0.3.5 lists "liveFirst" and "profile" in hello's `features`. Only then does the page send its subscribe id,
      ask for the served window on seconds and range views, and ask for the session table ("profile"); ChartBridge 0.3.4 and
      older get the subscribe of 1.6.0. */
-  let LIVE_FIRST = false, PROFILE = false, HTF_OK = false, subSeq = 0;
+  let LIVE_FIRST = false, PROFILE = false, HTF_OK = false, DELTA_TABLE = false, subSeq = 0;   // DELTA_TABLE: ChartBridge 0.6.25's delta table
   const shownUrl = u => u ? String(u).split('?')[0] : 'ChartBridge';
 
   function connect() {
@@ -2401,6 +2455,7 @@ function mount(container, options) {
     if (D.sub) msg.sub = D.sub;
     if (LIVE_FIRST && D.tickHours > 0) { msg.liveFirst = true; D.window = true; }
     if (PROFILE) msg.profile = true;
+    if (DELTA_TABLE) msg.deltaTable = true;            // the session's delta from 18:00 ET (ChartBridge 0.6.25), and sides in the served window
     send(msg);
     htfSync(true);                                      // 1.15.0: a new load (or connection) asks for its htf bars again, the ones shown kept
   }
@@ -2544,6 +2599,7 @@ function mount(container, options) {
         LIVE_FIRST = Array.isArray(m.features) && m.features.includes('liveFirst');
         PROFILE = Array.isArray(m.features) && m.features.includes('profile');
         HTF_OK = Array.isArray(m.features) && m.features.includes('htf');   // 0.3.7: 4h, 1D and 1W bars
+        DELTA_TABLE = Array.isArray(m.features) && m.features.includes('deltaTable');   // 0.6.25: the delta table
         instruments = {};
         for (const i of m.instruments || []) instruments[i.root] = i;
         readouts();
@@ -2588,6 +2644,11 @@ function mount(container, options) {
         if (m.root !== D.root || (m.sub !== undefined && m.sub !== null ? stale(m) : !D.ready)) return;
         onProfile(m);
         break;
+      case 'deltaTable':
+        // 0.6.25: with this load's id before its "ready"; without one when ChartBridge read the session's saved table back after it
+        if (m.root !== D.root || (m.sub !== undefined && m.sub !== null ? stale(m) : !D.ready)) return;
+        onDeltaTable(m);
+        break;
       case 'tick': onTick(m); break;
       case 'htf': onHtf(m); break;                         // 1.15.0: NinjaTrader's 4h, 1D or 1W bars (ChartBridge 0.3.7)
       case 'htfBar': onHtfBar(m); break;
@@ -2618,6 +2679,17 @@ function mount(container, options) {
      sends only subscribe, ping and htf. */
   const HOST = opt.trade && typeof opt.trade.place === 'function' && typeof opt.trade.move === 'function' && typeof opt.trade.cancel === 'function' ? opt.trade : null;
   const HT = { root: '', live: false, account: '', accountShort: '', orders: [], position: null, pointValue: 0, qty: 1, members: null };
+  /* release 1 (Bot-Lab plan step 1.6c): the mini ticket (the indicator 'ticket'). While it is on this chart and shown, the host
+     draws it in the chart's stage: HOST.mini({ stage, paneId, root }) returns its undo; root() is this chart's instrument now.
+     The chart itself still never sends an order: the mini ticket is the host's order ticket. */
+  let miniOff = null;
+  function miniSync() {
+    const want = !destroyed && !!HOST && typeof HOST.mini === 'function' && !!IS.ind.ticket && IS.ind.ticket.on && IS.ind.ticket.shown;
+    if (want && !miniOff) { try { miniOff = HOST.mini({ stage: $('chart').parentElement, paneId: PANE, root: () => S.root }) || null; } catch (e) { miniOff = null; setTimeout(() => { throw e; }); } }
+    else if (!want && miniOff) { const undo = miniOff; miniOff = null; try { undo(); } catch (e) { setTimeout(() => { throw e; }); } }
+  }
+  cleanups.push(() => { const undo = miniOff; miniOff = null; if (undo) try { undo(); } catch (e) { /* the host's */ } });
+  miniSync();
   const armedHere = () => HT.live && HT.root === D.root;
 
   /*
@@ -2843,7 +2915,8 @@ function mount(container, options) {
       index: i, t: b.t, end: barEnd(b, i), forming: !!e.forming, hovering: !!e.hovering,
       o: b.o, h: b.h, l: b.l, c: b.c, v: b.v || 0,
       // buys, sells, unknown and the largest trade from the delta pane's core (null: not counted there); why not
-      delta: db ? { buy: db.buy, sell: db.sell, unknown: db.unknown, big: db.big || 0 } : null,
+      // a bar built from ChartBridge's delta table with a second whose largest trade is not known (an older saved file): none (0, '-')
+      delta: db ? { buy: db.buy, sell: db.sell, unknown: db.unknown, big: db.bigMissing ? 0 : db.big || 0 } : null,
       deltaWhy: db ? '' : !S.layers.delta ? 'off' : masked('delta') ? 'htf' : deltaBuilding() || !cd ? 'building' : 'before',
       deltaFrom: cd && cd.session && cd.session.partial ? cd.session.from : null,
       bubbles: bubblesOn(b.t, next),
@@ -3253,7 +3326,9 @@ function mount(container, options) {
    * off), then the groups, folded, one open at a time, each with a + to add, and Hide all / Restore. The chip strip next
    * to the button holds the pinned ones: one click shows or hides; on a narrow pane each chip is one letter.
    */
-  const IND = LP.INDICATORS, ALL_DEFS = IND.concat(LP.COMING);
+  /* release 1 (1.6c): the mini ticket is listed only where the host draws it (the workspace's charts) */
+  const hostOnly = d => d.id !== 'ticket' || !!(opt.trade && typeof opt.trade.mini === 'function');
+  const IND = LP.INDICATORS.filter(hostOnly), ALL_DEFS = IND.concat(LP.COMING);
   const defOf = id => ALL_DEFS.find(d => d.id === id);
   const M = { q: '', cat: null, gear: null, returnTo: null, note: '' };   // menu state that is not saved
   const SVG = {
@@ -3279,6 +3354,7 @@ function mount(container, options) {
     else if (!IS.ind.delta.on && (D.delta || deltaBuilding())) deltaStop();
     else deltaView();
     sigApply();                                                    // the chart signals (G1c): made when added, dropped when off
+    miniSync();                                                    // release 1 (1.6c): the mini ticket, drawn by the host
     syncIndicators();
   }
   /* One change, here and in storage (read fresh there, so another tab's choices are kept). `fn` runs twice, so it
@@ -3452,7 +3528,7 @@ function mount(container, options) {
     let html = M.note ? `<div class="ind-note">${esc(M.note)}</div>` : '';
     const q = M.q.trim();
     if (q) {
-      const found = LP.searchIndicators(q);
+      const found = LP.searchIndicators(q).filter(hostOnly);
       html += `<div class="ind-cap">${found.length ? 'Results' : 'No match'}</div>` + found.map(rowHtml).join('');
     } else {
       if (IS.recent.length) html += '<div class="ind-recent"><span class="ind-cap-in">Recent</span>' + IS.recent.map(id => {

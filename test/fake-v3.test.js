@@ -368,12 +368,19 @@ test('bot: copilot proposal accepted is placed from its own parameters on Sim101
   d.desk.botMessage({ type: 'signal', id: 'p2', action: 'fired', side: 'buy', kind: 'market', stopTicks: 12, targetTicks: null, reason: 'Sample' });
   d.desk.botMessage({ type: 'withdraw', id: 'p2', reason: 'gone' });
   assert.equal(d.desk.bot.proposals.get('p2').state, 'not answered');
-  // auto: Sim101 only, 1 contract; the kill switch cancels unfilled entries and keeps the position
+  // auto: Sim101 only; the kill switch cancels unfilled entries and keeps the position. Release 1 (1.6b): gate 3 for the bot is its
+  // size and the hard ceiling (never config.txt's maxQty), so a bot entry never adds to a position held: the copilot short is closed first
+  d.act({ type: 'flatten', account: 'Sim101', root: 'MNQ' });
+  assert.equal(d.desk.pos('Sim101', 'MNQ').qty, 0);
   d.act({ type: 'botMode', mode: 'auto' });
   d.desk.botMessage({ type: 'signal', id: 'a1', action: 'fired', side: 'sell', kind: 'limit', price: 25500, stopTicks: 8, targetTicks: 8, reason: 'Sample' });
-  assert.ok(d.working('Sim101').some(o => o.by === 'bot' && o.role === 'entry'));
+  assert.ok(d.working('Sim101').some(o => o.by === 'bot' && o.role === 'entry'), JSON.stringify(d.desk.bot.lastSignal));
   d.act({ type: 'botKill', on: true });
   assert.ok(!d.working('Sim101').some(o => o.by === 'bot' && o.role === 'entry'));
+  d.act({ type: 'botKill', on: false });
+  d.desk.botMessage({ type: 'signal', id: 'a1m', action: 'fired', side: 'sell', kind: 'market', stopTicks: 8, targetTicks: 8, reason: 'Sample' });
+  assert.equal(d.desk.pos('Sim101', 'MNQ').qty, -1, JSON.stringify(d.desk.bot.lastSignal));
+  d.act({ type: 'botKill', on: true });
   assert.equal(d.desk.pos('Sim101', 'MNQ').qty, -1, 'never flattens by itself');
   d.desk.botMessage({ type: 'signal', id: 'a2', action: 'fired', side: 'buy', kind: 'market', stopTicks: 8, targetTicks: 8, reason: 'Sample' });
   assert.equal(d.desk.bot.lastSignal.result, 'refused: the kill switch is on');
@@ -383,7 +390,9 @@ test('bot: copilot proposal accepted is placed from its own parameters on Sim101
   assert.match(d.desk.bot.lastSignal.result, /5 trades today/);
   assert.match(d.desk.botMessage({ type: 'signal', id: 'x', action: 'fired', extra: 1 }), /Unknown key/);
   d.desk.bot.trades = 0;
+  d.act({ type: 'flatten', account: 'Sim101', root: 'MNQ' });   // flat, so the bot's entry fits its size
   d.desk.botMessage({ type: 'signal', id: 'a4', action: 'fired', side: 'sell', kind: 'limit', price: 25500, stopTicks: 8, targetTicks: 8, reason: 'Sample' });
+  assert.ok(d.working('Sim101').some(o => o.by === 'bot' && o.role === 'entry'), 'an unfilled entry works before the heartbeat is lost');
   d.advance(5100); d.desk.everySecond();
   assert.equal(d.desk.bot.connected, false);
   assert.ok(!d.working('Sim101').some(o => o.by === 'bot' && o.role === 'entry'), 'heartbeat lost: unfilled entries cancelled');
@@ -538,7 +547,7 @@ test('server --v3: hello lists v3 and quote-only roots; client gets accounts; au
     await assert.rejects(wsConnect(port, '/bot', { 'X-ChartBridge-Bot': secret }), /409/);
     bot.send({ type: 'botHello', name: 'Demo Opening Fade' });
     const w = await bot.next('welcome');
-    assert.equal(w.account, 'Sim101', 'chosen (--bot-account; no file is None since 0.5.7)'); assert.deepEqual(w.rails, { maxQty: 1, maxTrades: 5, maxLosses: 3 });
+    assert.equal(w.account, 'Sim101', 'chosen (--bot-account; no file is None since 0.5.7)'); assert.deepEqual(w.rails, { maxQty: 1, size: 1, maxTrades: 5, maxLosses: 3, dayLoss: 500, dayProfit: 500 });   // release 1 (1.6b): every rail (the fake's made-up PC set them)
     assert.ok(await bot.next('tick'), 'the bot reads live ticks');
     bot.send({ type: 'signal', id: 's1', action: 'skipped', reason: 'Sample: range too small' });
     let sg; do { sg = await a.next('botSignal', 3000); } while (sg && sg.id !== 's1');
@@ -907,7 +916,7 @@ test('server --agents: /agent/<id> needs its secret, no Origin, one at a time; h
     const unlock = (await post(port, '/pin/unlock', { pin: '5820' })).json.token;
     const token = JSON.parse((await get(port, '/session', unlock)).body).token;
     const a = await wsConnect(port, '/ws?unlock=' + encodeURIComponent(unlock), { Origin: own });
-    assert.equal((await a.next('hello')).version, 'fake-0.5.4');
+    assert.equal((await a.next('hello')).version, '0.5.4');
     a.send({ type: 'client', v: 3 }); a.send({ type: 'auth', token });
     const ag = await a.next('agent');
     assert.equal(ag.agent, 'demo'); assert.equal(ag.mode, 'shadow'); assert.equal(ag.account, null, 'no account file: None (ChartBridge 0.5.7)'); assert.equal(ag.standDown, 'agent demo\'s account is None: no new entries until an account is chosen on the Agent tab');

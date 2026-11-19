@@ -39,8 +39,8 @@ test('the watch: only traders in Shadow, in ChartBridge\'s own words, nothing gu
 });
 
 test('nothing on the Colosseum can send: its link has one key, listen, and league.js calls no post or send', () => {
-  const ws = read('live/workspace.js');
-  const m = /const colosseumLink = (AF \? Object\.freeze\(\{ listen: part => AF\.listen\(part\) \}\) : null);/.exec(ws);
+  const ws = read('live/legion-tabs.js');   // plan step 3.2: the Colosseum is mounted on Legion's page
+  const m = /const watch = (AF \? Object\.freeze\(\{ listen: part => AF\.listen\(part\) \}\) : null);/.exec(ws);
   assert.ok(m, 'the link is built in one line');
   const sent = [], heard = [];
   const AF = { listen: p => { heard.push(p); return () => {}; }, post: x => sent.push(x), send: x => sent.push(x), sendOrder: x => sent.push(x) };
@@ -50,31 +50,33 @@ test('nothing on the Colosseum can send: its link has one key, listen, and leagu
   link.listen({ message() {} });
   assert.equal(heard.length, 1); assert.equal(sent.length, 0);
   assert.strictEqual(new Function('AF', 'return ' + m[1])(null), null, 'no feed: no link');
-  assert.match(ws, /window\.LeagueView\.create\(\{ view: \$\('lgView'\), tab: \$\('wsLeagueTab'\), feed: hub, storagePrefix: PREFIX, watch: colosseumLink,/);
+  assert.match(ws, /window\.LeagueView\.create\(\{ view: \$\('lgView'\), tab: null, feed: hub, storagePrefix: PREFIX, watch,/);
   const lg = read('live/league.js');
   assert.doesNotMatch(lg, /\.post\(|\.send\(|sendOrder/, 'league.js never posts or sends');
   assert.doesNotMatch(lg, /agentMode|agentKill|agentAccount|agentRules|agentAnswer|agentPick|botMode|botAnswer/, 'no trader message is named in league.js');
 });
 
-test('the top tabs: Chart, Legion, Colosseum in one row, each its own button; old links land on the Colosseum', () => {
+test('the top tabs (plan step 3.2): the chart page keeps Chart, the Bot tab and a Legion link; old links forward to Legion', () => {
   const html = read('live/index.html');
   const row = /<span class="ws-toptabs" id="wsTopTabs" role="group" aria-label="Tabs" hidden>([\s\S]*?)\n  <\/span>/.exec(html);
   assert.ok(row, 'one row in the top bar');
-  assert.deepEqual([...row[1].matchAll(/<button[^>]*id="(\w+)"[^>]*>([^<]*)<\/button>/g)].map(x => x[1] + ':' + x[2]), ['wsChartTab:Chart', 'wsFleetTab:Legion', 'wsLeagueTab:Colosseum', 'wsPraetorianTab:Praetorian', 'wsAgentTab:Agent'], '1.51.0: Praetorian and its sides last (the Bot\'s button comes into its slot)');
+  assert.deepEqual([...row[1].matchAll(/<button[^>]*id="(\w+)"[^>]*>([^<]*)<\/button>/g)].map(x => x[1] + ':' + x[2]), ['wsChartTab:Chart'], 'the Chart button; the Bot\'s own button comes into its slot');
+  assert.match(row[1], /<a class="ws-btn ws-legionlink" id="wsLegion" href="legion\.html" target="legion"[^>]*hidden>Legion<\/a>/, 'Legion is its own page, opened by a link');
   assert.match(row[1], /<span class="ws-tabslot" id="wsTabSlot"><\/span>/);
   assert.match(row[1], /id="wsChartTab" aria-pressed="true"/, 'Chart pressed at the start');
   assert.doesNotMatch(row[1], /id="wsChartTab"[^>]*hidden/, 'Chart is never hidden on its own: the row shows while another tab is offered');
-  assert.match(read('live/workspace.js'), /const OTHER_TABS = \['wsFleetTab', 'wsLeagueTab', 'wsAgentTab', 'wsBotTab'\];/);
-  assert.equal((html.match(/id="wsLeagueTab"/g) || []).length, 1); assert.equal((html.match(/id="wsFleetTab"/g) || []).length, 1);
-  assert.match(html, /aria-label="Colosseum tab"/);
+  assert.doesNotMatch(html, /id="wsLeagueTab"|id="wsFleetTab"|id="wsAgentTab"|id="wsPraetorianTab"|aria-label="Colosseum tab"/);
   const ws = read('live/workspace.js');
-  assert.match(ws, /\['league', 'colosseum'\]\.includes\(new URLSearchParams\(location\.search\)\.get\('tab'\)\)\) leagueView\.openDay\(/, 'the old ?tab=league and the new ?tab=colosseum both open it, the day checked first');
-  assert.match(ws, /tabUrl\(on \? 'colosseum' : ''\);/);
-  assert.match(ws, /const TAB_CLASSES = \['bt-on', 'ag-on', 'lg-on', 'fl-on'\];/);
-  // every body class a tab sets is one the Chart tab reads: a later tab that forgets it fails here
+  assert.match(ws, /const OTHER_TABS = \['wsBotTab', 'wsLegion'\];/);
+  assert.match(ws, /if \(\$\('wsLegion'\)\) \$\('wsLegion'\)\.hidden = !\(Array\.isArray\(m\.features\) && m\.features\.includes\('v3'\)\);/, 'offered with a v3 ChartBridge');
+  assert.match(ws, /const LEGION_TABS = \['legion', 'fleet', 'league', 'colosseum', 'agent', 'praetorian'\];/);
+  assert.match(ws, /if \(LEGION_TABS\.includes\(movedTab\) && !prBotLast\) location\.replace\('legion\.html' \+ location\.search \+ location\.hash\);\nelse if \(PIN\)/, 'an old address forwards before anything starts');
+  const L = require('../live/legion.js');
+  for (const t of ['legion', 'fleet', 'league', 'colosseum', 'agent', 'praetorian']) assert.notEqual(L.tabFrom('?tab=' + t).tab, 'castra', t + ' lands on its tab on Legion');
+  assert.match(ws, /const TAB_CLASSES = \['bt-on'\];/);
   const toggled = [...ws.matchAll(/document\.body\.classList\.toggle\('([a-z]+-on)', on\)/g)].map(x => x[1]).sort();
-  assert.deepStrictEqual(['ag-on', 'bt-on', 'fl-on', 'lg-on'], toggled);
-  assert.match(ws, /function closeTabs\(\) \{ for \(const d of \[botDesk, agentDesk, leagueView, fleetView\]\) if \(d && d\.shown\(\)\) d\.showTab\(false\); \}/);
+  assert.deepStrictEqual(['bt-on'], toggled);
+  assert.match(ws, /function closeTabs\(\) \{ if \(botDesk && botDesk\.shown\(\)\) botDesk\.showTab\(false\); \}/);
   for (const f of ['live/league.js', 'live/league.css', 'live/workspace.css', 'live/index.html', 'docs/COLOSSEUM_PRAETORIAN_reuse_map.md', 'test/colosseum.test.js'])
     assert.ok(!/[\u2013\u2014]/.test(read(f)), f + ': no en or em dash');
 });

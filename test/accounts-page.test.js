@@ -413,7 +413,7 @@ test('the Account page is a workspace panel: its type, the Add menu, its files i
   // one v3 connection per window, shared: the Bot tab opens no WebSocket of its own, and gets the workspace's one
   assert.doesNotMatch(bot, /new WebSocket\(/);
   assert.match(ws, /window\.BotDesk\.create\(\{ v3: praetorianLink,/);   // 1.51.0: the same one connection, through Praetorian's gate
-  assert.match(ws, /const praetorianLink = AF && window\.AgentCore && typeof window\.AgentCore\.praetorianLink === 'function'\n  \? window\.AgentCore\.praetorianLink\(AF, /);   // the review of 102 (F1): one builder
+  assert.match(ws, /praetorianLink = AF && window\.AgentCore && typeof window\.AgentCore\.praetorianLink === 'function'\n    \? window\.AgentCore\.praetorianLink\(AF\)/);   // the review of 102 (F1): one builder (release 1: built inside its guard)
   assert.match(read('live/bot.html'), /src="accounts\.js"/);
   // one source for The Desk's address: ChartBridge's deskUrl (/diag), nothing kept per browser
   for (const t of [ws, bot, read('live/order-strategies.js')]) assert.doesNotMatch(t, /live-desk-url-v1/);
@@ -449,7 +449,7 @@ test('1.26.0: the Accounts tab gets Group and Limits only once ChartBridge sends
   assert.match(src, /accountLimits: \(name, floorText, dailyText\) => \{\s*if \(!S\.groups/);
   assert.match(src, /if \(!want\) \{ P\.join = null; F\.accountGroup\(name, null\);/, 'None at once');
   assert.match(src, /P\.join = joinPlan\(name, g, acc\)/, 'a group asks first (G2 b; 1.33.0: with the rules taken from The Desk)');
-  assert.match(src, /if \(!g\.perMember\) return Object\.assign\(base, \{ mode: 'old', prefill: String\(\+GC\.highCloseDefault\(g, acc\)/, 'an older ChartBridge: the 1.26.0 question exactly (1.37.0: on the feed, shared with the Multi-Account panel)');
+  assert.match(src, /if \(!g\.perMember\) return warned\(Object\.assign\(base, \{ mode: 'old', prefill: String\(\+GC\.highCloseDefault\(g, acc\)/, 'an older ChartBridge: the 1.26.0 question exactly (1.37.0: on the feed, shared with the Multi-Account panel; the floor fix: with the warning)');
   assert.match(src, /S, start, startAny, stop, account, limit, post, groupOf, rulesOf, store, setAccountType, readTypes, joinRefusal, joinPlan, joinWords,/, '1.37.0: one join (plan, checks, words) for the Accounts tab and the panel');
   assert.ok(html.indexOf('<script src="groups.js"></script>') > html.indexOf('<script src="accounts.js"></script>') && html.indexOf('<script src="groups.js"></script>') < html.indexOf('<script src="workspace.js"></script>'));
   assert.ok(!html.includes('id="wsGroupsCol"') && !html.includes('id="wsGroupsSec"'), '1.37.0: Settings has no groups column: groups are made and set on the Multi-Account panel');

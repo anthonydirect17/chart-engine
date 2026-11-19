@@ -24,8 +24,9 @@ const proposal = o => Object.assign({ type: 'agentProposal', agent: 'demo', id: 
   state: 'open', seenAt: null, answeredAt: null }, o || {});
 
 test('the tab with no agent; 1.22.0: an older ChartBridge (before 0.5.2, the page\'s minimum) is told to update', () => {
-  assert.deepEqual(AC.parseVersion('fake-0.4.0'), [0, 4, 0]);   // kept for checks above the page's minimum ChartBridge
-  assert.ok(AC.atLeast('0.5.0', '0.5.0') && AC.atLeast('0.5.1', '0.5.0') && AC.atLeast('fake-0.5.0', '0.5.0'));
+  assert.deepEqual(AC.parseVersion('0.4.0'), [0, 4, 0]);
+  for (const v of ['fake-0.4.0', 'v0.6.25', '0.6.25-rc1', '0.6', ' 0.6.25']) assert.equal(AC.parseVersion(v), null, v);   // plan step 3.2, X3: a.b.c only
+  assert.ok(AC.atLeast('0.5.0', '0.5.0') && AC.atLeast('0.5.1', '0.5.0') && !AC.atLeast('fake-0.5.0', '0.5.0'));
   assert.ok(!AC.atLeast('0.4.3', '0.5.0') && !AC.atLeast('', '0.5.0'));
   assert.equal(AC.offText({ v3: null }), 'Connecting to ChartBridge...');
   assert.equal(AC.MIN_BRIDGE, '0.5.2', 'the page\'s minimum: 0.5.0 and 0.5.1 refuse agentAccount with keepMode');
@@ -34,7 +35,8 @@ test('the tab with no agent; 1.22.0: an older ChartBridge (before 0.5.2, the pag
   assert.equal(AC.offText({ v3: true, version: '0.5.1', trading: { enabled: true } }), 'No agents on this ChartBridge (0.5.2 or later).');
   assert.equal(AC.offText({ v3: true, trading: { enabled: true } }), 'No agents on this ChartBridge (0.5.2 or later).', 'no version: not known to have it');
   assert.match(AC.offText({ v3: true, version: '0.5.2', trading: { enabled: true }, agents: 0 }), /none is named in its config\.txt/);
-  assert.match(AC.offText({ v3: true, version: 'fake-0.5.4', trading: { enabled: true }, agents: 0 }), /none is named in its config\.txt/);
+  assert.match(AC.offText({ v3: true, version: '0.5.4', trading: { enabled: true }, agents: 0 }), /none is named in its config\.txt/);
+  assert.equal(AC.offText({ v3: true, version: 'fake-0.5.4', trading: { enabled: true }, agents: 0 }), 'No agents on this ChartBridge (0.5.2 or later).', 'a version that is not a.b.c is not known to have it (X3)');
   assert.equal(AC.offText({ v3: true, version: '0.5.2', trading: { enabled: true }, agents: 1 }), '');
   assert.ok(AC.validId('manrae') && AC.validId('demo') && AC.validId('a1') && !AC.validId('1a') && !AC.validId('Demo') && !AC.validId('toolongagentid') && !AC.validId(''));
 });
@@ -234,7 +236,7 @@ test('rules change: flat keys exactly as the contract (section 7), checked again
 
 test('ChartBridge 0.5.4 (DECISION 2026-10-10 ag): in a trade the window alone may change; a window that flattens now asks first', () => {
   const pos = { root: 'MNQ', qty: 1, avgPrice: 25400 };
-  const inTrade = agent({ position: pos }), ctx = { roots: ['NQ', 'MNQ', 'ES', 'MES'], version: 'fake-0.5.4', now: T0 };   // 10:00 New York
+  const inTrade = agent({ position: pos }), ctx = { roots: ['NQ', 'MNQ', 'ES', 'MES'], version: '0.5.4', now: T0 };   // 10:00 New York
   const form = o => Object.assign(AC.rulesForm(RULES), o || {});
   assert.deepEqual(AC.rulesEditable(agent(), { version: '0.5.4' }), { ok: true, windowOnly: false, why: '' });
   assert.deepEqual(AC.rulesEditable(inTrade, { version: '0.5.4' }), { ok: true, windowOnly: true, why: 'Demo Agent has a position: only the window (entries from, until, flat at) can change now.' });
@@ -294,7 +296,7 @@ test('account chooser: tradable accounts, SIM first; never the bot\'s, the copie
   assert.equal(AC.accountChange(agent({ mode: 'auto' }), 'EVAL-A', ch, v052).confirm, 'Agent demo will trade LIVE account EVAL-A in Auto. Continue?', 'the question names the mode it keeps');
   assert.equal(AC.accountChange(agent({ mode: 'auto' }), 'EVAL-A', ch, v052).msg.keepMode, 'auto');
   assert.equal(AC.accountChange(agent({ mode: 'copilot' }), 'EVAL-A', ch, v052).confirm, 'Agent demo will trade LIVE account EVAL-A in Copilot. Continue?');
-  assert.equal(AC.accountChange(agent({ mode: 'copilot' }), 'EVAL-A', ch, { version: 'fake-0.5.2' }).msg.keepMode, 'copilot', 'the fake\'s version text counts');
+  assert.equal(AC.accountChange(agent({ mode: 'copilot' }), 'EVAL-A', ch, { version: '0.5.2' }).msg.keepMode, 'copilot', 'the version counts');
   assert.equal(AC.accountChange(agent({ mode: 'copilot' }), 'EVAL-A', ch, { version: '0.6.0' }).msg.keepMode, 'copilot');
   // the mismatch: the question named Auto; another page put the agent in Copilot since: keepMode says auto (ChartBridge then
   // puts it in Shadow), never the mode the person did not see
@@ -502,14 +504,14 @@ test('wiring: the workspace and agent.html load the Agent tab; bot.js shares the
   const idx = read('live', 'index.html'), pop = read('live', 'agent.html'), bot = read('live', 'bot.js'), ws = read('live', 'workspace.js');
   assert.ok(idx.indexOf('agent-core.js') > 0 && idx.indexOf('agent-core.js') < idx.indexOf('src="bot.js"'), 'agent-core.js before bot.js (the router exists when the Bot tab starts)');
   assert.ok(idx.indexOf('src="agent.js"') > idx.indexOf('src="bot.js"') && idx.indexOf('src="agent.js"') < idx.indexOf('src="workspace.js"'));
-  assert.match(idx, /agent\.css/); assert.match(idx, /id="wsAgentTab"/); assert.match(idx, /id="agView"/);
+  assert.match(idx, /agent\.css/); assert.doesNotMatch(idx, /id="wsAgentTab"/); assert.match(idx, /id="agView"[^>]*hidden/); assert.match(read('live/legion.html'), /id="agView"/);   // plan step 3.2: the Agent tab is on Legion; the chart page keeps the desk with no view
   assert.match(pop, /agent-core\.js/); assert.match(pop, /AgentDesk\.create\(\{ popout: true/);
   assert.match(bot, /copilotRouter\(document\)/);
   assert.match(ws, /AgentDesk\.create/);
-  assert.equal(JSON.parse(read('package.json')).version, '1.57.0');   // 1.57.0: the Colosseum's leaderboard (page only); 1.56.0: ChartBridge 0.6.23, a hand move is the move; 1.55.0: a Legion lane's account list (page only); 1.54.0: Legion simpler and Anthony's bot names (page only); 1.53.1: ChartBridge 0.6.22, the page unchanged; 1.53.0: Sim-only groups on Legion, a late listener handed the latest state (page only); 1.52.3: the lane cards name the files not offered (page only); 1.52.2: Flatten and turn off refuses a flatten it cannot tie to a seat (page only); 1.52.1: Legion Setup's Traders fold, Legion's trader desk mounted (page only); 1.52.0: Legion's trader desk, the Agent desk a second time (page only); 1.51.0: Praetorian, the Agent tab's desk on the gated link (page only); 1.50.0: the top tabs and the Colosseum (the Agent tab unchanged; page only); 1.46.0: Legion's lanes, the pick and the Armed switch (the Agent tab unchanged; page only); 1.45.1: ChartBridge 0.6.21, the pick and profitToday (the page unchanged); 1.45.0: the Legion tab (the Agent tab unchanged; page only); 1.44.6: ChartBridge 0.6.20, the roster served (the page unchanged); 1.44.5: ChartBridge 0.6.19, the day's profit stop (the page unchanged); 1.44.4: ChartBridge 0.6.18, entry rules per trader (Market entry and No target on the Agent tab's rules); 1.44.3: ChartBridge 0.6.17, Kill all for the prop accounts (page unchanged); 1.44.2: ChartBridge 0.6.16, prop accounts (page unchanged, page works with 0.6.2); 1.44.1: ChartBridge 0.6.15, the 1 second pull retired (page unchanged, page works with 0.6.2); 1.44.0: the brand, AUREUS in the IMPERIUM suite (page only, no F5); 1.43.0: a group's stops and targets within 2 ticks merge into one line (page only, no F5)
+  assert.equal(JSON.parse(read('package.json')).version, '1.58.0');   // 1.58.0: ChartBridge 0.6.25, Legion as its own app (Castra, the Ludus), the go-live guards, the delta table, the floor fix; 1.57.1: release 1, ChartBridge 0.6.24 (the start guard, the personal bot, Cut half and the mini ticket); 1.57.0: the Colosseum's leaderboard (page only); 1.56.0: ChartBridge 0.6.23, a hand move is the move; 1.55.0: a Legion lane's account list (page only); 1.54.0: Legion simpler and Anthony's bot names (page only); 1.53.1: ChartBridge 0.6.22, the page unchanged; 1.53.0: Sim-only groups on Legion, a late listener handed the latest state (page only); 1.52.3: the lane cards name the files not offered (page only); 1.52.2: Flatten and turn off refuses a flatten it cannot tie to a seat (page only); 1.52.1: Legion Setup's Traders fold, Legion's trader desk mounted (page only); 1.52.0: Legion's trader desk, the Agent desk a second time (page only); 1.51.0: Praetorian, the Agent tab's desk on the gated link (page only); 1.50.0: the top tabs and the Colosseum (the Agent tab unchanged; page only); 1.46.0: Legion's lanes, the pick and the Armed switch (the Agent tab unchanged; page only); 1.45.1: ChartBridge 0.6.21, the pick and profitToday (the page unchanged); 1.45.0: the Legion tab (the Agent tab unchanged; page only); 1.44.6: ChartBridge 0.6.20, the roster served (the page unchanged); 1.44.5: ChartBridge 0.6.19, the day's profit stop (the page unchanged); 1.44.4: ChartBridge 0.6.18, entry rules per trader (Market entry and No target on the Agent tab's rules); 1.44.3: ChartBridge 0.6.17, Kill all for the prop accounts (page unchanged); 1.44.2: ChartBridge 0.6.16, prop accounts (page unchanged, page works with 0.6.2); 1.44.1: ChartBridge 0.6.15, the 1 second pull retired (page unchanged, page works with 0.6.2); 1.44.0: the brand, AUREUS in the IMPERIUM suite (page only, no F5); 1.43.0: a group's stops and targets within 2 ticks merge into one line (page only, no F5)
   // before: 1.42.3: ChartBridge 0.6.14, the tick day check rule (page unchanged, page works with 0.6.2); 1.42.2: ChartBridge 0.6.13, the tick day's morning catch-up and the raw deleted once packed (page unchanged); 1.42.1: the ticket's bar trail ended and waiting lines short, no false League folder warning with the League Mirror (page only, no F5); 1.42.0: Fit stop and target, the bar trail follow-ups and the ticket's bar trail line (ChartBridge 0.6.12, page works with 0.6.2); 1.41.0: the bar trail, a past League day, the narrower 1 second request (ChartBridge 0.6.11, page works with 0.6.2), the updater's DST edge; 1.40.0: the account lifecycle, Blown and Promoted (ChartBridge 0.6.10, page works with 0.6.2); 1.39.2: a benched account sits out with no confirm (page only, no F5); 1.39.1: the agreed follow-ups (page only, no F5); 1.39.0: house style V2, black and gold (page only, ChartBridge stays 0.6.8); 1.38.1: the history gap after a reload (ChartBridge 0.6.8's minute book; the page says a hole and a long LOADING), the League chart and the Drone sky on NQ 1 min (page works with 0.6.2); 1.38.0: the Agents panel's Drone sky, order labels stacked in the gutter, the Multi-Account lane headers (page only); 1.37.0: the Multi-Account panel and the bench (ChartBridge 0.6.7, page works with 0.6.2), room right Custom, lighter lines, see-through labels, sharp candles; 1.36.0: the Agents strip (page only); 1.35.0: the League tab, the agent desk and the Bot as panels, Update floors from The Desk, the trade note (page only); 1.34.1: Trade tags keep clicks during and after a trade (page only); 1.34.0: the work requests of 2026-10-20 and the firm's limits (ChartBridge 0.6.6, page works with 0.6.2); 1.33.0: each member of a group with its own rules from The Desk (ChartBridge 0.6.5, page works with 0.6.2); 1.32.2: an optional trade `pts` decides the trade line's colour (page only); 1.32.1: the copier's leader back to none and Merge on an off follower (ChartBridge 0.6.4, page works with 0.6.2); 1.32.0: the account type picker as Firm, Plan and Size (page only); 1.31.0: the audit fixes (the Accounts tab after a drop, the kill switch's time; ChartBridge 0.6.3, page works with 0.6.2); 1.30.0: account types from The Desk's ledger and the Settings cleanup (page only); 1.29.1: one missed PC helper poll no longer flips the Agent tab (page only); 1.29.0: group stand-downs and league seats (needs ChartBridge 0.6.2); 1.28.0: the heroes-on-duty board and a group's default hero (needs ChartBridge 0.6.1); 1.27.0: group trading (needs ChartBridge 0.6.0); 1.26.0: prop groups and real account state (needs ChartBridge 0.5.8); 1.25.0: the plan id, None in every tab (needs ChartBridge 0.5.7); 1.24.0: the feed delay split (ChartBridge 0.5.6's clock check); 1.23.1: Layout 5 polish (Change the rules in the Rules header); 1.23.0: Layout 5 (DECISION 2026-10-14a); 1.22.0 removed the single chart page; 1.21.0 needs ChartBridge 0.5.2
-  assert.match(read('src', 'chart-engine.js'), /const VERSION = '1\.57\.0'/);
-  assert.match(read('src', 'chart-engine.js'), /^\/\*!\n \* chart-engine 1\.57\.0/);
+  assert.match(read('src', 'chart-engine.js'), /const VERSION = '1\.58\.0'/);
+  assert.match(read('src', 'chart-engine.js'), /^\/\*!\n \* chart-engine 1\.58\.0/);
   for (const f of ['live/agent.js', 'live/agent-core.js', 'live/agent-grid.js', 'live/agent.css', 'live/agent.html', 'docs/AGENT_TAB.md', 'docs/MOTION.md']) assert.doesNotMatch(read(f), /[\u2013\u2014]/, f + ': no em or en dashes');
 });
 
@@ -937,7 +939,9 @@ test('1.27.0 the Agent tab draws the picker from pickerChoices and a group\'s se
   assert.match(js, /AC\.groupTradable\(S\.accounts, S\.trading, acc\.seats\)/);
   assert.match(js, /function renderSeats\(a\) \{\s*const t = AC\.seatRows\(a, S\.accounts/);
   assert.equal(helper.flatOffStart(onGroup(), 0).action, 'off', 'a flat group turns off as before');
-  assert.match(js, /if \(Array\.isArray\(j\.seats\)\) \{[\s\S]*const failed = j\.seats\.filter\(x => o\.flatten\(x\.account, x\.root\) === false\);/, 'the page\'s Flatten on each seat holding his trade');
+  /* the R12 delta, nit: no desk has a Flatten of its own any more; a group's job names every seat holding his trade (handLine) */
+  assert.ok(!/o\.flatten\(/.test(js), 'no page Flatten');
+  assert.match(helper.handLine(helper.flatOffStart(onGroup({ mode: 'shadow', seats: [{ account: 'SIM-A', seat: true, position: { root: 'MNQ', qty: 1 } }, { account: 'SIM-B', seat: true, position: null }] }), 0).job), /^He is in Shadow: flatten SIM-A MNQ in NinjaTrader/, 'the seat holding his trade, named');
 });
 
 test('1.27.0 the Accounts tab marks each seat with its hero\'s name; the copier\'s pickers show seats with the reason', () => {
@@ -952,7 +956,7 @@ test('1.27.0 the Accounts tab marks each seat with its hero\'s name; the copier\
   assert.match(js, /const last = hero \? hero \+ '\\'s seat: the copier never trades it'/);
 });
 
-test('1.27.0 Off on a group in a trade: Shadow first, then the Flatten on every seat holding his trade, then Off once every seat is flat', () => {
+test('1.27.0 Off on a group in a trade: Shadow first, then every seat holding his trade flattened by hand (the R12 delta: no page Flatten), then Off once every seat is flat', () => {
   const AH = require('../live/agent-helper.js'), T = 1000000;
   const seat = (account, qty) => ({ account, seat: true, position: qty ? { root: 'MNQ', qty, avgPrice: 25000 } : null });
   const g = (mode, a, b, c) => onGroup({ mode, position: a ? { root: 'MNQ', qty: a, avgPrice: 25000 } : null, seats: [seat('SIM-A', a), seat('SIM-B', b), seat('SIM-C', c)] });
@@ -960,17 +964,17 @@ test('1.27.0 Off on a group in a trade: Shadow first, then the Flatten on every 
   assert.equal(AH.offStep(g('auto', 0, 0, 0)), 'off');
   assert.equal(AH.offQuestion(g('auto', 3, 0, -1), 'Demo'), 'Demo holds long 3 MNQ on SIM-A, short 1 MNQ on SIM-C. Flatten and turn him off?');
   const st = AH.flatOffStart(g('auto', 3, 2, 0), T);
-  assert.deepEqual(st, { job: { agent: 'demo', account: '', root: '', seats: [{ account: 'SIM-A', root: 'MNQ' }, { account: 'SIM-B', root: 'MNQ' }], phase: 'shadow', until: T + AH.SHADOW_WAIT_MS }, action: 'shadow' });
-  assert.equal(AH.flatOffStart(g('shadow', 3, 2, 0), T).action, 'flatten', 'in Shadow already: the Flatten at once');
+  assert.deepEqual(st, { job: { agent: 'demo', account: '', root: '', seats: [{ account: 'SIM-A', root: 'MNQ' }, { account: 'SIM-B', root: 'MNQ' }], phase: 'shadow', until: T + AH.SHADOW_WAIT_MS, hand: true }, action: 'shadow' });
+  assert.equal(AH.flatOffStart(g('shadow', 3, 2, 0), T).action, 'hand', 'in Shadow already: the wait at once');
   assert.match(AH.flatOffStart(onGroup({ mode: 'auto', seats: [{ account: 'SIM-A', position: { qty: 1 } }] }), T).error, /A seat's instrument is not known: nothing was sent/);
-  let r = AH.flatOffStep(st.job, g('auto', 3, 2, 0), T + 500, false);
+  let r = AH.flatOffStep(st.job, g('auto', 3, 2, 0), T + 500);
   assert.deepEqual([r.action, r.line], ['', 'Putting him in Shadow first (no new entries)...']);
-  r = AH.flatOffStep(st.job, g('shadow', 3, 2, 0), T + 2000, false);
-  assert.deepEqual([r.action, r.line], ['flatten', 'In Shadow: flattening SIM-A MNQ, SIM-B MNQ...']);
+  r = AH.flatOffStep(st.job, g('shadow', 3, 2, 0), T + 2000);
+  assert.deepEqual([r.action, r.line], ['', 'He is in Shadow: flatten SIM-A MNQ, SIM-B MNQ in NinjaTrader, or with Flatten on the chart page\'s ticket with each account picked; he turns off once every seat is flat.']);
   const j = r.job;
-  assert.match(AH.flatOffStep(j, g('shadow', 0, 2, 0), T + 3000, true).line, /^Flatten sent for SIM-A MNQ, SIM-B MNQ \(he is in Shadow\): turning him off once flat/, 'one seat still holds: wait');
-  assert.equal(AH.flatOffStep(j, g('shadow', 0, 2, 0), T + 3000, true).action, '');
-  assert.equal(AH.flatOffStep(j, g('shadow', 0, 0, 0), T + 4000, true).action, 'off', 'every seat flat: Off');
-  r = AH.flatOffStep(j, g('shadow', 0, 2, 0), j.until + 1, true);
-  assert.equal(r.line, 'Not flat 30 s after the Flatten for SIM-A MNQ, SIM-B MNQ: he stays on, in Shadow. Flatten in NinjaTrader, then press Off.');
+  assert.match(AH.flatOffStep(j, g('shadow', 0, 2, 0), T + 3000).line, /^He is in Shadow: flatten SIM-A MNQ, SIM-B MNQ in NinjaTrader/, 'one seat still holds: wait');
+  assert.equal(AH.flatOffStep(j, g('shadow', 0, 2, 0), T + 3000).action, '');
+  assert.equal(AH.flatOffStep(j, g('shadow', 0, 0, 0), T + 4000).action, 'off', 'every seat flat: Off');
+  r = AH.flatOffStep(j, g('shadow', 0, 2, 0), j.until + 1);
+  assert.equal(r.line, 'Not flat 15 minutes after he went to Shadow: he stays on, in Shadow. Flatten SIM-A MNQ, SIM-B MNQ, then press Off.');
 });

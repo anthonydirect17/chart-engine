@@ -317,7 +317,7 @@ test('0.6.18: entry rules per trader: ChartBridgeOrders.cs differs from 0.6.17 i
    this file does not know now FAILS, so each release re-pins on purpose (add the version below with its listed changes). */
 test('the pin tests know this ChartBridge version (a new release re-pins on purpose)', () => {
   const v = (/public const string Version = "([0-9.]+)";/.exec(read('ChartBridge.cs')) || [])[1];
-  assert.ok(['0.6.19', '0.6.20', '0.6.21', '0.6.22', '0.6.23'].includes(v), 'ChartBridge ' + v + ' is not pinned here: re-pin test/nt8-record.test.js for it');
+  assert.ok(['0.6.19', '0.6.20', '0.6.21', '0.6.22', '0.6.23', '0.6.24', '0.6.25'].includes(v), 'ChartBridge ' + v + ' is not pinned here: re-pin test/nt8-record.test.js for it');
 });
 
 test('0.6.19: the day\'s profit stop: only ChartBridgeAgents.cs changed; every other add-on file but ChartBridge.cs (its version) is the 0.6.18 file byte for byte, the groups and the order path included', () => {
@@ -395,13 +395,16 @@ test('0.6.19: the day\'s profit stop: only ChartBridgeAgents.cs changed; every o
 });
 
 test('0.6.22: the lanes, the day\'s loss stop and the voice calls: the order path gains three listen-only lines, listed word for word; every other pinned file is the 0.6.18 file', () => {
-  if (!/public const string Version = "0\.6\.2[23]";/.test(read('ChartBridge.cs'))) return;   // 0.6.23 holds the same pins (only ChartBridgeGroups.cs changes); a later release re-pins on purpose
+  if (!/public const string Version = "0\.6\.2[2-5]";/.test(read('ChartBridge.cs'))) return;   // 0.6.23 holds the same pins (only ChartBridgeGroups.cs changes); 0.6.24 is release 1, whose changes (1.6b, 1.6c) are listed here; 0.6.25 holds the same pins (it changes ChartBridge.cs, ChartBridgeAgents.cs and ChartBridgeGroups.cs only, none pinned here); a later release re-pins on purpose
   const sha = t => crypto.createHash('sha256').update(t).digest('hex');
   const same = {
     'ChartBridgeBars.cs': '7a9de59769499d804767461f67f8442c7a44a04b8b8bfae8cf6f4879b5186664',
-    'ChartBridgeBot.cs': '33ca2af1f1867f14ab188f659ad63210933801b62c951234255972111fef84b1',
-    'ChartBridgeCopier.cs': 'bb90a637610b3b56236c6cfba014c1a1db40110f2b821bbeecf7778f2f4e6e49',
-    'ChartBridgeMerge.cs': '7aa31e37d38c1875eb236e1575d20f49ed31c1e2c08fc9d265d5aa7e0a32952c',
+    // ChartBridgeBot.cs: release 1 step 1.6b (unreleased, the personal bot) changed it; its rules are BotHarness's (check:orders)
+    // release 1 step 1.6c (unreleased, Cut half) re-pins these two: the copier gains CutHalfRefusal (a follower that is on is never
+    // cut), Merge's freeze reads cutHalf's account and root as an order's; their rules are OrdersHarness's Cut half section (check:orders)
+    // (the R12 review's changes to these two are listed in r12c below and put back before the pin is checked)
+    'ChartBridgeCopier.cs': 'af309f8da530c682dd2a9e1a221dba5f52ae2fa887e9c6737ea01ebc26d7eabe',
+    'ChartBridgeMerge.cs': 'ed51c05639cc48d0fde76f6cf4011159d5ac32d0b64785802d566805fd1f1956',
     'ChartBridgeOrderRecord.cs': 'de33b77a1d774d2ce8d11a5f3a8e927f1ff085c7d8f47259ff6a542d18ccc1f1',
     'ChartBridgePin.cs': '8c6b28abf30cc716b7175fa3c1fd4e1cb9ca0c9407a19a03357830028481e3eb',
     'ChartBridgeStops.cs': 'f2d74c58a904a5ba448ca5ebceb05f25b01d55642ddfdf1323b0c7dbf95f5d3c',
@@ -409,7 +412,317 @@ test('0.6.22: the lanes, the day\'s loss stop and the voice calls: the order pat
     'ChartBridgeTicks.cs': 'def1e998f0e49dda1287d5422a6375ea8152646f62e86bc0c34d34b219cb7851',
     'ChartBridgeV3.cs': '4ea9774ee3d30e619d1b849965b68565c24eed8f276194deaf93ee23242261dc',
   };
-  for (const [f, h] of Object.entries(same)) assert.strictEqual(sha(read(f).replace(/\r/g, '')), h, f + ' is the 0.6.18 file');
+  // release 1 step 1.6c, the R12 review of Cut half (F1 to F5): each block it changed, listed word for word as [the lines now, the 1.6c
+  // lines they replaced]; put back, each file is its 1.6c pin. Their rules are OrdersHarness's R12 section (check:orders).
+  const r12c = {
+    'ChartBridgeOrders.cs': [
+      [[
+        "            lock (Sync) { PlanDeferred.Clear(); PlanWaitSince.Clear(); }",
+        "            lock (Sync) { CutFlattened.Clear(); CutLegs.Clear(); }   // release 1 (1.6c)",
+        "            MergeClear();   // 0.4.0 B4",
+      ], [
+        "            lock (Sync) { PlanDeferred.Clear(); PlanWaitSince.Clear(); }",
+        "            lock (Sync) CutFlattened.Clear();   // release 1 (1.6c)",
+        "            MergeClear();   // 0.4.0 B4",
+      ]],
+      [[
+        "        // press or a stale page never cuts twice), under 2 contracts, a Cut half of this account and contract still filling, other",
+        "        // exits working that Cut half does not shrink (an ATM or DOM bracket, a hand order, an agent's legs) which, with the close and",
+        "        // ChartBridge's shrunk legs, could close more than the position (R12 F1), a stop or target to shrink that is being sent,",
+        "        // changed or filled (R12 F2), an agent's pair (its legs are the agent's), a copier follower that is on or still holds copier",
+        "        // positions or orders (the copier keeps its size), a Merge running there (checked again under PlaceLock, R12 F4). A cancel",
+        "        // or change NinjaTrader refuses sends nothing more; a close it refuses changes the shrunk legs back (R12 F5). A leg whose",
+        "        // change NinjaTrader does not make is shrunk again at once (CutLegUpdate, R12 F2).",
+        "        private static readonly Regex CutNameRx = new Regex(\"^CB#([0-9a-f]{8}) exit cut q([0-9]{1,6})$\");",
+      ], [
+        "        // press or a stale page never cuts twice), under 2 contracts, a Cut half of this account and contract still filling, other",
+        "        // exits already working that would close more than the position with it, an agent's pair (its legs are the agent's), a",
+        "        // copier follower that is on (the copier keeps its size), a Merge running there.",
+        "        private static readonly Regex CutNameRx = new Regex(\"^CB#([0-9a-f]{8}) exit cut q([0-9]{1,6})$\");",
+      ]],
+      [[
+        "            if (owner != null) return \"Cut half: \" + where + \" belongs to agent \" + owner + \" (its stop and target are the agent's); use Flatten, or a market exit\";",
+        "            string copier = ChartBridgeCopier.CutHalfRefusal(account);   // 0.4.0 copier: release 1 (1.6c): never on a follower that is on, or off and still holding (R12 F3)",
+        "            if (copier != null) return copier;",
+      ], [
+        "            if (owner != null) return \"Cut half: \" + where + \" belongs to agent \" + owner + \" (its stop and target are the agent's); use Flatten, or a market exit\";",
+        "            string copier = ChartBridgeCopier.CutHalfRefusal(account);   // 0.4.0 copier: release 1 (1.6c): never on a follower that is on",
+        "            if (copier != null) return copier;",
+      ]],
+      [[
+        "                bool buy = posNow < 0;   // the close buys back a short, sells a long",
+        "                int cut = held / 2, keep = held - cut, pb, ps;",
+        "                PendingOrders(account, inst, out pb, out ps);",
+        "                // R12 F1: every exit on the closing side that may fill, each OCO group once at its largest (PendingOrders), less ChartBridge's",
+        "                // own legs there by the same count (LegUnits): what is left is the exits Cut half does not shrink (an ATM or DOM bracket, a",
+        "                // hand order or hand OCO, an agent's legs, a page exit). After the cut, those plus ChartBridge's legs (shrunk to keep, or",
+        "                // fewer if they were fewer) and the close may never close more than the position: else a stop could flip the account.",
+        "                List<Unit> units = LegUnits(WorkingLegs(account, inst));",
+        "                int own = units.Where(u => u.Buy == buy).Sum(u => Math.Max(0, u.Left));",
+        "                int other = Math.Max(0, (buy ? pb : ps) - own), ownAfter = Math.Min(own, keep);",
+        "                if ((long)other + ownAfter + cut > held)",
+        "                    return \"Cut half: \" + where + \" has other exits working for \" + other + \" of its \" + held + \" contracts (not ChartBridge's stop and target: an ATM or DOM bracket, a hand order, an agent's legs); with \" +",
+        "                           cut + \" closed and ChartBridge's legs at \" + ownAfter + \" they could close more than the \" + keep + \" left, so nothing was sent (cancel them, or use Flatten)\";",
+        "                // the legs to the size left, by the legs check's rule (cancel and change are only planned here)",
+        "                List<Order> cancel = new List<Order>(), change = new List<Order>();",
+        "                Dictionary<Order, int> was = new Dictionary<Order, int>();",
+        "                foreach (Unit u in units) foreach (Order o in u.Legs) was[o] = o.Quantity;",
+        "                ShrinkPlan(units, buy ? -keep : keep, cancel, change);",
+        "                // R12 F2 (a): a leg being sent, changed or filled (breakeven or trailing moving it, a drag, a pair not yet accepted) may",
+        "                // refuse the change: refused, nothing sent",
+        "                Order busy = cancel.Concat(change).FirstOrDefault(o => o.OrderState != OrderState.Accepted && o.OrderState != OrderState.Working && o.OrderState != OrderState.TriggerPending);",
+        "                if (busy != null)",
+        "                {",
+        "                    foreach (Order o in change) o.QuantityChanged = was[o];",
+        "                    return \"Cut half: a stop or target on \" + where + \" is being sent, changed or filled (\" + busy.OrderState + \"); nothing was sent, try again\";",
+        "                }",
+        "                string tag = Guid.NewGuid().ToString(\"N\").Substring(0, 8);",
+      ], [
+        "                bool buy = posNow < 0;   // the close buys back a short, sells a long",
+        "                int cut = held / 2, keep = held - cut, pb, ps, loneBuy, loneSell;",
+        "                PendingOrders(account, inst, out pb, out ps, out loneBuy, out loneSell);",
+        "                int lone = buy ? loneBuy : loneSell;   // exits already working there that are no bracket leg (a hand limit, a market exit)",
+        "                if ((long)lone + cut > held)",
+        "                    return \"Cut half: \" + where + \" has exits working for \" + lone + \" of its \" + held + \" contracts; closing \" + cut + \" more could pass the position, so nothing was sent (cancel them, or use Flatten)\";",
+        "                // the legs to the size left, by the legs check's rule (cancel and change are only planned here)",
+        "                List<Order> cancel = new List<Order>(), change = new List<Order>();",
+        "                ShrinkPlan(LegUnits(WorkingLegs(account, inst)), buy ? -keep : keep, cancel, change);",
+        "                string tag = Guid.NewGuid().ToString(\"N\").Substring(0, 8);",
+      ]],
+      [[
+        "                    \"CB#\" + tag + \" exit cut q\" + cut.ToString(CultureInfo.InvariantCulture), NinjaTrader.Core.Globals.MaxDate, null);",
+        "                lock (Sync)",
+      ], [
+        "                    \"CB#\" + tag + \" exit cut q\" + cut.ToString(CultureInfo.InvariantCulture), NinjaTrader.Core.Globals.MaxDate, null);",
+        "                ChartBridgeGroups.NoteNewOrder(account, inst, close, buy);   // 0.5.8 Q-EXIT (b): an exit of the position, as any page order",
+        "                lock (Sync)",
+      ]],
+      [[
+        "                }",
+        "                // R12 F4: the Merge check again, under PlaceLock with the close in Ours (a Merge that started since MergeFreezeWhy is",
+        "                // seen here; one that plans from now on sees the close, or this count, and is refused)",
+        "                string merging = MergeCutCheck(account, inst);",
+        "                if (merging != null)",
+        "                {",
+        "                    foreach (Order o in change) o.QuantityChanged = was[o];",
+        "                    lock (Sync) { Ours.Remove(close); DropId(close); }",
+        "                    return merging;",
+        "                }",
+        "                ChartBridgeGroups.NoteNewOrder(account, inst, close, buy);   // 0.5.8 Q-EXIT (b): an exit of the position, as any page order",
+        "                // R12 F2 (b): each changed leg's planned size, watched while the close works (CutLegUpdate)",
+        "                lock (Sync) foreach (Order o in change) CutLegs[o] = new CutLeg { Close = close, Planned = o.QuantityChanged, Keep = keep, Buy = buy };",
+        "                // R12 F5: a refused cancel or change sends nothing more (the close is not sent)",
+        "                try",
+        "                {",
+        "                    if (cancel.Count > 0) { NoteWeCancelSafe(() => cancel, \"Cut half\"); account.Cancel(cancel.ToArray()); }",
+        "                    if (change.Count > 0) account.Change(change.ToArray());",
+        "                }",
+        "                catch (Exception ex)",
+        "                {",
+        "                    lock (Sync) { Ours.Remove(close); DropId(close); foreach (Order o in change) CutLegs.Remove(o); }",
+        "                    Alarm(where + \": Cut half could not shrink the stop and target (\" + ex.Message + \"), so its close of \" + cut + \" was NOT sent; the legs may be partly cancelled or changed: check the stop in NinjaTrader\");",
+        "                    return \"Cut half: NinjaTrader refused the stop and target change (\" + ex.Message + \"); the close was not sent\";",
+        "                }",
+        "                try { account.Submit(new[] { close }); }",
+      ], [
+        "                }",
+        "                if (cancel.Count > 0) { NoteWeCancelSafe(() => cancel, \"Cut half\"); account.Cancel(cancel.ToArray()); }",
+        "                if (change.Count > 0) account.Change(change.ToArray());",
+        "                try { account.Submit(new[] { close }); }",
+      ]],
+      [[
+        "                {",
+        "                    // nothing was sent: the shrunk legs go back to the position held",
+        "                    lock (Sync) { Ours.Remove(close); foreach (Order o in change) CutLegs.Remove(o); }",
+        "                    string back = \"\";",
+        "                    if (change.Count > 0)",
+        "                    {",
+        "                        foreach (Order o in change) o.QuantityChanged = was[o];",
+        "                        try { account.Change(change.ToArray()); back = \"; ChartBridge changed its \" + change.Count + \" shrunk leg(s) back\"; }",
+        "                        catch (Exception ex2) { back = \"; changing its \" + change.Count + \" shrunk leg(s) back failed too (\" + ex2.Message + \")\"; }",
+        "                    }",
+        "                    Alarm(where + \": Cut half could not send its close of \" + cut + \" (\" + ex.Message + \")\" + back + (cancel.Count > 0 ? \"; \" + cancel.Count + \" leg(s) it cancelled are gone\" : \"\") +",
+        "                          \"; the position holds \" + held + \": check its stop in NinjaTrader\");",
+        "                    return \"Cut half: NinjaTrader refused the close (\" + ex.Message + \")\";",
+      ], [
+        "                {",
+        "                    lock (Sync) Ours.Remove(close);",
+        "                    Alarm(where + \": Cut half could not send its close of \" + cut + \" (\" + ex.Message + \"); the stop and target were already shrunk to \" + keep + \" while the position holds \" + held + \": check NinjaTrader and add a stop\");",
+        "                    return \"Cut half: NinjaTrader refused the close (\" + ex.Message + \")\";",
+      ]],
+      [[
+        "                return null;",
+        "            }",
+        "        }",
+        "",
+        "        // R12 F2 (b): a leg Cut half shrank, while its close may fill or has filled. NinjaTrader may refuse the change (breakeven or",
+        "        // trailing changing the stop at that moment, a drag, a pair not yet accepted) and leave the leg at its old size, over the",
+        "        // position once the close fills. Seen at its next event (an error, or settled above the planned size): an alarm, and the legs",
+        "        // shrunk again at once by the same rule (no SettleMs wait), once per cut; a second miss is said and left to the legs check.",
+        "        private class CutLeg { public Order Close; public int Planned, Keep; public bool Buy, Retried, Said; }",
+        "        private static readonly Dictionary<Order, CutLeg> CutLegs = new Dictionary<Order, CutLeg>();",
+        "        private static void CutLegUpdate(Account account, Order o, ErrorCode error, string where)",
+        "        {",
+        "            CutLeg w;",
+        "            lock (Sync) if (!CutLegs.TryGetValue(o, out w)) return;",
+        "            bool closeLive = w.Close.Filled > 0 || MayFill(w.Close.OrderState);",
+        "            bool settled = o.OrderState == OrderState.Accepted || o.OrderState == OrderState.Working || o.OrderState == OrderState.TriggerPending;",
+        "            bool missed = error != ErrorCode.NoError || (settled && o.Quantity > w.Planned);",
+        "            if (IsDone(o.OrderState) || !closeLive || (!missed && settled)) { lock (Sync) CutLegs.Remove(o); return; }   // done, the close failed (CutUpdate), or confirmed",
+        "            if (!missed) return;   // still changing",
+        "            bool retry;",
+        "            lock (Sync)",
+        "            {",
+        "                if (w.Said) return;",
+        "                w.Said = true;",
+        "                retry = !w.Retried;",
+        "                CutLegs.Remove(o);",
+        "            }",
+        "            string role = RoleFor(o);",
+        "            if (!retry)",
+        "            {",
+        "                Alarm(where + \": Cut half: NinjaTrader again did not shrink the \" + (role ?? \"leg\") + \" to \" + w.Planned + \" (it is \" + o.Quantity + (error != ErrorCode.NoError ? \", \" + error : \"\") +",
+        "                      \"); the legs may cover more than the position: check the stop and target in NinjaTrader (the legs check tries again)\");",
+        "                return;",
+        "            }",
+        "            Alarm(where + \": Cut half: NinjaTrader did not shrink the \" + (role ?? \"leg\") + \" to \" + w.Planned + \" (it is \" + o.Quantity + (error != ErrorCode.NoError ? \", \" + error : \"\") +",
+        "                  \"); ChartBridge shrinks the legs to the position again now\");",
+        "            Instrument inst = o.Instrument;",
+        "            int posNow = SignedPosition(account, inst), posEff = EffectivePosition(account, inst);",
+        "            if (posNow == 0 || posEff == 0 || (posNow < 0) != w.Buy || (posEff < 0) != w.Buy)",
+        "            {",
+        "                Alarm(where + \": Cut half: the position is \" + posNow + \" (\" + posEff + \" with the fills not yet in it), so ChartBridge leaves the legs to the legs check; check the stop and target in NinjaTrader\");",
+        "                return;   // flat, flipped or changing: never cancel legs on a reading that may be stale",
+        "            }",
+        "            int target = (w.Buy ? -1 : 1) * Math.Min(w.Keep, Math.Min(Math.Abs(posNow), Math.Abs(posEff)));   // the size left, or less if the position is smaller",
+        "            List<Order> cancel = new List<Order>(), change = new List<Order>();",
+        "            ShrinkPlan(LegUnits(WorkingLegs(account, inst)), target, cancel, change);",
+        "            lock (Sync) foreach (Order c in change) CutLegs[c] = new CutLeg { Close = w.Close, Planned = c.QuantityChanged, Keep = w.Keep, Buy = w.Buy, Retried = true };",
+        "            try",
+        "            {",
+        "                if (cancel.Count > 0) { NoteWeCancelSafe(() => cancel, \"Cut half\"); account.Cancel(cancel.ToArray()); }",
+        "                if (change.Count > 0) account.Change(change.ToArray());",
+        "            }",
+        "            catch (Exception ex)",
+        "            {",
+        "                lock (Sync) foreach (Order c in change) CutLegs.Remove(c);",
+        "                Alarm(where + \": Cut half could not shrink the legs again (\" + ex.Message + \"); check the stop and target in NinjaTrader\");",
+        "            }",
+      ], [
+        "                return null;",
+        "            }",
+      ]],
+      [[
+        "            try { CutUpdate(account, o, where); } catch (Exception ex) { ChartBridgeServer.Log(\"Cut half check error: \" + ex.Message); }   // release 1 (1.6c)",
+        "            try { CutLegUpdate(account, o, e.Error, where); } catch (Exception ex) { Alarm(where + \": Cut half leg check error (\" + ex.Message + \"); check the stop and target in NinjaTrader\"); }   // R12 F2 (b)",
+        "            if ((o.OrderState == OrderState.Rejected || o.OrderState == OrderState.Cancelled) && IsExit(o) && o.Filled < o.Quantity)",
+      ], [
+        "            try { CutUpdate(account, o, where); } catch (Exception ex) { ChartBridgeServer.Log(\"Cut half check error: \" + ex.Message); }   // release 1 (1.6c)",
+        "            if ((o.OrderState == OrderState.Rejected || o.OrderState == OrderState.Cancelled) && IsExit(o) && o.Filled < o.Quantity)",
+      ]],
+    ],
+    'ChartBridgeCopier.cs': [
+      [[
+        "",
+        "        // Release 1 (1.6c): Cut half on a copier follower is refused by MergeRefusal's rule (the R12 review F3): one that is on (the copier",
+        "        // sizes the follower from the leader, and its stops are the copier's), or one that is off while the copier still follows",
+        "        // something of its own there. On the leader it goes as any exit there (every leader exit is copied).",
+        "        public static string CutHalfRefusal(Account account)",
+      ], [
+        "",
+        "        // Release 1 (1.6c): Cut half on a copier follower that is on is refused (the copier sizes the follower from the leader, and its",
+        "        // stops are the copier's); on the leader it goes as any exit there (every leader exit is copied).",
+        "        public static string CutHalfRefusal(Account account)",
+      ]],
+      [[
+        "            if (!Enabled || account == null) return null;",
+        "            bool on, held;",
+        "            lock (Lk)",
+        "            {",
+        "                Follower f = FollowerNamed(account.Name);",
+        "                if (f == null) return null;",
+        "                on = f.On;",
+        "                held = !on && CopierOnAccountLocked(account.Name);",
+        "            }",
+        "            if (on) return \"Cut half: \" + account.Name + \" is a copier follower (the copier keeps its size from the leader); cut the leader, or use Flatten\";",
+        "            if (held) return \"Cut half: \" + account.Name + \" is a copier follower (off) that still holds a copier position or orders (the copier manages those orders); use Flatten, or wait until the copier's part there is flat and done\";",
+        "            return null;",
+        "        }",
+      ], [
+        "            if (!Enabled || account == null) return null;",
+        "            bool isFollower;",
+        "            lock (Lk) { Follower f = FollowerNamed(account.Name); isFollower = f != null && f.On; }",
+        "            return isFollower ? \"Cut half: \" + account.Name + \" is a copier follower (the copier keeps its size from the leader); cut the leader, or use Flatten\" : null;",
+        "        }",
+      ]],
+    ],
+    'ChartBridgeMerge.cs': [
+      [[
+        "        private static readonly Dictionary<string, MergeSwapState> MergeSwaps = new Dictionary<string, MergeSwapState>();   // account|contract",
+        "        // Release 1 (1.6c, the R12 review F4): one count per account|contract, raised under MergeLock by each Cut half that passed its",
+        "        // Merge check (its close already in Ours). MergeStart reads it before its plan and refuses the freeze when it moved meanwhile,",
+        "        // so a Cut half and a Merge on one account and contract never both go: the one that checks second is refused.",
+        "        private static readonly Dictionary<string, long> MergeCutGen = new Dictionary<string, long>();",
+        "        private static readonly Dictionary<string, double> MergeChangedAt = new Dictionary<string, double>();   // account|contract -> last fill or position event",
+      ], [
+        "        private static readonly Dictionary<string, MergeSwapState> MergeSwaps = new Dictionary<string, MergeSwapState>();   // account|contract",
+        "        private static readonly Dictionary<string, double> MergeChangedAt = new Dictionary<string, double>();   // account|contract -> last fill or position event",
+      ]],
+      [[
+        "                running.AddRange(MergeLateRunning);   // fix4 (G1): a late placement sends nothing more either",
+        "                MergeSwaps.Clear(); MergeCutGen.Clear(); MergeChangedAt.Clear(); MergeSeenFilled.Clear(); MergeHeldAlarms.Clear(); MergeFirstSeen.Clear(); MergeLates.Clear(); MergeFlattenAt.Clear();",
+        "                mergeMarkerRead = false;",
+      ], [
+        "                running.AddRange(MergeLateRunning);   // fix4 (G1): a late placement sends nothing more either",
+        "                MergeSwaps.Clear(); MergeChangedAt.Clear(); MergeSeenFilled.Clear(); MergeHeldAlarms.Clear(); MergeFirstSeen.Clear(); MergeLates.Clear(); MergeFlattenAt.Clear();",
+        "                mergeMarkerRead = false;",
+      ]],
+      [[
+        "            lock (MergeLock) return MergeSwaps.Values.Any(s => s.Account == a);",
+        "        }",
+        "",
+        "        private static long MergeCutGenLocked(string key) { long g; MergeCutGen.TryGetValue(key, out g); return g; }",
+        "",
+        "        // Release 1 (1.6c, the R12 review F4): Cut half's Merge check, inside its PlaceLock block with its close already in Ours. Null",
+        "        // and the count raised when no swap runs there; else why it is refused (nothing was sent).",
+        "        private static string MergeCutCheck(Account a, Instrument i)",
+        "        {",
+        "            string key = PosKey(a, i);",
+        "            lock (MergeLock)",
+        "            {",
+        "                if (MergeSwaps.ContainsKey(key)) return \"a Merge started on \" + Where(a, i) + \"; cutHalf is refused until it ends (Flatten is always accepted)\";",
+        "                MergeCutGen[key] = MergeCutGenLocked(key) + 1;",
+        "            }",
+        "            return null;",
+        "        }",
+      ], [
+        "            lock (MergeLock) return MergeSwaps.Values.Any(s => s.Account == a);",
+        "        }",
+      ]],
+      [[
+        "            MergeSwapState s = new MergeSwapState { Account = account, Instrument = inst, Root = root, Key = PosKey(account, inst), Cid = cid, Client = client, Where = Where(account, inst) };",
+        "            long cutGen;",
+        "            lock (MergeLock) MergeCutGen.TryGetValue(s.Key, out cutGen);   // release 1 (1.6c, R12 F4): a Cut half sent from here on refuses the freeze",
+        "            // Integration (lane B1): breakeven and trailing paused on this account and contract before the stop prices are read,",
+      ], [
+        "            MergeSwapState s = new MergeSwapState { Account = account, Instrument = inst, Root = root, Key = PosKey(account, inst), Cid = cid, Client = client, Where = Where(account, inst) };",
+        "            // Integration (lane B1): breakeven and trailing paused on this account and contract before the stop prices are read,",
+      ]],
+      [[
+        "                    else if (MergeLateRunning.Any(x => x.Key == s.Key)) why = MergeLateBusy;   // minors (4): checked with the freeze, under one lock",
+        "                    else if (MergeCutGenLocked(s.Key) != cutGen) why = \"a Cut half was just sent on \" + s.Where + \"; try Merge again in a moment\";   // release 1 (1.6c, R12 F4)",
+        "                    else MergeSwaps[s.Key] = s;                                         // the freeze (step 1)",
+      ], [
+        "                    else if (MergeLateRunning.Any(x => x.Key == s.Key)) why = MergeLateBusy;   // minors (4): checked with the freeze, under one lock",
+        "                    else MergeSwaps[s.Key] = s;                                         // the freeze (step 1)",
+      ]],
+    ],
+  };
+  const back = (f, text) => {
+    for (const [now, was] of r12c[f]) { const n = now.join('\n') + '\n'; assert.strictEqual(text.split(n).length, 2, f + ': the R12 block is there once: ' + now.find(l => l.trim()).trim().slice(0, 80)); text = text.replace(n, was.join('\n') + '\n'); }
+    return text;
+  };
+  for (const [f, h] of Object.entries(same)) assert.strictEqual(sha(r12c[f] ? back(f, read(f).replace(/\r/g, '')) : read(f).replace(/\r/g, '')), h, f + ' is the pinned file (0.6.18, or release 1 where it says so)');
   const without = (f, lines) => {
     let text = read(f).replace(/\r/g, '');
     for (const l of lines) { assert.strictEqual(text.split(l + '\n').length, 2, f + ': the added line is there once: ' + l.trim().slice(0, 80)); text = text.replace(l + '\n', ''); }
@@ -418,7 +731,156 @@ test('0.6.22: the lanes, the day\'s loss stop and the voice calls: the order pat
   const orders = ['            if (kind == "stop") ChartBridgeVoice.OnStopMoved(o, price);   // 0.6.22: listen only (to its fill price: Break even set)',
     '            ChartBridgeVoice.NoteFlatten(account, inst);   // 0.6.22: listen only (its close says Position closed)'];
   const strategies = ['                    ChartBridgeVoice.OnStopMoved(stop, d.Value);   // 0.6.22: listen only (breakeven, never a trailing move: only at its fill price)'];
-  assert.strictEqual(sha(without('ChartBridgeOrders.cs', orders)), '8e15e56a06b1f2597b5ff1ecebccba724b27a019819fa691b9f0a30c16bfaffd', 'ChartBridgeOrders.cs: the 0.6.18 file but for the two voice lines');
+  // release 1 step 1.6b (unreleased, Anthony 2026-11-18 "Bot tab + hard ceiling"): one line of gate 3 changes, the bot's cap only, listed word for word
+  const r1b = ['            if (bot) cap = ChartBridgeBot.EntryCap(root, out capWhy);   // release 1 (1.6b, Anthony 2026-11-18 "Bot tab + hard ceiling"): the bot\'s size and the hard ceiling only, on the order and the position (gate 3\'s own count); config.txt\'s maxQty no longer caps the bot (the ticket\'s and the agents\' caps are unchanged)',
+               '            if (bot) cap = Math.Min(cap, ChartBridgeBot.MaxQty);   // 0.4.0 bot: the 1 contract rail, on the order and the position (gate 3\'s own count)'];
+  // release 1 step 1.6b, review R12 round 2: one read-only helper for the bot's day stop (both position readings), listed word for word
+  const r12 = ['        // Release 1 (1.6b, review R12 round 2): read only, for the bot\'s day stop before it sends its flatten again. NinjaTrader\'s position',
+    '        // on inst by both readings (listed, and with the fills not yet in it): 0 means already flat, so only executions are late.',
+    '        internal static bool FlatByBothReadings(Account a, Instrument inst) { return a != null && inst != null && SignedPosition(a, inst) == 0 && EffectivePosition(a, inst) == 0; }'];
+  // release 1 decision 3 (R12, 2026-11-18, bot only and the owner guard; unreleased): ChartBridgeOrders.cs gains the owner guard's line
+  // in gate 3 and the bot's close (BotOwnerExposure, BotCover, BotCloseCancel, BotOursById, BotCloseSend), and FlattenForBot's two lines are
+  // replaced; each listed word for word as [the lines now, the lines before], put back before the pin is checked. Their rules are
+  // BotHarness's OwnerGuardCase, OwnerShare and OwnerUntold (check:orders).
+  const d3guard = "            if (bot) { string guard = ChartBridgeBot.OwnerGuard(account, root); if (guard != null) return guard; }   // release 1 (decision 3b): the owner guard, here under the order lock as well, so a page order cannot slip in between";
+  const d3 = [
+    [[
+      "        // 0.4.0 bot: the bot's flatten was v2 Flatten on the bot's account and root (FlattenForBot). Release 1 (decision 3a, 2026-11-18):",
+      "        // gone; the bot closes only its own contracts (BotCloseCancel, then BotCloseSend, below).",
+    ], [
+      "        // 0.4.0 bot: the bot's flatten (auto mode only, ChartBridgeBot.cs): v2 Flatten on the bot's account and root.",
+      "        public static string FlattenForBot(string root) { return Flatten(\"{\\\"account\\\":\" + CbJson.Str(ChartBridgeBot.BotAccount) + \",\\\"root\\\":\\\"\" + root + \"\\\"}\"); }",
+    ]],
+    [[
+      "",
+      "        // Release 1 (decision 3, 2026-11-18, \"bot only\" and the owner guard): the personal bot shares the personal account with",
+      "        // Anthony, so it closes only its own contracts and enters only where nothing of his is held or working. Read only, never",
+      "        // under ChartBridgeBot's lock.",
+      "        //",
+      "        // What on the bot's account and root is not the bot's, in words, or null: the position on the bot's contract minus the",
+      "        // bot's followed size (botQty, signed), by either reading (listed, or with the fills not yet in it); a position (or a fill",
+      "        // not yet in one) on another contract month of the root; and any order there that may still fill (NinjaTrader's list and",
+      "        // ChartBridge's own just sent) that isBot does not claim.",
+      "        // strict (R12 of decision 3, Anthony's rulings A and B): a position on the bot's contract counts only when both readings agree",
+      "        // (the smaller of the two); otherwise either reading counts (the entries' guard: the careful side).",
+      "        internal static string BotOwnerExposure(Account a, string root, int botQty, Func<Order, bool> isBot) { return BotOwnerExposure(a, root, botQty, isBot, false); }",
+      "        internal static string BotOwnerExposure(Account a, string root, int botQty, Func<Order, bool> isBot, bool strict)",
+      "        {",
+      "            if (a == null || string.IsNullOrEmpty(root)) return null;",
+      "            Instrument inst = ChartBridgeServer.InstrumentFor(root);",
+      "            Func<Instrument, bool> onRoot = i => i != null && ((i.MasterInstrument != null && string.Equals(i.MasterInstrument.Name, root, StringComparison.OrdinalIgnoreCase)) || ChartBridgeServer.RootFor(i) == root);",
+      "            string where = a.Name + \" \" + root;",
+      "            if (inst != null)",
+      "            {",
+      "                int listed = SignedPosition(a, inst) - botQty, eff = EffectivePosition(a, inst) - botQty, own = listed != 0 ? listed : eff;",
+      "                if (strict) own = Math.Sign(listed) == Math.Sign(eff) ? Math.Sign(listed) * Math.Min(Math.Abs(listed), Math.Abs(eff)) : 0;",
+      "                if (own != 0) return where + \" holds \" + Math.Abs(own) + \" contract\" + (Math.Abs(own) == 1 ? \"\" : \"s\") + (own > 0 ? \" long\" : \" short\") + \" that \" + (Math.Abs(own) == 1 ? \"is\" : \"are\") + \" not the bot's\";",
+      "            }",
+      "            List<Position> positions;",
+      "            lock (a.Positions) positions = a.Positions.ToList();",
+      "            foreach (Position p in positions)",
+      "                if (onRoot(p.Instrument) && !SameInstrument(p.Instrument, inst) && p.MarketPosition != MarketPosition.Flat && p.Quantity != 0)",
+      "                    return where + \" holds a position in \" + p.Instrument.FullName + \" that is not the bot's\";",
+      "            List<Order> orders;",
+      "            lock (a.Orders) orders = a.Orders.ToList();",
+      "            lock (Sync) foreach (Order o in Ours) if (o.Account == a && !orders.Contains(o)) orders.Add(o);",
+      "            foreach (Order o in orders)",
+      "                if (onRoot(o.Instrument) && MayFill(o.OrderState) && !isBot(o))",
+      "                    return where + \" has a working order that is not the bot's (\" + (IsBuy(o) ? \"buy \" : \"sell \") + KindText(o.OrderType) + \" \" + Math.Max(0, o.Quantity - o.Filled) + \")\";",
+      "            double now = ChartBridgeTime.NowUtcMs();",
+      "            string prefix = a.Name + \"|\" + root + \" \", mine = inst != null ? PosKey(a, inst) : null;",
+      "            lock (Moves)",
+      "                foreach (KeyValuePair<string, List<double[]>> kv in Moves)",
+      "                    if (kv.Key != mine && kv.Key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) && kv.Value.Where(m => now - m[1] <= MoveTtlMs).Sum(m => m[0]) != 0)",
+      "                        return where + \" has a fill in \" + kv.Key.Substring(a.Name.Length + 1) + \" that is not the bot's\";",
+      "            return null;",
+      "        }",
+      "",
+      "        // How many of the bot's contracts on its side (dir: 1 long, -1 short) NinjaTrader's position holds by BOTH readings: the",
+      "        // smaller of the two when both are on that side, else 0. The bot's close never sends more.",
+      "        internal static int BotCover(Account a, Instrument inst, int dir)",
+      "        {",
+      "            if (a == null || inst == null || dir == 0) return 0;",
+      "            int listed = SignedPosition(a, inst), eff = EffectivePosition(a, inst);",
+      "            return Math.Sign(listed) == dir && Math.Sign(eff) == dir ? Math.Min(Math.Abs(listed), Math.Abs(eff)) : 0;",
+      "        }",
+      "",
+      "        // The bot's own stop, target and entries cancelled for its close (decision 3a): only orders named the bot's (its trade's tag,",
+      "        // or a bot entry), whatever the caller passed. Just before: its bracket is marked (a later fill of its entry still gets legs,",
+      "        // with the alarm, as after Flatten) and its pairs are noted as cancelled by ChartBridge (not a stop lost with its target).",
+      "        // Only the bot's bracket (tag): Anthony's brackets and orders on the same contract are never marked or cancelled. Returns how",
+      "        // many cancels were sent.",
+      "        private static readonly Regex BotEntryNameRx = new Regex(\"^CB#[0-9a-f]{8} bot s[0-9]{1,9} t[0-9]{1,9}$\");",
+      "        internal static int BotCloseCancel(Account a, Instrument inst, string tag, List<Order> orders)",
+      "        {",
+      "            if (a == null || string.IsNullOrEmpty(tag) || orders == null) return 0;",
+      "            List<Order> mine = orders.Where(o => o != null && o.Account == a && ((o.Name ?? \"\").StartsWith(\"CB#\" + tag + \" \", StringComparison.Ordinal) || BotEntryNameRx.IsMatch(o.Name ?? \"\"))).ToList();",
+      "            if (mine.Count == 0) return 0;",
+      "            lock (Sync)",
+      "                foreach (Bracket br in BracketOfEntry.Values)",
+      "                    if (br.Account == a && SameInstrument(br.Instrument, inst) && br.Tag == tag) br.AfterFlatten = true;",
+      "            NoteWeCancelSafe(() => mine.Where(IsChartBridgeLeg).ToList(), \"the bot's close\");",
+      "            a.Cancel(mine.ToArray());",
+      "            ChartBridgeServer.Log(\"the bot's close: cancel sent for \" + mine.Count + \" of its own order(s) on \" + a.Name + \" \" + (inst != null ? inst.FullName : \"\") + \" (CB#\" + tag + \")\");",
+      "            return mine.Count;",
+      "        }",
+      "",
+      "        // R12 of decision 3, finding 5: a bot order (an entry, or the bot's close) ChartBridge has just sent on this account that NinjaTrader",
+      "        // does not list yet, by its order id; else null.",
+      "        private static readonly Regex BotCloseNameRx = new Regex(\"^CB#[0-9a-f]{8} bot close$\");",
+      "        internal static Order BotOursById(Account a, string orderId)",
+      "        {",
+      "            if (a == null || string.IsNullOrEmpty(orderId)) return null;",
+      "            lock (Sync) foreach (Order o in Ours) if (o.Account == a && o.OrderId == orderId && (BotEntryNameRx.IsMatch(o.Name ?? \"\") || BotCloseNameRx.IsMatch(o.Name ?? \"\"))) return o;",
+      "            return null;",
+      "        }",
+      "",
+      "        // The bot's close: one market order of qty on the bot's account and contract, the other side of the bot's position (dir),",
+      "        // named \"CB#<tag> bot close\" (the bot's tag, so the bot follows its fill; never an entry and never a bracket leg). An exit:",
+      "        // the account as Flatten checks it (no checkmark needed). Under the order lock, NinjaTrader's position is read again",
+      "        // first: never more than it holds on that side by both readings, never against its side. Null when sent, else why not.",
+      "        // R12 of decision 3, finding 4 (Anthony's ruling 2 of 2026-11-18, close and warn): under the same lock, the other exits that may",
+      "        // still fill on the closing side (the bot's own stop and target are done by now) are counted; when with this close they are more",
+      "        // than the position, the close still goes and `over` names them, so the bot raises an error. His orders are never changed.",
+      "        internal static string BotCloseSend(Account a, Instrument inst, string tag, int dir, int qty, out Order sent, out string over)",
+      "        {",
+      "            sent = null; over = null;",
+      "            string why;",
+      "            Account account = ChartBridgeAccounts.On ? ChartBridgeAccounts.FindForExit(a.Name, out why) : FindAccount(a.Name, out why);",
+      "            if (account == null) return why;",
+      "            if (qty < 1 || (dir != 1 && dir != -1)) return \"nothing to close\";",
+      "            Order x;",
+      "            lock (PlaceLock)",
+      "            {",
+      "                int cover = BotCover(account, inst, dir);",
+      "                if (qty > cover) return \"NinjaTrader's \" + (ChartBridgeServer.RootFor(inst) ?? inst.FullName) + \" position on \" + account.Name + \" holds \" + cover + \" on the bot's side by both readings, less than the \" + qty + \" to close (its executions are late, or it changed meanwhile)\";",
+      "                int pb, ps;",
+      "                PendingOrders(account, inst, out pb, out ps);",
+      "                int other = dir > 0 ? ps : pb;",
+      "                if (other + qty > cover)",
+      "                    over = \"Anthony's own exits there (\" + other + \" to \" + (dir > 0 ? \"sell\" : \"buy\") + \", working) are more than his own \" + (cover - qty) + \" left once the bot's \" + qty + \" is closed: if they fill they open a position the other way; ChartBridge does not change them: check them in NinjaTrader\";",
+      "                x = account.CreateOrder(inst, dir > 0 ? OrderAction.Sell : OrderAction.Buy, OrderType.Market, OrderEntry.Manual, TimeInForce.Day, qty, 0, 0, \"\",",
+      "                    \"CB#\" + tag + \" bot close\", NinjaTrader.Core.Globals.MaxDate, null);",
+      "                lock (Sync) { IdFor(x); Ours.Add(x); }   // counted in gate 3 at once",
+      "                try { account.Submit(new[] { x }); }",
+      "                catch (Exception ex) { lock (Sync) Ours.Remove(x); return \"the close could not be sent (\" + ex.Message + \")\"; }",
+      "            }",
+      "            sent = x;",
+      "            ChartBridgeServer.Log(\"the bot's close sent: \" + (dir > 0 ? \"sell \" : \"buy \") + qty + \" \" + inst.FullName + \" at market on \" + account.Name + \" (CB#\" + tag + \")\");",
+      "            return null;",
+      "        }",
+    ], []],
+  ];
+  const backD3 = text => {
+    for (const [now, was] of d3) { const n = now.join('\n') + '\n'; assert.strictEqual(text.split(n).length, 2, 'ChartBridgeOrders.cs: the decision 3 block is there once: ' + now.find(l => l.trim()).trim().slice(0, 80)); text = text.replace(n, was.length ? was.join('\n') + '\n' : ''); }
+    return text;
+  };
+  const ordersNow = back('ChartBridgeOrders.cs', backD3(without('ChartBridgeOrders.cs', orders.concat(r12, [d3guard]))));
+  assert.strictEqual(ordersNow.split(r1b[0] + '\n').length, 2, 'ChartBridgeOrders.cs: the 1.6b gate 3 line is there once');
+  // release 1 step 1.6c (unreleased, Anthony 2026-11-17, Cut half) re-pins ChartBridgeOrders.cs: the cutHalf command (CutHalf, CutUpdate),
+  // the legs check's shrink taken out unchanged as ShrinkPlan for both; its rules are OrdersHarness's Cut half section (check:orders).
+  // Before 1.6c this was 8e15e56a06b1f2597b5ff1ecebccba724b27a019819fa691b9f0a30c16bfaffd.
+  assert.strictEqual(sha(ordersNow.replace(r1b[0] + '\n', r1b[1] + '\n')), '2a0dfd4f49d06d0723d0083079eb26f9055267ab66f6e4b1344624131a722a15', 'ChartBridgeOrders.cs: the 1.6c file but for the two voice lines and the 1.6b gate 3 line');
   assert.strictEqual(sha(without('ChartBridgeStrategies.cs', strategies)), '968179e96aa887424b9df26148f8ae65bc3c60238f6f9de90f238e7781ab9193', 'ChartBridgeStrategies.cs: the 0.6.18 file but for the one voice line');
   // each voice entry the order path calls is off unless config says voice = on, and catches everything it does
   const main = read('ChartBridge.cs');

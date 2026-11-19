@@ -27,7 +27,7 @@ export function sampleFirmTypes() {
     t('sample-fundednext-d50', 'FundedNext', 'Direct 50K Account', 50000, { account_type: 'funded', drawdown_type: 'static' })];
 }
 
-export const KEY_IDS = ['buy', 'sell', 'be', 'close', 'flattenAll', 'merge', 'maximize', 'accept', 'reject'];
+export const KEY_IDS = ['buy', 'sell', 'be', 'close', 'flattenAll', 'cutHalf', 'merge', 'maximize', 'accept', 'reject'];   // release 1 (1.6c): The Desk with cutHalf (thedesk claude/desk-hotkeys-cut-half)
 const exact = (o, keys) => !!o && typeof o === 'object' && !Array.isArray(o) && Object.keys(o).length === keys.length && keys.every(k => Object.prototype.hasOwnProperty.call(o, k));
 const COMBO = /^(Ctrl\+)?(Alt\+)?(Shift\+)?([A-Z0-9]|F([1-9]|1[0-9]|2[0-4])|Num[0-9]|Num[-+*/.]|[-=[\];',./\\`])$/;
 

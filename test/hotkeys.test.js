@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const OT = require('../live/order-ticket.js');
 
 const ev = (code, mods, key) => Object.assign({ code, key: key !== undefined ? key : code.replace(/^Key|^Digit/, '').toLowerCase(), ctrlKey: false, altKey: false, shiftKey: false, metaKey: false }, mods || {});
-const none = { buy: '', sell: '', be: '', close: '', flattenAll: '' };
+const none = { buy: '', sell: '', be: '', close: '', flattenAll: '', cutHalf: '' };   // release 1 (1.6c): Cut half
 
 test('hotkeyCombo: the physical key with the modifiers in a fixed order', () => {
   assert.equal(OT.hotkeyCombo(ev('KeyB', { altKey: true })), 'Alt+B');
@@ -64,7 +64,7 @@ test('hotkeyRefused, 1.12.0 (the 1.11.0 review): more the browser keeps, each wi
   for (const c of ['Alt+C', 'Ctrl+Alt+C', 'Shift+O', 'Alt+U', 'Alt+G', 'Alt+K', 'Ctrl+Alt+E', 'Ctrl+Alt+B', 'Alt+I', 'Shift+I'])
     assert.equal(OT.hotkeyRefused(c), '', c + ' should still be allowed');
   // a saved key that is refused now is cleaned away on read (the next load), the others kept
-  assert.deepEqual(OT.cleanHotkeys({ buy: 'Ctrl+K', sell: 'Alt+S', be: 'F4', close: 'Alt+C', flattenAll: 'Ctrl+Shift+O' }), { buy: '', sell: 'Alt+S', be: '', close: 'Alt+C', flattenAll: '' });
+  assert.deepEqual(OT.cleanHotkeys({ buy: 'Ctrl+K', sell: 'Alt+S', be: 'F4', close: 'Alt+C', flattenAll: 'Ctrl+Shift+O' }), { buy: '', sell: 'Alt+S', be: '', close: 'Alt+C', flattenAll: '', cutHalf: '' });
 });
 
 test('hotkeyRefused with the event: a layout where another key gives a chart key', () => {
@@ -92,14 +92,20 @@ test('cleanHotkeys: never throws, keeps only allowed combos once, every action l
   assert.deepEqual(OT.cleanHotkeys('x'), none);
   assert.deepEqual(OT.cleanHotkeys([1, 2]), none);
   assert.deepEqual(OT.cleanHotkeys({ buy: 'Alt+B', sell: 'Ctrl+W', be: 5, close: 'Alt+B', flattenAll: 'F9', extra: 'Alt+X' }),
-    { buy: 'Alt+B', sell: '', be: '', close: '', flattenAll: 'F9' });
+    { buy: 'Alt+B', sell: '', be: '', close: '', flattenAll: 'F9', cutHalf: '' });
   assert.deepEqual(OT.cleanHotkeys({ buy: 'A', sell: 'Meta+S', be: 'x'.repeat(40), close: 'Space', flattenAll: 'Shift+F' }), Object.assign({}, none, { flattenAll: 'Shift+F' }));
   const hostile = {}; Object.defineProperty(hostile, 'buy', { get() { throw new Error('no'); }, enumerable: true });
   assert.deepEqual(OT.cleanHotkeys(hostile), none);
   assert.equal(OT.hotkeyAction({ buy: 'Alt+B', sell: '' }, 'Alt+B'), 'buy');
   assert.equal(OT.hotkeyAction({ buy: 'Alt+B', sell: '' }, ''), '');
   assert.equal(OT.hotkeyAction(none, 'Alt+B'), '');
-  assert.deepEqual(OT.HOTKEY_ACTIONS.map(a => a.name), ['Buy MKT', 'Sell MKT', 'B/E', 'Close', 'Flatten all']);
+  /* release 1 (1.6c): Close is named Flatten (its id stays 'close'), Cut half is last, so the older keys keep their precedence */
+  assert.deepEqual(OT.HOTKEY_ACTIONS.map(a => a.name), ['Buy MKT', 'Sell MKT', 'B/E', 'Flatten', 'Flatten all', 'Cut half']);
+  assert.deepEqual(OT.HOTKEY_ACTIONS.map(a => a.id), ['buy', 'sell', 'be', 'close', 'flattenAll', 'cutHalf']);
+  assert.deepEqual(OT.cleanHotkeys({ close: 'Alt+C', cutHalf: 'Alt+C' }), Object.assign({}, none, { close: 'Alt+C' }), 'a key Flatten already has is dropped from Cut half');
+  assert.deepEqual(OT.cleanHotkeys({ close: 'Alt+C', cutHalf: 'Alt+H' }), Object.assign({}, none, { close: 'Alt+C', cutHalf: 'Alt+H' }));
+  assert.equal(OT.hotkeyAction({ cutHalf: 'Alt+H' }, 'Alt+H'), 'cutHalf');
+  assert.equal(OT.hotkeyFromEvent(ev('KeyC', { altKey: true }), Object.assign({}, none, { close: 'Alt+C' }), 'cutHalf').error, 'Alt+C is already Flatten. Clear it there first.');
 });
 
 test('flattenAllRoots: one per instrument of the account with a position or a working order', () => {

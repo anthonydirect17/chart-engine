@@ -16,7 +16,7 @@
 
 .EXAMPLE
   powershell -NoProfile -ExecutionPolicy Bypass -File tools\studio-service\install-studio-task.ps1 `
-    -Work E:\SchwabDesk_bulk\studio_work -AllowOrigin https://desk.example.com
+    -Work C:\Data\Studio\work -AllowOrigin https://desk.example.com
 #>
 param(
   [string]$Work,

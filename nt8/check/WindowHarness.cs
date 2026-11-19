@@ -16,7 +16,7 @@ using NinjaTrader.Cbi;
 using NinjaTrader.Data;
 using NinjaTrader.NinjaScript.AddOns;
 
-public static class WindowHarness
+public static partial class WindowHarness   // 0.6.25: the delta table's cases are in check/DeltaHarness.cs
 {
     static Action<bool, string> Check;
     static object Priv(string name, params object[] args) { return typeof(ChartBridgeServer).GetMethod(name, BindingFlags.NonPublic | BindingFlags.Static).Invoke(null, args); }
@@ -29,6 +29,8 @@ public static class WindowHarness
         TimeZones();
         WholeRule();
         Format();
+        DeltaPure();   // 0.6.25: the delta table (check/DeltaHarness.cs)
+        DeltaRound2Pure();
     }
 
     // ------------------------------------------------------------ helpers
@@ -426,6 +428,8 @@ public static class WindowHarness
             Windows();
             WindowSingleFlight();
             FeedDrop();
+            DeltaLoads();   // 0.6.25: the delta table through the server (check/DeltaHarness.cs)
+            DeltaRound2();  // the delta table, review round 2 (check/DeltaHarness.cs)
         }
         finally
         {

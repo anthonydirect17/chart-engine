@@ -104,7 +104,7 @@ async function clockPart() {
   const port = PORT + 2;
   const ctl = async what => (await fetch(`http://127.0.0.1:${port}/test/${what}`, { method: 'POST' })).json();
   const fake = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(port), '--test-controls', '--live-rate=60', '--test-pin=' + TEST_PIN,
-    '--version=fake-0.5.6', '--pc-clock', '--clock-offset=-2.31', '--pc-clock-offset=0'], { stdio: ['ignore', 'pipe', 'inherit'] });
+    '--version=0.5.6', '--pc-clock', '--clock-offset=-2.31', '--pc-clock-offset=0'], { stdio: ['ignore', 'pipe', 'inherit'] });
   await new Promise(r => fake.stdout.once('data', r));
   const ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 }, deviceScaleFactor: 1 });
   try {
@@ -375,7 +375,7 @@ try {
   check(st.pin === 'Change PIN', 'Settings: Change PIN (ChartBridge has a PIN)');
   check(st.floors === 8, 'Settings: the large-print floors, RTH and overnight for 4 instruments');
   // 1.16.0: and the workspace's own Maximize panel (never a trading key)
-  check(st.hk === 'Buy MKT|Sell MKT|B/E|Close|Flatten all|Maximize panel', 'Settings: the 1.11.0 trading hotkeys, and Maximize panel (' + st.hk + ')');
+  check(st.hk === 'Buy MKT|Sell MKT|B/E|Flatten|Flatten all|Cut half|Maximize panel', 'Settings: the 1.11.0 trading hotkeys (release 1: Close named Flatten, and Cut half), and Maximize panel (' + st.hk + ')');
   check(st.reset && st.fits, 'Settings: Reset layout, and the panel fits the window (it scrolls inside)');
   await shot(page, 'workspace-settings.png');
   await page.click('#wsGlide [data-v="fast"]');

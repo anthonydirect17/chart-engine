@@ -6,12 +6,14 @@
 //     faded); Escape closes it;
 //   - R4: a click during the entrance acts at once and finishes it; R3: the kill switch, the mode, position and P&L are
 //     never animated;
-//   - the panel: the kill switch (on in one click, release in two), the rails as ChartBridge built them (1 to 5 trades, 1 to
-//     3 losing trades, the root or its micro or mini; never above ChartBridge's limits), the modes
+//   - the panel: the kill switch (on in one click, release in two), the rails (release 1, step 1.6b: every rail set on the tab,
+//     all required: the size up to the hard ceiling, trades, losing trades, the day's loss and profit stops; the root or its
+//     micro or mini), the modes
 //     (Auto asks once more; a Research build offers Shadow only), the day type calls logged with their times;
-//   - the bot's account (Anthony 2026-10-07: no Sim lock): SIM or LIVE next to the mode, in the strip, the pop-out and on every
-//     proposal (LIVE in the house red, never animated); Change account lists the tradable accounts, each marked; a LIVE one
-//     is asked once in the page, never with a browser dialog; ChartBridge's refusal is shown under the button;
+//   - the bot's account (release 1, step 1.6b: the personal account only, Sim later; the fake's personal pick is EVAL-A): LIVE
+//     next to the mode, in the strip, the pop-out and on every proposal (never animated); Change account lists the tradable
+//     accounts, each marked, only the personal one choosable (Sim: "not for now"); it is asked once in the page, never with a
+//     browser dialog; a refusal is shown under the button;
 //   - one v3 connection per window: the Bot tab opens none of its own (the workspace's, shared with the Account page and
 //     the ticket's 0.4.0 parts);
 //   - copilot proposals on the Main tab: botSeen the moment one shows, Accept with The Desk's accept key (the workspace's
@@ -60,7 +62,9 @@ const DESK_KEYS = { rev: 3, keys: { buy: '', sell: '', be: '', close: '', flatte
 const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
 let bridge = null;
 try {
-  bridge = await startBridge(PORT, ['--bot-account=Sim101']);   // ChartBridge 0.5.7: None until chosen; Sim101 chosen here
+  // ChartBridge 0.5.7: None until chosen; release 1 (1.6b): the personal account (EVAL-A here, made up), flat (no seeded EVAL-A
+  // position or orders: a bot entry never reduces or adds to a position it does not own)
+  bridge = await startBridge(PORT, ['--bot-account=EVAL-A', '--no-v3-seed']);
   const ctx = await browser.newContext({ viewport: { width: 1600, height: 900 }, deviceScaleFactor: 1 });
   await ctx.route('http://localhost:8800/api/chart-hotkeys', r => r.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(DESK_KEYS) }));
   await ctx.route('http://localhost:8800/api/chart-strategies', r => r.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify({ rev: 0, strategies: [] }) }));
@@ -96,8 +100,8 @@ try {
   await control('bot-connect', { name: 'Sample Lantern Fade' });
   await until(() => page.isVisible('#btStrip .bt-sline'), 'the strip shows');
   const strip = await page.textContent('#btStrip');
-  check(/Sample Lantern Fade/.test(strip) && /Shadow/.test(strip) && /Sim101\s*SIM/.test(strip) && /Flat/.test(strip) && /\$0\.00/.test(strip) && /0 of 5/.test(strip) && /0 of 3/.test(strip),
-    'one line: name, mode, the account with its SIM mark, position, P&L, the rails: "' + strip.replace(/\s+/g, ' ').trim() + '"');
+  check(/Sample Lantern Fade/.test(strip) && /Shadow/.test(strip) && /EVAL-A\s*LIVE/.test(strip) && /Flat/.test(strip) && /\$0\.00/.test(strip) && /0 of 5/.test(strip) && /0 of 3/.test(strip),
+    'one line: name, mode, the account with its LIVE mark, position, P&L, the rails: "' + strip.replace(/\s+/g, ' ').trim() + '"');
   await page.screenshot({ path: path.join(SHOTS, 'bot-strip.png'), clip: { x: 0, y: 0, width: 1600, height: 120 } });
 
   /* ---------------------------------------------------------------- the Bot tab, mid-entrance: R4 and R3 */
@@ -167,19 +171,26 @@ try {
   check((await v3()).bot.killed === true, 'one click does not release it');
   await page.click('.bt-kill');
   await until(async () => (await v3()).bot.killed === false, 'the second click releases it');
+  check(/^MNQ \(micro\), 1 contract$/.test(await page.textContent('[data-k="size"]')) && /\$500/.test(await page.textContent('[data-k="railDL"]')) && /\$500/.test(await page.textContent('[data-k="railDP"]')) && await page.isHidden('[data-k="railMiss"]'),
+    'release 1 (1.6b): the panel shows the size and both day stops set: ' + (await page.textContent('[data-k="size"]')));
   await page.click('[data-act="railsOpen"]');
-  const maxAttr = await page.getAttribute('[data-k="railTIn"]', 'max');
+  const maxAttr = await page.getAttribute('[data-k="railSIn"]', 'max');
   const roots = await page.$$eval('[data-k="railRoot"] option', o => o.map(x => x.value));
   check(roots.join() === 'MNQ,NQ', 'the root: the bot\'s, or its mini (ChartBridge\'s rule): ' + roots.join());
-  await page.fill('[data-k="railTIn"]', '6');
+  check(await page.inputValue('[data-k="railSIn"]') === '1' && await page.inputValue('[data-k="railDLIn"]') === '500', 'the form opens on the rails in force');
+  await page.fill('[data-k="railSIn"]', '21');
   await page.click('[data-act="railsSave"]');
-  const loosen = await page.textContent('[data-k="railsWhy"]');
-  check(maxAttr === '5' && /from 1 to 5 \(ChartBridge's limit\)/.test(loosen), 'never above ChartBridge\'s own limit: ' + loosen);
-  check((await v3()).bot.maxTrades === 5, 'nothing was sent for it');
-  await page.fill('[data-k="railTIn"]', '3'); await page.fill('[data-k="railLIn"]', '2');
+  const over = await page.textContent('[data-k="railsWhy"]');
+  check(maxAttr === '20' && /Size must be a whole number from 1 to 20 for MNQ \(the hard ceiling\)/.test(over), 'the size: never above the hard ceiling: ' + over);
+  check((await v3()).bot.size === 1, 'nothing was sent for it');
+  await page.fill('[data-k="railSIn"]', '1'); await page.fill('[data-k="railDLIn"]', '');
   await page.click('[data-act="railsSave"]');
-  await until(async () => { const b = (await v3()).bot; return b.maxTrades === 3 && b.maxLosses === 2; }, 'botRails reached ChartBridge');
-  await until(async () => (await page.textContent('[data-k="railTText"]')) === '0 of 3' && (await page.textContent('[data-k="railLText"]')) === '0 of 2', 'the panel shows the rails set');
+  check(/The day's loss stop must be dollars above 0/.test(await page.textContent('[data-k="railsWhy"]')), 'a day stop left empty: refused on the page (nothing is "no limit")');
+  await page.fill('[data-k="railTIn"]', '8'); await page.fill('[data-k="railLIn"]', '2'); await page.fill('[data-k="railDLIn"]', '300'); await page.fill('[data-k="railDPIn"]', '450.5');
+  await page.click('[data-act="railsSave"]');
+  await until(async () => { const b = (await v3()).bot; return b.maxTrades === 8 && b.maxLosses === 2 && b.size === 1 && b.dayLoss === 300 && b.dayProfit === 450.5; }, 'botRails reached ChartBridge (8 trades: above the old fixed 5)');
+  await until(async () => (await page.textContent('[data-k="railTText"]')) === '0 of 8' && (await page.textContent('[data-k="railLText"]')) === '0 of 2' && /\$300/.test(await page.textContent('[data-k="railDL"]')) && /\$450\.50/.test(await page.textContent('[data-k="railDP"]')), 'the panel shows the rails set');
+  await page.screenshot({ path: path.join(SHOTS, 'bot-rails.png') });
   check(/bot-rails\.txt/.test(await page.textContent('[data-k="railsWhy"]')), 'kept by ChartBridge (bot-rails.txt), not reset at 18:00');
   await page.click('.bt-modes [data-mode="copilot"]');
   await until(async () => (await v3()).bot.mode === 'copilot', 'Copilot');
@@ -187,10 +198,10 @@ try {
   await sleep(450);                                   // 1.17.0: a second click under 400 ms after the first is a double-click, ignored
   check((await v3()).bot.mode === 'copilot' && (await page.textContent('.bt-modes [data-mode="auto"]')) === 'Confirm', 'Auto asks once more');
   await page.click('.bt-modes [data-mode="auto"]');
-  await until(async () => (await v3()).bot.mode === 'auto', 'Auto on Sim101 (ChartBridge allows it: Sim101 is tradable)');
+  await until(async () => (await v3()).bot.mode === 'auto', 'Auto on EVAL-A (the personal account, tradable)');
   const acct0 = await page.evaluate(() => ({ name: document.querySelector('[data-k="account"]').textContent, mark: document.querySelector('[data-k="accountMark"]').textContent,
     byMode: document.querySelector('[data-k="modeAcct"]').textContent, live: document.querySelector('[data-k="modeAcct"]').classList.contains('live') }));
-  check(acct0.name === 'Sim101' && acct0.mark === 'SIM' && acct0.byMode === 'SIM' && !acct0.live, 'the panel: Sim101 with its SIM mark, and SIM next to the mode: ' + JSON.stringify(acct0));
+  check(acct0.name === 'EVAL-A' && acct0.mark === 'LIVE' && acct0.byMode === 'LIVE' && acct0.live, 'the panel: EVAL-A with its LIVE mark, and LIVE next to the mode: ' + JSON.stringify(acct0));
   await page.click('.bt-modes [data-mode="shadow"]');
   await until(async () => (await v3()).bot.mode === 'shadow', 'back to Shadow');
 
@@ -222,8 +233,8 @@ try {
   check(pp.answeredAt >= pp.seenAt, 'both times recorded: seen ' + pp.seenAt + ', answered ' + pp.answeredAt);
   await until(async () => !(await page.$('.bt-prop[data-id="p1"]')), 'the accepted proposal goes');
   // wait for the fill, as the checks above wait for theirs (one read could come before it)
-  const st2 = await until(async () => { const s = await control('state', { root: 'MNQ' }), q = s.positions['Sim101|MNQ']; return q && q.qty === -1 ? s : null; }, 'the accepted short filled on Sim101');
-  check(!!st2 && st2.positions['Sim101|MNQ'].qty === -1, 'ChartBridge placed it on Sim101 from the proposal itself: short 1 MNQ');
+  const st2 = await until(async () => { const s = await control('state', { root: 'MNQ' }), q = s.positions['EVAL-A|MNQ']; return q && q.qty === -1 ? s : null; }, 'the accepted short filled on EVAL-A');
+  check(!!st2 && st2.positions['EVAL-A|MNQ'].qty === -1, 'ChartBridge placed it on EVAL-A from the proposal itself: short 1 MNQ');
   await control('hold', { root: 'MNQ', on: '0' });                  // MNQ trades on
   await control('bot-proposal', { id: 'p2', side: 'buy', kind: 'market', stop: 10, target: 20 });
   await until(() => page.isVisible('.bt-prop[data-id="p2"] .bt-rej'), 'a second proposal');
@@ -253,7 +264,7 @@ try {
      bot's. The proposal's short of 1 is there (open, or closed by its stop since); the fake's sample Sim101 MNQ round trip
      of 2 (Anthony's own orders, unmarked) is not. */
   check(trips.some(t => t.dir === -1 && t.qty === 1 && t.tIn > 0), 'the bot\'s trade (the accepted short) is known for its marks (' + JSON.stringify(trips) + ')');
-  check(!trips.some(t => t.qty === 2), 'Sim101\'s own fills on the bot\'s root (no by "bot") are not the bot\'s');
+  check(!trips.some(t => t.qty === 2), 'the fake\'s own sample fills (no by "bot") are not the bot\'s');
   const lines = await page.evaluate(() => [...document.querySelectorAll('.bt-legend')].map(e => e.getAttribute('title')).join(' '));
   check(/ChartBridge marks the bot's orders/.test(lines), 'the Bot trades legend says only the bot\'s orders show');
   await page.screenshot({ path: path.join(SHOTS, 'bot-ghost.png') });
@@ -332,28 +343,31 @@ try {
   bridge.kill();
 
   /* ---------------------------------------------------------------- the bot's account: Sim or LIVE (Anthony 2026-10-07) */
-  console.log('the bot\'s account: the one Anthony chooses, Sim or LIVE');
-  bridge = await startBridge(PORT + 3, ['--bot-account=Sim101']);   // chosen (ChartBridge 0.5.7: None until then)
+  console.log('the bot\'s account: the personal account only (release 1, 1.6b; Sim later)');
+  bridge = await startBridge(PORT + 3);   // None (ChartBridge 0.5.7: until chosen); the personal pick is EVAL-A
   let dialogs = 0;
   page.on('dialog', d => { dialogs++; d.dismiss().catch(() => {}); });
   await open('?layout=Main&tab=bot');
   await until(async () => (await B()).on, 'the bot switch on');
   await control('bot-connect', { name: 'Sample Lantern Fade' });
-  await until(async () => (await page.textContent('[data-k="accountMark"]')) === 'SIM', 'Sim101, marked SIM');
+  await until(async () => (await page.textContent('[data-k="account"]')) === 'None', 'None until chosen');
   await page.click('[data-act="acctOpen"]');
   const opts = await page.$$eval('[data-k="acctSel"] option', o => o.map(x => x.textContent + (x.disabled ? ' [off]' : '')));
-  check(opts[0] === 'None (nothing trades)' && opts.includes('EVAL-A (LIVE)') && opts.includes('Sim101 (SIM), now') && opts.some(x => /^SIM-F1 \(SIM\)/.test(x)) && !opts.some(x => /FUNDED-C|EVAL-B/.test(x)),
-    'Change account lists the tradable accounts, each marked SIM or LIVE (not FUNDED-C, not checked; not EVAL-B): ' + opts.join(', '));
+  check(opts[0] === 'None (nothing trades), now' && opts.includes('EVAL-A (LIVE)') && opts.includes('Sim101 (SIM), Sim: not for now [off]') && opts.some(x => /^SIM-F1 \(SIM\), Sim: not for now \[off\]$/.test(x)) && !opts.some(x => /FUNDED-C|EVAL-B/.test(x)),
+    'Change account lists the tradable accounts, each marked; only the personal one (EVAL-A) may be chosen, Sim not for now: ' + opts.join(', '));
+  await page.evaluate(() => { document.querySelector('[data-k="acctSel"]').value = 'Sim101'; });   // a Sim account forced in: refused on the page
+  await page.click('[data-act="acctSave"]');
+  check(/Sim101 is a Sim account: the bot trades your personal account only/.test(await page.textContent('[data-k="acctWhy"]')) && (await v3()).bot.account === null, 'a Sim account: refused under the button, nothing sent');
   await page.selectOption('[data-k="acctSel"]', 'EVAL-A');
   await page.click('[data-act="acctSave"]');
   await until(() => page.isVisible('[data-k="acctAsk"]'), 'a LIVE account: the page asks once');
   const ask = await page.textContent('[data-k="acctAsk"]');
   check(/The bot will trade LIVE account EVAL-A in (Shadow|Copilot|Auto)\. Continue\?/.test(ask) && dialogs === 0, 'the question is in the page, never a browser dialog: ' + ask.trim());
-  check((await v3()).bot.account === 'Sim101', 'nothing sent before the answer');
+  check((await v3()).bot.account === null, 'nothing sent before the answer');
   await page.screenshot({ path: path.join(SHOTS, 'bot-live-ask.png') });
   await page.click('[data-act="acctNo"]');
   await sleep(300);
-  check((await v3()).bot.account === 'Sim101' && await page.isHidden('[data-k="acctAsk"]'), 'Cancel: nothing sent, still Sim101');
+  check((await v3()).bot.account === null && await page.isHidden('[data-k="acctAsk"]'), 'Cancel: nothing sent, still None');
   await page.click('[data-act="acctOpen"]');
   await page.selectOption('[data-k="acctSel"]', 'EVAL-A');
   await page.click('[data-act="acctSave"]');
@@ -387,9 +401,9 @@ try {
   await until(async () => (await v3()).proposals.find(x => x.id === 'pl1').state === 'rejected', 'rejected');
   await toggleTab(page, 'bot');
   await page.click('[data-act="acctOpen"]');
-  await page.selectOption('[data-k="acctSel"]', 'Sim101');
+  await page.evaluate(() => { document.querySelector('[data-k="acctSel"]').value = 'SIM-F1'; });
   await page.click('[data-act="acctSave"]');
-  await until(async () => /copier's leader/.test(await page.textContent('[data-k="acctWhy"]')), 'ChartBridge\'s refusal shown under the button (the fake\'s copier leader is Sim101)');
+  await until(async () => /SIM-F1 is a Sim account/.test(await page.textContent('[data-k="acctWhy"]')), 'the refusal shown under the button (release 1: Sim later)');
   check(await page.isHidden('[data-k="acctAsk"]') && (await v3()).bot.account === 'EVAL-A', 'a Sim account is not asked about; refused, nothing changed');
   /* None from the page (DECISION 2026-10-14e): account null, never asked about */
   await page.click('[data-act="acctOpen"]');

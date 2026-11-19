@@ -62,7 +62,7 @@ test('fake-bot against the fake bridge: refusals, welcome, ticks, shadow, copilo
 
     const bot = await connectBot({ port, secret });
     const w = await bot.next('welcome');
-    assert.equal(w.account, 'Sim101'); assert.equal(w.mode, 'shadow'); assert.deepEqual(w.rails, { maxQty: 1, maxTrades: 5, maxLosses: 3 });
+    assert.equal(w.account, 'Sim101'); assert.equal(w.mode, 'shadow'); assert.deepEqual(w.rails, { maxQty: 1, size: 1, maxTrades: 5, maxLosses: 3, dayLoss: 500, dayProfit: 500 });   // release 1 (1.6b): every rail (the fake's made-up PC set them)
     await assert.rejects(connectBot({ port, secret }), /409/, 'one bot at a time');
     assert.ok(await bot.next('tick', 5000), 'the bot reads the live trades');
 

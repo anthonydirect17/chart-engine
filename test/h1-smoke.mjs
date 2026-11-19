@@ -11,11 +11,11 @@
 //   - the corner readout on every chart, on a small panel and with the header text off; no countdown, ATR or % change
 //     left in the header;
 //   - compact order labels: the full label's hit areas, the full one on hover;
-//   - the Account panel: Close works disarmed, x needs Armed, a window without the ticket follows the forward rules, the
-//     Fills tab's round trips; the Quote board against the fake's prices and settlement, blank without one;
+//   - release 1: the old Account panel is removed (a saved layout that holds one opens without it); the Quote board against
+//     the fake's prices and settlement, blank without one;
 //   - the disarmed note, also after a reconnect;
 // with screenshots at 1366x768, 1920x1080 and 2560x1440 of two-monitor-style layouts and close crops of the labels, the
-// Account panel, the Quote board, the corner readout and the ring in test/out/.
+// Quote board, the corner readout and the ring in test/out/.
 //   npm run smoke:h1        (CHROMIUM_PATH=/path/to/chrome to use a preinstalled browser; H1_SMOKE_PORT)
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
@@ -55,14 +55,14 @@ const received = async port => (await fetch(`http://127.0.0.1:${port}/test/recei
 const state = (r) => control(PORT, 'state', { root: r || 'MNQ' });
 
 /* Two windows of Anthony's two-monitor setup (images/67.webp): Main (the big MNQ chart, a 4 hour, NQ and ES, the ticket
-   with the Account panel and the Quote board under it) and Second (two charts, the tape, a daily chart). */
+   with the Quote board under it; release 1: the old Account panel each layout still holds is dropped quietly) and Second (two charts, the tape, a daily chart). */
 const MAIN = [
   { id: 'm1', type: 'chart', root: 'MNQ', tf: 'm5', x: 0, y: 0, w: 5, h: 6 },
   { id: 'm2', type: 'chart', root: 'MNQ', tf: 'h4', x: 5, y: 0, w: 5, h: 3 },
   { id: 'm3', type: 'chart', root: 'NQ', tf: 'm1', x: 5, y: 3, w: 3, h: 3 },
   { id: 'm4', type: 'chart', root: 'ES', tf: 'm15', x: 8, y: 3, w: 2, h: 3 },
   { id: 'tk', type: 'ticket', x: 10, y: 0, w: 2, h: 3 },
-  { id: 'ac', type: 'account', x: 10, y: 3, w: 2, h: 2 },
+  { id: 'ac', type: 'account', x: 10, y: 3, w: 2, h: 2 },   // release 1: an old Account panel, dropped when the layout opens
   { id: 'qb', type: 'quotes', x: 10, y: 5, w: 2, h: 1 },
 ];
 const SECOND = [
@@ -70,7 +70,7 @@ const SECOND = [
   { id: 's2', type: 'tape', root: 'MNQ', x: 5, y: 0, w: 2, h: 6 },
   { id: 's3', type: 'chart', root: 'MNQ', tf: 'h1', x: 7, y: 0, w: 3, h: 3 },
   { id: 's4', type: 'chart', root: 'NQ', tf: 'd1', x: 7, y: 3, w: 3, h: 3 },
-  { id: 's5', type: 'account', x: 10, y: 0, w: 2, h: 3 },
+  { id: 's5', type: 'account', x: 10, y: 0, w: 2, h: 3 },   // release 1: dropped too
   { id: 's6', type: 'quotes', x: 10, y: 3, w: 2, h: 3 },
 ];
 function seed([layouts]) {
@@ -249,7 +249,7 @@ try {
   }
 
   /* ================================================================ orders on MNQ: the ticket armed, a bracket */
-  console.log('orders: compact labels, the ring and Shift+click, the Account panel');
+  console.log('orders: compact labels, the ring and Shift+click');
   const tk = id => page.locator(`.ws-panel[data-type="ticket"] [data-tk-id="${id}"]`);
   await tk('bStop').fill('8'); await tk('bStop').press('Enter');
   await tk('bTarget').fill('16'); await tk('bTarget').press('Enter');
@@ -325,25 +325,11 @@ try {
   check((await m1.drawings()).length === 0, 'Clear this chart');
   check(!(await page.locator('#wsMore [data-tool]').count()), 'the drawing tools left the small menu (Reset view stays)');
 
-  // the Account panel
+  // release 1: the old Account panel is gone from the saved layout, quietly
+  check(!(await page.$('.ws-panel.account, .ws-panel[data-type="account"]')) && !(await page.evaluate(() => window.workspace.panels().some(p => p.type === 'account'))), 'release 1: the Main layout opens without its old Account panel');
   const s1 = await state();
   const limit = s1.orders.find(o => o.kind === 'limit' && o.role === 'entry' || (o.kind === 'limit' && !o.role)) || s1.orders.find(o => o.price === L - 10);
   check(!!limit, 'a working buy limit from the Shift+click');
-  await page.click('.ws-panel.account .ac-tab[data-tab="ord"]');
-  const rows = await page.locator('.ws-panel.account [data-cancel]').count();
-  check(rows >= 3, 'Orders: the stop, the target and the limit (' + rows + ' rows)');
-  await shot(page, 'h1-account-orders-1920.png', await page.locator('.ws-panel.account').boundingBox());
-  await tk('armBtn').click();                                   // Armed off
-  const c0 = ((await received(PORT)).orderActions || []).filter(a => a.type === 'cancel').length;
-  await page.click(`.ws-panel.account [data-cancel="${limit.id}"]`);
-  await page.waitForTimeout(500);
-  check(((await received(PORT)).orderActions || []).filter(a => a.type === 'cancel').length === c0, 'x with Armed off: nothing sent');
-  const tnote = await page.evaluate(() => (document.querySelector('[data-tk-id="note"]') || {}).textContent || '');
-  check(/Armed is off/.test(tnote), 'and the ticket says why: "' + tnote + '"');
-  await tk('armBtn').click();                                   // Armed on
-  await page.click(`.ws-panel.account [data-cancel="${limit.id}"]`);
-  await until(async () => !(await state()).orders.some(o => o.id === limit.id), 'the limit cancelled', 5000);
-  check(!(await state()).orders.some(o => o.id === limit.id), 'x while Armed: the limit cancelled (the chart\'s x path)');
 
   // the disarmed note on the chart
   await tk('armBtn').click();                                   // Armed off
@@ -353,35 +339,15 @@ try {
     await page.mouse.move(cb.x + h2.box.x + 6, cb.y + h2.box.y + 9); await page.mouse.down(); await page.mouse.move(cb.x + h2.box.x - 30, cb.y + h2.box.y + 40); await page.mouse.up();
     const n = await until(async () => { const x = await m1.note(); return /Armed is off: arm to move or cancel orders/.test(x.msg) ? x : null; }, 'the disarmed note', 3000);
     check(!!n, 'a press on a leg with Armed off: "' + (n && n.msg) + '"');
-    check((await state()).orders.length === 2, 'and nothing moved');
+    check((await state()).orders.length === 3, 'and nothing moved');
   }
-  // Close works with Armed off, in this window and in a window without the ticket
+  // the Second window: no ticket, and no old Account panel (release 1)
   const B = await openWs(ctx, PORT, 'Second');
   await B.waitForTimeout(1500);
   check(await B.evaluate(() => !window.workspace.ticket().held), 'the Second window has no ticket');
-  await B.click('.ws-panel.account .ac-tab[data-tab="ord"]');
-  const bx = (await state()).orders[0];
-  const cb0 = ((await received(PORT)).orderActions || []).filter(a => a.type === 'cancel').length;
-  await B.click(`.ws-panel.account [data-cancel="${bx.id}"]`);
-  await B.waitForTimeout(800);
-  const bnote = await B.evaluate(() => window.__notes.join(' | '));
-  check(((await received(PORT)).orderActions || []).filter(a => a.type === 'cancel').length === cb0 && /Armed is off/.test(bnote), 'x in the other window, Armed off: forwarded, refused there, said here ("' + bnote.slice(-80) + '")');
-  await B.click('.ws-panel.account .ac-tab[data-tab="pos"]');
-  const f0 = ((await received(PORT)).orderActions || []).filter(a => a.type === 'flatten').length;
-  await control(PORT, 'price', { root: 'MNQ', p: L + 3 });         // bought at L: closed 3 points up, +$6.00 on MNQ
-  await page.waitForTimeout(300);
-  await B.click('.ws-panel.account [data-close="MNQ"]');
-  await until(async () => ((await received(PORT)).orderActions || []).filter(a => a.type === 'flatten').length > f0, 'the Close', 5000);
-  check(((await received(PORT)).orderActions || []).filter(a => a.type === 'flatten' && a.root === 'MNQ').length === f0 + 1, 'Close in the window without the ticket, Armed off: one flatten of MNQ, from its own connection');
+  check(!(await B.$('.ws-panel.account, .ws-panel[data-type="account"]')), 'release 1: the Second layout opens without its old Account panel');
+  await page.click('#wsFlat');                                   // flat (works with Armed off): the orders cancelled, the position closed
   await until(async () => { const s = await state(); return !s.orders.length && !(s.positions['Sim101|MNQ'] || {}).qty; }, 'flat', 8000);
-  // Fills: the round trip
-  await page.click('.ws-panel.account .ac-tab[data-tab="fil"]');
-  await page.waitForTimeout(1200);
-  const fills = await page.evaluate(() => [...document.querySelectorAll('.ws-panel.account .gr-fil .gr-row:not(.gr-h)')].map(r => r.innerText.replace(/\s+/g, ' ')));
-  check(fills.length >= 2 && / \+\$6\.00$/.test(fills[0]), 'Fills: the closing fill carries the trade\'s P&L, +$6.00 (' + fills.slice(0, 2).join(' / ') + ')');
-  await control(PORT, 'price', { root: 'MNQ', p: L });
-  const sum = await page.evaluate(() => [...document.querySelectorAll('.ws-panel.account .ac-sum b')].map(b => b.textContent));
-  check(/^[+-]?\$/.test(sum[1]) && +sum[3] >= 1, 'the summary: realized ' + sum[1] + ', day ' + sum[2] + ', trades ' + sum[3]);
   await B.close();
   // Armed went off with the connection (a working order to press on: a buy limit below the price)
   await tk('armBtn').click();
@@ -433,13 +399,12 @@ try {
       await p.waitForTimeout(3000);
       await shot(p, `h1-${l.toLowerCase()}-${w}.png`);
       if (l === 'Main') {
-        await shot(p, `h1-account-${w}.png`, await p.locator('.ws-panel.account').boundingBox());
         await shot(p, `h1-quotes-${w}.png`, await p.locator('.ws-panel.quotes').boundingBox());
         const cbx = await p.locator('.ws-panel[data-id="m1"] canvas').first().boundingBox(), cc = await p.evaluate(() => window.workspace.chart('m1').corner());
         if (cc) await shot(p, `h1-corner-${w}.png`, { x: cbx.x + cc.x - 40, y: cbx.y + cc.y - 30, width: Math.min(cc.w + 140, cbx.width - cc.x + 40), height: 70 });
-        const cut = await p.evaluate(() => [...document.querySelectorAll('.ws-panel.account .gr-row > *, .ws-panel.account .gr .pr > *, .ws-panel.quotes .gr-row > *, .ws-panel.quotes .gr .pr > *, .ac-sum b')]
+        const cut = await p.evaluate(() => [...document.querySelectorAll('.ws-panel.quotes .gr-row > *, .ws-panel.quotes .gr .pr > *')]
           .filter(e => e.getClientRects().length && e.scrollWidth > e.clientWidth + 1).map(e => e.textContent));
-        check(!cut.length, `${w}x${h}: no figure cut in the Account panel or the Quote board` + (cut.length ? ': ' + cut.join(', ') : ''));
+        check(!cut.length, `${w}x${h}: no figure cut in the Quote board` + (cut.length ? ': ' + cut.join(', ') : ''));
       }
       await p.close();
     }

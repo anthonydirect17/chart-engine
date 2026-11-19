@@ -82,14 +82,18 @@ test('the seats\' day, the week and month table and the spend', () => {
   assert.deepEqual(L.cleanGhosts('{"c1":true,"c2":false,"c3":"yes"}'), { c1: true });
 });
 
-test('the page: the Colosseum (1.50.0, was League) in the top tabs; the Bot button kept (1.36.0: no Bot panel); the ⋯ switch; nothing that trades', () => {
+test('the page: the Colosseum on Legion (plan step 3.2; was the chart page\'s top tabs, 1.50.0); the Bot button kept on the chart page; nothing that trades', () => {
   const html = read('live/index.html');
-  assert.match(html, /id="wsLeagueTab"[^>]*>Colosseum<\/button>/);
+  /* plan step 3.2: the Colosseum, Legion and Praetorian's Agent side left the chart page for legion.html; the chart page keeps
+     Chart, the Bot tab and a link to Legion; the ⋯ switch for the league's faint marks went with the league poll */
+  assert.doesNotMatch(html, /id="wsLeagueTab"|id="wsFleetTab"|id="wsAgentTab"|id="wsPraetorianTab"|id="lgView"|id="flView"/);
+  assert.match(html, /<a class="ws-btn ws-legionlink" id="wsLegion" href="legion\.html" target="legion"[^>]*hidden>Legion<\/a>/);
+  assert.match(read('live/legion.html'), /<section class="lg-view lx-lg" id="lgView" aria-label="Colosseum">/);
   assert.match(html, /<div id="wsTabHold" hidden>\s*<!--[^>]*-->\s*<button[^>]*id="wsBotTab"[^>]*>Bot<\/button>\s*<\/div>/, 'the Bot\'s own button waits in the hold');
-  assert.match(html, /id="wsLeagueTab"[^>]*>Colosseum<\/button>\s*<!--[^>]*-->\s*<span class="pr-tabs" id="wsPrGroup"[^>]*>\s*<button[^>]*id="wsPraetorianTab"[^>]*>Praetorian<\/button>\s*<!--[^>]*-->\s*<button type="button" class="ws-btn ag-tabbtn" id="wsAgentTab" aria-pressed="false" hidden>Agent<\/button>\s*<span class="ws-tabslot" id="wsTabSlot"><\/span>/, '1.51.0: after the Colosseum, Praetorian with its two sides, the Agent desk\'s own button and the Bot\'s slot');
+  assert.match(html, /id="wsLegion"[^>]*>Legion<\/a>\s*<!--[^>]*-->\s*<span class="pr-tabs" id="wsPrGroup"[^>]*>\s*<span class="ws-tabslot" id="wsTabSlot"><\/span>/, 'the Bot button\'s slot after the Legion link');
   assert.doesNotMatch(html, /data-add="agentdesk"/, 'no agent panel');
   assert.doesNotMatch(html, /data-add="bot"/, '1.36.0: no Bot panel (merged into the Agents strip)');
-  assert.match(html, /data-do="league" hidden>League trades \(faint\): off<\/button>/);
+  assert.doesNotMatch(html, /data-do="league"/);
   assert.ok(html.indexOf('<script src="league.js"></script>') < html.indexOf('<script src="workspace.js"></script>'));
   assert.ok(!W.TYPES.includes('bot') && !W.TYPES.includes('agentdesk'));
   const old = W.cleanLayout({ panels: [{ id: 'c1', type: 'chart', root: 'MNQ', tf: 'm1', x: 0, y: 0, w: 4, h: 2 }, { id: 'b1', type: 'bot', x: 4, y: 0, w: 2, h: 1 }] });
@@ -181,9 +185,12 @@ test('a past day: the page wiring (the address, read only, never on the live cha
   assert.match(src, /C\.sessionToday\(\)/, 'today is the league\'s session date');
   assert.match(src, />Back to today<\/button>/);
   assert.match(src, /'Past day ' \+ past \+ ' · read only'/);
-  assert.match(ws, /leagueView\.openDay\(new URLSearchParams\(location\.search\)\.get\('day'\)\)/);
-  assert.match(ws, /const leagueGhostDay = \(\) => \(leagueView && leagueView\.shown\(\) && leagueView\.liveDay\(\)\) \|\| LG\.day;/);
-  assert.doesNotMatch(ws, /LG\.day = leagueView\.day\(\)/, 'a past day never becomes the faint marks\' day');
+  /* plan step 3.2: the Colosseum is on Legion; its day comes from the address there, and the chart page forwards the old address */
+  const lt = read('live/legion-tabs.js');
+  assert.match(lt, /league\.openDay\(new URLSearchParams\(location\.search\)\.get\('day'\)\)/);
+  assert.match(ws, /const LEGION_TABS = \['legion', 'fleet', 'league', 'colosseum', 'agent', 'praetorian'\];/);
+  assert.match(ws, /if \(LEGION_TABS\.includes\(movedTab\) && !prBotLast\) location\.replace\('legion\.html' \+ location\.search \+ location\.hash\);/, '?tab=league&day= lands on Legion with its day');
+  assert.doesNotMatch(ws, /LeagueOverlay|leagueGhost/, 'no faint league marks on the live charts any more');
 });
 
 /* ---------------------------------------------------------------- 1.57.0: the leaderboard (part F) */

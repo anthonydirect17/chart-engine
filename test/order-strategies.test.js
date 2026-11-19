@@ -162,9 +162,16 @@ test('checkStrategiesDoc and cleanStrategiesDoc: at most 24, ids unique, a bad s
 });
 
 /* ---------------- the hotkeys document and the one conflict check */
-test('the hotkeys document: nine keys (The Desk\'s seven, Accept and Reject), two modifiers; read leniently, checked strictly', () => {
-  assert.deepEqual(OS.KEY_IDS, ['buy', 'sell', 'be', 'close', 'flattenAll', 'merge', 'maximize', 'accept', 'reject']);
-  assert.deepEqual(OS.emptyHotkeysDoc(), { rev: 0, keys: { buy: '', sell: '', be: '', close: '', flattenAll: '', merge: '', maximize: '', accept: '', reject: '' }, modifiers: { limit: '', stop: '' } });
+test('the hotkeys document: ten keys (The Desk\'s seven, Accept and Reject, and release 1\'s Cut half), two modifiers; read leniently, checked strictly', () => {
+  assert.deepEqual(OS.KEY_IDS, ['buy', 'sell', 'be', 'close', 'flattenAll', 'cutHalf', 'merge', 'maximize', 'accept', 'reject']);
+  assert.deepEqual(OS.emptyHotkeysDoc(), { rev: 0, keys: { buy: '', sell: '', be: '', close: '', flattenAll: '', cutHalf: '', merge: '', maximize: '', accept: '', reject: '' }, modifiers: { limit: '', stop: '' } });
+  assert.equal(OS.keyName('close'), 'Flatten'); assert.equal(OS.keyName('cutHalf'), 'Cut half');   // release 1 (1.6c): the id close is named Flatten
+  /* a document from a Desk before release 1 (no cutHalf) reads with Cut half as none; a write needs all ten (The Desk's exact list) */
+  const old = OS.cleanHotkeysDoc({ rev: 4, keys: { buy: 'Alt+B', close: 'Alt+C' }, modifiers: {} });
+  assert.equal(old.keys.cutHalf, ''); assert.equal(old.keys.close, 'Alt+C');
+  const nine = hkDoc(); delete nine.keys.cutHalf;
+  assert.match(OS.checkHotkeysDoc(nine), /keys needs exactly/);
+  assert.match(OS.checkHotkeysDoc(hkDoc({ close: 'Alt+C', cutHalf: 'Alt+C' })), /Alt\+C is already Flatten/);
   const c = OS.cleanHotkeysDoc({ rev: 2, keys: { buy: 'Alt+B', sell: 'Alt+B', be: 'Meta+E', merge: 'Ctrl+Alt+G', maximize: 7 }, modifiers: { limit: 'Shift', stop: 'Shift' } });
   assert.equal(c.rev, 2);
   assert.equal(c.keys.buy, 'Alt+B'); assert.equal(c.keys.sell, '', 'a key used twice is kept once');

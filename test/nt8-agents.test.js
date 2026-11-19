@@ -34,7 +34,7 @@ test('0.5.0 agents: the new file ships, is compile-checked and harnessed', () =>
   for (const f of ['check.sh', 'orders.sh']) assert.match(read(path.join('check', f)), /ChartBridgeBot\.cs ChartBridgeAgents\.cs ChartBridgeStrategies\.cs/);
   assert.match(read(path.join('check', 'orders.sh')), /check\/AgentHarness\.cs/);
   assert.match(read(path.join('check', 'OrdersHarness.cs')), /Section\("agents \(0\.5\.0\)", AgentHarness\.Run\);/);
-  assert.match(main, /public const string Version = "0\.(5\.[0-8]|6\.([0-9]|1[0-9]|2[0-3]))";/);   // 0.6.21: the pick, profitToday, the roster reader tightened; 0.6.20: the roster served; 0.6.19: the day's profit stop; 0.6.18: entry rules per trader (market entry, no target); 0.6.17: Kill all for the prop accounts; 0.6.16: prop accounts (Auto kept through the reset and one restore after a restart, prop only); 0.6.15: the 1 second pull retired; 0.6.14: the tick day check rule; 0.6.13: the tick day's morning catch-up, the raw deleted once packed; 0.6.12: the bar trail follow-ups; 0.6.10: the account lifecycle (remove-only for an account NinjaTrader no longer lists, Hide leaves the group); 0.6.9: the stats suite's Phase 2 (1 second bars, the order record, decision ids; recording only); 0.6.8: the minute book (the history path only); 0.6.7: the bench, no hedging always on, a group's own rules optional; 0.6.6: the firm's limits on entries, riskAlert, firmMinimum, copierFollowerRemove; 0.6.5: each member's own rules and the risk percent; 0.6.4: no false no-trade-record alarm, the alarm cleared, Merge on an off follower; 0.6.3: the audit fixes (a missed reset caught up, closes not seen, files that survive a power cut, the kill switch kept); 0.6.2: group stand-downs and league seats; 0.6.1: a group's type and default hero; 0.6.0: group trading (seats); 0.5.8: groups and accountState; 0.5.7: the plan id, the TradeLost hold, None and the daily reset; 0.5.1: the accounts follow NinjaTrader, on top of 0.5.0; 0.5.3: the agents' MNQ cap; 0.5.4: the window while exposed; 0.5.5: the accounts line and unknown keys; 0.5.6: the time check
+  assert.match(main, /public const string Version = "0\.(5\.[0-8]|6\.([0-9]|1[0-9]|2[0-5]))";/);   // 0.6.25: the combined release (agentStopAll, agentFlattenOff, the go-live guards); 0.6.24: release 1 (the personal bot, Cut half); 0.6.21: the pick, profitToday, the roster reader tightened; 0.6.20: the roster served; 0.6.19: the day's profit stop; 0.6.18: entry rules per trader (market entry, no target); 0.6.17: Kill all for the prop accounts; 0.6.16: prop accounts (Auto kept through the reset and one restore after a restart, prop only); 0.6.15: the 1 second pull retired; 0.6.14: the tick day check rule; 0.6.13: the tick day's morning catch-up, the raw deleted once packed; 0.6.12: the bar trail follow-ups; 0.6.10: the account lifecycle (remove-only for an account NinjaTrader no longer lists, Hide leaves the group); 0.6.9: the stats suite's Phase 2 (1 second bars, the order record, decision ids; recording only); 0.6.8: the minute book (the history path only); 0.6.7: the bench, no hedging always on, a group's own rules optional; 0.6.6: the firm's limits on entries, riskAlert, firmMinimum, copierFollowerRemove; 0.6.5: each member's own rules and the risk percent; 0.6.4: no false no-trade-record alarm, the alarm cleared, Merge on an off follower; 0.6.3: the audit fixes (a missed reset caught up, closes not seen, files that survive a power cut, the kill switch kept); 0.6.2: group stand-downs and league seats; 0.6.1: a group's type and default hero; 0.6.0: group trading (seats); 0.5.8: groups and accountState; 0.5.7: the plan id, the TradeLost hold, None and the daily reset; 0.5.1: the accounts follow NinjaTrader, on top of 0.5.0; 0.5.3: the agents' MNQ cap; 0.5.4: the window while exposed; 0.5.5: the accounts line and unknown keys; 0.5.6: the time check
   assert.ok(!/(^|[\s(=,+:?])\$"/m.test(acode) && !/\?\.\w/.test(acode) && !/\bnameof\(/.test(acode), 'C# 5');
 });
 
@@ -141,7 +141,7 @@ test('0.5.3 agents: the shipped MNQ cap of 20 is the agents\' own: maxQty.MNQ ca
   assert.match(place, /" is over the " \+ root \+ " cap of " \+ cap \+ " \(" \+ capWhy \+ "\)"/, 'the words name the cap that applied');
   assert.equal((ocode + acode + ccode).match(/\bAgentCap\(/g).length, 3, 'AgentCap: its definition, AgentEntryCap (gate 3 and plan check 4) and welcome.rules only');
   assert.match(main, /else ChartBridgeServer\.Log\("config\.txt: " \+ key \+ " is not a ChartBridge setting; the line does nothing"\);\s*\}\s*ChartBridgeAgents\.NoteConfigCaps\(\);/, 'said once at config load, after every line is read (0.5.5: after the unknown-key line)');
-  assert.match(bodies(acode, 'NoteConfigCaps'), /if \(Ids\(\)\.Count == 0\) return;[\s\S]*ChartBridgeServer\.Log\("config\.txt: maxQty\.MNQ = " \+ n \+ " caps the page's, the bot's and the copier's MNQ orders only; agents use their own MNQ cap of "/);
+  assert.match(bodies(acode, 'NoteConfigCaps'), /if \(Ids\(\)\.Count == 0\) return;[\s\S]*ChartBridgeServer\.Log\("config\.txt: maxQty\.MNQ = " \+ n \+ " caps the page's and the copier's MNQ orders only \(release 1: the bot uses its size from the Bot tab\); agents use their own MNQ cap of "/);
   assert.ok(!/MaxQty\[|MaxQty\.(Add|Remove|Clear)/.test(bodies(acode, 'NoteConfigCaps') + bodies(acode, 'AgentCap')), 'nothing in config is changed');
 });
 
@@ -264,7 +264,9 @@ test('0.6.16 prop accounts: every new branch passes through IsProp; nothing is p
   assert.match(tr, /if \(seats\.Any\(x => ChartBridgeBranches\.UnknownWhy\(FindAccount\(x\), x\) != null\)\) return;/, 'a seat not known yet: this pass does not decide');
   assert.match(tr, /List<string> notProp = seats\.Where\(x => !ChartBridgeBranches\.IsProp\(x\)\)\.ToList\(\);/);
   assert.match(tr, /List<string> busy = seats\.Where\(x => !ChartBridgeBranches\.Idle\(FindAccount\(x\)\)\)\.ToList\(\);/);
-  assert.match(tr, /if \(notProp\.Count > 0\) no = [^\n]*\n\s*else if \(busy\.Count > 0 \|\| Exposed\(\)\) no = [^\n]*\n\s*else \{ string why = AutoProblem\(\); if \(why != null\) no = why; \}/);
+  assert.match(tr, /if \(notProp\.Count > 0\) no = [^\n]*\n\s*else if \(busy\.Count > 0 \|\| Exposed\(\)\) no = [^\n]*\n\s*else \{ string why = AutoProblem\(\) \?\? ChartBridgeGroups\.SeatsFirmWhy\(seats\); if \(why != null\) no = why; \}/);
+  // plan step 3.5 (0.6.25): one PC per firm at the restore too, and it waits for the first read of The Desk's firms since the start
+  assert.match(tr, /if \(ChartBridgeGroups\.FirmsPending\) return;/);
   assert.equal((acode.match(/mode = "auto";/g) || []).length, 1, 'the restore is the only place ChartBridge itself sets Auto');
   assert.match(tr, /if \(no != null\)\s*\{\s*DropAutoIntent\(/, 'a no removes the file: one try per start');
   assert.match(tr, /lock \(Sync\) \{ mode = "auto"; autoRestorePending = false; autoDay = ChartBridgeBranches\.DueDay\(NowEt\(\)\); autoPick = savedPick; autoPickSha = savedSha; \}/);
@@ -298,24 +300,29 @@ test('0.6.17 Kill all for the prop accounts: only agents whose every account is 
   assert.match(one, /List<string> scope = seats\.Where\(x => KillScope\(x\)\)\.ToList\(\);\s*bool inScope = scope\.Count > 0;/, 'any account in scope');
   // the review of 90 (F3): or a saved Auto waits (no seats yet), never on the personal account
   assert.match(one, /if \(personal \|\| \(!inScope && !saved\)\) return null;/, 'never the personal account; else in scope, or a saved Auto waiting');
+  // plan step 3.2: Kill all's part moved unchanged into KillInLocked (Stop all automation uses it too, with its wider scope); the
+  // label names the press, "Kill all (prop accounts)" from KillProp
+  assert.match(one, /return KillInLocked\(scope, "Kill all \(prop accounts\)"\);/);
+  const killIn = bodies(acode, 'KillInLocked');
   assert.match(one, /try \{ saved = saved \|\| File\.Exists\(AutoFile\) \|\| File\.Exists\(ChartBridgeFiles\.BackupOf\(AutoFile\)\); \} catch \(Exception\) \{ saved = true; \}/);
   // the review of 90 (N1): the kill switch and Shadow FIRST, the flatten (its own orders only) after, in its own try
-  assert.match(one, /string err = KillLocked\(true\);[\s\S]*mode = "shadow";[\s\S]*DropAutoIntent\("Kill all \(prop accounts\)"\);[\s\S]*if \(inScope\)\s*\{\s*try\s*\{\s*if \(FlattenFaultForCheck == Id\) throw new InvalidOperationException\("a fault made by the harness"\);\s*foreach \(string x in scope\) roots \+= StartFlatten\("Kill all \(prop accounts\)", false, x, false, true\);[^\n]*\n\s*\}\s*catch \(Exception ex\) \{ flatErr = ex\.Message; \}/, 'the kill switch and Shadow, then the flatten');
-  assert.ok(one.indexOf('KillLocked(true)') < one.indexOf('StartFlatten('), 'N1: in that order');
+  assert.match(killIn, /string err = KillLocked\(true\);[\s\S]*mode = "shadow";[\s\S]*DropAutoIntent\(label\);[\s\S]*if \(inScope\)\s*\{\s*try\s*\{\s*if \(FlattenFaultForCheck == Id\) throw new InvalidOperationException\("a fault made by the harness"\);\s*foreach \(string x in scope\) roots \+= StartFlatten\(label, false, x, false, true\);[^\n]*\n\s*\}\s*catch \(Exception ex\) \{ flatErr = ex\.Message; \}/, 'the kill switch and Shadow, then the flatten');
+  assert.ok(killIn.indexOf('KillLocked(true)') > 0 && killIn.indexOf('KillLocked(true)') < killIn.indexOf('StartFlatten('), 'N1: in that order');
   // the review of 0.6.17: F1 (scope for a kill: an unlisted account is in), F2 (own orders only), N2 (never the action rate)
   const scope = bodies(acode, 'KillScope');
   assert.match(scope, /if \(!ChartBridgeBranches\.PersonalNamed \|\| ChartBridgeBranches\.IsPersonal\(name\)\) return false;/);
   assert.match(scope, /if \(ChartBridgeOrders\.IsNeverTradable\(name\)\) return false;/);
   assert.match(scope, /Account listed = FindAccount\(name\);\s*return listed == null \|\| !\(ChartBridgeBot\.IsSim\(listed\) \|\| ChartBridgeAccounts\.IsSim\(listed\)\);/, 'not listed: in scope');
   assert.match(acode, /List<Order> others = may\.Where\(o => o != j\.Close && \(j\.Owned \? \(!j\.OwnOnly \|\| IsMine\(o\)\) : \(IsMine\(o\) && !\(IsReStop\(o\) && \(p1 != 0 \|\| p2 != 0\)\)\)\)\)\.ToList\(\);/, 'own orders only when the job says so; every other flatten as before');
-  assert.strictEqual((acode.match(/, false, true\);/g) || []).length, 3, 'only Kill all, the day\'s profit stop (0.6.19) and the day\'s loss stop (0.6.22) ask for own orders only');
-  assert.match(acode, /if \(type == "agentKillAllProp"\) \{ why = PageKillAllProp\(\);[^\n]*\n\s*if \(!RateOk\(client\.Actions\)\)/, 'Kill all is handled before the action rate gate');
+  assert.strictEqual((acode.match(/, false, true\);/g) || []).length, 5, 'only Kill all (and Stop all automation through it), the day\'s profit stop (0.6.19), the day\'s loss stop (0.6.22), and plan step 3.2\'s Stop all on a mixed trader\'s prop seats and Flatten and turn off ask for own orders only');
+  assert.match(acode, /if \(type == "agentKillAllProp"\) \{ why = PageKillAllProp\(cid\);[^\n]*\n\s*if \(type == "agentStopAll"\) \{ why = PageStopAll\(cid\);[^\n]*\n\s*if \(type != "agentFlattenOff" && !RateOk\(client\.Actions\)\)/, 'Kill all (and plan step 3.2\'s Stop all automation) are handled before the action rate gate; Flatten and turn off is never refused for the rate (plan step 3.5, the Legion review)');
+  assert.equal((acode.match(/ChartBridgeV3\.SendToV3Traders\(PressStatus\(text, cid\)\);/g) || []).length, 2, 'Stop all and Kill all echo the press\'s cid (plan step 3.5, the Legion review)');
   for (const s of ['kill all F2: the hand order is not cancelled and still works', 'kill all F1 A: the account is not listed', 'kill all F1 B: and a plan is refused, nothing placed', 'kill all F1 C: a group with a member NinjaTrader no longer lists', 'kill all N1:', 'kill all N2: sent right after, it is carried out'])
     assert.ok(read(path.join('check', 'AgentHarness.cs')).includes(s), s);
-  assert.match(one, /DropAutoIntent\("Kill all \(prop accounts\)"\);/);
-  assert.ok(!/\.Submit\s*\(|\.CreateOrder\s*\(|PlaceOrder|PlaceAgentEntry/.test(one), 'no order call of its own: the close is the agent\'s flatten job, as at the flat time');
+  assert.match(killIn, /DropAutoIntent\(label\);/);
+  assert.ok(!/\.Submit\s*\(|\.CreateOrder\s*\(|PlaceOrder|PlaceAgentEntry/.test(one + killIn), 'no order call of its own: the close is the agent\'s flatten job, as at the flat time');
   assert.equal((acode.match(/KillProp\(\)/g) || []).length, 2, 'defined once, called once');
-  assert.match(acode, /if \(type == "agentKillAllProp"\) \{ why = PageKillAllProp\(\);/);
+  assert.match(acode, /if \(type == "agentKillAllProp"\) \{ why = PageKillAllProp\(cid\);/);
   const h = read(path.join('check', 'AgentHarness.cs'));
   for (const s of ['kill all, no personal account picked: refused', 'kill all: the personal account and a prop account the agent does not trade: no order, no cancel', 'kill all: an agent on a Sim account is not touched', 'kill all: an agent on the personal account: not killed, not flattened, still in Auto', 'kill all: released: Auto stays off until it is set on the page'])
     assert.ok(h.includes(s), s);
@@ -325,9 +332,9 @@ test('0.6.17 Kill all for the prop accounts: only agents whose every account is 
   // connection workspace.js builds for it; since 1.46.0 the gate on that connection is FleetCore.maySend (fleet.js), so
   // workspace.js names the message once, in its comment, and builds nothing; no other page file names it
   for (const f of fsx.readdirSync(path.join(__dirname, '..', 'live')).filter(f => f.endsWith('.js')))
-    assert.strictEqual(fsx.readFileSync(path.join(__dirname, '..', 'live', f), 'utf8').includes('agentKillAllProp'), f === 'fleet.js' || f === 'workspace.js', f);
-  assert.strictEqual((fsx.readFileSync(path.join(__dirname, '..', 'live', 'workspace.js'), 'utf8').match(/agentKillAllProp/g) || []).length, 1, 'workspace.js: one comment, nothing that builds the message');
-  assert.match(fsx.readFileSync(path.join(__dirname, '..', 'live', 'workspace.js'), 'utf8'), /post: m => legionGate\(m\) === true && AF\.post\(m\) === true \}/, 'and the gate (captured once from the frozen FleetCore) is in front of every post');
+    assert.strictEqual(fsx.readFileSync(path.join(__dirname, '..', 'live', f), 'utf8').includes('agentKillAllProp'), f === 'fleet.js' || f === 'legion.js', f);   // plan step 3.2: Legion's header with an older ChartBridge (LegionCore.stopMaySend)
+  assert.strictEqual((fsx.readFileSync(path.join(__dirname, '..', 'live', 'legion-tabs.js'), 'utf8').match(/agentKillAllProp/g) || []).length, 0, 'plan step 3.2: Legion mounts the tab; legion-tabs.js builds no message');
+  assert.match(fsx.readFileSync(path.join(__dirname, '..', 'live', 'legion-tabs.js'), 'utf8'), /post: m => legionGate\(m\) === true && AF\.post\(m\) === true \}/, 'and the gate (captured once from the frozen FleetCore) is in front of every post');
 });
 
 test('0.6.19 the day\'s profit stop: the plan\'s dayStopDollars, the smaller of it and the consistency mark off a funded account, the trader\'s own flatten, a stand-down until the roll', () => {
@@ -453,7 +460,7 @@ test('0.6.0 group trading: one plan, each seat through PlaceAgentEntry on its ow
   assert.ok(!/\.Submit\s*\(|\.CreateOrder\s*\(/.test(seats), 'no order call of its own');
   const checks = bodies(acode, 'Checks');
   assert.match(checks, /outs\[i\] = benchNow\.Contains\(seats\[i\]\) \|\| benchFresh\.Contains\(seats\[i\]\) \? "benched" : p\.Sizes\[i\] == 0 \? "its size is 0 \(no room for 1 contract\)" : AccountProblemFor\(seats\[i\], true\);/, 'Q1 b: size 0, not tradable or not connected: that seat sits out (0.6.7: a benched seat too)');
-  assert.match(checks, /outs\[i\] = ChartBridgeAgents\.EntryCheck\("agent:" \+ Id, a, root\) \?\? ChartBridgeGroups\.EntryCheck\("agent:" \+ Id, a, root, p\.Side == "buy", p\.Sizes\[i\], true, false\);/, 'Q1 b: the owner lock and the one-direction check per seat');
+  assert.match(checks, /outs\[i\] = ChartBridgeAgents\.EntryCheck\("agent:" \+ Id, a, root\) \?\? ChartBridgeGroups\.AdvisoryEntryCheck\("agent:" \+ Id, a, root, p\.Side == "buy", p\.Sizes\[i\], true, false\);/, 'Q1 b: the owner lock and the one-direction check per seat');
   assert.match(checks, /if \(outs\.All\(x => x != null\)\)\s*return "no seat of "/, 'refused only when no seat can take it');
   assert.match(bodies(acode, 'GroupPlanProblem'), /if \(p\.SeatsRev != rev\) return "the group changed; size again";/, 'a stale seatsRev refuses the whole plan');
   assert.match(checks, /open = Seats\.Values\.Any\(x => x\.openTag != null \|\| x\.Sticky\.Count > 0\);/, 'one at a time across every seat');
@@ -528,4 +535,49 @@ test('0.6.2 (SPEC CE-2): group stand-downs gate entries only; league seats are S
   const g = strip(read('ChartBridgeGroups.cs')), del = g.slice(g.indexOf('private static string GroupDelete('), g.indexOf('private static void ForgetHighs('));
   assert.ok(del.indexOf('ChartBridgeAgents.GroupDeleted(id)') > del.indexOf('string err = Save(next);'), 'a deleted group\'s stand-downs go under its save');
   assert.match(bodies(acode, 'WriteStandDowns'), /"standDown\\t" \+ s\.Build \+ "\\t" \+ s\.Group \+ "\\t" \+ s\.At\.ToString\("0", CultureInfo\.InvariantCulture\) \+ "\\t" \+ s\.Kind \+ "\\t" \+ s\.Why/);
+});
+
+test('plan step 3.2 (the R12 review, B1): Stop all and Flatten and turn off wait for the same ChartBridge', () => {
+  /* agentStopAll and agentFlattenOff ship in one ChartBridge release: the page asks for both from the same version, so a PC never
+     gets one without the other. The plan was for the release that ships this page to raise live/COMPAT.json minChartBridge to that
+     version; 1.58.0 keeps it at 0.6.2 so the page installs before ChartBridge 0.6.25 (Anthony's GO of 2026-11-19, the page first), and
+     below that version neither command is ever sent (CHANGELOG 1.58.0, Installing). */
+  const read = f => fs.readFileSync(path.join(__dirname, '..', 'live', f), 'utf8');
+  const flat = /const FLATOFF_MIN = '(\d+\.\d+\.\d+)';/.exec(read('agent-core.js'));
+  const stop = /const STOPALL_MIN = '(\d+\.\d+\.\d+)';/.exec(read('legion.js'));
+  assert.ok(flat && stop, 'both minimums are plain versions');
+  assert.equal(flat[1], stop[1], 'FLATOFF_MIN (agent-core.js) and STOPALL_MIN (legion.js) name the same ChartBridge');
+  assert.equal(require('../live/agent-core.js').FLATOFF_MIN, flat[1]);
+  const kill = /const STOPALL_MIN = '(\d+\.\d+\.\d+)';/.exec(read('fleet.js'));   // the R12 delta, X1: the Cohorts tab's Kill all too
+  assert.ok(kill && kill[1] === stop[1], 'STOPALL_MIN (fleet.js, Kill all) names the same ChartBridge');
+  /* round 4: GOLIVE_MIN (Go live, and Auto on a prop account) in agent-core.js, fleet.js and legion.js, the same ChartBridge */
+  const go = ['agent-core.js', 'fleet.js', 'legion.js'].map(f => (/const GOLIVE_MIN = '(\d+\.\d+\.\d+)';/.exec(read(f)) || [])[1]);
+  assert.deepEqual(go, [stop[1], stop[1], stop[1]], 'GOLIVE_MIN: ' + go.join(', '));
+});
+
+test('plan step 3.5 (0.6.25): one direction per firm, one PC per firm and the GO size, where each binds', () => {
+  const gcode = strip(read('ChartBridgeGroups.cs'));
+  // the order gate: every entry (every source) meets the firm guards after an exit of its own position has passed
+  const ec = bodies(gcode, 'EntryCheck');
+  assert.match(ec, /if \(exit\) return null;\s*string firmWhy = FirmEntryWhy\(source, a, root, isBuy, opposite, !advisory\);\s*if \(firmWhy != null\) return firmWhy;\s*EnsureLoaded\(\);/);
+  const fe = bodies(gcode, 'FirmEntryWhy');
+  assert.doesNotMatch(fe, /Flatten\(|Cancel\(|Submit\(|Change\(/, 'the firm guard only refuses: it never closes, cancels or places');
+  assert.match(fe, /FirmMarket\(h\.Root\) == market/);
+  assert.match(bodies(gcode, 'FirmMarket'), /r == "NQ" \|\| r == "MNQ" \|\| r == "ES" \|\| r == "MES"/);
+  // one PC per firm at the pick, Auto and the restore
+  assert.match(bodies(acode, 'SetPickLocked'), /if \(name != null\) \{ string fw = ChartBridgeGroups\.SeatsFirmWhy\(SeatNames\(\)\); if \(fw != null\) return /);
+  assert.match(bodies(acode, 'SetModeLocked'), /if \(m == "auto"\) \{ string fw = ChartBridgeGroups\.SeatsFirmWhy\(SeatNames\(\)\); if \(fw != null\) return "auto refused: " \+ fw; \}/);
+  // the firms are read with or without the lane rule
+  assert.match(bodies(gcode, 'LanePoll'), /try \{ FirmPoll\(\); \}[^\n]*\n\s*if \(LaneHarnessManual \|\| !ChartBridgeConfig\.LaneRule/);
+  assert.match(bodies(gcode, 'FirmPoll'), /"\/api\/legion\/cohorts"/);
+  // the GO size: a file whose GO size is not its playbook's is never served
+  assert.match(bodies(acode, 'One'), /string go = GoSizeProblem\(text, fmt\);\s*if \(go != null\) \{ why = go; return null; \}\s*return text\.Trim\(\);/);
+  assert.match(fs.readFileSync(path.join(nt8, 'check', 'AgentHarness.cs'), 'utf8'), /GoLive35\(\);/);
+  // the R12 review of 2f1ddb3: B1, an account with no firm counts against a trader's or the bot's entry; nit 1, the GO keys
+  // read strictly; nit 2, the answer is whole JSON first; nit 3, the plan check 10b is advisory (no Output line)
+  assert.match(fe, /if \(!his && FirmScope\(m\.Name\)\) unknown\.AddRange\(/);
+  assert.match(bodies(acode, 'GoSizeProblem'), /KeysProblem\(text, "", "live", "playbook", "bots"\)/);
+  assert.match(bodies(gcode, 'FirmsFrom'), /if \(!ChartBridgeBot\.JsonValid\(body\)\)/);
+  assert.equal((acode.match(/ChartBridgeGroups\.AdvisoryEntryCheck\("agent:" \+ Id, a, root, p\.Side == "buy", [^)]*, true, false\)/g) || []).length, 2, 'both plan check 10b calls are advisory');
+  assert.doesNotMatch(acode, /ChartBridgeGroups\.EntryCheck\(/, 'the agents file asks the group and firm rules only as advisory');
 });

@@ -71,10 +71,11 @@ const str = v => (typeof v === 'string' ? v : '');
 const validId = id => typeof id === 'string' && /^[a-z][a-z0-9]{0,11}$/.test(id);
 
 /* ======================================================================== versions */
-/** [major, minor, patch] from a version text ("0.5.0", "fake-0.4.0"), or null. Kept for checks above the page's minimum
- *  ChartBridge (0.5.2 since 1.21.0), such as a later release's feature. */
-function parseVersion(v) { const m = /(\d+)\.(\d+)\.(\d+)/.exec(String(v || '')); return m ? [+m[1], +m[2], +m[3]] : null; }
-/** Is version a at least b? An unknown a is false. */
+/* plan step 3.2 (the R12 delta, X3): ONE rule for ChartBridge's version in agent-core.js, fleet.js and legion.js (the same text
+   in each; test/legion.test.js holds them equal): exactly a.b.c, as ChartBridge.cs writes its Version. Anything else ("0.6.25-rc1",
+   "v0.6.25", "fake-0.5.4", "0.7") is no version, so every gate that asks for one fails closed. */
+function parseVersion(v) { const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(typeof v === 'string' ? v : ''); return m ? [+m[1], +m[2], +m[3]] : null; }
+/** Is version a at least b? A version that is not a.b.c is false. */
 function atLeast(a, b) {
   const x = parseVersion(a), y = parseVersion(b);
   if (!x || !y) return false;
@@ -1343,8 +1344,9 @@ function copilotRouter(doc) {
  * Anthony 2026-11-11: the Agent tab and the Bot tab as one tab, Praetorian, "focused on the personal (not prop business)
  * accounts"; "They already have all the rules and safety's built in". The two desks are mounted as they are; this is the one
  * thing neither had: a gate on the connection they are handed (live/workspace.js praetorianLink), so that from Praetorian
- * nothing reaches a prop account. It hears ChartBridge's own `accounts`, `agent` and `bot` messages and answers, for each
- * message a desk would post, '' (it may go) or why not. It passes:
+ * nothing reaches a prop account. It hears ChartBridge's own `accounts`, `agent` and `bot` messages, and `hello` (the version)
+ * and `groups` (a group trader's home; laneRule, whether ChartBridge has read The Desk's account types: prAutoWhy), and answers,
+ * for each message a desk would post, '' (it may go) or why not. It passes:
  *   - a kill switch turned ON (agentKill or botKill with on: true): it only stops a trader, so it is never held back; and a
  *     trader's or the bot's Shadow (agentMode or botMode to exactly 'shadow'), a stop too (the review of 102, F2; 03:30);
  *   - the two acknowledgements (agentSeen, botSeen): they change nothing;
@@ -1353,6 +1355,9 @@ function copilotRouter(doc) {
  * Everything else is refused by name: a group (groups are on Legion), a prop account, a live account the page cannot
  * tell, a trader ChartBridge has not described yet, and every message type not named above. Sim is offered because it can
  * never reach a prop account and the Agent and Bot tabs are where a trader is tried on Sim (to confirm).
+ * Auto on a Sim account (Anthony 2026-11-19): an account The Desk's ledger types eval or funded needs ChartBridge GOLIVE_MIN
+ * (0.6.25) or later for Auto, whatever NinjaTrader calls it (it may list it as Sim); a true Sim account (the ledger types it
+ * neither) keeps Auto on any version. prAutoWhy below; the stops, Shadow and Copilot never wait for it.
  * Personal is ChartBridge's own flag (0.6.16: personal: true on the one account picked on the Accounts tab, with
  * personalNamed), read by FleetCore.kindOf, the reader Legion uses. With no pick, before the first accounts message, or with no
  * FleetCore on the page, no account is personal and only a kill switch ON gets through (the careful side). It lives here, in
@@ -1365,6 +1370,18 @@ const fleetCore = () => {
 const PR_AGENT_TYPES = new Set(['agentMode', 'agentKill', 'agentRules', 'agentAnswer', 'agentAccount', 'agentSeen']);
 const PR_BOT_TYPES = new Set(['botMode', 'botKill', 'botRails', 'botAnswer', 'botAccount', 'botSeen']);
 const PR_ACKS = new Set(['agentSeen', 'botSeen']);
+/* plan step 3.2: "Flatten and turn him off" as one ChartBridge command (agentFlattenOff: Shadow, his saved Auto removed, his unfilled
+   entries cancelled, his own flatten, Copilot and Auto refused until his program ends). The ChartBridge that knows it is 0.6.25 (chart 1.58.0's
+   release); ChartBridge is installed by hand after the page, so until a PC runs 0.6.25 the desks use the page's own three steps as
+   before. It is a stop like Shadow: both gates pass it for any trader ChartBridge has described, with exactly the
+   keys type, cid and agent. */
+const FLATOFF_MIN = '0.6.25';
+/* round 4: Auto on a prop account (Legion's desks and Armed) and Go live need the ChartBridge that carries the firm and GO-size
+   guards (0.6.25), so a PC rolled back to an older ChartBridge can never run a trader past them. The same strict version rule as
+   every gate; held equal to FleetCore.GOLIVE_MIN and LegionCore.GOLIVE_MIN by test/nt8-agents.test.js */
+const GOLIVE_MIN = '0.6.25';
+const goLiveWhy = version => (atLeast(version, GOLIVE_MIN) ? '' : 'Auto on a prop account needs ChartBridge ' + GOLIVE_MIN + ' or later (its firm and GO-size guards); this one is ' + (typeof version === 'string' && version ? version.slice(0, 40) : 'not known'));
+const flatOffOk = (m, s) => Object.keys(m).every(k => k === 'type' || k === 'cid' || k === 'agent') && s.agents instanceof Map && typeof m.agent === 'string' && s.agents.has(m.agent);
 const PR_WHERE = 'it is set up from Legion\'s trader desk; from here you can only stop it';   // the review of 102 (F5): the words say the truth until Legion's trader desk is in
 
 /**
@@ -1514,8 +1531,60 @@ function prBotWhy(botMsg, accountsMsg) {
 }
 
 /**
+ * Auto from Praetorian on a Sim account (Anthony 2026-11-19): "Any account The Desk's ledger types as eval or funded needs
+ * ChartBridge 0.6.25 or later for Auto in Praetorian, whatever NinjaTrader calls it"; a true Sim account (one the ledger does
+ * not type as prop) keeps Auto testing. names: the trader's accounts (gateAccounts) or the bot's one. '' when Auto may go;
+ * else the words. Only a Sim account is held here (the personal account and None never are; a prop account is refused before).
+ *  - Below GOLIVE_MIN only ChartBridge's own words can tell the page what the ledger says, and none carries the whole ledger:
+ *    the groups message's laneRule.outside (0.6.23) names only the typed accounts in no lane, with no outcome and not
+ *    archived. An account it names is refused as prop; every other Sim account is refused too, since the page cannot read
+ *    its type (Anthony 2026-11-19, "Yes, update to test": the words say that 0.6.25 lets a true Sim account test).
+ *  - From GOLIVE_MIN ChartBridge reads the ledger itself (FirmScope: an account the lane ledger types or The Desk gives a firm
+ *    is under the firm and GO-size guards, a Sim-listed one too), but only once it has read The Desk's lane-accounts: until
+ *    then (and after a failed read) it takes a Sim-listed prop account for plain Sim. The page sees that read in laneRule
+ *    (ChartBridgeGroups.LaneRuleJson): `outside` is null until the first read since the start, and it is set in the same step
+ *    as the ledger Stop all and the firm guards read (NoteTyped); `state` is 'on' only while the last read worked ('off':
+ *    laneRule = off or no deskUrl, so no read; 'error': the last read failed, or lane-hand.txt does not read, which also hides
+ *    a failed read). So Auto on a Sim account goes only with state 'on' and an `outside` list (the coordinator, 2026-11-19:
+ *    the careful side).
+ */
+const SIM_AUTO_UPDATE = '. Update ChartBridge to ' + GOLIVE_MIN + ' or later and a true Sim account (one the ledger does not type eval or funded) can test in Auto';
+/** Whether ChartBridge (GOLIVE_MIN or later) has read The Desk's account types and its last read worked: '' when so, else
+ *  the words (the groups message's laneRule; see prAutoWhy). */
+function ledgerReadWhy(groupsMsg) {
+  const lr = plainObj(groupsMsg) && plainObj(groupsMsg.laneRule) ? groupsMsg.laneRule : null;
+  const why = lr && typeof lr.why === 'string' && lr.why ? ' (' + lr.why.slice(0, 200) + ')' : '';
+  if (!plainObj(groupsMsg)) return 'ChartBridge has not read The Desk\'s account types yet (it has not sent its groups)';
+  if (!lr) return 'ChartBridge has not read The Desk\'s account types yet (its groups message says nothing of them)';
+  if (lr.state === 'off') return 'ChartBridge does not read The Desk\'s account types' + why;
+  if (lr.state === 'error') return 'ChartBridge\'s last read of The Desk\'s account types did not work' + why;
+  if (lr.state !== 'on' || !Array.isArray(lr.outside)) return 'ChartBridge has not read The Desk\'s account types yet' + why;
+  return '';
+}
+function prAutoWhy(names, accountsMsg, groupsMsg, version) {
+  const FC = fleetCore(), rows = plainObj(accountsMsg) && Array.isArray(accountsMsg.list) ? accountsMsg.list : [];
+  const lr = plainObj(groupsMsg) && plainObj(groupsMsg.laneRule) ? groupsMsg.laneRule : null;
+  const outside = lr && Array.isArray(lr.outside) ? lr.outside : [];
+  const same = (a, b) => typeof a === 'string' && typeof b === 'string' && a.toLowerCase() === b.toLowerCase();   // ChartBridge's names ignore case
+  const newer = atLeast(version, GOLIVE_MIN), read = newer ? ledgerReadWhy(groupsMsg) : '';
+  if (newer && !read) return '';
+  for (const n of Array.isArray(names) ? names : []) {
+    if (typeof n !== 'string' || !n) continue;
+    const row = rows.find(r => plainObj(r) && r.name === n);
+    if (!row || !FC || typeof FC.kindOf !== 'function' || FC.kindOf(row) !== 'sim') continue;   // only a Sim account is held here
+    const shown = n.slice(0, 40);
+    if (newer) return read + ', so it cannot tell whether ' + shown + ' is a prop account NinjaTrader lists as Sim: Auto on a Sim account waits until it has read them';
+    const typed = outside.find(x => plainObj(x) && same(x.account, n) && (x.kind === 'eval' || x.kind === 'funded'));
+    if (typed) return shown + ' is typed ' + typed.kind + ' on The Desk\'s ledger, though NinjaTrader lists it as Sim: ' + goLiveWhy(version);
+    return 'The Desk\'s ledger may type ' + shown + ' eval or funded (NinjaTrader lists it as Sim) and this ChartBridge cannot say: ' + goLiveWhy(version) + SIM_AUTO_UPDATE;
+  }
+  return '';
+}
+
+/**
  * One message a desk would post, against what ChartBridge has said: '' (it may go) or why not.
- * st: { agents: Map(id -> agent message), bot (the bot message), accounts (the accounts message) }.
+ * st: { agents: Map(id -> agent message), bot (the bot message), accounts (the accounts message), groups (the groups message),
+ *   version (hello's, for Auto on a Sim account: prAutoWhy) }.
  */
 function prCheck(m, st) {
   const s = st || {};
@@ -1525,6 +1594,7 @@ function prCheck(m, st) {
   /* the review of 102 (F2): Shadow is a stop too (it places nothing new): agentMode to exactly 'shadow' goes for any trader
      ChartBridge has described, so "Flatten and turn off" works on a prop trader. Nothing else for one. */
   if (t === 'agentMode' && m.mode === 'shadow' && s.agents instanceof Map && typeof m.agent === 'string' && s.agents.has(m.agent)) return '';
+  if (t === 'agentFlattenOff') return flatOffOk(m, s) ? '' : 'Not sent from Praetorian: ChartBridge has not described trader ' + String(m.agent || '') + ' yet.';   // plan step 3.2: a stop
   /* the coordinator, 03:30: the bot's Shadow is a stop too, with the same exact check, once ChartBridge has described the bot */
   if (t === 'botMode' && m.mode === 'shadow' && plainObj(s.bot)) return '';
   if (PR_ACKS.has(t)) return '';
@@ -1535,6 +1605,7 @@ function prCheck(m, st) {
     if (nh !== null) { if (nh) return nh; if (!s.preMove && a.mode !== 'shadow') return 'Not sent from Praetorian: an account or group change goes only while the trader is in Shadow (the page sends Shadow first, then the change).'; return ''; }
     const why = prTraderWhy(a, s.accounts, s.groups);
     if (why) return 'Not sent from Praetorian: ' + why + '.';
+    if (t === 'agentMode' && m.mode === 'auto') { const no = prAutoWhy(gateAccounts(a), s.accounts, s.groups, s.version); if (no) return 'Not sent from Praetorian: ' + no + '.'; }   // Anthony 2026-11-19
     if (t === 'agentAccount') {
       if (!s.preMove && a.mode !== 'shadow') return 'Not sent from Praetorian: an account or group change goes only while the trader is in Shadow (the page sends Shadow first, then the change).';
       if (m.group !== undefined) return 'Not sent from Praetorian: groups are on Legion, ' + PR_WHERE + '.';
@@ -1546,6 +1617,7 @@ function prCheck(m, st) {
     if (!plainObj(s.bot)) return 'Not sent from Praetorian: ChartBridge has not described the bot yet.';
     const why = prBotWhy(s.bot, s.accounts);
     if (why) return 'Not sent from Praetorian: ' + why + '.';
+    if (t === 'botMode' && m.mode === 'auto') { const no = prAutoWhy([botAccountOf(s.bot)], s.accounts, s.groups, s.version); if (no) return 'Not sent from Praetorian: ' + no + '.'; }   // Anthony 2026-11-19
     if (t === 'botAccount' && m.account !== null && !prIsPersonal(m.account, s.accounts)) return 'Not sent from Praetorian: ' + prNotPersonalWhy(m.account, s.accounts) + '.';
     if (t === 'botAccount' && !s.preMove && s.bot.mode !== 'shadow') return 'Not sent from Praetorian: the bot changes account only in Shadow (the page sends Shadow first, then the change).';
     return '';
@@ -1652,16 +1724,17 @@ function gatedLink(gate, feed, onHear, opts) {
  * (everything heard is forgotten, so nothing is passed on an old word), check(m) as above, state() for the tests.
  */
 function praetorianGate() {
-  const S = { agents: new Map(), bot: null, accounts: null, groups: null };
+  const S = { agents: new Map(), bot: null, accounts: null, groups: null, version: '' };
   return {
     hear(m) {
       if (!plainObj(m)) return;
-      if (m.type === 'accounts') S.accounts = m;
-      else if (m.type === 'groups') S.groups = m;   // 1.52.0: only to say when a group trader has no home
+      if (m.type === 'hello') S.version = typeof m.version === 'string' ? m.version : '';   // Anthony 2026-11-19: Auto on a Sim account (prAutoWhy)
+      else if (m.type === 'accounts') S.accounts = m;
+      else if (m.type === 'groups') S.groups = m;   // 1.52.0: to say when a group trader has no home; 2026-11-19: laneRule.outside (prAutoWhy)
       else if (m.type === 'agent' && typeof m.agent === 'string') S.agents.set(m.agent, m);
       else if (m.type === 'bot') S.bot = m;
     },
-    lost() { S.agents.clear(); S.bot = null; S.accounts = null; S.groups = null; },
+    lost() { S.agents.clear(); S.bot = null; S.accounts = null; S.groups = null; S.version = ''; },
     check: (m, preMove) => prCheck(m, preMove ? Object.assign({}, S, { preMove: true }) : S),
     traderWhy: id => prTraderWhy(S.agents.get(id) || null, S.accounts, S.groups),
     noHome: id => noHomeWhy(S.agents.get(id) || null, S.accounts, S.groups),
@@ -1754,12 +1827,15 @@ function lgCheck(m, st) {
   const t = m.type;
   if ((t === 'agentKill' || t === 'botKill') && m.on === true) return '';
   if (t === 'agentMode' && m.mode === 'shadow' && s.agents instanceof Map && typeof m.agent === 'string' && s.agents.has(m.agent)) return '';
+  if (t === 'agentFlattenOff') return flatOffOk(m, s) ? '' : 'Not sent from Legion: ChartBridge has not described trader ' + String(m.agent || '') + ' yet.';   // plan step 3.2: a stop
   if (t === 'botMode' && m.mode === 'shadow' && plainObj(s.bot)) return '';   // the coordinator, 03:30: Shadow is a stop on both desks
   if (PR_ACKS.has(t)) return '';
   if (t === 'agentStandDownClear') {
     const why = typeof m.group === 'string' ? lgGroupWhy(m.group, s.groups, s.accounts) : 'no group named';
     return why ? 'Not sent from Legion: ' + why + '.' : '';
   }
+  /* round 4 (GOLIVE_MIN): every trader on Legion's desk is on a prop account, so Auto there waits for the ChartBridge that guards it */
+  if ((t === 'agentMode' || t === 'botMode') && m.mode === 'auto' && goLiveWhy(s.version)) return 'Not sent from Legion: ' + goLiveWhy(s.version) + '.';
   if (PR_AGENT_TYPES.has(t)) {
     const a = s.agents instanceof Map && typeof m.agent === 'string' ? s.agents.get(m.agent) || null : null;
     if (!a) return 'Not sent from Legion: ChartBridge has not described trader ' + String(m.agent || '') + ' yet.';
@@ -1787,16 +1863,17 @@ function lgCheck(m, st) {
 }
 /** The gate of Legion's desk: as praetorianGate, and it hears `groups` too (a group's members). */
 function legionGate() {
-  const S = { agents: new Map(), bot: null, accounts: null, groups: null };
+  const S = { agents: new Map(), bot: null, accounts: null, groups: null, version: '' };
   return {
     hear(m) {
       if (!plainObj(m)) return;
-      if (m.type === 'accounts') S.accounts = m;
+      if (m.type === 'hello') S.version = typeof m.version === 'string' ? m.version : '';   // round 4: GOLIVE_MIN
+      else if (m.type === 'accounts') S.accounts = m;
       else if (m.type === 'groups') S.groups = m;
       else if (m.type === 'agent' && typeof m.agent === 'string') S.agents.set(m.agent, m);
       else if (m.type === 'bot') S.bot = m;
     },
-    lost() { S.agents.clear(); S.bot = null; S.accounts = null; S.groups = null; },
+    lost() { S.agents.clear(); S.bot = null; S.accounts = null; S.groups = null; S.version = ''; },
     check: (m, preMove) => lgCheck(m, preMove ? Object.assign({}, S, { preMove: true }) : S),
     traderWhy: id => lgTraderWhy(S.agents.get(id) || null, S.accounts, S.groups),
     noHome: id => noHomeWhy(S.agents.get(id) || null, S.accounts, S.groups),
@@ -1829,6 +1906,6 @@ return {
   createCopilotRouter, copilotRouter, KEY_LOCK_MS, KEY_MIN_SHOWN_MS, KEY_SAY,
   boardRows, boardRoom, boardPosition, rWords, leagueChoices, standDownClearMsg, sdWhen,
   LIGHT, STEPS, PANELS, LIGHT_HOLD, LAP_MS, lightEvents, lightState, stepLines, ageText, entryRisk, tradesR, heatNow, rowTone, decisionRecord, sessionTrail, roomLines, MOTION_KEY, motionPref, setMotionPref,
-  gateAccounts, leftoverWhy, botAccountOf, noHomeWhy, traderFlat, gatedLink, MOVE_MS, prChoices, prBotChoices, praetorianLink, lgAccountOk, lgGroupWhy, lgTraderWhy, lgBotWhy, lgCheck, legionGate, legionLink, PR_AGENT_TYPES, PR_BOT_TYPES, prIsPersonal, prNotPersonalWhy, prTraderWhy, prBotWhy, prCheck, praetorianGate
+  gateAccounts, leftoverWhy, botAccountOf, noHomeWhy, traderFlat, gatedLink, MOVE_MS, prChoices, prBotChoices, praetorianLink, lgAccountOk, lgGroupWhy, lgTraderWhy, lgBotWhy, lgCheck, legionGate, legionLink, FLATOFF_MIN, GOLIVE_MIN, goLiveWhy, PR_AGENT_TYPES, PR_BOT_TYPES, prIsPersonal, prNotPersonalWhy, prTraderWhy, prBotWhy, prAutoWhy, ledgerReadWhy, prCheck, praetorianGate
 };
 });

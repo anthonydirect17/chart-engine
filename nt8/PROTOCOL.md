@@ -1,4 +1,4 @@
-# ChartBridge protocol (v1 market data and fills, v2 orders, v3 accounts, strategies, copier and bot, 0.5.0 agents, 0.5.1 accounts, 0.5.8 prop groups, 0.6.0 group trading, 0.6.1 a group's Type and default hero, 0.6.3 the audit fixes, 0.6.4 the no-trade-record alarm and Merge on an off follower, 0.6.8 the minute book, 0.6.10 the account lifecycle and the NQ tick file, 0.6.11 the bar trail and the narrower 1 second request, 0.6.12 the bar trail follow-ups, 0.6.13 the tick day's morning catch-up and the raw deleted once packed, 0.6.14 the tick day check's rule: short and holes, 0.6.15 the 1 second pull retired: the NQ tick file is the one source, 0.6.16 prop accounts: one Auto restore after a restart (Auto ends at 17:00 ET since 0.6.18), 0.6.17 Kill all for the prop accounts, 0.6.18 entry rules per trader: market entry and no target, 0.6.19 the day's profit stop: a dollar mark per account, 0.6.20 the roster served, 0.6.21 the pick and the day's profit side, 0.6.22 the lanes run themselves, the day's loss stop and the voice calls, 0.6.23 a hand move is the move)
+# ChartBridge protocol (v1 market data and fills, v2 orders, v3 accounts, strategies, copier and bot, 0.5.0 agents, 0.5.1 accounts, 0.5.8 prop groups, 0.6.0 group trading, 0.6.1 a group's Type and default hero, 0.6.3 the audit fixes, 0.6.4 the no-trade-record alarm and Merge on an off follower, 0.6.8 the minute book, 0.6.10 the account lifecycle and the NQ tick file, 0.6.11 the bar trail and the narrower 1 second request, 0.6.12 the bar trail follow-ups, 0.6.13 the tick day's morning catch-up and the raw deleted once packed, 0.6.14 the tick day check's rule: short and holes, 0.6.15 the 1 second pull retired: the NQ tick file is the one source, 0.6.16 prop accounts: one Auto restore after a restart (Auto ends at 17:00 ET since 0.6.18), 0.6.17 Kill all for the prop accounts, 0.6.18 entry rules per trader: market entry and no target, 0.6.19 the day's profit stop: a dollar mark per account, 0.6.20 the roster served, 0.6.21 the pick and the day's profit side, 0.6.22 the lanes run themselves, the day's loss stop and the voice calls, 0.6.23 a hand move is the move, 0.6.24 release 1 (the personal bot, Cut half), 0.6.25 the go-live guards, Stop all and Flatten and turn off, the delta table and the floor fix)
 
 ChartBridge is a NinjaTrader 8 add-on. It serves the live chart page at `http://localhost:8765/` and
 talks to it over one WebSocket at `ws://localhost:8765/ws`. Everything stays on the local machine.
@@ -199,10 +199,11 @@ Bars are stamped with their **start** time. NinjaTrader stamps bars at their clo
 
 | type | fields | when |
 |---|---|---|
-| `hello` | `version`, `now` (UTC ms), `instruments`: `[{root, name, tick, pointValue, settlement, settlementDate}]` (0.3.7: `settlement` the prior session's settlement for that contract, null when ChartBridge has no dated value for it; `settlementDate` the trading date it settles, `yyyy-MM-dd`), `accounts`: `[name]`, `trading` (0.3.0 and later: the `trading` object below, always with `enabled` false until the page signs in), `features` (0.3.5: `["liveFirst", "profile"]`, see Served window and session table; 0.3.7 adds `"settlement"`, `"htf"`, `"weekProfile"`), `pcClock` (0.5.6: this PC's clock against a time server, see Delay readout) | on connect |
+| `hello` | `version`, `now` (UTC ms), `instruments`: `[{root, name, tick, pointValue, settlement, settlementDate}]` (0.3.7: `settlement` the prior session's settlement for that contract, null when ChartBridge has no dated value for it; `settlementDate` the trading date it settles, `yyyy-MM-dd`), `accounts`: `[name]`, `trading` (0.3.0 and later: the `trading` object below, always with `enabled` false until the page signs in), `features` (0.3.5: `["liveFirst", "profile"]`, see Served window and session table; 0.3.7 adds `"settlement"`, `"htf"`, `"weekProfile"`; 0.6.25 adds `"deltaTable"`, see The delta table), `pcClock` (0.5.6: this PC's clock against a time server, see Delay readout) | on connect |
 | `history` | `root`, `name`, `barSeconds` (60), `sub` (0.3.3), `bars`: `[[t,o,h,l,c,v], ...]`, `done` (bool) | after `subscribe`, chunked. Since 0.3.3 the history is split: the chunks before the last minute (the last of them now says `done` false), then the last (forming) minute in its own message with `done` true, rebuilt from trades when it can be (see Backfill and live below) |
 | `ticks` | `root`, `sub` (0.3.3), `ticks`: `[[t,p,v], ...]`, since 0.3.4 `[[t,p,v,s,sm], ...]` (side and method, see Trade side; the first three keep their places); 0.3.7 sends `[t,p,v]` again; since 0.3.8 a trade with a known Time and Sales category is `[t,p,v,null,null,q]` (see Time and Sales category), `done` (bool) | after `history`, the current session's trades, chunked |
 | `ready` | `root`, `sub` (0.3.3), `filled` (0.6.8, minute and hour loads only: how many of the history's bars came from ChartBridge's minute book, 0 when none; see The minute book below), `minuteTimedOut`, `minuteFailed`, `standIn`, `tailTimedOut`, `historyFrom` (0.6.8, see The minute book) | history and tick backfill complete; live ticks follow (since 0.3.3 only those not already in the backfill; see Backfill and live below) |
+| `deltaTable` | `root`, `sub` (the load's; none when pushed after ChartBridge read the session's saved table back), `session`: `{from, coveredFrom, why, missed, big, rows: [dt, buy, sell, big, ...], unknown: [dt, volume, big, ...]}` or null (the delta table, see there) | after `profile` and right before `ready` when the subscribe asked for it (`deltaTable`); again, without `sub`, when a saved table of the session is joined after the load |
 | `profile` | `root`, `sub` (the load's; none when pushed after the session's backfill), `tick`, `bucketSeconds` (1800), `session` and `last`: `{from, whole, coveredFrom, rows: [[t, priceTicks, v], ...]}` or null (0.3.5, see Served window and session table) | right before `ready` when the subscribe asked for it; again, without `sub`, when the session's one backfill makes the table whole |
 | `tick` | `root`, `t`, `u`, `rx` (UTC ms when the add-on received it), `p`, `v`, and since 0.3.4 `s`, `sm` (side and method, see Trade side), since 0.3.8 `q` (Time and Sales category, see there; absent when unknown) | every trade, live |
 | `execs` | `list`: `[exec]` | on connect: executions NinjaTrader already has for today |
@@ -219,7 +220,7 @@ Bars are stamped with their **start** time. NinjaTrader stamps bars at their clo
 
 | type | fields |
 |---|---|
-| `subscribe` | `root` (`MNQ`, `NQ`, `MES`, `ES`), `days` (1m history, default 5), `tickHours` (tick backfill cap, default 8), `sub` (0.3.3, optional: a whole number of up to 15 digits, echoed as a plain number without leading zeros on that load's `history`, `ticks` and `ready`; without it ChartBridge numbers the page's subscribes 1, 2, 3, ...), `liveFirst` (sent by chart 1.8.0; ChartBridge 0.3.5 gives every subscribe with `tickHours` above 0 the served window, with or without it), `profile` (0.3.5: send the `profile` message) |
+| `subscribe` | `root` (`MNQ`, `NQ`, `MES`, `ES`), `days` (1m history, default 5), `tickHours` (tick backfill cap, default 8), `sub` (0.3.3, optional: a whole number of up to 15 digits, echoed as a plain number without leading zeros on that load's `history`, `ticks` and `ready`; without it ChartBridge numbers the page's subscribes 1, 2, 3, ...), `liveFirst` (sent by chart 1.8.0; ChartBridge 0.3.5 gives every subscribe with `tickHours` above 0 the served window, with or without it), `profile` (0.3.5: send the `profile` message), `deltaTable` (0.6.25: send the `deltaTable` message, and the served window's live trades with their sides) |
 | `ping` | `c` (page clock, echoed back in a `pong` with the server clock `s`) |
 | `htf` | `root`, `tf` (`4h`, `1D` or `1W`), `id` (optional) (0.3.7, strict: see below) |
 | `weekProfile` | `root`, `id` (optional) (0.3.7, strict: see below) |
@@ -546,7 +547,8 @@ added for it: the live Bid and Ask updates ChartBridge already follows are the o
 when it is known. Only trades ChartBridge saw live, with a usable quote, and keeps in the served window (see Served
 window and session table) have it: the trades of NinjaTrader's own tick answer, the session table and the files have
 no stored quote, so they stay `[t, p, v]`, unknown, never guessed. The side places stay `null` as in 0.3.7, so a page
-that reads `s` and `sm` from places 4 and 5 sees no side, exactly as for `[t, p, v]`.
+that reads `s` and `sm` from places 4 and 5 sees no side, exactly as for `[t, p, v]` (unless the load asked for the delta table:
+then a trade seen live carries its side there again, see The delta table).
 
 **Older pages** ignore it: chart 1.12.0 reads places 1 to 5 of a trade (`null` there is "no side") and only the
 fields it knows of a `tick`. `/diag` counts the live trades by category (`sides.<root>.live.q`).
@@ -751,8 +753,9 @@ the session is run: only then, never at a later 18:00. The backfills start once 
 first live trade after market data started) and no page is loading, through the gate, one instrument at a time in
 `profileRoots` order (MNQ, NQ, ES, MES, whatever order their first trades came in), once per session, never for a page load,
 and not while the market is closed (0.3.7, review lf7 N4: "closed" also knows the CME holidays, by the page's own rules in
-`src/chart-engine.js`, `cmeClosed`: no session on New Year's Day, Good Friday and Christmas as the NYSE observes them, the
-13:00 ET halt on the other NYSE holidays and 13:15 on an NYSE early close, until 18:00; the same rule decides whether a feed
+`src/chart-engine.js`, `cmeClosed`: no session on New Year's Day, Good Friday and Christmas as the NYSE observes them, except
+CME's abbreviated session on Good Friday 2026, closed from 09:15 ET (`cmeShortSessions`, `ChartBridgeCme.ShortClose`, Anthony's
+ruling 2026-11-18), the 13:00 ET halt on the other NYSE holidays and 13:15 on an NYSE early close, until 18:00; the same rule decides whether a feed
 drop missed trades). It asks NinjaTrader for the session so far **by
 date**, from its 18:00 start. NinjaTrader's help says a by-date request covers whole trading days from 12:00 AM, so the answer
 also holds the hours before 18:00 (back to midnight the day before); NinjaTrader loads them and ChartBridge copies them, then
@@ -804,6 +807,115 @@ and `backfillTotalMs` (the backfills' times added up). `windows` lists the last 
 `atUtcMs`, `fromCache`, `askedByCount` (the counts asked, "shared" for a load that waited on another's request), `trades`,
 `from`, `timeToLiveMs`, `error`.
 
+## The delta table (0.6.25; Anthony 2026-11-19)
+
+Anthony, 2026-11-19: "When I switch between chart timeframes or tickers, my Cum Delta resets. That should not be: once the data is
+in there, it should be there." Until this build the page counted only trades whose side it saw live (the served window's trades
+carry no side, 0.3.7), so a ticker switch, a layout or laptop-tab switch, a reload and a ChartBridge reconnect each began a new
+count. ChartBridge already sides every live trade (Trade side); it now keeps the session's sides and gives them to every load.
+**It asks NinjaTrader for nothing**: the 0.3.4 backfill sides came from historical quotes, which froze NinjaTrader (0.3.4.1,
+removed in 0.3.7); none of that comes back.
+
+**What ChartBridge keeps.** Per instrument in `roots` (`RootBook.Delta`, `DeltaTable`), the session's buy, sell and unknown volume
+per second of New York wall time: buy for side 1, sell for side -1, unknown for side 0 (no usable quote and no previous trade);
+and each second's largest single trade, any side (Anthony 2026-11-19, "Yes, add it": the Data Box's largest print on bars built
+from the table).
+Built in OnMarketData from the side `LiveSideTagger` gave the trade, under the book's lock, beside the session table (the same
+session, the same 18:00 ET reset by `SessionClock.Bounds`, the same rule that a trade more than 2 minutes off the clock never
+opens a session). A second is `floor(round(et, 3))`: the second the page reads from the trade's `t` on the wire. At most 86,400
+seconds, in blocks of an hour made as they are reached (about 1.4 MB an instrument for a full session; three adds and a compare a
+trade).
+
+- **From when.** From 18:00 ET when ChartBridge was listening before the session and the feed was up (the session table's
+  whole rule); else from its first live trade of the session (`coveredFrom`), `why` `"start"` (ChartBridge started after 18:00:
+  NinjaTrader started, or the add-on was compiled) or `"feed"` (the feed was down at 18:00). The session table's one backfill
+  makes the profile whole later; it never sides those trades, so the delta table keeps its own start.
+- **Missed seconds** (`missed`): seconds of open market (`ChartBridgeCme.Closed`: the break, a weekend, the holiday halts are
+  never missed) the table did not see: a feed drop while the market is open, from the drop to the next trade (or to the
+  session's end when it is still open at 18:00; a page loading while it is open is told the seconds so far); a NinjaTrader
+  restart, from the last saved second to the new run's first trade. Sent rounded up.
+- **Saved per session**, in `delta-<ROOT>-<yyyy-MM-dd>.txt` (its trading day) in ChartBridge's folder, kept 14 days: a header
+  `deltatable 1 <from> <coveredFrom> <why or ->`, then additive lines `<second since from> <buy> <sell> <unknown> <largest trade>`
+  (a late trade writes its second again; the largest of a second's lines is its largest trade, and a second with a line whose
+  largest trade is not known (0) stays not known) and `m <seconds>` for missed
+  seconds. A file saved before the largest trade was kept has four fields a line: it is still read, with those seconds' largest
+  trade not known (0). Every 10 s (the accounts timer, on a pool thread, one pass at a
+  time) the closed seconds since the last pass (the forming one waits), the late trades (at most 20,000 kept between passes) and
+  the missed seconds are copied under the book's lock (the text is made after it) and appended, written through
+  (`ChartBridgeFiles.Append`), the missed seconds first, then the late trades, then the seconds (a cut loses the least); the
+  market data thread never writes or waits. A failed write is cut back off the file (or, when that fails too, before the next
+  append) and tried again the next pass (`/diag` counts it, `health.memory.deltaSaveError` says why). The newest second is
+  written once it is over (the clock 2 s past it, or the market closed) and at ChartBridge's stop, which writes every table to
+  its last second before the books go. Late trades are kept a second each (merged), bounded by the session's seconds. A trade for a second the pass is writing, arriving while it writes, is kept as a late trade for the next
+  pass (review R12 S1). A file whose last line has no newline (a crash in the middle of an append) is cut back to its last whole
+  line before the next append (emptied, and its header written again, when the cut was in the header), and a reader leaves such
+  a line out, though it may look whole (R12 S2). A finished session's table
+  is written to its last second, then let go.
+- **Read back at a start.** When an instrument's book is made (off the thread that made it), the current session's file is read
+  (on a day with no session, a weekend or a CME holiday, the last session's); joined to the live table (its seconds added, its
+  start and `why` kept, the seconds between counted missed) at the session's first trade, or at once when that trade came first;
+  then every live page that asked gets the table again (no `sub`), in order with its live trades (as a pushed `profile`; one push
+  to a page at a time, so a profile push and a table push never skip each other's page, R12 N2). The saved seconds are never
+  written again (R12 B1: each restart used to append them once more); this run's own seconds at or below the last saved one are
+  written as late lines. With the market closed (the break, a weekend, a holiday) and no trade yet, the finished session's table
+  is the instrument's table until the next session's first trade (R12 N4); NinjaTrader's replay of that session's last trade at
+  market data start keeps it (it is in the file already). A read that fails is tried again by the next save passes (3 tries in
+  all); a file that is not this session's table, or still will not read, is set aside as `<file>.unread-<n>` and a fresh file is
+  started: a file that did not read back is never appended to. A set-aside file is kept on disk (pruned with the others after 14
+  days) but never read or joined again. A table read back while a page loads reaches that page once it
+  is ready. No file is written for that instrument before the read is done. A file of
+  another session is not read; a line cut by a power cut is left out (its seconds fall in the missed gap).
+
+**The `deltaTable` message.** Asked for with `"deltaTable": true` on `subscribe` (the page sends it when hello's `features` lists
+`deltaTable`; never for an agent). Sent after `profile` and right before `ready`, in the same outbox entry:
+
+```
+{"type":"deltaTable","root":"NQ","sub":12,"session":{"from":1790618400,"coveredFrom":1790618400,"why":null,"missed":0,"big":true,
+ "rows":[0,12,9,5, 1,4,7,3, 1,0,3,2, ...],"unknown":[0,2,5, 3600,1,1, ...]}}
+```
+
+`from` the session's 18:00 start and `coveredFrom` from when every trade is in (bar-time seconds), `why` null, `"start"` or
+`"feed"`, `missed` whole seconds. `big` true: each row ends with the second's largest single trade. `rows`: for each second with
+buy or sell volume, `dt` (seconds since the row before; the first since `from`), buy, sell, largest trade. `unknown`: for each
+second with unknown volume, `dt` (the same way, in its own list), the volume and the largest trade (the same number as in `rows`
+for a second in both). A largest trade of 0 is not known (a second read back from an older file); -1 says it is one of the held
+trades the page gets live after the table, in that same second (R12 N5: the largest of the table's own part of it is not known). So a full session is only the
+seconds that traded, delta coded: a busy NQ session at every second of 23 hours is about 0.89 MB (the harness's case; the fake
+bridge's full session at 15 trades a second, about 0.66 MB). A page reads a table without `big` (rows of 3, unknowns of 2) with no
+largest trade known. `session` is null when the instrument has no table
+(no trade this session since ChartBridge started): the page then counts as with an older ChartBridge.
+
+**The seam** (the `profile` message's): the table is copied under the book's lock together with the held trades, in the moment
+the profile's table is copied, and the held trades `Dedupe` releases after `ready` are taken off their seconds (`less`). So the
+page's delta from the table plus every tick after `ready` is the session's, every trade once: none in both, none in neither
+(the harness checks it with trades arriving during a minute load and a window load). The table is copied in about 0.6 ms for a
+full session (Mono) and formatted with no lock held.
+
+**The served window's sides.** For a load that asked for the table, a served window trade ChartBridge saw live carries its side
+again: `[t, p, v, s, sm]`, or `[t, p, v, s, sm, q]` with a Time and Sales category. A trade from NinjaTrader's tick answer has no
+stored side and stays `[t, p, v]` or `[t, p, v, null, null, q]`. A load that did not ask gets the window exactly as before. The
+page uses them on range bars, where a second's volume cannot be placed in a bar by time alone.
+
+**The page** (live/live.js, live/bar-builder.js `TableReplay`): with the table, the delta is built from it and the trades after
+it, the same on every load: time bars (15 s, 1 m, 5 m and up) take the table a second at a time (`CumulativeDelta.addSecond`:
+the cumulative moves once a second, so a bar's high and low are known to the second; the bar's largest print is the largest of its
+seconds' largest trades, or "-" in the Data Box when one of its seconds has none known, an older file's); range bars take the window's sided trades in the bars they made, and the rest of the table (the session before the
+window, and the window's part from NinjaTrader's answer, which has no side) a second at a time in the bar the builder holds once
+that second's trades are in (before the window: in one bar no chart bar shows, whose value the next bars carry on from), with
+that second's largest trade only when it is larger than every sided trade of that second the window holds (it is then the
+rest's own; else the bar's largest print is not known). The
+pane says "since 18:00 ET", "since HH:MM ET (ChartBridge started)" or "(data connection down at 18:00)", and ", missed N s"
+with ChartBridge's missed seconds (only while the newest session is the table's: a chart open across 18:00 drops them, R12 S3).
+An older ChartBridge (no `deltaTable` in `features`): as before (live/COMPAT.json's
+minChartBridge is unchanged).
+
+**Never touched:** the order path (no order file changes; `ChartBridgeOrders.cs` is not edited), the agents' loads (an agent's
+subscribe never gets the table or sided rows), NinjaTrader requests (none added).
+
+`/diag` `books.<root>.delta`: `from`, `coveredFrom`, `why`, `missedSec`, `seconds`, `trades`, `buy`, `sell`, `unknown`,
+`lateTrades`, `outside` (a trade outside the session's 86,400 seconds), `restored`, `savedThrough`, `lateLost`, `saves`,
+`saveErrors`, `saveError`.
+
 ## Settlement, higher-timeframe bars and the weekly profile (0.3.7)
 
 Three additions for the page (Anthony's chart items: the day % change by the instrument, the 4h, 1D and 1W charts, the
@@ -823,7 +935,9 @@ serve is answered with an `error` and no bars.
   are named by the date they end on (the CME rules above: weekends and CME holidays have none). The current session is the
   one begun last: in the 17:00 to 18:00 break, a weekend or a holiday it is still the one that just ended. So on Tuesday
   the prior is Monday's until Tuesday 18:00; from Sunday 18:00 to Monday 17:00 (and to 18:00) it is Friday's; across Good
-  Friday it is Thursday's from Sunday 18:00.
+  Friday it is Thursday's from Sunday 18:00. Good Friday 2026 was CME's abbreviated session (to 09:15 ET) that CME did not
+  settle (its clearing memo: the April 2 settlement was used), so no settlement is dated to it and Thursday's is the prior
+  in that session, after it and on Monday (`ChartBridgeCme.SettledDay`).
 - **Where the values come from:** NinjaTrader's own settlement for the served contract. NinjaTrader 8's `MarketData` object
   (the one ChartBridge already subscribes to for trades) holds a snapshot of each market data type, `MarketData.Settlement`
   among them (a `MarketDataEventArgs`; NinjaTrader's help, MarketData: "Snapshot data is provided right on subscription"),
@@ -835,7 +949,8 @@ serve is answered with an `error` and no bars.
   (0.3.8, Anthony's ruling) belongs to the session whose settlement time it comes after: stamped after a session day's
   settlement time (16:00 ET, or 12:00 ET on an NYSE holiday or early close, when CME halts early) and before the next
   session day's settlement time, it is that day's. So 16:15 Monday, 20:43 Monday evening and 10:00 Tuesday are all Monday's;
-  a Saturday, a Sunday evening or Monday 15:00 are Friday's; Good Friday (no session) is Thursday's. This dates the
+  a Saturday, a Sunday evening or Monday 15:00 are Friday's; Good Friday (no session, or in 2026 a session CME did not
+  settle) is Thursday's. This dates the
   snapshot NinjaTrader gives at subscription, which carries the time it was read (HOME, 2026-10-01: a first start at
   20:43 ET read that day's settlement stamped 20:43; 0.3.7 left it undated). **Equal to the day before's** (Anthony
   and the coordinator, 0.3.8): NinjaTrader can still hold the day before's value after the settlement time, so a value
@@ -1671,6 +1786,7 @@ at most 400 ticks from the last price) and `maxBracketTicks = 300` (bracket tick
 | `change` | `cid` (optional), `id` (ChartBridge order id, `o1`, `o2`, ...), `price` | move a working limit or stop, or a bracket leg (drag on the chart) |
 | `cancel` | `cid` (optional), `id` | cancel one working order (cancelling one leg of an OCO pair cancels its partner) |
 | `flatten` | `cid` (optional), `account`, `root` | cancel every working order for that account and instrument, then close the position at market |
+| `cutHalf` | `cid` (optional), `account`, `root`, `position` (the signed position the page shows) | release 1 (1.6c): close half the position at market and shrink ChartBridge's stops and targets there to the size left, in one step; see "Cut half (release 1, step 1.6c)" below |
 
 String values must be plain (no backslash escapes, at most 200 characters).
 
@@ -1696,6 +1812,62 @@ reduce). An order that already says `by` (a strategy's) keeps it; the page's own
 carry none. A v2 page never gets `by` for these: its `order` message stays byte for byte 0.3.8's. 0.5.0: `"by": "agent:<id>"`
 for an agent's entry (named `CB#<tag> ag:<id> s8 t16`), its legs and its flat close. 0.5.7: those also carry `"planId"`, the
 `id` of the plan the entry was placed for, when ChartBridge knows it (see the agent channel's Placing).
+
+### Cut half (release 1, step 1.6c)
+
+Anthony 2026-11-17 (the mini ticket mockup; Bot-Lab plan step 1.6c): **Cut half** on the order ticket and the mini ticket closes
+half the position on the ticket's account (or each member of its group) and instrument at market, and the stop and the target
+shrink to the size left **in the same step**. ChartBridge lists `cutHalf` in `hello`'s `features`; a page greys its Cut half
+button without it. One `cutHalf` message per account (a group: one per member, each on its own size, paced within the 10
+actions a second; a member at 1 contract is left alone and named in the page's note, never sent).
+
+`{"type":"cutHalf","cid":"p1","account":"Sim101","root":"MNQ","position":4}`
+
+- **The size.** Half of the position, the smaller part on an odd size: 4 closes 2 and keeps 2, 3 closes 1 and keeps 2, 5
+  closes 2 and keeps 3. Under 2 contracts (1, or flat) it is refused: "Cut half needs 2 or more contracts; MNQ Sim101 holds 1
+  (use Flatten)".
+- **An exit, like Flatten.** The exit side of gate 2 (with `accountChecks` on: a watched, Connected account, no checkmark
+  needed; off: `tradeAccounts`), gates 1, 4, 6, 7 and 8 as every order action, never gate 3 or 9 (it only takes risk off).
+  The page sends it with Armed off too. A `bracket` (or any key not in the table) is refused.
+- **The position, read three ways.** `position` is the signed position the page showed when Anthony pressed. It is refused,
+  nothing sent, unless ChartBridge's two readings (NinjaTrader's list, and with the fills not yet in it) agree and equal it:
+  a stale page or a second press never cuts twice. A Cut half close of the same account and contract that may still fill
+  refuses the next one too ("the last Cut half ... is still being filled"). Every other exit working on the closing side
+  counts (the R12 review): each order that may fill, an OCO group once at its largest, less ChartBridge's own stops and
+  targets there by the same count, so an ATM's or the DOM's bracket, a hand order or hand OCO, an agent's legs and a page
+  exit all count. Those, plus ChartBridge's legs at the size left (or fewer if they were fewer), plus the close, may never
+  close more than the position, or it is refused: a long 4 with an outside stop and target of 4 is refused (its stop of 4
+  would stay on a long 2), and so is a long 4 with ChartBridge's pair of 2 and an outside pair of 2.
+- **A stop or target being changed.** When a leg Cut half would cancel or shrink is not Accepted, Working or TriggerPending
+  (breakeven or trailing moving it, a drag, a pair not yet accepted, a part fill), it is refused, nothing sent ("a stop or
+  target on MNQ Sim101 is being sent, changed or filled"; try again).
+- **One step: the legs first, then the close.** Under the order lock (`PlaceLock`), ChartBridge's own stops and targets on
+  that contract are made to fit the size left by the legs check's own rule (`ShrinkPlan`: legs on the wrong side cancelled,
+  then the newest units cut, a unit covering no more than the excess cancelled whole, the one past it shrunk, a Merge set as a
+  set), at once instead of after the legs check's 4 seconds. Then the close goes out, a Day market order of the half named
+  `CB#<tag> exit cut q<n>` (never a bracket leg, never an entry). Legs that cover the size left can never open a position
+  whichever fills first (a stop filling first leaves the close to finish the exit); legs covering the whole position after the
+  close filled could. Legs ChartBridge cancels here are never called lost by the missing-stop alarm. Orders not named `CB#`
+  (placed in NinjaTrader), an ATM's and an agent's legs are never touched. If NinjaTrader refuses the cancel or the change
+  (the call throws), the close is not sent and every signed-in page gets a `status` `error`.
+- **A shrink NinjaTrader does not make.** Each shrunk leg's planned size is kept while the close may fill or has filled. If
+  the leg comes back with an error, or settles (Accepted, Working, TriggerPending) above that size, every signed-in page gets
+  a `status` `error` and the legs are shrunk again at once by the same rule, to the size left (or the position, if smaller),
+  without the legs check's 4 seconds; once per cut (a second miss is said and left to the legs check). A position flat,
+  flipped or changing by its two readings is left to the legs check. Whether to wait for NinjaTrader to confirm the shrink
+  before the close goes is parked for Anthony.
+- **A close NinjaTrader refuses.** If NinjaTrader rejects or cancels the close before it fills (or the call throws), its legs
+  were already shrunk: every signed-in page gets a `status` `error` at once ("the Cut half close was REJECTED ... those
+  contracts may have NO STOP; act in NinjaTrader now"), and the missing-stop alarm says it again after its 4 seconds. When the
+  submit call itself throws, nothing was sent: ChartBridge changes the shrunk legs back to the size held (legs it cancelled
+  are gone, and the error says so). A close that a Flatten cancels raises nothing (the Flatten closes the whole position).
+- **Refused, nothing sent:** a pair an AI agent owns (its stop and target are the agent's: use Flatten, or a market exit); a
+  copier follower that is on (the copier keeps its size from the leader: cut the leader, whose exits are copied), or off while
+  the copier still holds a position or orders of its own there (Merge's rule); a Merge running on that account and root
+  (checked again under the order lock, and a Merge that plans while a Cut half is sent there is refused); a root ChartBridge
+  does not serve or a quote-only one.
+- The page's Close button and hotkey are named **Flatten** in release 1 (the same `flatten` message; the hotkey's id stays
+  `close`). Flatten all is unchanged.
 
 ## 0.4.0 hardening and markets
 
@@ -1797,7 +1969,8 @@ long as it's clear that we have a sim account chosen, I do not need the lock or 
   and accepted copilot proposals go to that account through every gate (its checkmark or `tradeAccounts`, Connected, the caps).
   `bot`, `welcome` and `botProposal` say `account` and `sim`, and the page shows SIM or LIVE plainly next to the mode, in the
   strip, the pop-out and on every proposal. The rails are unchanged (1 contract, micro or mini, 5 trades, 3 losing trades, the
-  kill switch, the heartbeat never flattens). One account is never both the bot's account and a copier follower (both
+  kill switch, the heartbeat never flattens). **Release 1, step 1.6b replaces this bullet for the bot**: the personal account only,
+  every rail set on the Bot tab and fail closed, the day stops (see "The personal bot (release 1, step 1.6b)" below). One account is never both the bot's account and a copier follower (both
   directions refused, in plain words).
 - **With every off line written** ChartBridge 0.4.0 is 0.3.8 exactly, as before (the Mono harness's base checks run that way).
 
@@ -2753,14 +2926,16 @@ open proposals as `not answered` (they were for the old account), is logged with
 again. `bot`, `welcome` and `botProposal` carry `account` and `sim` (NinjaTrader's simulator or not: the page's SIM or LIVE
 mark; unknown is `false`, shown LIVE).
 
-**Rails** (enforced in ChartBridge, whatever the bot sends; reset at 18:00 ET): at most **1 contract**, on `botRoot` only
+**Rails** (release 1, step 1.6b: the fixed 1 contract, 5 trades and 3 losing trades below are replaced by the rails Anthony sets on
+the Bot tab, all required; see "The personal bot (release 1, step 1.6b)"; the rest stands) (enforced in ChartBridge, whatever the bot sends; reset at 18:00 ET): at most **1 contract**, on `botRoot` only
 (default MNQ); at most **5 trades a day** (an entry that filled, even partly, is a trade); **stand down after 3 losing
 trades** (a closed bot trade with realized P&L below 0; no new entries until the next session); no dollar limit on Sim; every
 bot entry needs a stop (`stopTicks` 1 or more, lead's default); the **kill switch** on the page (`botKill`); all v2 gates
 (trading, the bot account's gate 2, caps, grid, side of market, rate) on top. **Heartbeat**: any bot message counts; 5 s of silence
 and ChartBridge cancels the bot's unfilled entries, keeps any bot position's stop and target, marks the bot lost and tells
 the page (`bot` and a `status` `warn`). The kill switch does the same and refuses every bot order until it is released.
-**ChartBridge never flattens the bot's position by itself**; Flatten on the page works as always.
+**ChartBridge never flattens the bot's position by itself**; Flatten on the page works as always. (Release 1: a day stop closes
+the bot's own share, decision 3a below.)
 
 Bot orders are named `CB#1a2b3c4d bot s8 t16` and their legs as v2, so the legs check, the missing-stop alarm and restart
 recovery cover them.
@@ -2771,7 +2946,7 @@ recovery cover them.
 | `beat` | none | at least every 2 s when nothing else is sent |
 | `signal` | `id` (1 to 40 characters, unique today), `action` (`fired` or `skipped`), `side`, `kind` (`market`, `limit`, `stop`), `price` (limit or stop only), `stopTicks`, `targetTicks` (whole ticks, or `null` for none), `reason` (1 to 200 characters) | `skipped` carries only `id`, `action`, `reason` (and optionally `side`); by mode: logged, proposed, or placed |
 | `withdraw` | `id`, `reason` | the entry is no longer valid: a proposal expires ("not answered"), an unfilled auto entry is cancelled |
-| `flatten` | none | auto mode only: close the bot's position on its account (cancel its legs, then market) |
+| `flatten` | none | auto mode only: close the bot's own position on its account (cancel its legs, then market). Release 1, decision 3a: its own share only, never Anthony's contracts or orders there (see "Bot only") |
 
 | server to bot | fields | when |
 |---|---|---|
@@ -2827,7 +3002,28 @@ the made-up bot client `test/fake-bot.mjs` (no real bot's rules anywhere in this
   `session<TAB>yyyy-MM-dd`, then `trade<TAB><entry tag><TAB>open` or `<realized dollars>`, written whole through a temp
   file. Executions replayed after a restart re-open a trade still open and never count one twice. A file that cannot be read
   is never written over and stands the bot down (no new entries) for that run. At 18:00 ET trades, losses and signal ids
-  start over (a trade still open goes on into the new day).
+  start over (a trade still open goes on into the new day; the dollars of its contracts closed before 18:00 stay with the
+  day before).
+- **Release 1 (R12, the day file): a trade open across a restart keeps its dollars.** The trade being followed is written as
+  `trade<TAB><tag><TAB>open<TAB><its dollars closed so far><TAB><its size, signed><TAB><its average price>` at every execution
+  that changes it (a part exit, a Cut half, a late entry fill that reopens a closed trade, its close). The dollars are the
+  ledger's own: the cash flow of its executions plus the size held at its average price, times the point value, plus what it
+  closed with before a reopen; no commission, as the ledger. After a restart the trade is followed again by the same proof as
+  before (its own stop or target on the bot's account and contract, NinjaTrader's position on that side and at least that
+  size), the dollars come back with it and the day stops count them, so a $30 loss stop fires at the true day (long 2 at
+  25000, 1 sold at 24992, a restart: at 24993, not at 24985). At the size it was saved with, its average price comes back as
+  well (a reopened trade's own price, not the entry's average of both fills). A three field `open` line (a file from an
+  older build) still reads, as 0 dollars closed, priced as before (the entry's fill, else NinjaTrader's average).
+  A ChartBridge before this build does not understand the six field line (it reads a trade line only with three fields) and
+  stands the bot down, never writing over the file: the careful side.
+- **What cannot be told stands the bot down, named.** A trade whose size changed while ChartBridge was not following it (a
+  close or a stop that filled while it was down, a Cut half's close that filled while the restore waited for it, an entry
+  fill before it was followed again) is followed with the dollars
+  known, but `copilot`, `auto` and new bot entries are refused until 18:00 ET (`untold<TAB><tag>` in `bot-day.txt`, kept across
+  a restart). A day file that does not read (a line cut short, a number, size or price that does not read, no session line)
+  and a missing `bot-day.txt` with a copy of today's session left by a save cut off (`bot-day.txt.bak` or `.tmp`) refuse
+  `copilot`, `auto` and every entry, named, for that run: the day is never started over from nothing by accident (delete the
+  files the refusal names to start it over). A copy of an earlier session is a new day.
 - **Heartbeat lost** (5 s with no bot message): ChartBridge closes the bot's connection (it reconnects and says hello again),
   cancels its unfilled entries (only `bot` entries: never a stop, a target or another order), and every open proposal expires
   as `not answered` (the bot can no longer withdraw it; lead's default). The mode is kept. Pages get `bot` and a `status`
@@ -2870,6 +3066,159 @@ the made-up bot client `test/fake-bot.mjs` (no real bot's rules anywhere in this
   follower that is on, the copier refuses the bot's account as a follower while the bot is on, and `botAccount` refuses a
   follower that is on or the leader (see the copier's review 2 notes).
 - **Review 2: `by`** (finding 9): bot orders carry `"by": "bot"` on v3 pages only (see "Who placed it" under Orders).
+
+#### The personal bot (release 1, step 1.6b)
+
+Anthony's answers of 2026-11-17 (Q6, Q7) and 2026-11-18, for the bot channel only. Every other bot rule above stands. Built in
+`nt8/ChartBridgeBot.cs` (one line of gate 3 in `nt8/ChartBridgeOrders.cs`; decision 3: the owner guard's line and the bot's two close
+entry points there too); harnessed in `nt8/check/BotHarness.cs` (sections Rails, FailClosed, SizeCeiling, DayStops, ChosenAccount;
+decision 3: OwnerGuardCase, OwnerShare, OwnerUntold).
+
+- **The personal account only** (Q7: "Bot accounts: personal account only (ChartBridge refuses to arm on any prop account)";
+  2026-11-18: "Personal only, Sim later"). The bot trades only the personal account picked once on the chart page's Accounts
+  tab (`accountPersonal`, `personal-account.txt`, 0.6.16). `botAccount` refuses any other account, `botMode` refuses
+  `copilot` and `auto`, and every entry is refused, in plain words: "no personal account is picked (the chart page's Accounts
+  tab): the bot trades the personal account only", "EVAL-A is not the personal account: the bot trades the personal account
+  only (choose it on the Bot tab)". The pick moving away from the bot's account stands the bot down the same way. None is
+  still allowed (nothing trades). **A Sim account is refused for now** (by either Sim test, `ChartBridgeBot.IsSim` or
+  `ChartBridgeAccounts.IsSim`), also when `personal-account.txt` names one: "Sim101 is a Sim account: the bot trades the
+  personal account only (Sim comes back once the WORK check shows Lucid's accounts do not read as Simulator)".
+  **Planned change, not built: Sim later.** Lucid's accounts may read as NinjaTrader's simulator (law item 113, "not sure"), so
+  ChartBridge cannot tell Sim from prop by the provider name. Once the WORK check shows Lucid does not read as `Simulator`,
+  a later ChartBridge allows Sim accounts for the bot again (a code change and a review; nothing in `config.txt` turns it on).
+- **Every rail set on the Bot tab, fail closed** (Q6: "fail closed (all of size, trades, losses, day loss and profit stops set
+  above 0, else no start)"). `botRails` carries `cid` (optional), `size`, `maxTrades`, `maxLosses`, `dayLoss`, `dayProfit` and
+  `root`, all required: `size` a whole number from 1 to the hard ceiling of `root`; `maxTrades` and `maxLosses` 1 to 100 (a
+  bound on what is typed, not a rail); `dayLoss` and `dayProfit` dollars above 0, at most 1,000,000, at most 2 decimals; `root`
+  as before. 0, null, a string or a missing key is refused ("size must be a whole number from 1 to 20 for MNQ (the hard
+  ceiling: 2 minis or 20 micros, raised only by a new ChartBridge build)"). Refused while the bot has a position or a working
+  entry, as before. `bot-rails.txt` holds `size`, `maxTrades`, `maxLosses`, `dayLoss`, `dayProfit` and `root` after its two `#`
+  lines. **Nothing has a default**: no file, or a file without one of the five (a file from before 1.6b has no size and no day
+  stops), leaves that rail not set; a rail not set refuses `copilot`, `auto` and every entry, and the strip's `standDown` names
+  each one ("the bot's rails are not set: the size, the day's loss stop and the day's profit stop (set them on the Bot tab; until
+  then the bot does not trade)"). A line of 0, `none`, a blank, a size above the hard ceiling of its root or anything else
+  ChartBridge does not understand stands the bot down until the page sets the rails again or the file is deleted.
+- **The size: the Bot tab's, capped only by the hard ceiling** (Q6: "hard ceiling in code (2 minis / 20 micros like agents),
+  raised only by a new ChartBridge build"; 2026-11-18: "Bot tab + hard ceiling"). Every bot entry is `size` contracts. Gate 3's
+  cap for a bot entry is `ChartBridgeBot.EntryCap`: the size and `ChartBridgeAgents.HardCeiling` (NQ and ES 2, MNQ and MES 20),
+  on the order and the position as gate 3 always counts them; `config.txt`'s `maxQty.<ROOT>` no longer caps the bot. The
+  ticket's cap (`maxQty.<ROOT>`), the copier's and the agents' are unchanged. The words of a refusal name it: "the cap is 5 (the
+  bot's size on the Bot tab; the hard ceiling for MNQ is 20)". The size is checked against the ceiling again at placement.
+  One trade at a time stays.
+- **The day stops** (Q7: "flatten at once (realized + open; done for the day)"; 2026-11-18: "Drop to Shadow"). The day is the
+  bot's realized dollars today (its closed trades) plus its open trade marked to ChartBridge's last trade on its root, checked
+  every 500 ms and at every close. At or below minus `dayLoss`, or at or above `dayProfit`: the day is **latched** in
+  `bot-day.txt` (`stop<TAB>loss|profit<TAB><the day's dollars>`; a ChartBridge before 1.6b does not understand the line and
+  stands the bot down, the careful side), the mode **drops to Shadow** (open proposals end `not answered`, unfilled bot
+  entries are cancelled) and the **bot's own contracts are closed at once** (decision 3a below: only the bot's share, never
+  NinjaTrader's Flatten of the root), even with the kill switch on; a refused close is said and tried again while the bot holds
+  its trade. Until 18:00 ET `copilot` and `auto` are refused ("the day's loss stop ($30) was reached today (the day at -$30,
+  realized plus open): the bot's own contracts were closed and it was set to Shadow; no bot entries until 18:00 ET, then
+  Anthony arms it again"), and a restart keeps the latch. At 18:00 ET the latch ends with the day and the mode stays Shadow:
+  **ChartBridge never arms the bot by itself**. When the open trade cannot be valued (no fresh last trade), the realized
+  dollars alone are checked, said once a day. This is the one place ChartBridge closes the bot's position by itself.
+- **Bot only** (decision 3a, 2026-11-18: Anthony "whatever you think", the coordinator's call). The bot shares the personal
+  account with Anthony, so a day stop (and the bot's own `flatten` in auto) closes **only the bot's own contracts** and cancels
+  **only the bot's own working orders** (its entry, stop and target: the bot's tag), and leaves Anthony's own contracts and
+  working orders on the same account and root untouched. Before 3a it was NinjaTrader's Flatten of the whole root
+  (`ChartBridgeOrders.FlattenForBot`, gone). Each step (`ChartBridgeBot.CloseShare`, every 500 ms while it is due):
+  1. the bot's own orders on its contract: the legs of its trade (its tag), every bot entry, and its own closes;
+  2. **the proof, a budget for the whole close** (R12 of decision 3, finding 1): each pair of the bot's own legs on the closing
+     side, seen working (its OCO id, or the leg alone), is kept with the most contracts and the most of them filled seen, also
+     once it is done; the bot's own closes' fills are added up (`closeUsed`). What is left to prove is the pairs' contracts minus
+     what they filled and what its closes filled. Both start over when the trade is flat, and when it is followed again after a
+     restart;
+  3. a close of its own, or any other market order on its account and root (a Flatten or a close of Anthony's on its way, which
+     closes the bot's share too), that may still fill: wait, never a second close beside it ("a market order on OWN-1 MNQ may
+     still fill (Close)"). Its own stop and target stay working meanwhile (they still protect it);
+  4. its legs and entries still working are **cancelled first** (`ChartBridgeOrders.BotCloseCancel`, which cancels only orders
+     named the bot's; a lost cancel again every 5 s), and the close waits until **none of its legs can fill**, so a leg never
+     fills after the close and the close never reaches Anthony's contracts. An entry of its own still working does not hold the
+     close back (its fill only adds to the bot's own position; a late fill reopens the trade, which is closed again);
+  5. **the size**: the smallest of what is left to prove, the bot's followed size (its ledger), and NinjaTrader's position on
+     the bot's side by both readings; one market order `CB#<tag> bot close` of that size (`ChartBridgeOrders.BotCloseSend`,
+     under the order lock, the position read again first), at most once every 5 s. When nothing is left to prove and the ledger
+     still holds contracts, nothing more is ever closed for that trade: an error ("bot trade 1a2b3c4d's own stop and target
+     proved 1 contract and all of them are closed, yet the bot still follows 1 that cannot be told apart from Anthony's own
+     contracts, so ChartBridge closes nothing more: act in NinjaTrader"). A close that goes unfilled (rejected or cancelled) is
+     an error to the pages (its stop and target were cancelled for it) and is sent again within 5 s while the bot holds its
+     trade. **His own exits too big** (finding 4, Anthony's ruling 2 of 2026-11-18, close and warn): under the same lock the
+     other exits that may still fill on the closing side are counted; when with the bot's close they are more than the
+     position, the bot's close still goes, and an error names them ("Anthony's own exits there (3 to sell, working) are more
+     than his own 2 left once the bot's 1 is closed: if they fill they open a position the other way; ChartBridge does not
+     change them: check them in NinjaTrader"). His orders are never changed.
+  **A close that cannot go** (finding 3, Anthony's ruling 3 of 2026-11-18): while the bot still holds and its close waits or is
+  refused for 15 s, the pages get an error naming the order or the reason ("the bot's own contracts on OWN-1 MNQ are still NOT
+  closed after 15 s: a market order on OWN-1 MNQ may still fill (Close); act in NinjaTrader if you need to"), again every 60 s
+  until the bot is flat, each with the voice call `BotNotClosed` (the voice calls of 0.6.22, below). The latch's words say what is
+  true: "the bot's own contracts are being closed" while it holds, "were NOT closed (why)" after a refusal or for a trade not
+  followed, and "were closed" only once the bot is flat.
+  Net long 3 with the bot's 1: the day stop cancels the bot's stop and target, then sells 1 at market; Anthony's 2 and his own
+  stop stay. **The bot's ledger follows its own share**: its own executions (its entry, legs and close: its tag) are its share.
+  Any other execution on its contract (a hand order of Anthony's, or a close of the whole position such as Flatten or Cut half)
+  changes the bot's share only where NinjaTrader's position can no longer hold it: Anthony's own contracts there go first. When
+  he holds fewer than he sells, the rest of his sell closes the bot's contracts (Anthony's ruling 1 of 2026-11-18: he sells 1 by
+  hand while the bot alone is long 2: his sell closes one of the bot's contracts; the bot then holds 1, its stop and target follow
+  1 through the legs check, and its day counts that contract closed at his price). A hand order on the bot's own side only adds
+  to Anthony's share. Before 3a every execution there counted as the bot's. After a restart, the rest of NinjaTrader's position
+  beyond what the bot's legs prove is Anthony's. **Anthony's share** (`handQty`) starts at 0 at each bot entry, taken at the owner
+  guard's own last read (under the order lock; the R12 re-review L1), so his fills after that read count and none before it. A
+  fill of Anthony's that changed his share less than 2 s ago (`HandSettleMs`) may not be in NinjaTrader's position yet, so the
+  guard refuses a bot entry until it settles ("OWN-1 MNQ has a fill of Anthony's from less than 2 s ago that NinjaTrader's
+  position may not show yet: no bot entry until it settles"). A fill of a bot order that NinjaTrader does not list yet is found
+  in ChartBridge's own just sent (finding 5).
+  **The replay fence** (finding 2): NinjaTrader keeps an account's executions of the session across a NinjaScript recompile, and
+  ChartBridge delivers them all again when it starts watching the account, after the bot followed its open trade again from
+  `bot-day.txt` and its legs. Every execution already in an account when the bot starts, or when the account is first watched,
+  is noted (`ChartBridgeBot.NoteWatched`, keyed as ChartBridge keys executions) and never counted by the bot: its effect is in
+  `bot-day.txt` and the restore. And (the R12 re-review L2: after a full NinjaTrader restart a connection may add the day's past
+  executions later) an execution timed before this run began is never counted either. The two are compared in UTC (the R12
+  delta re-review): the execution's time is in NinjaTrader's time zone setting (Tools > Options > General), turned to UTC as the
+  bars are; `RunStart` is the PC's UTC clock at the bot's start, less 30 s for the broker's clock and the PC's to differ (an
+  execution from those 30 s before the start is still fenced by its key). A fill of an order the bot placed in this run (its
+  tag) is never fenced, whatever its time.
+  **When the bot's size cannot be told** (the fail-safe, the coordinator's choice): only what the bot's own legs prove is ever
+  closed. The untold state of the day file (its dollars cannot be told) closes what its legs prove, as any trade: its followed
+  size came from its legs at the restore. A followed size above the proof (an execution counted twice) closes the proof only,
+  said as an error ("bot trade 1a2b3c4d follows 2 contracts but its own stop and target prove only 1 still open: ChartBridge closed those 1
+  and none of the rest, which cannot be told apart from Anthony's own contracts; act in NinjaTrader"). With no proof at all (no
+  working leg was seen, or the trade is open in `bot-day.txt` and not followed), nothing is closed, the pages get an error ("no
+  stop or target of bot trade 1a2b3c4d proves its size, so ChartBridge closes none of it (Anthony's own contracts are never
+  touched): act in NinjaTrader"), and the bot stays stood down (Shadow, the latch, no entry). Why: the legs carry the bot's
+  tag and are sized by ChartBridge to the bot's own fills, so they never claim Anthony's contracts; refusing outright would
+  leave a proven bot position open past its day stop, and closing past the proof could sell Anthony's own contracts.
+- **The owner guard** (decision 3b, 2026-11-18). No new bot entry while Anthony holds his own position, or has his own working
+  order, on the bot's account and root. His exposure is the root's position (any contract month, by both readings) minus the
+  bot's followed size, plus any order there that may still fill and is not a bot order (its entries, and the legs and close of a
+  bot trade). Named, like the agents' owner lock: "OWN-1 MNQ holds 2 contracts long that are not the bot's: no bot entry while
+  Anthony holds his own position or working orders on the bot's account and root (the owner guard; copilot and auto stay armed
+  and enter once it is clear)" (or "has a working order that is not the bot's (buy limit 1)"). Asked for a copilot proposal (no
+  proposal is shown), an auto entry and an accepted proposal (`RailsProblem`), and again under the order lock
+  (`ChartBridgeOrders.PlaceOrderLocked`), so a page order cannot slip in between. **Copilot and auto stay armed** and make no
+  entry until the account is clear; **Shadow is unaffected**. With the guard, a mixed position arises only when Anthony trades
+  by hand while the bot holds its trade; "Bot only" above handles it. Gate 3's cap for the bot stays behind the guard (defense in
+  depth). A page order ChartBridge has just sent that NinjaTrader does not list yet counts as his (finding 6).
+- **Pause and cancel** (Anthony's ruling A, 2026-11-18): when his own position or working order is on the bot's account and root
+  (both readings agreeing, seen for 1 s, so a fill whose position update is late is not taken for his), every bot entry still
+  resting there is cancelled (a part filled entry: its rest), said as a warn ("... the bot's resting entry is cancelled
+  (Anthony's ruling of 2026-11-18, pause and cancel); its filled position and its stop and target are untouched"). Checked every
+  500 ms. The bot's filled position and its legs are never touched.
+- **The standing line** (Anthony's ruling B, 2026-11-18): while the owner guard blocks entries in copilot or auto, `bot` carries
+  `ownerWait` ("waiting: you hold your own position or order (OWN-1 MNQ holds 1 contract long that is not the bot's)", both
+  readings agreeing; null otherwise and in Shadow), and the Bot tab shows a line under the rails in Anthony's words of
+  2026-11-18: "Waiting: you're in this market." The refusals and ChartBridge's own words stay in the log.
+- **Messages.** `bot` adds `size`, `hardCeiling`, `dayLoss`, `dayProfit` (each null when not set), `railsMissing` (the names
+  of the rails not set), `dayStop` (null, or `{kind, day, text}`), `personal` (the bot's account is the personal one) and
+  `ownerWait` (ruling B: null, or the standing line's words; the fake bridge always sends null);
+  `maxTrades`, `maxLosses` and `maxQty` (the size) are null when not set. `welcome`'s `rails` is `{maxQty, size, maxTrades,
+  maxLosses, dayLoss, dayProfit}` (null when not set). `botState` adds `dayStop` (`loss`, `profit` or null). A proposal's
+  `qty` is the size.
+- **The page** (`live/bot-core.js`, `live/bot.js`): Set the rails asks for every rail (a rail not set opens empty; nothing has
+  a default) and refuses what ChartBridge refuses; the panel shows the size, both day stops, the rails not set and a day stop
+  reached; Change account offers only the personal account (Sim: "not for now"; others: "not your personal account").
+- **The fake bridge** (`test/fake-v3.mjs`) mirrors the rails, the fail closed rule and the size; it starts with the rails a
+  made-up PC already set (`botRails: null` starts with none set), applies the personal-account rule only when started with a
+  personal account named (`--personal`), and does not simulate the day stops (BotHarness checks them).
 
 ### The order lanes together (0.4.0 integration)
 
@@ -3218,9 +3567,10 @@ Where the contract left a detail open, the safest simple choice was taken and is
   agent at its full plan (20 MNQ) with nothing set by hand. Gate 3's config cap for an agent's MNQ entry is always 20
   (`ChartBridgeAgents.ShippedConfigCap`, through `ChartBridgeOrders.AgentCap`): `config.txt`'s `maxQty.MNQ` is never read
   for agents. The agent's MNQ entry is capped by the smallest of its own rule (Agent tab, default 20), the hard ceiling (20)
-  and that 20. The page's, the bot's and the copier's MNQ caps are as before: the `maxQty.MNQ` line, or 1 with no line.
+  and that 20. The page's and the copier's MNQ caps are as before: the `maxQty.MNQ` line, or 1 with no line (release 1,
+  step 1.6b: the bot's cap is its size from the Bot tab and the hard ceiling only, see "The personal bot").
   Every other root for agents is as before too (`config.txt`'s cap, 1 with no line). With agents on and a `maxQty.MNQ`
-  line, ChartBridge says once at start in the Output window that the line caps the page, the bot and the copier only.
+  line, ChartBridge says once at start in the Output window that the line caps the page and the copier only.
   ChartBridge never writes `config.txt`; nor do the installer and the updater.
 - **A page exit from an agent's position** (0.5.3 review): a page market order that only reduces an agent's position (the
   owner lock's exit: no bracket, no strategy, the other side, at most the smaller reading) skips gate 3's per-order qty
@@ -3704,6 +4054,57 @@ and the Board's KILL ALL AGENTS (agentKill on to every agent) are unchanged.
 The page's Legion tab sends this message (chart 1.45.0, `live/fleet.js`: asked first on the page; the tab's connection can post nothing else); no other page file names it. Checked in `check/AgentHarness.cs` (`PropAccounts`, the
 "kill all" parts, the review's three scenarios among them) and `test/nt8-agents.test.js`.
 
+### Stop all automation and Flatten and turn off (plan step 3.2: Legion, the next ChartBridge)
+
+Legion's own page (`live/legion.html`, served from the www folder behind the same PIN) has **Stop all automation** in its header
+on every tab (law 9.3; the lock of 2026-11-15, item 90; Anthony 2026-11-17, item 113). ChartBridge 0.6.25
+(chart 1.58.0) carries these two messages, and the pages ask for it as `0.6.25`
+(`LegionCore.STOPALL_MIN`, `AgentCore.FLATOFF_MIN`); with an older ChartBridge Legion sends `agentKillAllProp` and the desks
+keep their own three steps, as before. Both are guarded as every agent page message (a signed-in v3 page from an allowed
+origin, trading on, the agent channel on).
+
+```json
+{"type": "agentStopAll", "cid": "s1"}
+```
+
+No agent key. Like Kill all it is never refused for the action rate. **What is a prop account here** (`StopScope`): never
+the personal account (when one is picked), None, Backtest or Playback; otherwise in scope when Kill all's own rule says so
+(every account but the personal one that NinjaTrader does not list as Sim) **or** when the account ledger types it eval or
+funded: every account The Desk's last `GET /api/lane-accounts` rows give kind `eval` or `funded`, whatever its outcome or
+archive and whatever NinjaTrader calls its connection, so a prop account listed as a simulator is still stopped. The ledger
+is read by the lane rule's poll once a minute; with `laneRule = off`, no `deskUrl` or The Desk not reached it is not known, and
+the answer says the prop accounts were found by ChartBridge's own rule only. With no personal account picked it still acts on
+the ledger's accounts; with neither a pick nor the ledger, nothing is known to be prop and it is refused (`reject`).
+For every agent:
+
+1. **On prop seats only** (no personal seat): exactly Kill all's part (above), with this wider scope: its kill switch on
+   first and Shadow, its saved Auto removed, then its own flatten on the seats in scope.
+2. **On the personal account and prop seats too** (item 113: it "loses its prop seats"): it is NOT killed and its mode is
+   not changed, since the personal account is never touched. Each seat in scope is latched for the session first (no new
+   entry there by any trader until 18:00 ET: a group plan's seat sits out, `taken off by Stop all automation until 18:00 ET`;
+   a one-account plan there is refused), then its own flatten starts on those seats only.
+3. Otherwise (the personal account or Sim only, None): not touched.
+
+The bot, the copier, the order ticket and every manual order are never touched. One `status` line (level warn) to every v3
+page answers, starting `Stop all automation:`; one that throws is named FAILED and the others go on.
+
+```json
+{"type": "agentFlattenOff", "cid": "f1", "agent": "manrae"}
+```
+
+"Flatten and turn him off" as one command, so a page closed half way never leaves it half done (before, the page sent Shadow,
+then its own Flatten, then the PC helper's Off once flat). At once, under the agent's placement gate: its mode goes to
+Shadow (a Copilot proposal expires as not answered), its saved Auto is removed, its unfilled entries are cancelled and its own
+flatten starts on every seat (its own orders only; the position on that account and contract closed whole, as the page's
+Flatten for an agent did). ChartBridge finishes the flatten whatever the page does. Ending its program stays the PC helper's
+Off: while its program is connected, its `agent` message carries `"offAsked": true` and Copilot and Auto are refused for it
+(`auto refused: Flatten and turn off was asked ...`) until its program ends or connects again. The kill switch is not touched.
+One `status` line answers (`Agent <id>: Flatten and turn off: ...`). The page sends the helper's Off once the agent is flat.
+
+Checked in `check/AgentHarness.cs` (`PropAccounts`: stop all with no pick and no ledger, with the ledger only, a Sim-listed
+account the ledger types, a trader on the personal account and a prop account, the latch on a one-account plan; flatten and
+turn off: Shadow, the saved Auto, its own close, Copilot and Auto refused, the keys, a new start).
+
 ### A hand move is the move (0.6.23)
 
 Anthony 2026-11-13: "If I make a move, that's the move". Built in `ChartBridgeGroups.cs` only.
@@ -3739,6 +4140,63 @@ Anthony 2026-11-13: "If I make a move, that's the move". Built in `ChartBridgeGr
 
 Checked in `check/AgentHarness.cs` (`PropAccounts`, the lane rule part, "0.6.23 hand") and `check/GroupsHarness.cs`.
 
+### The floor's highest close kept (0.6.25, the floor fix)
+
+Anthony's ruling (2026-11-18): ChartBridge showed a 50K account's floor at the account size less the drawdown where the
+firm's was higher, from a close above the size before the join.
+A join with no highest close started the highs at the larger of the account size and the balance, and leaving a group,
+a deleted group and Hide forgot them. Built in `ChartBridgeGroups.cs`; released in ChartBridge 0.6.25.
+
+- **Every prop account's end-of-day high is kept at every close**, in a group or not. Prop is ChartBridge's own rule
+  (`ChartBridgeBranches.IsProp`: a personal account is picked, and this is not it, not Sim, not Backtest or Playback). In
+  the 17:00 to 18:00 ET break a prop account with no end-of-day high starts one at its equity then (a close ChartBridge
+  saw, so never above the firm's highest close until a firm resets an account and keeps its name, see below), said once in
+  the Output window; after that the same raise as a member's.
+  The R12 review (BLOCKER 1): a high started this way has not seen the closes before it, so that close's day is kept as
+  its `eodMissed` (the same 12 field line). An account in no group with the firm's rules applied (a copier follower, say)
+  then still reads `floor` null and NinjaTrader's own room (as before any close), with "no end-of-day high is known from
+  before <day>: give the minimum balance from the firm's dashboard"; the kept high still counts in a join (below). A join
+  or `firmMinimum` clears the mark. A group member with no high (its line gone from `account-marks.txt`, say) gets none
+  started at a close: it reads "no end-of-day high is known for this account" until the firm's minimum is given, as before.
+  With no personal account picked nothing is prop and nothing changes (the R12 review, SHOULD 2): no high is started, a
+  join or a move between groups starts as before (the larger of the size and the balance), leaving forgets, and `highEod`
+  is null.
+- **Kept through a leave, a deleted group, Hide and a restart.** A prop account keeps both highs and its missed-close
+  marks (`eodMissed`, `intradayMissed`) when it leaves a group by any way; a Sim or personal account forgets them as
+  before. **After a leave the account's earlier closes are not known** (the delta re-review: a kept high may have
+  started at the account size, a join with no highest close and nothing kept): an empty `eodMissed` is set to the latest
+  close and an empty `intradayMissed` to the day, so in no group with the firm's rules its `floor` is null and
+  NinjaTrader's own room is used ("no end-of-day high is known from before <day>"), until its minimum balance is given
+  (`firmMinimum`) or it joins a group again (the kept high counts in that join, which clears both marks). Anthony
+  2026-11-18 ("Keep both"): an ungrouped prop account keeps NinjaTrader's room until its minimum balance is given. `account-marks.txt` holds them in the same 12 field line (no new field, so any ChartBridge since 0.6.3 reads it).
+  The restart and missed-close rules (0.6.3, audit C2) are unchanged: a close it did not see while the account traded is
+  kept as `eodMissed` beside the kept high, and a gap with nothing traded takes the balance as that close.
+- **A join with no `highClose`** starts both highs at the larger of the kept end-of-day high, the account size and the
+  balance now (the intraday high never below a kept one either), for a prop account; any other account as before. A
+  `highClose` typed on the page is taken as given (the way to correct a high, with `firmMinimum`). **A kept high on a prop
+  account is never forgotten by ChartBridge**: after a firm reset that keeps the account's name, the way to lower it is a
+  typed highest close on the join or `firmMinimum`.
+- **The lane rule's join** carries The Desk's `highClose` from `/api/lane-accounts` when The Desk gives one; ChartBridge
+  starts at the larger of it, the kept end-of-day high (a close The Desk has not walked yet: its floor moves only after the
+  session) and the balance now (the R12 review, SHOULD 1: the old rule's balance floor stays), so **The Desk's highest
+  close can only raise the start**, never lower it. With neither, the join starts at the larger of the account size and
+  the balance, as before. The lane line says where the high
+  started: `added: 1 eval account, X, on the bench (rule); its end-of-day high starts at 50250.00 (The Desk's highest
+  close)`, `(ChartBridge's kept close, above The Desk's highest close 50200.00)`, `(its balance now, above The Desk's
+  highest close 50200.00)`, `(ChartBridge's kept close or its balance now; The Desk gave no highest close)`, or `; its end-of-day high starts at the account size 50000.00: no higher
+  close is known (none from The Desk, none kept by ChartBridge), so check the firm's dashboard and give its minimum balance
+  if the floor differs` (with The Desk's figure in place of "none from The Desk" when it gave the size itself). A `highClose` that reads but is not a plain number of dollars (a string, `true`) refuses that account's join with
+  `accountGroup`'s words; a bare token that is not a JSON number the reader takes (`NaN`, a negative) makes the whole
+  lane-accounts answer unreadable for that minute, so nothing moves until it reads again.
+- **The `accounts` entry gains `highEod`**: the end-of-day high kept for a prop account (dollars), or null when none is
+  kept, the account is not prop (the R12 review, SHOULD 2) or `account-marks.txt` does not read. The page's join prefills the highest close never below it (above The Desk's
+  seed too when that is lower), and warns once, in the join row, when the join must start at the account size, unless
+  NinjaTrader's own figure puts the floor within $25 of it (the same gap as the floor flag).
+- **Entries are unchanged**: an account whose floor is not known still trades as before ("Let them through", Anthony
+  2026-11-18); payouts are untouched.
+
+Checked in `check/GroupsHarness.cs` (`FloorHighs`) and `test/floor-highs.test.js`.
+
 ### The lanes run themselves (0.6.22)
 
 Anthony's standing rule (2026-11-13): a new eval account joins the eval lane by itself, always disarmed until he arms it;
@@ -3751,8 +4209,9 @@ Built in `ChartBridgeGroups.cs` (the rule) and `ChartBridgeAccounts.cs` (the res
 - **Once a minute** ChartBridge asks The Desk `GET <deskUrl>/api/lane-accounts` (10 s limit; the same guard as fills).
   The answer is `{"accounts":[{...}, ...]}`, one flat object per account: `account`, `kind` (`eval`, `funded` or
   `null`), `outcome` (`null`, `blown` or `promoted`), `archived`, `hasRules`, and the rules a join carries (`size`,
-  `dailyLoss`, `drawdown`, `drawdownType`, `lockAt`, `target`, `consistency`, `maxMinis`, `maxMicros`, `typeId`).
-  An answer that does not read moves nothing; that is said once in the Output window until it reads again.
+  `dailyLoss`, `drawdown`, `drawdownType`, `lockAt`, `target`, `consistency`, `maxMinis`, `maxMicros`, `typeId`);
+  0.6.25 (the floor fix): `highClose`, The Desk's highest close for the account (a number, or null; absent from an
+  older Desk), which the join carries (below). An answer that does not read moves nothing; that is said once in the Output window until it reads again.
 - **Join.** An account joins a lane only when all of these hold: its kind is `eval` or `funded`, it has no outcome and is
   not archived, The Desk knows its rules; NinjaTrader lists it and it is connected; it is prop by ChartBridge's own rule (a
   personal account is picked and this is not it, and it is not Sim); it is in no group now; and exactly one group has
@@ -3808,15 +4267,86 @@ lists them word for word).
 - **Calls**, each a `.wav` file of that name in the folder: an entry fill `LongFilled` / `ShortFilled`; ChartBridge's
   stop leg `StopFilled`; its target leg `TargetFilled`, or `TargetOneFilled` / `TargetTwoFilled` for a strategy's first
   and second target; ChartBridge's market exit, an agent's flatten, or NinjaTrader's close after ChartBridge's Flatten
-  `PositionClosed`; ChartBridge's stop moved to its fill price `BreakEvenSet`.
+  `PositionClosed`; ChartBridge's stop moved to its fill price `BreakEvenSet`. Release 1 (R12 of decision 3, Anthony's ruling 3 of
+  2026-11-18): the bot's day stop close still not done after 15 s, then every 60 s while the bot holds, `BotNotClosed`
+  (`ChartBridgeVoice.Say`, one call per error; a new file in the voice folder: until it is there that call is silent and the
+  Output window says so once).
 - **One call per decision**: a group entry copied to several accounts (one decision id) speaks once.
 - **Never waits**: a queue of at most 8 calls (full: the call is dropped) and one background thread plays them, each with a
   5 s limit (a stuck player: that call is dropped). A missing folder or file is said once in the Output window and that
   call is silent.
 - **`config.txt`**: `voice = on` turns it on (**off by default**: a recompile alone changes nothing Anthony hears);
-  `voiceFolder` names the folder (default `Documents\NinjaTrader 8\sounds_voice4`).
+  `voiceFolder` names the folder. **Release 1** (Anthony's rulings of 2026-11-18): the default folder is ChartBridge's
+  `www\voice` (`ChartBridgeVoice.FolderNow`, read when a call plays), and the nine voice-4 files ship in this repo
+  (`live/voice/<Call>.wav`, mono 16-bit PCM at 48000 Hz) and install with the page (`nt8/install-files.json`, the page
+  updater); nothing is made on a PC any more. `live/voice/README.txt` says how they were made and holds each file's sha256.
+  A `voiceFolder` line in `config.txt` still wins, so a PC that set it by hand keeps its old folder until that line is
+  removed. Before release 1 the default was `Documents\NinjaTrader 8\sounds_voice4`.
 
 Checked in `check/AgentHarness.cs` (`Voice`) and `test/nt8-record.test.js`.
+
+### One direction per firm, one PC per firm and the GO size (plan step 3.5, ChartBridge 0.6.25)
+
+Law 9.2 and 9.3 (Anthony 2026-11-17, items 78, 111, 113 and 114; Bot-Lab `notes/BUILD_PLAN_2026-11-16_the_move.md` row 3.5).
+Built in `ChartBridgeGroups.cs` (the firms, `EntryCheck`) and `ChartBridgeAgents.cs` (the pick, Auto, its restore, the roster
+reader). Bot-Lab's half (the GO, half size, the account type, the alarms, the funded scaling step in the runner's size) is
+Bot-Lab's `specrunner/` (its plan step 3.5 build); nothing here sizes a trader's plan (ChartBridge never resizes, check 4).
+
+- **The firms.** Once a minute, off the poll timer's thread, with or without the lane rule, ChartBridge reads The Desk's
+  `GET <deskUrl>/api/legion/cohorts` (The Desk's plan step 3.1) and keeps its `prop_accounts` rows: `account`, `firm` and
+  `pc` (the one trading PC the firm runs on, set on Legion's Cohorts; null: not set). Read strictly: the answer starts
+  `{"v":1,` and is valid JSON as a whole; each row one flat object by the strict reader (no escape, no nested value); a row with no firm is left out
+  (that account's firm is not known); one account with two firms, or one firm with two PCs, refuses the whole answer. A
+  firm is the same firm whatever its case and spaces. A failure keeps the last reading and is said once in the Output
+  window. The firm is never read from NinjaTrader's connection or provider name (item 113).
+- **This PC** is `ChartBridgeBars.PcName()`: `config.txt` `pc`, else the Windows computer name (the name every Desk message
+  carries, `/diag`'s `pc`). Legion's PC for a firm must be that name (any case).
+- **In scope:** a prop account by ChartBridge's own rule (a personal account is picked and this is another, not Sim), one the
+  lane ledger types eval or funded, or one The Desk's rows give a firm. Never None, Backtest, Playback or the personal account.
+- **One direction per firm** (`EntryCheck`, for every source: a trader, the bot, the copier and Anthony's own ticket; under
+  `PlaceLock`, and as plan check 10b's advisory): NQ, MNQ, ES and MES are one market (item 114), any other root its own.
+  While any account of the firm on this PC, grouped or not, holds a long there (a position by either reading, or a working
+  entry), a new short entry on any account of that firm is refused, and the other way round; a firm long and short refuses
+  both sides until it is one direction. **Only the new entry is refused and logged** (`firms: refused, <source>: ...`):
+  nothing is flattened or cancelled (item 111). An exit of the account's own position always goes (the check's first rule,
+  as before). The personal account is never counted and never bound. The group rule (one direction per group, 0.5.8) is
+  unchanged beside it. **A prop account with no firm in the ledger** (in scope, The Desk gives it no firm) counts against
+  a trader's or the bot's new entry on the same market: if it holds the other side (or both), the entry is refused ("...
+  is a prop account with no firm in The Desk's account ledger and holds short on ...: one direction per firm cannot be
+  checked"). Anthony's own ticket and the copier are not held by it. The Output line is written for an order the order
+  path refuses; a trader's plan refused by its plan check (10b, in every mode) is in the trader's own log.
+- **One PC per firm** (item 111): a trader (`agent:<id>`) is refused, with the reason,
+  - at `agentPick` (a file, not None), at `agentMode` `auto`, and at the one Auto restore after a restart (which waits for
+    the first read of The Desk's firms since the start), when its prop seats are of more than one firm ("a cohort trades
+    one firm"), a seat has no firm in the ledger, the firm has no PC set, or the firm runs on another PC;
+  - and each new entry on a prop account whose firm runs on another PC or has none set (a firm moved to another PC while
+    a trader is in Auto: its next entry is refused there). A trader with no prop seat (personal, Sim, None) is not bound.
+  Anthony's own ticket and the copier are not bound to a PC (item 79).
+- **Not known:** with no reading, a reading older than 10 minutes, or an account with no firm, a trader's (and the bot's)
+  new entry on a prop account is refused ("could not tell" is never a yes). Anthony's own ticket and his copier go when the
+  firm cannot be known (the 0.6.6 ruling's side for an unreadable `groups.txt`), and use the last reading whatever its age.
+- **The GO size is the file's** (law 9.3): a roster file that carries Anthony's GO (`live`, Bot-Lab's `_check_live`) is served
+  only when `live.risk_dollars` equals its own `playbook.<live.stage>.risk_dollars` (`live.stage` eval or funded); a
+  lineup's each bot's `live` against the lineup's one playbook. A key the GO size is read from (`live`, `playbook`,
+  `bots`, `stage`, `risk_dollars`, the stage's playbook) written twice in its object, or with an escape, refuses the
+  file. Otherwise `GET /roster` lists it with why (`ok` false) and
+  it cannot be picked, armed or restored. No `live` (or null): nothing to check. This is the only rule ChartBridge reads from
+  a roster file; the runner checks it and the rest of the GO again.
+- **`groups` gains `firmGuard`** (after `laneRule`): `{state: "on" | "error", why, pc (this PC's name or null), readAt (UTC ms
+  or null), firms: [{firm, pc, here, accounts, sides: [{market, side: long | short | mixed}]}]}`: each firm The Desk names,
+  its PC and whether that is this PC, its accounts NinjaTrader lists (never the personal account), and its direction on
+  each market where it holds something. The page shows nothing new yet (Legion's Cohorts, plan step 3.3, reads it).
+- **Needs:** The Desk with `GET /api/legion/cohorts` (plan step 3.1) and each firm's PC set on Legion. Until then a trader on a
+  prop account takes no new entry and cannot go to Auto there; Anthony's own trading and the copier are as before, except
+  that a new entry against a firm's direction is refused once the firm is known.
+
+- **From the Legion review (step 3.2's commands, ChartBridge side):** the status line that answers `agentStopAll` and
+  `agentKillAllProp` carries the press's `cid` after its text (the same opening words), so a page matches its own press;
+  `agentFlattenOff` is never refused for the action rate (as Stop all and Kill all); and when Flatten and turn off fails
+  after the trader is in Shadow, the pages get a status line (`error`) saying it is in Shadow and what was and was not
+  cancelled or flattened, never a bare `ChartBridge error` reject.
+
+Checked in `check/AgentHarness.cs` (`GoLive35`); the older parts run with a made-up firm per account on this PC.
 
 ### The pick, and the day's profit side in accountState (0.6.21)
 
@@ -4016,8 +4546,8 @@ Anthony's decisions of 2026-10-14 (items 4 and 5, with G1, G2, G3 and F-ALL) and
   (`accounts`) and to each agent (`accountState`). A number ChartBridge cannot give is null with the reason; it is never
   estimated. Bots are not in scope.
 - **G2 (b)**: when an account is put into a group, the page asks once for its "highest close so far" (from the firm's
-  dashboard; optional, prefilled with the larger of the account size and its balance now); ChartBridge starts both trailing
-  highs from it.
+  dashboard; optional, prefilled with the larger of the account size and its balance now, and, from 0.6.25 (the floor fix),
+  of the end-of-day high ChartBridge keeps for it); ChartBridge starts both trailing highs from it.
 
 **Files** (next to `config.txt`; written whole through a temp file, off NinjaTrader's thread; Anthony never edits them).
 `groups.txt`: two `#` lines, then one line per group, member and personal account:
@@ -4048,8 +4578,9 @@ in the 17:00 to 18:00 ET break by the same 2 s check that runs the daily reset (
 each session's first reading (`dayStartBalance`, the close before it) only when that reading falls in the 17:00 to 18:05 ET
 window (review of #48: a ChartBridge started at midday never takes a midday balance for a close). `dayStartAt` is the UTC ms of
 that reading. `peakIntraday`, the highest equity seen, raised by the
-1 s accounts check. The highs are kept only for an account in a group: joining sets both (G2), leaving or a deleted group
-clears them. `dayStartBalance`, the balance at the first reading of each session (`session`, `yyyy-MM-dd`, ChartBridge's
+1 s accounts check. The highs are kept for an account in a group: joining sets both (G2); leaving, a deleted group or Hide
+clears them for an account that is not prop. From 0.6.25 (the floor fix, below): a prop account keeps both highs and its
+missed-close marks through all of those, and the break starts its end-of-day high at a close when it has none, in a group or not. `dayStartBalance`, the balance at the first reading of each session (`session`, `yyyy-MM-dd`, ChartBridge's
 18:00 ET session date, as `agentState.session`). Written at most every 5 s while something changed, and at the stop. A file
 that cannot be read is not rewritten that run: the trailing floors are null with that reason (a static floor still works) and
 `realizedToday` and `pnlToday` fall back to NinjaTrader's. A balance of 0 is taken as NinjaTrader not having given one yet (no
@@ -4098,7 +4629,7 @@ config switch):
 |---|---|---|
 | `groupSave` | `cid` (optional), `group` (optional: the id to change; absent makes a new group), `name` (1 to 30 characters, no tab, unique ignoring case), `noHedge` (bool), `dailyLoss` (0 for none), `drawdown` (more than 0), `drawdownType` (`eod`, `intraday`, `static`), `target` (0 for none), `size` (more than 0, more than `drawdown`), `lockAt` (0 for none; `eod` and `intraday` only, above `size - drawdown`), `consistency` (optional, 0 or absent for none, else a percent above 0 and at most 100), `accountType` (0.6.1, optional: `eval`, `funded` or `-` for not set; absent keeps the group's), `hero` (0.6.1, optional: a build name of 1 to 64 safe characters, or `-` for none; absent keeps the group's) | every field every time (but `accountType` and `hero`): Rename and the No hedging switch send the whole group. Money: plain numbers, at most 2 decimals, at most 100,000,000 |
 | `groupDelete` | `cid` (optional), `group` | its members go to None (personal, their own limits kept) |
-| `accountGroup` | `cid` (optional), `account`, `group` (an id, or `null` for None), `highClose` (optional, more than 0: G2 b, joining a group only) | refused when the move would leave the target group mixed (the account holds the other side, or the group is mixed already, with No hedging on). Joining: both trailing highs start at `highClose`, or without it at the larger of the account size and the balance now (the page always asks, prefilled so). 0.6.10: `group` `null` for a member NinjaTrader does not list is accepted (remove-only); joining still needs the account listed |
+| `accountGroup` | `cid` (optional), `account`, `group` (an id, or `null` for None), `highClose` (optional, more than 0: G2 b, joining a group only) | refused when the move would leave the target group mixed (the account holds the other side, or the group is mixed already, with No hedging on). Joining: both trailing highs start at `highClose`, or without it at the larger of the end-of-day high kept for the account (unreleased, the floor fix), the account size and the balance now (the page always asks, prefilled so, never below the kept high). 0.6.10: `group` `null` for a member NinjaTrader does not list is accepted (remove-only); joining still needs the account listed |
 | `accountLimits` | `cid` (optional), `account`, `floor` (0 for none), `dailyLoss` (0 for none) | personal accounts only: refused for an account in a group ("its group's rules apply") |
 
 **ChartBridge to page** (to every v3 page on ChartBridge's own origin, signed in or not, as `accounts`):
@@ -4443,7 +4974,7 @@ A group with risk on and no rules line reads in 0.6.1 to 0.6.4 as before (the 14
 | message | 0.6.5 adds |
 |---|---|
 | `groupSave` | `riskPct` (optional: 0 off, else above 0 and at most 100, at most 2 decimals; absent keeps the group's, so a page before 1.33.0 never drops it). Refused: "riskPct must be a percent of each member's max loss from 0 (off) to 100, at most 2 decimals" |
-| `accountGroup` | the member's own rules, all or none, joining a group only: `size`, `dailyLoss`, `drawdown`, `drawdownType`, `lockAt`, `target` (all needed once any is there), `consistency`, `maxMinis`, `maxMicros` (whole, 0 or absent none), `typeId` (The Desk's type id, or `-`). None sent (a page before 1.33.0): the group's rules apply, and any rules the account had go. The seed of both highs without `highClose`: the larger of its own size and its balance. Refused with `groupSave`'s words, and "rules go with joining a group only" |
+| `accountGroup` | the member's own rules, all or none, joining a group only: `size`, `dailyLoss`, `drawdown`, `drawdownType`, `lockAt`, `target` (all needed once any is there), `consistency`, `maxMinis`, `maxMicros` (whole, 0 or absent none), `typeId` (The Desk's type id, or `-`). None sent (a page before 1.33.0): the group's rules apply, and any rules the account had go. The seed of both highs without `highClose`: the larger of its kept end-of-day high (unreleased, the floor fix), its own size and its balance. Refused with `groupSave`'s words, and "rules go with joining a group only" |
 | `memberRules` (new) | `cid` (optional), `account`, and the same rule keys (size, dailyLoss, drawdown, drawdownType, lockAt, target needed): a member's rules changed later. Its highs stay as they are. Refused for an account in no group ("SIM-C is in no group: its own rules are for a member of a group (My floor and My daily are for an account in no group)"); 0.6.6 takes it there (below) |
 | `groups` | each group gains, after `holders`, `riskPct` (null off) and `ownRules` (the members with rules of their own). A page tells a 0.6.5 ChartBridge by `riskPct` being there |
 | `accounts` | each entry gains `rules`: a member's rules `{size, dailyLoss, drawdown, drawdownType, lockAt, target, consistency, maxMinis, maxMicros, typeId, own}` (null for none; `own` false: its group's), null in no group |
@@ -4851,7 +5382,7 @@ only, never through the tunnel; CORS for `http://localhost:8765` and `http://127
 | endpoint | document | used for |
 |---|---|---|
 | `GET`, `PUT /api/chart-strategies` | `{rev, strategies: [{id, name, stop: {ticks, type, limitOffsetTicks}, targets: [{ticks, sharePct}], breakeven: {afterTicks, plusTicks} or null, trail: {startTicks, byTicks, stepTicks} or null, hotkey}]}` | the Order Strategies, at most 24 |
-| `GET`, `PUT /api/chart-hotkeys` | `{rev, keys: {buy, sell, be, close, flattenAll, merge, maximize}, modifiers: {limit, stop}}` | the trading hotkeys (Merge's key is `merge`) |
+| `GET`, `PUT /api/chart-hotkeys` | `{rev, keys: {buy, sell, be, close, flattenAll, cutHalf, merge, maximize, accept, reject}, modifiers: {limit, stop}}` | the trading hotkeys, ten keys (see "The hotkeys document" below; `close` is shown as Flatten, Merge's key is `merge`) |
 | `GET /api/chart-accounts` | `{accounts: [{account, firm, archived, daily_loss_limit, trailing_drawdown, account_size, source, accountType, outcome}]}` | read only: a prop limit Anthony typed on The Desk, shown only where ChartBridge's `roomDrawdown` or `roomDailyLoss` is null; 1.40.0: `outcome` (`blown`, `promoted` or `null`) starts the account lifecycle (see "The account lifecycle (0.6.10)") |
 | `PUT /api/accounts/{account}/outcome` (chart 1.40.0) | `{outcome: "blown" \| "promoted" \| null}` | the drawer's Blown and Promoted, as the account type's PUT (CORS `PUT`, `OPTIONS`) |
 | `PUT /api/chart-accounts/listed` (chart 1.40.0) | `{accounts: [names]}`; answer `{kept: [...], left_out: [...]}` | the accounts ChartBridge lists, so a new account shows on Prop > Accounts before its first fill: Sim and Playback names left out, at most 200 names of 1 to 64 characters, sorted; once a page load (when ChartBridge's accounts arrive) and whenever the list changes (checked each minute with the rows), as the account type's PUT (mode `cors`, credentials `omit`, `no-store`); a failure is asked again only the next minute, a `404` (an older Desk) stops it for the page load |
@@ -4879,8 +5410,8 @@ The Desk took before. The Desk of the Sunday 11-01 release (`thedesk/chart_setti
 the key (400, "unknown or missing keys"); the page says so and keeps the edit. The Desk needs to accept the key with these
 rules before Anthony can save a bar trail.
 
-Copilot's one-key accept and reject are not keys in D2's draft hotkeys document yet (an open item for the lead); until
-they are, the page shows Accept and Reject buttons and `botAnswer` is the same either way.
+Copilot's one-key accept and reject are keys of the hotkeys document (`accept` and `reject`, no default key, below);
+the page also shows Accept and Reject buttons, and `botAnswer` is the same either way.
 
 The Desk checks its own rules on save; ChartBridge checks `order.strategy` again on every order (it never trusts the
 store).
@@ -4935,8 +5466,11 @@ Each choice below that the brief left open is marked **(lead's default)**.
   (`live-hotkeys-v1`, `live-ws-keys-v1`), so the 1.15 handlers use them. (Until chart 1.22.0 the single chart page then
   showed them read only, told by `live-desk-sync-v1`; the page and the key are gone.) A key The Desk has that this browser keeps for itself (`hotkeyRefused`) is shown with why it does
   nothing here.
-- **The hotkeys document** has nine keys: The Desk's seven plus `accept` and `reject` (the copilot's one-key answers, no
-  default key) (lead's default; The Desk lane adds them). The page sends a cancelable `chart-copilot-key` DOM event
+- **The hotkeys document** has ten keys, the ones the page and The Desk use, in the order the page writes them:
+  `buy` (Buy MKT), `sell` (Sell MKT), `be` (B/E), `close` (shown as Flatten since release 1; the id stays `close`),
+  `flattenAll` (Flatten all), `cutHalf` (Cut half, release 1), `merge` (Merge), `maximize` (Maximize panel), `accept`
+  and `reject` (the copilot's one-key answers, no default key). The page refuses a document without exactly these ten, in any order
+  (`live/order-strategies.js`, `KEY_IDS` and `checkHotkeysDoc`). The page sends a cancelable `chart-copilot-key` DOM event
   (`detail.answer` `accept` or `reject`); the Bot tab answers it (the oldest open proposal); with none open a note says so.
 - **The Desk not reachable:** the last copy read (`live-desk-cache-v1`) is used and shown read only, with a plain note; a
   key pressed, a modifier picked or a strategy saved is refused and says it was not saved (nothing is queued or guessed).

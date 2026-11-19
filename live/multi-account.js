@@ -260,9 +260,10 @@ function mount(el, host) {
     if (!j || j.plan.account !== c.name || j.plan.group !== g.id) return '';
     const hw = window.GroupsCore.highWord(j.plan.rules), Hw = hw.charAt(0).toUpperCase() + hw.slice(1), words = F.joinWords(j.plan);
     return `<div class="ma-join" role="group" aria-label="${esc('Join ' + c.name + ' to ' + g.name)}"><span class="ma-jwords" title="${esc(words)}">${esc(words)}</span>` +
-      `<span class="ma-jrow"><label class="ma-lbl" for="ma-jhigh-${esc(host.panelId)}">${esc(Hw)}</label><input class="ws-num ma-jhigh" id="ma-jhigh-${esc(host.panelId)}" data-ma="jhigh" data-jkey="${esc(j.plan.account + '|' + j.plan.group)}" inputmode="decimal" autocomplete="off" value="${esc(j.plan.prefill)}" title="${esc(j.plan.seed ? 'From ' + j.plan.seed.words + '. ' : 'From the firm\'s dashboard. ')}Optional: empty takes the larger of the account size and its balance. ChartBridge starts the trailing floor from it.">` +
-      `<span class="ma-rules">${esc(j.plan.seed ? 'from The Desk\'s seed' + (j.plan.seed.date ? ' of ' + j.plan.seed.date : '') : 'the firm\'s dashboard; optional')}</span>` +
-      `<button type="button" class="ws-btn primary" data-ma="join-yes">Put in ${esc(g.name)}</button><button type="button" class="ws-btn" data-ma="join-no">Cancel</button></span></div>`;
+      `<span class="ma-jrow"><label class="ma-lbl" for="ma-jhigh-${esc(host.panelId)}">${esc(Hw)}</label><input class="ws-num ma-jhigh" id="ma-jhigh-${esc(host.panelId)}" data-ma="jhigh" data-jkey="${esc(j.plan.account + '|' + j.plan.group)}" inputmode="decimal" autocomplete="off" value="${esc(j.plan.prefill)}" title="${esc(j.plan.seed ? 'From ' + j.plan.seed.words + '. ' : j.plan.kept ? 'From the end-of-day high ChartBridge keeps for it. ' : 'From the firm\'s dashboard. ')}Optional: empty takes the larger of its kept end-of-day high, the account size and its balance. ChartBridge starts the trailing floor from it.">` +
+      `<span class="ma-rules">${esc(j.plan.seed ? 'from The Desk\'s seed' + (j.plan.seed.date ? ' of ' + j.plan.seed.date : '') : j.plan.kept ? 'the close ChartBridge kept; the firm\'s dashboard wins' : 'the firm\'s dashboard; optional')}</span>` +
+      `<button type="button" class="ws-btn primary" data-ma="join-yes">Put in ${esc(g.name)}</button><button type="button" class="ws-btn" data-ma="join-no">Cancel</button></span>` +
+      (j.plan.warn ? `<span class="ma-jwarn">${esc(j.plan.warn)}</span>` : '') + '</div>';
   }
   function chipHtml(c, g) {
     const pend = [...P.pending.values()].some(p => p.chip === c.name);

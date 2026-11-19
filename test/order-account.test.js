@@ -99,8 +99,13 @@ test('trade.js: every order path sends for TR.account, and only after ready() ch
   assert.match(CORE, /function flattenAll\(\) \{\n\s+(try \{ dropNoStop\(\); flattened\(null\); \} catch \(e\) \{ \/\* never in the way of the flatten \*\/ \}\n\s+)if \(!ready\(false\)\) return;\n\s+const one = !isGroup\(TR\.account\), account = TR\.account;/);   // 1.33.0: a group's Flatten all covers every member
   assert.match(CORE, /if \(!TR\.account\) \{ flash\('No account \(None\)/);
   assert.match(CORE, /function dropNoStop\(\) \{ if \(typeof env\.dropNoStop === 'function'\) env\.dropNoStop\(\); \}/, 'dropNoStop only closes the question');
-  // only Flatten and Flatten all skip the Armed check (Anthony 2026-10-01); every other ready() call keeps it
-  assert.deepEqual((CORE.match(/ready\(false\)/g) || []).length, 2);
+  // only Flatten, Flatten all and (release 1, 1.6c, Anthony 2026-11-17: "Cut half works with Armed off") Cut half skip the Armed
+  // check (Anthony 2026-10-01); every other ready() call keeps it
+  assert.deepEqual((CORE.match(/ready\(false\)/g) || []).length, 3);
+  assert.match(CORE, /function cutHalf\(\) \{\n\s+if \(!ready\(false\)\) return;\n\s+const R = root\(\), account = TR\.account;/);
+  // Cut half sends for TR.account (each member of its group): the signed position shown, which ChartBridge checks
+  assert.match(CORE, /const plan = OT\.cutHalfPlan\(targets\(account\), TR\.positions, R\);/);
+  assert.match(CORE, /function sendCut\(x, R\) \{ send\(\{ type: 'cutHalf', cid: \(sentCid = newCid\(\)\), account: x\.account, root: R, position: x\.position \}\); \}/);
   assert.match(CORE, /if \(!TR\.armed && armed !== false\) \{ flash\('Armed is off: nothing was sent/);
   // the buttons call the core's own functions: no second order path. 1.22.0: a chart (live.js) has no TradeCore, no order
   // bar and no trading hotkeys of its own; its clicks, drags and x go to its host (HOST.place, move, cancel, planAdd)
@@ -351,7 +356,8 @@ test('order-ticket.js is unchanged by 1.6.1 (defaultAccount stays for anything e
 
 test('the ticket\'s daily reset is wired in the workspace: every pick is stamped, the reset runs every 5 s in the ticket\'s window, None is kept as picked', () => {
   assert.match(WS, /function notePick\(a\) \{ try \{ store\.setItem\('live-account-v1', JSON\.stringify\(a\)\); store\.setItem\(PICK_AT_KEY, String\(Date\.now\(\)\)\);/);
-  assert.match(WS, /pickViewAccount: a => \{ notePick\(a\); renderOrders\(\); \},\n\s+accountPicked: a => \{ notePick\(a\); renderOrders\(\); \},/);
+  assert.match(WS, /pickViewAccount: a => \{ notePick\(a\); renderOrders\(\); \},\n\s+accountPicked: a => \{ notePick\(a\); syncBars\(\); renderOrders\(\); \},/);   // release 1 (1.6c): the mini tickets' pickers follow
+  assert.strictEqual((WS.match(/accountPicked: a => \{ notePick\(a\); syncBars\(\); renderOrders\(\); \},/g) || []).length, 2, 'the ticket and the mini ticket stamp every pick');
   assert.match(WS, /const r = LP\.ticketReset\(\{ account: acct, pickedAt: at, now, busy \}\);/);
   assert.match(WS, /setInterval\(ticketDailyReset, 5000\);/);
   assert.match(WS, /if \(!TR\.enabled \|\| !TR\.snapReady \|\| \(holder\(\) && !holds\(\)\)\) return;/, 'review of #47: only once the sign-in snapshot of orders and positions is whole, never on a timer');

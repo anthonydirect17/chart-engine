@@ -174,6 +174,10 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static readonly object MergeLock = new object();       // the swaps, the counters, the fill times; never held while sending
         private static readonly object MergeSendLock = new object();   // a swap's order call and Flatten's abort, one at a time (never taken on NinjaTrader's thread)
         private static readonly Dictionary<string, MergeSwapState> MergeSwaps = new Dictionary<string, MergeSwapState>();   // account|contract
+        // Release 1 (1.6c, the R12 review F4): one count per account|contract, raised under MergeLock by each Cut half that passed its
+        // Merge check (its close already in Ours). MergeStart reads it before its plan and refuses the freeze when it moved meanwhile,
+        // so a Cut half and a Merge on one account and contract never both go: the one that checks second is refused.
+        private static readonly Dictionary<string, long> MergeCutGen = new Dictionary<string, long>();
         private static readonly Dictionary<string, double> MergeChangedAt = new Dictionary<string, double>();   // account|contract -> last fill or position event
         private static readonly Dictionary<Order, int> MergeSeenFilled = new Dictionary<Order, int>();
         private static long mergeOk, mergeRestored, mergeFailed, mergeRefused;
@@ -193,7 +197,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 running = MergeSwaps.Values.ToList();
                 running.AddRange(MergeLateRunning);   // fix4 (G1): a late placement sends nothing more either
-                MergeSwaps.Clear(); MergeChangedAt.Clear(); MergeSeenFilled.Clear(); MergeHeldAlarms.Clear(); MergeFirstSeen.Clear(); MergeLates.Clear(); MergeFlattenAt.Clear();
+                MergeSwaps.Clear(); MergeCutGen.Clear(); MergeChangedAt.Clear(); MergeSeenFilled.Clear(); MergeHeldAlarms.Clear(); MergeFirstSeen.Clear(); MergeLates.Clear(); MergeFlattenAt.Clear();
                 mergeMarkerRead = false;
             }
             lock (MergeSendLock) foreach (MergeSwapState s in running) { s.Stopped = true; s.Aborted = true; }   // a running swap sends nothing more
@@ -216,6 +220,21 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (MergeLock) return MergeSwaps.Values.Any(s => s.Account == a);
         }
 
+        private static long MergeCutGenLocked(string key) { long g; MergeCutGen.TryGetValue(key, out g); return g; }
+
+        // Release 1 (1.6c, the R12 review F4): Cut half's Merge check, inside its PlaceLock block with its close already in Ours. Null
+        // and the count raised when no swap runs there; else why it is refused (nothing was sent).
+        private static string MergeCutCheck(Account a, Instrument i)
+        {
+            string key = PosKey(a, i);
+            lock (MergeLock)
+            {
+                if (MergeSwaps.ContainsKey(key)) return "a Merge started on " + Where(a, i) + "; cutHalf is refused until it ends (Flatten is always accepted)";
+                MergeCutGen[key] = MergeCutGenLocked(key) + 1;
+            }
+            return null;
+        }
+
         public static bool MergeFrozen(Account a, Instrument i)
         {
             if (a == null || i == null) return false;
@@ -227,7 +246,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             lock (MergeLock) if (MergeSwaps.Count == 0) return null;
             Account a = null; Instrument i = null;
-            if (type == "order")
+            if (type == "order" || type == "cutHalf")   // release 1 (1.6c): Cut half names its account and root, as an order does
             {
                 string name = Str(top, "account");
                 lock (Account.All) foreach (Account x in Account.All) if (name != null && x.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) { a = x; break; }
@@ -456,6 +475,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             Instrument inst = ChartBridgeServer.InstrumentFor(root);                 // gate 6: a root ChartBridge trades
             if (inst == null) return MergeRefuse("instrument " + root + " is not served by ChartBridge");
             MergeSwapState s = new MergeSwapState { Account = account, Instrument = inst, Root = root, Key = PosKey(account, inst), Cid = cid, Client = client, Where = Where(account, inst) };
+            long cutGen;
+            lock (MergeLock) MergeCutGen.TryGetValue(s.Key, out cutGen);   // release 1 (1.6c, R12 F4): a Cut half sent from here on refuses the freeze
             // Integration (lane B1): breakeven and trailing paused on this account and contract before the stop prices are read,
             // until the swap ends (PROTOCOL "Merge", step 1: "breakeven/trailing on it are ... paused for the swap").
             PauseStrategies(account, inst, true);
@@ -465,6 +486,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 {
                     if (MergeSwaps.ContainsKey(s.Key)) why = "a Merge is already running on " + s.Where;
                     else if (MergeLateRunning.Any(x => x.Key == s.Key)) why = MergeLateBusy;   // minors (4): checked with the freeze, under one lock
+                    else if (MergeCutGenLocked(s.Key) != cutGen) why = "a Cut half was just sent on " + s.Where + "; try Merge again in a moment";   // release 1 (1.6c, R12 F4)
                     else MergeSwaps[s.Key] = s;                                         // the freeze (step 1)
                 }
             if (why != null) { if (!MergeFrozen(account, inst)) PauseStrategies(account, inst, false); return MergeRefuse(why); }

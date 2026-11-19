@@ -52,6 +52,7 @@ const HK_ROWS = '#wsHotkeys .hk-row:not(.hk-view):not(.hk-extra)';
 const ORDER_TYPES = ['order', 'change', 'cancel', 'flatten'];
 const KEYS = { buy: 'Alt+KeyB', sell: 'Alt+KeyS', be: 'Alt+KeyK', close: 'Alt+KeyC', flattenAll: 'Shift+F9' };
 const SHOWN = { buy: 'Alt+B', sell: 'Alt+S', be: 'Alt+K', close: 'Alt+C', flattenAll: 'Shift+F9' };
+const SHOWN_ALL = Object.assign({}, SHOWN, { cutHalf: '' });   // release 1 (1.6c): Cut half's box, left empty here (test/mini-ticket-smoke.mjs and test/cut-half.test.js cover it)
 
 const browser = ticketOnSim101(await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {}));   // DECISION 2026-10-14e: the ticket starts on None; Sim101 picked, as Anthony would
 try {
@@ -87,8 +88,8 @@ try {
   check(await page.isVisible('#wsSettings'), 'Settings opens');
   const fields = () => page.evaluate(r => Object.fromEntries([...document.querySelectorAll(r + ' .hk-in')].map(i => [i.dataset.hk, i.value])), HK_ROWS);
   const stored = () => page.evaluate(() => localStorage.getItem('live-hotkeys-v1'));
-  check(JSON.stringify(await fields()) === JSON.stringify({ buy: '', sell: '', be: '', close: '', flattenAll: '' }) && await stored() === null, 'no default keys: every box empty, nothing stored');
-  check(JSON.stringify(await page.$$eval(HK_ROWS + ' .hk-name', els => els.map(e => e.textContent))) === '["Buy MKT","Sell MKT","B/E","Close","Flatten all"]', 'one row per action');
+  check(JSON.stringify(await fields()) === JSON.stringify({ buy: '', sell: '', be: '', close: '', flattenAll: '', cutHalf: '' }) && await stored() === null, 'no default keys: every box empty, nothing stored');
+  check(JSON.stringify(await page.$$eval(HK_ROWS + ' .hk-name', els => els.map(e => e.textContent))) === '["Buy MKT","Sell MKT","B/E","Flatten","Flatten all","Cut half"]', 'one row per action (release 1: Close is named Flatten, Cut half last)');
   const note = id => page.textContent('#wsHkNote-' + id);
   const setKey = async (id, combo) => { await page.click('#wsHk-' + id); await page.keyboard.press(combo); await page.waitForTimeout(80); };
   const refusals = [
@@ -104,10 +105,10 @@ try {
   }
   check(await page.isVisible('#wsSettings'), 'Escape in a key box does not close Settings');
   for (const id of Object.keys(KEYS)) { await setKey(id, KEYS[id]); check((await note(id)) === 'Saved.', 'set ' + id + ' to ' + SHOWN[id]); }
-  check(JSON.stringify(await fields()) === JSON.stringify(SHOWN), 'the boxes show the combos: ' + JSON.stringify(await fields()));
-  check(await stored() === JSON.stringify(SHOWN), 'saved under live-hotkeys-v1: ' + await stored());
+  check(JSON.stringify(await fields()) === JSON.stringify(SHOWN_ALL), 'the boxes show the combos: ' + JSON.stringify(await fields()));
+  check(await stored() === JSON.stringify(SHOWN_ALL), 'saved under live-hotkeys-v1: ' + await stored());
   await setKey('sell', KEYS.buy);
-  check(/Alt\+B is already Buy MKT/.test(await note('sell')) && (await fields()).sell === 'Alt+S' && await stored() === JSON.stringify(SHOWN), 'a combo given to another action is refused: ' + await note('sell'));
+  check(/Alt\+B is already Buy MKT/.test(await note('sell')) && (await fields()).sell === 'Alt+S' && await stored() === JSON.stringify(SHOWN_ALL), 'a combo given to another action is refused: ' + await note('sell'));
   // Clear, then set again
   await page.click('#wsHotkeys button[data-hk-clear="close"]');
   check((await fields()).close === '' && JSON.parse(await stored()).close === '', 'Clear empties and saves');
@@ -358,7 +359,7 @@ try {
   /* ---------------- reload keeps the keys (Armed off again); damaged storage is cleaned, never throws */
   await page.reload(); await tradingOn();
   await page.click('#wsSet');
-  check(JSON.stringify(await fields()) === JSON.stringify(SHOWN), 'reload keeps the keys: ' + JSON.stringify(await fields()));
+  check(JSON.stringify(await fields()) === JSON.stringify(SHOWN_ALL), 'reload keeps the keys: ' + JSON.stringify(await fields()));
   await page.click('#wsSet');
   await clearSent();
   await press(KEYS.buy);
@@ -366,10 +367,10 @@ try {
   await page.evaluate(() => localStorage.setItem('live-hotkeys-v1', '{"buy":"Ctrl+W","sell":"Alt+S","be":"Alt+S","close":7,"flattenAll":"A","x":"Alt+X"}'));
   await page.reload(); await tradingOn();
   await page.click('#wsSet');
-  check(JSON.stringify(await fields()) === JSON.stringify({ buy: '', sell: 'Alt+S', be: '', close: '', flattenAll: '' }), 'damaged keys cleaned on read: ' + JSON.stringify(await fields()));
+  check(JSON.stringify(await fields()) === JSON.stringify({ buy: '', sell: 'Alt+S', be: '', close: '', flattenAll: '', cutHalf: '' }), 'damaged keys cleaned on read: ' + JSON.stringify(await fields()));
   await page.evaluate(() => localStorage.setItem('live-hotkeys-v1', '{not json'));
   await page.click('#wsSet'); await page.click('#wsSet');
-  check(JSON.stringify(await fields()) === JSON.stringify({ buy: '', sell: '', be: '', close: '', flattenAll: '' }), 'unreadable storage: no keys, no error');
+  check(JSON.stringify(await fields()) === JSON.stringify({ buy: '', sell: '', be: '', close: '', flattenAll: '', cutHalf: '' }), 'unreadable storage: no keys, no error');
   await page.screenshot({ path: path.join(out, 'hotkeys-1440-settings-empty.png') });
   // the workspace's smallest screen is a laptop's (the single chart page also fitted a phone until 1.22.0)
   await page.setViewportSize({ width: 1366, height: 768 });
@@ -386,7 +387,7 @@ try {
   const host = await ctx.newPage();
   host.on('pageerror', e => fail('embed pageerror: ' + e.message));
   await host.goto(`http://localhost:${P2}/test/embed-host.html`);
-  await host.evaluate(keys => { localStorage.setItem('live-hotkeys-v1', keys); localStorage.setItem('desk:live-hotkeys-v1', keys); localStorage.setItem('embed:live-hotkeys-v1', keys); }, JSON.stringify(SHOWN));
+  await host.evaluate(keys => { localStorage.setItem('live-hotkeys-v1', keys); localStorage.setItem('desk:live-hotkeys-v1', keys); localStorage.setItem('embed:live-hotkeys-v1', keys); }, JSON.stringify(SHOWN_ALL));
   await host.evaluate(port => {
     window.__a = ChartLive.mount(document.getElementById('paneA'), { wsUrl: 'ws://localhost:' + port + '/ws', paneId: 'main', storagePrefix: 'desk:' });
   }, P2);

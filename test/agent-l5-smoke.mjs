@@ -69,10 +69,10 @@ try {
   const page = await ctx.newPage();
   page.on('pageerror', e => fail('page error: ' + e.message));
   page.on('dialog', d => { fail('a browser dialog: ' + d.message()); d.dismiss(); });
-  await page.goto(`http://localhost:${port}/live/?layout=Main`);
+  await page.goto(`http://localhost:${port}/live/legion.html?tab=cohorts&sub=legion`);   // plan step 3.2: Praetorian's Agent desk is on Legion
   if (await page.waitForSelector('.cb-pin-key', { timeout: 15000 }).catch(() => null)) await enterPin(page, TEST_PIN);
-  await page.waitForFunction(() => document.getElementById('wsConn').classList.contains('live'), null, { timeout: 30000 });
-  const A = () => page.evaluate(() => window.workspace.agent());
+  await page.waitForFunction(() => document.getElementById('lxConn').dataset.state === 'on', null, { timeout: 30000 });
+  const A = () => page.evaluate(() => window.legion.agent());
   const L5 = () => page.evaluate(() => window.__desk.layout5());
   const text = sel => page.evaluate(s => { const e = document.querySelector(s); return e ? e.textContent.replace(/\s+/g, ' ').trim() : null; }, sel);
   const box = sel => page.evaluate(s => { const e = document.querySelector(s); if (!e || !e.getClientRects().length) return null; const r = e.getBoundingClientRect(); return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height }; }, sel);
@@ -115,8 +115,8 @@ try {
   await control('price', { root: 'MNQ', p: 25400 });
   await control('agent-connect', { agent: 'demo', name: 'Demo Agent', build: 'sample-build-1' });
   await until(async () => (await A()).agents.length === 1, 'ChartBridge told of demo');
-  await page.evaluate(() => { window.__anims = []; const b = document.getElementById('wsAgentTab'); b.addEventListener('click', () => requestAnimationFrame(() => { window.__anims = document.getAnimations().map(a => a.animationName || a.transitionProperty || 'other'); })); });
-  await page.click('#wsAgentTab');
+  await page.evaluate(() => { window.__anims = []; const b = document.querySelector('[data-lx-sub="praetorian"]'); b.addEventListener('click', () => requestAnimationFrame(() => { window.__anims = document.getAnimations().map(a => a.animationName || a.transitionProperty || 'other'); })); });
+  await page.click('[data-lx-sub="praetorian"]');
   await until(async () => (await A()).shown, 'the tab opens');
   check(await page.evaluate(() => !!window.__desk && typeof window.__desk.layout5 === 'function'), 'the AgentDesk API has layout5()');
   const anims = await page.evaluate(() => window.__anims);
@@ -158,11 +158,11 @@ try {
   check(!r1.running && r1.frames - r0.frames <= 1, 'the system\'s reduced motion: no frame loop: ' + (r1.frames - r0.frames));
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   await until(async () => (await L5()).grid.running, 'it runs again');
-  await page.click('#wsAgentTab');
+  await page.click('[data-lx-sub="legion"]');   // Legion's other Cohorts side: the desk is hidden
   await until(async () => !(await A()).shown, 'the tab closed');
   await sleep(500); const h0 = (await L5()).grid; await sleep(1200); const h1 = (await L5()).grid;
   check(!h1.running && h1.frames === h0.frames, 'the tab closed: no frame loop and no frame: ' + JSON.stringify({ running: h1.running, frames: h1.frames - h0.frames }));
-  await page.click('#wsAgentTab');
+  await page.click('[data-lx-sub="praetorian"]');
   await until(async () => (await A()).shown && (await L5()).grid.running, 'the tab again: it runs');
   /* the pixel ratio stays at most 1.5 on a screen of 2 */
   await page.evaluate(() => Object.defineProperty(window, 'devicePixelRatio', { configurable: true, get: () => 2 }));

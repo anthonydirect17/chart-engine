@@ -1,5 +1,5 @@
 /*!
- * chart-engine 1.57.0
+ * chart-engine 1.58.0
  * Anthony's trading chart: a Canvas 2D candlestick engine with eased zoom, a smooth price axis,
  * live-growing candles, levels, VWAP and trade marks. No dependencies.
  *
@@ -13,7 +13,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
 'use strict';
 
-const VERSION = '1.57.0';
+const VERSION = '1.58.0';
 const DAY = 86400;
 
 /* ---------------------------------------------------------------- time */
@@ -725,17 +725,28 @@ function rthClose(t) {
 /*
  * CME Globex equity index futures (NQ, MNQ, ES and so on), for the volume profile's loads (1.6.1, review 2 S5): Globex
  * trades on most NYSE holidays, so "the stock market is closed" is not "CME is closed". The days with no Globex
- * session at all: New Year's Day, Good Friday and Christmas, on the days the NYSE observes them (cmeClosures). On the
- * other NYSE holidays (Martin Luther King Jr. Day, Presidents Day, Memorial Day, Juneteenth, Independence Day, Labor
- * Day, Thanksgiving) Globex trades from 18:00 the evening before and halts at 13:00 ET; on an NYSE early close day
- * it halts at 13:15 ET. Unscheduled changes are not known in advance and are not here.
+ * session at all: New Year's Day, Good Friday and Christmas, on the days the NYSE observes them (cmeClosures), except
+ * an abbreviated session CME ran on such a day (cmeShortSessions). On the other NYSE holidays (Martin Luther King Jr.
+ * Day, Presidents Day, Memorial Day, Juneteenth, Independence Day, Labor Day, Thanksgiving) Globex trades from 18:00
+ * the evening before and halts at 13:00 ET; on an NYSE early close day it halts at 13:15 ET. Other unscheduled changes
+ * are not known in advance and are not here.
  */
+/*
+ * The sessions the rule gets wrong: CME ran an abbreviated equity index session on a day the rule calls a full
+ * closure. Trading day number -> its close, seconds after midnight New York. Each is a row of the shared CME calendar
+ * (market-data shared/cme_calendar.json: kind "early", its close_ny); nt8/ChartBridge.cs ChartBridgeCme.ShortSessions
+ * holds the same rows. Good Friday 2026: CME's abbreviated Globex session, 18:00 the evening before to 09:15 ET
+ * (Anthony's ruling 2026-11-18, "follow CME").
+ */
+const CME_SHORT_SESSIONS = new Map([[Date.UTC(2026, 3, 3) / 1000 / DAY, 33300]]);
+/** The abbreviated sessions as a fresh Map (trading day number -> close in seconds after midnight ET). */
+function cmeShortSessions() { return new Map(CME_SHORT_SESSIONS); }
 const cmeClosureCache = new Map();
 function cmeClosures(year) {
   let set = cmeClosureCache.get(year);
   if (set) return set;
   const hol = nyseHolidays(year), D = (m, d) => Date.UTC(year, m - 1, d) / 1000 / DAY;
-  const days = [D(1, 1), D(1, 2), goodFriday(year), D(12, 24), D(12, 25), D(12, 26)].filter(d => hol.has(d));
+  const days = [D(1, 1), D(1, 2), goodFriday(year), D(12, 24), D(12, 25), D(12, 26)].filter(d => hol.has(d) && !CME_SHORT_SESSIONS.has(d));
   set = new Set(days);
   cmeClosureCache.set(year, set);
   return set;
@@ -747,8 +758,9 @@ function cmeSessionDay(d) {
 }
 /**
  * Whether CME Globex equity index futures are closed at exchange wall-clock time t: the 17:00 to 18:00 ET break every
- * day, Friday 17:00 to Sunday 18:00, a day with no Globex session (cmeClosures), and after the halt on an NYSE holiday
- * (13:00 ET) or an NYSE early close (13:15 ET) until 18:00.
+ * day, Friday 17:00 to Sunday 18:00, a day with no Globex session (cmeClosures), after an abbreviated session's close
+ * (cmeShortSessions: 09:15 ET on Good Friday 2026), and after the halt on an NYSE holiday (13:00 ET) or an NYSE early
+ * close (13:15 ET) until 18:00.
  */
 function cmeClosed(t) {
   const s = tod(t);
@@ -756,6 +768,7 @@ function cmeClosed(t) {
   if (!cmeSessionDay(tradeDay(t, 64800))) return true;
   const day = Math.floor(t / DAY), date = new Date(day * DAY * 1000), wd = date.getUTCDay(), y = date.getUTCFullYear();
   if (wd === 0 || wd === 6 || s >= 64800) return false;          // Sunday evening, or any evening's new session
+  if (CME_SHORT_SESSIONS.has(day)) return s >= CME_SHORT_SESSIONS.get(day);
   if (nyseHolidays(y).has(day)) return s >= 46800;
   if (nyseEarlyCloses(y).has(day)) return s >= 47700;
   return false;
@@ -860,7 +873,7 @@ function ibLines(ib, colors) {
  * (ChartBridge's profile drop), inside the window up to now makes the answer 'gap': trades may be missing.
  *
  * Returns { state, high, low, start, end }: 'closed' (no CME Globex session that trading day: a weekend, New Year's
- * Day, Good Friday, Christmas), 'forming' (18:00 to 9:30; high and low so far, null before the first trade),
+ * Day, Good Friday, Christmas; not Good Friday 2026, CME's abbreviated session to 09:15), 'forming' (18:00 to 9:30; high and low so far, null before the first trade),
  * 'locked' (from 9:30:00 to the next 18:00), 'empty' (locked with no trade in the window), 'uncovered', 'gap' or
  * 'inexact'. high and low are null in every state but 'forming' and 'locked'.
  */
@@ -1390,7 +1403,7 @@ function create(container, options) {
   /* Chart signals (G1c): { absorption (an Absorption), bubbles (a LargePrints), divergence (a DeltaDivergence), version }
      the page keeps feeding; each drawn while its layer is on (the arrows with the delta pane). */
   let signals = null, sigVer = -1;
-  const pane = { mode: 'cum', ratio: PANE_RATIO, note: '', reason: '', missed: 0, title: '', lo: -1, hi: 1, init: false, ver: -1, drag: null, tkey: '', tclosed: null, cid: 0, cc: null, widths: new Map() };
+  const pane = { mode: 'cum', ratio: PANE_RATIO, note: '', reason: '', missed: 0, start: false, title: '', lo: -1, hi: 1, init: false, ver: -1, drag: null, tkey: '', tclosed: null, cid: 0, cc: null, widths: new Map() };
   /* Levels as drawn: on a ground other than the default each level's color is moved until its name reads (1.5.3).
      Rebuilt when the levels or the theme change, never per frame. A level with `layer` ('ib') shows with that layer,
      the rest with 'levels'. */
@@ -2347,7 +2360,7 @@ function create(container, options) {
     // more: "since 10:04 ET (page opened), missed 32 s", or "since 18:00 ET, missed 32 s" for a session held from its start
     const missed = pane.missed >= 1 && lses && lses === delta.session ? Math.round(pane.missed) : 0;
     const since = !show ? '' : !delta.bars.length ? 'starts with the next full bar'
-      : pane.mode !== 'bar' && lses && (lses.partial || missed) ? 'since ' + fmtExact(lses.partial ? lses.from : lses.start) + ' ET' +
+      : pane.mode !== 'bar' && lses && (lses.partial || missed || (pane.start && lses === delta.session)) ? 'since ' + fmtExact(lses.partial ? lses.from : lses.start) + ' ET' +
         (lses.partial && pane.reason ? ' (' + pane.reason + ')' : '') + (missed ? ', missed ' + missed + ' s' : '') : '';
     pane.title = [title, val, since, pane.note].filter(Boolean).join(' ');
     ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
@@ -3512,8 +3525,9 @@ function create(container, options) {
      * The delta pane's view: { mode: 'cum' (candles, the default) or 'bar' (each bar's delta around zero), ratio (its
      * share of the chart's height, PANE_RATIO_MIN to PANE_RATIO_MAX; about 20% by default), note (drawn instead of any
      * delta, '' for none), reason (why a session counts from later than its start, in brackets after "since 21:40 ET",
-     * for example 'page opened'), missed (seconds the newest session's count missed; shown from 1 s: "missed 32 s") }. Only
-     * the fields given change.
+     * for example 'page opened'), missed (seconds the newest session's count missed; shown from 1 s: "missed 32 s"), start
+     * (0.6.25's delta table: the newest session says from when it counts even when that is its start, "since 18:00 ET") }.
+     * Only the fields given change.
      */
     setDeltaView(v) {
       if (!v) return;
@@ -3521,6 +3535,7 @@ function create(container, options) {
       if (typeof v.note === 'string') pane.note = v.note;
       if (typeof v.reason === 'string') pane.reason = v.reason;
       if (typeof v.missed === 'number' && isFinite(v.missed)) pane.missed = Math.max(0, v.missed);
+      if (typeof v.start === 'boolean') pane.start = v.start;
       if (typeof v.ratio === 'number' && isFinite(v.ratio)) { pane.ratio = clamp(v.ratio, PANE_RATIO_MIN, PANE_RATIO_MAX); layout(); clampRight(); }
       dirty = true;
     },
@@ -4207,26 +4222,8 @@ class CumulativeDelta {
    */
   add(t, v, s, barT, sm) {
     if (typeof t !== 'number' || !isFinite(t) || typeof v !== 'number' || !(v > 0 && v < Infinity)) { this.skipped++; return false; }
-    const last = this.bars.length ? this.bars[this.bars.length - 1] : null;
-    let bt = typeof barT === 'number' && isFinite(barT) ? barT : this.seconds ? Math.floor(t / this.seconds) * this.seconds : t;
-    if (last && bt < last.t) bt = last.t;                  // a late trade folds into the newest bar, as the bar builders do
-    if (bt < this.coveredFrom && !(this.byTime && t >= this.coveredFrom)) { this.uncovered++; return false; }
-    let bar = last;
-    if (!bar || bt > bar.t) {
-      const day = tradeDay(bt, this.sessionStart);
-      let ses = this.sessions.length ? this.sessions[this.sessions.length - 1] : null;
-      if (ses && day < ses.day) { this.skipped++; return false; }
-      if (!ses || day !== ses.day) {
-        const start = this.startOf(bt);
-        ses = { day, start, from: bt < this.coveredFrom ? this.coveredFrom : bt, partial: this.coveredFrom > start, buy: 0, sell: 0, unknown: 0, unknownTrades: 0, missing: 0, byRule: 0, trades: 0,
-          first: this.bars.length, last: this.bars.length };
-        this.sessions.push(ses);
-        this._cum = 0;
-      }
-      bar = { t: bt, o: this._cum, h: this._cum, l: this._cum, c: this._cum, buy: 0, sell: 0, unknown: 0, n: 0, big: 0, s: this.sessions.length - 1 };
-      this.bars.push(bar);
-      ses.last = this.bars.length - 1;
-    }
+    const bar = this._barFor(t, barT);
+    if (!bar) return false;
     const ses = this.sessions[bar.s];
     if (s === 1) { bar.buy += v; ses.buy += v; this._cum += v; }
     else if (s === -1) { bar.sell += v; ses.sell += v; this._cum -= v; }
@@ -4239,6 +4236,56 @@ class CumulativeDelta {
     if (v > bar.big) bar.big = v;                         // 1.16.0: the bar's largest single trade (the Data Box)
     this._ver++;
     return true;
+  }
+  /**
+   * One second of trades from ChartBridge's delta table (0.6.25, nt8/PROTOCOL.md "The delta table"): its buy, sell and unknown
+   * volume, in the price bar starting at barT (as add). The cumulative moves once, by buy minus sell, so inside a bar its high
+   * and low are known to the second (the table has no order inside a second). big: the second's largest single trade (the
+   * Data Box's largest print); 0 or none when not known, which marks the bar `bigMissing` (its largest print is then not
+   * known: a second of it may have held a larger one); -1 when the largest is a trade of the same second added after it (add,
+   * a live trade). Returns true when it was counted. Left out as add leaves a trade out.
+   */
+  addSecond(t, buy, sell, unknown, barT, big) {
+    const b = +buy || 0, s = +sell || 0, u = +unknown || 0;
+    if (typeof t !== 'number' || !isFinite(t) || !(b >= 0 && s >= 0 && u >= 0) || !(b + s + u > 0 && b + s + u < Infinity)) { this.skipped++; return false; }
+    const bar = this._barFor(t, barT);
+    if (!bar) return false;
+    const ses = this.sessions[bar.s];
+    bar.buy += b; ses.buy += b; bar.sell += s; ses.sell += s;
+    if (u) { bar.unknown += u; ses.unknown += u; ses.unknownTrades++; }
+    this._cum += b - s;
+    const c = this._cum;
+    if (c > bar.h) bar.h = c;
+    if (c < bar.l) bar.l = c;
+    bar.c = c; bar.n++; ses.trades++; this.trades++;
+    if (big > 0 && big < Infinity) { if (big > bar.big) bar.big = big; }
+    else if (big !== -1) bar.bigMissing = true;          // -1: the second's largest is a trade added live after it (ChartBridge's seam)
+    this._ver++;
+    return true;
+  }
+  /* The bar (made when new) a trade at t in the price bar barT goes in, or null when it is left out (counted). */
+  _barFor(t, barT) {
+    const last = this.bars.length ? this.bars[this.bars.length - 1] : null;
+    let bt = typeof barT === 'number' && isFinite(barT) ? barT : this.seconds ? Math.floor(t / this.seconds) * this.seconds : t;
+    if (last && bt < last.t) bt = last.t;                  // a late trade folds into the newest bar, as the bar builders do
+    if (bt < this.coveredFrom && !(this.byTime && t >= this.coveredFrom)) { this.uncovered++; return null; }
+    let bar = last;
+    if (!bar || bt > bar.t) {
+      const day = tradeDay(bt, this.sessionStart);
+      let ses = this.sessions.length ? this.sessions[this.sessions.length - 1] : null;
+      if (ses && day < ses.day) { this.skipped++; return null; }
+      if (!ses || day !== ses.day) {
+        const start = this.startOf(bt);
+        ses = { day, start, from: bt < this.coveredFrom ? this.coveredFrom : bt, partial: this.coveredFrom > start, buy: 0, sell: 0, unknown: 0, unknownTrades: 0, missing: 0, byRule: 0, trades: 0,
+          first: this.bars.length, last: this.bars.length };
+        this.sessions.push(ses);
+        this._cum = 0;
+      }
+      bar = { t: bt, o: this._cum, h: this._cum, l: this._cum, c: this._cum, buy: 0, sell: 0, unknown: 0, n: 0, big: 0, s: this.sessions.length - 1 };
+      this.bars.push(bar);
+      ses.last = this.bars.length - 1;
+    }
+    return bar;
   }
   /** add() for TickStore.feedSides(delta, from, minT): trades bucketed by `seconds` (time bars). */
   addQuiet(t, p, v, s, sm) { this.add(t, v, s, undefined, sm); }
@@ -4587,7 +4634,7 @@ return {
     parseColor, rgba, luminance, contrast, readableOn, legible, onGround, markOnGround, pairOnGround, ibPair, distinct, mix, buildTheme, chromeColors, CHROME_VARS,
     V1_GROUND, groundOf, HOUSE_CHROME,
     obarDims, fadedContrast, OBAR_DIM: { alpha: DIM, house: HOUSE_DIMS },
-    aggregate, foldLast, addSessionVwap, sessionLevels, levelLines, initialBalance, ibLines, overnightRange, onLines, rthDay, closedDay, cmeClosed, cmeSessionDay, cmeClosures, nyseHolidays, nyseEarlyCloses, rthClose,
+    aggregate, foldLast, addSessionVwap, sessionLevels, levelLines, initialBalance, ibLines, overnightRange, onLines, rthDay, closedDay, cmeClosed, cmeSessionDay, cmeClosures, cmeShortSessions, nyseHolidays, nyseEarlyCloses, rthClose,
     orderLabel, orderLabelShort, positionShort, partsRisk, htfStart, htfEnd, HTF_SECONDS, cornerPlace, openPnl, fmtMoney, fmtSigned, groupFills, stackFillLabels, profileRects,
     roomBars, ROOM_MIN, ROOM_MAX, LINE_SOFT, LABEL_SOFT, fitRange, fmtRemain, barRemain, atr, smaAt, emaAt, bandsAt, rsiAt, smaSeries, emaSeries, bollinger, rsiSeries, pctFrom, bubbleRadius, BUBBLE_R_MIN, BUBBLE_R_MAX, rthVwap, rthVwapUpdate, vwapAt, PD_POC_DASH,
   },

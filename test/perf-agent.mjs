@@ -1,5 +1,5 @@
 // R5 (docs/MOTION.md) for the Agent tab: the light (look F: the flowing border light) costs no frames while the agent is in a
-// trade over a busy chart. The workspace on the Agent tab against the fake bridge's agent channel with a busy tape (sample
+// trade over a busy chart. Legion's Praetorian side (plan step 3.2: the Agent desk left the chart page) against the fake bridge's agent channel with a busy tape (sample
 // data, the made-up "Demo Agent" and the made-up account SIM-AG1): the agent's entry fills, then MNQ trades at --live-rate
 // while the light circles the chart and the P&L footer (9 s a lap, its colour following the open P&L). Measured as
 // test/perf-bot.mjs does: each chart's own frame callback, all charts per frame, the frame intervals; once with Motion Full
@@ -68,14 +68,14 @@ try {
   const page = await ctx.newPage();
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
-  await page.goto(`http://localhost:${PORT}/live/?layout=Perf&tab=agent`);
+  await page.goto(`http://localhost:${PORT}/live/legion.html?tab=cohorts&sub=praetorian`);   // plan step 3.2: the Agent desk is Praetorian on Legion
   await page.waitForSelector('.cb-pin-key', { timeout: 30000 });
   await enterPin(page, TEST_PIN);
-  await page.waitForFunction(() => { const a = window.workspace && window.workspace.agent(); return a && a.signedIn && a.agents.length === 1; }, null, { timeout: 30000, polling: 200 });
+  await page.waitForFunction(() => { const a = window.legion && window.legion.agent(); return a && a.signedIn && a.agents.length === 1; }, null, { timeout: 30000, polling: 200 });
   /* the agent in a trade: its entry placed (Copilot, accepted) and filled at a held price, then the tape runs */
   await control('price', { root: 'MNQ', p: 25400 });
   await control('agent-connect', { agent: 'demo', name: 'Demo Agent', build: 'sample-build-1' });
-  await page.waitForFunction(() => { const a = window.workspace.agent(); return a && a.shown && a.agents.length === 1 && a.agents[0].connected; }, null, { timeout: 20000 });
+  await page.waitForFunction(() => { const a = window.legion.agent(); return a && a.shown && a.agents.length === 1 && a.agents[0].connected; }, null, { timeout: 20000 });
   await page.click('#agView [data-act="acctOpen"]'); await page.selectOption('#agView [data-k="acctSel"]', 'SIM-AG1'); await page.click('#agView [data-act="acctSave"]');
   await page.waitForFunction(() => document.querySelector('.ag-strip [data-k="sAccount"]').textContent === 'SIM-AG1', null, { timeout: 10000 });
   await page.click('#agView [data-mode="copilot"]');
@@ -85,14 +85,14 @@ try {
   await page.waitForSelector('.ag-plist .ag-prop [data-agans="accept"]', { timeout: 10000 });
   await sleep(1300);                                                           // on screen 1 s
   await page.click('.ag-plist [data-agans="accept"]');
-  await page.waitForFunction(() => window.workspace.agent().orders.some(o => o.by === 'agent:demo' && o.role === 'entry'), null, { timeout: 10000 });
+  await page.waitForFunction(() => window.legion.agent().orders.some(o => o.by === 'agent:demo' && o.role === 'entry'), null, { timeout: 10000 });
   await control('price', { root: 'MNQ', p: 25389.75 });                       // it fills
-  await page.waitForFunction(() => { const a = window.workspace.agent().agents[0]; return a.position && a.position.qty === 1; }, null, { timeout: 10000 });
+  await page.waitForFunction(() => { const a = window.legion.agent().agents[0]; return a.position && a.position.qty === 1; }, null, { timeout: 10000 });
   /* --profit=points: where the tape starts above the entry (0: at the entry, so the open P&L crosses zero again and again and
      the light's colour fades between green and red; 100, the default: a trade well in profit, the light steady) */
   await control('price', { root: 'MNQ', p: 25390 + PROFIT });
   await control('hold', { root: 'MNQ', on: 0 });                              // the busy tape from here on
-  await page.waitForFunction(() => { const l = window.workspace.agent().light; return l && l.phase === 'trade'; }, null, { timeout: 15000 });
+  await page.waitForFunction(() => { const l = window.legion.agent().light; return l && l.phase === 'trade'; }, null, { timeout: 15000 });
   await page.waitForFunction(() => { const c = document.querySelector('#agView .ag-chart .badge, #agView .ag-chart [data-conn]'); return !c || c.dataset.conn === 'live'; }, null, { timeout: 30000, polling: 200 }).catch(() => null);
   if (arg('css', '')) await page.addStyleTag({ content: String(arg('css', '')) });   // an experiment: a style added (what costs what)
   await sleep(WARM * 1000);
@@ -117,8 +117,8 @@ try {
       chartFrames: m.charts.length, chartP95: r3(q(m.charts, 0.95)), allChartsPerFrameP95: r3(q(m.perFrame, 0.95)), longTasks: m.long.length }; };
   const full = sum('full'), off = sum('off');
   await page.click('#agView button[data-motion="full"]');
-  const state = await page.evaluate(() => { const a = window.workspace.agent(); return { phase: a.light && a.light.phase, lit: [...document.querySelectorAll('#agView .ag-panel.lit')].map(e => e.dataset.panel).sort().join(',') }; });
-  result = { page: 'workspace, the Agent tab in a trade (MNQ 1 min, live), the light on the chart and the footer', size: W + 'x' + H, secs: SECS, liveRate: LIVE_RATE, state, full, off, lightCostP95: r3(full.frameP95 - off.frameP95), errors };
+  const state = await page.evaluate(() => { const a = window.legion.agent(); return { phase: a.light && a.light.phase, lit: [...document.querySelectorAll('#agView .ag-panel.lit')].map(e => e.dataset.panel).sort().join(',') }; });
+  result = { page: 'Legion, Praetorian\'s Agent desk in a trade (MNQ 1 min, live), the light on the chart and the footer', size: W + 'x' + H, secs: SECS, liveRate: LIVE_RATE, state, full, off, lightCostP95: r3(full.frameP95 - off.frameP95), errors };
   for (const m of [full, off]) {
     if (!(m.chartFrames > SECS * 10)) failed.push('Motion ' + m.motion + ': the chart drew only ' + m.chartFrames + ' frames');
     if (m.chartP95 >= GATE.chartP95) failed.push('Motion ' + m.motion + ': chart frame p95 ' + m.chartP95 + ' ms (gate ' + GATE.chartP95 + ')');

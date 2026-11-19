@@ -30,7 +30,7 @@ every one again.
 | `test/perf-agent.mjs` | `npm run perf:agent`: the light's (and the grid canvas's) cost in a trade over a busy chart (`docs/MOTION.md` R5) |
 | `test/agent-l5-smoke.mjs` | `npm run smoke:agent-l5` (also run by `smoke:agent`): what Layout 5 adds (below), and its screenshots `test/out/agent-l5-*.png` |
 | `test/agent-parity.json`, `test/agent-parity-smoke.mjs` | the parity list (128 items, made before Layout 5, held by it) and `npm run smoke:agent-parity` (also run by `smoke:agent`): every item asserted through its `data-parity` hook (below) |
-| `live/kits/agent-board-f/` | board F saved as a kit (main commit `a90c3c4`): opens on its own against the fake; never installed, never loaded by the page (`test/agent-kit.test.js`); its `README.md` says how to put it back |
+| (removed in release 1) | board F's snapshot (`live/kits/agent-board-f/`, never installed, never loaded by the page) was removed in release 1; it stays in main's history at commit aabb2cb (chart 1.57.0), and `git checkout aabb2cb -- live/kits/agent-board-f test/agent-kit.test.js` brings it back |
 
 Shared code changed (each change small and tested): `live/bot.js` hands its open proposals to the one copilot-key router
 instead of owning the `chart-copilot-key` event; `live/bot-core.js` `botFillLedger(mark)` takes an optional mark (the
@@ -307,12 +307,23 @@ at sign-in, which starts and stops the agent's runner. The logic is `live/agent-
 | Build row (Status) | the build id and stamp, as his hello says them; the header shows only his name |
 
 - **Off in a trade:** "<name> holds long 1 MNQ on SIM-AG1. Flatten and turn him off?", for that agent only (showing another
-  agent closes it). Flatten and turn off (`AgentHelper.flatOffStart`, `flatOffStep`): Shadow first (`agentMode` shadow, 10 s
-  at most for ChartBridge to say so), then the page's own Flatten for his account and root (`trade.js` `flattenAgent`: the
-  chart's Flatten message, which ChartBridge lets through the agent's lock as an exit; his position and account read again
-  right before; never a default account), then Off once his `agent` message says flat, 30 s at most. Not in Shadow or not
-  flat in time: he stays on, in Shadow, and the line says so until the next On or Off. Keep him on sends nothing. The page
-  never builds an order for him.
+  agent closes it). Flatten and turn off (`AgentHelper.flatOffStart`, `flatOffStep`; plan step 3.2 and its R12 delta): with a
+  ChartBridge that knows it, one `agentFlattenOff` (ChartBridge puts him in Shadow and flattens what he owns); the line says
+  Shadow only once his `agent` message does (10 s at most), a refusal ends it with ChartBridge's words, then Off once he is flat,
+  30 s at most. With an older ChartBridge: Shadow first (`agentMode` shadow, 10 s at most), then the line says where to flatten
+  him by hand (in NinjaTrader, or Flatten on the chart page's ticket), 15 minutes at most, then Off. Off goes only in Shadow and
+  flat; out of Shadow, or not flat in time, he stays on and the line says so until the next On or Off. No desk sends a Flatten of
+  its own. Keep him on sends nothing. The page never builds an order for him. Until his Off answers ok he stays on the list of
+  traders being turned off, shared by every window of the page's origin, and Legion's Armed leaves his lane out; a failed Off is
+  said there ("Off was not done on a desk: press Off (or On) for him there"). On Legion's desks Auto on a prop account needs
+  ChartBridge 0.6.25 or later (GOLIVE_MIN), said with the version when it is older. On Praetorian the same holds for a Sim account
+  (Anthony 2026-11-19): an account The Desk's ledger types eval or funded needs 0.6.25 or later for Auto, whatever NinjaTrader calls
+  it, and below 0.6.25 a Sim account whose type the page cannot read waits too, since no older ChartBridge says the whole ledger
+  (`AgentCore.prAutoWhy`); the line says that updating to 0.6.25 lets a true Sim account test (Anthony: "Yes, update to test").
+  On 0.6.25 or later a true Sim account goes to Auto as before once ChartBridge has read The Desk's account types: until its
+  first read since its start, and while its last read did not work (the groups message's `laneRule`: `outside` null, or `state`
+  not `on`), it would take a Sim-listed prop account for plain Sim, so Auto on a Sim account waits, said plainly ("ChartBridge
+  has not read The Desk's account types yet"). The stops, Shadow and Copilot never wait.
 - **A build that is not a hero** runs in Shadow on a Sim account only: Copilot, Auto and a LIVE account are closed with the
   reason, the helper refuses On for it in any other mode or account, and the runner refuses every plan there. The page fails
   closed: without the helper's word it reads it from his hello (such a runner says its build id as its name).
