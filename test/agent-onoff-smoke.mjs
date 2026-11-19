@@ -15,7 +15,11 @@
 //   - fails closed: the helper down or refusing (403, said so) while a build that is not a hero runs: Copilot, Auto and a
 //     LIVE account stay closed;
 //   - every helper call carries the PIN unlock; a PC with no helper says so and offers no On.
-//   npm run smoke:onoff      (CHROMIUM_PATH=/path/to/chrome; ONOFF_SMOKE_PORT; SHOTS=dir)
+//   - plan step 3.2: on Legion's Praetorian. A ChartBridge that knows agentFlattenOff (0.6.25, the default here) gets that one
+//     command; with --older (ChartBridge 0.6.24, the R12 review's B1) Legion has no Flatten of its own: Shadow first, the line
+//     says to flatten him in NinjaTrader or on the chart page's ticket, and Off goes once he is flat (here flattened in
+//     NinjaTrader's place by the fake's own order); nothing of the page's is a flatten or an order.
+//   npm run smoke:onoff      (both: the default, then --older; CHROMIUM_PATH=/path/to/chrome; ONOFF_SMOKE_PORT; SHOTS=dir)
 // Screenshots: agent-onoff-off, agent-onoff-slow, agent-onoff-on, agent-onoff-ask, agent-onoff-notflat (.png in test/out).
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
@@ -28,7 +32,8 @@ import { startFakeHelper } from './fake-helper.mjs';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SHOTS = path.resolve(process.env.SHOTS || path.join(root, 'test', 'out'));
 fs.mkdirSync(SHOTS, { recursive: true });
-const PORT = +(process.env.ONOFF_SMOKE_PORT || 8981);
+const OLDER = process.argv.includes('--older');   // ChartBridge 0.6.24: no agentFlattenOff
+const PORT = +(process.env.ONOFF_SMOKE_PORT || 8981) + (OLDER ? 2 : 0);
 const errors = [];
 let checks = 0;
 const fail = m => { errors.push(m); console.error('  FAIL ' + m); };
@@ -44,7 +49,7 @@ async function until(fn, what, ms = 10000) {
 const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
 let bridge = null, helper = null;
 try {
-  bridge = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(PORT), '--v3', '--trading', '--test-controls', '--test-pin=' + TEST_PIN, '--agents=demo,demotwo', '--agent-any-time', '--max-qty=MNQ:20,NQ:2', '--personal=EVAL-A', '--version=0.6.25'], { stdio: ['ignore', 'pipe', 'inherit'] });
+  bridge = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(PORT), '--v3', '--trading', '--test-controls', '--test-pin=' + TEST_PIN, '--agents=demo,demotwo', '--agent-any-time', '--max-qty=MNQ:20,NQ:2', '--personal=EVAL-A', '--version=' + (OLDER ? '0.6.24' : '0.6.25')], { stdio: ['ignore', 'pipe', 'inherit'] });
   await new Promise((res, rej) => { bridge.stdout.once('data', res); bridge.once('exit', c => rej(new Error('bridge exited ' + c))); });
   helper = await startFakeHelper({ bridgePort: PORT, agents: ['demo', 'demotwo'] });
   const ctx = await browser.newContext({ viewport: { width: 1600, height: 900 }, deviceScaleFactor: 1 });
@@ -198,6 +203,7 @@ try {
   await sleep(600);
   check(!(await visible('#agView [data-k="hAsk"]')) && (await agentNow()).connected && helper.calls.filter(c => c.route === 'POST /off').length === 1 && (await sentAll()).filter(m => m.type === 'agentFlattenOff').length === flattensBefore,
     '"Keep him on": nothing sent, he stays on and in his trade');
+  if (!OLDER) {
   console.log('Flatten and turn off, not flat in 30 s: Shadow first, he stays on, and the line says so');
   const flattens = async () => (await sentAll()).filter(m => m.type === 'agentFlattenOff');   // plan step 3.2: one ChartBridge command
   await page.evaluate(() => { window.__dropFlatten = true; });                         // ChartBridge never gets this Flatten
@@ -234,6 +240,31 @@ try {
   check(offAt >= fl.__at, 'Off went after ChartBridge\'s flatten filled');
   await until(async () => (await text('#agView [data-k="hWhy"]')) === 'Flat. Off: his program ends, no more model calls.', 'the line says flat, then off');
   check(!(await sentAll()).some(m => m.type === 'order' && m.account === 'SIM-AG1'), 'the page built no order for him');
+  } else {
+  console.log('ChartBridge 0.6.24 (no agentFlattenOff): Shadow first, flattened by hand, Off once flat');
+  const sentOf = async t => (await sentAll()).filter(m => m.type === t);
+  const HAND = 'He is in Shadow: flatten him in NinjaTrader, or with Flatten on the chart page\'s ticket with his account picked; he turns off once flat.';
+  const modes0 = (await sentOf('agentMode')).length;
+  await page.click('#agView [data-onoff="off"]');
+  await until(() => visible('#agView [data-k="hAsk"]'), 'asked again');
+  await page.click('#agView [data-act="hFlatOff"]');
+  await until(async () => (await sentOf('agentMode')).length === modes0 + 1, 'Shadow goes first');
+  const sh = (await sentOf('agentMode')).pop();
+  await until(async () => (await agentNow()).mode === 'shadow', 'ChartBridge put him in Shadow');
+  check(sh.agent === 'demo' && sh.mode === 'shadow' && !(await sentOf('agentFlattenOff')).length && !(await sentOf('flatten')).length,
+    'Yes on 0.6.24: agentMode shadow for demo, and no agentFlattenOff and no flatten (Legion has no Flatten of its own): ' + JSON.stringify(sh));
+  await until(async () => (await text('#agView [data-k="hWhy"]')) === HAND, 'the line says where to flatten him');
+  check((await text('#agView [data-k="hWhy"]')) === HAND && await disabled('#agView [data-onoff="off"]'), 'the line: ' + await text('#agView [data-k="hWhy"]'));
+  await sleep(12000);
+  check((await text('#agView [data-k="hWhy"]')) === HAND && helper.calls.filter(c => c.route === 'POST /off').length === 1 && (await agentNow()).connected && /Long 1 MNQ/.test(await text('.ag-strip [data-k="sPos"]')),
+    'still long 12 s later: no Off yet, he stays on in Shadow, and the line stays');
+  await page.screenshot({ path: path.join(SHOTS, 'agent-onoff-hand.png'), clip: { x: 0, y: 0, width: 760, height: 900 } });
+  await control('elsewhere', { account: 'SIM-AG1', root: 'MNQ', side: 'sell', kind: 'market', qty: 1 });   // flattened in NinjaTrader (the fake's own order)
+  const offAt0 = await until(() => helper.calls.filter(c => c.route === 'POST /off').length === 2 && helper.calls.filter(c => c.route === 'POST /off')[1].at, 'Off once he is flat');
+  check(!!offAt0 && !(await agentNow()).position, 'flattened by hand: Off goes once he is flat');
+  await until(async () => (await text('#agView [data-k="hWhy"]')) === 'Flat. Off: his program ends, no more model calls.', 'the line says flat, then off');
+  check(!(await sentOf('flatten')).length && !(await sentOf('agentFlattenOff')).length && !(await sentAll()).some(m => m.type === 'order' && m.account === 'SIM-AG1'), 'the page sent no flatten and built no order for him');
+  }
 
   console.log('settings: auto-On and the daily cap');
   await page.click('#agView .ag-hset summary');

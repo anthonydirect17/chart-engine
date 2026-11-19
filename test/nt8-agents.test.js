@@ -533,3 +533,14 @@ test('0.6.2 (SPEC CE-2): group stand-downs gate entries only; league seats are S
   assert.ok(del.indexOf('ChartBridgeAgents.GroupDeleted(id)') > del.indexOf('string err = Save(next);'), 'a deleted group\'s stand-downs go under its save');
   assert.match(bodies(acode, 'WriteStandDowns'), /"standDown\\t" \+ s\.Build \+ "\\t" \+ s\.Group \+ "\\t" \+ s\.At\.ToString\("0", CultureInfo\.InvariantCulture\) \+ "\\t" \+ s\.Kind \+ "\\t" \+ s\.Why/);
 });
+
+test('plan step 3.2 (the R12 review, B1): Stop all and Flatten and turn off wait for the same ChartBridge', () => {
+  /* agentStopAll and agentFlattenOff ship in one ChartBridge release: the page asks for both from the same version, so a PC never
+     gets one without the other. The release that ships this page raises live/COMPAT.json minChartBridge to that version. */
+  const read = f => fs.readFileSync(path.join(__dirname, '..', 'live', f), 'utf8');
+  const flat = /const FLATOFF_MIN = '(\d+\.\d+\.\d+)';/.exec(read('agent-core.js'));
+  const stop = /const STOPALL_MIN = '(\d+\.\d+\.\d+)';/.exec(read('legion.js'));
+  assert.ok(flat && stop, 'both minimums are plain versions');
+  assert.equal(flat[1], stop[1], 'FLATOFF_MIN (agent-core.js) and STOPALL_MIN (legion.js) name the same ChartBridge');
+  assert.equal(require('../live/agent-core.js').FLATOFF_MIN, flat[1]);
+});

@@ -973,11 +973,14 @@ function create(o) {
       H.lines[a.agent] = 'Flatten and turn off sent: ChartBridge puts him in Shadow and flattens what he owns; turning him off once flat...';
       jobStep(); flatLoop(); return;
     }
-    if (typeof o.flatten !== 'function') { H.lines[a.agent] = 'Flatten him on the main page or in NinjaTrader, then press Off.'; renderPanel(); return; }
-    const st = AH.flatOffStart(a, Date.now());
+    /* the R12 review of plan step 3.2, B1: an older ChartBridge, and this page has no Flatten of its own (Legion, the pop-out): the
+       stop half still goes (Shadow first, nothing more placed for him), he is flattened by hand, and Off goes once he is flat */
+    const hand = typeof o.flatten !== 'function';
+    const st = AH.flatOffStart(a, Date.now(), hand);
     if (st.error) { H.lines[a.agent] = st.error; renderPanel(); return; }
     if (st.action === 'off') { helperOff(a.agent); return; }
     H.job = st.job; H.flatSent = false;
+    if (st.action === 'hand') { H.lines[a.agent] = AH.handLine(st.job); jobStep(); flatLoop(); return; }   // in Shadow already: the wait at once
     if (st.action === 'shadow') {
       const sm = AC.modeMsg(a.agent, 'shadow'), no = refusal(sm);   // 1.51.0 (the review of 102, F2): the gate's own words, never "not signed in"
       if (!sendAgent(sm, 'mode')) { H.job = null; H.lines[a.agent] = no ? no + ' Nothing was flattened and he stays on.' : 'Shadow could not be sent (not signed in to ChartBridge): nothing was flattened and he stays on.'; renderPanel(); return; }

@@ -253,3 +253,23 @@ test('the missed-poll grace is wired: agent.js folds every poll through pollStep
   assert.equal(AH.POLL_MS, 3000); assert.equal(AH.TIMEOUT_MS, 4000); assert.equal(AH.MISS_GRACE_MS, 8000);
   assert.ok(AH.POLL_MS + AH.TIMEOUT_MS <= AH.MISS_GRACE_MS, 'a poll that times out right after a good answer still gets the grace');
 });
+
+test('plan step 3.2 (the R12 review, B1): a hand flatten (no Flatten of the page, an older ChartBridge): Shadow first, then Off once flat', () => {
+  const T = 2000000, pos = { root: 'MNQ', qty: 1, avgPrice: 25400 };
+  const inCopilot = { agent: 'demo', account: 'SIM-AG1', mode: 'copilot', position: pos }, inShadow = Object.assign({}, inCopilot, { mode: 'shadow' });
+  const HAND = 'He is in Shadow: flatten him in NinjaTrader, or with Flatten on the chart page\'s ticket with his account picked; he turns off once flat.';
+  const st = AH.flatOffStart(inCopilot, T, true);
+  assert.deepEqual([st.action, st.job.phase, st.job.hand], ['shadow', 'shadow', true], 'the stop half still goes: Shadow first');
+  let r = AH.flatOffStep(st.job, inShadow, T + 1000, false);
+  assert.deepEqual([r.action, r.job.phase, r.line], ['', 'flatten', HAND], 'in Shadow: no Flatten of the page, the line says where');
+  assert.equal(r.job.until, T + 1000 + AH.HAND_WAIT_MS);
+  assert.equal(AH.flatOffStep(r.job, inShadow, T + 60000, false).action, '', 'still long a minute later: he waits, no Off');
+  assert.equal(AH.flatOffStep(r.job, Object.assign({}, inShadow, { position: null }), T + 61000, false).action, 'off', 'flat by hand: Off');
+  const g = AH.flatOffStep(r.job, inShadow, r.job.until + 1, false);
+  assert.deepEqual([g.action, g.job], ['giveup', null]); assert.match(g.line, /^Not flat 15 minutes after he went to Shadow: he stays on, in Shadow\. Flatten SIM-AG1 MNQ, then press Off\.$/);
+  const s2 = AH.flatOffStart(inShadow, T, true);
+  assert.deepEqual([s2.action, s2.job.phase, s2.job.until], ['hand', 'flatten', T + AH.HAND_WAIT_MS], 'in Shadow already: the wait at once');
+  assert.equal(AH.handLine(s2.job), HAND);
+  assert.equal(AH.flatOffStart(Object.assign({}, inCopilot, { position: null }), T, true).action, 'off', 'flat: Off at once');
+  assert.equal(AH.flatOffStart(inCopilot, T).job.hand, undefined, 'without hand: the page\'s own Flatten, as before');
+});
