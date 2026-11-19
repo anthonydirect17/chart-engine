@@ -465,6 +465,6 @@ test('Castra\'s card VII: the question in the card with Yes and Cancel, Escape c
   assert.match(castra, /r\.can && fresh \? raw\(actBtn\('undo'/);
   assert.match(castra, /const realClick = typeof o\.realClick === 'function' \? o\.realClick : \(\) => false;/);
   assert.match(read('live', 'legion-tabs.js'), /window\.LegionCastra\.mount\(\$\('cxView'\), \{ [^}]*realClick \}\)/);
-  assert.doesNotMatch(read('test', 'fixtures', 'castra-sample.js').match(/function centurionV1[\s\S]*?\n}\n/)[0], /[–—]/);
+  assert.doesNotMatch(read('test', 'fixtures', 'castra-sample.js').match(/function centurionV1[\s\S]*?\n}\n/)[0], /[\u2013\u2014]/);
   assert.match(JSON.stringify(F.centurionV1()), /Sample week \(made up\)/, 'the sample week says sample on screen');
 });
