@@ -33,6 +33,11 @@ the size. Fixed in `nt8/ChartBridgeGroups.cs`, `live/groups.js`, `live/accounts.
   now: The Desk's highest close can only raise the start. PROTOCOL says how a kept high is lowered after a firm reset that
   keeps the name (a typed highest close or the firm's minimum) and that a `highClose` the reader cannot take as a number
   (`NaN`, a negative) leaves the whole lane answer unread for that minute.
+- **The delta re-review's change**: a prop account that leaves a group (by hand, the lane rule, a deleted group or Hide)
+  keeps its highs with its earlier closes marked as not known (the empty `eodMissed` and `intradayMissed` set), so in no
+  group with the firm's rules it keeps NinjaTrader's room until its minimum balance is given (the review's P5 and P4a: a
+  1,800 entry against a room of 1,749 is held after the leave); a join or the firm's minimum clears the marks. A group
+  member with no high gets none started at a close (its words stay "no end-of-day high is known for this account").
 - **Unchanged**: an account whose floor is not known trades as before ("Let them through"); payouts; the order path.
 - Tests: `nt8/check/GroupsHarness.cs` `FloorHighs` (the case itself: a 50,151 close, then a join at a balance of 49,900
   or 50,000 gives a floor of 48,151, not 48,000; a leave and rejoin; a restart; a deleted group; Hide; a missed close; the

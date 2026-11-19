@@ -3988,13 +3988,19 @@ a deleted group and Hide forgot them. Built in `ChartBridgeGroups.cs`; no versio
   its `eodMissed` (the same 12 field line). An account in no group with the firm's rules applied (a copier follower, say)
   then still reads `floor` null and NinjaTrader's own room (as before any close), with "no end-of-day high is known from
   before <day>: give the minimum balance from the firm's dashboard"; the kept high still counts in a join (below). A join
-  or `firmMinimum` clears the mark.
+  or `firmMinimum` clears the mark. A group member with no high (its line gone from `account-marks.txt`, say) gets none
+  started at a close: it reads "no end-of-day high is known for this account" until the firm's minimum is given, as before.
   With no personal account picked nothing is prop and nothing changes (the R12 review, SHOULD 2): no high is started, a
   join or a move between groups starts as before (the larger of the size and the balance), leaving forgets, and `highEod`
   is null.
 - **Kept through a leave, a deleted group, Hide and a restart.** A prop account keeps both highs and its missed-close
   marks (`eodMissed`, `intradayMissed`) when it leaves a group by any way; a Sim or personal account forgets them as
-  before. `account-marks.txt` holds them in the same 12 field line (no new field, so any ChartBridge since 0.6.3 reads it).
+  before. **After a leave the account's earlier closes are not known** (the delta re-review: a kept high may have
+  started at the account size, a join with no highest close and nothing kept): an empty `eodMissed` is set to the latest
+  close and an empty `intradayMissed` to the day, so in no group with the firm's rules its `floor` is null and
+  NinjaTrader's own room is used ("no end-of-day high is known from before <day>"), until its minimum balance is given
+  (`firmMinimum`) or it joins a group again (the kept high counts in that join, which clears both marks). Anthony
+  2026-11-18 ("Keep both"): an ungrouped prop account keeps NinjaTrader's room until its minimum balance is given. `account-marks.txt` holds them in the same 12 field line (no new field, so any ChartBridge since 0.6.3 reads it).
   The restart and missed-close rules (0.6.3, audit C2) are unchanged: a close it did not see while the account traded is
   kept as `eodMissed` beside the kept high, and a gap with nothing traded takes the balance as that close.
 - **A join with no `highClose`** starts both highs at the larger of the kept end-of-day high, the account size and the

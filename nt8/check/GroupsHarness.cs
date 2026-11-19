@@ -2293,7 +2293,7 @@ public static class GroupsHarness
         ChartBridgeBranches.LoadPersonal();
         List<Account> made = new List<Account>();
         Func<string, Account> prop = n => { Account a = NewAccount(n); a.Provider = Provider.Rithmic; made.Add(a); return a; };
-        Account lucid = prop("LUCID-1"), mine = prop("MINE-9"), l2 = prop("LUCID-2"), l3 = prop("LUCID-3"), l4 = prop("LUCID-4"), l5 = prop("LUCID-5"), l6 = prop("LUCID-6");
+        Account lucid = prop("LUCID-1"), mine = prop("MINE-9"), l2 = prop("LUCID-2"), l3 = prop("LUCID-3"), l4 = prop("LUCID-4"), l5 = prop("LUCID-5"), l6 = prop("LUCID-6"), l7 = prop("LUCID-7"), l8 = prop("LUCID-8");
         bool laneWas = ChartBridgeGroups.LaneHarnessManual;
         ClockEt(2026, 10, 20, 9, 0); Restart();
         try
@@ -2326,6 +2326,21 @@ public static class GroupsHarness
                   "FH R12 BLOCKER 1 (after one 17:00 close at 49900): the kept high marks the closes before it not known: floor null, room 1749, the 1800 stop still held: " + e6 + " " + MarksText().Replace("\t", "<TAB>"));
             ClockEt(2026, 10, 21, 9, 30); Tick();
             Check(Entry(AccountsNow(), "LUCID-6").Contains("\"floor\":null,\"roomFloor\":1749,"), "FH R12 BLOCKER 1: the next morning still floor null and NinjaTrader's room");
+            // the delta re-review's P5: a prop account (balance 49,900, NinjaTrader's room 1,749) joins with no highest close and
+            // nothing kept (its highs start at the size: floor 48,000, as before), then leaves; given the firm's rules in no group it
+            // must keep NinjaTrader's room until its minimum is given (Anthony 2026-11-18: "Keep both"), never 48,000 and a room of 1,900
+            Money(l7, 49900, 0, 0); l7.Items[AccountItem.TrailingMaxDrawdown] = 1749; Tick();
+            Clear(); G("accountGroup", Join("LUCID-7", "\"g1\"", null));
+            Check(Rejection() == "" && Entry(AccountsNow(), "LUCID-7").Contains("\"floor\":48000,"), "FH P5 setup: joined with no highest close and nothing kept: floor 48000 (as before)");
+            Clear(); G("accountGroup", Join("LUCID-7", "null", null));
+            Clear(); G("memberRules", MR("LUCID-7", R("50000", "0", "2000", "eod", "0", "3000", "")));
+            string e7 = Entry(AccountsNow(), "LUCID-7");
+            Check(Rejection() == "" && HighEod("LUCID-7") == "50000" && e7.Contains("\"floor\":null,\"roomFloor\":1749,") && e7.Contains("no end-of-day high is known from before 2026-10-20: give the minimum balance from the firm's dashboard") &&
+                  ChartBridgeOrders.MachineHold("the bot", "held", l7, "NQ", 1, 0, 1800) != null,
+                  "FH P5: after the leave, the firm's rules in no group: floor null, NinjaTrader's room 1749, a 1800 entry held (the kept 50000 still counts in a join): " + e7 + " " + Rejection());
+            Clear(); G("accountGroup", Join("LUCID-7", "\"g1\"", null));
+            Check(Entry(AccountsNow(), "LUCID-7").Contains("\"floor\":48000,") && Regex.IsMatch(MarksText(), "mark\tLUCID-7\t50000\t[^\n]*\t-\t-\n"), "FH P5: a join clears the marks again: " + MarksText().Replace("\t", "<TAB>"));
+            Clear(); G("accountGroup", Join("LUCID-7", "null", null));
             // THE SCENARIO: the next day it is down to 49,900 and joins with no highest close: floor 48,151 (it was 48,000)
             ClockEt(2026, 10, 21, 10, 0); Money(lucid, 49900, 0, 0); Tick();
             Clear(); G("accountGroup", Join("LUCID-1", "\"g1\"", null));
@@ -2399,7 +2414,9 @@ public static class GroupsHarness
             // off over a close with nothing traded: the balance is that close, and it raises the kept high (as for a member)
             ClockEt(2026, 10, 23, 16, 30); Tick();
             ClockEt(2026, 10, 26, 9, 0); Restart(); Tick();
-            Check(HighEod("LUCID-1") == "50450" && Regex.IsMatch(MarksText(), "mark\tLUCID-1\t50450\t[^\n]*\tflat\t-\t"), "FH missed close: off over the weekend with nothing traded: nothing missed: " + MarksText().Replace("\t", "<TAB>"));
+            // nothing missed over the weekend (the high is not raised and no new missed close); the mark the leave of 10-23 set
+            // stays (its latest close then, 10-22: the delta re-review, in no group the earlier closes are not known)
+            Check(HighEod("LUCID-1") == "50450" && Regex.IsMatch(MarksText(), "mark\tLUCID-1\t50450\t[^\n]*\tflat\t2026-10-22\t"), "FH missed close: off over the weekend with nothing traded: nothing missed: " + MarksText().Replace("\t", "<TAB>"));
 
             // the lane rule adds: The Desk's highest close when it gives one, raised to the kept high when that is higher; with neither
             // the size, and its line on the lane says to check the firm's dashboard
@@ -2421,6 +2438,25 @@ public static class GroupsHarness
             Check(Entry(acc, "LUCID-2").Contains("\"floor\":48000,") && gj.Contains("LUCID-2, on the bench (rule); its end-of-day high starts at the account size 50000.00: no higher close is known (none from The Desk, none kept by ChartBridge), so check the firm's dashboard"),
                   "FH lane: no highest close anywhere: the size (48000), said once on the lane: " + Entry(acc, "LUCID-2"));
             Check(ChartBridgeGroups.BenchedOf("g1").Contains("LUCID-1") && ChartBridgeGroups.BenchedOf("g1").Contains("LUCID-2"), "FH lane: still on the bench, as every rule join");
+            // the delta re-review's P4a: LUCID-2 joined by the rule at the size (nothing kept, nothing from The Desk), then leaves:
+            // with the firm's rules in no group, NinjaTrader's room 1,749 holds a 1,800 entry
+            l2.Items[AccountItem.TrailingMaxDrawdown] = 1749;
+            Clear(); G("accountGroup", Join("LUCID-2", "null", null));
+            Clear(); G("memberRules", MR("LUCID-2", R("50000", "0", "2000", "eod", "0", "3000", "")));
+            string e2 = Entry(AccountsNow(), "LUCID-2");
+            Check(Rejection() == "" && ChartBridgeGroups.GroupOf("LUCID-2") == null && e2.Contains("\"floor\":null,\"roomFloor\":1749,") && ChartBridgeOrders.MachineHold("the bot", "held", l2, "NQ", 1, 0, 1800) != null,
+                  "FH P4a: a lane join at the size, then a leave: in no group with the firm's rules, NinjaTrader's room 1749 holds a 1800 entry: " + e2 + " " + Rejection());
+            // the delta re-review's nit: a group member with no high (its line gone from account-marks.txt) gets no high started at
+            // the close, so its words stay "no end-of-day high is known for this account", never "not running at the close"
+            Money(l8, 50200, 0, 0); Tick();
+            Clear(); G("accountGroup", Join("LUCID-8", "\"g1\"", "50200"));
+            File.WriteAllText(mp, string.Join("\n", File.ReadAllText(mp).Split('\n').Where(x => !x.StartsWith("mark\tLUCID-8\t", StringComparison.Ordinal))));
+            Restart(); Tick();
+            ClockEt(2026, 10, 27, 17, 5); Tick(); ChartBridgeGroups.EodMark();
+            string e8 = Entry(AccountsNow(), "LUCID-8");
+            Check(ChartBridgeGroups.GroupOf("LUCID-8") == "g1" && HighEod("LUCID-8") == "null" && e8.Contains("\"floor\":null,") && e8.Contains("no end-of-day high is known for this account: give the minimum balance") && !e8.Contains("not running at the close"),
+                  "FH nit: a member with no high: none started at the close, the words of a high not known: " + e8);
+            Clear(); G("accountGroup", Join("LUCID-8", "null", null));
             // The Desk's highest close at the size (its card made from the type, no seed, no fill) and nothing kept: said plainly too
             Clear(); G("accountGroup", Join("LUCID-2", "null", null));
             Gone(hand); ChartBridgeGroups.LaneForget();

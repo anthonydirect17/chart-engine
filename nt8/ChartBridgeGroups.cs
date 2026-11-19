@@ -1295,7 +1295,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if (marksError != null || !Marks.TryGetValue(a.Name, out m)) continue;
                     string c = SessionNow();   // 0.6.3 (audit C2): in the break, the day's close is seen
                     if (m.CloseSeen == null || string.CompareOrdinal(c, m.CloseSeen) > 0) { m.CloseSeen = c; marksDirty = true; }
-                    if (!m.PeakEod.HasValue && prop)
+                    // the delta re-review's nit: never for a group member with no high (account-marks.txt deleted, say): it keeps
+                    // "no end-of-day high is known for this account" until the firm's minimum is given, as before
+                    if (!m.PeakEod.HasValue && prop && !state.Members.ContainsKey(a.Name))
                     {
                         // R12 review (BLOCKER 1): a high started here has not seen the closes before this one, so they are marked
                         // as not known (eodMissed = this close's day): a floor read from it stays null (NinjaTrader's own room is
@@ -1804,9 +1806,13 @@ namespace NinjaTrader.NinjaScript.AddOns
                 {
                     double? peak = mark == null ? null : r.Type == "eod" ? mark.PeakEod : mark.PeakIntraday;
                     string gone = mark == null ? null : r.Type == "eod" ? mark.EodMissed : mark.IntradayMissed;
-                    if (gone != null) { floorWhy = r.Type == "eod" ? (g == null ? "no end-of-day high is known from before " + gone + ": give the minimum balance from the firm's dashboard (the account's settings)"   // R12 review: an account in no group (the floor fix's kept high)
-                                                                                    : "ChartBridge was not running at the close of " + gone + ": give the minimum balance from the firm's dashboard (the account's settings), or " + again + " the highest close")
-                                                                  : "ChartBridge was not watching on " + gone + " while the account held a position or traded, so its intraday high may be missed: give the minimum balance from the firm's dashboard (the account's settings), or " + again + " the highest balance"; missedHigh = true; }
+                    // the floor fix: in no group, a kept high's earlier closes are not known (the first kept close, or a leave). A
+                    // member never has such a mark: EodMark starts no high for a member (the delta re-review's nit), so its words
+                    // stay those of a close ChartBridge did not see
+                    bool notKnown = g == null;
+                    if (gone != null) { floorWhy = notKnown ? "no " + (r.Type == "eod" ? "end-of-day" : "intraday") + " high is known from before " + gone + ": give the minimum balance from the firm's dashboard (the account's settings)" + (g != null ? ", or " + again + " the highest close" : "")
+                                                 : r.Type == "eod" ? "ChartBridge was not running at the close of " + gone + ": give the minimum balance from the firm's dashboard (the account's settings), or " + again + " the highest close"
+                                                 : "ChartBridge was not watching on " + gone + " while the account held a position or traded, so its intraday high may be missed: give the minimum balance from the firm's dashboard (the account's settings), or " + again + " the highest balance"; missedHigh = true; }
                     else if (!peak.HasValue) floorWhy = "no " + (r.Type == "eod" ? "end-of-day" : "intraday") + " high is known for this account: give the minimum balance from the firm's dashboard (the account's settings)";
                     else
                     {
@@ -2257,10 +2263,23 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         // An account leaves its group (by hand, the lane rule, a deleted group or Hide): a Sim or personal account's highs go, as
         // before. Unreleased (Anthony 2026-11-18, the floor fix): a prop account (ChartBridgeBranches.IsProp) keeps its highs and
-        // its missed-close marks, so the floor does not drop to the account size when it joins a group again.
+        // its missed-close marks, so the floor does not drop to the account size when it joins a group again. The delta re-review
+        // (P5, P4a): a kept high may have started at the account size (a join with no highest close and nothing kept), so in no
+        // group its earlier closes are not known: the empty missed marks are set (the latest close, today), the floor reads null
+        // and NinjaTrader's own room holds, until the firm's minimum is given or a join (KeptEod still counts there) clears them.
         private static void ForgetHighs(IEnumerable<string> accounts)
         {
-            List<string> forget = accounts.Where(a => !ChartBridgeBranches.IsProp(a)).ToList();   // asked before Mem (it reads NinjaTrader's list)
+            List<string> all = accounts.ToList();
+            List<string> forget = all.Where(a => !ChartBridgeBranches.IsProp(a)).ToList();   // asked before Mem (it reads NinjaTrader's list)
+            DateTime et = NowEt();
+            string closeDay = LatestClose(et), today = et.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+            lock (Mem) foreach (string a in all.Except(forget, StringComparer.OrdinalIgnoreCase))
+            {
+                Mark mk;
+                if (marksError != null || !Marks.TryGetValue(a, out mk)) continue;
+                if (mk.PeakEod.HasValue && mk.EodMissed == null) { mk.EodMissed = closeDay; marksDirty = true; }
+                if (mk.PeakIntraday.HasValue && mk.IntradayMissed == null) { mk.IntradayMissed = today; marksDirty = true; }
+            }
             lock (Mem) foreach (string a in forget) { Mark mk; if (Marks.TryGetValue(a, out mk) && (mk.PeakEod.HasValue || mk.PeakIntraday.HasValue || mk.EodMissed != null || mk.IntradayMissed != null)) { mk.PeakEod = null; mk.PeakIntraday = null; mk.EodMissed = null; mk.IntradayMissed = null; marksDirty = true; } }
             SaveMarks(true);
         }
