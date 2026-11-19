@@ -384,6 +384,14 @@ class RangeReplay {
  * largest trade) into columns sorted by second: { from, coveredFrom, why, missed, n, sec, buy, sell, unk, big }; null when it is
  * not one.
  */
+/* Round 2, item 12: a second's largest trade as given in both lists (the same number, as ChartBridge sends it), merged whatever
+   the order: not known (0) stays not known, -1 (it comes live) stays -1 against a known one, else the larger. */
+function mergeBig(cur, v) {
+  if (cur !== cur) return v;                             // NaN: the first value of this second
+  if (cur === 0 || v === 0) return 0;
+  if (cur === -1 || v === -1) return -1;
+  return Math.max(cur, v);
+}
 function decodeDeltaTable(ses) {
   if (!ses || typeof ses !== 'object' || !Array.isArray(ses.rows) || !Array.isArray(ses.unknown)) return null;
   const from = +ses.from, cov = +ses.coveredFrom;
@@ -396,12 +404,13 @@ function decodeDeltaTable(ses) {
   while (i < nr || j < nu) {
     const t = j >= nu || (i < nr && tr <= tu) ? tr : tu;
     if (n && sec[n - 1] === t) n--;                      // the same second again (never sent so; kept whole if it were)
-    else { sec[n] = t; buy[n] = 0; sell[n] = 0; unk[n] = 0; big[n] = 0; }
-    if (i < nr && tr === t) { buy[n] += +R[RS * i + 1] || 0; sell[n] += +R[RS * i + 2] || 0; if (G) big[n] = +R[RS * i + 3] || 0; i++; if (i < nr) tr += +R[RS * i]; }
-    if (j < nu && tu === t) { unk[n] += +Un[US * j + 1] || 0; if (G && !(big[n] > 0)) big[n] = +Un[US * j + 2] || 0; j++; if (j < nu) tu += +Un[US * j]; }
+    else { sec[n] = t; buy[n] = 0; sell[n] = 0; unk[n] = 0; big[n] = NaN; }
+    if (i < nr && tr === t) { buy[n] += +R[RS * i + 1] || 0; sell[n] += +R[RS * i + 2] || 0; if (G) big[n] = mergeBig(big[n], +R[RS * i + 3] || 0); i++; if (i < nr) tr += +R[RS * i]; }
+    if (j < nu && tu === t) { unk[n] += +Un[US * j + 1] || 0; if (G) big[n] = mergeBig(big[n], +Un[US * j + 2] || 0); j++; if (j < nu) tu += +Un[US * j]; }
     n++;
     if (!(isFinite(tr) && isFinite(tu))) return null;
   }
+  for (let k = 0; k < n; k++) if (big[k] !== big[k]) big[k] = 0;   // NaN: no value came (a table without "big")
   return { from, coveredFrom: cov, why: typeof ses.why === 'string' ? ses.why : null, missed: +ses.missed > 0 ? +ses.missed : 0, n,
     sec: sec.subarray(0, n), buy: buy.subarray(0, n), sell: sell.subarray(0, n), unk: unk.subarray(0, n), big: big.subarray(0, n) };
 }
