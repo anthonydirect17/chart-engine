@@ -147,9 +147,9 @@ test('the R12 delta, nits: on an older ChartBridge the ledger caveat is in the q
   assert.ok(closed.indexOf('S.pending') < closed.indexOf('renderHead()'));
 });
 
-test('Castra, Ludus and Go live: labelled not built yet, with no sample numbers', () => {
+test('Go live: labelled not built yet, with no sample numbers (Castra is built: test/legion-castra.test.js; the Ludus: test/ludus.test.js)', () => {
   const html = read('live', 'legion.html');
-  for (const t of ['castra', 'ludus', 'golive']) {
+  for (const t of ['golive']) {
     const sec = new RegExp('<section class="lx-view" id="lx-' + t + '"[\\s\\S]*?</section>').exec(html)[0];
     assert.match(sec, /<b>Not built yet\.<\/b>/, t);
     assert.doesNotMatch(sec.replace(/profit per \$1/g, ''), /\$\d|\d+%|\bsample data\b/i, t + ': no numbers ("profit per $1" is the measure\'s name)');

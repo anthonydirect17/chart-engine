@@ -1,0 +1,90 @@
+/*
+ * Castra and the cohort model (plan step 3.3), on Legion's Imperial look (live/legion.css: cut corners, gold and bronze, no
+ * purple; Roman numerals through its .lx-rn). Green and red only for P&L. Wide pages: the page scrolls and nothing inside it
+ * does; on a phone the tables stack (legion.css .lx-tbl, each cell named by its column) and the cards go one to a row.
+ */
+.cx-body, .ch { display: grid; gap: 14px; }
+.cx-two { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 14px; }
+.cx-card h2 { flex-wrap: wrap; }
+.cx-first { border-color: var(--lx-gold); }
+.cx-note { margin: 6px 0; max-width: 110ch; color: var(--lx-fg); }
+.cx-dim, .cx-note.cx-dim { color: var(--lx-muted); }
+.cx-note.cx-bad { border-left: 2px solid var(--lx-bronze); padding-left: 8px; }
+.cx-bad-t { color: var(--lx-gold-hot); }
+.cx-sim { color: var(--lx-muted); }
+.cx-note.cx-sim { color: var(--lx-gold-hot); }
+.cx-gold { color: var(--lx-gold-hot); }
+.cx-lead { color: var(--lx-gold-hot); font-weight: 600; }
+.cx-num { font-family: "IBM Plex Mono", monospace; font-variant-numeric: tabular-nums; }
+.cx-up { color: var(--ws-buy, #3DDC97); }
+.cx-down { color: var(--ws-sell, #FF5C7A); }
+.cx-big { margin: 4px 0 10px; font-size: 18px; }
+.cx-foot { margin: 0; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; font-size: 12.5px; }
+
+/* the money alarm: bronze and warn, never the P&L red */
+.cx-alarm { margin: 0 0 10px; padding: 8px 12px; border: 1px solid var(--ws-warn, #E8B85C); background: var(--ws-warn-ground, #1C150A); color: var(--ws-warn-text, #FFE2B0); }
+.cx-ok { margin: 0 0 10px; padding: 6px 12px; border-left: 2px solid var(--lx-gold); color: var(--lx-fg); }
+.cx-al { font: 600 11px var(--lx-head); letter-spacing: .08em; text-transform: uppercase; }
+.cx-al-tripped { color: var(--ws-warn, #E8B85C); }
+.cx-al-clear { color: var(--lx-gold-hot); }
+.cx-al-unknown { color: var(--lx-muted); }
+.cx-off { margin: 10px 0; padding: 6px 12px; border: 1px dashed var(--lx-line); color: var(--lx-muted); }
+.cx-off b { color: var(--lx-gold); }
+
+/* Needs you */
+.cx-needsyou { border-color: var(--ws-warn, #E8B85C); }
+.cx-needs { margin: 6px 0; padding-left: 18px; }
+.cx-needs li { margin: 5px 0; overflow-wrap: anywhere; }
+.cx-kind { font: 600 10.5px var(--lx-head); letter-spacing: .08em; text-transform: uppercase; color: var(--lx-bronze); margin-right: 4px; }
+.cx-list { margin: 6px 0; padding-left: 18px; }
+.cx-link { font: inherit; color: var(--lx-gold-hot); background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline; text-decoration-color: var(--lx-line); text-underline-offset: 3px; }
+.cx-link:hover { text-decoration-color: var(--lx-gold); }
+.cx-link:focus-visible { outline: 1px solid var(--lx-gold-hot); outline-offset: 2px; }
+.cx-kv { display: grid; grid-template-columns: minmax(120px, max-content) 1fr; gap: 4px 14px; margin: 6px 0; font-size: 13px; }
+.cx-kv dt { color: var(--lx-muted); overflow-wrap: break-word; }
+.cx-kv dd { margin: 0; overflow-wrap: break-word; min-width: 0; }
+
+/* tables, wide: the whole width of the page, no box that scrolls */
+.cx-card .lx-tbl { margin: 8px 0; }
+.cx-card .lx-tbl table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.cx-card .lx-tbl th { text-align: left; font: 600 10.5px var(--lx-head); letter-spacing: .08em; text-transform: uppercase; color: var(--lx-muted); padding: 6px 8px; border-bottom: 1px solid var(--lx-line); }
+.cx-card .lx-tbl td { padding: 6px 8px; border-bottom: 1px solid var(--lx-line2); vertical-align: top; overflow-wrap: anywhere; }
+
+/* the cohorts */
+.ch-said { margin: 0; padding: 8px 12px; border: 1px solid var(--lx-line2); background: var(--lx-panel); font-size: 12.5px; overflow-wrap: anywhere; }
+.ch-said.cx-bad { border-color: var(--lx-bronze); color: var(--lx-fg); }
+.ch-said[hidden] { display: none; }
+.ch-head .lx-link { font-size: 11px; padding: 4px 9px; }
+.ch-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 14px; }
+.ch-tag { font: 600 10.5px var(--lx-head); letter-spacing: .08em; text-transform: uppercase; padding: 1px 6px; border: 1px solid var(--lx-line); color: var(--lx-muted); }
+.ch-auto { font: 600 10.5px var(--lx-head); letter-spacing: .08em; text-transform: uppercase; padding: 1px 6px; border: 1px solid var(--lx-gold); color: var(--lx-gold-hot); }
+.ch-chips { list-style: none; margin: 8px 0 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; }
+.ch-chip { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border: 1px solid var(--lx-line2); background: var(--lx-panel2); cursor: grab; min-width: 0; font-size: 12.5px;
+  clip-path: polygon(0 0, calc(100% - 7px) 0, 100% 7px, 100% 100%, 7px 100%, 0 calc(100% - 7px)); }
+.ch-chip:active { cursor: grabbing; }
+.ch-chip-bad { border-color: var(--lx-bronze); }
+.ch-chip-name { font: 600 13px "IBM Plex Mono", monospace; color: var(--lx-fg); overflow-wrap: anywhere; }
+.ch-chip-line { overflow-wrap: anywhere; }
+.ch-move { margin-top: 4px; font: 12px "IBM Plex Sans", system-ui, sans-serif; color: var(--lx-fg); background: var(--lx-panel); border: 1px solid var(--lx-line2); padding: 3px 4px; max-width: 100%; }
+.ch-move:focus-visible { outline: 1px solid var(--lx-gold-hot); outline-offset: 2px; }
+.ch-empty { margin: 8px 0 0; }
+.ch-drop-ok { outline: 1px dashed var(--lx-gold); outline-offset: -4px; }
+.ch-drop-no { outline: 1px dashed var(--lx-line2); outline-offset: -4px; opacity: .72; }
+/* the Drone sky keeps the height the chart page gave its panel */
+.ch-sky [data-ch-sky] { min-height: 300px; position: relative; }
+.ch-sky .ak-wrap { min-height: 300px; }
+
+@media (max-width: 760px) {
+  .cx-two { grid-template-columns: minmax(0, 1fr); }
+  .ch-grid { grid-template-columns: minmax(0, 1fr); }
+  .cx-kv { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .cx-kv dt { margin-top: 4px; }
+  .ch-chips { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+}
+
+.cx-money td:first-child { min-width: 120px; }
+@media (max-width: 760px) { .cx-money td:first-child { min-width: 0; } }
+.ch-chip .ch-tag { align-self: flex-start; }
+
+@media (max-width: 760px) { .cx-money .cx-al { white-space: nowrap; display: inline-block; } .cx-money td::before { flex: 0 0 auto; white-space: nowrap; } .cx-money td { flex-wrap: wrap; } }
+@media (max-width: 760px) { .cx-goes td { display: block; text-align: left; } .cx-goes td::before { display: block; margin-bottom: 2px; } }

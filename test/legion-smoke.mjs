@@ -3,7 +3,7 @@
 //   npm run smoke:legion        (CHROMIUM_PATH=/path/to/chrome; SHOTS=dir)
 // Checks: the PIN pad first (the same PIN as the chart page); the header with the wordmark, the five tabs in order with their
 // numerals, the clock, ChartBridge's state and Stop all automation, on every tab; the address keeps the tab and the chart page's
-// old words land where the tab moved (?tab=legion, ?tab=league, ?tab=agent); Castra, Ludus and Go live say "Not built yet";
+// old words land where the tab moved (?tab=legion, ?tab=league, ?tab=agent); Go live says "Not built yet" (Castra: test/legion-castra-smoke.mjs; the Ludus: test/ludus-smoke.mjs);
 // Cohorts holds the chart page's Legion tab and Praetorian, the Colosseum the chart page's Colosseum, each the real module.
 // Stop all: a double click on the button sends nothing; Yes inside its first moment is refused; Yes by the keyboard is refused;
 // Escape and Cancel close it; a real click on Yes sends exactly one message, Kill all with ChartBridge 0.6.24 (and the header says
@@ -70,9 +70,9 @@ try {
       check(s.url.includes('tab=' + t) && s.shown.length === 1 && s.shown[0] === 'lx-' + t && s.stop, t + ': its page alone shows, the address keeps it, Stop all is in reach: ' + JSON.stringify(s));
       await page.screenshot({ path: path.join(SHOTS, 'legion-' + t + '.png') });
     }
-    for (const t of ['castra', 'ludus', 'golive']) check(/Not built yet\./.test(await page.textContent('#lx-' + t)), t + ' says Not built yet');
+    for (const t of ['golive']) check(/Not built yet\./.test(await page.textContent('#lx-' + t)), t + ' says Not built yet');
     const parts = await page.evaluate(() => ({ app: window.LegionApp.state(), tabs: window.LegionTabs.state() }));
-    check(parts.app.mounted.join() === 'cohorts,praetorian,colosseum' && parts.app.failed.length === 0, 'the moved tabs are mounted, none failed: ' + JSON.stringify(parts.app));
+    check(parts.app.mounted.join() === 'cohorts,praetorian,castra,cohortModel,colosseum,ludus' && parts.app.failed.length === 0, 'the moved tabs are mounted, none failed: ' + JSON.stringify(parts.app));
     check(parts.tabs.cohorts && parts.tabs.colosseum && parts.tabs.praetorian, 'each moved tab answers its own state (FleetView, LeagueView, AgentDesk)');
     await page.click('[data-lx-tab="cohorts"]'); await sleep(400);
     check(await page.locator('#flView .fl-title').first().textContent() === 'Legion', 'Cohorts: the chart page\'s Legion tab, drawn by live/fleet.js');

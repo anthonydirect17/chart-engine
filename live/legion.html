@@ -21,9 +21,15 @@
 <link rel="stylesheet" href="agent.css">
 <link rel="stylesheet" href="league.css">
 <link rel="stylesheet" href="fleet.css">
+<!-- the Agents strip and the Drone sky, on the Cohorts tab (plan step 3.3) -->
+<link rel="stylesheet" href="agents-strip.css">
 <link rel="stylesheet" href="multi-account.css">
 <!-- Legion's own look, last: the Imperial shell (cut corners, gold and bronze, Roman numerals) -->
 <link rel="stylesheet" href="legion.css">
+<!-- the Ludus and the build page (plan step 3.4), on Legion's look -->
+<link rel="stylesheet" href="ludus.css">
+<!-- Castra and the cohorts (plan step 3.3), on Legion's look -->
+<link rel="stylesheet" href="legion-castra.css">
 </head>
 <body class="lx">
 <div class="lx-app" id="lxApp">
@@ -73,13 +79,10 @@
 <p class="lx-said bad" id="lxFailed" role="alert" hidden></p>
 
 <main class="lx-main">
-  <!-- I Castra: home. Its content (running now, Needs you as the one place, last night, today live only, Centurion's week and its
-       veto) is not built yet -->
+  <!-- I Castra: home (plan step 3.3, live/legion-castra.js), read only: real against simulated money with the money alarm, who goes in
+       today, running now, Needs you as the one place, last night, today live only, and Centurion's week (no veto action yet) -->
   <section class="lx-view" id="lx-castra" role="tabpanel" aria-label="Castra">
-    <div class="lx-card lx-todo"><h2><span class="lx-rn">I</span>Castra</h2>
-      <p><b>Not built yet.</b> Castra will be Legion's home: what is running now, Needs you (the one place a decision waits for you), last night's builds, today live only, and Centurion's week with your veto, every number led by profit per $1.</p>
-      <p class="lx-muted">Until then: Stop all automation works from this header on every tab, the cohorts and their traders are on Cohorts, and the league is on the Colosseum. No sample numbers are shown here.</p>
-    </div>
+    <div id="cxView" aria-label="Castra"><div class="lx-card lx-todo"><p class="lx-muted">Loading Castra...</p></div></div>
   </section>
   <!-- II Cohorts: the chart page's Legion tab (live/fleet.js) and Praetorian's Agent side, moved here (live/legion-tabs.js) -->
   <section class="lx-view" id="lx-cohorts" role="tabpanel" aria-label="Cohorts" hidden>
@@ -88,6 +91,8 @@
       <button type="button" role="tab" data-lx-sub="praetorian" aria-selected="false">Praetorian<span class="lx-sub-long">: your personal account</span></button>
     </div>
     <div data-lx-subview="legion">
+      <!-- the cohort model from The Desk, drag and drop, the Agents strip and the Drone sky (plan step 3.3, live/legion-cohorts.js), over the lanes -->
+      <div id="chView" aria-label="The cohort model"></div>
       <section class="fl-view lx-fl" id="flView" aria-label="The cohorts"><div class="lx-card lx-todo"><p class="lx-muted">Loading the cohorts...</p></div></section>
     </div>
     <div data-lx-subview="praetorian" hidden>
@@ -98,12 +103,9 @@
   <section class="lx-view" id="lx-colosseum" role="tabpanel" aria-label="Colosseum" hidden>
     <section class="lg-view lx-lg" id="lgView" aria-label="Colosseum"><div class="lx-card lx-todo"><p class="lx-muted">Loading the Colosseum...</p></div></section>
   </section>
-  <!-- IV Ludus: not built yet -->
+  <!-- IV Ludus: Pipeline, Board, Builder, Seeds, Agents and the build page (plan step 3.4, live/ludus.js), read only -->
   <section class="lx-view" id="lx-ludus" role="tabpanel" aria-label="Ludus" hidden>
-    <div class="lx-card lx-todo"><h2><span class="lx-rn">IV</span>Ludus</h2>
-      <p><b>Not built yet.</b> The Ludus will hold the Pipeline, the Board, the Builder, the Seeds and the Agents, and each build's own page: profit per $1, pass rate, days to pass and payout per funded account, then its trades.</p>
-      <p class="lx-muted">No sample builds are shown here.</p>
-    </div>
+    <div id="ldView" aria-label="Ludus"><div class="lx-card lx-todo"><p class="lx-muted">Loading the Ludus...</p></div></div>
   </section>
   <!-- V Go live: not built yet -->
   <section class="lx-view" id="lx-golive" role="tabpanel" aria-label="Go live" hidden>
@@ -136,7 +138,17 @@
 <script src="legion-desk.js"></script>
 <script src="league.js"></script>
 <script src="fleet.js"></script>
+<!-- the Agents strip (its cards and model) and the Drone sky, mounted on the Cohorts tab -->
+<script src="agents-strip.js"></script>
+<script src="agents-sky.js"></script>
 <script src="multi-account.js"></script>
+<!-- the Ludus (plan step 3.4): its pure part, then its view (mounted by legion-tabs.js) -->
+<script src="ludus-core.js"></script>
+<script src="ludus.js"></script>
+<!-- Castra and the cohort model (plan step 3.3): their pure part, then their views (mounted by legion-tabs.js) -->
+<script src="legion-castra-core.js"></script>
+<script src="legion-castra.js"></script>
+<script src="legion-cohorts.js"></script>
 <!-- the tabs moved from the chart page, mounted here with their own gates (before legion.js, which starts them) -->
 <script src="legion-tabs.js"></script>
 <script src="legion.js"></script>
