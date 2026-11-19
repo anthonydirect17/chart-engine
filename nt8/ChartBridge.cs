@@ -4811,7 +4811,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // The market is closed now (New York time: Friday 17:00 to Sunday 18:00, the daily 17:00 to 18:00 break, and since
         // 0.3.7 (lf7 N4) the CME holidays by the page's own rules: no session on New Year's Day, Good Friday and Christmas,
         // the 13:00 halt on the other NYSE holidays and 13:15 on an NYSE early close; ChartBridgeCme).
-        public static bool MarketClosedNow()
+        internal static bool MarketClosedNow()   // internal (not public): the harness reaches it as a non-public member
         {
             return ChartBridgeCme.Closed(TimeZoneInfo.ConvertTimeFromUtc(ChartBridgeTime.ToUtc(NowNt()), ChartBridgeTime.Eastern));
         }
