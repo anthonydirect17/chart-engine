@@ -71,6 +71,7 @@ body.lx { font: 14px/1.45 "IBM Plex Sans", system-ui, sans-serif; overflow-y: au
 .lx-float .lx-alerts:not(:has(> :not([hidden]))) { display: none; }
 .lx-float .ws-alert { margin-top: 0; }
 .lx-main { padding-bottom: var(--lx-float-room, 0px); }
+body.lx-pr .lx-main { padding-bottom: 0; }   /* Praetorian's desk is one screen: a passing line covers its foot a moment, the page never scrolls */
 
 /* the tabs' pages: the page scrolls, never a box inside it */
 .lx-main { padding-top: 18px; }

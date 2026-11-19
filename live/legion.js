@@ -214,7 +214,7 @@ function noteLine(text, warn) {
 let roomPx = 0;
 function floatRoom(reset) {
   const f = $('lxFloat'); if (!f) return;
-  const h = Math.ceil(f.getBoundingClientRect().height) + 16;
+  const fh = Math.ceil(f.getBoundingClientRect().height), h = fh > 0 ? fh + 16 : 0;   // nothing showing: no room
   if (reset) roomPx = 0;
   if (h > roomPx) { roomPx = h; document.documentElement.style.setProperty('--lx-float-room', roomPx + 'px'); }
 }
