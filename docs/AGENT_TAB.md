@@ -316,7 +316,10 @@ at sign-in, which starts and stops the agent's runner. The logic is `live/agent-
   its own. Keep him on sends nothing. The page never builds an order for him. Until his Off answers ok he stays on the list of
   traders being turned off, shared by every window of the page's origin, and Legion's Armed leaves his lane out; a failed Off is
   said there ("Off was not done on a desk: press Off (or On) for him there"). On Legion's desks Auto on a prop account needs
-  ChartBridge 0.6.25 or later (GOLIVE_MIN), said with the version when it is older.
+  ChartBridge 0.6.25 or later (GOLIVE_MIN), said with the version when it is older. On Praetorian the same holds for a Sim account
+  (Anthony 2026-11-19): an account The Desk's ledger types eval or funded needs 0.6.25 or later for Auto, whatever NinjaTrader calls
+  it, and below 0.6.25 a Sim account whose type the page cannot read waits too, since no older ChartBridge says the whole ledger
+  (`AgentCore.prAutoWhy`). A true Sim account goes to Auto on 0.6.25 or later as before; the stops, Shadow and Copilot never wait.
 - **A build that is not a hero** runs in Shadow on a Sim account only: Copilot, Auto and a LIVE account are closed with the
   reason, the helper refuses On for it in any other mode or account, and the runner refuses every plan there. The page fails
   closed: without the helper's word it reads it from his hello (such a runner says its build id as its name).

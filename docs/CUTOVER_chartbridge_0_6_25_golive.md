@@ -67,7 +67,9 @@ chart-engine main **<MAIN_COMMIT>** (<RELEASE_PR>) carries ChartBridge 0.6.25 wi
    whose size is not the file's. This is not only an instruction: the coordinator adds a guard on the page before the
    release (planned, not built on this branch, since Legion changes in parallel): **Legion's Go live and Auto on a prop
    account require ChartBridge 0.6.25 or later** (a `GOLIVE_MIN` in Legion, as `STOPALL_MIN` is for Stop all), so with
-   0.6.24 back the page greys Go live and Auto for prop accounts and says why.
+   0.6.24 back the page greys Go live and Auto for prop accounts and says why. Praetorian holds Auto on a Sim account the
+   same way (Anthony 2026-11-19: an account the ledger types eval or funded, whatever NinjaTrader calls it; below 0.6.25 the
+   page cannot read the whole ledger, so every Sim account waits for 0.6.25 there, said with the version).
 5. **Page installs after a rollback:** these guards need nothing new on the page, so `live/COMPAT.json` `minChartBridge`
    stays 0.6.2 for step 3.5 (it is raised only if another part of the release needs it). With 0.6.24 back, the PC updater
    keeps installing new pages as before; only the planned `GOLIVE_MIN` guard above changes what the page offers.
