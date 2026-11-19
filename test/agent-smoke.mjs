@@ -315,13 +315,17 @@ try {
   check((await text('#agView [data-mode="auto"]')) === 'Confirm' && !(await modesSent()).length, 'Auto asks a second click within 4 s; nothing sent yet');
   await sleep(4300);
   check((await text('#agView [data-mode="auto"]')) === 'Auto', 'no second click: Auto is not asked for');
+  /* Anthony 2026-11-19: this fake is ChartBridge 0.5.4 and demo is on SIM-AG1, a Sim account whose type on The Desk's ledger this
+     ChartBridge cannot say, so Praetorian refuses Auto there (it needs 0.6.25 or later); a confirmed Auto shows that refusal, so the
+     double-click guard is read from it: no refusal after the double-click (not confirmed), the refusal after the next click */
+  const autoNo = /Not sent from Praetorian: The Desk's ledger may type SIM-AG1 eval or funded \(NinjaTrader lists it as Sim\) and this ChartBridge cannot say: Auto on a prop account needs ChartBridge 0\.6\.25 or later \(its firm and GO-size guards\); this one is 0\.5\.4\./;
   await page.dblclick('#agView [data-mode="auto"]');
   await sleep(500);
-  check(!(await modesSent()).length && (await A()).agents.find(a => a.agent === 'demo').mode === 'shadow', 'a double-click on Auto never confirms it (review S3)');
+  check(!(await modesSent()).length && (await A()).agents.find(a => a.agent === 'demo').mode === 'shadow' && !autoNo.test(await text('#agView')), 'a double-click on Auto never confirms it (review S3)');
   await page.click('#agView [data-mode="auto"]');                                     // the double-click's own second click armed it: confirm now
-  await until(async () => (await A()).agents.find(a => a.agent === 'demo').mode === 'auto', 'a second click 400 ms or more after the first confirms Auto');
+  await until(async () => autoNo.test(await text('#agView')), 'a second click 400 ms or more after the first confirms Auto, and on a Sim account below ChartBridge 0.6.25 Praetorian says why it is not sent (2026-11-19)');
   const ms = await modesSent();
-  check(ms.length === 1 && ms[0].mode === 'auto' && ms[0].agent === 'demo', 'Auto\'s second click sends agentMode auto, once: ' + JSON.stringify(ms));
+  check(ms.length === 0 && (await A()).agents.find(a => a.agent === 'demo').mode === 'shadow', '2026-11-19: Auto on a Sim account on ChartBridge 0.5.4 is not sent from Praetorian: ' + JSON.stringify(ms));
   await page.click('#agView [data-k="kill"]');
   await until(async () => (await A()).agents.find(a => a.agent === 'demo').killed, 'kill on in one click');
   check(/KILLED/.test(await text('.ag-strip')), 'the strip says KILLED');
@@ -613,8 +617,11 @@ try {
   if ((await cp.textContent('.bt-modes [data-mode="auto"]')).trim() !== 'Confirm') { await cp.click('.bt-modes [data-mode="auto"]'); await sleep(450); }
   await cp.click('.bt-modes [data-mode="auto"]');
   /* release 1 (1.6b): ChartBridge lets the bot trade the personal account only, and this smoke's bot is on Sim101 with a personal
-     account named, so ChartBridge refuses Auto; the page's part is that the confirming click sends botMode auto, once */
-  await until(async () => (await botModes()) === bm0 + 1, 'a later second click confirms it, as before: botMode sent once');
+     account named, so ChartBridge refuses Auto. Anthony 2026-11-19: on this ChartBridge (0.5.4) Praetorian refuses it first (a Sim
+     account whose ledger type this ChartBridge cannot say); the page's part is that the confirming click is the one refused, said */
+  await until(async () => /Not sent from Praetorian: The Desk's ledger may type Sim101 eval or funded \(NinjaTrader lists it as Sim\) and this ChartBridge cannot say: Auto on a prop account needs ChartBridge 0\.6\.25 or later/.test(await cp.evaluate(() => document.body.innerText)),
+    'a later second click confirms it, as before, and Praetorian says why it is not sent (2026-11-19)');
+  check((await botModes()) === bm0, '2026-11-19: botMode auto on Sim101 on ChartBridge 0.5.4 is not sent');
   await cp.click('.bt-modes [data-mode="shadow"]');
   await cp.click('.bt-kill');
   await until(async () => (await control('v3')).bot.killed, 'the bot\'s kill on in one click');
