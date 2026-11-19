@@ -3,18 +3,23 @@
  * (test/ludus.test.js); a plain <script> sets window.LudusCore. live/ludus.js draws it.
  *
  * WHAT IT READS (The Desk, read only; nothing here writes, sends or places anything):
- *   the board     GET /api/lab/loop/board (thedesk/loop_board.py; Bot-Lab teststudio/loop/board.py writes it): the stations,
- *                 the line of 30, every build (candidate) with its runs, the library and the Builder's requests. The Desk's
- *                 own Lab screen reads it there today. The Desk gives Legion's origin no CORS on it yet: the page says so
- *                 plainly and the Board falls back to the ledger.
+ *   the board     GET /api/legion/board (TheDesk #112: the same body as the Lab's GET /api/lab/loop/board, from the same
+ *                 function, thedesk/loop_board.py; Bot-Lab teststudio/loop/board.py writes it): the stations, the line of 30,
+ *                 every build (candidate) with its runs, the library and the Builder's requests. The Lab's own routes give
+ *                 Legion's origin no CORS, so the Ludus never reads them. With no board (The Desk off, or one from before
+ *                 #112), the page says so plainly and the Board falls back to the ledger.
  *   the ledger    GET /api/legion/ledger (moved to Legion for Ludus's Board, plan step 3.1): every run, flat, each with its
  *                 candidate. With no board, the builds and the build page are made from it.
  *   the roster    GET /api/legion/roster: the roster files Anthony approved or that were placed, each with its playbook.
  *   the trades    GET /api/legion/build/{candidate}/trades?show=&page=: discovery days only, 20 a page (a placeholder
  *                 shape, loop.build_trades/0, until Bot-Lab's side writes the file).
- *   the bars      GET /api/bars?root=&session=: The Desk's stored 1-minute bars of one session, for the one trade on the
- *                 chart (an hour before the entry to half an hour after the exit).
- *   the Lab       GET /api/lab: the seeds (Seeds); the PC helper's GET /status: this PC's agent builds (Agents).
+ *   the bars      each trade's own `bars` in the trades answer when the file carries them (written by Bot-Lab from the
+ *                 master's ticks, "so the trade chart has one data source"; ownBars checks them as The Desk does). Only
+ *                 when a trade has none: GET /api/legion/bars?root=&session= (#112, the same body as GET /api/bars), The
+ *                 Desk's stored 1-minute bars of one session (ChartBridge's), an hour before the entry to half an hour
+ *                 after the exit, labelled as such on the page.
+ *   the Lab       GET /api/legion/lab (#112: {"seeds": [...]}, the part of GET /api/lab that Seeds reads); the PC helper's
+ *                 GET /status: this PC's agent builds (Agents).
  * Every route is in ROUTES, the one table.
  *
  * ROI FIRST (Rule 1, law 1.6): every build leads with profit per $1, then the pass rate, the days to pass and the payout per
@@ -59,12 +64,12 @@ const DEFAULT_SETTING = 'the default setting: the 50K account with the daily los
 const PLACED = 'in-sample, not proven, not approved';
 
 const ROUTES = Object.freeze({
-  board: '/api/lab/loop/board',
+  board: '/api/legion/board',
   ledger: '/api/legion/ledger',
   roster: '/api/legion/roster',
-  lab: '/api/lab',
+  lab: '/api/legion/lab',
   trades: (cid, show, page) => '/api/legion/build/' + cid + '/trades?show=' + encodeURIComponent(show) + '&page=' + page,
-  bars: (root, session) => '/api/bars?root=' + encodeURIComponent(root) + '&session=' + encodeURIComponent(session),
+  bars: (root, session) => '/api/legion/bars?root=' + encodeURIComponent(root) + '&session=' + encodeURIComponent(session),
 });
 
 const isNum = x => typeof x === 'number' && isFinite(x);
@@ -310,6 +315,13 @@ function playbookStage(roster, stage) {
 const planName = r => (isObj(r) && isObj(r.plan) ? typeName({ size: r.plan.size, daily_loss_limit: !!r.plan.dll }) : 'account not stated');
 
 /* ---------------------------------------------------------------- the line and the checks */
+/** One half of a line entry's tuned days: its figure against its no-edge p95, with its own sample (the board's half carries
+ *  sessions, trades and days with a trade: teststudio/loop/line.py _entry); with no figure, NOT_ENOUGH beside the sample. */
+function halfText(h) {
+  if (!isObj(h)) return NOT_ENOUGH;
+  const fig = isNum(h.profit_per_dollar) ? perDollar(h.profit_per_dollar) + ' (no-edge p95 ' + (isNum(h.no_edge_p95) ? signed(h.no_edge_p95) : 'not known') + ')' : NOT_ENOUGH;
+  return fig + ', ' + sampleText(h);
+}
 /** The line of 30 from the board: [{ rank, candidate, name, roi (its held run's), lineFigure, noEdge95, halves, untuned,
  *  toProof, whyNot }], best first; and its words. */
 function lineOf(board, list) {
@@ -320,7 +332,7 @@ function lineOf(board, list) {
     const run = b ? b.runs.find(r => r.run_id === e.run_id) || null : null;
     return { rank: isNum(e.rank) ? e.rank : null, candidate: str(e.candidate), name: b ? b.name : str(e.candidate).slice(0, 12),
       roi: roiOf(run || { prop: { profit_per_dollar: e.profit_per_dollar, sample: e.sample, no_edge: { p95: e.no_edge_p95 }, no_edge_line: e.no_edge_line } }),
-      halves: Array.isArray(e.halves) ? e.halves.map(h => (isObj(h) && isNum(h.profit_per_dollar) ? perDollar(h.profit_per_dollar) + ' (no-edge p95 ' + (isNum(h.no_edge_p95) ? signed(h.no_edge_p95) : 'not known') + ')' : NOT_ENOUGH)) : [],
+      halves: Array.isArray(e.halves) ? e.halves.map(halfText) : [],
       untuned: isNum(e.untuned_sessions) ? e.untuned_sessions : null, toProof: e.to_proof === true, whyNot: str(e.why_not_to_proof) };
   });
   return { rows, note: str(board.line.note), rankedBy: str(board.line.ranked_by), counts: isObj(board.line.counts) ? board.line.counts : null };
@@ -418,6 +430,22 @@ function barsIn(ans, w) {
   return ans.bars.filter(b => Array.isArray(b) && b.length >= 5 && b.slice(0, 5).every(isNum) && b[0] >= w.from && b[0] <= w.to && b[2] >= b[3])
     .sort((a, b) => a[0] - b[0]);
 }
+/** A trade's own bars (the trades answer's optional `bars`, Bot-Lab's from the master's ticks): { rows, why }. rows null with
+ *  why '' when the trade carries none; rows null with a why when they are not in The Desk's shape (TheDesk docs/API.md: rows
+ *  [t, o, h, l, c, v], at most 400, every number finite, t a whole number of UTC ms and rising, high at least low, volume 0
+ *  or more). One bad row and none of them is drawn, as The Desk refuses the whole file. */
+const OWN_BARS_MAX = 400;
+function ownBars(t) {
+  if (!isObj(t) || t.bars === undefined || t.bars === null) return { rows: null, why: '' };
+  const b = t.bars, bad = { rows: null, why: 'This trade\'s own bars are not in the shape The Desk serves, so none of them is drawn.' };
+  if (!Array.isArray(b) || !b.length || b.length > OWN_BARS_MAX) return bad;
+  let last = -Infinity;
+  for (const r of b) {
+    if (!Array.isArray(r) || r.length !== 6 || !r.every(isNum) || !Number.isInteger(r[0]) || r[0] <= 1e11 || r[0] <= last || r[2] < r[3] || r[5] < 0) return bad;
+    last = r[0];
+  }
+  return { rows: b.map(r => r.slice()), why: '' };
+}
 /** What the chart draws for one trade: { bars (chart-engine's), trades, levels }. zone(unixSeconds) -> the chart's wall clock
  *  seconds (ChartEngine.util.zoneSeconds). Only the trade's own numbers and the bars given: nothing made up. */
 function chartOf(t, rows, zone, stopColor) {
@@ -469,13 +497,23 @@ function agentsOf(status) {
   return list.map(b => ({ build: str(b.build), hero: str(b.hero), tier: str(b.tier),
     exam: isNum(b.examEdge) ? b.examEdge : null, live: isNum(b.liveEdge) ? b.liveEdge : null, liveN: isNum(b.liveN) ? b.liveN : null }));
 }
-/** An edge in R with its sample: "+0.12 R over 40 trades", or NOT_ENOUGH. */
-const edgeText = (x, n) => (isNum(x) ? signed(x) + ' R' + (isNum(n) ? ' over ' + plural(n, 'trade') : '') : NOT_ENOUGH);
+/** The fewest trades an agent's edge is shown on: 20, the repo's existing bar (the league's standings, live/league.js
+ *  standingRows, "not enough data yet" under its 20). */
+const EDGE_MIN_TRADES = 20;
+/** An edge in R with its sample: "+0.12 R over 40 trades"; under EDGE_MIN_TRADES "not enough data yet (n 12 of 20)"; with
+ *  no sample reported (the PC helper's examEdge has no count of its own, nt8/PROTOCOL.md) NOT_ENOUGH and why, never the
+ *  bare figure; no figure: NOT_ENOUGH. */
+function edgeText(x, n) {
+  if (!isNum(x)) return NOT_ENOUGH;
+  if (!isNum(n) || n < 0) return NOT_ENOUGH + ' (the PC helper reports no sample for it)';
+  if (n < EDGE_MIN_TRADES) return NOT_ENOUGH + ' (n ' + Math.floor(n) + ' of ' + EDGE_MIN_TRADES + ')';
+  return signed(x) + ' R over ' + plural(n, 'trade');
+}
 
 return Object.freeze({ SUBS, SUB_NAMES, SHOWS, SHOW_NAMES, PER_PAGE, BUILDS_PER_PAGE, BEFORE_MS, AFTER_MS, NEW_LINE, ZONE_SPLIT_ON,
   NOT_ENOUGH, NOT_GIVEN, SIMULATED, ZONES_OFF, SLOT_30, NOT_NAMED, DEFAULT_SETTING, PLACED, ROUTES, RN,
   signed, perDollar, pct, usd, sessionsText, sampleText, routeFrom, routeSearch, failWords, boardOf, runsOf,
   roiOf, roiCells, noEdgeText, typeName, bestTry, heldRun, builds, pageOf, byType, rosterFor, playbookStage, planName,
-  lineOf, checksOf, pipeline, tradesOf, tradeWindow, barsIn, chartOf, tradeRows, builderOf, seedsOf, agentsOf, edgeText,
+  lineOf, halfText, checksOf, pipeline, tradesOf, tradeWindow, barsIn, ownBars, OWN_BARS_MAX, chartOf, tradeRows, builderOf, seedsOf, agentsOf, edgeText, EDGE_MIN_TRADES,
   isCandidate: id => CANDIDATE.test(str(id)) });
 });

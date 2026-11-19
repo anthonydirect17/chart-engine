@@ -41,7 +41,7 @@ function mount(el, opts) {
   const S = { shown: false, route: C.routeFrom(location.search), readAt: 0, timer: 0, gen: 0,
     board: { state: 'idle', why: '', board: null }, ledger: { state: 'idle', why: '', ans: null }, roster: { state: 'idle', why: '', ans: null },
     lab: { state: 'idle', why: '', ans: null }, helper: { state: 'idle', why: '', status: null },
-    trades: { key: '', state: 'idle', view: null, why: '' }, bars: { key: '', state: 'idle', rows: [], why: '', answer: null },
+    trades: { key: '', state: 'idle', view: null, why: '' }, bars: { key: '', state: 'idle', rows: [], why: '', answer: null, from: '', ownWhy: '' },
     boardPage: 1, chart: null, chartKey: '' };
 
   const get = path => Promise.resolve().then(() => o.deskBase()).then(base => o.fetch(base + path, { cache: 'no-store', mode: 'cors', credentials: 'omit' }))
@@ -92,19 +92,28 @@ function mount(el, opts) {
       render();
     }, why => { if (S.trades.key === key) { S.trades = { key, state: 'fail', view: null, why }; render(); } });
   }
+  /* the trade's own bars first (Bot-Lab's, from the master's ticks: the trade chart's one data source); only a trade with none
+     reads The Desk's stored bars of its session (ChartBridge's), and the page says which it drew */
   function readBars(t, root) {
+    const own = C.ownBars(t), b = S.route.build;
+    if (own.rows) {
+      const key = b + '|own|' + t.n;
+      if (S.bars.key !== key) S.bars = { key, state: 'ok', rows: own.rows, why: '', answer: null, from: 'trade', ownWhy: '' };
+      return;
+    }
     const w = C.tradeWindow(t, root);
-    const key = w ? w.root + '|' + w.session + '|' + t.n : 'none|' + t.n;
+    const key = b + '|' + (w ? w.root + '|' + w.session : 'none') + '|' + t.n;
     if (S.bars.key === key) return;
-    if (!w) { S.bars = { key, state: 'fail', rows: [], why: 'This trade has no entry time in the file: it cannot be placed on a chart.', answer: null }; return; }
-    S.bars = { key, state: 'loading', rows: [], why: '', answer: null };
+    const ownWhy = own.why || 'This trade carries no bars of its own.';
+    if (!w) { S.bars = { key, state: 'fail', rows: [], why: ownWhy + ' It has no entry time in the file either: it cannot be placed on a chart.', answer: null, from: '', ownWhy }; return; }
+    S.bars = { key, state: 'loading', rows: [], why: '', answer: null, from: 'desk', ownWhy };
     get(C.ROUTES.bars(w.root, w.session)).then(ans => {
       if (S.bars.key !== key) return;
       const rows = C.barsIn(ans, w);
-      S.bars = { key, state: rows.length ? 'ok' : 'fail', rows, answer: ans,
-        why: rows.length ? '' : 'The Desk has no stored bars for this trade\'s time (' + w.root + ', session ' + w.session + '): its numbers are below.' };
+      S.bars = { key, state: rows.length ? 'ok' : 'fail', rows, answer: ans, from: 'desk', ownWhy,
+        why: rows.length ? '' : ownWhy + ' The Desk has no stored bars for this trade\'s time either (' + w.root + ', session ' + w.session + '): its numbers are below.' };
       render();
-    }, why => { if (S.bars.key === key) { S.bars = { key, state: 'fail', rows: [], why, answer: null }; render(); } });
+    }, why => { if (S.bars.key === key) { S.bars = { key, state: 'fail', rows: [], why: ownWhy + ' ' + why, answer: null, from: 'desk', ownWhy }; render(); } });
   }
 
   /* ---------------------------------------------------------------- what is known */
@@ -187,6 +196,8 @@ function mount(el, opts) {
     }
     return card('', 'Seeds', body);
   }
+  /* an agent's edge: green or red only on a figure shown with its sample */
+  function edgeCell(x, n) { const t = C.edgeText(x, n); return cell(t, 'ld-num' + (t.startsWith(C.NOT_ENOUGH) ? ' ld-dim' : ' ' + tone(x))); }
   function viewAgents() {
     let body = note('The hybrid\'s exam (its bots alone, against its bots with the agent, against random skipping) is not built yet. Below: the agent builds this PC\'s helper knows, with their exam and live edges.');
     if (loading(S.helper)) body += note('Asking the PC helper...');
@@ -194,7 +205,8 @@ function mount(el, opts) {
     else {
       const a = C.agentsOf(S.helper.status);
       body += a.length ? table('ld-agents', ['Build', 'Hero', 'Tier', 'Exam edge', 'Live edge'], a.map(x => ({ cells: [cell(x.build), cell(x.hero || '-'), cell(x.tier || 'tier unknown'),
-        cell(C.edgeText(x.exam), 'ld-num ' + tone(x.exam)), cell(C.edgeText(x.live, x.liveN), 'ld-num ' + tone(x.live))] }))) : note('The PC helper lists no agent build.', 'ld-dim');
+        edgeCell(x.exam, null), edgeCell(x.live, x.liveN)] }))) : note('The PC helper lists no agent build.', 'ld-dim');
+      body += note('An edge shows with its sample, from ' + C.EDGE_MIN_TRADES + ' trades on (the league\'s bar); under that, or with no sample reported (the exam edge has none from the PC helper): ' + C.NOT_ENOUGH + '.', 'ld-dim');
     }
     return card('', 'Agents', body);
   }
@@ -216,7 +228,7 @@ function mount(el, opts) {
       const c = C.roiCells(t.roi);
       return { cells: [cell(t.type + (t.best ? '' : ' (no law 6.7 figure)') + ', ' + t.tries + ' tr' + (t.tries === 1 ? 'y' : 'ies')), cell(c[0].text, 'ld-num ld-lead'), cell(c[1].text, 'ld-num'), cell(c[2].text, 'ld-num'), cell(c[3].text, 'ld-num'), cell(c[4].text, 'ld-dim'), cell(C.noEdgeText(t.roi) || '-', 'ld-dim')] };
     })) : note('No try of this build has a prop score yet: ' + C.NOT_ENOUGH + '.');
-    roi += note('Each row: the best try on that account at ' + C.DEFAULT_SETTING + '.', 'ld-dim');
+    roi += note('Each row: the best try on that row\'s own account type, at its list price, with the default playbooks (not only the 50K account of the screen\'s default setting).', 'ld-dim');
     out += card('', b.name, head + roi, 'ld-build-head');
     /* II: the best eval and funded playbooks */
     let pb = '';
@@ -268,7 +280,8 @@ function mount(el, opts) {
     const rows = C.tradeRows(t);
     const bars = S.bars;
     const words = bars.state === 'loading' ? 'Reading the bars...' : bars.state === 'fail' ? bars.why
-      : 'The Desk\'s stored 1-minute bars of that session (ChartBridge\'s, not the master\'s ticks), from an hour before the entry to half an hour after the exit.';
+      : bars.from === 'trade' ? 'This trade\'s own 1-minute bars, written by Bot-Lab from the master\'s ticks (the trade chart\'s one data source).'
+        : bars.ownWhy + ' Instead: The Desk\'s stored 1-minute bars of that session (ChartBridge\'s, not the master\'s ticks), from an hour before the entry to half an hour after the exit.';
     return '<div class="ld-one-grid"><div class="ld-chart-wrap"><div class="ld-chart" id="ldChart" aria-label="Trade ' + esc(t.n) + ' on the chart"' + (bars.state === 'ok' ? '' : ' hidden') + '></div>' + note(words, bars.state === 'fail' ? 'bad' : 'ld-dim') + '</div>' +
       '<dl class="ld-kv">' + rows.map(x => '<dt>' + esc(x.label) + '</dt><dd class="ld-num">' + esc(x.text) + '</dd>').join('') + '</dl></div>' +
       note('Flag this trade: not built yet (The Desk has no place to keep your flag).', 'ld-dim');
@@ -364,7 +377,7 @@ function mount(el, opts) {
   return {
     show,
     state: () => ({ shown: S.shown, route: Object.assign({}, S.route), board: S.board.state, boardWhy: S.board.why, ledger: S.ledger.state, roster: S.roster.state,
-      trades: S.trades.state, bars: S.bars.state, barsWhy: S.bars.why, chart: !!S.chart, builds: data().list.length }),
+      trades: S.trades.state, bars: S.bars.state, barsWhy: S.bars.why, barsFrom: S.bars.from, chart: !!S.chart, builds: data().list.length }),
     destroy() { clearInterval(S.timer); dropChart(); el.removeEventListener('click', onClick); el.innerHTML = ''; },
   };
 }

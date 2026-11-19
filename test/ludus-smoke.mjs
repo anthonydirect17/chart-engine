@@ -4,10 +4,13 @@
 // Checks: the five sub tabs; the Pipeline's stations I to VII; the Board's line of 30 and every build, ROI first, with the
 // sample and "not enough data yet"; the build page (per account type, the eval and funded playbooks, the zone split off, the
 // plain-code checks, the trades 20 a page with All, Winners, Losers and Worth a look) and one trade drawn on chart-engine's own
-// chart; the address keeps all of it over a reload; the Builder, Seeds and Agents read only; with the board's read refused (no
-// CORS for this page yet) the builds come from the ledger and the page says why. The Ludus sends The Desk only GETs. No page error, no
+// chart (its own bars, Bot-Lab's from the master's ticks; a trade with none falls back to The Desk's stored bars, labelled);
+// the address keeps all of it over a reload; the Builder, Seeds and Agents read only; with the board's read failing (The Desk
+// off) the builds come from the ledger and the page says why. The stub gives CORS only where The Desk does (its /api/legion/
+// routes, TheDesk #112): a read of a Lab route (/api/lab, /api/lab/loop/board, /api/bars) fails as the browser's CORS
+// refusal does on the box, and is counted (the review of R12, B2). The Ludus sends The Desk only GETs. No page error, no
 // box that scrolls inside the page, no sideways scroll on a phone. Screenshots (test/out): ludus-pipeline, ludus-board,
-// ludus-build, ludus-trade, ludus-builder, ludus-seeds, ludus-agents, ludus-noboard (1600 x 900) and ludus-phone-board,
+// ludus-build, ludus-trade, ludus-trade-desk-bars, ludus-builder, ludus-seeds, ludus-agents, ludus-noboard (1600 x 900) and ludus-phone-board,
 // ludus-phone-build, ludus-phone-trade (390 x 844).
 import { chromium } from 'playwright';
 import { fileURLToPath } from 'node:url';
@@ -37,23 +40,28 @@ async function withBridge(fn) {
     await fn();
   } finally { bridge.kill(); }
 }
-/* The Desk (made-up answers) and the PC helper. board: 'ok' or 'blocked' (the read fails as a CORS refusal does) */
+/* The Desk (made-up answers) and the PC helper. board: 'ok' or 'blocked' (the board's read fails: The Desk off).
+   CORS as The Desk gives it (docs/API.md, Legion): its /api/legion/ routes only, never the Lab's own. */
 async function open(vp, query, board) {
   const ctx = await browser.newContext({ viewport: vp, deviceScaleFactor: 1 });
   const desk = [];
   await ctx.route(/localhost:8800\//, async x => {
     const u = new URL(x.request().url()), m = x.request().method();
     desk.push(m + ' ' + u.pathname);
-    if (m === 'OPTIONS') return x.fulfill({ status: 204, headers: CORS });
-    const json = b => x.fulfill({ status: 200, contentType: 'application/json', headers: CORS, body: JSON.stringify(b) });
-    if (u.pathname === '/api/lab/loop/board') return board === 'blocked' ? x.abort('failed') : json(F.boardAnswer());
+    const cors = u.pathname.startsWith('/api/legion/') ? CORS : {};
+    if (m === 'OPTIONS') return x.fulfill({ status: 204, headers: cors });
+    const json = b => x.fulfill({ status: 200, contentType: 'application/json', headers: cors, body: JSON.stringify(b) });
+    /* the Lab's own routes give this page no CORS: the browser refuses their answer, so the stub refuses them the same way
+       (a fetch that throws; a fulfilled answer would reach the page here, as Playwright does not hold it to CORS) */
+    if (u.pathname === '/api/lab/loop/board' || u.pathname === '/api/lab' || u.pathname === '/api/bars') return x.abort('accessdenied');
+    if (u.pathname === '/api/legion/board') return board === 'blocked' ? x.abort('failed') : json(F.boardAnswer());
     if (u.pathname === '/api/legion/ledger') return json(F.ledgerAnswer());
     if (u.pathname === '/api/legion/roster') return json(F.rosterAnswer());
-    if (u.pathname === '/api/lab') return json(F.labAnswer());
-    if (u.pathname === '/api/bars') return json(F.barsAnswer(u.searchParams.get('session')));
+    if (u.pathname === '/api/legion/lab') return json({ seeds: F.labAnswer().seeds });
+    if (u.pathname === '/api/legion/bars') return json(F.barsAnswer(u.searchParams.get('session')));
     const t = /^\/api\/legion\/build\/([0-9a-f]{64})\/trades$/.exec(u.pathname);
     if (t) return json(t[1] === F.A ? F.tradesAnswer(t[1], u.searchParams.get('show'), +u.searchParams.get('page')) : { ok: false, problem: 'This build has no trades file yet (sample).', trades: [] });
-    return x.fulfill({ status: 404, contentType: 'application/json', headers: CORS, body: '{}' });
+    return x.fulfill({ status: 404, contentType: 'application/json', headers: cors, body: '{}' });
   });
   await ctx.route(/localhost:8767\//, x => (x.request().method() === 'OPTIONS' ? x.fulfill({ status: 204, headers: CORS })
     : x.fulfill({ status: 200, contentType: 'application/json', headers: CORS, body: JSON.stringify(F.helperStatus()) })));
@@ -136,10 +144,19 @@ try {
       return { w: c.width, h: c.height, lit }; });
     check(ch && ch.w > 300 && ch.h > 200 && ch.lit > 2000, 'trade 1 drawn on chart-engine\'s chart (the bars, the trade and its stop): ' + JSON.stringify(ch));
     check(/trade=1/.test(await page.evaluate(() => location.search)) && /Entry\s*21000\.25/.test(await page.textContent('#ldOne')) && /Flag this trade: not built yet/.test(await page.textContent('#ldOne')), 'its numbers beside it; the address keeps it');
+    check((await lstate(page)).barsFrom === 'trade' && /This trade's own 1-minute bars, written by Bot-Lab from the master's ticks/.test(await page.textContent('#ldOne'))
+      && !desk.some(r => / \/api\/(legion\/)?bars\b/.test(r)), 'trade 1: drawn from its own bars (the master\'s ticks), labelled; no read of The Desk\'s stored bars');
     await page.screenshot({ path: path.join(SHOTS, 'ludus-trade.png'), fullPage: true });
+    await page.click('[data-ld-trade-btn="3"]');
+    await until(page, () => window.LegionTabs.state().ludus.bars === 'ok' && window.LegionTabs.state().ludus.chart === true);
+    await sleep(300);
+    const s3 = await lstate(page), one3 = await page.textContent('#ldOne');
+    check(s3.chart === true && s3.barsFrom === 'desk' && /This trade carries no bars of its own\. Instead: The Desk's stored 1-minute bars of that session \(ChartBridge's, not the master's ticks\)/.test(one3)
+      && desk.some(r => r.startsWith('GET /api/legion/bars')), 'trade 3: no bars of its own, so The Desk\'s stored bars from /api/legion/bars, labelled plainly');
+    await page.screenshot({ path: path.join(SHOTS, 'ludus-trade-desk-bars.png'), fullPage: true });
     await page.click('[data-ld-trade-btn="2"]'); await sleep(300);
     const s2 = await lstate(page);
-    check(!s2.chart && /no entry time/.test(s2.barsWhy), 'a trade with no entry time: no chart, and it says why: ' + s2.barsWhy);
+    check(!s2.chart && /no bars of its own/.test(s2.barsWhy) && /no entry time/.test(s2.barsWhy), 'a trade with no bars and no entry time: no chart, and it says why: ' + s2.barsWhy);
     check((await innerScrolls(page)).length === 0, 'no box scrolls inside the page: ' + JSON.stringify(await innerScrolls(page)));
 
     /* a reload keeps the build page and the trade */
@@ -161,9 +178,12 @@ try {
     check((await page.$$eval('.ld-seeds tbody tr', x => x.map(e => e.textContent))).join('|').includes('refused: sample reason'), 'the Seeds: each request\'s state');
     await page.screenshot({ path: path.join(SHOTS, 'ludus-seeds.png'), fullPage: true });
     await page.click('[data-ld-sub="agents"]');
-    await until(page, () => document.querySelectorAll('.ld-agents tbody tr').length === 2);
+    await until(page, () => document.querySelectorAll('.ld-agents tbody tr').length === 3);
     const ag = await page.$$eval('.ld-agents tbody tr', x => x.map(e => e.textContent));
-    check(/\+0\.08 R over 40 trades/.test(ag[0]) && /not enough data yet/.test(ag[1]), 'the Agents: this PC\'s agent builds, each edge with its sample: ' + JSON.stringify(ag));
+    check(/\+0\.08 R over 40 trades/.test(ag[0]) && /not enough data yet \(the PC helper reports no sample for it\)/.test(ag[0]) && !/\+0\.12/.test(ag[0])
+      && /not enough data yet/.test(ag[1]) && /not enough data yet \(n 12 of 20\)/.test(ag[2]) && !/\+0\.30/.test(ag[2]),
+      'the Agents: each edge with its sample, not enough data yet under 20 trades or with no sample: ' + JSON.stringify(ag));
+    check(/from 20 trades on \(the league's bar\)/.test(await page.textContent('#lx-ludus')), 'the Agents say the bar');
     await page.screenshot({ path: path.join(SHOTS, 'ludus-agents.png'), fullPage: true });
 
     /* leaving the tab: the address drops the Ludus's keys, and a hidden Ludus is not shown */
@@ -173,14 +193,16 @@ try {
     const mine = desk.filter(r => / \/api\/(lab|legion|bars)\b/.test(r));
     const writes = mine.filter(r => !/^(GET|OPTIONS) /.test(r));
     check(writes.length === 0 && mine.some(r => r.startsWith('GET /api/legion/build/')), 'only GETs from the Ludus reached The Desk: ' + JSON.stringify(writes));
+    const lab = mine.filter(r => / \/api\/(lab|bars)\b/.test(r));
+    check(lab.length === 0 && ['board', 'lab', 'bars'].every(k => mine.some(r => r.startsWith('GET /api/legion/' + k))), 'The Desk\'s Legion routes only (board, lab, bars), never the Lab\'s (no CORS there): ' + JSON.stringify(lab));
     check(pe.length === 0, 'no page error: ' + JSON.stringify(pe));
     await ctx.close();
 
-    /* ---------------- the board's read refused (no CORS for this page yet): the ledger instead */
+    /* ---------------- the board's read failing (The Desk off, or one from before #112): the ledger instead */
     const nb = await open({ width: 1600, height: 900 }, '?tab=ludus&ludus=board', 'blocked');
     await until(nb.page, () => window.LegionTabs.state().ludus && window.LegionTabs.state().ludus.ledger === 'ok');
     const nbt = await nb.page.textContent('#lx-ludus');
-    check(/The board: The Desk did not answer \/api\/lab\/loop\/board \(it is off, or it does not let this page read it yet\)\. The builds below are read from the loop's ledger instead\./.test(nbt), 'it says why the board is not read, and where the builds come from');
+    check(/The board: The Desk did not answer \/api\/legion\/board \(it is off, or it does not let this page read it yet\)\. The builds below are read from the loop's ledger instead\./.test(nbt), 'it says why the board is not read, and where the builds come from');
     check((await nb.page.$$('.ld-builds tbody tr')).length === 3 && (await nb.page.$$('.ld-line')).length === 0, 'every build from the ledger; no line without the board');
     await nb.page.screenshot({ path: path.join(SHOTS, 'ludus-noboard.png'), fullPage: true });
     await nb.page.click('[data-ld-build="' + F.A + '"]');

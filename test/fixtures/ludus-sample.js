@@ -92,7 +92,9 @@ const rosterAnswer = () => ({ ok: true, problem: null, folder: { set: true, ok: 
     { name: 'broken.json', ok: false, why: 'not valid JSON' },
   ], left: 0 });
 
-/* 45 made-up trades of build A, on made-up 2001 sessions; trade 1 has times and prices, the chart draws it */
+/* 45 made-up trades of build A, on made-up 2001 sessions. Trade 1 has times, prices and its own bars (the trades answer's
+   optional `bars`, as Bot-Lab writes them from the master's ticks): the chart draws those. Trade 3 has times and prices but
+   no bars of its own: the chart falls back to The Desk's stored bars (GET /api/legion/bars) and says so. */
 const T0 = Date.UTC(2001, 1, 1, 14, 0, 0);              // 2001-02-01 09:00 New York
 function trades() {
   const out = [];
@@ -100,7 +102,8 @@ function trades() {
     const day = 1 + Math.floor((i - 1) / 3), session = '2001-02-' + String(day).padStart(2, '0');
     const r = i % 3 === 0 ? -1 : i % 3 === 1 ? 1.5 : 0.5;
     const t = { n: i, session, side: i % 2 ? 'long' : 'short', r, pnl: r * 40, flags: i % 9 === 0 ? ['best day share (sample)'] : [] };
-    if (i === 1) Object.assign(t, { entry_ms: T0, exit_ms: T0 + 25 * 60000, entry: 21000.25, exit: 21006.25, stop: 20996.25 });
+    if (i === 1) Object.assign(t, { entry_ms: T0, exit_ms: T0 + 25 * 60000, entry: 21000.25, exit: 21006.25, stop: 20996.25, bars: ownBars1() });
+    if (i === 3) Object.assign(t, { entry_ms: T0 + 40 * 60000, exit_ms: T0 + 50 * 60000, entry: 21002.25, exit: 20998.25, stop: 20998.25 });
     out.push(t);
   }
   return out;
@@ -126,11 +129,16 @@ function barsAnswer(session) {
   }
   return { root: 'MNQ', session, asked: null, contract: bars.length ? 'MNQ 03-01' : null, partner: false, contracts: [], stamp: 'open', time: 'utc_ms', bars };
 }
+/* trade 1's own bars: the same made-up walk, an hour before the entry to half an hour after the exit, volume 0 or more */
+function ownBars1() {
+  return barsAnswer('2001-02-01').bars.filter(b => b[0] >= T0 - 3600000 && b[0] <= T0 + 55 * 60000).map(b => [b[0], b[1], b[2], b[3], b[4], Math.abs(b[5])]);
+}
 const labAnswer = () => ({ objectives: [], competitors: [], needs: [], records: [], records_total: 0, routes: [], routes_closed: [], route_tally: 0,
   agents_ratings: { available: true, note: null, builds: [] },
   seeds: [{ id: 1, name: 'Sample seed', size: 'H', path: { kind: 'fresh' }, made_at: 981036000000, state: 'waiting', settled_at: null, agent_id: null, refused: null },
     { id: 2, name: 'Sample fork', size: 'H', path: { kind: 'fork', source_seat: 'S', source_notebook_sha256: '7'.repeat(64) }, made_at: 981036000000, state: 'refused', settled_at: 1, agent_id: null, refused: 'sample reason' }] });
-const helperStatus = () => ({ agents: {}, builds: [{ build: 'sample-a', hero: 'Sample Hero A', tier: 'Good', examEdge: 0.12, liveEdge: 0.08, liveN: 40 }, { build: 'sample-c', hero: null }] });
+const helperStatus = () => ({ agents: {}, builds: [{ build: 'sample-a', hero: 'Sample Hero A', tier: 'Good', examEdge: 0.12, liveEdge: 0.08, liveN: 40 }, { build: 'sample-c', hero: null },
+  { build: 'sample-d', hero: 'Sample Hero D', tier: 'Acceptable', liveEdge: 0.3, liveN: 12 }] });
 
 module.exports = { A, B, C, SPEC_A, SPEC_B, SPEC_C, ACCT50, ACCT25, BOARD, RUNS_A, RUNS_B, RUNS_C, ROSTER_A, T0,
-  boardAnswer, ledgerAnswer, rosterAnswer, tradesAnswer, barsAnswer, labAnswer, helperStatus, trades };
+  boardAnswer, ledgerAnswer, rosterAnswer, tradesAnswer, barsAnswer, labAnswer, helperStatus, trades, ownBars1 };
