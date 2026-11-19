@@ -608,6 +608,9 @@ try {
   await cp.dblclick('.bt-modes [data-mode="auto"]');
   await sleep(500);
   check((await botModes()) === bm0 && (await control('v3')).bot.mode !== 'auto', 'a double-click on the bot\'s Auto never confirms it');
+  /* the double-click armed it for 4 s; on a loaded machine the checks above can outlast that, so arm again first (a click 400 ms
+     or more after arming is the confirming one either way) */
+  if ((await cp.textContent('.bt-modes [data-mode="auto"]')).trim() !== 'Confirm') { await cp.click('.bt-modes [data-mode="auto"]'); await sleep(450); }
   await cp.click('.bt-modes [data-mode="auto"]');
   await until(async () => (await control('v3')).bot.mode === 'auto', 'a later second click confirms it, as before');
   await cp.click('.bt-modes [data-mode="shadow"]');

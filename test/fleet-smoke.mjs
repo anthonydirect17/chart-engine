@@ -620,11 +620,13 @@ try {
     check(await lg.evaluate(() => !document.querySelector('.fl-chart .ce-canvas') && !document.querySelector('.fl-acctrows [data-ap]')), 'Legion: back on Setup, the chart and the rows are taken down');
     await lg.click('[data-lx-sub="praetorian"]');
     await sleep(500);
-    const vis = id => lg.evaluate(i => { const e = document.getElementById(i); return !!e && getComputedStyle(e).display !== 'none' && !e.hidden; }, id);
-    check(await vis('agView') && !(await vis('flView')) && /sub=praetorian/.test(await lg.evaluate(() => location.search)), 'Legion: the Praetorian side shows the Agent desk and hides FleetView (one side at a time)');
+    const sides = () => lg.evaluate(() => { const t = window.LegionTabs.state(); return { pr: !!(t.praetorian && t.praetorian.shown), fl: !!(t.cohorts && t.cohorts.shown), url: location.search }; });
+    const s1 = await sides();
+    check(s1.pr && !s1.fl && /sub=praetorian/.test(s1.url), 'Legion: the Praetorian side shows the Agent desk and hides FleetView (one side at a time): ' + JSON.stringify(s1));
     await lg.click('[data-lx-sub="legion"]');
     await sleep(500);
-    check(await vis('flView') && !(await vis('agView')), 'Legion: and the Legion side brings FleetView back');
+    const s2 = await sides();
+    check(s2.fl && !s2.pr && /sub=legion/.test(s2.url), 'Legion: and the Legion side brings FleetView back: ' + JSON.stringify(s2));
     await lg.close();
     /* an old address on the chart page forwards to Legion */
     await page.goto(`http://localhost:${PORT}/live/?layout=Main&tab=legion`);
@@ -669,7 +671,7 @@ try {
       check(await p2.isVisible('#wsAlert') && !(await overlap()) && await reach('[data-do="ask"]') === 15, 'banner, ' + width + ' px: with the alert banner up it does not lie on the head, and 15 of 15 points of Kill all reach it (' + await reach('[data-do="ask"]') + ')');
       const kb = await p2.locator('[data-do="ask"]').boundingBox();
       await p2.mouse.click(kb.x + kb.width / 2, kb.y + kb.height / 2);
-      check(await p2.evaluate(() => window.workspace.fleet().asking), 'banner, ' + width + ' px: a click on Kill all opens the question');
+      check(await p2.evaluate(() => window.legion.fleet().asking), 'banner, ' + width + ' px: a click on Kill all opens the question');
       await control('status', { level: 'error', text: 'Sample: another made-up error, arriving while the question is up' });
       await sleep(700);
       check(!(await overlap()) && await reach('[data-do="yes"]') === 15 && await reach('[data-do="no"]') === 15, 'banner, ' + width + ' px: an alert that arrives while the question is up covers neither Yes nor Cancel (' + await reach('[data-do="yes"]') + ', ' + await reach('[data-do="no"]') + ' of 15)');
