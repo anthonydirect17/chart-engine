@@ -1512,3 +1512,8 @@ test('review round 2, item 3: Stop writes every delta table to its last second a
   assert.ok(unhook > 0 && save > unhook && clear > save, 'unhook, then SaveDeltas(true), then Books.Clear()');
   assert.match(bodyOf(code, 'public static void SaveDeltas(bool final)'), /upTo = done \|\| final \|\| closedNow \|\| over \? d\.Hi : d\.Hi - 1;/);
 });
+
+test('R12 follow-up 1: a start clears the cut backs an earlier run in this process noted', () => {
+  assert.match(bodyOf(code, 'public static bool Start()'), /lock \(DeltaCutBack\) DeltaCutBack\.Clear\(\);/);
+  assert.match(bodyOf(code, 'private static void ReadDelta(RootBook book)'), /lock \(DeltaCutBack\) DeltaCutBack\.Remove\(f\);/);
+});
