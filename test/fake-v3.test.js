@@ -916,7 +916,7 @@ test('server --agents: /agent/<id> needs its secret, no Origin, one at a time; h
     const unlock = (await post(port, '/pin/unlock', { pin: '5820' })).json.token;
     const token = JSON.parse((await get(port, '/session', unlock)).body).token;
     const a = await wsConnect(port, '/ws?unlock=' + encodeURIComponent(unlock), { Origin: own });
-    assert.equal((await a.next('hello')).version, 'fake-0.5.4');
+    assert.equal((await a.next('hello')).version, '0.5.4');
     a.send({ type: 'client', v: 3 }); a.send({ type: 'auth', token });
     const ag = await a.next('agent');
     assert.equal(ag.agent, 'demo'); assert.equal(ag.mode, 'shadow'); assert.equal(ag.account, null, 'no account file: None (ChartBridge 0.5.7)'); assert.equal(ag.standDown, 'agent demo\'s account is None: no new entries until an account is chosen on the Agent tab');

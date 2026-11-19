@@ -71,10 +71,11 @@ const str = v => (typeof v === 'string' ? v : '');
 const validId = id => typeof id === 'string' && /^[a-z][a-z0-9]{0,11}$/.test(id);
 
 /* ======================================================================== versions */
-/** [major, minor, patch] from a version text ("0.5.0", "fake-0.4.0"), or null. Kept for checks above the page's minimum
- *  ChartBridge (0.5.2 since 1.21.0), such as a later release's feature. */
-function parseVersion(v) { const m = /(\d+)\.(\d+)\.(\d+)/.exec(String(v || '')); return m ? [+m[1], +m[2], +m[3]] : null; }
-/** Is version a at least b? An unknown a is false. */
+/* plan step 3.2 (the R12 delta, X3): ONE rule for ChartBridge's version in agent-core.js, fleet.js and legion.js (the same text
+   in each; test/legion.test.js holds them equal): exactly a.b.c, as ChartBridge.cs writes its Version. Anything else ("0.6.25-rc1",
+   "v0.6.25", "fake-0.5.4", "0.7") is no version, so every gate that asks for one fails closed. */
+function parseVersion(v) { const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(typeof v === 'string' ? v : ''); return m ? [+m[1], +m[2], +m[3]] : null; }
+/** Is version a at least b? A version that is not a.b.c is false. */
 function atLeast(a, b) {
   const x = parseVersion(a), y = parseVersion(b);
   if (!x || !y) return false;

@@ -24,7 +24,8 @@
 //   --tick-shift-ms=137             every trade stamped this many ms later (history and live), as real trades are: a
 //                                   session's first trade at 18:00:00.137, not 18:00:00.000 (chart 1.6.1, review 2 S4)
 //   --version=0.3.5                 the version hello reports (default fake-0.3.4; fake-0.3.7 with --data-037, fake-0.4.0
-//                                   with --v3, fake-0.5.2 with --agents)
+//                                   with --v3, 0.5.4 with --agents: a plain a.b.c, as the page's one version rule
+//                                   takes no other text, plan step 3.2, X3)
 //   --tick-gaps                     tick history skips prices now and then (1 to 3 ticks, sometimes a fast 8 to 16),
 //                                   like a fast market, so the two range bar modes differ (sample data, seeded)
 //   --pin-file=path                 where the PIN hash lives (ChartBridge 0.3.2 keeps pin.txt in its folder), so a
@@ -147,7 +148,7 @@
 //   /test/bar-trail?state=notProven&text=... (next release: ChartBridge's word on the bar trail for every live managed entry,
 //   as `managed` `barTrail`; state= empty takes it away; the fake builds no bars).
 //   --agents=demo                   (with --v3) ChartBridge 0.5.0's agent channel (contract AGENT_CHANNEL v1, docs/AGENT_TAB.md):
-//                                   config.txt's `agents` list; hello says fake-0.5.4. The made-up accounts SIM-AG1 and SIM-AG2 (Sim, checked)
+//                                   config.txt's `agents` list; hello says 0.5.4. The made-up accounts SIM-AG1 and SIM-AG2 (Sim, checked)
 //                                   are added for agents to take; every agent starts on None (no account file; ChartBridge 0.5.7) in shadow.
 //   --agent-accounts=demo:SIM-AG1   an agent starts on that account, as if chosen (agent-<id>-account.txt)
 //   --bot-account=Sim101            the bot starts on that account, as if chosen (bot-account.txt); without it: None
@@ -924,7 +925,7 @@ server.on('upgrade', (req, sock) => {
     hello.features = (hello.features || []).concat(['settlement', 'htf', 'weekProfile']); hello.version = 'fake-0.3.7';
   }
   if (V3) { hello.features = (hello.features || []).concat(['v3', 'cutHalf']);   // release 1 (1.6c): Cut half
-    hello.version = flagValue('version') || (AGENTS.length ? 'fake-0.5.4' : 'fake-0.4.0'); }   // --version still wins (1.22.0)   // protocol v3 (quote-only markets are told per instrument); 0.5.4 with agents (keepMode 0.5.2, the window in a trade 0.5.4)
+    hello.version = flagValue('version') || (AGENTS.length ? '0.5.4' : 'fake-0.4.0'); }   // --version still wins (1.22.0); with agents a plain a.b.c (the page's version rule, plan step 3.2, X3)   // protocol v3 (quote-only markets are told per instrument); 0.5.4 with agents (keepMode 0.5.2, the window in a trade 0.5.4)
   send(c, hello);
   send(c, { type: 'execs', list: NO_HELLO_ACCOUNTS ? [] : fillsSample() });
   sock.on('data', d => {

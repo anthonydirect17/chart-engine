@@ -78,8 +78,11 @@ const isNum = v => typeof v === 'number' && isFinite(v);
 const plainObj = v => !!v && typeof v === 'object' && !Array.isArray(v);
 const str = (v, n) => (typeof v === 'string' ? v.slice(0, n || 200) : '');
 
-/* a version of two parts ("0.7") reads as 0.7.0, never as "older than everything" */
-function parseVersion(v) { const m = /(\d+)\.(\d+)(?:\.(\d+))?/.exec(typeof v === 'string' ? v : ''); return m ? [+m[1], +m[2], +(m[3] || 0)] : null; }
+/* plan step 3.2 (the R12 delta, X3): ONE rule for ChartBridge's version in agent-core.js, fleet.js and legion.js (the same text
+   in each; test/legion.test.js holds them equal): exactly a.b.c, as ChartBridge.cs writes its Version. Anything else ("0.6.25-rc1",
+   "v0.6.25", "fake-0.5.4", "0.7") is no version, so every gate that asks for one fails closed. */
+function parseVersion(v) { const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(typeof v === 'string' ? v : ''); return m ? [+m[1], +m[2], +m[3]] : null; }
+/** Is version a at least b? A version that is not a.b.c is false. */
 function atLeast(a, b) {
   const x = parseVersion(a), y = parseVersion(b);
   if (!x || !y) return false;

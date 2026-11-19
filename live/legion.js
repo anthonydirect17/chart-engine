@@ -88,12 +88,15 @@ const ARM_MS = 600;              // and takes no answer for this long after it o
 const ANSWER_WAIT_MS = 5000;     // a Stop all sent and not answered in this long is said, marked bad
 const QUESTION = 'Flatten and stop every bot and agent on your prop accounts? Your personal account, the chart\'s Bot tab and the copier are not touched.';
 
-/** a.b.c at least min.b.c (ChartBridge's versions; anything else is not) */
-function atLeast(v, min) {
-  const p = s => (typeof s === 'string' && /^\d+\.\d+\.\d+$/.test(s) ? s.split('.').map(Number) : null);
-  const a = p(v), b = p(min);
-  if (!a || !b) return false;
-  for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] > b[i];
+/* plan step 3.2 (the R12 delta, X3): ONE rule for ChartBridge's version in agent-core.js, fleet.js and legion.js (the same text
+   in each; test/legion.test.js holds them equal): exactly a.b.c, as ChartBridge.cs writes its Version. Anything else ("0.6.25-rc1",
+   "v0.6.25", "fake-0.5.4", "0.7") is no version, so every gate that asks for one fails closed. */
+function parseVersion(v) { const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(typeof v === 'string' ? v : ''); return m ? [+m[1], +m[2], +m[3]] : null; }
+/** Is version a at least b? A version that is not a.b.c is false. */
+function atLeast(a, b) {
+  const x = parseVersion(a), y = parseVersion(b);
+  if (!x || !y) return false;
+  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] > y[i];
   return true;
 }
 

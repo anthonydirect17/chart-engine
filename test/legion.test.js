@@ -52,6 +52,23 @@ test('Stop all: what it can send by ChartBridge\'s version, and why not otherwis
   for (const v of ['0.6.16', '', 'fake-0.6.25', null]) { const p = L.stopPlan(v, true, true); assert.equal(p.ok, false, String(v)); assert.match(p.why, /has no Stop all/); }
 });
 
+test('one version rule (the R12 delta, X3): agent-core.js, fleet.js and legion.js the same text, a.b.c only; ChartBridge.cs writes a.b.c', () => {
+  const FC = require('../live/fleet.js');
+  /* the rule's own lines, word for word the same in the three files (the version gates of Stop all, Kill all and Flatten and turn off) */
+  const rule = f => { const s = read('live', f), i = s.indexOf('function parseVersion(v)'), j = s.indexOf('\n}\n', s.indexOf('function atLeast(', i)); assert.ok(i > 0 && j > i, f); return s.slice(i, j + 3); };
+  assert.equal(rule('fleet.js'), rule('agent-core.js'), 'fleet.js and agent-core.js');
+  assert.equal(rule('legion.js'), rule('agent-core.js'), 'legion.js and agent-core.js');
+  const cases = [['0.6.25', '0.6.25', true], ['0.6.26', '0.6.25', true], ['0.7.0', '0.6.25', true], ['1.0.0', '0.6.25', true], ['0.6.24', '0.6.25', false],
+    ['0.6.25-rc1', '0.6.25', false], ['v0.6.25', '0.6.25', false], ['fake-0.6.25', '0.6.25', false], ['0.6.25 ', '0.6.25', false], ['0.6.25.1', '0.6.25', false], ['0.7', '0.6.25', false],
+    ['', '0.6.25', false], [null, '0.6.25', false], [undefined, '0.6.25', false], [625, '0.6.25', false], [['0.6.25'], '0.6.25', false], ['0.6.25', 'x', false]];
+  for (const [v, min, want] of cases) assert.deepEqual([L.atLeast(v, min), FC.atLeast(v, min), AC.atLeast(v, min)], [want, want, want], JSON.stringify([v, min]));
+  /* so Stop all (legion.js), Kill all (fleet.js) and Flatten and turn off (agent-core.js) agree about every ChartBridge */
+  for (const v of ['0.6.25', '0.6.24', '0.6.25-rc1', 'v0.6.25', '0.7']) assert.equal(L.stopPlan(v, true, true).kind === 'stopAll', AC.atLeast(v, AC.FLATOFF_MIN), v);
+  const cb = /public const string Version = "([^"]*)";/.exec(read('nt8', 'ChartBridge.cs'));
+  assert.ok(cb, 'ChartBridge.cs names its Version');
+  assert.match(cb[1], /^\d+\.\d+\.\d+$/, 'ChartBridge says its version as a.b.c, the only form the page takes');
+});
+
 test('Stop all: one message with exactly its keys, and the header\'s gate passes those two and nothing else', () => {
   assert.deepEqual(L.stopMsg('stopAll', 'c1'), { type: 'agentStopAll', cid: 'c1' });
   assert.deepEqual(L.stopMsg('killAll', 'c1'), { type: 'agentKillAllProp', cid: 'c1' });

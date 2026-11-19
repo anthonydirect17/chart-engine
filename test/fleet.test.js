@@ -109,9 +109,10 @@ test('legion: the head line never says nobody is trading while a trader is in Au
   for (const f of ['live/fleet.js', 'live/fleet.css', 'live/index.html']) assert.ok(!/on duty/i.test(read(...f.split('/'))), f + ': the words "on duty" (the withdrawn claim) are not used');
 });
 
-test('legion: versions: three parts or two, never "older than everything" (N7)', () => {
-  assert.deepStrictEqual([F.atLeast('0.6.17', '0.6.17'), F.atLeast('0.6.16', '0.6.17'), F.atLeast('0.7', '0.6.17'), F.atLeast('1.0', '0.6.20'), F.atLeast('0.6', '0.6.17'), F.atLeast('', '0.6.17'), F.atLeast(null, '0.6.17'), F.atLeast(['0.9.9'], '0.6.17')],
-    [true, false, true, true, false, false, false, false]);
+test('legion: versions: a.b.c only; anything else fails every gate closed (plan step 3.2, X3; was N7)', () => {
+  assert.deepStrictEqual([F.atLeast('0.6.17', '0.6.17'), F.atLeast('0.6.16', '0.6.17'), F.atLeast('0.7.0', '0.6.17'), F.atLeast('1.0.0', '0.6.20'), F.atLeast('0.7', '0.6.17'), F.atLeast('1.0', '0.6.20'), F.atLeast('', '0.6.17'), F.atLeast(null, '0.6.17'), F.atLeast(['0.9.9'], '0.6.17')],
+    [true, false, true, true, false, false, false, false, false]);
+  for (const v of ['0.6.25-rc1', 'v0.6.25', 'fake-0.6.25', '0.6.25 ', '0.6.25.1']) assert.strictEqual(F.atLeast(v, '0.6.17'), false, v);
 });
 
 
