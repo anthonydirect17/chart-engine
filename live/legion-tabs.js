@@ -117,6 +117,17 @@ function mount(env) {
       els: { view: $('agView'), tab: prBtn },
       openBot: () => { try { window.open('./?tab=bot', 'chart'); } catch (e) { /* blocked */ } },
       onTab: on => { if (window.LegionApp && typeof window.LegionApp.show === 'function') { const st = window.LegionApp.state(); if (on) window.LegionApp.show('cohorts', 'praetorian'); else if (st.tab === 'cohorts' && st.sub === 'praetorian') window.LegionApp.show('cohorts', 'legion'); } } });
+    /* the chart page opens Praetorian on one trader (?agent=id, from its corner line or a drone): chosen here, then dropped from
+       the address so a reload keeps the trader chosen last */
+    const asked = new URLSearchParams(location.search).get('agent');
+    if (asked && /^[A-Za-z0-9_-]{1,64}$/.test(asked)) {
+      try { const u = new URL(location.href); u.searchParams.delete('agent'); history.replaceState(null, '', u.pathname + '?' + u.searchParams.toString() + u.hash); } catch (e) { /* a file page */ }
+      /* chosen once ChartBridge has named him (the agents arrive one by one, and the desk picks the first it knows until then);
+         given up after 15 s (an agent not on this ChartBridge) */
+      const desk = praetorian, until = Date.now() + 15000;
+      const pick = () => { const st = desk.state(); if (st && Array.isArray(st.agents) && st.agents.some(x => x && x.agent === asked)) { desk.choose(asked); return true; } return Date.now() > until; };
+      if (!pick()) { const t = setInterval(() => { if (pick()) clearInterval(t); }, 250); }
+    }
     mounted.praetorian = true;
   });
 

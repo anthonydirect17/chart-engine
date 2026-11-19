@@ -139,7 +139,8 @@ test('the link the page and both pop-out windows hand the desks (AgentCore.praet
   /* the page and both pop-out windows build it, and hand it to the desk instead of the feed (F1) */
   const ws = read('workspace.js');
   assert.match(ws, /window\.BotDesk\.create\(\{ v3: praetorianLink,/);
-  assert.match(ws, /window\.AgentDesk\.create\(\{ embedded: true, keyPrefix: '', keys: false, v3: praetorianLink,/, 'plan step 3.2: the chart page keeps the desk with no view, on the same link');
+  assert.match(ws, /window\.AgentDesk\.create\(\{ keys: false, v3: praetorianLink,/, 'plan step 3.2: the chart page keeps the desk with no tab and its keys off, on the same link');
+  assert.match(ws, /openAgent: id => openLegion\('cohorts', 'praetorian', id\)/, 'plan step 3.2: its corner line opens Legion on that trader');
   assert.ok(ws.indexOf('window.AgentCore.praetorianLink(AF)') < ws.indexOf('function startBot()'), 'the link (and its gate) before the desks');
   assert.match(read('legion-tabs.js'), /const link = AF && AC && typeof AC\.praetorianLink === 'function' \? AC\.praetorianLink\(AF\) : null;/, 'Legion\'s Praetorian builds the same link');
   for (const [f, desk] of [['agent.html', 'AgentDesk'], ['bot.html', 'BotDesk']]) {

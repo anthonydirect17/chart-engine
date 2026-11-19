@@ -615,6 +615,7 @@ function create(o) {
     const id = key.slice(6);
     if (!key.startsWith('agent:') || !agents.get(id)) return;
     if (S.chosen !== id) { choose(id); unmountChart(); }
+    if (typeof o.openAgent === 'function') { o.openAgent(id); return; }   // plan step 3.2: the chart page's copy opens Legion's Praetorian on him
     if (S.shown) render(); else showTab(true);
   }
   if (cornerLine) cornerLine.addEventListener('click', e => { const b = e.target.closest('button[data-goto]'); if (b) goTo(b.dataset.goto); });

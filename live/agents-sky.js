@@ -49,7 +49,7 @@ const hms = s => { const d = new Date(s * 1000); return pad(d.getUTCHours()) + '
 const sR = v => (isNum(v) ? (v >= 0 ? '+' : '-') + Math.abs(v).toFixed(2) + 'R' : '');
 
 /**
- * The sky in a panel's body. o: { day(), reach(), agents(), bot(), nowMs(), last(root), pv(root), bars() ({ root, name, bars:
+ * The sky in a panel's body. o: { day(), reach(), league (false: no league read on this page, no seats and no warning), agents(), bot(), nowMs(), last(root), pv(root), bars() ({ root, name, bars:
  * [{ t, o, h, l, c }] } or null: the NQ minute bars the page holds), mine() (Anthony's entries today, AgentsStripCore.entriesOf),
  * zoneSec(ms) (epoch ms to the league's clock, seconds), openLeague(), openAgent(id), openBot() }. Returns { render, destroy, state }.
  */
@@ -193,7 +193,7 @@ function mount(body, o) {
     const mh = m.drones.slice(shown).map(d => '<button type="button" class="ak-mi" role="listitem" data-key="' + esc(d.key) + '" aria-label="' + esc(d.letter + ' ' + d.name + ', ' + d.mode + (d.state ? ', ' + d.state : '') + ': ' + CARD.openWhat(d.card)) + '">' +
       '<b style="color:' + esc(d.color) + '">' + esc(d.letter) + '</b><span>' + esc(d.name) + '</span>' + (d.state ? '<i>' + esc(d.state) + '</i>' : '') + '</button>').join('');
     if (moreEl.dataset.html !== mh) { moreEl.dataset.html = mh; moreEl.innerHTML = mh; }
-    const prob = reach.problem || (!o.day() ? 'Reading the league from The Desk...' : o.day().problem || '');
+    const prob = reach.problem || (o.league === false ? '' : !o.day() ? 'Reading the league from The Desk...' : o.day().problem || '');   // league false: a page that reads no league (the chart page from plan step 3.2)
     warnEl.hidden = !prob; if (warnEl.textContent !== prob) { warnEl.textContent = prob; warnEl.title = prob; }
     const key = S.slots.map(s => s.d.key + ':' + Math.round(s.x) + ':' + Math.round(s.w) + ':' + Math.round(s.h) + ':' + s.d.name + s.d.mode + s.d.state + (s.d.trade ? s.d.trade.side : 'flat')).join('|');
     if (key !== S.hitsKey) {

@@ -1,22 +1,20 @@
-// Chart 1.35.0 smoke (Anthony 2026-10-21): the League tab and the league's trades faint on any chart; 1.36.0 (Anthony 2026-10-22):
-// the Bot panel is gone, merged into the Agents strip (its bot card opens the Bot view). Against the fake bridge (--v3, the made-up Demo Agent, sample data) and the fake Desk (test/fake-desk.mjs)
-// serving a SAMPLE league day (made up here: three seats, made-up paper trades on the sample bars, made-up decisions; no real
-// league, no model name, no account), at 1366 x 768, 1600 x 900 and 1920 x 1080:
+// Chart 1.35.0 smoke (Anthony 2026-10-21): the League tab (the Colosseum since 1.50.0); 1.36.0 (Anthony 2026-10-22): the Bot panel is
+// gone, merged into the Agents strip (its bot card opens the Bot view). Plan step 3.2: Legion is its own page (live/legion.html), and
+// the Colosseum is its third tab; the chart page keeps the Bot, a small Legion link, and reads no league. Against the fake bridge
+// (--v3, the made-up Demo Agent, sample data) and the fake Desk (test/fake-desk.mjs) serving a SAMPLE league day (made up here: three
+// seats, made-up paper trades on the sample bars, made-up decisions; no real league, no model name, no account), at 1366 x 768,
+// 1600 x 900 and 1920 x 1080:
 //   npm run smoke:league        (CHROMIUM_PATH=/path/to/chrome to use a preinstalled browser)
-// Checks: the top bar keeps the Agent tab as it was, League after it, and the Bot button (no Agents strip on the layout); + Add
-// panel offers no Bot (1.36.0) but Agents;
-// the League tab hides the grid and shows SHADOW: no orders, the legend H Haiku, S Sonnet, O Opus, the seats' day, the week and
-// month table ("not enough data yet" under 20), the decision log, the spend against the caps and the day closed note; its chart
-// carries the hollow marks (pixels drawn on the overlay, never on the chart's canvas); a chart's ⋯ switch shows them faintly,
-// off by default, kept in this browser; the Agent tab and the League tab close each other; with an Agents strip the Bot button
-// stays in the top bar (it does on every layout) and the strip's bot card opens the Bot view; the button stays in reach while a
-// view is open and while it carries its red alert (review 2), and is still there when the strip goes; nothing sends an order.
-// 1.38.1 (Anthony 2026-10-23: his only MNQ chart is a 40-range execution chart, every other chart is NQ): the layout's chart is NQ
-// 1 min (1.57.0: the Colosseum has no chart now, Anthony 2026-11-13; opening it sends no subscribe at all), so opening the tab sends no new NQ subscribe and no MNQ
-// minute subscribe (it joins the NQ line's load); the Agents panel's Drone sky reads NQ bars. The sample marks are at the NQ
-// sample's prices (the league's MNQ prices are the same index).
-// Next release (Anthony's task "League view opens a given past day"): ?tab=league&day=YYYY-MM-DD opens that day read only, labelled,
-// with Back to today; a day with no record says so; a bad day is refused and said. Screenshots test/out/league-*.png.
+// Checks on the chart page: the top bar is Chart, the Legion link and the Bot button; no Colosseum, Legion, Praetorian or Agent tab;
+// + Add panel offers no Bot (1.36.0) but Agents; a chart's ⋯ menu has no league switch; with an Agents strip the Bot button stays in
+// the top bar and the strip's bot drone opens the Bot view; the button stays in reach while it carries its red alert (review 2);
+// the Drone sky reads NQ bars from the NQ line already open (1.38.1); the chart page reads no league at all; nothing sends an order.
+// Checks on Legion's Colosseum: SHADOW: no orders, the legend H Haiku, S Sonnet, O Opus (O bronze, plan step 3.2: house style, no
+// purple), the seats' day, the week and month table ("not enough data yet" under 20), the decision log, the spend against the caps,
+// the day closed note, the leaderboard (1.57.0), the watch box, no chart and no subscribe (1.57.0); a dropped connection empties the
+// watch. Past days (Anthony's task "League view opens a given past day"): ?tab=colosseum&day=YYYY-MM-DD opens that day read only,
+// labelled, with Back to today; a day with no record says so; a bad day is refused and said; the chart page's old
+// ?tab=league&day= address forwards there. Screenshots test/out/league-*.png and colosseum-*.png.
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -101,151 +99,39 @@ try {
   /* the made-up bot connected, so it carries no alert of its own until the test raises one (review 2) */
   await fetch(`http://127.0.0.1:${PORT}/test/bot-connect?name=Demo%20Opening%20Fade`, { method: 'POST' });
   await until(() => p.$eval('#wsBotTab', b => !b.classList.contains('bt-alert')), 'the made-up bot connected: no alert', 10000);
+  const post = (u, q) => fetch(`http://127.0.0.1:${PORT}${u}` + (q ? '?' + new URLSearchParams(q) : ''), { method: 'POST' }).then(r => r.json());
+  const reads = () => desk.log.filter(x => x.which === 'chart-league').length;
 
-  /* the top bar (1.50.0): the top tabs Chart, Legion, Colosseum (the League's button, renamed), then the Agent tab as it was; the
-     Bot button in the top bar (1.36.0: on a layout with no Agents strip) */
-  check(await p.isVisible('#wsLeagueTab') && (await p.textContent('#wsLeagueTab')) === 'Colosseum', '1.50.0: the top bar has the Colosseum (the League tab, renamed)');
-  check(await p.evaluate(() => [...document.getElementById('wsTopTabs').children].map(b => b.id).join() === 'wsChartTab,wsFleetTab,wsLeagueTab,wsPrGroup' && [...document.getElementById('wsPrGroup').children].map(b => b.id).join() === 'wsPraetorianTab,wsAgentTab,wsTabSlot' && !!document.getElementById('wsAgentTab').closest('.ws-top')), '1.51.0: the top tabs in order Chart, Legion, Colosseum, Praetorian (its sides Agent and the Bot\'s slot)');
+  /* the chart page's top bar (plan step 3.2): Chart, the Legion link, the Bot button's slot; the moved tabs are gone */
+  await until(() => p.isVisible('#wsLegion'), 'the Legion link (a v3 ChartBridge)', 10000);
+  check(await p.evaluate(() => [...document.getElementById('wsTopTabs').children].map(b => b.id).join() === 'wsChartTab,wsLegion,wsPrGroup' && [...document.getElementById('wsPrGroup').children].map(b => b.id).join() === 'wsTabSlot'),
+    'plan step 3.2: the top bar is Chart, the Legion link and the Bot\'s slot');
+  check(await p.evaluate(() => ['wsLeagueTab', 'wsFleetTab', 'wsPraetorianTab', 'wsAgentTab', 'lgView', 'flView'].every(id => !document.getElementById(id))), 'plan step 3.2: no Colosseum, Legion, Praetorian or Agent tab and no league view on the chart page');
   check(await p.isVisible('#wsBotTab') && await p.$eval('#wsTabSlot', h => h.contains(document.getElementById('wsBotTab'))), '1.36.0: no Agents strip on the layout: the Bot button is in the top bar');
   await p.click('#wsAdd');
   const menu = await p.$$eval('#wsAddMenu [data-add]', bs => bs.map(b => b.textContent));
   check(!menu.includes('Bot') && menu.includes('Agents') && !menu.some(t => /^Agent( tab| desk)?$/.test(t)), '1.36.0: + Add panel offers no Bot panel and no Agent tab panel, and the Agents strip: ' + menu.join(', '));
   await p.click('#wsAdd');
-
-  /* the League tab: 1.38.1 NQ 1 min, the load the NQ 1 min chart holds (no new subscribe, no MNQ minute load) */
-  await wait(500);
-  const subs0 = await p.evaluate(() => window.__subs.length);
-  await p.click('#wsLeagueTab');
-  await until(() => p.evaluate(() => document.body.classList.contains('lg-on') && window.workspace.league().trades === 2), 'the League tab with the sample day', 15000);
-  check(await p.$eval('#wsGrid', g => getComputedStyle(g).display === 'none'), 'the League tab hides the grid');
-  /* 1.57.0 (part F): the leaderboard, bots and agents mingled, ranked; nothing on it sends */
-  await until(() => p.evaluate(() => window.workspace.league().board.programs === 2), 'the leaderboard read', 15000);
-  const lb = await p.evaluate(() => [...document.querySelectorAll('#lgView .lg-brow')].map(r => [r.dataset.key, r.dataset.kind, r.querySelector('.lg-who').textContent]));
-  check(lb.map(x => x[0]).join() === 'desk:sample-agent-beta,desk:sample-bot-alpha,league:H,league:O,league:S' && lb.filter(x => x[0].startsWith('league:')).every(x => x[1] === 'agent'),
-    'Today: by today\'s R (+1.50, +0.50); the league\'s sample day is an older session, so its seats have no today and come after, as agents: ' + JSON.stringify(lb));
-  check(lb[0][2] === 'AGENT' && lb[1][2] === 'BOT' && lb[2][2] === 'AGENT', 'told apart by the BOT and AGENT tags');
-  check(/its last session 2026-10-22/.test(await p.$eval('#lgView .lg-brow[data-key="league:H"]', r => r.innerText)), 'a seat says its last session, not today');
-  const rowText = await p.$eval('#lgView .lg-brow[data-key="desk:sample-agent-beta"]', r => r.innerText.replace(/\s+/g, ' '));
-  check(/Copilot, reported today/.test(rowText) && /\+1\.50 R/.test(rowText) && /too early/.test(rowText) && /\$0\.40 today, \$0\.60 month/.test(rowText) && /not reported/.test(rowText), 'an agent\'s row: status, today, too early, API cost, decision time: ' + rowText);
-  check(/no backtest pace yet/.test(await p.$eval('#lgView .lg-brow[data-key="desk:sample-bot-alpha"]', r => r.innerText)), 'a bot with 6 days: no backtest pace yet');
-  await p.click('#lgView [data-do="bview"][data-view="multi"]');
-  const multi = await p.evaluate(() => [...document.querySelectorAll('#lgView .lg-brow')].map(r => r.dataset.key));
-  check(multi[0] === 'desk:sample-bot-alpha' && multi[1] === 'desk:sample-agent-beta', 'Multi-day: by the last 20 days (+3.00 over +0.50), the seats after: ' + multi.join());
-  await p.click('#lgView .lg-bname[data-key="desk:sample-agent-beta"]');
-  const detail = await p.$eval('#lgView .lg-bdetail[data-key="desk:sample-agent-beta"]', r => r.innerText.replace(/\s+/g, ' '));
-  check(/No trade today/.test(detail) && /Thoughts \(1\)/.test(detail), 'a click opens the row: its trades and its thoughts, folded: ' + detail);
-  await p.click('#lgView .lg-bdetail[data-key="desk:sample-agent-beta"] summary');
-  check(/sample thoughts: waited for the open to settle/.test(await p.$eval('#lgView .lg-bdetail[data-key="desk:sample-agent-beta"]', r => r.innerText)), 'the thoughts open under the row');
-  await p.click('#lgView [data-do="bview"][data-view="today"]');
-  await p.screenshot({ path: path.join(root, 'test', 'out', 'colosseum-board-157.png') });
-  /* 1.57.0 (Anthony 2026-11-13, the league's chart: "I dont think its necessary"): no chart on the Colosseum, so opening it
-     subscribes to nothing */
-  await wait(1500);
-  const newSubs = await p.evaluate(n => window.__subs.slice(n), subs0);
-  check(!(await p.$('#lgView canvas')) && !(await p.$('#lgView .lg-chart')) && newSubs.length === 0 && (await p.evaluate(() => window.workspace.league().chart)) === false,
-    '1.57.0: no chart on the Colosseum, and opening it sends no subscribe (' + JSON.stringify(newSubs) + ')');
-  check(new URL(p.url()).searchParams.get('tab') === 'colosseum', '1.50.0: ?tab=colosseum in the address');
-  /* 1.50.0 the Colosseum: its name, the watch box (ChartBridge's traders in Shadow, read only, "not built yet" for the loop's own
-     list), the Chart tab; a mode change of the made-up agent moves it in and out of the box (another page's change) */
-  const post = (u, q) => fetch(`http://127.0.0.1:${PORT}${u}` + (q ? '?' + new URLSearchParams(q) : ''), { method: 'POST' }).then(r => r.json());
-  check((await p.textContent('#lgView .lg-word')) === 'Colosseum' && await p.$eval('#lgView .lg-word', e => /Cinzel/.test(getComputedStyle(e).fontFamily)), '1.50.0: the tab\'s name, Colosseum, in the title font');
-  check(await p.getAttribute('#wsChartTab', 'aria-pressed') === 'false' && await p.getAttribute('#wsLeagueTab', 'aria-pressed') === 'true', '1.50.0: Colosseum pressed, Chart not');
-  check(await p.evaluate(() => window.workspace.league().watch.linked === true), '1.50.0: the watch box has its listen-only link');
-  await post('/test/agent-mode', { agent: 'demo', mode: 'shadow' });
-  await until(() => p.evaluate(() => window.workspace.league().watch.rows.join() === 'demo'), 'the made-up agent in Shadow is in the watch box', 8000);
-  const wtext = await p.$eval('#lgView .lg-watch', e => e.innerText);
-  check(/Demo Agent/.test(wtext) && /not built yet/.test(wtext), '1.50.0: the watch box lists the made-up agent in Shadow and says the loop\'s own list is not built yet');
-  await p.screenshot({ path: path.join(out, 'colosseum-1366.png') });
-  await post('/test/agent-mode', { agent: 'demo', mode: 'auto' });
-  await until(() => p.evaluate(() => window.workspace.league().watch.rows.length === 0), 'a trader in Auto leaves the watch box', 8000);
-  check(/No trader on the agent channel is in Shadow now/.test(await p.$eval('#lgView .lg-watch', e => e.innerText)), '1.50.0: a trader in Auto is not on the watch; the box says none is in Shadow');
-  await post('/test/agent-mode', { agent: 'demo', mode: 'shadow' });
-  await until(() => p.evaluate(() => window.workspace.league().watch.rows.join() === 'demo'), 'back in Shadow: back on the watch', 8000);
-  const text = await p.$eval('#lgView', e => e.innerText);
-  check(/SHADOW: no orders/.test(text), 'SHADOW: no orders');
-  check(/H\s*Haiku/.test(text) && /S\s*Sonnet/.test(text) && /O\s*Opus/.test(text), 'the legend strip: H Haiku, S Sonnet, O Opus');
-  const legend = await p.$$eval('.lg-legend .lg-key', ks => ks.map(k => getComputedStyle(k.querySelector('i')).color));
-  check(legend.join('|') === 'rgb(255, 194, 102)|rgb(93, 224, 240)|rgb(182, 156, 255)', 'H amber, S cyan, O violet: ' + legend.join(', '));
-  check(/day closed, recording to 17:00/.test(text), 'the day closed note (status from the 16:01 close)');
-  check(/LONG 3 MNQ/.test(text) && /Flag for you: cleared fence 2\.99 on day 60/.test(text), 'the seats\' day: S\'s open paper trade, O\'s flag');
-  check(/not enough data yet \(n 4 of 20\)/.test(text) && /\+0\.12 R \(n 24\)/.test(text), 'the week and month table: net R with n, not enough data yet under 20');
-  check(/\$3\.00 of \$9\.50 today/.test(text) && /\$12\.25 of \$200\.00 this month/.test(text), 'the API spend against the caps');
-  const log = await p.$$eval('.lg-log .lg-row', rs => rs.map(r => r.className + ' ' + r.textContent));
-  check(log.length === 3 && /k-refused/.test(log[0]) && /k-pass/.test(log[1]) && /k-enter/.test(log[2]) && /short 5 MNQ, stop 15 pt, target 30 pt at VWAP/.test(log[2]) && /\(with you\)/.test(log[2]), 'the decision log, newest first: ' + log.length + ' rows');
-  check((await p.evaluate(() => window.workspace.league().marks)) === 5, 'five marks for a chart\'s faint switch: three fills and two exits');
-  await p.screenshot({ path: path.join(out, 'league-1366.png') });
-  check(await p.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'no sideways scroll at 1366');
-  for (const [w, h] of [[1600, 900], [1920, 1080]]) {
-    await p.setViewportSize({ width: w, height: h }); await wait(600);
-    check(await p.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'no sideways scroll at ' + w);
-    await p.screenshot({ path: path.join(out, `league-${w}.png`) });
-  }
-  await p.setViewportSize({ width: 1366, height: 768 }); await wait(300);
-  await p.click('#wsLeagueTab');
-  await until(() => p.evaluate(() => !document.body.classList.contains('lg-on')), 'back to the layout');
-
-  /* a chart's ⋯ switch: the league's trades, faint, off by default; not offered on ES */
-  check((await p.evaluate(() => window.workspace.leagueGhosts().length)) === 0 && !(await p.$('.ws-panel[data-id="c1"] .lg-overlay')), 'off by default: no marks on the charts');
-  await p.click('.ws-panel[data-id="c2"] .ws-more');
-  check(await p.$eval('#wsMore [data-do="league"]', b => b.hidden), 'not offered on an ES chart');
-  await p.click('.ws-panel[data-id="c2"] .ws-more');
+  /* plan step 3.2: the league's faint marks went with the league poll: a chart's ⋯ menu has no league switch */
   await p.click('.ws-panel[data-id="c1"] .ws-more');
-  check((await p.textContent('#wsMore [data-do="league"]')) === 'League trades (faint): off', 'the NQ chart\'s ⋯: League trades (faint): off');
-  await p.click('#wsMore [data-do="league"]');
-  const ink2 = await until(async () => { const n = await inked(p, '.ws-panel[data-id="c1"] .lg-overlay').catch(() => 0); return n > 100 ? n : null; }, 'the faint marks on the NQ chart', 40000);
-  check(!!ink2, 'on: the league\'s trades, faint, on that chart (' + ink2 + ' pixels)');
-  await p.screenshot({ path: path.join(out, 'league-faint-1366.png') });
-  check(await p.evaluate(() => JSON.parse(localStorage.getItem('live-league-ghost-v1')).c1 === true), 'kept in this browser');
-  /* review 3: the League tab was open once; after it closed the faint marks still follow The Desk (a new paper trade shows) */
-  const n0 = await p.evaluate(() => window.workspace.leagueGhostTrades());
-  const d2 = sampleDay(bars);
-  d2.trades.push({ id: 's-S-2', seat: 'S', side: 'short', contracts: 2, fill_t: bars[bars.length - 5].t * 1000, fill_px: bars[bars.length - 5].c, stop_px: bars[bars.length - 5].c + 20, target_px: null, exit_t: bars[bars.length - 2].t * 1000, exit_px: bars[bars.length - 2].c, exit_reason: 'flat time', r: 0.1 });
-  desk.league = d2;
-  const n1 = await until(async () => { const n = await p.evaluate(() => window.workspace.leagueGhostTrades()); return n === n0 + 1 ? n : null; }, 'a new paper trade on the faint marks after the League tab was closed', 45000);
-  if (await p.isVisible('#wsAlertClose')) await p.click('#wsAlertClose');   // the fake bridge's made-up "EVAL-B is gone" banner, over the headers
-  if (n1 !== n0 + 1) console.log('  debug: ' + JSON.stringify(await p.evaluate(() => ({ body: document.body.className, n: window.workspace.leagueGhostTrades(), ghosts: window.workspace.leagueGhosts() }))));
-  check(n1 === n0 + 1, 'review 3: the faint marks read on after the League tab closed (' + n0 + ' to ' + n1 + ' trades)');
+  check(!(await p.$('#wsMore [data-do="league"]')) && !(await p.$('.ws-panel[data-id="c1"] .lg-overlay')), 'plan step 3.2: the NQ chart\'s ⋯ has no League trades switch, and no marks on the chart');
   await p.click('.ws-panel[data-id="c1"] .ws-more');
-  await p.click('#wsMore [data-do="league"]');
-  await until(async () => !(await p.$('.ws-panel[data-id="c1"] .lg-overlay')), 'off again: the marks go');
 
-  /* the Agent tab stays in the top bar, as it was (Anthony 2026-10-21): the League tab closes it and it closes the League tab */
-  await until(() => p.isVisible('#wsAgentTab'), 'the Agent tab (the agents came)', 15000);
-  await p.click('#wsAgentTab');
-  await until(() => p.evaluate(() => window.workspace.agent().shown && document.body.classList.contains('ag-on')), 'the Agent tab opens as before');
-  check(new URL(p.url()).searchParams.get('tab') === 'agent', '?tab=agent as before');
-  await p.click('#wsLeagueTab');
-  await until(() => p.evaluate(() => !window.workspace.agent().shown && document.body.classList.contains('lg-on')), 'one view at a time: the League tab closes the Agent tab');
-  await p.click('#wsAgentTab');
-  await until(() => p.evaluate(() => window.workspace.agent().shown && !document.body.classList.contains('lg-on')), 'and the Agent tab closes the League tab');
-  await p.screenshot({ path: path.join(out, 'league-agent-tab-1366.png') });
-  await p.click('#wsAgentTab');
-  await until(() => p.evaluate(() => !window.workspace.agent().shown), 'closed');
-
-  /* 1.36.0: the Bot through the Agents strip (the Bot panel is gone); 1.38.0: the strip is the Drone sky, the bot a drone */
+  /* 1.36.0: the Bot through the top bar and the Agents strip (the Bot panel is gone); 1.38.0: the strip is the Drone sky, the bot a drone */
   await p.click('#wsBotTab');
   await until(() => p.evaluate(() => document.body.classList.contains('bt-on')), 'the Bot view from the top bar as before');
   check(new URL(p.url()).searchParams.get('tab') === 'bot', '?tab=bot as before');
+  check(await p.getAttribute('#wsChartTab', 'aria-pressed') === 'false', 'Chart not pressed under the Bot view');
+  await p.click('#wsChartTab');
+  await until(() => p.evaluate(() => !document.body.classList.contains('bt-on')), 'Chart closes the Bot view');
+  check(await p.getAttribute('#wsChartTab', 'aria-pressed') === 'true' && await p.$eval('#wsGrid', g => getComputedStyle(g).display !== 'none') && !new URL(p.url()).searchParams.has('tab'), 'Chart closes the Bot view: the grid back, Chart pressed, no tab in the address');
+  await p.click('#wsChartTab');
+  check(await p.getAttribute('#wsChartTab', 'aria-pressed') === 'true', 'Chart with no tab open changes nothing');
+  await p.click('#wsBotTab');
+  await until(() => p.evaluate(() => document.body.classList.contains('bt-on')), 'the Bot view again');
   await p.click('#wsBotTab');
   await until(() => p.evaluate(() => !document.body.classList.contains('bt-on')), 'closed again from its button');
-  /* 1.51.0 Praetorian: its name over its two sides; it opens the side used last (the Bot, just now), closes again, and is
-     pressed while either side is open; the Chart tab closes it */
-  check(await p.isVisible('#wsPraetorianTab') && (await p.textContent('#wsPraetorianTab')) === 'Praetorian' && await p.getAttribute('#wsPraetorianTab', 'aria-pressed') === 'false', '1.51.0: Praetorian offered, not pressed');
-  await p.click('#wsPraetorianTab');
-  await until(() => p.evaluate(() => document.body.classList.contains('bt-on')), 'Praetorian opens the side used last (the Bot)');
-  check(await p.getAttribute('#wsPraetorianTab', 'aria-pressed') === 'true' && await p.getAttribute('#wsChartTab', 'aria-pressed') === 'false', '1.51.0: Praetorian pressed while its Bot side is open');
-  await p.screenshot({ path: path.join(out, 'praetorian-topbar-1366.png'), clip: { x: 0, y: 0, width: 1366, height: 48 } });
-  await p.click('#wsAgentTab');
-  await until(() => p.evaluate(() => document.body.classList.contains('ag-on') && !document.body.classList.contains('bt-on')), 'its Agent side');
-  check(await p.getAttribute('#wsPraetorianTab', 'aria-pressed') === 'true', '1.51.0: still pressed on its Agent side');
-  await p.click('#wsPraetorianTab');
-  await until(() => p.evaluate(() => !document.body.classList.contains('ag-on') && !document.body.classList.contains('bt-on')), 'Praetorian closes');
-  await p.click('#wsPraetorianTab');
-  await until(() => p.evaluate(() => document.body.classList.contains('ag-on')), 'Praetorian opens the Agent side, used last');
-  await p.click('#wsChartTab');
-  await until(() => p.evaluate(() => !document.body.classList.contains('ag-on')), 'Chart closes Praetorian');
-  check(await p.getAttribute('#wsPraetorianTab', 'aria-pressed') === 'false', '1.51.0: Praetorian opens the side used last, closes, and Chart closes it');
-  check(await p.evaluate(() => document.documentElement.scrollWidth <= innerWidth), '1.51.0: no sideways scroll with the four tabs at ' + (await p.evaluate(() => innerWidth)));
+  check(await p.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'no sideways scroll on the chart page at ' + (await p.evaluate(() => innerWidth)));
   const socks0 = socks;
   await p.click('#wsAdd'); await p.click('#wsAddMenu [data-add="agents"]');
   /* the bot's drone: in the sky, or (a narrow panel) in the "+N more" list */
@@ -256,20 +142,12 @@ try {
   check(await p.isVisible('#wsBotTab') && await p.$eval('#wsTabSlot', h => h.contains(document.getElementById('wsBotTab'))), 'with an Agents strip the Bot button stays in the top bar (Anthony: "its fine there")');
   const skyNq = await until(async () => { const s = await p.evaluate(() => window.workspace.agentsStrip()); return s && s.bars > 5 && s.barsRoot === 'NQ' ? s : null; }, 'the Drone sky over NQ bars', 15000);
   check(!!skyNq && skyNq.root === 'NQ' && socks === socks0, '1.38.1: the Drone sky reads NQ bars (' + (skyNq ? skyNq.bars : 0) + ' pillars) from the NQ line already open: no new socket (' + socks0 + ' before, ' + socks + ' after)');
+  check(!!skyNq && !skyNq.drones.some(d => /^seat:/.test(d.key)), 'plan step 3.2: no seat drones on the chart page (the seats are on Legion\'s Colosseum): ' + (skyNq ? skyNq.drones.map(d => d.key).join(', ') : ''));
   await openBotDrone();
   await until(() => p.evaluate(() => document.body.classList.contains('bt-on')), 'a click on the bot\'s drone opens the Bot view');
   check(await p.$eval('#wsTabSlot', e => e.contains(document.getElementById('wsBotTab'))) && await p.isVisible('#wsBotTab'), 'while the Bot view is open its button is in the top bar (the way back)');
-  await p.click('#wsBotTab');
-  await until(() => p.evaluate(() => !document.body.classList.contains('bt-on') && document.getElementById('wsTabSlot').contains(document.getElementById('wsBotTab'))), 'closed: the button still in the top bar');
-  /* review 6: from the League view the Bot is one click away in the top bar */
-  await p.click('#wsLeagueTab');
-  await until(() => p.evaluate(() => document.body.classList.contains('lg-on')), 'the League view');
-  await until(() => p.isVisible('#wsBotTab'), 'from the League view the Bot button is in the top bar', 5000);
-  check(await p.$eval('#wsTabSlot', e => e.contains(document.getElementById('wsBotTab'))) && await p.isVisible('#wsAgentTab'), 'from the League view: Bot and Agent both in reach in the top bar');
   check(await p.evaluate(() => document.body.classList.contains('bt-has-tab')), 'review 5: the Layout word gives way (bt-has-tab) while the Bot button is in the top bar');
   await p.screenshot({ path: path.join(out, 'league-panels-1366.png') });
-  await p.click('#wsBotTab');
-  await until(() => p.evaluate(() => document.body.classList.contains('bt-on') && !document.body.classList.contains('lg-on')), 'the Bot view from the League view');
   /* review 2: the Bot's red alert is never hidden: killed, with the strip on the layout, the button stays in the top bar, red,
      and the strip's bot card carries the same alert */
   await p.click('.bt-kill');
@@ -293,36 +171,101 @@ try {
   await until(() => p.$eval('#wsBotTab', b => !b.classList.contains('bt-alert')), 'released: no alert', 8000);
   await p.click('#wsBotTab');
   await until(() => p.$eval('#wsTabSlot', h => h.contains(document.getElementById('wsBotTab'))), 'the alert cleared and the grid back: the button stays in the top bar', 8000);
-  check(await p.evaluate(() => document.body.classList.contains('bt-has-tab')), 'the Layout word gives way while the Bot button is in the top bar (bt-has-tab), as before 1.35.0');
   await p.click('.ws-panel.agents [data-act="close"]');
   await until(() => p.$eval('#wsTabSlot', h => h.contains(document.getElementById('wsBotTab'))), 'the strip closed: the Bot button still in the top bar');
   check(await p.isVisible('#wsBotTab'), 'with no strip on the layout the Bot is one click away in the top bar');
-  /* 1.50.0: the Chart tab closes whichever tab is open, and is pressed again */
-  await p.click('#wsLeagueTab');
-  await until(() => p.evaluate(() => document.body.classList.contains('lg-on')), 'the Colosseum open again');
-  check(await p.getAttribute('#wsChartTab', 'aria-pressed') === 'false', '1.50.0: Chart not pressed under the Colosseum');
-  await p.click('#wsChartTab');
-  await until(() => p.evaluate(() => !document.body.classList.contains('lg-on')), 'Chart closes the Colosseum');
-  check(await p.getAttribute('#wsChartTab', 'aria-pressed') === 'true' && await p.$eval('#wsGrid', g => getComputedStyle(g).display !== 'none') && !new URL(p.url()).searchParams.has('tab'), '1.50.0: Chart closes the Colosseum: the grid back, Chart pressed, no tab in the address');
-  await p.click('#wsChartTab');
-  check(await p.getAttribute('#wsChartTab', 'aria-pressed') === 'true', '1.50.0: Chart with no tab open changes nothing');
-  check((await p.evaluate(() => window.__sent.length)) === 0, 'nothing here sent an order message');
-  /* (at the end: a drop disturbs what follows) */
-  if (!(await p.evaluate(() => document.body.classList.contains('lg-on')))) await p.click('#wsLeagueTab');
-  await until(() => p.evaluate(() => document.body.classList.contains('lg-on')), 'the Colosseum open for the last checks');
+  check(reads() === 0, 'plan step 3.2: the chart page read no league the whole time (' + reads() + ' reads of /api/chart-league)');
+  check((await p.evaluate(() => window.__sent.length)) === 0, 'nothing on the chart page sent an order message');
+
+  /* Legion's Colosseum (plan step 3.2): its own page, opened on Castra, then the Colosseum: 1.38.1 / 1.57.0, no subscribe */
+  const q = await ctx.newPage();
+  q.on('pageerror', e => fail('legion pageerror: ' + e.message));
+  await q.goto(`http://localhost:${PORT}/live/legion.html`);
+  await q.waitForSelector('.cb-pin-key', { timeout: 15000 }); await enterPin(q, TEST_PIN);
+  await q.waitForFunction(() => document.getElementById('lxConn').dataset.state === 'on', null, { timeout: 40000 });
+  await wait(1500);
+  const subs0 = await q.evaluate(() => window.__subs.length);
+  await q.click('[data-lx-tab="colosseum"]');
+  await until(() => q.evaluate(() => window.legion.league() && window.legion.league().shown && window.legion.league().trades === 2), 'the Colosseum with the sample day', 15000);
+  check(await q.getAttribute('[data-lx-tab="colosseum"]', 'aria-selected') === 'true' && await q.$eval('#lgView', e => getComputedStyle(e).display !== 'none'), 'Legion: the Colosseum tab is selected and its view shows');
+  /* 1.57.0 (part F): the leaderboard, bots and agents mingled, ranked; nothing on it sends */
+  await until(() => q.evaluate(() => window.legion.league().board.programs === 2), 'the leaderboard read', 15000);
+  const lb = await q.evaluate(() => [...document.querySelectorAll('#lgView .lg-brow')].map(r => [r.dataset.key, r.dataset.kind, r.querySelector('.lg-who').textContent]));
+  check(lb.map(x => x[0]).join() === 'desk:sample-agent-beta,desk:sample-bot-alpha,league:H,league:O,league:S' && lb.filter(x => x[0].startsWith('league:')).every(x => x[1] === 'agent'),
+    'Today: by today\'s R (+1.50, +0.50); the league\'s sample day is an older session, so its seats have no today and come after, as agents: ' + JSON.stringify(lb));
+  check(lb[0][2] === 'AGENT' && lb[1][2] === 'BOT' && lb[2][2] === 'AGENT', 'told apart by the BOT and AGENT tags');
+  check(/its last session 2026-10-22/.test(await q.$eval('#lgView .lg-brow[data-key="league:H"]', r => r.innerText)), 'a seat says its last session, not today');
+  const rowText = await q.$eval('#lgView .lg-brow[data-key="desk:sample-agent-beta"]', r => r.innerText.replace(/\s+/g, ' '));
+  check(/Copilot, reported today/.test(rowText) && /\+1\.50 R/.test(rowText) && /too early/.test(rowText) && /\$0\.40 today, \$0\.60 month/.test(rowText) && /not reported/.test(rowText), 'an agent\'s row: status, today, too early, API cost, decision time: ' + rowText);
+  check(/no backtest pace yet/.test(await q.$eval('#lgView .lg-brow[data-key="desk:sample-bot-alpha"]', r => r.innerText)), 'a bot with 6 days: no backtest pace yet');
+  await q.click('#lgView [data-do="bview"][data-view="multi"]');
+  const multi = await q.evaluate(() => [...document.querySelectorAll('#lgView .lg-brow')].map(r => r.dataset.key));
+  check(multi[0] === 'desk:sample-bot-alpha' && multi[1] === 'desk:sample-agent-beta', 'Multi-day: by the last 20 days (+3.00 over +0.50), the seats after: ' + multi.join());
+  await q.click('#lgView .lg-bname[data-key="desk:sample-agent-beta"]');
+  const detail = await q.$eval('#lgView .lg-bdetail[data-key="desk:sample-agent-beta"]', r => r.innerText.replace(/\s+/g, ' '));
+  check(/No trade today/.test(detail) && /Thoughts \(1\)/.test(detail), 'a click opens the row: its trades and its thoughts, folded: ' + detail);
+  await q.click('#lgView .lg-bdetail[data-key="desk:sample-agent-beta"] summary');
+  check(/sample thoughts: waited for the open to settle/.test(await q.$eval('#lgView .lg-bdetail[data-key="desk:sample-agent-beta"]', r => r.innerText)), 'the thoughts open under the row');
+  await q.click('#lgView [data-do="bview"][data-view="today"]');
+  await q.screenshot({ path: path.join(root, 'test', 'out', 'colosseum-board-157.png') });
+  /* 1.57.0 (Anthony 2026-11-13, the league's chart: "I dont think its necessary"): no chart on the Colosseum, so opening it
+     subscribes to nothing */
+  await wait(1500);
+  const newSubs = await q.evaluate(n => window.__subs.slice(n), subs0);
+  check(!(await q.$('#lgView canvas')) && !(await q.$('#lgView .lg-chart')) && newSubs.length === 0 && (await q.evaluate(() => window.legion.league().chart)) === false,
+    '1.57.0: no chart on the Colosseum, and opening it sends no subscribe (' + JSON.stringify(newSubs) + ')');
+  check(new URL(q.url()).searchParams.get('tab') === 'colosseum', '?tab=colosseum in Legion\'s address');
+  /* 1.50.0 the Colosseum: its name, the watch box (ChartBridge's traders in Shadow, read only, "not built yet" for the loop's own
+     list); a mode change of the made-up agent moves it in and out of the box (another page's change) */
+  check((await q.textContent('#lgView .lg-word')) === 'Colosseum' && await q.$eval('#lgView .lg-word', e => /Cinzel/.test(getComputedStyle(e).fontFamily)), '1.50.0: the tab\'s name, Colosseum, in the title font');
+  check(await q.evaluate(() => window.legion.league().watch.linked === true), '1.50.0: the watch box has its listen-only link');
   await post('/test/agent-mode', { agent: 'demo', mode: 'shadow' });
+  await until(() => q.evaluate(() => window.legion.league().watch.rows.join() === 'demo'), 'the made-up agent in Shadow is in the watch box', 8000);
+  const wtext = await q.$eval('#lgView .lg-watch', e => e.innerText);
+  check(/Demo Agent/.test(wtext) && /not built yet/.test(wtext), '1.50.0: the watch box lists the made-up agent in Shadow and says the loop\'s own list is not built yet');
+  await q.screenshot({ path: path.join(out, 'colosseum-1366.png') });
+  await post('/test/agent-mode', { agent: 'demo', mode: 'auto' });
+  await until(() => q.evaluate(() => window.legion.league().watch.rows.length === 0), 'a trader in Auto leaves the watch box', 8000);
+  check(/No trader on the agent channel is in Shadow now/.test(await q.$eval('#lgView .lg-watch', e => e.innerText)), '1.50.0: a trader in Auto is not on the watch; the box says none is in Shadow');
+  await post('/test/agent-mode', { agent: 'demo', mode: 'shadow' });
+  await until(() => q.evaluate(() => window.legion.league().watch.rows.join() === 'demo'), 'back in Shadow: back on the watch', 8000);
+  const text = await q.$eval('#lgView', e => e.innerText);
+  check(/SHADOW: no orders/.test(text), 'SHADOW: no orders');
+  check(/H\s*Haiku/.test(text) && /S\s*Sonnet/.test(text) && /O\s*Opus/.test(text), 'the legend strip: H Haiku, S Sonnet, O Opus');
+  const legend = await q.$$eval('.lg-legend .lg-key', ks => ks.map(k => getComputedStyle(k.querySelector('i')).color));
+  check(legend.join('|') === 'rgb(255, 194, 102)|rgb(93, 224, 240)|rgb(176, 122, 60)', 'H amber, S cyan, O bronze (plan step 3.2: no purple): ' + legend.join(', '));
+  check(/day closed, recording to 17:00/.test(text), 'the day closed note (status from the 16:01 close)');
+  check(/LONG 3 MNQ/.test(text) && /Flag for you: cleared fence 2\.99 on day 60/.test(text), 'the seats\' day: S\'s open paper trade, O\'s flag');
+  check(/not enough data yet \(n 4 of 20\)/.test(text) && /\+0\.12 R \(n 24\)/.test(text), 'the week and month table: net R with n, not enough data yet under 20');
+  check(/\$3\.00 of \$9\.50 today/.test(text) && /\$12\.25 of \$200\.00 this month/.test(text), 'the API spend against the caps');
+  const log = await q.$$eval('.lg-log .lg-row', rs => rs.map(r => r.className + ' ' + r.textContent));
+  check(log.length === 3 && /k-refused/.test(log[0]) && /k-pass/.test(log[1]) && /k-enter/.test(log[2]) && /short 5 MNQ, stop 15 pt, target 30 pt at VWAP/.test(log[2]) && /\(with you\)/.test(log[2]), 'the decision log, newest first: ' + log.length + ' rows');
+  check((await q.evaluate(() => window.legion.league().marks)) === 5, 'five marks for the day: three fills and two exits');
+  await q.screenshot({ path: path.join(out, 'league-1366.png') });
+  check(await q.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'no sideways scroll at 1366');
+  for (const [w, h] of [[1600, 900], [1920, 1080]]) {
+    await q.setViewportSize({ width: w, height: h }); await wait(600);
+    check(await q.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'no sideways scroll at ' + w);
+    await q.screenshot({ path: path.join(out, `league-${w}.png`) });
+  }
+  await q.setViewportSize({ width: 1366, height: 768 }); await wait(300);
+  check((await q.evaluate(() => window.__sent.length)) === 0, 'nothing on the Colosseum sent an order message');
   /* a deliberate break of 98 that no test caught at first (2026-11-12): a dropped connection forgets the traders at once */
   await post('/test/drop');
-  const dropped = await until(() => p.evaluate(() => { const w = window.workspace.league().watch; return !w.connected ? w : null; }), 'the drop seen by the watch', 8000);
+  const dropped = await until(() => q.evaluate(() => { const w = window.legion.league().watch; return !w.connected ? w : null; }), 'the drop seen by the watch', 8000);
   check(!!dropped && dropped.traders === 0 && dropped.rows.length === 0, 'a dropped connection empties the watch at once (nothing shown on an old word): ' + JSON.stringify(dropped));
-  await until(() => p.evaluate(() => window.workspace.league().watch.connected && window.workspace.league().watch.rows.join() === 'demo'), 'reconnected: the watch back', 20000);
+  await until(() => q.evaluate(() => window.legion.league().watch.connected && window.legion.league().watch.rows.join() === 'demo'), 'reconnected: the watch back', 20000);
+  await q.close();
 
-
-  /* a reload with ?tab=league keeps the League tab */
+  /* the chart page's old address ?tab=league forwards to Legion's Colosseum, and a reload keeps it */
   await p.goto(`http://localhost:${PORT}/live/?layout=Lg&tab=league`);
   await p.waitForSelector('.cb-pin-key', { timeout: 15000 }); await enterPin(p, TEST_PIN);
-  await until(() => p.evaluate(() => document.body.classList.contains('lg-on')), '?tab=league opens the League tab', 20000);
-  check(true, 'a reload keeps the League tab');
+  await until(() => p.evaluate(() => /legion\.html$/.test(location.pathname) && window.legion && window.legion.league() && window.legion.league().shown), '?tab=league forwards to Legion\'s Colosseum', 20000);
+  check(new URL(p.url()).searchParams.get('tab') === 'colosseum', 'the old ?tab=league address lands on Legion with ?tab=colosseum: ' + p.url());
+  await p.reload();
+  await p.waitForSelector('.cb-pin-key', { timeout: 15000 }); await enterPin(p, TEST_PIN);
+  await until(() => p.evaluate(() => window.legion && window.legion.league() && window.legion.league().shown), 'a reload keeps the Colosseum', 20000);
+  check(true, 'a reload keeps the Colosseum');
   /* a past day (?tab=league&day=YYYY-MM-DD, The Desk's Agent Stats links here): read only, labelled, the way back to today, a day
      with no record said plainly, a bad day refused. The SAMPLE past day's trades sit on the sample bars of the newest earlier date */
   const sessionNow = await p.evaluate(() => window.LeagueCore.sessionToday());   // review LOW 1: the league's session date
@@ -336,9 +279,9 @@ try {
     trades: pt(20) ? [{ id: 'p-O-1', seat: 'O', side: 'short', contracts: 2, fill_t: pt(20).t * 1000, fill_px: pt(20).c, stop_px: pt(20).c + 12, target_px: pt(20).c - 24, exit_t: pt(8).t * 1000, exit_px: pt(8).c, exit_reason: 'target', r: 2, relation: 'own' }] : [],
     open: [], decisions: [{ id: 'pd1', seat: 'O', time: '10:20:00', trigger: 'grid', latency_s: 5.5, call_ok: true, refused: null, answer: { action: 'enter', side: 'short', stop_points: 12, target_points: 24, reasoning: 'made up for the past-day smoke' }, contracts: 2 }] } };
   const asked = () => desk.log.filter(x => x.which === 'chart-league' && x.date).map(x => x.date);
-  await p.goto(`http://localhost:${PORT}/live/?layout=Lg&tab=league&day=${pastDate}`);
+  await p.goto(`http://localhost:${PORT}/live/?layout=Lg&tab=league&day=${pastDate}`);   // the chart page's old link: forwarded to Legion
   await p.waitForSelector('.cb-pin-key', { timeout: 15000 }); await enterPin(p, TEST_PIN);
-  await until(() => p.evaluate(d => document.body.classList.contains('lg-on') && window.workspace.league().past === d && window.workspace.league().decisions === 1, pastDate), 'the League view on the past day ' + pastDate, 20000);
+  await until(() => p.evaluate(d => window.legion && window.legion.league() && window.legion.league().shown && window.legion.league().past === d && window.legion.league().decisions === 1, pastDate), 'the League view on the past day ' + pastDate, 20000);
   check(asked().includes(pastDate), 'a past day reads GET /api/chart-league?date=' + pastDate);
   const ptext = await p.$eval('#lgView', e => e.innerText);
   check(await p.isVisible('#lgView [data-k="past"]') && (await p.textContent('#lgView [data-k="past"]')) === 'Past day ' + pastDate + ' · read only', 'labelled: Past day ' + pastDate + ' · read only');
@@ -346,66 +289,65 @@ try {
   check(/past day: the live status is not kept per day/.test(ptext) && !/LONG 3 MNQ/.test(ptext) && !/Flag for you/.test(ptext), 'a past day shows no live status (no position, no flag of today)');
   check(/the live spend is not kept per day here/.test(ptext) && !/\$3\.00 of \$9\.50 today/.test(ptext), 'a past day shows no spend of today');
   check(/made up for the past-day smoke/.test(ptext) && !/made up: no edge at the level/.test(ptext), 'the decision log is the past day\'s only');
-  check(new URL(p.url()).searchParams.get('day') === pastDate && new URL(p.url()).searchParams.get('tab') === 'colosseum', 'the old ?tab=league&day= link lands on the Colosseum and the address keeps the day: ?tab=colosseum&day=' + pastDate);
+  check(/legion\.html$/.test(new URL(p.url()).pathname) && new URL(p.url()).searchParams.get('day') === pastDate && new URL(p.url()).searchParams.get('tab') === 'colosseum', 'the chart page\'s old ?tab=league&day= link lands on Legion\'s Colosseum and the address keeps the day: ' + p.url());
   if (pt(20)) {
-    check((await p.evaluate(() => window.workspace.league().marks)) === 2, 'the past day\'s marks: one fill, one exit');
+    check((await p.evaluate(() => window.legion.league().marks)) === 2, 'the past day\'s marks: one fill, one exit');
   } else console.log('  note: the sample bars hold no earlier date; the past-day marks were not checked');
-  check((await p.evaluate(() => window.workspace.leagueGhostTrades())) !== 1, 'the past day is never the faint marks\' day');
   await p.screenshot({ path: path.join(out, 'league-past-1366.png') });
   await p.click('#lgView [data-k="today"]');
-  await until(() => p.evaluate(() => window.workspace.league().past === null && window.workspace.league().date === '2026-10-22' && window.workspace.league().trades > 0), 'Back to today: the live day');
+  await until(() => p.evaluate(() => window.legion.league().past === null && window.legion.league().date === '2026-10-22' && window.legion.league().trades > 0), 'Back to today: the live day');
   check(!(await p.isVisible('#lgView [data-k="past"]')) && !(await p.isVisible('#lgView [data-k="today"]')) && !new URL(p.url()).searchParams.has('day') && new URL(p.url()).searchParams.get('tab') === 'colosseum', 'Back to today: the label goes, the address drops the day, the view stays');
   /* a day with no record: said plainly, never a guess */
   const emptyDate = pastDate > '2026-10-19' ? '2026-10-19' : '2026-01-05';
-  await p.goto(`http://localhost:${PORT}/live/?layout=Lg&tab=league&day=${emptyDate}`);
+  await p.goto(`http://localhost:${PORT}/live/legion.html?tab=colosseum&day=${emptyDate}`);
   await p.waitForSelector('.cb-pin-key', { timeout: 15000 }); await enterPin(p, TEST_PIN);
   const emptyText = await until(() => p.$eval('#lgView [data-k="problem"]', e => (!e.hidden && /No league record/.test(e.textContent) ? e.textContent : null)), 'the empty past day said', 20000);
   check(emptyText === 'No league record for ' + emptyDate + ': no paper trade and no decision. Not enough data to show that day.', 'a day with no record: ' + emptyText);
-  check((await p.evaluate(() => window.workspace.league().marks)) === 0, 'no marks for it');
+  check((await p.evaluate(() => window.legion.league().marks)) === 0, 'no marks for it');
   await p.screenshot({ path: path.join(out, 'league-past-empty-1366.png') });
-  /* closing the view drops the day: the next open is the live day */
-  await p.click('#wsLeagueTab');
-  await until(() => p.evaluate(() => !document.body.classList.contains('lg-on')), 'closed');
-  check(!new URL(p.url()).searchParams.has('day') && !new URL(p.url()).searchParams.has('tab'), 'closed: the address keeps neither tab nor day');
-  await p.click('#wsLeagueTab');
-  await until(() => p.evaluate(() => window.workspace.league().past === null && window.workspace.league().date === '2026-10-22' && window.workspace.league().trades > 0), 'opened again: the live day');
+  /* leaving the Colosseum drops the day: the next open is the live day */
+  await p.click('[data-lx-tab="castra"]');
+  await until(() => p.evaluate(() => !window.legion.league().shown), 'closed');
+  check(!new URL(p.url()).searchParams.has('day') && new URL(p.url()).searchParams.get('tab') === 'castra', 'another tab: the address keeps no day');
+  await p.click('[data-lx-tab="colosseum"]');
+  await until(() => p.evaluate(() => window.legion.league().past === null && window.legion.league().date === '2026-10-22' && window.legion.league().trades > 0), 'opened again: the live day');
   /* a bad day: refused, said, the live view */
   for (const [bad, said] of [['2026-02-30', /2026-02-30, which is not a calendar date\. Showing today\./], ['2099-01-02', /2099-01-02, which is after the current session/], ['yesterday', /not a date \(YYYY-MM-DD\)/]]) {
     const before = asked().length;
-    await p.goto(`http://localhost:${PORT}/live/?layout=Lg&tab=league&day=${bad}`);
+    await p.goto(`http://localhost:${PORT}/live/legion.html?tab=colosseum&day=${bad}`);
     await p.waitForSelector('.cb-pin-key', { timeout: 15000 }); await enterPin(p, TEST_PIN);
     const t = await until(() => p.$eval('#lgView [data-k="problem"]', e => (!e.hidden && e.textContent ? e.textContent : null)), 'the bad day ' + bad + ' said', 20000);
-    await until(() => p.evaluate(() => window.workspace.league().date === '2026-10-22' && window.workspace.league().trades > 0), 'the live day under it', 15000);
-    check(said.test(t || '') && (await p.evaluate(() => window.workspace.league().past)) === null && asked().length === before && !(await p.isVisible('#lgView [data-k="past"]')), 'a bad day (' + bad + ') is refused and said, the live view shows, The Desk is never asked for it: ' + t);
+    await until(() => p.evaluate(() => window.legion.league().date === '2026-10-22' && window.legion.league().trades > 0), 'the live day under it', 15000);
+    check(said.test(t || '') && (await p.evaluate(() => window.legion.league().past)) === null && asked().length === before && !(await p.isVisible('#lgView [data-k="past"]')), 'a bad day (' + bad + ') is refused and said, the live view shows, The Desk is never asked for it: ' + t);
   }
   await p.screenshot({ path: path.join(out, 'league-past-bad-1366.png') });
   /* review LOW 1: the current session's own date (after 17:00 New York the next date, a weekend Monday) is the live view, never refused */
-  await p.goto(`http://localhost:${PORT}/live/?layout=Lg&tab=league&day=${sessionNow}`);
+  await p.goto(`http://localhost:${PORT}/live/legion.html?tab=colosseum&day=${sessionNow}`);
   await p.waitForSelector('.cb-pin-key', { timeout: 15000 }); await enterPin(p, TEST_PIN);
-  await until(() => p.evaluate(() => document.body.classList.contains('lg-on') && window.workspace.league().date === '2026-10-22' && window.workspace.league().trades > 0), 'the current session\'s date: the live view', 20000);
-  check((await p.evaluate(() => window.workspace.league().past)) === null && (await p.evaluate(() => window.workspace.league().dayProblem)) === '', 'the current session\'s date (' + sessionNow + ') opens the live view, not refused');
+  await until(() => p.evaluate(() => window.legion && window.legion.league() && window.legion.league().shown && window.legion.league().date === '2026-10-22' && window.legion.league().trades > 0), 'the current session\'s date: the live view', 20000);
+  check((await p.evaluate(() => window.legion.league().past)) === null && (await p.evaluate(() => window.legion.league().dayProblem)) === '', 'the current session\'s date (' + sessionNow + ') opens the live view, not refused');
 
   /* The Desk on HOMESERVER reading the copy WORK's League Mirror posts (set false, ok true, source mirror): the day, no warning */
   const live = desk.league;
   desk.league = Object.assign({}, live, { folder: { set: false, ok: true, problem: null, source: 'mirror' } });
-  await p.click('#wsLeagueTab'); await p.click('#wsLeagueTab');
-  await until(() => p.evaluate(() => document.body.classList.contains('lg-on') && window.workspace.league().trades > 0), 'the mirror: the day shows', 20000);
+  await p.click('[data-lx-tab="castra"]'); await p.click('[data-lx-tab="colosseum"]');
+  await until(() => p.evaluate(() => window.legion.league().shown && window.legion.league().trades > 0), 'the mirror: the day shows', 20000);
   await new Promise(r => setTimeout(r, 1500));
   const mirrorWarn = await p.$eval('#lgView [data-k="problem"]', e => (e.hidden ? '' : e.textContent));
-  check(mirrorWarn === '' && (await p.evaluate(() => window.workspace.league().problem)) === '', 'the mirror (set false, ok true): no warning: "' + mirrorWarn + '"');
+  check(mirrorWarn === '' && (await p.evaluate(() => window.legion.league().problem)) === '', 'the mirror (set false, ok true): no warning: "' + mirrorWarn + '"');
   await p.screenshot({ path: path.join(out, 'league-mirror-1366.png') });
 
   /* The Desk with nothing to read: its own words said plainly */
   const deskSays = 'The league\'s folder is not set, and no league files have arrived from WORK yet.';
   desk.league = { shadow: 'SHADOW: no orders', folder: { set: false, ok: false, problem: deskSays, source: null }, trades: [], open: [], decisions: [] };
-  await p.click('#wsLeagueTab'); await p.click('#wsLeagueTab');
+  await p.click('[data-lx-tab="castra"]'); await p.click('[data-lx-tab="colosseum"]');
   const nofolder = await until(() => p.$eval('#lgView [data-k="problem"]', (e, want) => (!e.hidden && e.textContent === want ? e.textContent : null), deskSays), 'nothing to read said', 20000);
   check(!!nofolder, 'nothing to read on The Desk: its own words said plainly: ' + nofolder);
   await p.screenshot({ path: path.join(out, 'league-nofolder-1366.png') });
 
   /* an older Desk (set false, no ok, no problem): the page's sentence, never "set a folder on WORK" */
   desk.league = { shadow: 'SHADOW: no orders', folder: { set: false }, trades: [], open: [], decisions: [] };
-  await p.click('#wsLeagueTab'); await p.click('#wsLeagueTab');
+  await p.click('[data-lx-tab="castra"]'); await p.click('[data-lx-tab="colosseum"]');
   const oldDesk = await until(() => p.$eval('#lgView [data-k="problem"]', e => (!e.hidden && e.textContent === 'No league files have reached The Desk yet.' ? e.textContent : null)), 'an older Desk said', 20000);
   check(!!oldDesk, 'an older Desk with no league files: said plainly, no folder to set: ' + oldDesk);
   await ctx.close();

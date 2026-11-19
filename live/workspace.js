@@ -2857,9 +2857,10 @@ function mountAgentsStrip(v) {
   if (!window.AgentsSky || !window.AgentsStrip || !window.AgentsStripCore) { v.body.innerHTML = '<p class="tt-foot warn">Reload this window: its agents-strip.js or agents-sky.js is missing.</p>'; v.destroy = () => {}; return; }
   const offQuote = watchQuote('NQ');   // 1.38.1: NQ (Anthony 2026-10-23); the Quote board watches it too
   const strip = window.AgentsSky.mount(v.body, {
-    /* plan step 3.2: the chart page's league poll went with the Colosseum to Legion: the league card says where it is */
+    /* plan step 3.2: the chart page's league poll went with the Colosseum to Legion: no seats here and no league warning */
+    league: false,
     day: () => null,
-    reach: () => ({ problem: 'The league is on Legion\'s Colosseum now (Legion, legion.html).', at: 0 }),
+    reach: () => ({}),
     agents: () => (agentDesk && agentDesk.glances ? agentDesk.glances().map(g => ({ a: g.agent, g })) : []),   // one read of the day's fills a tick, for every agent
     nowMs: () => etNowSec() * 1000,
     zoneSec: ms => U.zoneSeconds(ms / 1000),
@@ -2868,7 +2869,7 @@ function mountAgentsStrip(v) {
     bars: () => { const x = quoteOf('NQ'); return x && x.bars.length ? { root: 'NQ', name: x.name, bars: x.bars } : null; },
     mine: () => myEntries(),
     openLeague: () => openLegion('colosseum', ''),
-    openAgent: id => { if (agentDesk) agentDesk.choose(id); openLegion('cohorts', 'praetorian'); },   // Praetorian's Agent desk is on Legion
+    openAgent: id => { if (agentDesk) agentDesk.choose(id); openLegion('cohorts', 'praetorian', id); },   // Praetorian's Agent desk is on Legion, on him
     bot: () => (botDesk && botDesk.glance ? botDesk.glance() : null),
     openBot: () => { if (botDesk) botDesk.showTab(true); else note('The Bot tab did not start: reload this window', true); },
   });
@@ -3767,21 +3768,25 @@ function tabUrl(t) {
   history.replaceState(null, '', u.pathname + '?' + u.searchParams.toString() + u.hash);
 }
 /* plan step 3.2: Praetorian's Agent tab moved to Legion (legion.html, Cohorts, Praetorian). The Agent desk itself stays on the chart
-   page with no tab and no view of its own (embedded, never shown, no copilot keys), because the page uses it beyond its tab:
-   the order ticket's owner check (agentOwner: a pair an agent owns is refused here as before), the copilot switch (copilotOn),
-   and the Agents panel's cards (glances). It acknowledges nothing (an embedded desk acknowledges only while shown) and draws
-   nothing; its proposals are answered on Legion. It is handed Praetorian's gated link, as before. */
+   page with no tab (its view is never shown), because the page uses it beyond its tab: the order ticket's owner check
+   (agentOwner: a pair an agent owns is refused here as before), the copilot switch (copilotOn), the Agents panel's cards
+   (glances), and what it showed off its tab: the corner line that counts the agents' open proposals (a name opens Legion's
+   Praetorian on that trader), its corner notices and its alert band. It acknowledges nothing (only a shown desk does) and its
+   copilot keys stay off (off its tab they never answered an agent; the chart page's keys answer the bot). Praetorian's gated
+   link, as before. */
 let agentDesk = null;
 function startAgent() {
   if (!window.AgentDesk) return;
-  agentDesk = window.AgentDesk.create({ embedded: true, keyPrefix: '', keys: false, v3: praetorianLink, headers: () => (PIN ? PIN.headers() : {}), feed: hub, storage: store, storagePrefix: PREFIX,
-    els: { view: $('agView') }, tradingKeys: () => HK, copilotKeys: () => (DS.on && DS.hk ? DS.hk : null) });
+  agentDesk = window.AgentDesk.create({ keys: false, v3: praetorianLink, headers: () => (PIN ? PIN.headers() : {}), feed: hub, storage: store, storagePrefix: PREFIX,
+    els: { view: $('agView') }, tradingKeys: () => HK, copilotKeys: () => (DS.on && DS.hk ? DS.hk : null),
+    openBot: () => { if (botDesk) botDesk.showTab(true); },        // "Bot: 1 proposal" in the corner line: the Bot tab answers it
+    openAgent: id => openLegion('cohorts', 'praetorian', id) });   // a name in the corner line: Praetorian on Legion, on that trader
 }
 /* plan step 3.2: Legion's own page, in its own window (one window, reused), on the tab named; the chart page's old ?tab= words
    land there by Legion's own mapping (LegionCore.tabFrom) */
 const LEGION_TABS = ['legion', 'fleet', 'league', 'colosseum', 'agent', 'praetorian'];
-function openLegion(tab, sub) {
-  const q = new URLSearchParams(); if (tab) q.set('tab', tab); if (sub) q.set('sub', sub);
+function openLegion(tab, sub, agent) {
+  const q = new URLSearchParams(); if (tab) q.set('tab', tab); if (sub) q.set('sub', sub); if (agent) q.set('agent', agent);
   try { window.open('legion.html?' + q.toString(), 'legion'); } catch (e) { note('Legion did not open: open legion.html from this PC', true); }
 }
 /* 1.50.0 (the top tabs: Chart, Legion, Colosseum, Praetorian): Chart is pressed while no tab covers the grid, and a click on it
