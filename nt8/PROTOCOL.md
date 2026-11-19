@@ -4142,14 +4142,16 @@ Checked in `check/AgentHarness.cs` (`PropAccounts`, the lane rule part, "0.6.23 
 
 ### The floor's highest close kept (0.6.25, the floor fix)
 
-Anthony's ruling (2026-11-18): ChartBridge showed a Lucid 50K account's floor at $48,000 where the firm showed $48,151.
+Anthony's ruling (2026-11-18): ChartBridge showed a 50K account's floor at the account size less the drawdown where the
+firm's was higher, from a close above the size before the join.
 A join with no highest close started the highs at the larger of the account size and the balance, and leaving a group,
 a deleted group and Hide forgot them. Built in `ChartBridgeGroups.cs`; released in ChartBridge 0.6.25.
 
 - **Every prop account's end-of-day high is kept at every close**, in a group or not. Prop is ChartBridge's own rule
   (`ChartBridgeBranches.IsProp`: a personal account is picked, and this is not it, not Sim, not Backtest or Playback). In
   the 17:00 to 18:00 ET break a prop account with no end-of-day high starts one at its equity then (a close ChartBridge
-  saw, so never above the firm's highest close), said once in the Output window; after that the same raise as a member's.
+  saw, so never above the firm's highest close until a firm resets an account and keeps its name, see below), said once in
+  the Output window; after that the same raise as a member's.
   The R12 review (BLOCKER 1): a high started this way has not seen the closes before it, so that close's day is kept as
   its `eodMissed` (the same 12 field line). An account in no group with the firm's rules applied (a copier follower, say)
   then still reads `floor` null and NinjaTrader's own room (as before any close), with "no end-of-day high is known from
@@ -4179,9 +4181,9 @@ a deleted group and Hide forgot them. Built in `ChartBridgeGroups.cs`; released 
   session) and the balance now (the R12 review, SHOULD 1: the old rule's balance floor stays), so **The Desk's highest
   close can only raise the start**, never lower it. With neither, the join starts at the larger of the account size and
   the balance, as before. The lane line says where the high
-  started: `added: 1 eval account, X, on the bench (rule); its end-of-day high starts at 50151.00 (The Desk's highest
-  close)`, `(ChartBridge's kept close, above The Desk's highest close 50100.00)`, `(its balance now, above The Desk's
-  highest close 50100.00)`, `(ChartBridge's kept close or its balance now; The Desk gave no highest close)`, or `; its end-of-day high starts at the account size 50000.00: no higher
+  started: `added: 1 eval account, X, on the bench (rule); its end-of-day high starts at 50250.00 (The Desk's highest
+  close)`, `(ChartBridge's kept close, above The Desk's highest close 50200.00)`, `(its balance now, above The Desk's
+  highest close 50200.00)`, `(ChartBridge's kept close or its balance now; The Desk gave no highest close)`, or `; its end-of-day high starts at the account size 50000.00: no higher
   close is known (none from The Desk, none kept by ChartBridge), so check the firm's dashboard and give its minimum balance
   if the floor differs` (with The Desk's figure in place of "none from The Desk" when it gave the size itself). A `highClose` that reads but is not a plain number of dollars (a string, `true`) refuses that account's join with
   `accountGroup`'s words; a bare token that is not a JSON number the reader takes (`NaN`, a negative) makes the whole

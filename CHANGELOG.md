@@ -316,7 +316,8 @@ the GO size"; the cutover card's text with its rollback: `docs/CUTOVER_chartbrid
 
 ### The floor fix (2026-11-18): every prop account's highest close kept (ChartBridge and the page)
 
-Anthony's ruling (2026-11-18): ChartBridge showed a Lucid 50K Flex account's floor at $48,000 where Lucid showed $48,151.
+Anthony's ruling (2026-11-18): ChartBridge showed a 50K account's floor at the account size less the drawdown where the
+firm's was higher, from a close above the size before the join.
 A join with no highest close started the highs at the larger of the account size and the balance, the lane rule's join
 never sent a highest close, and leaving a group, deleting a group or Hide forgot the highs, so a rejoin started over at
 the size. Fixed in `nt8/ChartBridgeGroups.cs`, `live/groups.js`, `live/accounts.js` and `live/multi-account.js`
@@ -351,8 +352,8 @@ the size. Fixed in `nt8/ChartBridgeGroups.cs`, `live/groups.js`, `live/accounts.
   1,800 entry against a room of 1,749 is held after the leave); a join or the firm's minimum clears the marks. A group
   member with no high gets none started at a close (its words stay "no end-of-day high is known for this account").
 - **Unchanged**: an account whose floor is not known trades as before ("Let them through"); payouts; the order path.
-- Tests: `nt8/check/GroupsHarness.cs` `FloorHighs` (the case itself: a 50,151 close, then a join at a balance of 49,900
-  or 50,000 gives a floor of 48,151, not 48,000; a leave and rejoin; a restart; a deleted group; Hide; a missed close; the
+- Tests: `nt8/check/GroupsHarness.cs` `FloorHighs` (the case itself: a close above the account size, then a join at a
+  lower balance gives the floor from that close, not from the size; a leave and rejoin; a restart; a deleted group; Hide; a missed close; the
   lane rule with The Desk's highest close, without it, below the kept high, with neither, and not a number); 25 of its
   checks fail on the code before the fix; the review's probes (BLOCKER 1, SHOULD 1, SHOULD 2) fail on 04c741c. `test/floor-highs.test.js` (the prefill, the warning, the join steps).
 
