@@ -90,13 +90,13 @@ test('legion: the head line never says nobody is trading while a trader is in Au
   // the very trader Kill all does NOT stop: a group holding the personal account and a prop account
   const mixed = agent('mix', { account: null, group: { id: 'g9', name: 'Both' }, seats: [{ account: 'MINE-1' }, { account: 'EVAL-A' }] });
   assert.strictEqual(F.traders([mixed], accounts, '0.6.19')[0].kind, 'mixed');
-  assert.strictEqual(line([mixed]), 'In Auto on a group with your personal account in it (Kill all will NOT stop it: stop it on the Agent tab): mix');
+  assert.strictEqual(line([mixed]), 'In Auto on a group with your personal account in it (Kill all will NOT stop it: stop it on Praetorian): mix');
   // a prop account NinjaTrader does not list now: in scope for Kill all (ChartBridgeAgents.KillScope), and said
   const gone = agent('gone', { account: 'DROPPED-1' });
   assert.strictEqual(F.traders([gone], accounts, '0.6.19')[0].kind, 'unlisted');
   assert.strictEqual(line([gone]), 'In Auto on an account NinjaTrader does not list now (Kill all stops it): gone');
   assert.strictEqual(line([agent('germanicus'), gone, mixed, agent('away', { account: 'EVAL-B', connected: false })]),
-    'In Auto on prop accounts: away (its program is not connected now), germanicus. In Auto on an account NinjaTrader does not list now (Kill all stops it): gone. In Auto on a group with your personal account in it (Kill all will NOT stop it: stop it on the Agent tab): mix');
+    'In Auto on prop accounts: away (its program is not connected now), germanicus. In Auto on an account NinjaTrader does not list now (Kill all stops it): gone. In Auto on a group with your personal account in it (Kill all will NOT stop it: stop it on Praetorian): mix');
   // prop and Sim seats together: stopped by Kill all (its prop seats flattened), counted with the prop ones
   const ps = agent('ps', { account: null, group: { id: 'g8', name: 'PS' }, seats: [{ account: 'EVAL-A' }, { account: 'Sim101' }] });
   assert.deepStrictEqual([F.traders([ps], accounts, '0.6.19')[0].kind, line([ps])], ['propsim', 'In Auto on prop accounts: ps']);
@@ -155,24 +155,24 @@ test('fleet: dollars', () => {
 });
 
 test('legion: the tab is wired into the page beside the other three, with a connection that can post its three messages only', () => {
-  const src = read('live', 'fleet.js'), html = read('live', 'index.html'), ws = read('live', 'workspace.js');
-  assert.match(html, /<button type="button" class="ws-btn fl-tabbtn" id="wsFleetTab" aria-pressed="false"[^>]* hidden>Legion<\/button>/, 'hidden until ChartBridge says it knows Kill all');
-  assert.match(html, /<section class="fl-view fl-in-ws" id="flView" aria-label="Legion tab"><\/section>/);
-  assert.ok(html.indexOf('<script src="fleet.js"></script>') > 0 && html.indexOf('<script src="fleet.js"></script>') < html.indexOf('<script src="workspace.js"'), 'loaded before workspace.js');
+  /* plan step 3.2: the Legion tab is Cohorts on Legion's own page (legion.html), mounted by live/legion-tabs.js with the chart
+     page's own connection lines; the chart page keeps a link to it */
+  const src = read('live', 'fleet.js'), html = read('live', 'legion.html'), ws = read('live', 'legion-tabs.js'), idx = read('live', 'index.html');
+  assert.doesNotMatch(idx, /id="wsFleetTab"|id="flView"/, 'no longer on the chart page');
+  assert.match(html, /<section class="fl-view lx-fl" id="flView" aria-label="The cohorts">/);
+  assert.ok(html.indexOf('<script src="fleet.js"></script>') > 0 && html.indexOf('<script src="fleet.js"></script>') < html.indexOf('<script src="legion-tabs.js"'), 'loaded before legion-tabs.js');
   const files = JSON.parse(read('nt8', 'install-files.json'));
   assert.ok(files.www.some(x => x.from === 'live/fleet.js' && x.to === 'fleet.js') && files.www.some(x => x.from === 'live/fleet.css' && x.to === 'fleet.css'), 'installed on the PCs with the page');
-  for (const id of ['wsAgentTab', 'wsLeagueTab', 'wsBotTab']) assert.ok(html.includes('id="' + id + '"'), id + ' is still there: Legion replaces none of them (Anthony 2026-11-11: keep both tabs)');
+  assert.ok(idx.includes('id="wsBotTab"'), 'the Bot tab stays on the chart page');
   /* release 1 (the start guard): each tab started inside its own guard, after the charts and the ticket (test/start-guard.test.js) */
-  for (const s of ["startGuard('Bot tab', () => { startBot();", "startGuard('Agent tab', () => { startAgent();", "startGuard('Colosseum tab', startLeague, 'wsLeagueTab');", "startGuard('Legion tab', startFleet, 'wsFleetTab');"]) assert.ok(ws.includes(s), s);
-  assert.strictEqual((ws.match(/fleetView && fleetView\.shown\(\)\) fleetView\.showTab\(false\);/g) || []).length, 4, 'closed by each other tab and a layout tab: one view at a time');
-  assert.match(ws, /if \(fleetView\) startGuard\('Legion tab', \(\) => \{ if \(fleetView\.shown\(\)\) fleetView\.showTab\(false\); \}\);/, 'and by a layout change (release 1: inside its guard)');
-  assert.match(ws, /tabUrl\(on \? 'legion' : ''\);/); assert.match(ws, /if \(fleetView && tab === 'legion'\) startGuard\('Legion tab', \(\) => fleetView\.showTab\(true\)\);/);
+  assert.match(ws, /guard\('the cohorts', \(\) => \{/, 'started inside its own guard on Legion');
+  assert.match(ws, /if \(fleet\) guard\('the cohorts', \(\) => fleet\.showTab\(tab === 'cohorts' && sub === 'legion'\)\);/, 'shown only while Cohorts and its side are');
   // N5: the tab is not handed the feed. Its connection is built here and run: it passes what FleetCore.maySend passes and nothing else
   /* the review of 94, note 5: the gate is captured once from a frozen FleetCore, never read from an open object at each post */
   assert.match(ws, /const legionGate = window\.FleetCore && Object\.isFrozen\(window\.FleetCore\) \? window\.FleetCore\.maySend : null;\n/);
   const m = /const legionLink = AF && legionGate \? (\{[^\n]*\}) : null;\n/.exec(ws);
-  assert.ok(m, 'the tab\'s own connection is one line in workspace.js');
-  assert.match(ws, /tab: \$\('wsFleetTab'\), v3: legionLink, realClick: OT\.realClick, headers:/, 'and it is what the tab gets, not AF');
+  assert.ok(m, 'the tab\'s own connection is one line in legion-tabs.js');
+  assert.match(ws, /tab: null, v3: legionLink, realClick, headers,/, 'and it is what the tab gets, not AF');
   const posted = [], heard = [];
   const AF = { listen: part => { heard.push(part); return () => {}; }, post: x => { posted.push(x); return true; }, send: () => { throw new Error('send reached'); }, sendOrder: () => { throw new Error('sendOrder reached'); } };
   const link = new Function('AF', 'legionGate', 'return ' + m[1])(AF, F.maySend);
@@ -662,7 +662,7 @@ test('Kill all\'s Yes takes a real click only (Anthony 2026-11-11): never a key;
   // the one rule, in both places: workspace.js calls OrderTicket.realClick for the group entry's Send and hands the same function to the tab
   const ws = read('live', 'workspace.js'), src = read('live', 'fleet.js');
   assert.match(ws, /d\.querySelector\('#gqSend'\)\.addEventListener\('click', e => \{\s*if \(!OT\.realClick\(e\)\) \{ tnote\('The group entry is sent by a click on Send only, not by keyboard\.', 'warn'\); return; \}/);
-  assert.match(ws, /v3: legionLink, realClick: OT\.realClick, headers:/);
+  assert.match(read('live', 'legion-tabs.js'), /v3: legionLink, realClick, headers,/); assert.match(read('live', 'legion.js'), /const realClick = window\.OrderTicket && typeof window\.OrderTicket\.realClick === 'function' \? window\.OrderTicket\.realClick : \(\) => false;/);   // plan step 3.2: Legion hands the same rule
   assert.match(ws, /OT = window\.OrderTicket,/);
   assert.ok(!/detail === 0|detail !== 0|detail < 1/.test(src), 'fleet.js has no copy of the rule');
 });
@@ -675,8 +675,8 @@ test('hotkeys under a tab (Anthony 2026-11-11 and 2026-11-12): one place, every 
   // every body class a tab sets while it covers the grid is in the list: a later tab that forgets it fails here
   const toggled = [...ws.matchAll(/document\.body\.classList\.toggle\('([a-z]+-on)', on\)/g)].map(x => x[1]).sort();
   assert.deepStrictEqual(Object.keys(tabs).sort(), toggled);
-  assert.deepStrictEqual(tabs, { 'fl-on': 'Legion', 'ag-on': 'Praetorian', 'bt-on': 'Praetorian', 'lg-on': 'Colosseum' });   // 1.50.0: the League tab is the Colosseum; 1.51.0: Agent and Bot are Praetorian's sides
-  for (const [cls, f] of [['fl-on', 'fleet.css'], ['ag-on', 'agent.css'], ['bt-on', 'bot.css'], ['lg-on', 'league.css']])
+  assert.deepStrictEqual(tabs, { 'bt-on': 'Bot' });   // plan step 3.2: Legion, the Colosseum and Praetorian's Agent side moved to legion.html; the Bot tab is the one left
+  for (const [cls, f] of [['bt-on', 'bot.css']])
     assert.match(read('live', f), new RegExp('body\\.' + cls + ' \\.ws-grid[^{]*\\{ display: none !important; \\}'), cls + ' hides the chart grid');
   // the rule itself, run: which keys act under which tab
   const run = (cls, id) => {
@@ -693,7 +693,7 @@ test('hotkeys under a tab (Anthony 2026-11-11 and 2026-11-12): one place, every 
     for (const id of live) assert.deepStrictEqual(run(cls, id), [true, []], id + ' under ' + tabs[cls] + ': live');
     for (const id of entry.concat(undecided)) { const [acted, notes] = run(cls, id); assert.strictEqual(acted, false, id + ' under ' + tabs[cls] + ': off'); assert.strictEqual(notes.length, 1); assert.match(notes[0][0], new RegExp('^Hotkey ignored: the ' + tabs[cls] + ' tab covers the chart\\.')); assert.strictEqual(notes[0][1], true); }
   }
-  assert.deepStrictEqual(['fl-on', 'lg-on', 'ag-on', 'bt-on'].map(c => run(c, 'accept')[0]), [false, false, true, true], 'Accept: only on the tabs that show its proposal (Anthony 2026-11-12)');
+  assert.deepStrictEqual(['bt-on'].map(c => run(c, 'accept')[0]), [true], 'Accept: only on the tab that shows its proposal (Anthony 2026-11-12)');
   // both handlers go through it, and nothing else reaches the actions
   assert.match(ws, /actions: \{ buy: underTab\('buy', \(\) => keyAct\('buy'\)\), sell: underTab\('sell', \(\) => keyAct\('sell'\)\), be: underTab\('be', \(\) => keyAct\('be'\)\), close: underTab\('close', \(\) => core\.flattenHere\(\)\), flattenAll: underTab\('flattenAll', \(\) => core\.flattenAll\(\)\), cutHalf: underTab\('cutHalf', \(\) => keyAct\('cutHalf'\)\) \},/);
   assert.match(ws, /run: id => underTab\(id, \(\) => runExtraKey\(id\)\)\(\),/);
@@ -746,7 +746,7 @@ test('lanes: a lane is the trader on a group of that Type; each reason a lane ca
   const why = (more, o) => F.lanes([evalTrader(more)], (o && o.groups) || groups, o && 'accounts' in o ? o.accounts : accounts, (o && o.v) || V, o && 'cards' in o ? o.cards : cards)[0];
   assert.match(why({}, { v: '0.6.20' }).why, /^The pick needs ChartBridge 0\.6\.21 or later \(this one is 0\.6\.20\)$/);
   assert.match(why({ enabled: false }).why, /off in ChartBridge/);
-  assert.match(why({ killed: true }).why, /kill switch is on \(it is released on the Agent tab, by you\)/);
+  assert.match(why({ killed: true }).why, /kill switch is on \(it is released on his desk, by you: the Traders fold here, or Praetorian\)/);
   assert.match(why({ standDown: 'the day stop' }).why, /^It is stood down: the day stop$/);
   assert.match(why({ pickProblem: 'not one pick line' }).why, /saved pick could not be read: not one pick line/);
   assert.match(why({ pick: undefined }).why, /No bot is picked/);
@@ -831,7 +831,7 @@ test('the Armed switch: offered only when Kill all is, "not known" until heard, 
   const loose = [evalTrader(), fundTrader({ pick: 'duo.json' }), agent('loose', { mode: 'auto', account: 'EVAL-A' })];
   const sl = A(L(loose), loose);
   assert.strictEqual(sl.state, 'partly');
-  assert.match(sl.reasons.join(' '), /^Not a lane, so not armed from here: loose on a prop account in Auto \(a click sends it to Shadow; or Praetorian, the Agent tab until Praetorian merges\)$/);
+  assert.match(sl.reasons.join(' '), /^Not a lane, so not armed from here: loose on a prop account in Auto \(a click sends it to Shadow; or on Praetorian\)$/);
   assert.deepStrictEqual(F.armMsgs(L(loose), false, loose, null, F.outsideAuto(L(loose), loose, accounts, V)).map(m => [m.agent, m.mode]), [['loose', 'shadow']]);
   // off: every trader of every lane that is not in Shadow, the second trader of a doubled lane included, and the loose one
   const mixed = [evalTrader({ mode: 'auto' }), fundTrader({ mode: 'copilot' }), agent('twin', { mode: 'auto', account: null, group: { id: 'g1', name: 'Evals' }, seats: [] }), agent('solo', { mode: 'auto', account: 'EVAL-A' })];
@@ -1365,9 +1365,9 @@ test('B4 (1.48.1): the tab reads the helper every 3 s while open, draws each lan
   P.fv.showTab(false);
   t.mock.timers.tick(30000); await P.tick();
   assert.strictEqual(calls.length, 2, 'no read while the tab is shut');
-  const src = read('live', 'fleet.js'), ws = read('live', 'workspace.js');
+  const src = read('live', 'fleet.js'), ws = read('live', 'legion-tabs.js');   // plan step 3.2: mounted on Legion
   assert.doesNotMatch(src, /\/on\b|\/off\b|\.on\(|\.off\(|helperClient|createClient/, 'the tab has no way to On or Off');
-  assert.match(ws, /return \(\) => client\.status\(\);\n  \}\)\(\);/, 'the page hands the status call only, never the client');
+  assert.match(ws, /return \(\) => client\.status\(\);\n\s*\}\)\(\);/, 'the page hands the status call only, never the client');
   assert.match(ws, /helperStatus: legionHelperStatus,/);
 });
 
@@ -1593,7 +1593,7 @@ test('the Traders fold (builder 4\'s Legion trader desk): closed by default, mou
   const R = page(t, { traderDesk: () => { throw new Error('made up'); } }); R.fv.showTab(true); R.ready(); R.click('desk');
   assert.match(R.part('desk').innerHTML, /The trader desk shows here/, 'a desk that throws is no desk');
   // the page hands the desk its own feed (AF), never Legion's link: the desk puts Legion's gate round it itself (builder 4)
-  const ws = read('live', 'workspace.js');
+  const ws = read('live', 'legion-tabs.js');   // plan step 3.2: mounted on Legion
   assert.match(ws, /traderDesk: el => \(window\.LegionDesk && typeof window\.LegionDesk\.mount === 'function' && el\n\s+\? window\.LegionDesk\.mount\(el, \{ v3: AF, feed: hub,/);
 });
 
@@ -1718,7 +1718,7 @@ test('answers 27, 104-B and 104-D: the Kill all line names a trader in Auto whos
   const left = agent('m1', { mode: 'auto', account: 'MINE', group: null, seats: [{ account: 'EVAL-A' }] });
   const lr = F.traders([left], accts, V);
   assert.strictEqual(lr[0].accountText, 'MINE, left over: EVAL-A', 'every account, as Kill all counts them');
-  assert.match(F.autoLine(lr, true), /^In Auto on your personal account with a prop account left over \(Kill all will NOT stop it: stop it on the Agent tab\): m1$/);
+  assert.match(F.autoLine(lr, true), /^In Auto on your personal account with a prop account left over \(Kill all will NOT stop it: stop it on Praetorian\): m1$/);
   assert.doesNotMatch(F.autoLine(lr, true), /a group/);
   const out = F.outsideAuto([], [left], accts, V);
   assert.deepStrictEqual(out.words, ['m1 on a prop account and your personal account (Kill all will NOT stop it)']);
@@ -1748,9 +1748,10 @@ test('answers 27, 104-E: one rule for a trader\'s accounts: FleetCore and the ga
 });
 
 test('answers 27, 104-C: the page loads legion-desk.js after agent.js and bot.js and before workspace.js, and the install copies it', () => {
-  const html = read('live', 'index.html');
+  const html = read('live', 'legion.html');   // plan step 3.2: Legion's own page loads it (the chart page no longer does)
   const at = f => html.indexOf('<script src="' + f + '"></script>');
-  assert.ok(at('legion-desk.js') > at('agent.js') && at('legion-desk.js') > at('bot.js') && at('legion-desk.js') < at('workspace.js') && at('agent.js') > 0, 'the order');
+  assert.ok(at('legion-desk.js') > at('agent.js') && at('legion-desk.js') > at('bot.js') && at('legion-desk.js') < at('legion-tabs.js') && at('agent.js') > 0, 'the order');
+  assert.ok(!read('live', 'index.html').includes('legion-desk.js'), 'not on the chart page');
   const files = JSON.parse(read('nt8', 'install-files.json'));
   const list = [].concat(...Object.values(files).filter(Array.isArray));
   assert.ok(list.some(x => x && x.from === 'live/legion-desk.js' && x.to === 'legion-desk.js'), 'installed');
@@ -1818,7 +1819,7 @@ test('the re-review of 94, R3: any trader in Auto outside the lanes reads PARTLY
   const st = F.armState(ls, V, true, true, acc, groups, true, out);
   assert.strictEqual(st.state, 'partly');
   assert.match(st.reasons.join(' '), /simmy on a Sim account \(Kill all does not reach it\)/);
-  assert.match(st.reasons.join(' '), /or Praetorian, the Agent tab until Praetorian merges/);
+  assert.match(st.reasons.join(' '), /or on Praetorian\)/);
   // no personal account picked: Kill all is refused, the switch still reads PARTLY (never "off") and may only switch off
   const noPick = Object.assign({}, acc, { personalNamed: false });
   const st2 = F.armState(F.lanes(list, groups, noPick, V, cards), V, true, true, noPick, groups, true, F.outsideAuto(F.lanes(list, groups, noPick, V, cards), list, noPick, V));
@@ -1951,3 +1952,17 @@ test('the re-review of 94, N6: the day stop mark says it is the page\'s own work
   assert.match(P.part('accounts').innerHTML, /The mark shown is worked out on this page from the group's rules and the plan's value; ChartBridge's own mark is not sent to the page yet\./);
 });
 
+
+test('the R12 delta of plan step 3.2, B1r: a lane whose trader a desk is turning off is not armable, and Armed sends it nothing', () => {
+  const V = '0.6.21', cards = liveCards(), cidFn = () => 'c';
+  const both = [evalTrader(), fundTrader({ pick: 'duo.json' })];
+  const [ev, fu] = F.lanes(both, groups, accounts, V, cards, ['legion1']);
+  assert.deepStrictEqual([ev.armable, ev.why], [false, 'A desk is turning legion1 off (Flatten and turn off): not armed until that ends']);
+  assert.strictEqual(fu.armable, true, 'the other lane is armable as before');
+  assert.deepStrictEqual(F.armMsgs([ev, fu], true, both, cidFn).map(m => m.agent), ['legion2'], 'Armed puts only the other lane in Auto');
+  assert.strictEqual(F.lanes(both, groups, accounts, V, cards, [])[0].armable, true, 'once it ends: armable again');
+  assert.strictEqual(F.lanes(both, groups, accounts, V, cards)[0].armable, true, 'no list: as before');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'live', 'fleet.js'), 'utf8');
+  assert.match(src, /C\.lanes\(agentList\(\), S\.groups, S\.accounts, S\.version, S\.roster\.cards,\n\s+window\.AgentDesk && typeof window\.AgentDesk\.turningOff === 'function' \? window\.AgentDesk\.turningOff\(\) : \[\]\)/, 'FleetView reads the desks\' list');
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'live', 'agent.js'), 'utf8'), /window\.AgentDesk = \{ create, VERSION, turningOff: \(\) => \[\.\.\.new Set\(TURNING\.values\(\)\)\] \};/, 'every desk of the window reports its job');
+});

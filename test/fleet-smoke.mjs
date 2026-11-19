@@ -3,7 +3,7 @@
 // drawn, the roster cards from a stand-in GET /roster, the Kill all question, and that exactly one message is ever sent, only
 // after Yes. Every account, trader, bot and number is made up: sample data only.
 //   npm run smoke:fleet      (CHROMIUM_PATH=/path/to/chrome; SHOTS=dir)
-// Then the tab inside the whole workspace against the fake bridge (the button, one view at a time, a reload).
+// Then, against the fake bridge (plan step 3.2): the chart page's Legion link, Legion's Cohorts and its two sides, an old address forwarded.
 // The review of 92: a double click anywhere on Kill all sends nothing (STOP 1); a press, a message, a release still counts, on
 // Kill all and on Yes, also under a stream of messages (STOP 2); hostile strings run nothing; a roster tag is never a P&L colour.
 // Screenshots: fleet-roster-shut, fleet-banner, fleet-desktop, fleet-ask, fleet-answer, fleet-phone, fleet-empty, fleet-workspace (.png in test/out).
@@ -175,7 +175,7 @@ try {
   check(await page.locator('.fl-others').count() === 0 && await page.locator('.fl-trader').count() === 0 && !/Other connections/.test(await text('#flView')), 'no Other connections on Legion');
   // PROP 3: a trader in Auto on a group with the personal account in it is named as the one Kill all will not stop
   await feed(agent('mixed', { account: null, group: { id: 'g9', name: 'Sample both' }, seats: [{ account: 'SAMPLE-MINE' }, { account: 'SAMPLE-EVAL-2' }] }));
-  check((await text('.fl-autoline')).includes('In Auto on a group with your personal account in it (Kill all will NOT stop it: stop it on the Agent tab): mixed'), 'the head line names the trader Kill all will not stop: ' + await text('.fl-autoline'));
+  check((await text('.fl-autoline')).includes('In Auto on a group with your personal account in it (Kill all will NOT stop it: stop it on Praetorian): mixed'), 'the head line names the trader Kill all will not stop: ' + await text('.fl-autoline'));
   await feed(agent('mixed', { mode: 'shadow', account: null }));
 
   await page.click('[data-do="sub"][data-sub="live"]');
@@ -541,8 +541,8 @@ try {
   check(pageErrors.length === 0, 'no page errors and no browser dialog: ' + pageErrors.join(' | '));
 } finally { await browser.close(); }
 
-/* ---- in the whole workspace, against the fake bridge: the button shows with a ChartBridge that knows Kill all, the tab opens
-   over the grid, one view at a time, and a reload keeps it. The fake bridge knows nothing of prop accounts: the tab then says
+/* ---- in the whole workspace, against the fake bridge (plan step 3.2): the chart page's Legion link shows with a ChartBridge that
+   knows Kill all and opens Legion, its own page, where Cohorts holds FleetView; an old ?tab=legion address forwards there. The fake bridge knows nothing of prop accounts: the tab then says
    how to pick the personal account, and nothing is sent. */
 {
   const { spawn } = await import('node:child_process');
@@ -565,64 +565,96 @@ try {
     await page.waitForSelector('.cb-pin-key', { timeout: 15000 });
     await enterPin(page, TEST_PIN);
     await page.waitForFunction(() => document.getElementById('wsConn').classList.contains('live'), null, { timeout: 30000 });
-    await page.waitForFunction(() => !document.getElementById('wsFleetTab').hidden, null, { timeout: 15000 }).catch(() => {});
-    check(await page.locator('#wsFleetTab').isVisible(), 'workspace: the Legion button shows with ChartBridge 0.6.20');
-    await page.waitForFunction(() => !document.getElementById('wsAgentTab').hidden, null, { timeout: 15000 }).catch(() => {});
-    check(await page.locator('#wsAgentTab').isVisible(), 'workspace: the Agent button is still there');
-    await page.click('#wsFleetTab');
-    await sleep(300);
-    const on = await page.evaluate(() => ({ cls: document.body.classList.contains('fl-on'), url: location.search, grid: getComputedStyle(document.querySelector('.ws-grid')).display,
-      view: getComputedStyle(document.getElementById('flView')).display, title: (document.querySelector('.fl-title') || {}).textContent }));
-    check(on.cls && /tab=legion/.test(on.url) && on.grid === 'none' && on.view !== 'none' && on.title === 'Legion', 'workspace: the tab opens over the grid and the address keeps it: ' + JSON.stringify(on));
-    check(await page.locator('.fl-others').count() === 0, 'workspace: no Other connections on Legion (1.54.0); the fake bridge\'s agent shows on the Colosseum and Praetorian');
-    check((await page.locator('.fl-box[aria-label="Accounts live"] .fl-empty').innerText()).includes('No personal account is picked yet'), 'workspace: no pick, so no prop account, and it says how to pick');
-    await page.waitForFunction(() => window.workspace.fleet().roster.state !== 'loading', null, { timeout: 10000 }).catch(() => {});
-    const ro = await page.evaluate(() => window.workspace.fleet().roster);
-    check(ro.state === 'none' && ro.asked === 1 && /No roster folder is set on this PC/.test(ro.text), 'workspace: the real request: the fake bridge has no roster (404), asked once, and the tab says the folder is not set: ' + JSON.stringify(ro));
+    /* plan step 3.2: Legion is its own page; the chart page keeps a small Legion link and no Legion, Agent or Colosseum tab */
+    await page.waitForFunction(() => !document.getElementById('wsLegion').hidden, null, { timeout: 15000 }).catch(() => {});
+    const lk = await page.evaluate(() => { const a = document.getElementById('wsLegion'); return { shown: !!a && !a.hidden, text: a && a.textContent.trim(), href: a && a.getAttribute('href'), target: a && a.target }; });
+    check(lk.shown && lk.text === 'Legion' && lk.href === 'legion.html' && lk.target === 'legion', 'workspace: the chart page\'s Legion link shows with ChartBridge 0.6.20 and opens legion.html: ' + JSON.stringify(lk));
+    const gone = await page.evaluate(() => ['wsFleetTab', 'wsAgentTab', 'wsLeagueTab', 'flView', 'lgView'].filter(id => document.getElementById(id)));
+    check(gone.length === 0, 'workspace: no Legion, Agent or Colosseum tab and no Legion or league view on the chart page: ' + gone.join(', '));
+    const popP = ctx.waitForEvent('page', { timeout: 10000 });
+    await page.click('#wsLegion');
+    const lg = await popP;
+    lg.on('pageerror', e => pe.push('legion: ' + e.message));
+    lg.on('dialog', d => { pe.push('legion, a browser dialog: ' + d.message()); d.dismiss(); });
+    await lg.waitForSelector('.cb-pin-key', { timeout: 15000 }).then(() => enterPin(lg, TEST_PIN)).catch(() => {});
+    await lg.waitForFunction(() => document.getElementById('lxConn').dataset.state === 'on', null, { timeout: 30000 }).catch(() => {});
+    check(/\/live\/legion\.html/.test(lg.url()), 'workspace: a click on the link opens Legion in its own window: ' + lg.url());
+    await lg.click('[data-lx-tab="cohorts"]');
+    await lg.waitForFunction(() => document.getElementById('flView') && getComputedStyle(document.getElementById('flView')).display !== 'none', null, { timeout: 10000 }).catch(() => {});
+    const on = await lg.evaluate(() => ({ url: location.search, view: getComputedStyle(document.getElementById('flView')).display, title: (document.querySelector('.fl-title') || {}).textContent }));
+    check(/tab=cohorts/.test(on.url) && on.view !== 'none', 'Legion, Cohorts: FleetView shows and the address keeps the tab: ' + JSON.stringify(on));
+    check(await lg.locator('.fl-others').count() === 0, 'Legion, Cohorts: no Other connections (1.54.0); the fake bridge\'s agent shows on the Colosseum and Praetorian');
+    check((await lg.locator('.fl-box[aria-label="Accounts live"] .fl-empty').innerText()).includes('No personal account is picked yet'), 'Legion, Cohorts: no pick, so no prop account, and it says how to pick');
+    await lg.waitForFunction(() => window.legion.fleet().roster.state !== 'loading', null, { timeout: 10000 }).catch(() => {});
+    const ro = await lg.evaluate(() => window.legion.fleet().roster);
+    check(ro.state === 'none' && ro.asked === 1 && /No roster folder is set on this PC/.test(ro.text), 'Legion, Cohorts: the real request: the fake bridge has no roster (404), asked once, and the tab says the folder is not set: ' + JSON.stringify(ro));
     // 1.52.1: the Traders fold mounts the real Legion trader desk (live/legion-desk.js, loaded by the page) when opened
-    check(await page.locator('#flDesk').isHidden(), 'workspace: the Traders fold is shut until opened');
-    await page.click('[data-do="desk"]');
-    await page.waitForFunction(() => { const d = document.getElementById('flDesk'); return d && !d.hidden && d.querySelector('*') && !/shows here when the page has it/.test(d.textContent); }, null, { timeout: 10000 }).catch(() => {});
-    const desk = await page.evaluate(() => { const d = document.getElementById('flDesk'); return { shown: !d.hidden, kids: d.querySelectorAll('*').length, placeholder: /shows here when the page has it/.test(d.textContent), loaded: !!window.LegionDesk }; });
-    check(desk.loaded && desk.shown && desk.kids > 0 && !desk.placeholder, 'workspace: opened, the Traders fold holds the real Legion trader desk: ' + JSON.stringify(desk));
+    check(await lg.locator('#flDesk').isHidden(), 'Legion, Cohorts: the Traders fold is shut until opened');
+    await lg.click('[data-do="desk"]');
+    await lg.waitForFunction(() => { const d = document.getElementById('flDesk'); return d && !d.hidden && d.querySelector('*') && !/shows here when the page has it/.test(d.textContent); }, null, { timeout: 10000 }).catch(() => {});
+    const desk = await lg.evaluate(() => { const d = document.getElementById('flDesk'); return { shown: !d.hidden, kids: d.querySelectorAll('*').length, placeholder: /shows here when the page has it/.test(d.textContent), loaded: !!window.LegionDesk }; });
+    check(desk.loaded && desk.shown && desk.kids > 0 && !desk.placeholder, 'Legion, Cohorts: opened, the Traders fold holds the real Legion trader desk: ' + JSON.stringify(desk));
     // 1.53.0 (E, HOME 2026-11-12): mounted late, after hello and trading went by, the desk is handed them and leaves "Connecting"
-    await page.waitForFunction(() => !/Connecting to ChartBridge/.test(document.getElementById('flDesk').textContent), null, { timeout: 5000 }).catch(() => {});
-    const conn = await page.evaluate(() => /Connecting to ChartBridge/.test(document.getElementById('flDesk').textContent));
-    check(!conn, 'workspace: the desk mounted late is not stuck on "Connecting to ChartBridge..." (the feed hands it the latest state)');
-    await page.screenshot({ path: path.join(SHOTS, 'fleet-workspace-desk.png') });
-    await page.click('[data-do="desk"]');
-    check(await page.locator('#flDesk').isHidden(), 'workspace: and shuts again');
-    /* 1.49.0 Legion Live in the real page: a real chart (the League tab's way), the Accounts tab's own rows, and Kill all and
-       Armed in the very same place as on Setup */
-    const head = () => page.evaluate(() => ['[data-do="ask"]', '[data-do="arm"]'].map(s => { const r = document.querySelector(s).getBoundingClientRect(); return [Math.round(r.x), Math.round(r.y)]; }));
+    await lg.waitForFunction(() => !/Connecting to ChartBridge/.test(document.getElementById('flDesk').textContent), null, { timeout: 5000 }).catch(() => {});
+    const conn = await lg.evaluate(() => /Connecting to ChartBridge/.test(document.getElementById('flDesk').textContent));
+    check(!conn, 'Legion, Cohorts: the desk mounted late is not stuck on "Connecting to ChartBridge..." (the feed hands it the latest state)');
+    await lg.screenshot({ path: path.join(SHOTS, 'fleet-workspace-desk.png') });
+    await lg.click('[data-do="desk"]');
+    check(await lg.locator('#flDesk').isHidden(), 'Legion, Cohorts: and shuts again');
+    /* 1.49.0 Legion Live: a real chart (the League tab's way), the Accounts tab's own rows, and Kill all and Armed in the very same
+       place as on Setup */
+    const head = () => lg.evaluate(() => ['[data-do="ask"]', '[data-do="arm"]'].map(s => { const r = document.querySelector(s).getBoundingClientRect(); return [Math.round(r.x), Math.round(r.y)]; }));
     const onSetup = await head();
-    await page.click('[data-do="sub"][data-sub="live"]');
-    await page.waitForFunction(() => document.querySelector('.fl-chart .ce-canvas'), null, { timeout: 10000 }).catch(() => {});
-    const live = await page.evaluate(() => ({ canvas: !!document.querySelector('.fl-chart .ce-canvas'), h: Math.round((document.querySelector('.fl-chart') || {}).getBoundingClientRect ? document.querySelector('.fl-chart').getBoundingClientRect().height : 0),
+    await lg.click('[data-do="sub"][data-sub="live"]');
+    await lg.waitForFunction(() => document.querySelector('.fl-chart .ce-canvas'), null, { timeout: 10000 }).catch(() => {});
+    const live = await lg.evaluate(() => ({ canvas: !!document.querySelector('.fl-chart .ce-canvas'), h: Math.round((document.querySelector('.fl-chart') || {}).getBoundingClientRect ? document.querySelector('.fl-chart').getBoundingClientRect().height : 0),
       rows: !!document.querySelector('.fl-acctrows [data-ap]'), table: !!document.querySelector('.fl-box[aria-label="Accounts live"] .fl-table'),
-      tiles: [...document.querySelectorAll('.fl-tile')].map(t => t.dataset.tile).join(','), ghosts: window.workspace.leagueGhosts().length }));
-    check(live.canvas && live.h >= 250, 'workspace, Live: a real chart is mounted on the tab: ' + JSON.stringify(live));
-    check(live.rows && !live.table, 'workspace, Live: the Accounts tab\'s own rows, not Legion\'s old table: ' + JSON.stringify(live));
-    check(live.tiles === 'all,eval,funded,business', 'workspace, Live: the four tiles: ' + live.tiles);
-    check(JSON.stringify(await head()) === JSON.stringify(onSetup), 'workspace, Live: Kill all and Armed stay exactly where they are on Setup: ' + JSON.stringify(onSetup));
-    await page.screenshot({ path: path.join(SHOTS, 'fleet-live.png') });
-    await page.click('[data-do="sub"][data-sub="setup"]');
+      tiles: [...document.querySelectorAll('.fl-tile')].map(t => t.dataset.tile).join(',') }));
+    check(live.canvas && live.h >= 250, 'Legion, Live: a real chart is mounted on the tab: ' + JSON.stringify(live));
+    check(live.rows && !live.table, 'Legion, Live: the Accounts tab\'s own rows, not Legion\'s old table: ' + JSON.stringify(live));
+    check(live.tiles === 'all,eval,funded,business', 'Legion, Live: the four tiles: ' + live.tiles);
+    check(JSON.stringify(await head()) === JSON.stringify(onSetup), 'Legion, Live: Kill all and Armed stay exactly where they are on Setup: ' + JSON.stringify(onSetup));
+    await lg.screenshot({ path: path.join(SHOTS, 'fleet-live.png') });
+    await lg.click('[data-do="sub"][data-sub="setup"]');
     await sleep(200);
-    check(await page.evaluate(() => !document.querySelector('.fl-chart .ce-canvas') && !document.querySelector('.fl-acctrows [data-ap]')), 'workspace: back on Setup, the chart and the rows are taken down');
-    await page.click('#wsAgentTab');
+    check(await lg.evaluate(() => !document.querySelector('.fl-chart .ce-canvas') && !document.querySelector('.fl-acctrows [data-ap]')), 'Legion: back on Setup, the chart and the rows are taken down');
+    await lg.click('[data-lx-sub="praetorian"]');
+    await sleep(500);
+    /* each side by the desks' own state and by what is really on screen (an element with boxes: no hidden ancestor) */
+    const sides = () => lg.evaluate(() => { const t = window.LegionTabs.state(), seen = id => { const e = document.getElementById(id); return !!e && e.getClientRects().length > 0 && e.getBoundingClientRect().height > 0; };
+      return { pr: !!(t.praetorian && t.praetorian.shown), fl: !!(t.cohorts && t.cohorts.shown), prSeen: seen('agView'), flSeen: seen('flView'), url: location.search }; });
+    const s1 = await sides();
+    check(s1.pr && !s1.fl && s1.prSeen && !s1.flSeen && /sub=praetorian/.test(s1.url), 'Legion: the Praetorian side shows the Agent desk and hides FleetView (one side at a time, on screen too): ' + JSON.stringify(s1));
+    await lg.click('[data-lx-sub="legion"]');
+    await sleep(500);
+    const s2 = await sides();
+    check(s2.fl && !s2.pr && s2.flSeen && !s2.prSeen && /sub=legion/.test(s2.url), 'Legion: and the Legion side brings FleetView back: ' + JSON.stringify(s2));
+    /* the R12 review of plan step 3.2, S2: ChartBridge's warning and error lines and a panel's note come and go over the bottom of
+       the window: Kill all and Armed never move, and every point of each still reaches it */
+    const killArm = () => lg.evaluate(() => ['[data-do="ask"]', '[data-do="arm"]'].map(q => { const b = document.querySelector(q), r = b.getBoundingClientRect(); let n = 0;
+      for (let i = 0; i < 15; i++) { const e = document.elementFromPoint(r.left + 1 + (r.width - 2) * i / 14, r.top + r.height / 2); if (e && (e === b || b.contains(e))) n++; } return [Math.round(r.x), Math.round(r.y), n]; }));
+    const before = await killArm();
+    const st = (level, text) => fetch(`http://127.0.0.1:${PORT}/test/status?` + new URLSearchParams({ level, text }), { method: 'POST' });
+    await st('warn', 'Sample: a made-up warning line from ChartBridge'); await st('error', 'Sample: a made-up error line from ChartBridge');
+    await lg.evaluate(() => { const n = document.getElementById('lxNote'); n.textContent = 'Sample: a made-up note of a panel'; n.hidden = false; });
+    await lg.waitForFunction(() => !document.getElementById('wsAlert').hidden, null, { timeout: 8000 }).catch(() => {});
     await sleep(300);
-    check(await page.evaluate(() => !document.body.classList.contains('fl-on') && document.body.classList.contains('ag-on') && /tab=agent/.test(location.search)), 'workspace: opening the Agent tab closes Legion (one view at a time)');
-    await page.click('#wsFleetTab');
+    const during = await killArm(), float = await lg.evaluate(() => { const f = document.getElementById('lxFloat').getBoundingClientRect(); return { top: Math.round(f.top), alert: !document.getElementById('wsAlert').hidden, said: !document.getElementById('lxStopSaid').hidden }; });
+    await lg.screenshot({ path: path.join(SHOTS, 'fleet-legion-alerts.png') });
+    await lg.click('#wsAlertClose');
+    await lg.evaluate(() => { document.getElementById('lxNote').hidden = true; });
     await sleep(300);
-    check(await page.evaluate(() => document.body.classList.contains('fl-on') && !document.body.classList.contains('ag-on')), 'workspace: and Legion closes the Agent tab');
-    await page.reload();
+    const after = await killArm();
+    check(float.alert && JSON.stringify(during) === JSON.stringify(before) && JSON.stringify(after) === JSON.stringify(before) && before.every(x => x[2] === 15),
+      'Legion, Cohorts: with the alert lines, a note and Stop all\'s line showing, then gone, Kill all and Armed stay put and every point reaches them: ' + JSON.stringify({ before, during, after, float }));
+    await lg.close();
+    /* an old address on the chart page forwards to Legion */
+    await page.goto(`http://localhost:${PORT}/live/?layout=Main&tab=legion`);
+    await page.waitForURL(/legion\.html/, { timeout: 15000 }).catch(() => {});
     await page.waitForSelector('.cb-pin-key', { timeout: 15000 }).then(() => enterPin(page, TEST_PIN)).catch(() => {});
-    await page.waitForFunction(() => document.body.classList.contains('fl-on'), null, { timeout: 20000 }).catch(() => {});
-    check(await page.evaluate(() => document.body.classList.contains('fl-on')), 'workspace: a reload with ?tab=legion opens the tab again');
-    await page.click('#wsFleetTab');
-    await sleep(300);
-    check(await page.evaluate(() => !document.body.classList.contains('fl-on') && !/tab=/.test(location.search) && getComputedStyle(document.querySelector('.ws-grid')).display !== 'none'), 'workspace: a second click closes it and the grid is back');
-    check(pe.length === 0, 'workspace: no page errors and no browser dialog: ' + pe.join(' | '));
+    await page.waitForFunction(() => document.getElementById('flView') && getComputedStyle(document.getElementById('flView')).display !== 'none', null, { timeout: 20000 }).catch(() => {});
+    check(/\/live\/legion\.html\?/.test(page.url()) && await page.evaluate(() => getComputedStyle(document.getElementById('flView')).display !== 'none'), 'workspace: an old ?tab=legion address forwards to Legion\'s Cohorts: ' + page.url());
+    check(pe.length === 0, 'workspace and Legion: no page errors and no browser dialog: ' + pe.join(' | '));
     await page.screenshot({ path: path.join(SHOTS, 'fleet-workspace.png') });
 
     /* ---- STOP 3 (the second look at 92): the page's alert banner never covers the tab's head. The fake bridge knows nothing of a
@@ -649,7 +681,7 @@ try {
       await p2.setViewportSize({ width, height: 900 });
       await p2.goto(`http://localhost:${PORT}/live/?layout=Main&tab=legion`);
       await p2.waitForSelector('.cb-pin-key', { timeout: 15000 }).then(() => enterPin(p2, TEST_PIN)).catch(() => {});
-      await p2.waitForFunction(() => document.body.classList.contains('fl-on') && document.querySelector('[data-do="ask"]') && !document.querySelector('[data-do="ask"]').hasAttribute('aria-disabled'), null, { timeout: 30000 }).catch(() => {});
+      await p2.waitForFunction(() => /legion\.html/.test(location.pathname) && document.querySelector('[data-do="ask"]') && !document.querySelector('[data-do="ask"]').hasAttribute('aria-disabled'), null, { timeout: 30000 }).catch(() => {});
       check(await p2.evaluate(() => !document.querySelector('[data-do="ask"]').hasAttribute('aria-disabled')), 'banner, ' + width + ' px: Kill all is offered (signed in, a personal account picked)');
       await control('status', { level: 'error', text: 'Sample: NOT FLAT? a made-up error line from ChartBridge' });
       await control('status', { level: 'warn', text: 'Sample: a second made-up line' });
@@ -659,7 +691,7 @@ try {
       check(await p2.isVisible('#wsAlert') && !(await overlap()) && await reach('[data-do="ask"]') === 15, 'banner, ' + width + ' px: with the alert banner up it does not lie on the head, and 15 of 15 points of Kill all reach it (' + await reach('[data-do="ask"]') + ')');
       const kb = await p2.locator('[data-do="ask"]').boundingBox();
       await p2.mouse.click(kb.x + kb.width / 2, kb.y + kb.height / 2);
-      check(await p2.evaluate(() => window.workspace.fleet().asking), 'banner, ' + width + ' px: a click on Kill all opens the question');
+      check(await p2.evaluate(() => window.legion.fleet().asking), 'banner, ' + width + ' px: a click on Kill all opens the question');
       await control('status', { level: 'error', text: 'Sample: another made-up error, arriving while the question is up' });
       await sleep(700);
       check(!(await overlap()) && await reach('[data-do="yes"]') === 15 && await reach('[data-do="no"]') === 15, 'banner, ' + width + ' px: an alert that arrives while the question is up covers neither Yes nor Cancel (' + await reach('[data-do="yes"]') + ', ' + await reach('[data-do="no"]') + ' of 15)');

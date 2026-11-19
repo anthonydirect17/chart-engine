@@ -58,6 +58,9 @@ const EDGES = ['t', 'r', 'b', 'l'];
 const LIGHT_HTML = '<div class="ag-light" data-parity="LT02" aria-hidden="true">' + EDGES.map(e => '<i class="ag-edge e-' + e + '"><b></b><b></b></i>').join('') +
   EDGES.map(e => '<i class="ag-edge ag-h e-' + e + '"><b></b><b></b></i>').join('') + '</div>';
 
+/* the R12 delta of plan step 3.2, B1r: the traders a desk of this window is turning off (Flatten and turn off under way), so
+   Legion's Armed never puts one of them in Auto meanwhile (FleetCore.lanes reads AgentDesk.turningOff) */
+const TURNING = new Map();   // desk -> agent id
 function create(o) {
   o = o || {};
   const els = o.els || {};
@@ -97,6 +100,7 @@ function create(o) {
      H.lines[agent] until it ends (a give-up's until the next On or Off for that agent) */
   /* 1.29.1: H.okAt, H.misses, H.slow: the missed-poll grace (AgentHelper.pollStep): one missed GET /status keeps the last good
      answer, slow true, and nothing starts on it */
+  const api0 = {};                                  // this desk, as TURNING knows it
   const H = { reach: '', why: '', status: null, okAt: 0, misses: 0, slow: false, pick: {}, busy: false, ask: null, job: null, flatSent: false, lines: {}, said: '', saidAt: 0, setFilled: '' };
   { const v = readJson(K.chart); if (v && TF_NAMES[v.tf]) S.chartTf = v.tf; }
   { const v = readJson(K.feed); if (v && FILTERS.some(f => f[0] === v.filter)) S.feedFilter = v.filter; }
@@ -158,7 +162,7 @@ function create(o) {
         '<span class="ag-motion" data-parity="ST13" role="group" aria-label="Motion of the light" title="The light around the panels and the grid: Full moves them, Off keeps them still (kept in this browser). Your system\'s reduced motion keeps them still too."><span class="ag-lbl">Motion</span>' +
           '<button type="button" data-motion="full" data-parity="ST13-full" aria-pressed="true">Full</button><button type="button" data-motion="off" data-parity="ST13-off" aria-pressed="false">Off</button></span>' +
         '<button type="button" class="ws-btn ag-boardbtn" data-act="board" title="Heroes on duty: every agent slot, every group, Kill all agents">Board</button>' +
-        (popout || embedded ? '' : '<button type="button" class="ws-btn ag-popbtn" data-act="popout" data-parity="ST14" title="Open the Agent tab in its own window (for a third monitor)">Pop out</button>') +
+        (popout || embedded ? '' : '<button type="button" class="ws-btn ag-popbtn" data-act="popout" data-parity="ST14" title="Open this desk in its own window (for a third monitor)">Pop out</button>') +
       '</header>' +
       /* the newest word of each step, still (the grid's words in one line); empty steps say nothing */
       '<div class="ag-nowline" data-k="nowline" aria-label="The newest word of each step">' + AC.STEPS.map((x, i) => '<span class="t-' + x[0] + '"><b>' + x[1] + '</b><span class="ag-nw" data-k="nw' + i + '"></span></span>').join('') + '</div>' +
@@ -603,7 +607,7 @@ function create(o) {
     /* the corner's line, off the tab: every agent's open proposals (the bot's are its own cards there) */
     if (cornerLine) {
       const all = openCounts(false, ''), on = !S.shown && all.length > 0;
-      writeLine(cornerLine, lineHtml(all, lineOut, now, false, x => 'Open the Agent tab on ' + x.name + ': its proposals are answered there'));
+      writeLine(cornerLine, lineHtml(all, lineOut, now, false, x => 'Open Praetorian on ' + x.name + ' (Legion, Cohorts): its proposals are answered there'));
       put(cornerLine, 'hidden', !on);
     }
     const next = Math.min(...[...lineIn.up.values(), ...lineOut.up.values()].filter(t => t > now));
@@ -615,6 +619,7 @@ function create(o) {
     const id = key.slice(6);
     if (!key.startsWith('agent:') || !agents.get(id)) return;
     if (S.chosen !== id) { choose(id); unmountChart(); }
+    if (typeof o.openAgent === 'function') { o.openAgent(id); return; }   // plan step 3.2: the chart page's copy opens Legion's Praetorian on him
     if (S.shown) render(); else showTab(true);
   }
   if (cornerLine) cornerLine.addEventListener('click', e => { const b = e.target.closest('button[data-goto]'); if (b) goTo(b.dataset.goto); });
@@ -756,7 +761,7 @@ function create(o) {
       tog(tabBtn, 'ag-alert', bad);
       tog(tabBtn, 'ag-waiting', !S.shown && [...cards.values()].some(x => !x.ended));
       put(tabBtn.dataset, 'parity', 'W01 W02' + (bad ? ' W02-alert' : '') + (tabBtn.classList.contains('ag-waiting') ? ' W02-waiting' : ''));
-      attr(tabBtn, 'title', off ? 'Agents: ' + AC.offText(offCtx()) : 'Agent tab: ' + agents.size() + (agents.size() === 1 ? ' agent' : ' agents'));
+      attr(tabBtn, 'title', off ? 'Agents: ' + AC.offText(offCtx()) : 'Praetorian: ' + agents.size() + (agents.size() === 1 ? ' agent' : ' agents'));
     }
     if (view) {
       put(q('[data-k="off"]'), 'hidden', !off); put(q('[data-k="main"]'), 'hidden', off || S.board); put(q('[data-k="board"]'), 'hidden', off || !S.board);
@@ -797,7 +802,9 @@ function create(o) {
     put(st, 'hidden', !stText); put(st, 'textContent', stText); attr(st, 'title', stText || null);
     put(q('[data-k="last"]'), 'textContent', m.last); attr(q('[data-k="last"]'), 'title', m.last);   // one line in the column, the whole of it here
   }
+  function syncTurning() { if (H.job && H.job.agent) TURNING.set(api0, H.job.agent); else TURNING.delete(api0); }
   function renderPanel() {
+    syncTurning();
     renderBoard();                                // 1.28.0: the board follows the same messages (accounts, groups, the helper)
     if (!view) return;
     const a = cur(); if (!a) return;
@@ -960,11 +967,26 @@ function create(o) {
     const ask = H.ask; H.ask = null;
     const a = ask ? agents.get(ask.agent) : null;
     if (!a || a.agent !== S.chosen) { renderPanel(); return; }
-    if (typeof o.flatten !== 'function') { H.lines[a.agent] = 'Flatten him on the main page or in NinjaTrader, then press Off.'; renderPanel(); return; }
-    const st = AH.flatOffStart(a, Date.now());
+    /* plan step 3.2: with a ChartBridge that knows it, one command (agentFlattenOff): ChartBridge puts him in Shadow and flattens what
+       he owns itself, and refuses Copilot and Auto for him until his program ends, so this page closing half way leaves nothing half
+       done. This page then sends the helper's Off once ChartBridge says he is flat, as before (the same wait and the same lines). */
+    if (AC.FLATOFF_MIN && AC.atLeast(S.version, AC.FLATOFF_MIN)) {
+      if (AH.flat(a)) { helperOff(a.agent); return; }
+      const fm = { type: 'agentFlattenOff', agent: a.agent }, no = refusal(Object.assign({ cid: 'x' }, fm));
+      if (!sendAgent(fm, 'flatoff')) { H.lines[a.agent] = (no || 'Flatten and turn off could not be sent (not signed in to ChartBridge).') + ' Nothing was flattened and he stays on.'; renderPanel(); return; }
+      const st0 = AH.flatOffStart(a, Date.now()), now0 = Date.now();
+      H.job = Object.assign({ agent: a.agent, account: String(a.account || ''), root: '' }, st0.job || {}, { phase: 'flatten', until: now0 + AH.FLAT_WAIT_MS }); H.flatSent = true;
+      H.lines[a.agent] = 'Flatten and turn off sent: ChartBridge puts him in Shadow and flattens what he owns; turning him off once flat...';
+      jobStep(); flatLoop(); return;
+    }
+    /* the R12 review of plan step 3.2, B1: an older ChartBridge, and this page has no Flatten of its own (Legion, the pop-out): the
+       stop half still goes (Shadow first, nothing more placed for him), he is flattened by hand, and Off goes once he is flat */
+    const hand = typeof o.flatten !== 'function';
+    const st = AH.flatOffStart(a, Date.now(), hand);
     if (st.error) { H.lines[a.agent] = st.error; renderPanel(); return; }
     if (st.action === 'off') { helperOff(a.agent); return; }
     H.job = st.job; H.flatSent = false;
+    if (st.action === 'hand') { H.lines[a.agent] = AH.handLine(st.job); jobStep(); flatLoop(); return; }   // in Shadow already: the wait at once
     if (st.action === 'shadow') {
       const sm = AC.modeMsg(a.agent, 'shadow'), no = refusal(sm);   // 1.51.0 (the review of 102, F2): the gate's own words, never "not signed in"
       if (!sendAgent(sm, 'mode')) { H.job = null; H.lines[a.agent] = no ? no + ' Nothing was flattened and he stays on.' : 'Shadow could not be sent (not signed in to ChartBridge): nothing was flattened and he stays on.'; renderPanel(); return; }
@@ -1696,7 +1718,7 @@ function create(o) {
   }
 
   /* ---------------- the Agent tab's chart: a normal live chart on the window's feed, never animated, takes no orders */
-  const chartHost = { pressOff: () => 'The Agent tab\'s chart is for watching: it takes no orders. Its lines are the agent\'s own working orders.', place: () => {}, move: () => {}, cancel: () => {} };
+  const chartHost = { pressOff: () => 'His desk\'s chart is for watching: it takes no orders. Its lines are the agent\'s own working orders.', place: () => {}, move: () => {}, cancel: () => {} };
   /* the chart's root: the one picked here, else the position's, else a working entry's, else the agent's first root */
   function rootFor(a) {
     const roots = (AC.parseRules(a && a.rules) || { roots: [] }).roots.filter(r => S.instruments[r] || !Object.keys(S.instruments).length);
@@ -1820,10 +1842,10 @@ function create(o) {
     board: () => Object.assign({ shown: S.board, line: B.line, job: B.job ? Object.assign({}, B.job) : null }, boardModel()),
     /** Layout 5, read only (tests): the grid canvas, the chart maximized, his trades in R, his heat */
     layout5: () => { const a = cur(); return { grid: GRID ? GRID.state() : null, max: S.max, r: a ? rNow(a) : null, heat: a ? AC.heatNow(a, S.orders.values(), pointValue) : null, risks: risksDay().map }; },
-    destroy() { if (GRID) GRID.destroy(); unlisten(); unroute(); unmountChart(); if (resizeObs) resizeObs.disconnect(); if (rulesObs) rulesObs.disconnect(); clearTimeout(othersTimer); clearTimeout(helperTimer); clearTimeout(flatTimer); clearTimeout(assignTimer); clearTimeout(startTimer); S.shown = false; placeNotes(); if (propBox) propBox.classList.remove('ag-hide'); if (cornerLine) document.body.classList.remove('ag-agents'); if (cornerLine) cornerLine.remove(); clearTimeout(timer); },
+    destroy() { TURNING.delete(api0); if (GRID) GRID.destroy(); unlisten(); unroute(); unmountChart(); if (resizeObs) resizeObs.disconnect(); if (rulesObs) rulesObs.disconnect(); clearTimeout(othersTimer); clearTimeout(helperTimer); clearTimeout(flatTimer); clearTimeout(assignTimer); clearTimeout(startTimer); S.shown = false; placeNotes(); if (propBox) propBox.classList.remove('ag-hide'); if (cornerLine) document.body.classList.remove('ag-agents'); if (cornerLine) cornerLine.remove(); clearTimeout(timer); },
   };
   return api;
 }
 
-window.AgentDesk = { create, VERSION };
+window.AgentDesk = { create, VERSION, turningOff: () => [...new Set(TURNING.values())] };
 })();

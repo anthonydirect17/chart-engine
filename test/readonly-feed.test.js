@@ -1,14 +1,14 @@
 'use strict';
 /* answers 25, N-b (K16): the Account page's rows-only mount gets a feed that passes the page's state and its reading
    functions (FEED_READS, the review of 97, F8) and answers false for every other function without calling the page's
-   feed. The two definitions are taken from live/workspace.js as written (a browser file with no exports). */
+   feed. The two definitions are taken from live/legion-tabs.js as written (plan step 3.2: Legion's rows; a browser file). */
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const src = fs.readFileSync(path.join(__dirname, '..', 'live', 'workspace.js'), 'utf8');
-const a = src.indexOf('const FEED_READS = '), b = src.indexOf('function mountLanePanel(');
+const src = fs.readFileSync(path.join(__dirname, '..', 'live', 'legion-tabs.js'), 'utf8');
+const a = src.indexOf('const FEED_READS = '), b = src.indexOf('function fitPanel(');
 assert.ok(a > 0 && b > a, 'FEED_READS and readOnlyFeed are where this test looks');
 const { FEED_READS, readOnlyFeed } = new Function(src.slice(a, b) + '\nreturn { FEED_READS, readOnlyFeed };')();
 

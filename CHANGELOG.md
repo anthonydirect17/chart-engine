@@ -56,7 +56,34 @@ each in a reviewed change)". CME's Globex equity index session on Good Friday 20
   after it and on Monday (before, on the day itself it was Wednesday's). `nt8/check/DataHarness.cs` follows.
 - Docs: `CHART_STYLE.md` (the overnight range), `nt8/PROTOCOL.md` (closed, the prior settlement).
 
-## Unreleased (2026-11-04): getting ready to go private: the PC updater accepts the box job and reads a chart-engine token; placeholders
+## Unreleased (plan step 3.2, and 2026-11-04): Legion as its own app, and getting ready to go private
+
+### Plan step 3.2: Legion as its own app (unreleased; no version bump until the release names it)
+
+Page and ChartBridge (`ChartBridgeAgents.cs` only; `ChartBridge.cs` untouched, its version raised at the release).
+
+- **Legion is its own page** (`live/legion.html`, `legion.js`, `legion-tabs.js`, `legion.css`), behind the same PIN, served by
+  ChartBridge from its www folder: Castra, Cohorts (the cohorts' FleetView and Praetorian's Agent desk), Colosseum, Ludus and
+  Go live, with Stop all automation in its header on every tab. Castra, Ludus and Go live are placeholders that say they are not
+  built yet; no sample numbers.
+- **Stop all automation** (`agentStopAll`, new): ChartBridge stops every bot and agent on a prop account by its own rule and
+  the account ledger, flattens what each owns and latches a mixed trader's prop seats until 18:00 ET. An older ChartBridge (0.6.17
+  or later) gets Kill all (prop accounts) instead, said beside the button.
+- **Flatten and turn off** (`agentFlattenOff`, new): one ChartBridge command puts the trader in Shadow and flattens what he owns,
+  then the page turns him off once flat. On an older ChartBridge a desk with no Flatten of its own (Legion, the pop-out) sends
+  Shadow first and turns him off once he is flattened by hand (in NinjaTrader, or Flatten on the chart page's ticket).
+- **The chart page** keeps Chart, the Bot tab, the bot strip and a small Legion link (shown with a v3 ChartBridge, opening
+  `legion.html` in its own window). Legion, the Colosseum and Praetorian's Agent tab left it, and so did its league read: the
+  Drone sky shows the agents and the bot only, and a chart's ⋯ has no League trades switch. The Agent desk stays on the chart page
+  with no tab for the ticket's owner check, the copilot switch, the Agents panel's cards and its corner line; a name in the line
+  opens Praetorian on Legion on that trader. Old addresses (`?tab=legion`, `fleet`, `league` with its day, `colosseum`, `agent`,
+  `praetorian`) forward to Legion; `?tab=praetorian` opens the Bot tab when that was the side used last.
+- **Copilot keys** stay on the chart page (they answer the bot); on Legion a proposal is answered with its buttons.
+- **COMPAT:** the release that ships this page raises `live/COMPAT.json` minChartBridge to the ChartBridge that knows
+  agentStopAll and agentFlattenOff (`FLATOFF_MIN` in `agent-core.js` and `STOPALL_MIN` in `legion.js`, pinned to one version by
+  `test/nt8-agents.test.js`).
+
+### Getting ready to go private (2026-11-04): the PC updater accepts the box job and reads a chart-engine token; placeholders
 
 `nt8/update-pc.ps1` and docs only (no page change, no version bump, as the 2026-10-23 updater entries). Anthony decided
 (2026-11-04) to make chart-engine private, with its Windows CI on HOMESERVER's self-hosted runner (SERVER_RULES.md rule

@@ -176,7 +176,11 @@ test('wiring: loaded before agent.js on both pages, installed, the workspace pas
   }
   const to = JSON.parse(read('nt8', 'install-files.json')).www.map(f => f.to);
   assert.ok(to.includes('agent-helper.js'));
-  assert.match(read('live', 'workspace.js'), /flatten: \(account, root\) => core\.flattenAgent\(account, root\)/);
+  /* plan step 3.2: the Agent desk is on Legion (no order ticket there): with a ChartBridge that knows it, "Flatten and turn off"
+     is one ChartBridge command (agentFlattenOff); with an older one the desk says where to flatten. The chart page no longer
+     shows the desk, so it hands it no Flatten */
+  assert.match(read('live', 'agent.js'), /if \(AC\.FLATOFF_MIN && AC\.atLeast\(S\.version, AC\.FLATOFF_MIN\)\) \{/);
+  assert.doesNotMatch(read('live', 'workspace.js'), /core\.flattenAgent\(/);
   assert.match(read('live', 'trade.js'), /function flattenAgent\(account, R\)/);
   for (const f of ['live/agent-helper.js', 'test/agent-helper.test.js']) assert.doesNotMatch(read(f), /[\u2013\u2014]/, f);
   /* the page never builds an order for the agent: the only order On/Off can cause is the page's own Flatten */
@@ -248,4 +252,38 @@ test('the missed-poll grace is wired: agent.js folds every poll through pollStep
   assert.match(js, /AH\.assignStart\(g, agents\.list\(\), H\.status, helperReach\(\)/);
   assert.equal(AH.POLL_MS, 3000); assert.equal(AH.TIMEOUT_MS, 4000); assert.equal(AH.MISS_GRACE_MS, 8000);
   assert.ok(AH.POLL_MS + AH.TIMEOUT_MS <= AH.MISS_GRACE_MS, 'a poll that times out right after a good answer still gets the grace');
+});
+
+test('plan step 3.2 (the R12 review, B1): a hand flatten (no Flatten of the page, an older ChartBridge): Shadow first, then Off once flat', () => {
+  const T = 2000000, pos = { root: 'MNQ', qty: 1, avgPrice: 25400 };
+  const inCopilot = { agent: 'demo', account: 'SIM-AG1', mode: 'copilot', position: pos }, inShadow = Object.assign({}, inCopilot, { mode: 'shadow' });
+  const HAND = 'He is in Shadow: flatten him in NinjaTrader, or with Flatten on the chart page\'s ticket with his account picked; he turns off once flat.';
+  const st = AH.flatOffStart(inCopilot, T, true);
+  assert.deepEqual([st.action, st.job.phase, st.job.hand], ['shadow', 'shadow', true], 'the stop half still goes: Shadow first');
+  let r = AH.flatOffStep(st.job, inShadow, T + 1000, false);
+  assert.deepEqual([r.action, r.job.phase, r.line], ['', 'flatten', HAND], 'in Shadow: no Flatten of the page, the line says where');
+  assert.equal(r.job.until, T + 1000 + AH.HAND_WAIT_MS);
+  assert.equal(AH.flatOffStep(r.job, inShadow, T + 60000, false).action, '', 'still long a minute later: he waits, no Off');
+  assert.equal(AH.flatOffStep(r.job, Object.assign({}, inShadow, { position: null }), T + 61000, false).action, 'off', 'flat by hand: Off');
+  const g = AH.flatOffStep(r.job, inShadow, r.job.until + 1, false);
+  assert.deepEqual([g.action, g.job], ['giveup', null]); assert.match(g.line, /^Not flat 15 minutes after he went to Shadow: he stays on, in Shadow\. Flatten SIM-AG1 MNQ, then press Off\.$/);
+  const s2 = AH.flatOffStart(inShadow, T, true);
+  assert.deepEqual([s2.action, s2.job.phase, s2.job.until], ['hand', 'flatten', T + AH.HAND_WAIT_MS], 'in Shadow already: the wait at once');
+  assert.equal(AH.handLine(s2.job), HAND);
+  assert.equal(AH.flatOffStart(Object.assign({}, inCopilot, { position: null }), T, true).action, 'off', 'flat: Off at once');
+  assert.equal(AH.flatOffStart(inCopilot, T).job.hand, undefined, 'without hand: the page\'s own Flatten, as before');
+});
+
+test('the R12 delta of plan step 3.2, B1r: in the hand wait, he leaves Shadow (Auto, from Legion\'s Armed or another page): the wait ends, no Off', () => {
+  const T = 3000000, pos = { root: 'MNQ', qty: 1, avgPrice: 25400 };
+  const inShadow = { agent: 'demo', account: 'SIM-AG1', mode: 'shadow', position: pos };
+  const st = AH.flatOffStart(inShadow, T, true);
+  assert.deepEqual([st.action, st.job.phase, st.job.hand], ['hand', 'flatten', true]);
+  let r = AH.flatOffStep(st.job, Object.assign({}, inShadow, { mode: 'auto' }), T + 5000, false);
+  assert.deepEqual([r.action, r.job], ['giveup', null]);
+  assert.equal(r.line, 'He left Shadow (now auto) before he was flat: he stays on. Flatten SIM-AG1 MNQ, then press Off.');
+  r = AH.flatOffStep(st.job, Object.assign({}, inShadow, { mode: 'auto', position: null }), T + 5000, false);
+  assert.equal(r.action, 'giveup', 'flat but out of Shadow: no Off either');
+  r = AH.flatOffStep(st.job, Object.assign({}, inShadow, { mode: undefined }), T + 5000, false);
+  assert.match(r.line, /^He left Shadow \(now not known\)/);
 });

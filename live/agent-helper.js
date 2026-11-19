@@ -47,6 +47,9 @@ const TIMEOUT_MS = 4000;
 const MISS_GRACE_MS = 8000;
 const FLAT_WAIT_MS = 30000;
 const SHADOW_WAIT_MS = 10000;
+/* plan step 3.2 (the R12 review, B1): a page with no order connection of its own (Legion, the pop-out) on a ChartBridge older than
+   agentFlattenOff: Shadow first, then he is flattened by hand; the page waits this long for him to be flat, then Off */
+const HAND_WAIT_MS = 15 * 60000;
 const HHMM = /^([01][0-9]|2[0-3]):[0-5][0-9]$/;
 const isNum = v => typeof v === 'number' && isFinite(v);
 const str = v => (typeof v === 'string' ? v : '');
@@ -254,6 +257,10 @@ function offQuestion(a, name) {
 }
 /** What the job flattens, in words: "SIM-A MNQ" or, for a group, "SIM-A MNQ, SIM-B MNQ". */
 const jobWhere = j => (Array.isArray(j.seats) && j.seats.length ? j.seats.map(x => x.account + ' ' + x.root).join(', ') : j.account + ' ' + j.root);
+/** The line while a hand flatten is awaited (job.hand): where to flatten him, and that he turns off once flat. */
+const handLine = j => (Array.isArray(j.seats) && j.seats.length
+  ? 'He is in Shadow: flatten ' + jobWhere(j) + ' in NinjaTrader, or with Flatten on the chart page\'s ticket with each account picked; he turns off once every seat is flat.'
+  : 'He is in Shadow: flatten him in NinjaTrader, or with Flatten on the chart page\'s ticket with his account picked; he turns off once flat.');
 
 /** Is he flat now (his `agent` message)? A group: every seat. */
 function flat(a) { return offStep(a) === 'off'; }
@@ -263,7 +270,14 @@ function flat(a) { return offStep(a) === 'off'; }
  * phase, until }. action: 'shadow' (send agentMode shadow first), 'flatten' (already in Shadow), or 'off' (he is flat now).
  * His account must be known: never a default.
  */
-function flatOffStart(a, now) {
+function flatOffStart(a, now, hand) {
+  const r = flatOffStart1(a, now);
+  /* hand: this page sends no Flatten (no order connection of its own, and a ChartBridge with no agentFlattenOff): the same Shadow
+     first, then the job waits for him to be flattened by hand */
+  if (hand && r.job && r.job.phase !== 'off') { r.job.hand = true; if (r.job.phase === 'flatten') { r.job.until = now + HAND_WAIT_MS; r.action = 'hand'; } }
+  return r;
+}
+function flatOffStart1(a, now) {
   const x = a || {}, p = x.position || {};
   if (flat(x)) return { job: { agent: str(x.agent), account: str(x.account), root: str(p.root), phase: 'off', until: 0 }, action: 'off' };
   // chart 1.27.0 (ChartBridge 0.6.0): a group, as one account: Shadow first (no new entries), then the page's Flatten on every
@@ -292,6 +306,18 @@ function flatOffStep(job, a, now, sent) {
   if (!a) {                                     // no word from ChartBridge (the connection dropped): never read as flat
     if (now > j.until) return { action: 'giveup', job: null, line: 'ChartBridge did not answer: ' + (j.phase === 'shadow' ? 'nothing was flattened and he stays on' : 'he may still hold ' + jobWhere(j) + ' and stays on') + '. Check NinjaTrader, then press Off.' };
     return { action: '', job: j, line: 'Waiting for ChartBridge (the connection dropped): nothing is read as flat meanwhile...' };
+  }
+  if (j.phase === 'shadow' && j.hand) {   // a hand flatten: Shadow first, then the wait for him to be flattened by hand
+    if (x.mode === 'shadow') return flat(x) ? { action: 'off', job: Object.assign({}, j, { phase: 'off' }), line: 'In Shadow and flat: turning him off...' }
+      : { action: '', job: Object.assign({}, j, { phase: 'flatten', until: now + HAND_WAIT_MS }), line: handLine(j) };
+  }
+  if (j.phase === 'flatten' && j.hand) {
+    /* the R12 delta, B1r: an older ChartBridge refuses nothing, and Legion's Armed can put him back in Auto: out of Shadow the wait
+       ends (never "He is in Shadow" when he is not, and no Off while he trades) */
+    if (x.mode !== 'shadow') return { action: 'giveup', job: null, line: 'He left Shadow (now ' + (x.mode || 'not known') + ') before he was flat: he stays on. Flatten ' + jobWhere(j) + ', then press Off.' };
+    if (flat(x)) return { action: 'off', job: Object.assign({}, j, { phase: 'off' }), line: 'Flat: turning him off...' };
+    if (now > j.until) return { action: 'giveup', job: null, line: 'Not flat ' + HAND_WAIT_MS / 60000 + ' minutes after he went to Shadow: he stays on, in Shadow. Flatten ' + jobWhere(j) + ', then press Off.' };
+    return { action: '', job: j, line: handLine(j) };
   }
   if (j.phase === 'shadow') {
     if (x.mode === 'shadow') return { action: flat(x) ? 'off' : 'flatten', job: Object.assign({}, j, { phase: flat(x) ? 'off' : 'flatten', until: now + FLAT_WAIT_MS }), line: flat(x) ? 'In Shadow and flat: turning him off...' : 'In Shadow: flattening ' + jobWhere(j) + '...' };
@@ -436,5 +462,5 @@ function createClient(env) {
   };
 }
 
-return { VERSION, PORT, BASE, POLL_MS, TIMEOUT_MS, MISS_GRACE_MS, pollStep, SLOW_TEXT, FLAT_WAIT_MS, SHADOW_WAIT_MS, ASSIGN_WAIT_MS, slotFree, startBegin, startStep, onGate, TIERS, TYPE_NAME, tierOf, tierChip, tierFit, proving, PROVING_OF, heroOptions, preselect, freeSlot, assignStart, assignStep, usd, spendText, stateText, pickerRows, pickerNote, nonHero, modeBlock, accountBlock, offStep, offQuestion, flat, flatOffStart, flatOffStep, seatsHeld, seatsUnclear, jobWhere, names, settingsBody, createClient };
+return { VERSION, PORT, BASE, POLL_MS, TIMEOUT_MS, MISS_GRACE_MS, pollStep, SLOW_TEXT, FLAT_WAIT_MS, SHADOW_WAIT_MS, HAND_WAIT_MS, handLine, ASSIGN_WAIT_MS, slotFree, startBegin, startStep, onGate, TIERS, TYPE_NAME, tierOf, tierChip, tierFit, proving, PROVING_OF, heroOptions, preselect, freeSlot, assignStart, assignStep, usd, spendText, stateText, pickerRows, pickerNote, nonHero, modeBlock, accountBlock, offStep, offQuestion, flat, flatOffStart, flatOffStep, seatsHeld, seatsUnclear, jobWhere, names, settingsBody, createClient };
 });

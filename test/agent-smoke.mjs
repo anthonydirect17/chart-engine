@@ -1,7 +1,9 @@
-// The Agent tab (chart 1.17.0, live/agent.js) in the workspace against the fake bridge's agent channel (fake-bridge --v3
+// The Agent tab (chart 1.17.0, live/agent.js; plan step 3.2: Praetorian's Agent desk on Legion, live/legion.html?tab=cohorts&
+// sub=praetorian, while the copilot keys, the corner line and the Bot tab stay on the chart page) against the fake bridge's agent
+// channel (fake-bridge --v3
 // --agents=demo,demotwo: ChartBridge 0.5.0, contract AGENT_CHANNEL v1). The agents are made up ("Demo Agent" and "Second
 // Demo Agent"), and so are the accounts (Sim101, SIM-AG1, EVAL-A) and every note, plan and price: sample data only.
-//   - the Agent tab next to the Bot tab; the grid hidden while it is open (?tab=agent); one tab at a time;
+//   - the Agent desk on Legion's Praetorian side (no Agent tab on the chart page; the chart page's ?tab=agent forwards there);
 //   - the picker (two agents), the strip: name, build, connected and the heartbeat, mode, SIM or LIVE, account, position,
 //     P&L, trades, losses, the owner lock badge, the kill switch's state;
 //   - notes (look, thinking collapsed, lesson, notebook, status) and plans (shadow, refused, skipped), newest first;
@@ -10,7 +12,8 @@
 //     the button only while flat with no working entry or proposal;
 //   - Copilot: a proposal shows in the tab with its countdown (agentSeen sent), Accept places it (by agent:demo on the
 //     chart), the strip shows the owner lock; Accept closes in the last 5 s; an expired one ends;
-//   - one copilot key for the bot and the agents: the oldest open proposal across both is answered first;
+//   - the copilot keys on the chart page answer the bot only (an agent's proposal by its button on Legion; Legion has no keys);
+//     the chart page's corner line opens Legion on that agent;
 //   - the kill switch (on in one click, release in two), Auto asks a second click;
 //   - the pop-out window (agent.html); an older ChartBridge (0.4.0): "No agents on this ChartBridge (0.5.2 or later)."; a
 //     0.5.2 with no agents line: "No agents on this ChartBridge: none is named in its config.txt (agents = ...)."
@@ -100,18 +103,20 @@ try {
   check(/^11:0\d$/.test(pageNy), 'the page\'s clock reads ' + SMOKE_NY + ' New York, whatever the time of day the smoke runs: ' + pageNy);
   page.on('pageerror', e => fail('page error: ' + e.message));
   page.on('dialog', d => { fail('a browser dialog: ' + d.message()); d.dismiss(); });
-  const open = async (q = '?layout=Main') => {
-    await page.goto(`http://localhost:${port}/live/${q}`);
-    await page.waitForSelector('.cb-pin-key', { timeout: 15000 });
-    await enterPin(page, TEST_PIN);
-    await page.waitForFunction(() => document.getElementById('wsConn').classList.contains('live'), null, { timeout: 30000 });
+  /* plan step 3.2: the Agent desk is Praetorian's side on Legion (page); the chart page (cp) keeps the copilot keys, the corner
+     line and the Bot tab */
+  const open = async (pg, q) => {
+    await pg.goto(`http://localhost:${port}/live/${q}`);
+    await pg.waitForSelector('.cb-pin-key', { timeout: 15000 });
+    await enterPin(pg, TEST_PIN);
   };
-  const A = () => page.evaluate(() => window.workspace.agent());
-  const sent = () => page.evaluate(() => window.__socks.flatMap(s => s.msgs));
+  const A = () => page.evaluate(() => window.legion.agent());
+  const sentOn = pg => pg.evaluate(() => window.__socks.flatMap(s => s.msgs));
+  const sent = () => sentOn(page);
   const text = sel => page.evaluate(s => { const e = document.querySelector(s); return e ? e.textContent.replace(/\s+/g, ' ').trim() : null; }, sel);
   const visible = sel => page.evaluate(s => { const e = document.querySelector(s); if (!e) return false; const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0 && getComputedStyle(e).visibility !== 'hidden'; }, sel);
   /* board F: the light's state, the lit panels, the running light animations (the line and its halo: one animation per lit panel) */
-  const light = () => page.evaluate(() => window.workspace.agent().light);
+  const light = () => page.evaluate(() => window.legion.agent().light);
   const lit = () => page.evaluate(() => [...document.querySelectorAll('#agView .ag-panel.lit')].map(e => e.dataset.panel).sort().join(','));
   /* the panels whose light runs: each lit panel turns its strips (the line's four and the halo's four, each with its crossfade copy), all on one lap */
   const orbits = () => page.evaluate(() => { const by = {}; for (const a of document.getAnimations()) if (a.animationName === 'ag-orbit' && a.playState === 'running') { const p = a.effect.target.closest('[data-panel]').dataset.panel; by[p] = (by[p] || 0) + 1; } return Object.keys(by).filter(p => by[p] === 16).sort().join(','); });
@@ -154,24 +159,25 @@ try {
     return L;
   }
   const shotF = async name => { const vp = page.viewportSize(); await page.setViewportSize({ width: 1440, height: 1000 }); await sleep(700); await page.screenshot({ path: path.join(SHOTS, name + '.png') }); await page.setViewportSize(vp); await sleep(300); };
-  await open();
+  const cp = await ctx.newPage();
+  cp.on('pageerror', e => fail('chart page error: ' + e.message));
+  cp.on('dialog', d => { fail('a browser dialog on the chart page: ' + d.message()); d.dismiss(); });
+  await open(cp, '?layout=Main');
+  await cp.waitForFunction(() => document.getElementById('wsConn').classList.contains('live'), null, { timeout: 30000 });
+  await open(page, 'legion.html?tab=cohorts&sub=praetorian');
+  await page.waitForFunction(() => document.getElementById('lxConn').dataset.state === 'on', null, { timeout: 30000 });
   await control('price', { root: 'MNQ', p: 25400 });                                   // MNQ held at a sample price: the entries rest
 
   /* ---------------------------------------------------------------- the tab */
   console.log('the Agent tab next to the Bot tab');
   await until(async () => (await A()).agents.length === 2, 'ChartBridge told of both agents after sign-in');
-  /* 1.35.0 (Anthony 2026-10-21): the Bot tab moved to a panel of its own (+ Add panel, Bot); the Agent tab stays where it was,
-     with the League tab after it */
-  /* review 2 of 1.35.0: the Bot button comes back to the top bar only while it carries its red alert (this sample bot is on but
-     not connected), so the alert is never hidden */
-  check(await page.isVisible('#wsAgentTab') && (!(await page.isVisible('#wsBotTab')) || await page.$eval('#wsBotTab', b => b.classList.contains('bt-alert'))),
-    'the Agent tab button is in the top bar (the Bot tab is a panel now; its button is there only with its red alert)');
-  check(await page.evaluate(() => { const a = document.getElementById('wsAgentTab'); return a.parentElement === document.getElementById('wsPrGroup') && a.previousElementSibling === document.getElementById('wsPraetorianTab') && a.nextElementSibling === document.getElementById('wsTabSlot'); }), '1.51.0: the Agent button is Praetorian\'s first side, after the Praetorian button, the Bot\'s slot after it');
+  /* plan step 3.2: no Agent tab on the chart page; the desk is Legion's Praetorian side (its button pressed while it shows) */
+  check(await cp.evaluate(() => !document.getElementById('wsAgentTab') && !document.getElementById('wsPraetorianTab') && !!document.getElementById('wsLegion')), 'plan step 3.2: the chart page has no Agent or Praetorian tab, only the Legion link');
   await control('agent-connect', { agent: 'demo', name: 'Demo Agent', build: 'sample-build-1' });
   await control('agent-connect', { agent: 'demotwo', name: 'Second Demo Agent', build: 'sample-build-7' });
-  await page.click('#wsAgentTab');
-  await until(async () => (await A()).shown, 'the tab opens');
-  check(await page.evaluate(() => getComputedStyle(document.getElementById('wsGrid')).display) === 'none' && /tab=agent/.test(page.url()), 'the grid is hidden while the Agent tab is open; the URL keeps ?tab=agent');
+  await until(async () => (await A()).shown, 'the desk shows on Praetorian\'s side');
+  check(await visible('#agView') && !(await visible('#flView')) && /sub=praetorian/.test(page.url()) && await page.getAttribute('[data-lx-sub="praetorian"]', 'aria-selected') === 'true',
+    'Legion\'s Praetorian side: the Agent desk shows, the cohorts\' FleetView does not; the address keeps sub=praetorian');
   check(await visible('#agView [data-k="pickWrap"]'), 'two agents: the picker shows');
   await page.selectOption('#agView [data-k="pick"]', 'demo');
   await until(async () => (await text('.ag-strip [data-k="name"]')) === 'Demo Agent', 'Demo Agent chosen');
@@ -347,7 +353,7 @@ try {
   check((await text('.ag-plist [data-k="cd"]')) !== cd, 'the countdown runs');
   await page.screenshot({ path: path.join(SHOTS, 'agent-proposal.png') });
   await lightIs('plan', 'judgment', ['pipe', 'prop'], 'a plan waiting in copilot');
-  check(await page.evaluate(() => { const L = window.workspace.agent().light, p = document.querySelector('#agView .ag-panel.lit'), l = p.querySelector('.ag-light'); const rgb = h => 'rgb(' + [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16)).join(', ') + ')';
+  check(await page.evaluate(() => { const L = window.legion.agent().light, p = document.querySelector('#agView .ag-panel.lit'), l = p.querySelector('.ag-light'); const rgb = h => 'rgb(' + [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16)).join(', ') + ')';
     const slot = l.classList.contains('ag-c1') ? 1 : 0; return getComputedStyle(p).getPropertyValue('--ag-to').trim() === rgb(L.color) && getComputedStyle(l).getPropertyValue('--ag-c' + slot).trim() === rgb(L.color); }),
     'the light\'s colour is set where it draws: the lit panel\'s glow fades to it, the light crossfades to it (registered colours, not inherited by the tab)');
   for (const [w, h] of [[1440, 1000], [1366, 768]]) {
@@ -403,7 +409,7 @@ try {
   await page.click('.ag-filters [data-filter="all"]');
   check(drawerTop >= 0, 'the drawer sits over the right column');
   check(/OWNS SIM-AG1 MNQ/.test(await text('#agView [data-k="sOwns"]')), 'the strip: ' + await text('#agView [data-k="sOwns"]'));
-  const lines = await page.evaluate(() => { const c = window.workspace.agent(); return c.chart; });
+  const lines = await page.evaluate(() => { const c = window.legion.agent(); return c.chart; });
   check(lines && (await A()).chartRoot === 'MNQ' && /^MNQ/.test(await text('#agView [data-k="chartName"]')), 'the Agent tab\'s chart is on the agent\'s root, MNQ (its working entry\'s, not its first root NQ): ' + await text('#agView [data-k="chartName"]'));
   await sleep(1200);
   await page.screenshot({ path: path.join(SHOTS, 'agent-tab.png') });
@@ -504,7 +510,7 @@ try {
   /* ---------------------------------------------------------------- one copilot key for the bot and every agent */
   console.log('copilot keys: never a second proposal (review B1), the tab answers its agent only, elsewhere one open only (S1)');
   const answersSent = async () => (await sent()).filter(m => m.type === 'agentAnswer');
-  await until(async () => (await page.evaluate(() => window.workspace.bot().keys.accept)) === 'Alt+Y', 'the copilot keys from The Desk');
+  await until(async () => (await cp.evaluate(() => window.workspace.bot().keys.accept)) === 'Alt+Y', 'the copilot keys from The Desk, on the chart page');
   // the second agent on its own made-up account, in Copilot
   await page.selectOption('#agView [data-k="pick"]', 'demotwo');
   await until(async () => (await text('.ag-strip [data-k="name"]')) === 'Second Demo Agent', 'Second Demo Agent shown');
@@ -542,72 +548,87 @@ try {
   await sleep(300);
   await control('agent-plan', { agent: 'demo', id: 'k1', side: 'buy', kind: 'limit', p: 25390, qty: 1, stop: 12, target: 24, expire: 900 });
   await until(() => page.isVisible('.ag-plist .ag-prop[data-id="k1"]'), 'demo\'s proposal in the tab');
-  await sleep(1100);                                                                   // a key answers a proposal on screen 1 s or more
+  await sleep(1100);
+  /* plan step 3.2, item 3: Legion has no copilot keys (the chart page's key machinery stays on the chart page); the proposal is
+     answered by its button here */
   const a0 = (await answersSent()).length;
   await page.mouse.click(800, 450);
   await page.keyboard.press('Alt+KeyY');
-  await page.keyboard.press('Alt+KeyY');                                               // the double press
   await sleep(900);
-  const dbl = (await answersSent()).slice(a0);
-  check(dbl.length === 1 && dbl[0].agent === 'demo' && dbl[0].id === 'k1', 'a double press answers one proposal, the shown agent\'s: ' + JSON.stringify(dbl.map(m => m.agent + ':' + m.id)));
-  await until(async () => (await agentsNow()).find(a => a.agent === 'demo').proposals.find(p => p.id === 'k1').state === 'accepted', 'demo\'s k1 accepted');
-  check((await agentsNow()).find(a => a.agent === 'demotwo').proposals.find(p => p.id === 'k2').state === 'open', 'demotwo\'s k2 (not shown on the tab) untouched');
+  check((await answersSent()).length === a0 && (await agentsNow()).find(a => a.agent === 'demo').proposals.find(p => p.id === 'k1').state === 'open', 'on Legion the copilot key answers nothing (its proposal by its button)');
+  await page.click('.ag-plist .ag-prop[data-id="k1"] [data-agans="accept"]');
+  await until(async () => (await agentsNow()).find(a => a.agent === 'demo').proposals.find(p => p.id === 'k1').state === 'accepted', 'demo\'s k1 accepted by its button');
+  check((await agentsNow()).find(a => a.agent === 'demotwo').proposals.find(p => p.id === 'k2').state === 'open', 'demotwo\'s k2 (not shown on the desk) untouched');
   await control('agent-withdraw', { agent: 'demo', id: 'k1' });
-  // off the tab: demotwo's proposal is no card anywhere, only counted in the corner's line; the key answers the bot's (1.16.0)
-  await page.click('#wsAgentTab');
-  await until(async () => !(await A()).shown, 'the tab closes');
-  await until(async () => (await text('.ag-cornerline')) === 'Second Demo Agent: 1 proposal', 'the tab closed: demotwo\'s proposal counted in the corner\'s line');
-  check(!(await page.evaluate(() => [...document.querySelectorAll('[data-agans]')].some(b => b.getClientRects().length))), 'off the tab no agent Accept or Reject anywhere');
+  // the chart page: demotwo's proposal is no card anywhere, only counted in the corner's line; the key answers the bot's (1.16.0)
+  const cpAnswers = async () => (await sentOn(cp)).filter(m => m.type === 'agentAnswer');
+  await cp.bringToFront();
+  await until(async () => (await cp.evaluate(() => { const e = document.querySelector('.ag-cornerline'); return e ? e.textContent.replace(/\s+/g, ' ').trim() : ''; })) === 'Second Demo Agent: 1 proposal', 'the chart page: demotwo\'s proposal counted in the corner\'s line');
+  check(!(await cp.evaluate(() => [...document.querySelectorAll('[data-agans]')].some(b => b.getClientRects().length))), 'the chart page: no agent Accept or Reject anywhere');
   await control('bot-connect', { name: 'Sample Lantern Fade' });
   await control('bot-proposal', { id: 'b1', side: 'sell', kind: 'market', stop: 12, target: 24, reason: 'Sample: the made-up bot\'s signal' });
-  await until(() => visible('.bt-prop[data-id="b1"]'), 'the bot\'s proposal in the corner');
+  await until(() => cp.evaluate(() => { const e = document.querySelector('.bt-prop[data-id="b1"]'); return !!e && e.getClientRects().length > 0; }), 'the bot\'s proposal in the corner');
   await sleep(1100);
-  await page.screenshot({ path: path.join(SHOTS, 'agent-corner.png') });
-  await page.mouse.click(800, 450);
-  const a1 = (await answersSent()).length;
-  await page.keyboard.press('Alt+KeyN');
-  await until(async () => (await control('v3')).proposals.find(p => p.id === 'b1').state === 'rejected', 'the key answers the bot\'s (agents\' proposals are answered only in the Agent tab)');
-  check((await answersSent()).length === a1 && (await agentsNow()).find(a => a.agent === 'demotwo').proposals.find(p => p.id === 'k2').state === 'open', 'and never demotwo\'s k2');
-  await until(() => page.evaluate(() => !document.querySelector('.bt-prop[data-id="b1"]:not(.bt-ended)')), 'the bot\'s card shows it ended');
-  // the corner's line opens the tab on demotwo: k2 answered there with its button
-  await page.click('.ag-cornerline [data-goto="agent:demotwo"]');
-  await until(async () => (await A()).shown && (await A()).chosen === 'demotwo', 'the Agent tab on demotwo');
-  await page.click('.ag-plist .ag-prop[data-id="k2"] [data-agans="reject"]');
+  await cp.screenshot({ path: path.join(SHOTS, 'agent-corner.png') });
+  await cp.mouse.click(800, 450);
+  const a1 = (await cpAnswers()).length;
+  await cp.keyboard.press('Alt+KeyN');
+  await until(async () => (await control('v3')).proposals.find(p => p.id === 'b1').state === 'rejected', 'the key answers the bot\'s (agents\' proposals are answered only on their desk)');
+  check((await cpAnswers()).length === a1 && (await agentsNow()).find(a => a.agent === 'demotwo').proposals.find(p => p.id === 'k2').state === 'open', 'and never demotwo\'s k2');
+  await until(() => cp.evaluate(() => !document.querySelector('.bt-prop[data-id="b1"]:not(.bt-ended)')), 'the bot\'s card shows it ended');
+  // the corner's line opens Legion's Praetorian on demotwo: k2 answered there with its button
+  const [lg2] = await Promise.all([ctx.waitForEvent('page', { timeout: 10000 }), cp.click('.ag-cornerline [data-goto="agent:demotwo"]')]);
+  lg2.on('pageerror', e => fail('legion (from the corner line) error: ' + e.message));
+  await lg2.waitForLoadState('domcontentloaded');
+  if (await lg2.waitForSelector('.cb-pin-key', { timeout: 8000 }).catch(() => null)) await enterPin(lg2, TEST_PIN);
+  await lg2.waitForFunction(() => window.legion && window.legion.agent() && window.legion.agent().shown && window.legion.agent().chosen === 'demotwo' && window.legion.agent().agents.length === 2, null, { timeout: 20000 }).catch(() => {});
+  await sleep(1000);   // the agents named one by one: still on demotwo after both
+  check(await lg2.evaluate(() => !!window.legion && window.legion.agent().shown && window.legion.agent().chosen === 'demotwo' && !/agent=/.test(location.search) && /sub=praetorian/.test(location.search)),
+    'the chart page\'s corner line opens Legion on Praetorian, on demotwo (the address then drops ?agent=): ' + lg2.url());
+  await lg2.waitForSelector('.ag-plist .ag-prop[data-id="k2"] [data-agans="reject"]', { timeout: 10000 }).catch(() => {});
+  await lg2.click('.ag-plist .ag-prop[data-id="k2"] [data-agans="reject"]');
   await until(async () => (await agentsNow()).find(a => a.agent === 'demotwo').proposals.find(p => p.id === 'k2').state === 'rejected', 'k2 rejected by its button');
-  await until(async () => !(await page.$('.ag-prop[data-id="k2"]')), 'its card goes', 6000);
+  await until(async () => !(await lg2.$('.ag-prop[data-id="k2"]')), 'its card goes', 6000);
+  await lg2.close();
+  await cp.mouse.click(800, 450);
+  await cp.keyboard.press('Alt+KeyN');
+  await until(async () => /no copilot proposal to answer here/.test(await cp.textContent('#wsNote')), 'with none open the chart page says so (as in 1.16.0)');
+  await page.bringToFront();
   await page.selectOption('#agView [data-k="pick"]', 'demo');
-  await page.click('#wsAgentTab');
-  await until(async () => !(await A()).shown, 'the tab closes again');
-  await page.mouse.click(800, 450);
-  await page.keyboard.press('Alt+KeyN');
-  await until(async () => /no copilot proposal to answer here/.test(await page.textContent('#wsNote')), 'with none open the workspace says so (as in 1.16.0)');
+  await until(async () => (await text('.ag-strip [data-k="name"]')) === 'Demo Agent', 'Demo Agent shown again');
 
   /* ---------------------------------------------------------------- the Bot tab: a double-click never confirms (review S3) */
   console.log('the Bot tab: a double-click on Auto or Release never confirms');
-  await toggleTab(page, 'bot');                                                        // 1.35.0: + Add panel, Bot
-  await until(async () => (await page.evaluate(() => window.workspace.bot().shown)), 'the Bot tab opens');
+  await cp.bringToFront();
+  await toggleTab(cp, 'bot');                                                        // 1.35.0: + Add panel, Bot
+  await until(async () => (await cp.evaluate(() => window.workspace.bot().shown)), 'the Bot tab opens');
   await sleep(1500);                                                                   // its entrance
-  const botModes = async () => (await sent()).filter(m => m.type === 'botMode').length;
+  const botModes = async () => (await cp.evaluate(() => window.__socks.flatMap(s => s.types))).filter(t => t === 'botMode').length;   // the spy keeps every type (its messages: agent ones only)
   const bm0 = await botModes();
-  await page.dblclick('.bt-modes [data-mode="auto"]');
+  await cp.dblclick('.bt-modes [data-mode="auto"]');
   await sleep(500);
   check((await botModes()) === bm0 && (await control('v3')).bot.mode !== 'auto', 'a double-click on the bot\'s Auto never confirms it');
-  await page.click('.bt-modes [data-mode="auto"]');
-  await until(async () => (await control('v3')).bot.mode === 'auto', 'a later second click confirms it, as before');
-  await page.click('.bt-modes [data-mode="shadow"]');
-  await page.click('.bt-kill');
+  /* the double-click armed it for 4 s; on a loaded machine the checks above can outlast that, so arm again first (a click 400 ms
+     or more after arming is the confirming one either way) */
+  if ((await cp.textContent('.bt-modes [data-mode="auto"]')).trim() !== 'Confirm') { await cp.click('.bt-modes [data-mode="auto"]'); await sleep(450); }
+  await cp.click('.bt-modes [data-mode="auto"]');
+  /* release 1 (1.6b): ChartBridge lets the bot trade the personal account only, and this smoke's bot is on Sim101 with a personal
+     account named, so ChartBridge refuses Auto; the page's part is that the confirming click sends botMode auto, once */
+  await until(async () => (await botModes()) === bm0 + 1, 'a later second click confirms it, as before: botMode sent once');
+  await cp.click('.bt-modes [data-mode="shadow"]');
+  await cp.click('.bt-kill');
   await until(async () => (await control('v3')).bot.killed, 'the bot\'s kill on in one click');
   await sleep(300);
-  await page.dblclick('.bt-kill');
+  await cp.dblclick('.bt-kill');
   await sleep(500);
   check((await control('v3')).bot.killed, 'a double-click on the bot\'s Release never releases');
-  await page.click('.bt-kill');
+  await cp.click('.bt-kill');
   await until(async () => !(await control('v3')).bot.killed, 'a later second click releases, as before');
-  await toggleTab(page, 'bot');
+  await toggleTab(cp, 'bot');
 
+  await page.bringToFront();
   /* ---------------------------------------------------------------- the pop-out */
   console.log('the pop-out window');
-  await page.click('#wsAgentTab');
   /* the corner notices cover none of the tab: never the left column (its rules and Change the rules), the proposal, the
      tracker, the stream or the footer; they stack in the chart panel's lower left */
   console.log('the corner notices while the Agent tab is open');
@@ -648,10 +669,11 @@ try {
   const [pop] = await Promise.all([ctx.waitForEvent('page'), page.click('.ag-popbtn')]);
   pop.on('pageerror', e => fail('pop-out error: ' + e.message));
   await pop.waitForLoadState();
-  if (await pop.$('.cb-pin-key')) await enterPin(pop, TEST_PIN);
+  if (await pop.waitForSelector('.cb-pin-key', { timeout: 8000 }).catch(() => null)) await enterPin(pop, TEST_PIN);   // the PIN door can come a moment after the load on a busy machine
   await pop.waitForFunction(() => window.agentDesk && window.agentDesk.state().agents.length === 2, null, { timeout: 20000 });
   await pop.waitForFunction(() => /Demo Agent/.test(document.querySelector('.ag-strip').textContent), null, { timeout: 10000 });
   check(/\/live\/agent\.html$/.test(pop.url()), 'an agent-only page (agent.html) for a third monitor');
+  await pop.evaluate(() => document.fonts.ready.then(() => null)).catch(() => {});   // the fonts load from this PC; on a busy machine after the first look
   check(await pop.evaluate(() => getComputedStyle(document.querySelector('.ag-view')).fontFamily.includes('Chakra Petch') && document.fonts.check('600 12px "Chakra Petch"') && document.fonts.check('12px "JetBrains Mono"') && document.fonts.check('12px "IBM Plex Sans"')), 'the pop-out has the tab\'s fonts, from this PC');
   await pop.setViewportSize({ width: 1500, height: 900 });
   await sleep(1500);
@@ -680,7 +702,7 @@ try {
   check(/Demo Agent trades a group: groups are on Legion, it is set up from Legion's trader desk; from here you can only stop it/.test(held.why) && held.acct && held.rules && held.modes && !held.kill,
     '1.51.0 Praetorian: a trader on a group is held back (rules, modes, Change account off; Kill switch on); 1.53.0: a Sim group is Legion\'s: ' + JSON.stringify(held));
   await control('agent-group', { agent: 'demo', on: '0' });
-  await page.close();
+  await page.close(); await cp.close();
   await bridge.kill(); bridge = null;
 
   /* ---------------------------------------------------------------- an older ChartBridge (0.4.0), then 0.5.2 with no agents line */
@@ -691,11 +713,11 @@ try {
   await p2.goto(`http://localhost:${port}/live/?layout=Main&tab=agent`);
   await p2.waitForSelector('.cb-pin-key', { timeout: 15000 });
   await enterPin(p2, TEST_PIN);
-  await p2.waitForFunction(() => document.getElementById('wsConn').classList.contains('live'), null, { timeout: 30000 });
+  await p2.waitForFunction(() => /legion\.html$/.test(location.pathname) && document.getElementById('lxConn').dataset.state === 'on', null, { timeout: 30000 });
   await p2.waitForFunction(() => /0\.5\.2 or later/.test(document.querySelector('#agView [data-k="offText"]').textContent), null, { timeout: 10000 });
   check((await p2.textContent('#agView [data-k="offText"]')) === 'No agents on this ChartBridge (0.5.2 or later).', 'the tab says: No agents on this ChartBridge (0.5.2 or later). (the hello says fake-0.4.0)');
   check(!(await p2.evaluate(() => window.__socks.some(s => s.types.some(t => /^agent/.test(t))))), 'nothing agent is sent');
-  check(!!(await p2.$('#wsBotTab')), 'the Bot tab is as it was (1.35.0: its button waits for its panel)');
+  check(/legion\.html\?/.test(p2.url()) && /sub=praetorian/.test(p2.url()), 'plan step 3.2: the chart page\'s ?tab=agent forwards to Legion\'s Praetorian side: ' + p2.url());
   await p2.close();
   await bridge.kill(); bridge = null;
   console.log('a ChartBridge 0.5.2 with no agents line: no agents');
@@ -705,7 +727,7 @@ try {
   await p2b.goto(`http://localhost:${port}/live/?layout=Main&tab=agent`);
   await p2b.waitForSelector('.cb-pin-key', { timeout: 15000 });
   await enterPin(p2b, TEST_PIN);
-  await p2b.waitForFunction(() => document.getElementById('wsConn').classList.contains('live'), null, { timeout: 30000 });
+  await p2b.waitForFunction(() => /legion\.html$/.test(location.pathname) && document.getElementById('lxConn').dataset.state === 'on', null, { timeout: 30000 });
   await p2b.waitForFunction(() => /none is named/.test(document.querySelector('#agView [data-k="offText"]').textContent), null, { timeout: 10000 });
   check((await p2b.textContent('#agView [data-k="offText"]')) === 'No agents on this ChartBridge: none is named in its config.txt (agents = ...).', 'the tab says: none is named in its config.txt (the hello says 0.5.2)');
   check(!(await p2b.evaluate(() => window.__socks.some(s => s.types.some(t => /^agent/.test(t))))), 'nothing agent is sent');

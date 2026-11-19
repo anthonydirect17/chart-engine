@@ -2553,7 +2553,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         private static readonly Dictionary<string, List<KeyValuePair<long, string>>> LaneLog = new Dictionary<string, List<KeyValuePair<long, string>>>(StringComparer.Ordinal);
         private static readonly HashSet<string> LaneSaid = new HashSet<string>(StringComparer.Ordinal);   // a refusal said once (account|reason)
         private static readonly string[] LaneRuleKeys = { "size", "dailyLoss", "drawdown", "drawdownType", "lockAt", "target", "consistency", "maxMinis", "maxMicros", "typeId" };
-        public static void LaneForget() { lock (LaneLog) LaneLog.Clear(); lock (LaneSaid) LaneSaid.Clear(); lock (HandSync) { handLoaded = false; handOut = null; handError = null; handSaveError = null; } LaneRaceHook = null; LaneLeaveHook = null; laneLastError = null; laneTyped = null; }   // the harness: a fresh rule
+        public static void LaneForget() { lock (LaneLog) LaneLog.Clear(); lock (LaneSaid) LaneSaid.Clear(); lock (HandSync) { handLoaded = false; handOut = null; handError = null; handSaveError = null; } LaneRaceHook = null; LaneLeaveHook = null; laneLastError = null; laneTyped = null; ledgerProp = null; }   // the harness: a fresh rule
         private static string LaneLogPart(string gid) { string j = LaneLogJson(gid); return j == "[]" ? "" : ",\"laneLog\":" + j; }
         private static string LaneLogJson(string gid)
         {
@@ -2817,10 +2817,28 @@ namespace NinjaTrader.NinjaScript.AddOns
         // ("follower", "leader" or null), taken by LaneApply on the rule's own thread with no other lock held (the copier's lock is never
         // taken under the groups' locks). null: no rows read yet. Which group each is in is read when the message is built.
         private static volatile List<string[]> laneTyped;
+        // Plan step 3.2 (law 9.3; Anthony 2026-11-17, item 113): the account ledger as Stop all automation reads it. Every account The
+        // Desk's last rows type eval or funded, whatever its outcome or archive (a blown account a trader still holds is still a prop
+        // account) and whatever NinjaTrader calls its connection, so Stop all reaches a prop account NinjaTrader lists as a simulator.
+        // null: no rows read yet (laneRule = off, no deskUrl, or The Desk not reached): Stop all then says it used ChartBridge's own
+        // rule only. Read for Stop all and nothing else: no rule here or in the lanes changes with it.
+        private static volatile HashSet<string> ledgerProp;
+        public static bool LedgerKnown { get { return ledgerProp != null; } }
+        public static bool InLedger(string name) { HashSet<string> l = ledgerProp; return l != null && !string.IsNullOrEmpty(name) && l.Contains(name); }
+        internal static void LedgerForCheck(IEnumerable<string> names) { ledgerProp = names == null ? null : new HashSet<string>(names, StringComparer.OrdinalIgnoreCase); }   // the harness only
         private static void NoteTyped(List<LaneRow> rows)
         {
             List<string[]> typed = new List<string[]>();
             HashSet<string> seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            HashSet<string> ledger = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (LaneRow r in rows)
+                if (r != null && !string.IsNullOrEmpty(r.Account) && (r.Kind == "eval" || r.Kind == "funded"))
+                {
+                    ledger.Add(r.Account);
+                    Account la = Find(r.Account);
+                    if (la != null) ledger.Add(la.Name);
+                }
+            ledgerProp = ledger;
             foreach (LaneRow r in rows)
             {
                 if (r == null || string.IsNullOrEmpty(r.Account) || r.Kind == null || r.Outcome != null || r.Archived) continue;

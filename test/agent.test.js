@@ -502,7 +502,7 @@ test('wiring: the workspace and agent.html load the Agent tab; bot.js shares the
   const idx = read('live', 'index.html'), pop = read('live', 'agent.html'), bot = read('live', 'bot.js'), ws = read('live', 'workspace.js');
   assert.ok(idx.indexOf('agent-core.js') > 0 && idx.indexOf('agent-core.js') < idx.indexOf('src="bot.js"'), 'agent-core.js before bot.js (the router exists when the Bot tab starts)');
   assert.ok(idx.indexOf('src="agent.js"') > idx.indexOf('src="bot.js"') && idx.indexOf('src="agent.js"') < idx.indexOf('src="workspace.js"'));
-  assert.match(idx, /agent\.css/); assert.match(idx, /id="wsAgentTab"/); assert.match(idx, /id="agView"/);
+  assert.match(idx, /agent\.css/); assert.doesNotMatch(idx, /id="wsAgentTab"/); assert.match(idx, /id="agView"[^>]*hidden/); assert.match(read('live/legion.html'), /id="agView"/);   // plan step 3.2: the Agent tab is on Legion; the chart page keeps the desk with no view
   assert.match(pop, /agent-core\.js/); assert.match(pop, /AgentDesk\.create\(\{ popout: true/);
   assert.match(bot, /copilotRouter\(document\)/);
   assert.match(ws, /AgentDesk\.create/);

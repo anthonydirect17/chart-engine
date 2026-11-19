@@ -7,14 +7,15 @@
 //                                      STRIP_DPR=2 for a 2x screen)
 // An Accounts-like layout at 1906 x 1014 (Anthony's third screen), the panel from + Add panel in the lower left (about 1,430 by
 // 450 px). Checks: + Add panel's "Agents" and one a layout; a saved layout with the strip opens the sky; one drone per agent active
-// today (H, S, O, the Demo Agent, the bot) in its colour, SHADOW rings dashed; the strip's state words on the text blocks; each text
+// today (plan step 3.2: the three made-up agents and the bot; the league's seats are on Legion's Colosseum and the chart page
+// reads no league) in its colour, SHADOW rings dashed; the strip's state words on the text blocks; each text
 // block inside its slot at every width; the canvas on whole device pixels; 1.38.1 (Anthony 2026-10-23): NQ bars from the NQ quote
 // line (this layout has no NQ chart, so that one line is the panel's only new socket; with an NQ chart open it is none, see
 // test/league-smoke.mjs), the sample seats' prices at NQ's (the league's MNQ prices are the same index); no replay
-// of history; a new look fires the laser; a pass pulses and types into the feed; a trail moves the stop line and says so; Anthony's
-// fill drops the A beacon; the hover card and its full reasoning; a click opens the League tab, the Agent tab or the Bot view;
+// of history; a new look fires the laser; Anthony's fill drops the A beacon; the hover card and its full text; a click opens the
+// Bot view, or Legion on Praetorian's Agent desk;
 // "+N idle" and the empty state; slim below 200 px; at most 30 frames a second, 15 calm (reduced motion); no frame while hidden
-// (another view open, a panel maximized over it, the window in the background, scrolled away); the frame time; one league read;
+// (another view open, a panel maximized over it, the window in the background, scrolled away); the frame time; no league read;
 // nothing sent. Screenshots test/out/agents-sky-*.png.
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
@@ -86,7 +87,7 @@ const desk = await startDesk(DP, {});
 desk.league = { shadow: 'SHADOW: no orders', folder: { set: true, ok: true, problem: 'The league has no session yet.' }, trades: [], open: [], decisions: [] };
 let px = null;
 const refresh = setInterval(() => { if (px !== null) desk.league = sampleDay(px); }, 3000);   // its clock follows now (no "status late")
-const bridge = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(PORT), '--v3', '--trading', '--test-controls', '--agents=demo', '--agent-any-time', '--bot-account=Sim101', '--test-pin=' + TEST_PIN, '--desk-url=http://127.0.0.1:' + DP], { stdio: ['ignore', 'pipe', 'inherit'] });
+const bridge = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(PORT), '--v3', '--trading', '--test-controls', '--agents=demo,demo2,demo3', '--agent-any-time', '--bot-account=Sim101', '--test-pin=' + TEST_PIN, '--desk-url=http://127.0.0.1:' + DP], { stdio: ['ignore', 'pipe', 'inherit'] });
 await new Promise(r => bridge.stdout.once('data', r));
 const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
 const post = (u, q) => fetch(`http://127.0.0.1:${PORT}${u}` + (q ? '?' + new URLSearchParams(q) : ''), { method: 'POST' }).then(r => r.json());
@@ -122,6 +123,7 @@ try {
   await post('/test/bot-connect', { name: 'Demo Opening Fade' });
   await post('/test/agent-connect', { agent: 'demo', name: 'Demo Agent' });
   await post('/test/agent-mode', { agent: 'demo', mode: 'shadow' });
+  for (const [id, name] of [['demo2', 'Demo Agent Two'], ['demo3', 'Demo Agent Three']]) { await post('/test/agent-connect', { agent: id, name }); await post('/test/agent-mode', { agent: id, mode: 'shadow' }); }
   await post('/test/agent-note', { agent: 'demo', kind: 'look', text: 'Sample: a made-up look at the opening range' });
   await post('/test/agent-note', { agent: 'demo', kind: 'thinking', text: 'Sample: waiting for a retest of the made-up level before any plan' });
   /* + Add panel: Agents, into the free lower left */
@@ -143,26 +145,23 @@ try {
   check(await p.$eval('#wsAddMenu [data-add="agents"]', b => b.disabled), 'one Agents panel a layout: the menu item is off once placed');
   await p.click('#wsAdd');
 
-  /* the drones: one per agent active today, the league's seats first */
-  const st = await until(async () => { const s = await sky(); return s && s.drones.length === 5 && s.drones[1].trade && s.bars > 20 ? s : null; }, 'five drones (H, S, O, the Demo Agent, the bot) over NQ bars', 40000);
+  /* the drones: one per agent active today. Plan step 3.2: the league's seats are on Legion's Colosseum, so the chart page reads no
+     league and the sky has no seat drones: the three made-up agents and the bot */
+  const st = await until(async () => { const s = await sky(); return s && s.drones.length === 4 && s.bars > 20 ? s : null; }, 'four drones (the three Demo Agents, the bot) over NQ bars', 40000);
   if (st) {
-    check(st.drones.map(d => d.key).join(',') === 'seat:H,seat:S,seat:O,agent:demo,bot', 'left to right: ' + st.drones.map(d => d.key).join(', '));
-    check(st.drones.slice(0, 3).map(d => d.color).join(',') === '#FFC266,#5DE0F0,#B69CFF' && st.drones.slice(3).every(d => d.color === '#9AA8B8'), 'H amber, S cyan, O violet as the League; the live agent and the bot in the strip\'s own colour: ' + st.drones.map(d => d.color).join(', '));
+    check(st.drones.map(d => d.key).join(',') === 'agent:demo,agent:demo2,agent:demo3,bot', 'left to right, no seat: ' + st.drones.map(d => d.key).join(', '));
+    check(st.drones.every(d => d.color === '#9AA8B8'), 'the live agents and the bot in the strip\'s own colour: ' + st.drones.map(d => d.color).join(', '));
     check(st.drones.every(d => d.ring === 'dashed' && d.mode === 'SHADOW'), 'SHADOW everywhere here: dashed rings (a LIVE one would be solid)');
-    check(st.drones[2].state === 'look cap' && st.drones[2].looks === 31, 'O keeps the strip\'s state word on its text block: look cap (31 counted looks)');
-    const s = st.drones[1].trade;
-    check(s.side === 'long' && s.contracts === 3 && s.be === true && s.stop === s.entry && typeof s.r === 'number', 'S: in a long trade at break-even, its open R worked out: ' + JSON.stringify(s));
     check(st.bars >= 24 && st.bars <= 90 && st.barsRoot === 'NQ' && st.root === 'NQ', '1.38.1: the pillars: ' + st.bars + ' NQ minute bars (' + st.barsRoot + ')');
     check(st.size.cw === Math.round(st.size.w * st.size.dpr) && Number.isInteger(st.size.cw) && Math.abs(st.size.cw / st.size.dpr - st.size.w) < 1e-9, 'the canvas on whole device pixels: ' + JSON.stringify(st.size));
   }
-  /* The Desk on HOMESERVER reading the League Mirror's copy (set false, ok true, source mirror): the seats stay, no warning in the strip */
-  extra.mirror = true; desk.league = sampleDay(px);
+  /* plan step 3.2: no league read from the chart page, though The Desk would answer one, and no league warning in the strip */
   const reads0 = desk.log.filter(x => x.which === 'chart-league').length;
-  await until(() => desk.log.filter(x => x.which === 'chart-league').length > reads0 || null, 'a league read of the mirror-shaped answer', 40000);
-  await wait(1000);
+  await wait(20000);
+  const reads1 = desk.log.filter(x => x.which === 'chart-league').length;
+  check(reads0 === 0 && reads1 === 0, 'the chart page reads no league (' + reads0 + ' reads, then ' + reads1 + ' after 20 s with the panel open)');
   const mw = await p.$eval(SKY + ' [data-k="warn"]', e => (e.hidden ? '' : e.textContent));
-  const ms = await sky();
-  check(mw === '' && ms && ms.drones.slice(0, 3).map(d => d.key).join(',') === 'seat:H,seat:S,seat:O', 'the mirror (set false, ok true): the seats show, no warning in the strip: "' + mw + '"');
+  check(mw === '', 'no league warning in the strip: "' + mw + '"');
   const feed1 = await p.evaluate(() => window.workspace.feed());
   check(feed1.opened - feed0.opened <= 1 && feed1.lines.some(L => L.root === 'NQ' && L.state === 'open'),
     '1.38.1: the bars come from the NQ quote line: at most its one instrument socket is new on this layout with no NQ chart (' + feed0.opened + ' before, ' + feed1.opened + ' after; lines ' + feed1.lines.map(L => L.root).join(', ') + ')');
@@ -189,15 +188,6 @@ try {
   await shot('agents-sky-look-1906.png', true);
   const fd = await until(async () => { const s = await sky(); return /^LOOK\s+Sample: a newer made-up look/.test(s.feed.text) && s.feed.who === 'D' ? s.feed : null; }, 'the look in the feed line', 6000);
   check(!!fd, 'then the feed line types it: ' + JSON.stringify(fd));
-  /* a new pass from a seat (the next league read, every 15 s with the panel): its laser, then the pulse and the reason */
-  extra.passes.push(['H', 'H-new', 'Sample: a newer made-up pass, nothing at the level']);
-  desk.league = sampleDay(px);
-  const ps = await until(async () => { const s = await sky(); return /^PASS\s+Sample: a newer made-up pass/.test(s.feed.text) && s.feed.who === 'H' ? s : null; }, 'H\'s new pass in the feed line', 25000);
-  check(!!ps, 'a seat\'s new pass: its look, then the pulse and its reason typed into the feed line');
-  /* the trail: S's stop moves up 5 points; the line moves and the feed says so */
-  extra.trail = 5; desk.league = sampleDay(px);
-  const tr = await until(async () => { const s = await sky(); const d = s.drones.find(x => x.key === 'seat:S'); return d && d.trade && d.trade.stop === d.trade.entry + 5 && /^TRAIL\s+stop to/.test(s.feed.text) ? s : null; }, 'the trail on S', 25000);
-  check(!!tr, 'S\'s trail: the stop line moves 5 points up and the feed line says TRAIL');
   /* Anthony's own fill: a market buy on the ticket's account (as the order connection reports it) drops the A beacon */
   await p.selectOption('.tk [data-tk-id="oAcct"]', 'Sim101'); await wait(300);   // the ticket's account (nothing picked by default)
   const acct = await p.evaluate(() => window.workspace.ticket().account);
@@ -209,19 +199,22 @@ try {
   await shot('agents-sky-beacon-1906.png', true);
   await post('/test/elsewhere', { account: acct, root: 'MNQ', side: 'sell', kind: 'market', qty: 1 });   // flat again
 
-  /* the hover card: the strip's card for that drone */
+  /* the hover card: the strip's card for that drone (the Agents panel's cards stay on the chart page) */
   /* the drones' hit layer is drawn again as the sky resumes (after a tab closes, for one): wait for the drone, never read
      it in the middle of a redraw (under load the read came between the two and found nothing, then the drone was there) */
   const hit = async k => until(() => p.$eval(SKY + ` .ak-hit[data-key="${k}"]`, e => { const r = e.getBoundingClientRect(); return r.width > 0 ? { x: r.x + 30, y: r.y + 20 } : null; }).catch(() => null), 'the drone ' + k, 4000);
-  const hs = await hit('seat:S');
-  await p.mouse.move(hs.x, hs.y);
+  const hd = await hit('agent:demo');
+  await p.mouse.move(hd.x, hd.y);
   const pop = await until(() => p.$eval(SKY + ' .ak-pop', e => (!e.hidden ? e.innerText : null)), 'the hover card', 4000);
-  check(!!pop && /Sonnet/.test(pop) && /LONG 3 MNQ/.test(pop) && /open [+-]?\$[\d,.]+ · [+-]?\d+\.\d\d R/.test(pop) && /\$0\.48 seat/.test(pop) && /Thoughts/i.test(pop), 'hover on S: today\'s full card (LONG 3 MNQ, open P&L and R, spend, thoughts)');
+  check(!!pop && /Demo Agent/.test(pop) && /Thoughts/i.test(pop), 'hover on the Demo Agent: today\'s card with its thoughts: ' + JSON.stringify((pop || '').slice(0, 160)));
   await shot('agents-sky-hover-1906.png', true);
-  await p.click(SKY + ' .ak-pop .as-th.k-enter');
-  const det = await until(() => p.$eval(SKY + ' .ak-pop .ak-detail', e => e.innerText), 'the full reasoning', 4000);
-  check(!!det && /The second line of the made-up reasoning/.test(det) && /confidence 0\.62/.test(det) && /SHADOW: paper only/.test(det), 'a click on a thought in the card: its full reasoning');
-  check(!(await p.evaluate(() => document.body.classList.contains('lg-on'))), 'a thought\'s click opens no tab');
+  const th = await p.$(SKY + ' .ak-pop .as-th');
+  if (check(!!th, 'the card lists a thought')) {
+    await th.click();
+    const det = await until(() => p.$eval(SKY + ' .ak-pop .ak-detail', e => e.innerText), 'the full reasoning', 4000);
+    check(!!det && /Sample: /.test(det), 'a click on a thought in the card: its full text: ' + JSON.stringify((det || '').slice(0, 120)));
+  }
+  check(!(await p.evaluate(() => document.body.classList.contains('bt-on'))), 'a thought\'s click opens no tab');
   /* 1.39.1: the flake "the card goes when the mouse leaves": the thought's click replaced the card's HTML under the still mouse and
      Chromium then sends no pointerleave to the card when the mouse leaves within a frame or so (the card stayed). The page now also
      closes it on any move outside it. Here the leave is made to go missing every time: the card's and the drones' pointerleave and
@@ -232,21 +225,7 @@ try {
   check(!!(await until(() => p.$eval(SKY + ' .ak-pop', e => e.hidden), 'the card gone', 3000)), 'the card goes when the mouse leaves (even with no pointerleave, as after its HTML was replaced under the mouse)');
   await p.evaluate(() => { for (const t of ['pointerleave', 'pointerout']) window.removeEventListener(t, window.__noLeave, true); });
 
-  /* a click opens the agent's full view */
-  const r0 = await p.evaluate(() => window.workspace.leagueReads());
-  const hh = await hit('seat:H');
-  const f0 = (await sky()).frames;
-  await p.mouse.click(hh.x, hh.y);
-  await until(() => p.evaluate(() => document.body.classList.contains('lg-on')), 'a seat\'s drone opens the League tab');
-  check(true, 'a click on a seat\'s drone opens the League tab');
-  await wait(1500);
-  const f1 = (await sky()).frames; await wait(1500); const f2 = (await sky()).frames;
-  check(f2 === f1 && !(await sky()).running, 'no frame while the League view covers the panel (' + f0 + ', ' + f1 + ', ' + f2 + ')');
-  await wait(14000);
-  check((await p.evaluate(() => window.workspace.leagueReads())) === r0, 'while the League view is open the workspace\'s league read waits (one read for the page)');
-  await p.click('#wsLeagueTab');
-  await until(() => p.evaluate(() => !document.body.classList.contains('lg-on')), 'back to the layout');
-  await until(async () => (await sky()).running, 'the sky runs again', 4000);
+  /* a click opens the agent's full view: the bot's on the chart page, an agent's on Legion (plan step 3.2) */
   const hb = await hit('bot');
   await p.mouse.click(hb.x, hb.y);
   await until(() => p.evaluate(() => document.body.classList.contains('bt-on')), 'the bot\'s drone opens the Bot view');
@@ -255,14 +234,20 @@ try {
   await until(() => p.evaluate(() => !document.body.classList.contains('bt-on')), 'the Bot view closed');
   await until(async () => (await sky()).running && await p.$(SKY + ' .ak-hit[data-key="agent:demo"]'), 'the strip laid out again', 4000);   // the review of 103, round 3: the Bot view's close, then the layout
   const ha = await hit('agent:demo');
+  const popP = ctx.waitForEvent('page', { timeout: 8000 }).catch(() => null);
+  const f0 = (await sky()).frames;
   await p.mouse.click(ha.x, ha.y);
-  await until(() => p.evaluate(() => window.workspace.agent().shown && window.workspace.agent().chosen === 'demo'), 'the agent\'s drone opens the Agent tab on him');
-  check(true, 'a click on the live agent\'s drone opens the Agent tab, on him');
-  await p.click('#wsAgentTab');
-  await until(() => p.evaluate(() => !window.workspace.agent().shown), 'closed');
+  const lg = await popP;
+  if (lg) await lg.waitForLoadState('domcontentloaded').catch(() => {});
+  check(!!lg && /\/legion\.html\?tab=cohorts&sub=praetorian/.test(lg.url()), 'a click on the live agent\'s drone opens Legion on Praetorian\'s Agent desk: ' + (lg && lg.url()));
+  check(await p.evaluate(() => window.workspace.agent().chosen === 'demo'), 'and the chart page\'s Agent desk has him chosen');
+  await wait(1200);
+  check((await sky()).frames > f0 && (await sky()).running, 'the chart page\'s sky keeps running (no tab covers it now)');
+  if (lg) await lg.close();
+  await p.bringToFront();
   /* keys: a drone's button takes the focus and shows its card */
-  await p.focus(SKY + ' .ak-hit[data-key="seat:O"]');
-  check(!!(await until(() => p.$eval(SKY + ' .ak-pop', e => (!e.hidden && /look cap/.test(e.innerText) ? 1 : null)), 'the card on focus', 3000)), 'a drone\'s button with the focus shows its card (O, look cap)');
+  await p.focus(SKY + ' .ak-hit[data-key="agent:demo2"]');
+  check(!!(await until(() => p.$eval(SKY + ' .ak-pop', e => (!e.hidden && /Demo Agent Two/.test(e.innerText) ? 1 : null)), 'the card on focus', 3000)), 'a drone\'s button with the focus shows its card (Demo Agent Two)');
   await p.keyboard.press('Escape').catch(() => {}); await p.mouse.move(5, 5); await p.evaluate(() => document.activeElement && document.activeElement.blur()); await wait(500);
 
   /* the pace and the cost: at most 30 frames a second; the frame time small */
@@ -321,30 +306,16 @@ try {
   await p.$eval(SKY, e => { e.style.width = ''; e.style.justifySelf = ''; });
   check(await p.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'no sideways page scroll at 1906');
 
-  /* Anthony 2026-10-23: seats fade after their session. The league's day closed (as The Desk reports it): H (flat, nothing resting)
-     folds into +N idle; S (its open paper trade) and O (its resting order) stay until they are flat */
-  /* a seat stopped in the session for a risk reason (its own stopped flag) is not after its session: it stays, saying day stopped */
-  extra.hStopped = true; desk.league = sampleDay(px);
-  const hs1 = await until(async () => { const s = await sky(); const d = s.drones.find(x => x.key === 'seat:H'); return d && d.state === 'day stopped' ? s : null; }, 'H stopped in the session', 25000);
-  check(!!hs1 && !hs1.idle.includes('Haiku'), 'a seat\'s own day stopped (a risk stop, the session not over): H stays a drone, flat, its word "day stopped" on its text block');
-  extra.hStopped = false;
-  extra.closed = true; desk.league = sampleDay(px);
-  const fade = await until(async () => { const s = await sky(); return s.idle.includes('Haiku') ? s : null; }, 'H folded into idle after the day closed', 25000);
-  check(!!fade && !fade.drones.some(d => d.key === 'seat:H') && fade.drones.some(d => d.key === 'seat:S' && d.trade) && fade.drones.some(d => d.key === 'seat:O'),
-    'the league\'s day closed (The Desk): flat H folds into idle (' + (fade && fade.idle.join(', ')) + '); S still holding its trade and O its resting order stay: ' + (fade && fade.drones.map(d => d.key).join(', ')));
-  const chipF = await p.$eval(SKY + ' .ak-idle', e => ({ text: e.textContent, title: e.title }));
-  check(/\+1 idle/.test(chipF.text) && /Haiku/.test(chipF.title), 'named on hover of the chip: ' + JSON.stringify(chipF));
-  await shot('agents-sky-day-stopped-1906.png', true);
-  extra.closed = false;
-
-  /* +N idle: the league's day not today (yesterday's file): the seats fold into the chip, named on hover */
-  extra.date = '2020-01-02'; desk.league = sampleDay(px);
-  const idl = await until(async () => { const s = await sky(); return s.idle.length === 3 && s.drones.length === 2 ? s : null; }, 'the seats idle', 25000);
+  /* +N idle: an agent off, flat and with nothing working folds into the chip, named on hover */
+  await post('/test/agent-connect', { agent: 'demo3', on: '0' });
+  const idl = await until(async () => { const s = await sky(); return s.idle.length === 1 && s.drones.length === 3 ? s : null; }, 'Demo Agent Three idle', 15000);
   const chip = await p.$eval(SKY + ' .ak-idle', e => ({ text: e.textContent, title: e.title, hidden: e.hidden }));
-  check(!!idl && chip.text === '+3 idle' && /Haiku, Sonnet, Opus/.test(chip.title), 'a league day of another date: the seats fold into "+3 idle", named on hover: ' + JSON.stringify(chip));
+  check(!!idl && chip.text === '+1 idle' && /Demo Agent Three/.test(chip.title), 'an agent off and flat folds into "+1 idle", named on hover: ' + JSON.stringify(chip));
+  await shot('agents-sky-idle-1906.png', true);
   /* the empty state: the agent and the bot off too */
   await post('/test/bot-connect', { on: '0' });
   await post('/test/agent-connect', { agent: 'demo', on: '0' });
+  await post('/test/agent-connect', { agent: 'demo2', on: '0' });
   const emp = await until(async () => { const s = await sky(); return s.drones.length === 0 ? s : null; }, 'nobody active', 15000);
   if (!emp) console.log('  still active: ' + JSON.stringify((await sky()).drones.map(d => [d.key, d.state, d.trade])) + ' ' + JSON.stringify(await p.evaluate(() => { const b = window.workspace.agent().agents; return b.map(a => ({ c: a.connected, k: a.killed, s: a.standDown, p: a.position })); })));
   if (emp) {

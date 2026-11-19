@@ -6258,6 +6258,154 @@ public static class AgentHarness
             }
             finally { if (groupsWas != null) File.WriteAllText(GroupsFile, groupsWas); else Gone(GroupsFile); ChartBridgeGroups.StartNow(); }
         });
+        // ---- plan step 3.2: Stop all automation (Legion's header), with the prop accounts found by the account ledger too
+        Part("stop all: no pick and no ledger: refused, nothing touched; its keys are type and cid only", () =>
+        {
+            PropStart("PROP-1", false);
+            ChartBridgeGroups.LedgerForCheck(null);
+            Mode("manrae", "auto");
+            Order e = PlacedOn(prop1, Good(NewId()));
+            Fill(e, 1, 24999);
+            int calls = prop1.Calls.Count;
+            P("{\"type\":\"agentStopAll\",\"cid\":\"sa0\"}");
+            Advance(1500);
+            Check(PageReject().Contains("\"cid\":\"sa0\"") && PageReject().Contains("no personal account is picked") && PageReject().Contains("account ledger has not been read") && !M.Killed && ModeNow() == "auto" && prop1.Calls.Count == calls && PosOf(prop1, mnq) == 1,
+                  "stop all, no pick and no ledger: refused, the agent, its position and its orders exactly as they were: " + PageReject());
+            P("{\"type\":\"agentStopAll\",\"cid\":\"sa1\",\"agent\":\"manrae\"}");
+            Check(PageReject().Contains("unknown key \\\"agent\\\" in agentStopAll"), "stop all takes no agent: " + PageReject());
+            Settle(prop1);
+        });
+        Part("stop all: no pick, the ledger read: a ledger account is stopped, one off the ledger is not", () =>
+        {
+            PropStart("PROP-1", false);
+            ChartBridgeGroups.LedgerForCheck(new[] { "PROP-1" });
+            Mode("manrae", "auto");
+            int s0 = N(page);
+            P("{\"type\":\"agentStopAll\",\"cid\":\"sa2\"}");
+            Advance(1500);
+            Check(!PageReject().Contains("\"cid\":\"sa2\"") && M.Killed && ModeNow() == "shadow" && Any(page, s0, "Stop all automation: agent manrae on PROP-1"),
+                  "stop all with no pick: the ledger's PROP-1 is prop: the kill switch on, Shadow: " + PageReject());
+            P("{\"type\":\"agentKill\",\"cid\":\"k\",\"agent\":\"manrae\",\"on\":false}");
+            ChartBridgeGroups.LedgerForCheck(new[] { "PROP-2" });
+            Mode("manrae", "auto");
+            int s1 = N(page);
+            P("{\"type\":\"agentStopAll\",\"cid\":\"sa3\"}");
+            Advance(1500);
+            Check(!M.Killed && ModeNow() == "auto" && Any(page, s1, "Stop all automation: no bot or agent is on a prop account: nothing was done") && Any(page, s1, "Not touched (not on prop accounts): manrae, demob"),
+                  "stop all with no pick: an account the ledger does not type is not touched (nothing else is known to be prop)");
+            Mode("manrae", "shadow");
+            ChartBridgeGroups.LedgerForCheck(null);
+        });
+        Part("stop all: an account NinjaTrader lists as Sim that the ledger types is stopped (item 113); Kill all leaves it", () =>
+        {
+            PropStart("SIM-C", true);
+            ChartBridgeGroups.LedgerForCheck(null);
+            Mode("manrae", "auto");
+            Order e = PlacedOn(simc, Good(NewId()));
+            Fill(e, 1, 24999);
+            Check(e != null && PosOf(simc, mnq) == 1, "stop all setup: manrae long 1 MNQ on SIM-C (a Sim account by NinjaTrader's listing): " + AgentReject());
+            P("{\"type\":\"agentKillAllProp\",\"cid\":\"sk0\"}");
+            Advance(1000);
+            Check(!M.Killed && ModeNow() == "auto", "kill all (ChartBridge's own rule) leaves an agent on a Sim-listed account, as before");
+            int s0 = N(page);
+            P("{\"type\":\"agentStopAll\",\"cid\":\"sk1\"}");
+            Advance(1000);
+            Check(!M.Killed && ModeNow() == "auto" && Any(page, s0, "account ledger has not been read") && Any(page, s0, "Not touched (not on prop accounts): manrae"),
+                  "stop all with no ledger read: ChartBridge's own rule only, and the line says so");
+            ChartBridgeGroups.LedgerForCheck(new[] { "SIM-C" });
+            int calls = simc.Calls.Count, s1 = N(page);
+            P("{\"type\":\"agentStopAll\",\"cid\":\"sk2\"}");
+            Check(M.Killed && ModeNow() == "shadow" && !AutoFileThere && Any(page, s1, "Stop all automation: agent manrae on SIM-C: flattening what it owns"),
+                  "stop all with the ledger: SIM-C is typed by the ledger: the kill switch on, Shadow, its own flatten: " + PageReject());
+            foreach (Order o in Legs(simc, e)) if (IsLive(o)) { o.OrderState = OrderState.Cancelled; Update(o); }
+            Advance(1500);
+            Order close;
+            lock (simc.Orders) close = simc.Orders.LastOrDefault(o => Regex.IsMatch(o.Name ?? "", "^CB#[0-9a-f]{8} ag:manrae flat$"));
+            Check(close != null && close.OrderType == OrderType.Market && close.OrderAction == OrderAction.Sell && close.Quantity == 1, "stop all: its position on SIM-C closed by its own flatten: " + string.Join(" | ", simc.Calls.Skip(calls)));
+            P("{\"type\":\"agentKill\",\"cid\":\"k\",\"agent\":\"manrae\",\"on\":false}");
+            ChartBridgeGroups.LedgerForCheck(null);
+            Settle(simc);
+        });
+        Part("stop all: a trader on the personal account and a prop account loses the prop seat only (item 113)", () =>
+        {
+            string groupsWas = File.Exists(GroupsFile) ? File.ReadAllText(GroupsFile) : null;
+            try
+            {
+                WriteGroup("MINE-1", "PROP-1");
+                PropStart("group:g1", true);
+                ChartBridgeGroups.LedgerForCheck(new[] { "PROP-1" });
+                Mode("manrae", "copilot");
+                string before = ModeNow();
+                int mineCalls = mine.Calls.Count, s0 = N(page);
+                SetPos(mine, mnq, 2);
+                P("{\"type\":\"agentStopAll\",\"cid\":\"sm1\"}");
+                Advance(1000);
+                string today = (et.Hour >= 18 ? et.Date.AddDays(1) : et.Date).ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
+                Check(!M.Killed && ModeNow() == before && Any(page, s0, "its prop seats PROP-1 taken off until 18:00 ET") && Any(page, s0, "(your personal account not touched)"),
+                      "stop all, mixed: not killed, its mode as it was (" + before + "), the line names the prop seat taken off: " + PageReject());
+                Check(ChartBridgeAgents.DayReachedWords(today, ChartBridgeAgents.StopKey("PROP-1")) != null && ChartBridgeAgents.DayReachedWords(today, ChartBridgeAgents.StopKey("MINE-1")) == null,
+                      "stop all, mixed: PROP-1 is latched for the session, MINE-1 is not");
+                Check(mine.Calls.Count == mineCalls && PosOf(mine, mnq) == 2, "stop all, mixed: the personal account: no order, no cancel, its position as it was");
+                Mode("manrae", "shadow");
+                SetPos(mine, mnq, 0);
+            }
+            finally { if (groupsWas != null) File.WriteAllText(GroupsFile, groupsWas); else Gone(GroupsFile); ChartBridgeGroups.StartNow(); ChartBridgeGroups.LedgerForCheck(null); }
+            // the latch holds for any trader on that account this session: a one-account plan there is refused
+            PropStart("PROP-1", true);
+            string day = (et.Hour >= 18 ? et.Date.AddDays(1) : et.Date).ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
+            ChartBridgeAgents.NoteDayReached(day, ChartBridgeAgents.StopKey("PROP-1"), "Stop all automation took PROP-1 from the traders this session: no new entry there until 18:00 ET");
+            Mode("manrae", "auto");
+            int c0 = prop1.Calls.Count;
+            Order x = PlacedOn(prop1, Good(NewId()));
+            Check(x == null && prop1.Calls.Count == c0 && AgentReject().Contains("Stop all automation took PROP-1"), "stop all: a one-account plan on a seat it took is refused until 18:00 ET: " + AgentReject());
+            Mode("manrae", "shadow");
+            ChartBridgeAgents.ForgetDayReachedForCheck();
+        });
+        // ---- plan step 3.2: "Flatten and turn him off" as one ChartBridge command
+        Part("flatten and turn off: Shadow, its saved Auto removed, its own flatten; Auto refused until its program ends", () =>
+        {
+            PropStart("PROP-1", true);
+            Mode("manrae", "auto");
+            Order e = PlacedOn(prop1, Good(NewId()));
+            Fill(e, 1, 24999);
+            Check(e != null && PosOf(prop1, mnq) == 1 && AutoFileThere, "flatten and turn off setup: manrae long 1 MNQ on PROP-1 in Auto, its Auto saved: " + AgentReject());
+            int calls = prop1.Calls.Count, s0 = N(page), mineCalls = mine.Calls.Count;
+            P("{\"type\":\"agentFlattenOff\",\"cid\":\"fo1\",\"agent\":\"manrae\"}");
+            Check(!PageReject().Contains("\"cid\":\"fo1\"") && ModeNow() == "shadow" && !AutoFileThere && !M.Killed && M.StripJson().Contains("\"offAsked\":true") &&
+                  Any(page, s0, "Agent manrae: Flatten and turn off: mode shadow (was auto)") && Any(page, s0, "Copilot and Auto are refused until its program ends"),
+                  "flatten and turn off: Shadow at once, its saved Auto removed, the kill switch untouched, offAsked in its agent message: " + PageReject());
+            foreach (Order o in Legs(prop1, e)) if (IsLive(o)) { o.OrderState = OrderState.Cancelled; Update(o); }
+            Advance(1500);
+            Order close;
+            lock (prop1.Orders) close = prop1.Orders.LastOrDefault(o => Regex.IsMatch(o.Name ?? "", "^CB#[0-9a-f]{8} ag:manrae flat$"));
+            Check(close != null && close.OrderType == OrderType.Market && close.OrderAction == OrderAction.Sell && close.Quantity == 1 && mine.Calls.Count == mineCalls,
+                  "flatten and turn off: ChartBridge closes its position by its own flatten, with no page involved; no other account touched: " + string.Join(" | ", prop1.Calls.Skip(calls)));
+            Mode("manrae", "auto");
+            Check(PageReject().Contains("auto refused: Flatten and turn off was asked for agent manrae") && ModeNow() == "shadow", "flatten and turn off: Auto refused until its program ends: " + PageReject());
+            Mode("manrae", "copilot");
+            Check(PageReject().Contains("copilot refused: Flatten and turn off was asked") && ModeNow() == "shadow", "flatten and turn off: Copilot refused too");
+            P("{\"type\":\"agentFlattenOff\",\"cid\":\"fo2\",\"agent\":\"manrae\",\"account\":\"PROP-1\"}");
+            Check(PageReject().Contains("unknown key \\\"account\\\" in agentFlattenOff"), "flatten and turn off takes type, cid and agent only: " + PageReject());
+            P("{\"type\":\"agentFlattenOff\",\"cid\":\"fo3\",\"agent\":\"nobody\"}");
+            Check(PageReject().Contains("there is no agent nobody"), "flatten and turn off for an agent that is not configured: refused");
+            if (close != null)
+            {
+                close.OrderId = "NTF" + Guid.NewGuid().ToString("N").Substring(0, 6);
+                close.Filled = 1; close.AverageFillPrice = 25001; close.OrderState = OrderState.Filled;
+                Update(close);
+                Deliver("PROP-1", mnq, MarketPosition.Short, 1, 25001, close.OrderId);
+                SetPos(prop1, mnq, 0);
+                ClearMoves();
+                Advance(1000);
+            }
+            // its program ends and starts again (the helper's Off and On): a new start, Auto may be set again
+            Restart();
+            Advance(2000);
+            Check(!M.StripJson().Contains("\"offAsked\"") && ModeNow() == "shadow", "flatten and turn off: a new start of its program clears it; Shadow until set on the page");
+            Mode("manrae", "auto");
+            Check(ModeNow() == "auto", "flatten and turn off: after its program started again, Auto can be set: " + PageReject());
+            Mode("manrae", "shadow");
+        });
         // ---- the review of 86 (REVIEW_2026-11-11_chartengine_85_86_87.md): F2, F1 (its scenarios A, B, C), N1, N2
         Part("kill all: an order placed by hand on the same account and contract stays (F2)", () =>
         {

@@ -63,6 +63,8 @@ test('Cinzel for the wordmark only, with a real fallback stack; the old title an
        title, its section titles and its lane titles, each a fixed word */
     else if (f === 'fleet.css') assert.deepEqual(uses, ['.fl-title', '.fl-box .fl-h', '.fl-lanetitle'], f + ': Cinzel on titles only');
     else if (f === 'league.css') assert.deepEqual(uses, ['.lg-word'], '1.50.0: the Colosseum\'s name, a title (never a live value)');
+    /* plan step 3.2: Legion's own page: its wordmark and the Roman numerals of its tabs, fixed words only */
+    else if (f === 'legion.css') assert.deepEqual(uses, ['.lx-word', '.lx-rn'], f + ': Cinzel on the wordmark and the numerals only');
     else assert.deepEqual(uses, [], f + ': no Cinzel');
   }
   const rule = sel => (new RegExp('^' + sel.replace(/\./g, '\\.') + ' \\{([^}]*)\\}', 'm').exec(ws) || [])[1] || '';
