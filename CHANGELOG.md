@@ -380,6 +380,16 @@ the size. Fixed in `nt8/ChartBridgeGroups.cs`, `live/groups.js`, `live/accounts.
   join's highest close) keeps what was typed if the list is rebuilt. Main had it too; found by an intermittent
   `test/accounts-smoke.mjs` failure, which now waits 2.5 s after typing and checks the box still holds the minimum.
 
+### A fix on the order ticket (the page only)
+
+- The managed line ("Runner 3T managing: 3 pairs · Bar trail not proven yet") stays inside the ticket's panel at 1366 x 768
+  again (the rule of 1.42). Release 1's grid of three (B/E, Flatten, Cut half, Cancel all and Merge) added a second row of
+  buttons, and in the default 2 x 3 panel the line, with the bar trail warning, went below the panel. A ticket panel under
+  400 px tall (the default 2 x 3 at 1366 x 768) is now compact: its controls 24 px high and 4 px apart (28 px and 6 px
+  elsewhere). It follows the panel's size only, never what the ticket shows, so nothing moves when a trade opens. A taller
+  panel (1920 x 1080) and the mini ticket are unchanged. Found by `test/strategies-smoke.mjs` (3 of its 137 checks failed
+  from release 1 on).
+
 ### Tests
 
 - The version pins follow the release: `package.json`, `src/chart-engine.js` (header and `VERSION`), `live/COMPAT.json`

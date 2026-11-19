@@ -684,3 +684,10 @@ body.ws-tight .ws-body > .chart-live { padding: 2px 3px 2px; }
 /* plan step 3.2: the link to Legion's own page (legion.html) in the top tabs row, drawn as the row's buttons */
 .ws-btn.ws-legionlink { text-decoration: none; display: inline-flex; align-items: center; }
 .ws-btn.ws-legionlink[hidden] { display: none; }
+
+/* a short ticket panel (tk-short, from its size: the default 2 x 3 at 1366 x 768): the controls 24 px high and 4 px apart, so the
+   second row of buttons release 1 added (1.6c) leaves the managed line and its bar trail warning inside the panel (1.42). The
+   mini ticket is in a chart's panel, never here. */
+.ws-panel.tk-short .chart-live .obar.tk-bar { gap: 4px; }
+.ws-panel.tk-short .chart-live .tk-bar .acct-sel, .ws-panel.tk-short .chart-live .tk-bar .oin, .ws-panel.tk-short .chart-live .tk-bar .btn,
+.ws-panel.tk-short .chart-live .tk-bar .obtn, .ws-panel.tk-short .chart-live .tk-bar .arm { min-height: 24px; padding-top: 2px; padding-bottom: 2px; }
