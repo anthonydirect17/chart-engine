@@ -55,7 +55,7 @@ function mount(env) {
   const host = { watchQuote, quoteOf, quoteSubs, fitPanel, note, now: etNowSec };
 
   /* ---------------- Cohorts: the chart page's Legion tab */
-  let fleet = null;
+  let fleet = null, legionDesk = null;
   guard('the cohorts', () => {
     if (!window.FleetView || !$('flView')) return;
     const FC = window.FleetCore;
@@ -87,7 +87,7 @@ function mount(env) {
         return { panel: ma, refused: feed.refused, feed, destroy: () => { if (panels.get(key) === ma) { panels.delete(key); lanes.delete(key); ma.destroy(); } } };
       },
       traderDesk: el => (window.LegionDesk && typeof window.LegionDesk.mount === 'function' && el
-        ? window.LegionDesk.mount(el, { v3: AF, feed: hub, headers, storage: store, storagePrefix: PREFIX })
+        ? (legionDesk = window.LegionDesk.mount(el, { v3: AF, feed: hub, headers, storage: store, storagePrefix: PREFIX }))
         : null),
       onTab: () => {} });
     mounted.cohorts = true;
@@ -103,6 +103,42 @@ function mount(env) {
     praetorian = window.AgentDesk.create({ embedded: true, keyPrefix: '', keys: false, v3: link, headers, feed: hub, storage: store, storagePrefix: PREFIX,
       els: { view: $('agView') } });
     mounted.praetorian = true;
+  });
+
+  /* ---------------- Castra and the cohort model (plan step 3.3): read only but for the cohort model's drag and drop (PUT to The Desk, never to
+     ChartBridge). Both read The Desk through the one address (AccountsPage.deskBase); what only this PC knows (the traders, the prop accounts'
+     room to the floor and day) is read from FleetView's own state, once a second at most: never a second reader. */
+  const deskBase = () => window.AccountsPage.deskBase((u, o) => fetch(u, o));
+  let liveAt = 0, liveCache = null;
+  const fleetLive = () => {
+    if (!fleet) return null;
+    const t = Date.now();
+    if (t - liveAt < 800) return liveCache;
+    liveAt = t;
+    try { const s = fleet.state(); liveCache = s.connected ? { traders: s.traders, accounts: s.accounts } : null; } catch (e) { liveCache = null; }
+    return liveCache;
+  };
+  const openTab = id => { const b = document.querySelector('[data-lx-tab="' + id + '"]'); if (b) b.click(); };
+  let castra = null;
+  guard('Castra', () => {
+    if (!window.LegionCastra || !$('cxView')) return;
+    $('cxView').innerHTML = '';
+    castra = window.LegionCastra.mount($('cxView'), { fetch: (u, o) => fetch(u, o), deskBase, live: fleetLive, go: openTab });
+    mounted.castra = !!castra;
+  });
+  let cohortModel = null;
+  guard('the cohort model', () => {
+    if (!window.LegionCohorts || !$('chView')) return;
+    /* the Drone sky's providers: the Agent desks' glances (Praetorian's and the trader desk's), the league's day (read by the view), and no price
+       line on this page (no quote: the sky says "not reported" for an open trade's R; an open position's price is on the chart page) */
+    const glancesOf = d => (d && typeof d.glances === 'function' ? d.glances() : []);
+    const sky = { agents: () => glancesOf(praetorian).concat(glancesOf(legionDesk && legionDesk.agent)).map(g => ({ a: g.agent, g })),
+      nowMs: () => etNowSec() * 1000, zoneSec: ms => (U && typeof U.zoneSeconds === 'function' ? U.zoneSeconds(ms / 1000) : ms / 1000),
+      last: () => null, pv: r => ({ MNQ: 2, NQ: 20 }[r] || null), bars: () => null, mine: () => [], bot: () => null,
+      openLeague: () => openTab('colosseum'), openAgent: () => {}, openBot: () => {} };
+    $('chView').innerHTML = '';
+    cohortModel = window.LegionCohorts.mount($('chView'), { fetch: (u, o) => fetch(u, o), deskBase, live: fleetLive, sky });
+    mounted.cohortModel = !!cohortModel;
   });
 
   /* ---------------- Colosseum: the chart page's Colosseum */
@@ -139,14 +175,16 @@ function mount(env) {
     if (fleet) guard('the cohorts', () => fleet.showTab(tab === 'cohorts' && sub === 'legion'));
     if (praetorian) guard('Praetorian', () => praetorian.showTab(tab === 'cohorts' && sub === 'praetorian'));
     if (ludus) guard('the Ludus', () => ludus.show(tab === 'ludus'));
+    if (castra) guard('Castra', () => castra.show(tab === 'castra'));
+    if (cohortModel) guard('the cohort model', () => cohortModel.show(tab === 'cohorts' && sub === 'legion'));
     if (league) guard('the Colosseum', () => {
       if (tab !== 'colosseum') { league.showTab(false); return; }
       if (!dayAsked) { dayAsked = true; league.openDay(new URLSearchParams(location.search).get('day')); }   // a day checked first: a past one read only
       else league.showTab(true);
     });
   });
-  window.LegionTabs.state = () => ({ cohorts: fleet ? fleet.state() : null, praetorian: praetorian ? praetorian.state() : null, colosseum: league ? league.state() : null, ludus: ludus ? ludus.state() : null });
-  window.LegionTabs.parts = { fleet, praetorian, league, ludus };
+  window.LegionTabs.state = () => ({ cohorts: fleet ? fleet.state() : null, praetorian: praetorian ? praetorian.state() : null, colosseum: league ? league.state() : null, ludus: ludus ? ludus.state() : null, castra: castra ? castra.state() : null, cohortModel: cohortModel ? cohortModel.state() : null });
+  window.LegionTabs.parts = { fleet, praetorian, league, ludus, castra, cohortModel };
 }
 
 window.LegionTabs = { mount, readOnlyFeed };

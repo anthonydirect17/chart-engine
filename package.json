@@ -30,6 +30,7 @@
     "smoke:workspace": "node test/workspace-smoke.mjs",
     "smoke:legion": "node test/legion-smoke.mjs",
     "smoke:ludus": "node test/ludus-smoke.mjs",
+    "smoke:castra": "node test/legion-castra-smoke.mjs",
     "smoke:plan": "node test/plan-smoke.mjs",
     "smoke:nostop": "node test/nostop-smoke.mjs",
     "smoke:signals": "node test/signals-smoke.mjs",

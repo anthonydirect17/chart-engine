@@ -113,9 +113,9 @@ test('the header: the five tabs, Stop all automation outside every tab panel (so
   assert.ok(html.includes(L.QUESTION.replace(/'/g, '\'')), 'the question in the page is LegionCore\'s');
 });
 
-test('Castra and Go live: labelled not built yet, with no sample numbers (the Ludus is built: test/ludus.test.js)', () => {
+test('Go live: labelled not built yet, with no sample numbers (Castra is built: test/legion-castra.test.js; the Ludus: test/ludus.test.js)', () => {
   const html = read('live', 'legion.html');
-  for (const t of ['castra', 'golive']) {
+  for (const t of ['golive']) {
     const sec = new RegExp('<section class="lx-view" id="lx-' + t + '"[\\s\\S]*?</section>').exec(html)[0];
     assert.match(sec, /<b>Not built yet\.<\/b>/, t);
     assert.doesNotMatch(sec.replace(/profit per \$1/g, ''), /\$\d|\d+%|\bsample data\b/i, t + ': no numbers ("profit per $1" is the measure\'s name)');
