@@ -112,14 +112,45 @@ function alarmOf(real, simEval, rangeForN) {
   }
   return { state: 'clear', words: 'Real profit per $1 (' + L.signed(real.profit_per_dollar) + ') is not under the low end of the Prop Sim\'s range for the same number of evals (' + L.signed(rangeForN.low) + ').' };
 }
-/** One build's real money cells: { ppd, costs, payouts, net, sample } as words ("not enough data yet" with no figure). */
+/**
+ * TheDesk #120 (docs/API.md, GET /api/legion/money): an entry is counted under the card's fills account as it stood when the entry
+ * was booked, from The Desk's log of the card's fills account. For an entry dated before the log began (or a card whose log
+ * cannot be read) whether the card had another account then cannot be told: The Desk reads it by the card's account now, counts
+ * it in real.card_account_could_not_tell and sets real.card_account_words ("could not tell"). The numbers are still shown, and
+ * the page says so beside the build's real figure. -> the words, or '' when every entry could be told (or the Desk says nothing).
+ */
+function cardAccountWords(r) {
+  const n = isObj(r) && isNum(r.card_account_could_not_tell) && r.card_account_could_not_tell > 0 ? Math.floor(r.card_account_could_not_tell) : 0;
+  const w = isObj(r) ? str(r.card_account_words, 60) : '';
+  if (!n && !w) return '';
+  return (w || 'could not tell') + ': ' + (n ? plural(n, 'entry', 'entries') : 'some entries') + ' counted by the card\'s fills account now (whether the card had another account when ' + (n === 1 ? 'it was' : 'they were') + ' booked cannot be told)';
+}
+/** One build's real money cells: { ppd, costs, payouts, net, sample, cardAccount } as words ("not enough data yet" with no figure). */
 function realCells(real) {
   const r = isObj(real) ? real : {};
   const has = isNum(r.profit_per_dollar);
   const entries = isNum(r.entries) ? r.entries : 0, accounts = isNum(r.accounts) ? r.accounts : 0, withCard = isNum(r.accounts_with_a_card) ? r.accounts_with_a_card : null;
   return { has, ppd: has ? L.perDollar(r.profit_per_dollar) : NOT_ENOUGH, costs: L.usd(r.costs) || NOT_ENOUGH, payouts: L.usd(r.payouts) || NOT_ENOUGH, net: L.usd(r.net) || NOT_ENOUGH,
     netTone: tone(r.net), ppdTone: tone(has ? r.profit_per_dollar : null),
-    sample: plural(entries, 'ledger entry', 'ledger entries') + ' on ' + plural(accounts, 'account') + (withCard !== null ? ' (' + withCard + ' with a card)' : ''), words: str(r.words, 120) };
+    sample: plural(entries, 'ledger entry', 'ledger entries') + ' on ' + plural(accounts, 'account') + (withCard !== null ? ' (' + withCard + ' with a card)' : ''), words: str(r.words, 120),
+    cardAccount: cardAccountWords(r) };
+}
+/**
+ * The ledger-level line of TheDesk #120: by_card_account_could_not_tell (the entries of every build read by the card's account now)
+ * and card_account_log ({ began: the log's first trade day, note }). -> { couldNotTell, began, note, words }, or null when The Desk
+ * gives neither (a Desk from before #120: nothing to say).
+ */
+function cardAccountLog(ans) {
+  const n = isObj(ans) && isNum(ans.by_card_account_could_not_tell) && ans.by_card_account_could_not_tell >= 0 ? Math.floor(ans.by_card_account_could_not_tell) : null;
+  const log = isObj(ans) && isObj(ans.card_account_log) ? ans.card_account_log : null;
+  if (n === null && !log) return null;
+  const began = log && /^\d{4}-\d{2}-\d{2}$/.test(str(log.began)) ? log.began : null, logNote = log ? str(log.note, 300) : '';
+  let words = 'Each entry counts under the card\'s fills account when it was booked, from The Desk\'s log of each card\'s fills account, which '
+    + (began ? 'begins on ' + began + ' (its first trade day).' : 'gives no first day (could not tell when it began).');
+  if (n === null) words += ' The Desk does not say how many entries could not be told.';
+  else if (n) words += ' Could not tell for ' + plural(n, 'entry', 'entries') + ' (booked before the log began, or a card whose log cannot be read): each is counted by the card\'s fills account now, and the card may have had another account then.';
+  else words += ' Every entry could be told.';
+  return { couldNotTell: n, began, note: logNote, words };
 }
 /** The money answer as the page shows it: { ok, problem, builds, unattributed, total, tripped, note }. */
 function moneyView(ans) {
@@ -134,7 +165,8 @@ function moneyView(ans) {
   return { ok: true, problem: null, builds, tripped: builds.filter(b => b.alarm.state === 'tripped').length,
     unattributed: un ? { entries: isNum(un.entries) ? un.entries : 0, costs: L.usd(un.costs) || '$0', payouts: L.usd(un.payouts) || '$0' } : null,
     total: tot ? { entries: isNum(tot.entries) ? tot.entries : 0, costs: L.usd(tot.costs) || '$0', payouts: L.usd(tot.payouts) || '$0' } : null,
-    problems: Array.isArray(ans.problems) ? ans.problems.filter(x => typeof x === 'string').slice(0, 10) : [], note: str(ans.note, 400) };
+    problems: Array.isArray(ans.problems) ? ans.problems.filter(x => typeof x === 'string').slice(0, 10) : [], note: str(ans.note, 400),
+    cardLog: cardAccountLog(ans) };
 }
 
 /* ---------------------------------------------------------------- who goes in today: each roster build's overall ROI, days to pass, payout speed */
@@ -334,5 +366,5 @@ function needsYou(o) {
 }
 
 return Object.freeze({ ROUTES, FLEET_PATH, RN, NOT_BUILT, NOT_ENOUGH, SIM_LABEL, deskClient, esc, table, cell, raw, card, note, tone, plural,
-  simStage, alarmOf, ALARM_NOT_KNOWN, readStatus, realCells, moneyView, goesInView, runningNow, todayLive, lastNight, centurionView, fleetIndex, chipOf, pickWords, cohortsView, directionWords, dropRefusal, moveWords, needsYou });
+  simStage, alarmOf, ALARM_NOT_KNOWN, readStatus, realCells, cardAccountWords, cardAccountLog, moneyView, goesInView, runningNow, todayLive, lastNight, centurionView, fleetIndex, chipOf, pickWords, cohortsView, directionWords, dropRefusal, moveWords, needsYou });
 });

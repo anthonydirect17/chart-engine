@@ -113,6 +113,11 @@ try {
     check(/-0\.40 per \$1/.test(cx) && /\+1\.10 per \$1 \(range \+0\.20 to \+2\.00\), simulated/.test(cx), 'real profit per $1 beside the simulated one, which says simulated');
     check(/3 ledger entries on 2 accounts/.test(cx) && /not enough data yet/.test(await text(a.page, '#cxView [data-cx-build="sample_b_v1"]')), 'each with its sample; no costs reads "not enough data yet"');
     check(/Simulated by the Prop Sim on in-sample days: not proven/.test(cx), 'the simulated label');
+    const cnt = await text(a.page, '#cxView [data-cx-build="sample_a_v1"] [data-cx-cnt]').catch(() => '');
+    const clog = await text(a.page, '#cxView [data-cx-cardlog]').catch(() => '');
+    check(/^could not tell: 2 entries counted by the card's fills account now/.test(cnt) && /-0\.40 per \$1/.test(await text(a.page, '#cxView [data-cx-build="sample_a_v1"]'))
+      && /begins on 2001-03-05 \(its first trade day\)\. Could not tell for 2 entries/.test(clog) && (await a.page.$$('#cxView [data-cx-cnt]')).length === 1,
+      'TheDesk #120: "could not tell" beside the build\'s real figure (the number still shown), and the ledger\'s line with the log\'s first day: ' + JSON.stringify([cnt, clog]));
     check(/Money alarm: not known yet\./.test(cx) && /range for the same number of evals is not served yet/.test(cx) && !/TRIPPED/i.test(cx), 'the money alarm reads not known yet: it does not trip on a range for another number of evals');
     check(/sample_a_v1/.test(await text(a.page, '.cx-goes')) && /approved by Anthony/.test(await text(a.page, '.cx-goes')) && /11 sessions \(median, simulated\)/.test(cx) && /19 sessions to the first payout/.test(cx), 'who goes in today: the approved build with days to pass and payout speed');
     check(/Split by zone and regime: off\./.test(cx) && /Off until a zone version passes test 3/.test(cx), 'the zone split is shown as off');

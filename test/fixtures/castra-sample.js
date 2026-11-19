@@ -9,16 +9,19 @@ const SHA_A = '6'.repeat(64);
 const stage = (ppd, lo, hi) => ({ profit_per_dollar: ppd, range95: [lo, hi], no_edge_p95: 0.4, above_no_edge: ppd > 0.4 });
 const real = (costs, payouts, accounts) => ({ entries: 3, not_checked: 3, spent: costs, refunds: 0, costs, payouts, net: payouts - costs,
   roi_pct: costs ? Math.round(100 * (payouts - costs) / costs) : null, profit_per_dollar: costs ? Math.round(100 * (payouts - costs) / costs) / 100 : null,
-  words: costs ? null : 'not enough data yet', accounts, accounts_with_a_card: accounts });
+  words: costs ? null : 'not enough data yet', accounts, accounts_with_a_card: accounts, card_account_could_not_tell: 0, card_account_words: null });
 function moneyAnswer(o) {
   const x = o || {};
   return { v: 1, note: 'made up', in_sample_simulated: true,
     builds: [
-      { bot: 'sample_a_v1', file: 'sample_a_v1.json', sha256: SHA_A, on_roster: true, simulated: { in_sample: true, eval: stage(1.1, 0.2, 2.0), funded: stage(0.9, 0.1, 1.8) }, accounts: ['EVAL-B', 'FUNDED-C'], real: x.alarm === false ? real(200, 500, 2) : real(200, 120, 2) },
+      { bot: 'sample_a_v1', file: 'sample_a_v1.json', sha256: SHA_A, on_roster: true, simulated: { in_sample: true, eval: stage(1.1, 0.2, 2.0), funded: stage(0.9, 0.1, 1.8) }, accounts: ['EVAL-B', 'FUNDED-C'],
+        /* TheDesk #120: 2 of its entries were booked before the card's fills account log began (made up) */
+        real: Object.assign(x.alarm === false ? real(200, 500, 2) : real(200, 120, 2), { card_account_could_not_tell: 2, card_account_words: 'could not tell' }) },
       { bot: 'sample_b_v1', file: 'sample_b_v1.json', sha256: '7'.repeat(64), on_roster: true, simulated: { in_sample: true, eval: stage(0.8, 0.1, 1.5), funded: stage(0.7, 0.0, 1.4) }, accounts: ['EVAL-D'], real: real(0, 0, 1) },
       { bot: 'sample_old_v1', file: 'sample_old_v1.json', sha256: '8'.repeat(64), on_roster: false, simulated: null, accounts: ['GONE-1'], real: real(150, 0, 1) },
     ],
-    by_bought_for_before_history: 0,
+    by_bought_for_before_history: 0, by_card_account_could_not_tell: 2,
+    card_account_log: { began: '2001-03-05', note: 'made up' },
     unattributed: { entries: 2, costs: 130, payouts: 0, by_reason: { no_account: 1, no_build: 1, no_pick: 0, not_prop: 0 }, note: 'made up' },
     ledger_total: { entries: 12, costs: 680, payouts: 620 }, problems: [] };
 }

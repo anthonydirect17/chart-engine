@@ -36,6 +36,37 @@ test('real against simulated money: ROI first, each with its sample; "not enough
   assert.equal(K.moneyView(null).ok, false);
 });
 
+test('TheDesk #120: "could not tell" which account a card had, beside the build\'s real figure and for the whole ledger (the review of R12, B3)', () => {
+  const v = K.moneyView(F.moneyAnswer());
+  const [a, b] = v.builds;
+  assert.equal(a.real.cardAccount, 'could not tell: 2 entries counted by the card\'s fills account now (whether the card had another account when they were booked cannot be told)');
+  assert.equal(a.real.ppd, '-0.40 per $1', 'the number is still shown');
+  assert.equal(b.real.cardAccount, '', 'every entry told: nothing said');
+  assert.equal(K.realCells({ card_account_could_not_tell: 1, card_account_words: null }).cardAccount, 'could not tell: 1 entry counted by the card\'s fills account now (whether the card had another account when it was booked cannot be told)');
+  assert.equal(K.realCells({ card_account_words: 'could not tell' }).cardAccount, 'could not tell: some entries counted by the card\'s fills account now (whether the card had another account when they were booked cannot be told)');
+  assert.equal(K.realCells({}).cardAccount, '', 'a Desk from before #120: nothing');
+  assert.deepEqual(v.cardLog, { couldNotTell: 2, began: '2001-03-05', note: 'made up',
+    words: 'Each entry counts under the card\'s fills account when it was booked, from The Desk\'s log of each card\'s fills account, which begins on 2001-03-05 (its first trade day). Could not tell for 2 entries (booked before the log began, or a card whose log cannot be read): each is counted by the card\'s fills account now, and the card may have had another account then.' });
+  const ans = F.moneyAnswer();
+  assert.match(K.moneyView(Object.assign({}, ans, { by_card_account_could_not_tell: 0 })).cardLog.words, /begins on 2001-03-05 \(its first trade day\)\. Every entry could be told\.$/);
+  assert.match(K.moneyView(Object.assign({}, ans, { card_account_log: { began: 'soon', note: '' } })).cardLog.words, /gives no first day \(could not tell when it began\)\./, 'a first day not a date: never shown as one');
+  assert.match(K.moneyView(Object.assign({}, ans, { by_card_account_could_not_tell: undefined })).cardLog.words, /The Desk does not say how many entries could not be told\.$/);
+  const old = Object.assign({}, ans); delete old.by_card_account_could_not_tell; delete old.card_account_log;
+  assert.equal(K.moneyView(old).cardLog, null, 'a Desk from before #120: no line');
+  const js = read('live', 'legion-castra.js');
+  assert.match(js, /\(b\.real\.cardAccount \? '<br><span class="cx-dim" data-cx-cnt>' \+ esc\(b\.real\.cardAccount\) \+ '<\/span>' : ''\)/, 'beside the real figure');
+  assert.match(js, /if \(mv\.cardLog\) body \+= '<p class="cx-note cx-dim" data-cx-cardlog>' \+ esc\(mv\.cardLog\.words\)/, 'the ledger-level line');
+});
+
+test('the section comments name the cards\' own numerals', () => {
+  const js = read('live', 'legion-castra.js');
+  const cards = [...js.matchAll(/card\('([IVX]+)', '([^']+)'/g)].map(m => m[1] + ' ' + m[2]);
+  for (const [rn, title] of [['I', 'Real against simulated money'], ['II', 'Needs you'], ['III', 'Who goes in today'], ['IV', 'Running now'], ['VI', 'Last night']])
+    assert.ok(cards.some(c => c.startsWith(rn + ' ' + title)), rn + ' ' + title);
+  for (const c of ['/* I. real against simulated money', '/* II. Needs you', '/* III. who goes in today', '/* IV. running now, V. today live only', '/* VI. last night', '/* VII. Centurion\'s week'])
+    assert.ok(js.includes(c), c);
+});
+
 test('the money alarm: never trips until the Prop Sim\'s range for the SAME number of evals is served; it never tops Needs you', () => {
   const v = K.moneyView(F.moneyAnswer());
   assert.equal(v.tripped, 0);
