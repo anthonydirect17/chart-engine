@@ -299,8 +299,8 @@ function agentCard(a, g, ctx) {
     room: 'room ' + NR,
   };
   const sp = gl.spend && typeof gl.spend === 'object' ? gl.spend : null;
-  const spend = sp ? { line1: (isNum(sp.session) ? money(sp.session) : NR) + ' this session · ' + (isNum(sp.overall) ? money(sp.overall) : NR) + ' overall', line2: 'calls ' + NR, title: 'The PC helper\'s figures, as the Agent tab last read them' }
-    : { line1: 'spend ' + NR, line2: '', title: 'The PC helper is read while the Agent tab is open' };
+  const spend = sp ? { line1: (isNum(sp.session) ? money(sp.session) : NR) + ' this session · ' + (isNum(sp.overall) ? money(sp.overall) : NR) + ' overall', line2: 'calls ' + NR, title: 'The PC helper\'s figures, as his desk (Praetorian) last read them' }
+    : { line1: 'spend ' + NR, line2: '', title: 'The PC helper is read while his desk (Praetorian) is open' };
   const thoughts = (Array.isArray(gl.stream) ? gl.stream : []).slice(0, THOUGHTS_MAX).map(r => ({ id: str(r.key, 120), time: str(r.time, 8).slice(0, 5), action: ({ thinking: 'think', notebook: 'notes' }[str(r.tag, 12).toLowerCase()] || str(r.tag, 12).toLowerCase()), conf: '', line: firstLine(r.text, 140), full: str(r.full, 4000), detail: str(r.time, 8) + (r.tag ? ' · ' + str(r.tag, 12) : '') }));
   return { kind: 'agent', key: 'agent:' + x.agent, id: String(x.agent || ''), letter: name.slice(0, 1).toUpperCase(), name, color: '', mode: agentMode(x), state, position, today, spend, thoughts, flag: '', looks: null };
 }
@@ -567,7 +567,7 @@ const C = window.AgentsStripCore;
 const esc = s => String(s === undefined || s === null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 /** What a click on the card opens: the League tab for a seat, the Bot view for the bot, the Agent tab for a live agent. */
-const openWhat = c => (c.kind === 'seat' ? 'Open the League tab' : c.kind === 'bot' ? 'Open the Bot (its switches, kill switch and rails)' : 'Open the Agent tab for ' + c.name);
+const openWhat = c => (c.kind === 'seat' ? 'Open the Colosseum (Legion)' : c.kind === 'bot' ? 'Open the Bot (its switches, kill switch and rails)' : 'Open Praetorian on ' + c.name + ' (Legion)');
 
 /** One agent's card (the 1.36.0 strip card): name, mode, state, Now, Today, Spend (the bot's Rails) and Thoughts, newest first. */
 function cardHtml(c) {

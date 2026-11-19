@@ -10,11 +10,12 @@
  *   On         the helper starts the runner with the build picked here (it fetches a missing build from The Desk)
  *   Off        the helper ends the runner process: no more model calls, so spend stops. ChartBridge cancels his unfilled
  *              entries when he disconnects (as built); a position keeps its stop and target.
- *   Off in a trade   asks "Flatten and turn him off?" (offStep), for that agent only. Yes (flatOffStart, flatOffStep):
- *              first Shadow (ChartBridge then places nothing more for him and cancels his unfilled entries; SHADOW_WAIT_MS
- *              at most), then the page's own Flatten for his account and root (the chart's Flatten path, never an order built
- *              here), then Off once ChartBridge says he is flat (FLAT_WAIT_MS at most). Not in Shadow or not flat in time: he
- *              stays on, and the line says so until Anthony acts. No: nothing is sent.
+ *   Off in a trade   asks "Flatten and turn him off?" (offStep), for that agent only. Yes (flatOffStart, flatOffStep), plan
+ *              step 3.2: a ChartBridge that knows agentFlattenOff gets that one command (ChartBridge puts him in Shadow and
+ *              flattens what he owns); the job waits to see him in Shadow (SHADOW_WAIT_MS at most), then for flat (FLAT_WAIT_MS
+ *              at most). An older one: Shadow first (agentMode), then he is flattened by hand (HAND_WAIT_MS at most). Off goes
+ *              only in Shadow and flat; out of Shadow, not in Shadow or not flat in time: he stays on, and the line says so
+ *              until Anthony acts. No page sends a Flatten of its own (the R12 delta). No: nothing is sent.
  *   Spend      this session's and the overall dollars of the live agent only (the runner's own journal of its calls)
  *   Picker     DECISION w: Copilot, Auto and a LIVE account list heroes only; Shadow on a Sim account lists heroes and the
  *              builds that pass the Shadow bar (pickerRows). A build that is not a hero keeps the mode at Shadow on Sim:
@@ -47,6 +48,9 @@ const TIMEOUT_MS = 4000;
 const MISS_GRACE_MS = 8000;
 const FLAT_WAIT_MS = 30000;
 const SHADOW_WAIT_MS = 10000;
+/* plan step 3.2 (the R12 review, B1): a page with no order connection of its own (Legion, the pop-out) on a ChartBridge older than
+   agentFlattenOff: Shadow first, then he is flattened by hand; the page waits this long for him to be flat, then Off */
+const HAND_WAIT_MS = 15 * 60000;
 const HHMM = /^([01][0-9]|2[0-3]):[0-5][0-9]$/;
 const isNum = v => typeof v === 'number' && isFinite(v);
 const str = v => (typeof v === 'string' ? v : '');
@@ -91,6 +95,11 @@ function pollStep(prev, r, now) {
   if (misses === 1 && p.reach === 'ok' && p.status && isNum(p.okAt) && p.okAt > 0 && now - p.okAt <= MISS_GRACE_MS)
     return { reach: 'ok', status: p.status, why: p.why || '', okAt: p.okAt, misses, slow: true };
   return { reach: 'down', status: null, why, okAt: p.okAt || 0, misses, slow: false };
+}
+/** Round 5, S1: does a held (failed Off) lane stop being held? Yes when the poll is ok and the helper reports him neither on nor
+ *  running (the Off was done from another window, or he is off already). Never on any other answer, never while he is on or running. */
+function holdClears(hold, holdFailed, reach, h) {
+  return !!hold && !!holdFailed && reach === 'ok' && !!h && !h.on && !h.running;
 }
 /** The quiet note while one poll was missed (pollStep's slow). */
 const SLOW_TEXT = 'PC helper slow';
@@ -254,16 +263,42 @@ function offQuestion(a, name) {
 }
 /** What the job flattens, in words: "SIM-A MNQ" or, for a group, "SIM-A MNQ, SIM-B MNQ". */
 const jobWhere = j => (Array.isArray(j.seats) && j.seats.length ? j.seats.map(x => x.account + ' ' + x.root).join(', ') : j.account + ' ' + j.root);
+/** The line while a hand flatten is awaited (job.hand): where to flatten him, and that he turns off once flat. */
+const handLine = j => (Array.isArray(j.seats) && j.seats.length
+  ? 'He is in Shadow: flatten ' + jobWhere(j) + ' in NinjaTrader, or with Flatten on the chart page\'s ticket with each account picked; he turns off once every seat is flat.'
+  : 'He is in Shadow: flatten him in NinjaTrader, or with Flatten on the chart page\'s ticket with his account picked; he turns off once flat.');
 
 /** Is he flat now (his `agent` message)? A group: every seat. */
 function flat(a) { return offStep(a) === 'off'; }
 
 /**
- * "Flatten and turn off" pressed for agent a: { job, action } or { error } (nothing sent). The job: { agent, account, root,
- * phase, until }. action: 'shadow' (send agentMode shadow first), 'flatten' (already in Shadow), or 'off' (he is flat now).
- * His account must be known: never a default.
+ * "Flatten and turn off" pressed for agent a: { job, action } or { error } (nothing sent). fo: ChartBridge knows agentFlattenOff
+ * (action 'flatoff', send it). Else the hand job (job.hand): { agent, account, root (or seats), phase, until }; action 'shadow'
+ * (send agentMode shadow first), 'hand' (already in Shadow: the wait for a flatten by hand), or 'off' (he is flat now). His
+ * account must be known: never a default (the line says where to flatten him).
  */
-function flatOffStart(a, now) {
+function flatOffStart(a, now, fo) {
+  if (fo) return foStart(a, now);
+  const r = flatOffStart1(a, now);
+  if (r.job && r.job.phase !== 'off') { r.job.hand = true; if (r.job.phase === 'flatten') { r.job.until = now + HAND_WAIT_MS; r.action = 'hand'; } }
+  return r;
+}
+/* plan step 3.2, the R12 delta X2: the job of one agentFlattenOff (fo). ChartBridge puts him in Shadow and flattens what he owns
+   itself, so his account and instrument are words only here, never a target: the job is made even when the page cannot say them.
+   It waits to SEE him in Shadow (SHADOW_WAIT_MS at most) before it says so; then the same wait for flat as the hand path (out of
+   Shadow ends it, B1r), FLAT_WAIT_MS at most; Off only in Shadow and flat. A refusal of the command ends it (live/agent.js onReject). */
+function foStart(a, now) {
+  const x = a || {}, r = flatOffStart1(x, now), j = r.job || {};
+  const job = { agent: str(x.agent), account: str(j.account || x.account), root: str(j.root), phase: 'shadow', fo: true, until: now + SHADOW_WAIT_MS };
+  if (Array.isArray(j.seats)) job.seats = j.seats;
+  return { job, action: 'flatoff' };
+}
+/** Where to flatten him, in words, for a line ("SIM-A MNQ", or his account alone, or "what he holds"). */
+const whereWords = j => { const w = jobWhere(j).trim(); return w || 'what he holds'; };
+const modeWord = m => (m === 'auto' ? 'Auto' : m === 'copilot' ? 'Copilot' : m === 'shadow' ? 'Shadow' : 'mode not known');
+const FO_SENT = 'Flatten and turn off sent: waiting for ChartBridge to put him in Shadow...';
+const FO_WAIT = 'In Shadow: ChartBridge flattens what he owns; he turns off once flat...';
+function flatOffStart1(a, now) {
   const x = a || {}, p = x.position || {};
   if (flat(x)) return { job: { agent: str(x.agent), account: str(x.account), root: str(p.root), phase: 'off', until: 0 }, action: 'off' };
   // chart 1.27.0 (ChartBridge 0.6.0): a group, as one account: Shadow first (no new entries), then the page's Flatten on every
@@ -282,28 +317,125 @@ function flatOffStart(a, now) {
 }
 
 /**
- * The job's next step, at each `agent` message and each second: { action, job, line }. action: '' (wait), 'flatten' (he is
- * in Shadow now: send the Flatten), 'off' (flat: send Off), 'giveup' (time is up: he stays on; line says why and stays).
- * a: his `agent` message now (null when ChartBridge no longer tells of him). sent: the Flatten has gone.
+ * The job's next step, at each `agent` message and each second: { action, job, line }. action: '' (wait), 'off' (in Shadow and
+ * flat: send Off), 'giveup' (he left Shadow, or time is up: he stays on; line says why and stays). a: his `agent` message now
+ * (null when ChartBridge no longer tells of him). Every job is fo (agentFlattenOff) or hand (Shadow, then a flatten by hand):
+ * no page sends a Flatten of its own, so a job of neither kind is taken as a hand job (it never sends one either).
  */
-function flatOffStep(job, a, now, sent) {
+function flatOffStep(job, a, now) {
   const j = job, x = a || {};
   if (!j) return { action: '', job: null, line: '' };
   if (!a) {                                     // no word from ChartBridge (the connection dropped): never read as flat
-    if (now > j.until) return { action: 'giveup', job: null, line: 'ChartBridge did not answer: ' + (j.phase === 'shadow' ? 'nothing was flattened and he stays on' : 'he may still hold ' + jobWhere(j) + ' and stays on') + '. Check NinjaTrader, then press Off.' };
+    if (now > j.until) return { action: 'giveup', job: null, line: 'ChartBridge did not answer: ' + (j.fo ? 'whether he was flattened is not known, and he stays on' : j.phase === 'shadow' ? 'nothing was flattened and he stays on' : 'he may still hold ' + jobWhere(j) + ' and stays on') + '. Check NinjaTrader, then press Off.' };
     return { action: '', job: j, line: 'Waiting for ChartBridge (the connection dropped): nothing is read as flat meanwhile...' };
   }
+  if (j.fo) {                                   // the R12 delta X2: one agentFlattenOff; Shadow seen before it is said, and before Off
+    if (j.phase === 'shadow') {
+      if (x.mode === 'shadow') return flat(x) ? { action: 'off', job: Object.assign({}, j, { phase: 'off' }), line: 'In Shadow and flat: turning him off...' }
+        : { action: '', job: Object.assign({}, j, { phase: 'flatten', until: now + FLAT_WAIT_MS }), line: FO_WAIT };
+      if (now > j.until) return { action: 'giveup', job: null, line: 'ChartBridge did not put him in Shadow within ' + SHADOW_WAIT_MS / 1000 + ' s of Flatten and turn off: he stays on (' + modeWord(x.mode) + '). Flatten ' + whereWords(j) + ' in NinjaTrader, then press Off.' };
+      return { action: '', job: j, line: FO_SENT };
+    }
+    if (x.mode !== 'shadow') return { action: 'giveup', job: null, line: 'He left Shadow (now ' + (x.mode || 'not known') + ') before he was flat: he stays on. Flatten ' + whereWords(j) + ', then press Off.' };
+    if (flat(x)) return { action: 'off', job: Object.assign({}, j, { phase: 'off' }), line: 'Flat: turning him off...' };
+    if (now > j.until) return { action: 'giveup', job: null, line: 'Not flat ' + FLAT_WAIT_MS / 1000 + ' s after Flatten and turn off: he stays on, in Shadow. Flatten ' + whereWords(j) + ' in NinjaTrader, then press Off.' };
+    return { action: '', job: j, line: FO_WAIT };
+  }
+  /* the hand job: Shadow first, then the wait for him to be flattened by hand */
   if (j.phase === 'shadow') {
-    if (x.mode === 'shadow') return { action: flat(x) ? 'off' : 'flatten', job: Object.assign({}, j, { phase: flat(x) ? 'off' : 'flatten', until: now + FLAT_WAIT_MS }), line: flat(x) ? 'In Shadow and flat: turning him off...' : 'In Shadow: flattening ' + jobWhere(j) + '...' };
+    if (x.mode === 'shadow') return flat(x) ? { action: 'off', job: Object.assign({}, j, { phase: 'off' }), line: 'In Shadow and flat: turning him off...' }
+      : { action: '', job: Object.assign({}, j, { phase: 'flatten', until: now + HAND_WAIT_MS }), line: handLine(j) };
     if (now > j.until) return { action: 'giveup', job: null, line: 'ChartBridge did not put him in Shadow within ' + SHADOW_WAIT_MS / 1000 + ' s: nothing was flattened and he stays on.' };
     return { action: '', job: j, line: 'Putting him in Shadow first (no new entries)...' };
   }
   if (j.phase === 'flatten') {
-    if (sent && flat(x)) return { action: 'off', job: Object.assign({}, j, { phase: 'off' }), line: 'Flat: turning him off...' };
-    if (now > j.until) return { action: 'giveup', job: null, line: 'Not flat ' + FLAT_WAIT_MS / 1000 + ' s after the Flatten for ' + jobWhere(j) + ': he stays on, in Shadow. Flatten in NinjaTrader, then press Off.' };
-    return { action: '', job: j, line: 'Flatten sent for ' + jobWhere(j) + ' (he is in Shadow): turning him off once flat...' };
+    /* the R12 delta, B1r: an older ChartBridge refuses nothing, and Legion's Armed can put him back in Auto: out of Shadow the wait
+       ends (never "He is in Shadow" when he is not, and no Off while he trades) */
+    if (x.mode !== 'shadow') return { action: 'giveup', job: null, line: 'He left Shadow (now ' + (x.mode || 'not known') + ') before he was flat: he stays on. Flatten ' + jobWhere(j) + ', then press Off.' };
+    if (flat(x)) return { action: 'off', job: Object.assign({}, j, { phase: 'off' }), line: 'Flat: turning him off...' };
+    if (now > j.until) return { action: 'giveup', job: null, line: 'Not flat ' + HAND_WAIT_MS / 60000 + ' minutes after he went to Shadow: he stays on, in Shadow. Flatten ' + jobWhere(j) + ', then press Off.' };
+    return { action: '', job: j, line: handLine(j) };
   }
   return { action: '', job: j, line: 'Turning him off...' };
+}
+
+/* ---------------- the traders being turned off, shared by the windows of this origin (plan step 3.2, the R12 delta X4)
+   Legion's Armed leaves out a lane whose trader a desk is turning off (B1r). A desk in another window (a second Legion, the
+   chart page, the pop-out) must count too, or its Armed could send Auto during this window's wait. Each window keeps one browser
+   entry per trader it is turning off (TURN_KEY, its own window token, the id: { until }), written again each second while it
+   lasts and read as gone TURN_TTL_MS after the last write (a window closed mid-wait), and says the same on a BroadcastChannel.
+   Storage or a channel that cannot be used is skipped: the list is then this window's own and what it can still hear, and
+   nothing throws. */
+const TURN_KEY = 'live-agent-turning-v1:';
+/* round 4, S1: longer than Chrome's timer throttle in a hidden window (a timer there may wait about a minute; 75 s is the margin
+   asked), so a window in the background, still turning a trader off, never lets its entry lapse; a closed window clears its own
+   at once (live/agent.js, pagehide) */
+const TURN_TTL_MS = 90000;
+const TURN_SCAN_MS = 1000;
+const TURN_ID = /^[a-z][a-z0-9]{0,11}$/;
+/**
+ * env { storage: () => localStorage or null, channel: () => a BroadcastChannel or null, now, token }. -> { set(ids, held): this
+ * window's traders being turned off now (each written again, the ones gone removed; held: those of them kept only because their
+ * Off failed, round 4 S2), list(): every trader any window of this origin is turning off now, with .held (not enumerable): the
+ * ones every window keeps only for a failed Off }.
+ */
+/** ids with .held (not enumerable): the ones kept only for a failed Off (round 4, S2). */
+function heldList(ids, held) { Object.defineProperty(ids, 'held', { value: held, enumerable: false }); return ids; }
+function createTurnShare(env) {
+  const e = env || {}, now = typeof e.now === 'function' ? e.now : () => Date.now();
+  const token = typeof e.token === 'string' && /^[a-z0-9]{1,16}$/.test(e.token) ? e.token : Math.random().toString(36).slice(2, 10) || 'w';
+  const mine = new Map(), heard = new Map();          // mine: id -> held; heard: 'token:id' -> { until, hold }, from other windows
+  const store = () => { try { return typeof e.storage === 'function' ? e.storage() || null : null; } catch (x) { return null; } };
+  let chan = null;
+  try { chan = typeof e.channel === 'function' ? e.channel() || null : null; } catch (x) { chan = null; }
+  if (chan) {
+    try {
+      chan.onmessage = ev => {
+        const d = ev && ev.data;
+        if (!d || typeof d.w !== 'string' || d.w === token || typeof d.agent !== 'string' || !TURN_ID.test(d.agent) || !isNum(d.until)) return;
+        if (d.until > now()) heard.set(d.w + ':' + d.agent, { until: d.until, hold: d.hold === true }); else heard.delete(d.w + ':' + d.agent);
+      };
+    } catch (x) { chan = null; }
+  }
+  const say = (agent, until, hold) => { if (chan) { try { chan.postMessage({ w: token, agent, until, hold: !!hold }); } catch (x) { /* closed */ } } };
+  function set(ids, held) {
+    const want = new Set((Array.isArray(ids) ? ids : []).filter(x => typeof x === 'string' && TURN_ID.test(x))), t = now(), s = store();
+    const h = new Set(Array.isArray(held) ? held : []);
+    for (const id of want) {
+      const until = t + TURN_TTL_MS, hold = h.has(id);
+      try { if (s) s.setItem(TURN_KEY + token + ':' + id, JSON.stringify(hold ? { until, hold: true } : { until })); } catch (x) { /* blocked */ }
+      say(id, until, hold);
+    }
+    for (const id of mine.keys()) if (!want.has(id)) { try { if (s) s.removeItem(TURN_KEY + token + ':' + id); } catch (x) { /* blocked */ } say(id, 0); }
+    mine.clear(); for (const id of want) mine.set(id, h.has(id));
+  }
+  /* the browser entries are read at most once each TURN_SCAN_MS (a page asks at every draw, and reading every key of the origin's
+     storage each time slowed the page): the channel carries a new entry at once meanwhile, and each entry carries its own time */
+  let scanAt = -Infinity, scanned = [];
+  function scan(t) {
+    if (t - scanAt < TURN_SCAN_MS && t >= scanAt) return scanned;
+    scanAt = t; scanned = [];
+    const s = store(), old = [];
+    try {
+      if (s) for (let i = 0; i < s.length; i++) {
+        const k = s.key(i);
+        if (typeof k !== 'string' || k.indexOf(TURN_KEY) !== 0) continue;
+        const id = k.slice(k.lastIndexOf(':') + 1);
+        let v = null; try { v = JSON.parse(s.getItem(k)); } catch (x) { v = null; }
+        if (TURN_ID.test(id) && v && isNum(v.until) && v.until > t) scanned.push({ id, until: v.until, hold: v.hold === true }); else old.push(k);
+      }
+      for (const k of old) s.removeItem(k);             // a closed window's entries, once they are past their time
+    } catch (x) { /* storage cannot be read: this window's own and what the channel said */ }
+    return scanned;
+  }
+  function list() {
+    const t = now(), all = new Map(mine);              // id -> held, true only while every source says held (S2)
+    const add = (id, hold) => all.set(id, all.has(id) ? all.get(id) && hold : hold);
+    for (const [k, v] of heard) { if (v.until > t) add(k.slice(k.indexOf(':') + 1), v.hold); else heard.delete(k); }
+    for (const e of scan(t)) if (e.until > t) add(e.id, e.hold);
+    return heldList([...all.keys()], [...all].filter(([, h]) => h).map(([id]) => id));
+  }
+  return { set, list, token };
 }
 
 /* ---------------- Assign hero (the heroes-on-duty board, SPEC CE-1) */
@@ -436,5 +568,5 @@ function createClient(env) {
   };
 }
 
-return { VERSION, PORT, BASE, POLL_MS, TIMEOUT_MS, MISS_GRACE_MS, pollStep, SLOW_TEXT, FLAT_WAIT_MS, SHADOW_WAIT_MS, ASSIGN_WAIT_MS, slotFree, startBegin, startStep, onGate, TIERS, TYPE_NAME, tierOf, tierChip, tierFit, proving, PROVING_OF, heroOptions, preselect, freeSlot, assignStart, assignStep, usd, spendText, stateText, pickerRows, pickerNote, nonHero, modeBlock, accountBlock, offStep, offQuestion, flat, flatOffStart, flatOffStep, seatsHeld, seatsUnclear, jobWhere, names, settingsBody, createClient };
+return { VERSION, PORT, BASE, POLL_MS, TIMEOUT_MS, MISS_GRACE_MS, pollStep, holdClears, SLOW_TEXT, FLAT_WAIT_MS, SHADOW_WAIT_MS, HAND_WAIT_MS, handLine, ASSIGN_WAIT_MS, slotFree, startBegin, startStep, onGate, TIERS, TYPE_NAME, tierOf, tierChip, tierFit, proving, PROVING_OF, heroOptions, preselect, freeSlot, assignStart, assignStep, usd, spendText, stateText, pickerRows, pickerNote, nonHero, modeBlock, accountBlock, offStep, offQuestion, flat, flatOffStart, flatOffStep, FO_SENT, FO_WAIT, modeWord, TURN_KEY, TURN_TTL_MS, TURN_SCAN_MS, createTurnShare, heldList, seatsHeld, seatsUnclear, jobWhere, names, settingsBody, createClient };
 });

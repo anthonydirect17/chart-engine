@@ -104,7 +104,7 @@ async function clockPart() {
   const port = PORT + 2;
   const ctl = async what => (await fetch(`http://127.0.0.1:${port}/test/${what}`, { method: 'POST' })).json();
   const fake = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(port), '--test-controls', '--live-rate=60', '--test-pin=' + TEST_PIN,
-    '--version=fake-0.5.6', '--pc-clock', '--clock-offset=-2.31', '--pc-clock-offset=0'], { stdio: ['ignore', 'pipe', 'inherit'] });
+    '--version=0.5.6', '--pc-clock', '--clock-offset=-2.31', '--pc-clock-offset=0'], { stdio: ['ignore', 'pipe', 'inherit'] });
   await new Promise(r => fake.stdout.once('data', r));
   const ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 }, deviceScaleFactor: 1 });
   try {

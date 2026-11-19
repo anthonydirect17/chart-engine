@@ -52,6 +52,23 @@ test('Stop all: what it can send by ChartBridge\'s version, and why not otherwis
   for (const v of ['0.6.16', '', 'fake-0.6.25', null]) { const p = L.stopPlan(v, true, true); assert.equal(p.ok, false, String(v)); assert.match(p.why, /has no Stop all/); }
 });
 
+test('one version rule (the R12 delta, X3): agent-core.js, fleet.js and legion.js the same text, a.b.c only; ChartBridge.cs writes a.b.c', () => {
+  const FC = require('../live/fleet.js');
+  /* the rule's own lines, word for word the same in the three files (the version gates of Stop all, Kill all and Flatten and turn off) */
+  const rule = f => { const s = read('live', f), i = s.indexOf('function parseVersion(v)'), j = s.indexOf('\n}\n', s.indexOf('function atLeast(', i)); assert.ok(i > 0 && j > i, f); return s.slice(i, j + 3); };
+  assert.equal(rule('fleet.js'), rule('agent-core.js'), 'fleet.js and agent-core.js');
+  assert.equal(rule('legion.js'), rule('agent-core.js'), 'legion.js and agent-core.js');
+  const cases = [['0.6.25', '0.6.25', true], ['0.6.26', '0.6.25', true], ['0.7.0', '0.6.25', true], ['1.0.0', '0.6.25', true], ['0.6.24', '0.6.25', false],
+    ['0.6.25-rc1', '0.6.25', false], ['v0.6.25', '0.6.25', false], ['fake-0.6.25', '0.6.25', false], ['0.6.25 ', '0.6.25', false], ['0.6.25.1', '0.6.25', false], ['0.7', '0.6.25', false],
+    ['', '0.6.25', false], [null, '0.6.25', false], [undefined, '0.6.25', false], [625, '0.6.25', false], [['0.6.25'], '0.6.25', false], ['0.6.25', 'x', false]];
+  for (const [v, min, want] of cases) assert.deepEqual([L.atLeast(v, min), FC.atLeast(v, min), AC.atLeast(v, min)], [want, want, want], JSON.stringify([v, min]));
+  /* so Stop all (legion.js), Kill all (fleet.js) and Flatten and turn off (agent-core.js) agree about every ChartBridge */
+  for (const v of ['0.6.25', '0.6.24', '0.6.25-rc1', 'v0.6.25', '0.7']) assert.equal(L.stopPlan(v, true, true).kind === 'stopAll', AC.atLeast(v, AC.FLATOFF_MIN), v);
+  const cb = /public const string Version = "([^"]*)";/.exec(read('nt8', 'ChartBridge.cs'));
+  assert.ok(cb, 'ChartBridge.cs names its Version');
+  assert.match(cb[1], /^\d+\.\d+\.\d+$/, 'ChartBridge says its version as a.b.c, the only form the page takes');
+});
+
 test('Stop all: one message with exactly its keys, and the header\'s gate passes those two and nothing else', () => {
   assert.deepEqual(L.stopMsg('stopAll', 'c1'), { type: 'agentStopAll', cid: 'c1' });
   assert.deepEqual(L.stopMsg('killAll', 'c1'), { type: 'agentKillAllProp', cid: 'c1' });
@@ -113,6 +130,23 @@ test('the header: the five tabs, Stop all automation outside every tab panel (so
   assert.ok(html.includes(L.QUESTION.replace(/'/g, '\'')), 'the question in the page is LegionCore\'s');
 });
 
+test('the R12 delta, nits: on an older ChartBridge the ledger caveat is in the question itself; a drop answers a pending Stop all at once', () => {
+  assert.equal(L.questionFor(L.stopPlan('0.6.25', true, true)), L.QUESTION, '0.6.25: the question as it is');
+  for (const v of ['0.6.17', '0.6.24']) {
+    const q = L.questionFor(L.stopPlan(v, true, true));
+    assert.ok(q.startsWith(L.QUESTION + ' '), v);
+    assert.match(q, /by its own prop rule only: an account The Desk's ledger types eval or funded that NinjaTrader lists as Sim is NOT stopped/, v);
+  }
+  assert.equal(L.questionFor(L.stopPlan('0.6.16', true, true)), L.QUESTION, 'nothing can be sent: no question opens anyway');
+  const js = read('live', 'legion.js');
+  assert.match(js, /const q = \$\('lxStopQ'\), qt = C\.questionFor\(p\);\n\s+if \(q && q\.textContent !== qt\) q\.textContent = qt;/, 'the page writes it into the question');
+  assert.match(js, /const tip = p\.ok \? C\.questionFor\(p\) : p\.why;/);
+  /* the closed handler: the pending press is answered at once, marked bad, never left to the 5 s timer */
+  const closed = js.slice(js.indexOf('closed: () => {'), js.indexOf('} });', js.indexOf('closed: () => {')));
+  assert.match(closed, /if \(S\.pending\) \{ S\.pending = ''; clearTimeout\(S\.waitTimer\); say\('Stop all was sent and ChartBridge\\'s answer never came \(the connection dropped\): check the traders on Cohorts, or in NinjaTrader, now\.', true\); \}/);
+  assert.ok(closed.indexOf('S.pending') < closed.indexOf('renderHead()'));
+});
+
 test('Castra and Go live: labelled not built yet, with no sample numbers (the Ludus is built: test/ludus.test.js)', () => {
   const html = read('live', 'legion.html');
   for (const t of ['castra', 'golive']) {
@@ -132,8 +166,8 @@ test('the header sends through its own link only: the two Stop all messages', ()
 
 test('the moved tabs keep the gates the chart page gave them', () => {
   const js = read('live', 'legion-tabs.js');
-  assert.match(js, /const legionLink = AF && gate \? \{ listen: part => AF\.listen\(part\), post: m => gate\(m\) === true && AF\.post\(m\) === true \} : null;/, 'Cohorts: FleetCore.maySend in front');
-  assert.match(js, /const gate = FC && Object\.isFrozen\(FC\) \? FC\.maySend : null;/);
+  assert.match(js, /const legionLink = AF && legionGate \? \{ listen: part => AF\.listen\(part\), post: m => legionGate\(m\) === true && AF\.post\(m\) === true \} : null;/, 'Cohorts: FleetCore.maySend in front');
+  assert.match(js, /const legionGate = window\.FleetCore && Object\.isFrozen\(window\.FleetCore\) \? window\.FleetCore\.maySend : null;/);
   assert.match(js, /const watch = AF \? Object\.freeze\(\{ listen: part => AF\.listen\(part\) \}\) : null;/, 'Colosseum: listen only');
   assert.match(js, /AC\.praetorianLink\(AF\)/, 'Praetorian: its own gate');
   assert.match(js, /FC\.laneFeed\(AF, opts\.locked, opts\.group, opts\.otherLocked\)/, 'a lane: the narrow feed');
@@ -176,4 +210,26 @@ test('plain hyphens only in Legion\'s files', () => {
     const p = path.join(root, f);
     if (fs.existsSync(p)) assert.ok(!/[\u2013\u2014]/.test(fs.readFileSync(p, 'utf8')), f);
   }
+});
+
+test('round 4: a status line carrying a cid answers only the pending press with that cid; one with none is matched by its words', () => {
+  const line = { type: 'status', level: 'warn', text: 'Stop all automation: agent a on P: stopped' };
+  assert.deepEqual(L.stopAnswer(Object.assign({ cid: 'lx1' }, line), 'lx1'), { text: line.text, bad: false }, 'its own press');
+  assert.equal(L.stopAnswer(Object.assign({ cid: 'other' }, line), 'lx1'), null, 'another window\'s press: not this answer');
+  assert.equal(L.stopAnswer(Object.assign({ cid: 'lx1' }, line), ''), null, 'nothing pending: a line with a cid is not taken');
+  assert.equal(L.stopAnswer(Object.assign({ cid: 'lx1' }, line, { text: 'Kill all (prop accounts): x' }), 'lx2'), null);
+  assert.deepEqual(L.stopAnswer(line, 'lx1'), { text: line.text, bad: false }, 'an older ChartBridge (no cid): by its words, as before');
+  assert.deepEqual(L.stopAnswer(line, ''), { text: line.text, bad: false });
+  const js = read('live', 'legion.js');
+  assert.match(js, /const a = C\.stopAnswer\(m, S\.pending\);\n[^\n]*\n\s+if \(m\.type === 'status' && typeof m\.text === 'string' && \(m\.level === 'warn' \|\| m\.level === 'error'\) && !a\) alertLoud/, 'a line that is not this press\'s answer goes to the alert line');
+});
+
+test('round 4, GOLIVE_MIN: Go live needs ChartBridge 0.6.25 or later, said with the version on its tab', () => {
+  assert.equal(L.GOLIVE_MIN, '0.6.25');
+  assert.deepEqual(L.goLivePlan('0.6.25'), { ok: true, why: '' });
+  assert.deepEqual(L.goLivePlan('0.7.0'), { ok: true, why: '' });
+  for (const [v, w] of [['0.6.24', '0.6.24'], ['0.6.25-rc1', '0.6.25-rc1'], ['', 'not known'], [null, 'not known']])
+    assert.deepEqual(L.goLivePlan(v), { ok: false, why: 'Go live needs ChartBridge 0.6.25 or later (its firm and GO-size guards); this one is ' + w + '. Nothing goes live from here until it is updated.' }, String(v));
+  assert.match(read('live', 'legion.html'), /<section class="lx-view" id="lx-golive"[\s\S]*?<p class="lx-muted" id="lxGoLiveWhy" role="note" hidden><\/p>/);
+  assert.match(read('live', 'legion.js'), /const gl = \$\('lxGoLiveWhy'\), gw = S\.connected \? C\.goLivePlan\(S\.version\)\.why : '';/);
 });
