@@ -4,6 +4,8 @@
 # the seam between backfill and live trades (check/SeamHarness.cs), the side of every trade (check/SidesHarness.cs),
 # the session tables and the served window (check/WindowHarness.cs, 0.3.5), the daily bars (check/BarsHarness.cs, 0.3.6) and the
 # 0.3.7 data side: settlement, higher-timeframe bars, the weekly profile, the gate's stop edges and CME holidays (check/DataHarness.cs).
+# 0.6.25: the delta table: its seconds against every trade and side, the 18:00 reset, a late start, missed seconds, the message and its
+# size, the seam with the held trades, the served window's sides, and the file saved, read back after a restart and joined (check/DeltaHarness.cs).
 # 0.4.0: quote-only markets, their rolls and settlement times, the tape counters, error lines and /diag health (check/MarketsHarness.cs).
 # 0.4.0: accounts, the per-account checkmark, Gone, Archive and cancel from the Working orders tab (check/AccountsHarness.cs).
 # 0.4.0: Merge stops and targets, every refusal, the swap, the restore and the fallback (check/MergeHarness.cs).
@@ -29,7 +31,7 @@
 # The build goes to $CHARTBRIDGE_ORDERS_EXE when set (kept); else to a path of its own for this run ($TMPDIR or /tmp, chartbridge-orders-<pid>.exe, deleted after), so parallel runs never share a build.
 out="${CHARTBRIDGE_ORDERS_EXE:-${TMPDIR:-/tmp}/chartbridge-orders-$$.exe}"
 cd "$(dirname "$0")/.." && mcs -langversion:5 -nowarn:67,169,219,414 -r:System.dll -r:System.Core.dll -out:"$out" \
-  ChartBridge.cs ChartBridgeOrders.cs ChartBridgePin.cs ChartBridgeBars.cs ChartBridgeTape.cs ChartBridgeV3.cs ChartBridgeAccounts.cs ChartBridgeMerge.cs ChartBridgeTicks.cs ChartBridgeCopier.cs ChartBridgeBot.cs ChartBridgeAgents.cs ChartBridgeStrategies.cs ChartBridgeOrderRecord.cs ChartBridgeGroups.cs ChartBridgeStops.cs check/Nt8Stubs.cs check/OrdersHarness.cs check/PinHarness.cs check/SeamHarness.cs check/SidesHarness.cs check/WindowHarness.cs check/BarsHarness.cs check/DataHarness.cs check/MarketsHarness.cs check/AccountsHarness.cs check/MergeHarness.cs check/CopierHarness.cs check/BotHarness.cs check/StrategiesHarness.cs check/IntegrationHarness.cs check/AgentHarness.cs check/ClockHarness.cs check/GroupsHarness.cs check/StopsHarness.cs check/RecordHarness.cs check/GapHarness.cs check/GapReproHarness.cs check/WindowGapHarness.cs && mono "$out"
+  ChartBridge.cs ChartBridgeOrders.cs ChartBridgePin.cs ChartBridgeBars.cs ChartBridgeTape.cs ChartBridgeV3.cs ChartBridgeAccounts.cs ChartBridgeMerge.cs ChartBridgeTicks.cs ChartBridgeCopier.cs ChartBridgeBot.cs ChartBridgeAgents.cs ChartBridgeStrategies.cs ChartBridgeOrderRecord.cs ChartBridgeGroups.cs ChartBridgeStops.cs check/Nt8Stubs.cs check/OrdersHarness.cs check/PinHarness.cs check/SeamHarness.cs check/SidesHarness.cs check/WindowHarness.cs check/DeltaHarness.cs check/BarsHarness.cs check/DataHarness.cs check/MarketsHarness.cs check/AccountsHarness.cs check/MergeHarness.cs check/CopierHarness.cs check/BotHarness.cs check/StrategiesHarness.cs check/IntegrationHarness.cs check/AgentHarness.cs check/ClockHarness.cs check/GroupsHarness.cs check/StopsHarness.cs check/RecordHarness.cs check/GapHarness.cs check/GapReproHarness.cs check/WindowGapHarness.cs && mono "$out"
 rc=$?
 [ -n "$CHARTBRIDGE_ORDERS_EXE" ] || rm -f "$out" "${out%.exe}.pdb" "$out.mdb"
 exit $rc

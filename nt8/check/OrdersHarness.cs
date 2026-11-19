@@ -81,6 +81,7 @@ public static class OrdersHarness
 
     public static int Main()
     {
+        ChartBridgeServer.DeltaFiles = false;   // 0.6.25: no delta table file is read or written, except in its own cases (check/DeltaHarness.cs)
         ChartBridgeBranches.HarnessManual = true;   // 0.6.3: the 2 s timer never runs the reset on this PC's clock while a harness runs (each case calls Check)
         AllOffLines();
         // 0.3.7: ChartBridge's folder (planned_brackets.txt) in a fresh directory, never a shared /tmp/nt8 from an earlier run
