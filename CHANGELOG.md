@@ -347,7 +347,7 @@ the size. Fixed in `nt8/ChartBridgeGroups.cs`, `live/groups.js`, `live/accounts.
   the same `FLOOR_GAP` as the floor flag).
 - **The R12 review's changes**: a high started at a close marks the closes before it as not known (`eodMissed`), so an
   account in no group with the firm's rules applied keeps a null floor and NinjaTrader's own room (the review's probe: a
-  1,800 stop against a room of 1,749 is still held after the first close), with "no end-of-day high is known from before
+  1,800 stop against a room of 1,700 is still held after the first close), with "no end-of-day high is known from before
   <day>"; the kept high still counts in a join, which clears the mark. With no personal account picked nothing changes at
   all (no kept high in a join or a move, `highEod` only for a prop account). A lane join never starts below the balance
   now: The Desk's highest close can only raise the start. PROTOCOL says how a kept high is lowered after a firm reset that
@@ -356,7 +356,7 @@ the size. Fixed in `nt8/ChartBridgeGroups.cs`, `live/groups.js`, `live/accounts.
 - **The delta re-review's change**: a prop account that leaves a group (by hand, the lane rule, a deleted group or Hide)
   keeps its highs with its earlier closes marked as not known (the empty `eodMissed` and `intradayMissed` set), so in no
   group with the firm's rules it keeps NinjaTrader's room until its minimum balance is given (the review's P5 and P4a: a
-  1,800 entry against a room of 1,749 is held after the leave); a join or the firm's minimum clears the marks. A group
+  1,800 entry against a room of 1,700 is held after the leave); a join or the firm's minimum clears the marks. A group
   member with no high gets none started at a close (its words stay "no end-of-day high is known for this account").
 - **Unchanged**: an account whose floor is not known trades as before ("Let them through"); payouts; the order path.
 - Tests: `nt8/check/GroupsHarness.cs` `FloorHighs` (the case itself: a close above the account size, then a join at a

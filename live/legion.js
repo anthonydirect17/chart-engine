@@ -80,9 +80,8 @@ function tabSearch(search, tab, sub) {
 
 /* ---------------- Stop all automation */
 const KILL_MIN = '0.6.17';       // ChartBridge's Kill all for the prop accounts (agentKillAllProp)
-/* The ChartBridge that knows agentStopAll and agentFlattenOff. This branch does not bump ChartBridge's version (the release
-   that carries it names the number and sets this to it); until then no installed ChartBridge reports it, and the page uses Kill
-   all as above: the careful side. */
+/* The ChartBridge that knows agentStopAll and agentFlattenOff: 0.6.25 (chart 1.58.0's release). ChartBridge is installed by hand,
+   after the page, so until a PC runs 0.6.25 the page uses Kill all as above: the careful side. */
 const STOPALL_MIN = '0.6.25';
 /* round 4: Go live (and Auto on a prop account) needs the ChartBridge with the firm and GO-size guards; AgentCore.GOLIVE_MIN, held
    equal by test/nt8-agents.test.js. The Go live tab asks goLivePlan before any button of its sends anything */

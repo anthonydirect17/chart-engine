@@ -1371,9 +1371,9 @@ const PR_AGENT_TYPES = new Set(['agentMode', 'agentKill', 'agentRules', 'agentAn
 const PR_BOT_TYPES = new Set(['botMode', 'botKill', 'botRails', 'botAnswer', 'botAccount', 'botSeen']);
 const PR_ACKS = new Set(['agentSeen', 'botSeen']);
 /* plan step 3.2: "Flatten and turn him off" as one ChartBridge command (agentFlattenOff: Shadow, his saved Auto removed, his unfilled
-   entries cancelled, his own flatten, Copilot and Auto refused until his program ends). The ChartBridge that knows it: the release
-   that carries it names the number (this branch does not bump ChartBridge's version), so until then the desks use the page's own
-   three steps as before. It is a stop like Shadow: both gates pass it for any trader ChartBridge has described, with exactly the
+   entries cancelled, his own flatten, Copilot and Auto refused until his program ends). The ChartBridge that knows it is 0.6.25 (chart 1.58.0's
+   release); ChartBridge is installed by hand after the page, so until a PC runs 0.6.25 the desks use the page's own three steps as
+   before. It is a stop like Shadow: both gates pass it for any trader ChartBridge has described, with exactly the
    keys type, cid and agent. */
 const FLATOFF_MIN = '0.6.25';
 /* round 4: Auto on a prop account (Legion's desks and Armed) and Go live need the ChartBridge that carries the firm and GO-size
