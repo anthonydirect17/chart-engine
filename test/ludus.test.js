@@ -28,13 +28,23 @@ test('the address: the Ludus view and the build page are kept, and leave with th
 });
 
 test('the routes: The Desk\'s reads, one table; reads only', () => {
-  assert.equal(L.ROUTES.board, '/api/lab/loop/board');
+  // The Desk's Legion copies (TheDesk #112, docs/API.md "Ludus's copies of three Lab reads"): the Lab's own routes give this
+  // page no CORS, so no Lab route is in the table (the review of R12, B2)
+  assert.equal(L.ROUTES.board, '/api/legion/board');
   assert.equal(L.ROUTES.ledger, '/api/legion/ledger');
   assert.equal(L.ROUTES.roster, '/api/legion/roster');
-  assert.equal(L.ROUTES.lab, '/api/lab');
+  assert.equal(L.ROUTES.lab, '/api/legion/lab');
   assert.equal(L.ROUTES.trades(F.A, 'worth_a_look', 2), '/api/legion/build/' + F.A + '/trades?show=worth_a_look&page=2');
-  assert.equal(L.ROUTES.bars('MNQ', '2001-02-01'), '/api/bars?root=MNQ&session=2001-02-01');
-  assert.match(L.failWords('/api/lab/loop/board', null), /did not answer \/api\/lab\/loop\/board \(it is off, or it does not let this page read it yet\)/);
+  assert.equal(L.ROUTES.bars('MNQ', '2001-02-01'), '/api/legion/bars?root=MNQ&session=2001-02-01');
+  for (const k of Object.keys(L.ROUTES)) {
+    const r = typeof L.ROUTES[k] === 'function' ? L.ROUTES[k](F.A, 'all', 1) : L.ROUTES[k];
+    assert.ok(r.startsWith('/api/legion/'), k + ': a Legion route, with CORS for this page: ' + r);
+  }
+  for (const f of ['live/ludus.js', 'live/ludus-core.js']) {
+    const code = read(...f.split('/')).replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+    assert.doesNotMatch(code, /'\/api\/(lab|bars)\b/, f + ': no Lab route in the code');
+  }
+  assert.match(L.failWords('/api/legion/board', null), /did not answer \/api\/legion\/board \(it is off, or it does not let this page read it yet\)/);
   assert.match(L.failWords('/api/legion/roster', 403), /THEDESK_FILLS_FROM/);
   for (const f of ['live/ludus.js', 'live/ludus-core.js']) {
     const src = read(...f.split('/'));
@@ -119,7 +129,10 @@ test('the line, the checks and the stations I to VII', () => {
   assert.equal(ln.rows.length, 1);
   assert.equal(ln.rows[0].name, 'samplea_v1');
   assert.equal(L.roiCells(ln.rows[0].roi)[1].text, '61%', 'the line row leads with the held run\'s money');
-  assert.deepEqual(ln.rows[0].halves, ['+0.90 per $1 (no-edge p95 +0.35)', '+0.70 per $1 (no-edge p95 +0.35)']);
+  assert.deepEqual(ln.rows[0].halves, ['+0.90 per $1 (no-edge p95 +0.35), 70 trades on 40 days, of 50 sessions', '+0.70 per $1 (no-edge p95 +0.35), 70 trades on 40 days, of 50 sessions'],
+    'each half with its own sample (the review of R12)');
+  assert.equal(L.halfText({ sessions: 50, trades: 3, days_with_a_trade: 3, verdict: 'bar' }), L.NOT_ENOUGH + ', 3 trades on 3 days, of 50 sessions', 'no figure: not enough, beside its sample');
+  assert.equal(L.halfText(null), L.NOT_ENOUGH);
   const ck = L.checksOf(list[0], F.BOARD);
   assert.deepEqual(ck.lines.map(l => [l.label, l.ok]), [['Trades on 70% of sessions (the floor)', true], ['Beats its no-edge line on both halves', true],
     ['At least 40 untuned sessions before proof', true], ['In the line of 30', true]]);
@@ -164,6 +177,31 @@ test('the trades: discovery days only, 20 a page; the one trade on chart-engine\
   assert.equal(L.tradeRows(v.rows[1]).find(r => r.label === 'Entry').text, L.NOT_GIVEN);
 });
 
+test('the trade chart\'s one data source: a trade\'s own bars (Bot-Lab\'s, from the master\'s ticks) first, The Desk\'s stored bars only when it has none', () => {
+  const v = L.tradesOf(F.tradesAnswer(F.A, 'all', 1));
+  const own = L.ownBars(v.rows[0]);
+  assert.equal(own.why, '');
+  assert.deepEqual(own.rows, F.ownBars1(), 'trade 1: its own bars, as given');
+  assert.ok(own.rows.length > 60 && own.rows.length <= L.OWN_BARS_MAX);
+  assert.deepEqual(L.ownBars(v.rows[2]), { rows: null, why: '' }, 'trade 3: none of its own, so the page falls back to The Desk\'s');
+  assert.ok(L.tradeWindow(v.rows[2], 'MNQ'), 'and it has the times to ask for them');
+  const bad = rows => L.ownBars(Object.assign({}, v.rows[0], { bars: rows }));
+  const r0 = F.ownBars1();
+  for (const [what, rows] of [['not a list', 'x'], ['empty', []], ['over 400 rows', Array.from({ length: 401 }, (_, i) => [F.T0 + i * 60000, 1, 2, 1, 1, 0])],
+    ['seconds, not ms', [[F.T0 / 1000, 1, 2, 1, 1, 0]]], ['t not whole', [[F.T0 + 0.5, 1, 2, 1, 1, 0]]], ['t not rising', [r0[1], r0[0]]],
+    ['high under low', [[F.T0, 1, 1, 2, 1, 0]]], ['negative volume', [[F.T0, 1, 2, 1, 1, -1]]], ['not finite', [[F.T0, 1, Infinity, 1, 1, 0]]], ['five columns', [[F.T0, 1, 2, 1, 1]]]]) {
+    const b = bad(rows);
+    assert.equal(b.rows, null, what);
+    assert.match(b.why, /not in the shape The Desk serves, so none of them is drawn/, what);
+  }
+  /* the page: own bars first, then the fallback with a plain label */
+  const js = read('live', 'ludus.js');
+  assert.ok(js.indexOf('C.ownBars(t)') > -1 && js.indexOf('C.ownBars(t)') < js.indexOf('get(C.ROUTES.bars('), 'own bars checked before any read of The Desk\'s');
+  assert.match(js, /This trade\\'s own 1-minute bars, written by Bot-Lab from the master\\'s ticks \(the trade chart\\'s one data source\)\./);
+  assert.match(js, /' Instead: The Desk\\'s stored 1-minute bars of that session \(ChartBridge\\'s, not the master\\'s ticks\)/);
+  assert.match(js, /const ownWhy = own\.why \|\| 'This trade carries no bars of its own\.';/);
+});
+
 test('the Builder, the Seeds and the Agents: read only here, with their samples', () => {
   const b = L.builderOf(F.BOARD);
   assert.deepEqual(b.slots.map(s => s.slot), ['window', 'location']);
@@ -176,6 +214,20 @@ test('the Builder, the Seeds and the Agents: read only here, with their samples'
   const ag = L.agentsOf(F.helperStatus());
   assert.equal(L.edgeText(ag[0].live, ag[0].liveN), '+0.08 R over 40 trades');
   assert.equal(L.edgeText(ag[1].exam), L.NOT_ENOUGH);
+  // every edge with its sample; under the repo's bar (the league's 20) or with no sample: not enough data yet (the review of R12)
+  assert.equal(L.EDGE_MIN_TRADES, 20);
+  assert.equal(L.edgeText(ag[0].exam), L.NOT_ENOUGH + ' (the PC helper reports no sample for it)', 'the exam edge has no count from the helper: never the bare figure');
+  assert.equal(L.edgeText(ag[2].live, ag[2].liveN), L.NOT_ENOUGH + ' (n 12 of 20)');
+  assert.equal(L.edgeText(0.1, 19), L.NOT_ENOUGH + ' (n 19 of 20)');
+  assert.equal(L.edgeText(-0.1, 20), '-0.10 R over 20 trades');
+  assert.match(read('live', 'ludus.js'), /function edgeCell\(x, n\) \{ const t = C\.edgeText\(x, n\); return cell\(t, 'ld-num' \+ \(t\.startsWith\(C\.NOT_ENOUGH\) \? ' ld-dim' : ' ' \+ tone\(x\)\)\); \}/,
+    'green or red only on a figure shown with its sample');
+});
+
+test('the per account type note: each row is its own account type, never "the 50K account" on the 25K row (the review of R12)', () => {
+  const js = read('live', 'ludus.js');
+  assert.doesNotMatch(js, /Each row: the best try on that account at ' \+ C\.DEFAULT_SETTING/);
+  assert.match(js, /'Each row: the best try on that row\\'s own account type, at its list price, with the default playbooks \(not only the 50K account of the screen\\'s default setting\)\.'/);
 });
 
 test('the page: installed, mounted at the one place, shown only on its tab; no sample numbers in the page itself', () => {

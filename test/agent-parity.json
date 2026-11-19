@@ -307,13 +307,13 @@
   {
    "id": "OH09",
    "region": "on/off/helper",
-   "what": "Flatten and turn off: agentMode shadow first (10 s at most), then the page's own Flatten for his account and root (o.flatten = workspace core.flattenAgent), then POST /off once flat (30 s at most); lines in hWhy (\"Putting him in Shadow first...\", \"Flatten sent for SIM-AG1 MNQ (he is in Shadow): turning him off once flat...\", give-ups that stay until the next On or Off); the mode buttons closed meanwhile (\"Turning him off (Shadow, Flatten, Off): the mode waits until that ends.\")",
+   "what": "Flatten and turn off (plan step 3.2; no page Flatten of its own since the R12 delta): ChartBridge 0.6.25 gets one agentFlattenOff (\"Flatten and turn off sent: waiting for ChartBridge to put him in Shadow...\" until his agent message says Shadow, then \"In Shadow: ChartBridge flattens what he owns; he turns off once flat...\"; a refusal ends it with ChartBridge's words); an older one gets agentMode shadow first (10 s at most), then the line says where to flatten him by hand (15 minutes at most); POST /off only in Shadow and flat; give-ups that stay until the next On or Off; the mode buttons closed meanwhile (\"Turning him off (Shadow, Flatten, Off): the mode waits until that ends.\")",
    "selector": "#agView [data-k=\"hWhy\"], #agView [data-k=\"modes\"] button[title]",
    "mustBeVisible": false,
    "r3NoMotion": true,
-   "test": "test/agent-onoff-smoke.mjs: check \"Shadow first (agentMode shadow), then the Flatten: \"; test/agent-onoff-smoke.mjs: check \"the line while it waits: \"; test/agent-onoff-smoke.mjs: check \"still said after 12 s (it does not fade): \"; test/agent-onoff-smoke.mjs: check \"the give-up line stays (10 s later), and Off can be pressed again\"; test/agent-onoff-smoke.mjs: check \"the chart's own Flatten message {type, account SIM-AG1, root MNQ}: \"; test/agent-onoff-smoke.mjs: check \"Off went after the flatten filled\"; test/agent-onoff-smoke.mjs: check \"the page built no order for him\"; test/agent-helper.test.js: \"Flatten and turn off: Shadow first, then the Flatten, then Off once flat; his account never a default; it gives up and says so\"",
-   "source": "AgentHelper.flatOffStart / flatOffStep; agent message; workspace flatten",
-   "rules": "never builds an order; never a default account; pop-out says \"Flatten him on the main page or in NinjaTrader, then press Off.\"",
+   "test": "test/agent-onoff-smoke.mjs: check \"one agentFlattenOff {type, cid, agent demo}, no Shadow or Flatten of the page's own (ChartBridge does both): \"; test/agent-onoff-smoke.mjs: check \"refused: the line says so, in his mode, and Off can be pressed again: \"; test/agent-onoff-smoke.mjs: check \"while he is still in Copilot the line never says Shadow: \"; test/agent-onoff-smoke.mjs: check \"the line while it waits: \"; test/agent-onoff-smoke.mjs: check \"the give-up line stays (10 s later), and Off can be pressed again\"; test/agent-onoff-smoke.mjs: check \"the page built no order for him\"; test/agent-helper.test.js: \"the R12 delta of plan step 3.2, X2: one agentFlattenOff: Shadow said only once seen, Shadow before Off, out of Shadow the wait ends\"",
+   "source": "AgentHelper.flatOffStart / flatOffStep; agent message; agentFlattenOff or agentMode shadow",
+   "rules": "never builds an order; never a default account; on a ChartBridge with no agentFlattenOff a desk with no Flatten of its own (Legion, the pop-out) sends Shadow first and turns him off once he is flattened by hand (plan step 3.2, the R12 review B1)",
    "when": "Flatten and turn off pressed",
    "pr40": ""
   },
@@ -801,7 +801,7 @@
   {
    "id": "CH07",
    "region": "centre",
-   "what": "The chart itself: a normal live chart (candles, its own price line), compact, no toolbar, never animated; takes no orders (a press says \"The Agent tab's chart is for watching: it takes no orders. Its lines are the agent's own working orders.\")",
+   "what": "The chart itself: a normal live chart (candles, its own price line), compact, no toolbar, never animated; takes no orders (a press says \"His desk's chart is for watching: it takes no orders. Its lines are the agent's own working orders.\")",
    "selector": "#agView [data-k=\"chart\"][data-no-motion] .chart-live",
    "mustBeVisible": true,
    "r3NoMotion": true,

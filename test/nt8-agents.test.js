@@ -329,9 +329,9 @@ test('0.6.17 Kill all for the prop accounts: only agents whose every account is 
   // connection workspace.js builds for it; since 1.46.0 the gate on that connection is FleetCore.maySend (fleet.js), so
   // workspace.js names the message once, in its comment, and builds nothing; no other page file names it
   for (const f of fsx.readdirSync(path.join(__dirname, '..', 'live')).filter(f => f.endsWith('.js')))
-    assert.strictEqual(fsx.readFileSync(path.join(__dirname, '..', 'live', f), 'utf8').includes('agentKillAllProp'), f === 'fleet.js' || f === 'workspace.js' || f === 'legion.js', f);   // plan step 3.2: Legion's header with an older ChartBridge (LegionCore.stopMaySend)
-  assert.strictEqual((fsx.readFileSync(path.join(__dirname, '..', 'live', 'workspace.js'), 'utf8').match(/agentKillAllProp/g) || []).length, 1, 'workspace.js: one comment, nothing that builds the message');
-  assert.match(fsx.readFileSync(path.join(__dirname, '..', 'live', 'workspace.js'), 'utf8'), /post: m => legionGate\(m\) === true && AF\.post\(m\) === true \}/, 'and the gate (captured once from the frozen FleetCore) is in front of every post');
+    assert.strictEqual(fsx.readFileSync(path.join(__dirname, '..', 'live', f), 'utf8').includes('agentKillAllProp'), f === 'fleet.js' || f === 'legion.js', f);   // plan step 3.2: Legion's header with an older ChartBridge (LegionCore.stopMaySend)
+  assert.strictEqual((fsx.readFileSync(path.join(__dirname, '..', 'live', 'legion-tabs.js'), 'utf8').match(/agentKillAllProp/g) || []).length, 0, 'plan step 3.2: Legion mounts the tab; legion-tabs.js builds no message');
+  assert.match(fsx.readFileSync(path.join(__dirname, '..', 'live', 'legion-tabs.js'), 'utf8'), /post: m => legionGate\(m\) === true && AF\.post\(m\) === true \}/, 'and the gate (captured once from the frozen FleetCore) is in front of every post');
 });
 
 test('0.6.19 the day\'s profit stop: the plan\'s dayStopDollars, the smaller of it and the consistency mark off a funded account, the trader\'s own flatten, a stand-down until the roll', () => {
@@ -532,4 +532,20 @@ test('0.6.2 (SPEC CE-2): group stand-downs gate entries only; league seats are S
   const g = strip(read('ChartBridgeGroups.cs')), del = g.slice(g.indexOf('private static string GroupDelete('), g.indexOf('private static void ForgetHighs('));
   assert.ok(del.indexOf('ChartBridgeAgents.GroupDeleted(id)') > del.indexOf('string err = Save(next);'), 'a deleted group\'s stand-downs go under its save');
   assert.match(bodies(acode, 'WriteStandDowns'), /"standDown\\t" \+ s\.Build \+ "\\t" \+ s\.Group \+ "\\t" \+ s\.At\.ToString\("0", CultureInfo\.InvariantCulture\) \+ "\\t" \+ s\.Kind \+ "\\t" \+ s\.Why/);
+});
+
+test('plan step 3.2 (the R12 review, B1): Stop all and Flatten and turn off wait for the same ChartBridge', () => {
+  /* agentStopAll and agentFlattenOff ship in one ChartBridge release: the page asks for both from the same version, so a PC never
+     gets one without the other. The release that ships this page raises live/COMPAT.json minChartBridge to that version. */
+  const read = f => fs.readFileSync(path.join(__dirname, '..', 'live', f), 'utf8');
+  const flat = /const FLATOFF_MIN = '(\d+\.\d+\.\d+)';/.exec(read('agent-core.js'));
+  const stop = /const STOPALL_MIN = '(\d+\.\d+\.\d+)';/.exec(read('legion.js'));
+  assert.ok(flat && stop, 'both minimums are plain versions');
+  assert.equal(flat[1], stop[1], 'FLATOFF_MIN (agent-core.js) and STOPALL_MIN (legion.js) name the same ChartBridge');
+  assert.equal(require('../live/agent-core.js').FLATOFF_MIN, flat[1]);
+  const kill = /const STOPALL_MIN = '(\d+\.\d+\.\d+)';/.exec(read('fleet.js'));   // the R12 delta, X1: the Cohorts tab's Kill all too
+  assert.ok(kill && kill[1] === stop[1], 'STOPALL_MIN (fleet.js, Kill all) names the same ChartBridge');
+  /* round 4: GOLIVE_MIN (Go live, and Auto on a prop account) in agent-core.js, fleet.js and legion.js, the same ChartBridge */
+  const go = ['agent-core.js', 'fleet.js', 'legion.js'].map(f => (/const GOLIVE_MIN = '(\d+\.\d+\.\d+)';/.exec(read(f)) || [])[1]);
+  assert.deepEqual(go, [stop[1], stop[1], stop[1]], 'GOLIVE_MIN: ' + go.join(', '));
 });

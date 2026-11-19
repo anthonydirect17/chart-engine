@@ -45,12 +45,17 @@
     <button type="button" role="tab" data-lx-tab="ludus" aria-selected="false" aria-controls="lx-ludus" tabindex="-1"><span class="lx-rn" aria-hidden="true">IV</span>Ludus</button>
     <button type="button" role="tab" data-lx-tab="golive" aria-selected="false" aria-controls="lx-golive" tabindex="-1"><span class="lx-rn" aria-hidden="true">V</span>Go live</button>
   </nav>
+  <!-- while Praetorian is shown, the Cohorts sides sit here so its desk keeps one screen (live/legion.js fitDesk) -->
+  <span class="lx-subslot" id="lxSubSlot"></span>
   <div class="lx-right">
     <span class="lx-clock"><span id="lxClock">--:--:--</span> <span class="lx-et">ET</span></span>
     <span class="lx-pill" id="lxConn" role="status" data-state="off">ChartBridge: not connected</span>
-    <!-- the chart page, in this window's own tab of the browser: Legion is not attached to the charts -->
-    <a class="lx-btn lx-link" href="./" title="The chart page: Chart, the Bot tab and the bot strip">Charts</a>
+    <!-- the chart page in its own window, named chart as the Bot links open it (the R12 review, N2) -->
+    <a class="lx-btn lx-link" href="./" target="chart" title="The chart page, in its own window (the one the Bot links open): Chart, the Bot tab and the bot strip">Charts</a>
     <!-- law 9.3: on every tab. One message to ChartBridge, which does all of it itself (live/legion.js, "Stop all automation") -->
+    <!-- the R12 delta of plan step 3.2, S-a: the standing word on Stop all (an older ChartBridge, not connected) in fixed room beside
+         the button, one line, the whole of it in its title; never a floating line -->
+    <span class="lx-stopnote" id="lxStopNote" role="note"></span>
     <button type="button" class="lx-btn lx-stop" id="lxStop" aria-haspopup="dialog" aria-expanded="false" aria-controls="lxStopAsk">Stop all automation</button>
   </div>
 </header>
@@ -59,7 +64,18 @@
   <button type="button" class="lx-btn lx-stop" id="lxStopYes">Yes, stop all</button>
   <button type="button" class="lx-btn" id="lxStopNo">Cancel</button>
 </div>
-<p class="lx-said" id="lxStopSaid" role="status" aria-live="polite" hidden></p>
+<!-- the R12 review of plan step 3.2 (S1, S2): Stop all's line, the panels' note line and ChartBridge's warnings float over the bottom
+     of the window, so nothing under the pointer ever moves when one comes or goes (the page keeps room below its last line for them).
+     Stop all's line is Stop all's only; a click puts an answer away -->
+<div class="lx-float" id="lxFloat">
+  <p class="lx-said" id="lxStopSaid" role="status" aria-live="polite" hidden></p>
+  <p class="lx-said lx-note" id="lxNote" role="status" aria-live="polite" hidden></p>
+  <!-- ChartBridge's warnings and errors, the newest three, until dismissed: the chart page's alert line, the same ids (the Agent
+       desk holds it in its board's tray) -->
+  <div class="ws-alerts lx-alerts" id="wsAlerts">
+    <div class="ws-alert" id="wsAlert" role="alert" hidden><b>ChartBridge</b><span id="wsAlertText"></span><button type="button" class="ws-btn" id="wsAlertClose">Dismiss</button></div>
+  </div>
+</div>
 <p class="lx-said bad" id="lxFailed" role="alert" hidden></p>
 
 <main class="lx-main">
@@ -70,9 +86,9 @@
   </section>
   <!-- II Cohorts: the chart page's Legion tab (live/fleet.js) and Praetorian's Agent side, moved here (live/legion-tabs.js) -->
   <section class="lx-view" id="lx-cohorts" role="tabpanel" aria-label="Cohorts" hidden>
-    <div class="lx-sub" role="tablist" aria-label="Cohorts">
+    <div class="lx-sub" id="lxSub" role="tablist" aria-label="Cohorts">
       <button type="button" role="tab" data-lx-sub="legion" aria-selected="true">The cohorts</button>
-      <button type="button" role="tab" data-lx-sub="praetorian" aria-selected="false">Praetorian: your personal account</button>
+      <button type="button" role="tab" data-lx-sub="praetorian" aria-selected="false">Praetorian<span class="lx-sub-long">: your personal account</span></button>
     </div>
     <div data-lx-subview="legion">
       <!-- the cohort model from The Desk, drag and drop, the Agents strip and the Drone sky (plan step 3.3, live/legion-cohorts.js), over the lanes -->
@@ -96,6 +112,7 @@
     <div class="lx-card lx-todo"><h2><span class="lx-rn">V</span>Go live</h2>
       <p><b>Not built yet.</b> Go live will hold a build's live check (half the size your GO names, its match to the engine and the drift alarm) and your GO with its size.</p>
       <p class="lx-muted">No bot goes live from this page today. No sample builds are shown here.</p>
+      <p class="lx-muted" id="lxGoLiveWhy" role="note" hidden></p>
     </div>
   </section>
 </main>

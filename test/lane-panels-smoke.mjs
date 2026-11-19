@@ -1,7 +1,7 @@
 // The Multi-Account panel mounted more than once on one page (chart 1.47.0; the reuse map, build answers 18 point 4): the
 // proof that a Legion lane can BE that panel, before anything is built on it. Against the fake bridge (--bench --bench-groups:
 // made-up groups Lucid with SIM-A to SIM-D and Apex with SIM-H) in Chromium. Sample data only; nothing reaches a broker.
-//   - three mounts through the page's own window.workspace.lanePanel: two on Lucid, one on Apex, each in its own element;
+//   - three mounts through the page's own window.legion.lanePanel: two on Lucid, one on Apex, each in its own element;
 //   - each shows its own group; no element id is on the page twice;
 //   - a click on a chip in one mount sends ONE memberBench; ChartBridge's groups message redraws that mount AND the other mount
 //     on the same group, and leaves the mount on the other group as it was;
@@ -13,7 +13,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
-import { TEST_PIN, enterPin } from './smoke-pin.mjs';
+import { TEST_PIN, enterPin, unlockIfAsked } from './smoke-pin.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const out = path.join(root, 'test', 'out');
@@ -44,9 +44,10 @@ try {
   await ctx.addInitScript(l => { try { if (!localStorage.getItem('live-workspace-v1')) localStorage.setItem('live-workspace-v1', JSON.stringify({ v: 1, layouts: { Main: { panels: l } } })); } catch (e) { /* blocked */ } }, LAYOUT);
   const p = await ctx.newPage();
   p.on('pageerror', e => fail('pageerror: ' + e.message));
-  await p.goto(`http://localhost:${PORT}/live/?layout=Main`);
+  /* plan step 3.2: Legion's lanes live on Legion's own page (legion.html, Cohorts), and so do these mounts (window.legion) */
+  await p.goto(`http://localhost:${PORT}/live/legion.html?tab=cohorts`);
   await p.waitForSelector('.cb-pin-key', { timeout: 15000 }); await enterPin(p, TEST_PIN);
-  await p.waitForFunction(() => document.getElementById('wsConn').classList.contains('live'), null, { timeout: 40000 });
+  await p.waitForFunction(() => document.getElementById('lxConn').dataset.state === 'on', null, { timeout: 40000 });
 
   // three mounts, each in its own box over the page, through the page's own function
   const made = await p.evaluate(() => {
@@ -54,10 +55,10 @@ try {
     host.id = 'laneHost'; host.style.cssText = 'position:fixed;left:8px;right:8px;top:60px;bottom:8px;z-index:50;display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;background:#050506';
     document.body.appendChild(host);
     window.lanes = {};
-    for (const k of ['laneA', 'laneB', 'laneC']) { const el = document.createElement('div'); el.id = k; el.style.cssText = 'min-width:0;overflow:auto;border:1px solid #2A2824'; host.appendChild(el); window.lanes[k] = window.workspace.lanePanel(el, k, { twoMountsProof: true }); }
-    return { all: Object.values(window.lanes).every(x => x && x.panel && typeof x.destroy === 'function'), again: window.workspace.lanePanel(document.getElementById('laneA'), 'laneA', { twoMountsProof: true }),
+    for (const k of ['laneA', 'laneB', 'laneC']) { const el = document.createElement('div'); el.id = k; el.style.cssText = 'min-width:0;overflow:auto;border:1px solid #2A2824'; host.appendChild(el); window.lanes[k] = window.legion.lanePanel(el, k, { twoMountsProof: true }); }
+    return { all: Object.values(window.lanes).every(x => x && x.panel && typeof x.destroy === 'function'), again: window.legion.lanePanel(document.getElementById('laneA'), 'laneA', { twoMountsProof: true }),
       /* the review of 97, F7 and F1: no group and no proof flag, or a group with no lock: no panel at all */
-      bare: window.workspace.lanePanel(document.createElement('div'), 'laneX'), nolock: window.workspace.lanePanel(document.createElement('div'), 'laneY', { group: 'g1' }) };
+      bare: window.legion.lanePanel(document.createElement('div'), 'laneX'), nolock: window.legion.lanePanel(document.createElement('div'), 'laneY', { group: 'g1' }) };
   });
   check(made.all && made.again === null, 'three Multi-Account panels are mounted beside each other; the same key twice is refused');
   check(made.bare === null && made.nolock === null, 'no group without the proof flag, and a group with no lock: no panel (the review of 97, F7 and F1)');
@@ -106,7 +107,7 @@ try {
   await p.evaluate(() => {
     window.lockWhy = '';
     const el = document.getElementById('laneC'); el.innerHTML = '';
-    window.fixed = window.workspace.lanePanel(el, 'laneF', { group: 'g1', locked: () => window.lockWhy });
+    window.fixed = window.legion.lanePanel(el, 'laneF', { group: 'g1', locked: () => window.lockWhy });
   });
   await until(async () => (await p.$$('#laneC .ma-lane.in [data-chip]')).length >= 3, 'the fixed panel drawn');
   const fx = await p.evaluate(() => { const q = x => document.querySelector('#laneC ' + x); return {
@@ -168,7 +169,7 @@ try {
     window.fixed.destroy(); window.lanes.laneA.destroy(); window.lanes.laneB.destroy();
     const host = document.getElementById('laneHost'); host.innerHTML = ''; host.style.gridTemplateColumns = '1fr';
     const el = document.createElement('div'); el.id = 'rowsBox'; el.style.cssText = 'min-width:0;overflow:auto'; host.appendChild(el);
-    window.rows = window.workspace.accountRows(el, 'rowsL', a => a.group === 'g1');
+    window.rows = window.legion.accountRows(el, 'rowsL', a => a.group === 'g1');
   });
   const R = await until(async () => { const r = await p.evaluate(() => ({ rows: [...document.querySelectorAll('#rowsBox .gr-row.apg-acc')].map(e => e.dataset.k), secs: [...document.querySelectorAll('#rowsBox .apg-stitle')].map(e => e.textContent),
     tabs: (document.querySelector('#rowsBox .apg-tabs') || {}).hidden, controls: [...document.querySelectorAll('#rowsBox button, #rowsBox input, #rowsBox select')].filter(e => !e.closest('[hidden]')).length, room: (document.querySelector('#rowsBox .apg-rpart') || {}).textContent,
@@ -183,7 +184,14 @@ try {
 
   // ---- the League tab's overlay, handed any trader's marks (Legion Live's marks of each lane), on a real chart panel
   await p.evaluate(() => { document.getElementById('laneHost').remove(); });
-  const ov = await p.evaluate(async () => {
+  /* the overlay on a real chart panel: the chart page, in a second window of the same browser */
+  const pc = await ctx.newPage();
+  pc.on('pageerror', e => fail('pageerror (the chart page): ' + e.message));
+  await pc.goto(`http://localhost:${PORT}/live/?layout=Main`);
+  await unlockIfAsked(pc, TEST_PIN, 40000);
+  await pc.waitForFunction(() => document.getElementById('wsConn').classList.contains('live'), null, { timeout: 40000 });
+  await pc.waitForFunction(() => { const c = window.workspace.chart('c1'); return !!c && c.bars().length > 20; }, null, { timeout: 20000 }).catch(() => {});
+  const ov = await pc.evaluate(async () => {
     const chart = window.workspace.chart('c1'), body = document.querySelector('.ws-panel[data-id="c1"] .ws-body');
     const bars = chart.bars(), last = bars[bars.length - 1], mid = bars[Math.max(0, bars.length - 20)];
     const marks = { kind: 'marks', marks: [{ kind: 'entry', t: mid.t, price: mid.c, color: '#8FB4E0', letter: 'E' }, { kind: 'exit', t: last.t, price: last.c, color: '#8FB4E0', letter: 'E' },
@@ -208,7 +216,7 @@ try {
   // ---- Legion Setup in the real page: a sample trader on the eval group (Lucid, Type eval) is the eval lane, and its lane holds
   // the page's own Multi-Account panel on that group (one fixed group, the narrow feed)
   await control('agent-group', { agent: 'demo', name: 'Lucid', members: 'SIM-A,SIM-B,SIM-C,SIM-D', sizes: '1,1,1,1' });
-  await p.click('#wsFleetTab');
+  await p.bringToFront();   // Legion's Cohorts is open since the start (plan step 3.2)
   await until(() => p.evaluate(() => !!document.querySelector('#flView .fl-lane[data-stage="eval"] .fl-lanepanels .ma')), 'the eval lane holds a Multi-Account panel');
   const lp = await p.evaluate(() => { const q = x => document.querySelector('#flView .fl-lane[data-stage="eval"] ' + x); return { name: (q('.ma-bar .ma-lname') || {}).textContent, select: !!q('[data-ma="group"]'), settings: !!q('[data-ma="settings"]'),
     chips: [...document.querySelectorAll('#flView .fl-lane[data-stage="eval"] [data-chip]')].map(e => e.dataset.chip) }; });

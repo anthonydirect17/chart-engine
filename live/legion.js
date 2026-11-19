@@ -84,17 +84,23 @@ const KILL_MIN = '0.6.17';       // ChartBridge's Kill all for the prop accounts
    that carries it names the number and sets this to it); until then no installed ChartBridge reports it, and the page uses Kill
    all as above: the careful side. */
 const STOPALL_MIN = '0.6.25';
+/* round 4: Go live (and Auto on a prop account) needs the ChartBridge with the firm and GO-size guards; AgentCore.GOLIVE_MIN, held
+   equal by test/nt8-agents.test.js. The Go live tab asks goLivePlan before any button of its sends anything */
+const GOLIVE_MIN = '0.6.25';
 const CONFIRM_MS = 8000;         // the question stays this long (compared at the Yes, by the clock)
 const ARM_MS = 600;              // and takes no answer for this long after it opens: a double click answers nothing
 const ANSWER_WAIT_MS = 5000;     // a Stop all sent and not answered in this long is said, marked bad
 const QUESTION = 'Flatten and stop every bot and agent on your prop accounts? Your personal account, the chart\'s Bot tab and the copier are not touched.';
 
-/** a.b.c at least min.b.c (ChartBridge's versions; anything else is not) */
-function atLeast(v, min) {
-  const p = s => (typeof s === 'string' && /^\d+\.\d+\.\d+$/.test(s) ? s.split('.').map(Number) : null);
-  const a = p(v), b = p(min);
-  if (!a || !b) return false;
-  for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] > b[i];
+/* plan step 3.2 (the R12 delta, X3): ONE rule for ChartBridge's version in agent-core.js, fleet.js and legion.js (the same text
+   in each; test/legion.test.js holds them equal): exactly a.b.c, as ChartBridge.cs writes its Version. Anything else ("0.6.25-rc1",
+   "v0.6.25", "fake-0.5.4", "0.7") is no version, so every gate that asks for one fails closed. */
+function parseVersion(v) { const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(typeof v === 'string' ? v : ''); return m ? [+m[1], +m[2], +m[3]] : null; }
+/** Is version a at least b? A version that is not a.b.c is false. */
+function atLeast(a, b) {
+  const x = parseVersion(a), y = parseVersion(b);
+  if (!x || !y) return false;
+  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] > y[i];
   return true;
 }
 
@@ -108,6 +114,19 @@ function stopPlan(version, connected, signedIn) {
   if (atLeast(version, STOPALL_MIN)) return { kind: 'stopAll', ok: true, why: '', note: '' };
   if (atLeast(version, KILL_MIN)) return { kind: 'killAll', ok: true, why: '', note: 'This ChartBridge (' + version + ') stops by its own prop rule only (every live account but your personal one), not by the account ledger. The next ChartBridge reads the ledger too.' };
   return { kind: '', ok: false, why: 'This ChartBridge (' + (version || 'version not known') + ') has no Stop all: stop each trader in NinjaTrader.', note: '' };
+}
+
+/** The question for this plan (the R12 delta, nit): on an older ChartBridge the ledger's caveat is IN the question, where a phone
+ *  shows it whole (the caption beside the button is cut short there). */
+function questionFor(p) {
+  if (!p || p.kind !== 'killAll') return QUESTION;
+  return QUESTION + ' This ChartBridge finds them by its own prop rule only: an account The Desk\'s ledger types eval or funded that NinjaTrader lists as Sim is NOT stopped: stop such a trader with its own kill switch on Cohorts.';
+}
+
+/** May Go live act on this ChartBridge? -> { ok, why }: a plain line naming the version when it may not (round 4). */
+function goLivePlan(version) {
+  if (atLeast(version, GOLIVE_MIN)) return { ok: true, why: '' };
+  return { ok: false, why: 'Go live needs ChartBridge ' + GOLIVE_MIN + ' or later (its firm and GO-size guards); this one is ' + (typeof version === 'string' && version ? version.slice(0, 40) : 'not known') + '. Nothing goes live from here until it is updated.' };
 }
 
 /** The one message a press sends, with exactly its keys. */
@@ -127,10 +146,13 @@ function stopMaySend(m) {
 }
 
 /** Is this ChartBridge message the answer to a Stop all? ChartBridge answers a press with one status line (warn) whose text
- *  starts with its own words, or with a reject carrying the press's cid. -> { text, bad } or null. */
+ *  starts with its own words, or with a reject carrying the press's cid. Round 4: once ChartBridge echoes the press's cid on that
+ *  status line, a line carrying a cid is the answer only to the pending press with that cid (another window's press is not
+ *  this one's answer); until then (this branch's ChartBridge sends no cid) the line is matched by its words as before. -> { text, bad } or null. */
 function stopAnswer(m, cid) {
   if (!m || typeof m !== 'object') return null;
   if (m.type === 'reject' && cid && m.cid === cid) return { text: 'Not done: ' + String(m.reason || 'ChartBridge refused it'), bad: true };
+  if (m.type === 'status' && Object.prototype.hasOwnProperty.call(m, 'cid') && !(cid && m.cid === cid)) return null;
   if (m.type === 'status' && typeof m.text === 'string' && /^(Stop all automation|Kill all \(prop accounts\))/.test(m.text)) {
     return { text: m.text.slice(0, 2000), bad: /NOT STOPPED|FAILED|could NOT/.test(m.text) };
   }
@@ -150,8 +172,8 @@ function stopClick(askedAt, now, real) {
   return 'yes';
 }
 
-return Object.freeze({ TABS, TAB_IDS, OLD_TABS, COHORT_SUBS, roman, tabFrom, tabSearch, KILL_MIN, STOPALL_MIN, CONFIRM_MS, ARM_MS, ANSWER_WAIT_MS, QUESTION,
-  atLeast, stopPlan, stopMsg, stopMaySend, stopAnswer, stopClick });
+return Object.freeze({ TABS, TAB_IDS, OLD_TABS, COHORT_SUBS, roman, tabFrom, tabSearch, KILL_MIN, STOPALL_MIN, GOLIVE_MIN, goLivePlan, CONFIRM_MS, ARM_MS, ANSWER_WAIT_MS, QUESTION,
+  questionFor, atLeast, stopPlan, stopMsg, stopMaySend, stopAnswer, stopClick });
 });
 
 /* ================================================================================================ the page (browser only) */
@@ -191,20 +213,49 @@ function renderHead() {
   }
   if (btn) {
     btn.disabled = !p.ok && !S.ask;
-    const tip = p.ok ? C.QUESTION : p.why;
+    const tip = p.ok ? C.questionFor(p) : p.why;
     if (btn.title !== tip) btn.title = tip;
     btn.setAttribute('aria-expanded', String(!!S.ask));
   }
   if (ask) ask.hidden = !S.ask;
-  const words = S.said || (!p.ok ? p.why : p.note);
-  if (line) { if (line.textContent !== words) line.textContent = words; line.hidden = !words; line.classList.toggle('bad', !!(S.said ? S.saidBad : !p.ok)); }
+  const q = $('lxStopQ'), qt = C.questionFor(p);
+  if (q && q.textContent !== qt) q.textContent = qt;
+  /* the R12 delta, S-a: the floating line carries Stop all's answers only; the standing word (an older ChartBridge, not connected)
+     sits in the header's fixed caption beside the button */
+  /* round 4: below GOLIVE_MIN the Go live tab says so plainly (its buttons ask goLivePlan before they send) */
+  const gl = $('lxGoLiveWhy'), gw = S.connected ? C.goLivePlan(S.version).why : '';
+  if (gl) { if (gl.textContent !== gw) gl.textContent = gw; gl.hidden = !gw; }
+  const words = S.said, standing = !p.ok ? p.why : p.note, cap = $('lxStopNote');
+  if (line) { if (line.textContent !== words) line.textContent = words; line.hidden = !words; line.classList.toggle('bad', !!S.saidBad); line.classList.toggle('lx-put', !!words); line.title = words ? 'Click to put this away' : ''; }
+  if (cap) { if (cap.textContent !== standing) cap.textContent = standing; cap.title = standing; cap.classList.toggle('bad', !p.ok); }   // a standing line (not an answer): Praetorian's compact chrome keeps it in the button's title
+  fitDesk(); floatRoom();
 }
 function say(text, bad) { S.said = String(text || ''); S.saidBad = !!bad; renderHead(); }
+/* the panels' notes and the feed's own warnings: their own line, gone after a few seconds or a click (the R12 review, S1) */
+let noteTimer = 0;
+function noteLine(text, warn) {
+  const el = $('lxNote'); if (!el) return;
+  clearTimeout(noteTimer);
+  el.textContent = String(text || ''); el.hidden = !text; el.classList.toggle('bad', !!warn);
+  if (text) noteTimer = setTimeout(() => { el.hidden = true; el.textContent = ''; floatRoom(); }, warn ? 8000 : 5000);
+  floatRoom();
+}
+/* the floating lines cover the bottom of the window: the page keeps that much room below its last line, grown only (a shrink
+   could move what is under the pointer), set again on a tab change; the question sits under the header wherever it is */
+let roomPx = 0;
+function floatRoom(reset) {
+  const f = $('lxFloat'); if (!f) return;
+  const fh = Math.ceil(f.getBoundingClientRect().height), h = fh > 0 ? fh + 16 : 0;   // nothing showing: no room
+  if (reset) roomPx = 0;
+  if (h > roomPx) { roomPx = h; document.documentElement.style.setProperty('--lx-float-room', roomPx + 'px'); }
+}
+function placeAsk() { const h = $('lxHead'); if (h) document.documentElement.style.setProperty('--lx-ask-top', Math.max(0, Math.round(h.getBoundingClientRect().bottom) + 6) + 'px'); }
+window.addEventListener('scroll', () => { if (S.ask) placeAsk(); }, { passive: true });
 function endAsk() { S.ask = 0; clearTimeout(S.askTimer); S.askTimer = 0; }
 function openAsk() {
   const p = plan();
   if (!p.ok) { say(p.why, true); return; }
-  S.ask = Date.now(); clearTimeout(S.askTimer);
+  S.ask = Date.now(); clearTimeout(S.askTimer); placeAsk();
   S.askTimer = setTimeout(() => { if (S.ask && Date.now() - S.ask >= C.CONFIRM_MS) { endAsk(); say('', false); } }, C.CONFIRM_MS + 50);
   say('', false);
   renderHead();
@@ -237,8 +288,37 @@ function onHeadMessage(m) {
   if (m.type === 'hello') { S.version = typeof m.version === 'string' ? m.version : ''; S.connected = true; }
   if (m.type === 'trading') S.signedIn = !!m.enabled;
   const a = C.stopAnswer(m, S.pending);
+  /* a warning that is not this press's answer goes to the alert line (round 4: another window's Stop all, its cid not ours, too) */
+  if (m.type === 'status' && typeof m.text === 'string' && (m.level === 'warn' || m.level === 'error') && !a) alertLoud(m.text, m.level !== 'error');
   if (a && (S.pending || m.type === 'status')) { if (S.pending) { S.pending = ''; clearTimeout(S.waitTimer); } say(a.text, a.bad); }
   renderHead();
+}
+
+/* ---------------- Praetorian's Agent desk: one screen (its Layout 5), the window below Legion's compact chrome */
+function fitDesk() {
+  const on = S.tab === 'cohorts' && S.sub === 'praetorian', v = $('agView');
+  document.body.classList.toggle('lx-pr', on);
+  const sub = $('lxSub'), slot = $('lxSubSlot'), home = $('lx-cohorts');
+  if (sub && slot && home) { if (on && sub.parentNode !== slot) slot.appendChild(sub); else if (!on && sub.parentNode !== home) home.insertBefore(sub, home.firstChild); }
+  if (!v) return;
+  if (!on) { if (v.style.height) v.style.height = ''; return; }
+  const h = Math.max(320, Math.floor(window.innerHeight - v.getBoundingClientRect().top - window.scrollY));
+  if (v.style.height !== h + 'px') v.style.height = h + 'px';
+}
+window.addEventListener('resize', () => fitDesk());
+
+/* ---------------- ChartBridge's warnings and errors (the chart page's alert line): the newest three until dismissed, red once an
+   error is in it. Stop all's own answer is the header's line, not here. */
+const alerts = [];
+let alertErr = false;
+function alertLoud(text, warn) {
+  const box = $('wsAlert'), t = $('wsAlertText');
+  if (!box || !t || !text) return;
+  if (alerts.length && alerts[alerts.length - 1].endsWith('  ' + text)) return;   // the same line twice in a row: once
+  alerts.push(new Date().toLocaleTimeString() + '  ' + text); while (alerts.length > 3) alerts.shift();
+  if (!warn) alertErr = true;
+  t.textContent = alerts.join('\n'); box.hidden = false; box.classList.toggle('warn', !alertErr);
+  fitDesk(); floatRoom();
 }
 
 /* ---------------- the tabs */
@@ -253,6 +333,7 @@ function showTab(tab, sub, keepUrl) {
   for (const b of document.querySelectorAll('[data-lx-sub]')) b.setAttribute('aria-selected', String(b.dataset.lxSub === S.sub));
   for (const v of document.querySelectorAll('[data-lx-subview]')) v.hidden = v.dataset.lxSubview !== S.sub;
   if (!keepUrl) { try { history.replaceState(null, '', location.pathname + C.tabSearch(location.search, S.tab, S.sub) + location.hash); } catch (e) { /* file: */ } }
+  fitDesk(); floatRoom(true);
   for (const fn of HOOKS.tab) { try { fn(S.tab, S.sub); } catch (e) { failed('the ' + S.tab + ' tab', e); } }
   const t = C.TABS.find(x => x.id === tab);
   document.title = (t ? t.name + ' · ' : '') + 'Legion · Imperium';
@@ -279,33 +360,43 @@ function guard(name, fn) { try { return fn(); } catch (e) { failed(name, e); ret
 
 /* the parts each tab mounts register here (slice 2: the moved tabs); the header never waits for them */
 const HOOKS = { tab: [], message: [] };
-window.LegionApp = { hooks: HOOKS, guard, state: () => ({ tab: S.tab, sub: S.sub, version: S.version, connected: S.connected, signedIn: S.signedIn, asking: S.ask > 0, said: S.said, saidBad: S.saidBad, pending: !!S.pending, failed: [...FAILED.keys()], mounted: Object.keys(S.mounted).filter(k => S.mounted[k]) }),
+window.LegionApp = { hooks: HOOKS, guard, show: (tab, sub) => { if (S.tab !== tab || S.sub !== (sub || '')) showTab(tab, sub); }, state: () => ({ tab: S.tab, sub: S.sub, version: S.version, connected: S.connected, signedIn: S.signedIn, asking: S.ask > 0, said: S.said, saidBad: S.saidBad, pending: !!S.pending, failed: [...FAILED.keys()], mounted: Object.keys(S.mounted).filter(k => S.mounted[k]) }),
   feeds: () => ({ AF, hub }), store, PREFIX, PIN, realClick };
 
 function start() {
   tick(); setInterval(tick, 1000);
   const nav = $('lxNav');
   if (nav) { nav.addEventListener('click', e => { const b = e.target.closest('[data-lx-tab]'); if (b) showTab(b.dataset.lxTab, ''); }); nav.addEventListener('keydown', onNavKey); }
-  for (const b of document.querySelectorAll('[data-lx-sub]')) b.addEventListener('click', () => showTab('cohorts', b.dataset.lxSub));
+  /* a side button a part owns (data-lx-own: Praetorian's, handed to its desk as its tab button) is opened and closed by that part */
+  for (const b of document.querySelectorAll('[data-lx-sub]')) b.addEventListener('click', () => { if (b.dataset.lxOwn !== '1') showTab('cohorts', b.dataset.lxSub); });
   const head = $('lxHead'); if (head) head.addEventListener('click', onStopClick);
   const ask = $('lxStopAsk'); if (ask) ask.addEventListener('click', onStopClick);
+  const sl = $('lxStopSaid'); if (sl) sl.addEventListener('click', () => { if (S.said && !S.pending) say('', false); });   // an answer put away
+  const nl = $('lxNote'); if (nl) nl.addEventListener('click', () => noteLine('', false));
+  const ac = $('wsAlertClose'); if (ac) ac.addEventListener('click', () => { alerts.length = 0; alertErr = false; $('wsAlert').hidden = true; fitDesk(); });
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && S.ask) { endAsk(); say('', false); e.preventDefault(); } }, true);
   /* the window's two connections, as the chart page and agent.html open them: the chart feed (prices, for a chart inside a tab)
      and the v3 connection (ChartBridge's accounts, groups and traders; every message a tab sends goes through its own gate) */
   guard('the chart feed', () => { hub = window.ChartFeed && typeof window.ChartFeed.create === 'function' ? window.ChartFeed.create({ wsUrl }) : null; });
   guard('the ChartBridge connection', () => {
     AF = window.AccountsPage && typeof window.AccountsPage.createFeed === 'function' ? window.AccountsPage.createFeed({ wsUrl, pin: PIN, framed, fetch: (u, o) => fetch(u, o),
-      note: (t, warn) => { if (warn) say(t, true); }, changed: () => { for (const fn of HOOKS.message) { try { fn(null); } catch (e) { /* its own guard */ } } } }) : null;
+      note: (t, warn) => { if (warn) noteLine(t, true); }, changed: () => { for (const fn of HOOKS.message) { try { fn(null); } catch (e) { /* its own guard */ } } } }) : null;
   });
   /* the header's own link: listen, and post only what stopMaySend passes (the two Stop all messages, exactly their keys) */
   link = AF ? Object.freeze({ post: m => C.stopMaySend(m) === true && AF.post(m) === true }) : null;
   if (AF) AF.listen({ message: m => { onHeadMessage(m); for (const fn of HOOKS.message) { try { fn(m); } catch (e) { /* its own guard */ } } },
-    closed: () => { S.connected = false; S.signedIn = false; if (S.ask) endAsk(); renderHead(); } });
-  if (window.LegionTabs && typeof window.LegionTabs.mount === 'function') guard('the moved tabs', () => window.LegionTabs.mount({ AF, hub, store, PREFIX, PIN, realClick, hooks: HOOKS, mounted: S.mounted, guard, say }));
+    closed: () => {
+      S.connected = false; S.signedIn = false; if (S.ask) endAsk();
+      /* the R12 delta, nit: a Stop all sent and not answered is said at once when the connection drops (never left to the timer) */
+      if (S.pending) { S.pending = ''; clearTimeout(S.waitTimer); say('Stop all was sent and ChartBridge\'s answer never came (the connection dropped): check the traders on Cohorts, or in NinjaTrader, now.', true); }
+      renderHead();
+    } });
+  if (window.LegionTabs && typeof window.LegionTabs.mount === 'function') guard('the moved tabs', () => window.LegionTabs.mount({ AF, hub, store, PREFIX, PIN, realClick, hooks: HOOKS, mounted: S.mounted, guard, noteLine }));
   const want = C.tabFrom(location.search);
   showTab(want.tab, want.sub, false);
   renderHead();
-  if (AF) AF.startAny();
+  /* as the chart page starts it (its own hello still checks v3), so The Desk's account types and limits are read too */
+  if (AF) AF.start(['v3']);
 }
 if (PIN) PIN.gate().then(start); else start();
 })();

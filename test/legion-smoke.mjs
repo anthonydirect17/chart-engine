@@ -60,7 +60,8 @@ try {
     check(head.word === 'LEGION' && /Cinzel/.test(head.font), 'the wordmark LEGION in Cinzel: ' + JSON.stringify(head));
     check(JSON.stringify(head.tabs) === JSON.stringify(['ICastra', 'IICohorts', 'IIIColosseum', 'IVLudus', 'VGo live']), 'the five tabs in order with their numerals: ' + JSON.stringify(head.tabs));
     check(head.stop === 'Stop all automation' && /0\.6\.24: on/.test(head.conn), 'Stop all automation and ChartBridge\'s state in the header');
-    const note = await page.textContent('#lxStopSaid');
+    const note = await page.getAttribute('#lxStopNote', 'title');   // the R12 delta, S-a: the standing word in the header's caption
+    check(await page.evaluate(() => document.getElementById('lxHead').contains(document.getElementById('lxStopNote')) && document.getElementById('lxStopSaid').hidden), 'the R12 delta, S-a: the standing word sits in the header beside Stop all; no floating line for it');
     check(/own prop rule only .* not by the account ledger/.test(note), 'ChartBridge 0.6.24: the header says Stop all is Kill all by ChartBridge\'s own rule, not the ledger: ' + note);
     for (const t of ['castra', 'cohorts', 'colosseum', 'ludus', 'golive']) {
       await page.click('[data-lx-tab="' + t + '"]');
@@ -94,6 +95,8 @@ try {
     check(((r1.types.agentKillAllProp || 0) + (r1.types.agentStopAll || 0)) === sent0, 'a double click on Stop all sends nothing: ' + JSON.stringify(afterDbl));
     if (!afterDbl.asking) await page.click('#lxStop');
     check((await app(page)).asking && await page.locator('#lxStopAsk').isVisible(), 'the question opens in the page (no browser dialog)');
+    check(/by its own prop rule only: an account The Desk's ledger types eval or funded that NinjaTrader lists as Sim is NOT stopped/.test(await page.textContent('#lxStopQ')),
+      'the R12 delta, nit: ChartBridge 0.6.24: the ledger caveat is in the question itself: ' + await page.textContent('#lxStopQ'));
     await page.screenshot({ path: path.join(SHOTS, 'legion-ask.png') });
     await page.click('#lxStopNo');
     check(!(await app(page)).asking, 'Cancel closes it');
@@ -114,6 +117,12 @@ try {
     check((r3.types.agentKillAllProp || 0) === (r0.types.agentKillAllProp || 0) + 1 && (r3.types.agentStopAll || 0) === (r0.types.agentStopAll || 0), 'a real click on Yes: exactly one Kill all with ChartBridge 0.6.24: ' + JSON.stringify(r3.types));
     check(!done.asking && !done.pending && /^Kill all \(prop accounts\)/.test(done.said), 'ChartBridge\'s answer shows in the header: ' + done.said);
     await page.screenshot({ path: path.join(SHOTS, 'legion-answer.png') });
+    /* round 4, GOLIVE_MIN: the Go live tab says plainly that this ChartBridge cannot go live */
+    await page.click('[data-lx-tab="golive"]'); await sleep(200);
+    check(await page.locator('#lxGoLiveWhy').isVisible() && /^Go live needs ChartBridge 0\.6\.25 or later \(its firm and GO-size guards\); this one is 0\.6\.24\./.test(await page.textContent('#lxGoLiveWhy')),
+      'round 4: Go live on ChartBridge 0.6.24 says it needs 0.6.25: ' + await page.textContent('#lxGoLiveWhy'));
+    await page.screenshot({ path: path.join(SHOTS, 'legion-golive-old.png') });
+    await page.click('[data-lx-tab="castra"]'); await sleep(200);
     check(pe.length === 0, 'no page error: ' + JSON.stringify(pe));
     await ctx.close();
 
@@ -135,6 +144,8 @@ try {
       await ph.page.screenshot({ path: path.join(SHOTS, 'legion-phone-' + t + '.png') });
     }
     await ph.page.click('[data-lx-tab="castra"]'); await ph.page.click('#lxStop'); await sleep(200);
+    const pq = await ph.page.evaluate(() => { const q = document.getElementById('lxStopQ'), r = q.getBoundingClientRect(); const b = document.getElementById('lxStopAsk').getBoundingClientRect(); return { text: q.textContent, whole: q.scrollHeight <= q.clientHeight + 1 && q.scrollWidth <= q.clientWidth + 1, left: Math.round(b.left), right: Math.round(b.right), cw: document.documentElement.clientWidth }; });
+    check(/NOT stopped/.test(pq.text) && pq.whole && pq.left >= 0 && pq.right <= pq.cw, 'phone: the question with its caveat shows whole: ' + JSON.stringify(pq));
     await ph.page.screenshot({ path: path.join(SHOTS, 'legion-phone-ask.png') });
     check(ph.pe.length === 0, 'phone: no page error: ' + JSON.stringify(ph.pe));
     await ph.ctx.close();
@@ -143,13 +154,16 @@ try {
   /* the next ChartBridge: Stop all automation with the ledger */
   await withBridge('0.6.25', BASE_PORT + 1, async port => {
     const { ctx, page, pe } = await open(port, { width: 1600, height: 900 });
-    check((await page.textContent('#lxStopSaid')) === '' && await page.locator('#lxStopSaid').isHidden(), 'ChartBridge 0.6.25: no note beside Stop all');
+    check((await page.textContent('#lxStopSaid')) === '' && await page.locator('#lxStopSaid').isHidden() && (await page.textContent('#lxStopNote')) === '', 'ChartBridge 0.6.25: no note beside Stop all');
+    check(!/NOT stopped/.test(await page.textContent('#lxStopQ')), 'ChartBridge 0.6.25: the question has no caveat');
     const r0 = await received(port);
     await page.click('#lxStop'); await sleep(700); await page.click('#lxStopYes');
     await page.waitForFunction(() => /^Stop all automation:/.test(document.getElementById('lxStopSaid').textContent), null, { timeout: 5000 }).catch(() => {});
     const r1 = await received(port), s = await app(page);
     check((r1.types.agentStopAll || 0) === (r0.types.agentStopAll || 0) + 1 && (r1.types.agentKillAllProp || 0) === (r0.types.agentKillAllProp || 0), 'a real click on Yes: exactly one agentStopAll: ' + JSON.stringify(r1.types));
-    check(/^Stop all automation:/.test(s.said) && !s.saidBad, 'its answer shows: ' + s.said);
+    check(/^Stop all automation:/.test(s.said) && !s.saidBad, 'its answer shows (round 4: its status line carries the press\'s cid, and it is this press\'s): ' + s.said);
+    await page.click('[data-lx-tab="golive"]'); await sleep(200);
+    check(await page.locator('#lxGoLiveWhy').isHidden(), 'round 4: on ChartBridge 0.6.25 the Go live tab has no version line');
     check(pe.length === 0, 'no page error: ' + JSON.stringify(pe));
     await ctx.close();
   });

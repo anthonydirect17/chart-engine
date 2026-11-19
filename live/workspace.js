@@ -903,7 +903,8 @@ function tmessage(m) {
       /* release 1: the ticket has its hello above; each tab hears it inside its own guard */
       if (botDesk) startGuard('Bot tab', () => botDesk.hello(m));        // 1.16.0: the Bot tab says what an older ChartBridge lacks
       if (agentDesk) startGuard('Agent tab', () => agentDesk.hello(m));  // 1.17.0: the Agent tab too (agents need ChartBridge 0.5.0)
-      if (fleetView) startGuard('Legion tab', () => fleetView.hello(m)); // 1.45.0: the Legion tab shows with ChartBridge 0.6.17
+      /* plan step 3.2: Legion is its own page (legion.html); its link is offered with a ChartBridge that speaks v3 */
+      if ($('wsLegion')) $('wsLegion').hidden = !(Array.isArray(m.features) && m.features.includes('v3'));
       return;
     case 'execs': tfills.clear(); for (const f of m.list || []) if (f && f.id) tfills.set(f.account + '|' + f.id, f); renderOrders(); return;
     case 'pcClock': pcClock = pcClockOf(m); syncStats(); return;   // 1.24.0: a new check of this PC's clock (every 5 minutes)
@@ -1677,12 +1678,13 @@ const busy = () => !!pop || $('wsDialog').open || !!document.querySelector('.ws-
    proposal it would answer, the Agent tab and the Bot tab (as before this release), and is off under Legion and League.
    Not clearly one or the other, so off under a tab until Anthony rules (the careful side): B/E, Merge, and a strategy's key.
    With no tab open nothing here changes anything. ONE place: both hotkey handlers below go through underTab. */
-/* 1.50.0: the League tab is the Colosseum (its name in the note); 1.51.0: the Agent and Bot tabs are Praetorian's two sides */
-const COVERING_TABS = { 'fl-on': 'Legion', 'ag-on': 'Praetorian', 'bt-on': 'Praetorian', 'lg-on': 'Colosseum' };
+/* plan step 3.2: Legion, the Colosseum and Praetorian's Agent side moved to Legion's own page (legion.html); the Bot tab is the one
+   tab left on the chart page, and it shows the bot's proposal, so Accept stays live under it as before */
+const COVERING_TABS = { 'bt-on': 'Bot' };
 const coveringTab = () => { for (const c of Object.keys(COVERING_TABS)) if (document.body.classList.contains(c)) return COVERING_TABS[c]; return ''; };
 /* release 1 (1.6c): Cut half only reduces, so it is live under a tab too */
 const LIVE_UNDER_TAB = new Set(['close', 'flattenAll', 'reject', 'cutHalf']);
-const ACCEPT_SHOWN_ON = new Set(['Praetorian']);         // the tabs that show the proposal the Accept key answers
+const ACCEPT_SHOWN_ON = new Set(['Bot']);                // the tab that shows the proposal the Accept key answers
 const underTab = (id, fn) => () => {
   const t = coveringTab();
   if (t && !LIVE_UNDER_TAB.has(id) && !(id === 'accept' && ACCEPT_SHOWN_ON.has(t))) {
@@ -2855,8 +2857,10 @@ function mountAgentsStrip(v) {
   if (!window.AgentsSky || !window.AgentsStrip || !window.AgentsStripCore) { v.body.innerHTML = '<p class="tt-foot warn">Reload this window: its agents-strip.js or agents-sky.js is missing.</p>'; v.destroy = () => {}; return; }
   const offQuote = watchQuote('NQ');   // 1.38.1: NQ (Anthony 2026-10-23); the Quote board watches it too
   const strip = window.AgentsSky.mount(v.body, {
-    day: () => leagueGhostDay(),
-    reach: () => (leagueView && leagueView.shown() ? { problem: leagueView.state().problem, at: 0 } : { problem: LG.problem, at: LG.at }),
+    /* plan step 3.2: the chart page's league poll went with the Colosseum to Legion: no seats here and no league warning */
+    league: false,
+    day: () => null,
+    reach: () => ({}),
     agents: () => (agentDesk && agentDesk.glances ? agentDesk.glances().map(g => ({ a: g.agent, g })) : []),   // one read of the day's fills a tick, for every agent
     nowMs: () => etNowSec() * 1000,
     zoneSec: ms => U.zoneSeconds(ms / 1000),
@@ -2864,14 +2868,13 @@ function mountAgentsStrip(v) {
     pv: r => (instruments[r] && +instruments[r].pointValue > 0 ? +instruments[r].pointValue : null),
     bars: () => { const x = quoteOf('NQ'); return x && x.bars.length ? { root: 'NQ', name: x.name, bars: x.bars } : null; },
     mine: () => myEntries(),
-    openLeague: () => { if (leagueView) leagueView.showTab(true); else note('The Colosseum tab did not start: reload this window', true); },
-    openAgent: id => { if (agentDesk) { agentDesk.choose(id); agentDesk.showTab(true); } },
+    openLeague: () => openLegion('colosseum', ''),
+    openAgent: id => { if (agentDesk) agentDesk.choose(id); openLegion('cohorts', 'praetorian', id); },   // Praetorian's Agent desk is on Legion, on him
     bot: () => (botDesk && botDesk.glance ? botDesk.glance() : null),
     openBot: () => { if (botDesk) botDesk.showTab(true); else note('The Bot tab did not start: reload this window', true); },
   });
   v.strip = strip;
-  syncLeagueGhosts();                                       // the league read runs while a strip is placed
-  v.destroy = () => { offQuote(); strip.destroy(); v.strip = null; setTimeout(syncLeagueGhosts, 0); };
+  v.destroy = () => { offQuote(); strip.destroy(); v.strip = null; };
 }
 setInterval(() => { for (const v of stripViews()) v.strip.render(); }, 1000);   // its clocks and the Agent tab's news (the sky's frames run on their own, only while seen)
 var tagsRaf = 0;                                          // var: renderOrders may run before this line
@@ -2901,41 +2904,8 @@ function mountAccountsPage(v) {
   v.accountPage = ap;
   v.destroy = () => { ap.destroy(); delete v.accountPage; };
 }
-/* 1.47.0 (the reuse map, build answers 17 and 18): the Multi-Account panel mounted a second time, outside the grid (a Legion
-   lane is that panel showing one group). The same factory and the same redraw loop as the grid's panel: no copy of the panel.
-   key: its own panel id (its element ids and its kept group pick carry it). -> { panel, destroy } or null. */
-const lanePanels = new Map();
-function mountLegionLane(el, key, opts) {
-  const FC = window.FleetCore;
-  if (!FC || !AF || !opts || typeof opts.group !== 'string' || !opts.group || typeof opts.locked !== 'function') return null;   // no lock, no panel (F1)
-  const feed = FC.laneFeed(AF, opts.locked, opts.group, opts.otherLocked);           // bound to its lane (F2)
-  const made = mountLanePanel(el, key, feed, { group: opts.group, locked: opts.locked });
-  return made ? Object.assign(made, { refused: feed.refused, feed }) : null;
-}
-/* The Account page's rows-only mount reads the page's feed and sends nothing (the review of 97, F8): this object passes the
-   feed's state and its reading functions, and every other function answers false without calling the feed. */
-const FEED_READS = new Set(['account', 'limit', 'groupOf', 'rulesOf', 'typeOf', 'level', 'listen', 'joinRefusal', 'joinPlan', 'joinWords', 'readTypes', 'readFloors', 'firmMins', 'rateOf']);
-function readOnlyFeed(feed) {
-  const out = {};
-  for (const k of Object.keys(feed)) {
-    const d = Object.getOwnPropertyDescriptor(feed, k);
-    if (d.get) Object.defineProperty(out, k, { enumerable: true, get: () => feed[k] });
-    else if (typeof feed[k] !== 'function') Object.defineProperty(out, k, { enumerable: true, get: () => feed[k] });
-    else out[k] = FEED_READS.has(k) ? (...a) => feed[k](...a) : () => false;
-  }
-  return Object.freeze(out);
-}
-function mountLanePanel(el, key, feed, opts) {
-  if (!feed || !window.MultiAccount || !el || lanePanels.has(key)) return null;
-  const AC = window.AccountsCore;
-  const ma = window.MultiAccount.mount(el, Object.assign({ feed, panelId: key, note: (t, w) => note(t, !!w, w ? 8000 : 4000),
-    working: () => [...feed.S.orders.values()].filter(o => (AC && typeof AC.isWorking === 'function' ? AC.isWorking(o) : true)) }, opts || {}));
-  lanePanels.set(key, ma);
-  renderAccountPages();
-  return { panel: ma, destroy: () => { if (lanePanels.get(key) === ma) { lanePanels.delete(key); ma.destroy(); } } };
-}
 let accountPageRaf = 0;
-function renderAccountPages() { if (!accountPageRaf && (accountPages().length || lanePanels.size)) accountPageRaf = requestAnimationFrame(() => { accountPageRaf = 0; for (const v of accountPages()) v.accountPage.render(); for (const ma of lanePanels.values()) ma.render(); }); }
+function renderAccountPages() { if (!accountPageRaf && accountPages().length) accountPageRaf = requestAnimationFrame(() => { accountPageRaf = 0; for (const v of accountPages()) v.accountPage.render(); }); }
 setInterval(renderAccountPages, 1000);                   // the clock (Gone's since, a new trading day)
 /* Item 15: a chart trading an account near its limit says so in its header (amber at 70 percent of the room used to the
    closer of the daily loss and the trailing drawdown, red at 90). Every chart here shows the ticket's account. Written only
@@ -3188,10 +3158,6 @@ function openMore(v, anchor) {
     const g = $('wsMore').querySelector('[data-do="ghost"]');
     g.hidden = !(botDesk && botDesk.ghostOffered());
     if (!g.hidden) g.textContent = 'Bot trades (faint): ' + (botDesk.ghostOn(v.panel.id) ? 'on' : 'off');
-    /* 1.35.0: the league's paper trades, faint, on this chart (off by default; NQ and MNQ only) */
-    const lg = $('wsMore').querySelector('[data-do="league"]');
-    lg.hidden = !window.LeagueCore || !window.LeagueCore.ROOTS.includes(v.panel.root) || !(leagueView && leagueView.offered());   // offered with The Desk's league only
-    if (!lg.hidden) lg.textContent = 'League trades (faint): ' + (leagueGhosts()[v.panel.id] ? 'on' : 'off');
     openPop($('wsMore'), anchor);
   });
 }
@@ -3200,7 +3166,6 @@ $('wsMore').addEventListener('click', e => {
   if (!b || !v || !v.pane) return;
   if (b.dataset.do === 'reset') v.pane.chart.reset();
   else if (b.dataset.do === 'ghost' && botDesk) botDesk.setGhost(v.panel.id, !botDesk.ghostOn(v.panel.id));
-  else if (b.dataset.do === 'league') setLeagueGhost(v.panel.id, !leagueGhosts()[v.panel.id]);
   closePops();
 });
 
@@ -3579,9 +3544,6 @@ function syncLaptop() {
 $('wsTabs').addEventListener('click', e => {
   const b = e.target.closest('[data-tab]');
   if (b && botDesk && botDesk.shown()) botDesk.showTab(false);   // 1.16.0: from the Bot tab back to a layout
-  if (b && agentDesk && agentDesk.shown()) agentDesk.showTab(false);   // 1.17.0: and from the Agent tab
-  if (b && leagueView && leagueView.shown()) leagueView.showTab(false);   // 1.35.0: and from the League tab
-  if (b && fleetView && fleetView.shown()) fleetView.showTab(false);     // 1.45.0: and from the Legion tab
   if (!b || b.dataset.tab === layout) return;
   save(); openLayout(b.dataset.tab);
 });
@@ -3706,8 +3668,6 @@ function openLayout(name) {
   /* release 1: each tab told inside its own guard, after the charts and the ticket are placed */
   if (botDesk) startGuard('Bot tab', () => { botDesk.layoutChanged(layout); botDesk.chartsChanged(); });   // 1.16.0: the strip on Main only; ghost marks
   if (agentDesk) startGuard('Agent tab', () => agentDesk.layoutChanged(layout));                          // 1.17.0: a layout closes the Agent tab
-  if (leagueView) startGuard('Colosseum tab', () => { if (leagueView.shown()) leagueView.showTab(false); });   // 1.35.0: and the League tab
-  if (fleetView) startGuard('Legion tab', () => { if (fleetView.shown()) fleetView.showTab(false); });         // 1.45.0: and the Legion tab
 }
 
 /* Another window changed something this page uses. Its open layouts stay its own. */
@@ -3745,35 +3705,11 @@ window.workspace = { get layout() { return layout; }, panels: () => panels.map(p
   botReplay: () => !!(botDesk && botDesk.replay()),
   /* 1.17.0: the Agent tab (read it; its actions go through ChartBridge's checks) */
   agent: () => (agentDesk ? agentDesk.state() : null),
-  /* 1.35.0: the League tab, and the charts showing the league's trades faintly (read only) */
-  league: () => (leagueView ? leagueView.state() : null),
-  fleet: () => (fleetView ? fleetView.state() : null),          // 1.45.0: the Legion tab's state (test/fleet-smoke.mjs)
-  leagueGhosts: () => [...LG.overlays.keys()],
   /* 1.37.0: the Multi-Account panel's state (its tab, group, toast), for the smokes */
-  /* 1.47.0: a second Multi-Account panel in any element (the smokes; Legion's lanes are mounted the same way) */
-  /* 1.47.0: the Account page's own rows for the accounts filter() passes, read only, in any element (Legion Live's accounts by
-     group; the smokes). The same mount and redraw as the Accounts panel. -> { destroy } or null */
-  accountRows: (el, key, filter) => {
-    if (!AF || !window.AccountsPage || !el || typeof filter !== 'function' || lanePanels.has(key)) return null;
-    const body = document.createElement('div'); el.appendChild(body);
-    const ap = window.AccountsPage.mount({ el, body, head: document.createElement('div') }, { feed: readOnlyFeed(AF), rows: { filter }, watchQuote, quoteOf, quoteSubs, fitPanel, note: (t, w) => note(t, !!w, w ? 8000 : 4000), now: etNowSec });
-    lanePanels.set(key, ap); renderAccountPages();
-    return { destroy: () => { if (lanePanels.get(key) === ap) { lanePanels.delete(key); ap.destroy(); } } };
-  },
-  lanePanel: (el, key, opts) => {
-    const o = opts || {}, FC = window.FleetCore;
-    /* the whole panel, as on the grid, only for the two-mounts proof (test/lane-panels-smoke.mjs): no Legion code reaches the
-       page's whole feed by leaving the group out (the review of 97, F7) */
-    if (!o.group) return o.twoMountsProof === true ? mountLanePanel(el, key, AF, null) : null;
-    if (!FC || !AF || typeof o.locked !== 'function') return null;                // no lock, no panel (F1)
-    return mountLegionLane(el, key, { group: o.group, locked: o.locked, otherLocked: o.otherLocked });   // one fixed group: the narrow feed, never AF itself
-  },
   multi: () => { const v = [...views.values()].find(x => x.panel.type === 'multi' && x.accountPage); return v ? { tab: v.accountPage.state.tab, gid: v.accountPage.state.gid, toast: v.accountPage.state.toast } : null; },
-  /* 1.36.0: the Agents strip (read only) and how many times this window read the league */
+  /* 1.36.0: the Agents strip (read only) */
   agentsStrip: () => { const v = stripViews()[0]; return v ? v.strip.state() : null; },
-  leagueReads: () => LG.reads,
   quoteLast: r => { const x = quoteOf(r); return x ? x.last : null; },
-  leagueGhostTrades: () => { const d = leagueGhostDay(); return d ? d.trades.length + d.open.length : 0; },
   /* 1.34.0: how many risk alerts sounded in this window (test/flatten-every-smoke.mjs) */
   riskSounds: () => riskSounds };
 
@@ -3809,7 +3745,7 @@ function startGuard(name, fn, btnId) {
 let praetorianLink = null;
 startGuard('Praetorian link', () => {
   praetorianLink = AF && window.AgentCore && typeof window.AgentCore.praetorianLink === 'function'
-    ? window.AgentCore.praetorianLink(AF, m => { if (!m || m.type === 'accounts' || m.type === 'hello') syncPraetorian(); }) : null;   // the review of 102 (F1): one builder, also used by agent.html and bot.html
+    ? window.AgentCore.praetorianLink(AF) : null;   // the review of 102 (F1): one builder, also used by agent.html and bot.html
 });   // a link that throws leaves the desks with no connection (null): the careful side, as when agent-core.js is not served
 let botDesk = null;
 function startBot() {
@@ -3820,7 +3756,7 @@ function startBot() {
     charts: () => chartViews().map(v => ({ id: v.panel.id, root: v.panel.root, chart: v.pane.chart })),
     onTab: on => {
       document.body.classList.toggle('bt-on', on);
-      if (on) { closePops(); restoreMax(); if (agentDesk && agentDesk.shown()) agentDesk.showTab(false); if (leagueView && leagueView.shown()) leagueView.showTab(false); if (fleetView && fleetView.shown()) fleetView.showTab(false); }   // one tab at a time
+      if (on) { closePops(); restoreMax(); store.setItem(PR_SIDE_KEY, 'bot'); }   // Praetorian's side used last (an old ?tab=praetorian)
       tabUrl(on ? 'bot' : '');
       placeTabBtn();                                        // 1.35.0: its button in the top bar while open (the way back)
     } });
@@ -3828,139 +3764,46 @@ function startBot() {
 /* the tab in the URL (?tab=bot or ?tab=agent), so a reload keeps it */
 function tabUrl(t) {
   const u = new URL(location.href);
-  if (t) u.searchParams.set('tab', t); else if (!document.body.classList.contains('bt-on') && !document.body.classList.contains('ag-on') && !document.body.classList.contains('lg-on') && !document.body.classList.contains('fl-on')) u.searchParams.delete('tab');
+  if (t) u.searchParams.set('tab', t); else if (!document.body.classList.contains('bt-on')) u.searchParams.delete('tab');
   history.replaceState(null, '', u.pathname + '?' + u.searchParams.toString() + u.hash);
 }
-/* 1.17.0: the Agent tab (live/agent.js) on the same v3 connection (AF); the agents come with ChartBridge 0.5.0, and with an
-   older one the tab says so. It hides the grid while it is open, as the Bot tab does (?tab=agent keeps it on a reload). */
+/* plan step 3.2: Praetorian's Agent tab moved to Legion (legion.html, Cohorts, Praetorian). The Agent desk itself stays on the chart
+   page with no tab (its view is never shown), because the page uses it beyond its tab: the order ticket's owner check
+   (agentOwner: a pair an agent owns is refused here as before), the copilot switch (copilotOn), the Agents panel's cards
+   (glances), and what it showed off its tab: the corner line that counts the agents' open proposals (a name opens Legion's
+   Praetorian on that trader), its corner notices and its alert band. It acknowledges nothing (only a shown desk does) and its
+   copilot keys stay off (off its tab they never answered an agent; the chart page's keys answer the bot). Praetorian's gated
+   link, as before. */
 let agentDesk = null;
 function startAgent() {
   if (!window.AgentDesk) return;
-  agentDesk = window.AgentDesk.create({ v3: praetorianLink, headers: () => (PIN ? PIN.headers() : {}), feed: hub, storage: store, storagePrefix: PREFIX,
-    els: { tab: $('wsAgentTab'), view: $('agView') }, tradingKeys: () => HK,
-    copilotKeys: () => (DS.on && DS.hk ? DS.hk : null),
-    openBot: () => { if (botDesk) botDesk.showTab(true); },        // "Bot: 1 proposal" under the agent's proposal: the Bot tab answers it
-    flatten: (account, root) => core.flattenAgent(account, root),   // On/Off's "Flatten and turn him off?" Yes (1.20.0)
-    onTab: on => {
-      document.body.classList.toggle('ag-on', on);
-      if (on) { closePops(); restoreMax(); if (botDesk && botDesk.shown()) botDesk.showTab(false); if (leagueView && leagueView.shown()) leagueView.showTab(false); if (fleetView && fleetView.shown()) fleetView.showTab(false); }   // one tab at a time
-      tabUrl(on ? 'agent' : '');
-      placeTabBtn();                                        // 1.35.0: its button in the top bar while open (the way back)
-    } });
+  agentDesk = window.AgentDesk.create({ keys: false, v3: praetorianLink, headers: () => (PIN ? PIN.headers() : {}), feed: hub, storage: store, storagePrefix: PREFIX,
+    els: { view: $('agView') }, tradingKeys: () => HK, copilotKeys: () => (DS.on && DS.hk ? DS.hk : null),
+    openBot: () => { if (botDesk) botDesk.showTab(true); },        // "Bot: 1 proposal" in the corner line: the Bot tab answers it
+    openAgent: id => openLegion('cohorts', 'praetorian', id) });   // a name in the corner line: Praetorian on Legion, on that trader
 }
-/* 1.35.0 (Anthony 2026-10-21): the League tab (live/league.js), a second top-level tab beside the Agent tab (which is unchanged):
-   the shadow league's paper trades on one chart, the seats' day,
-   the week and month, the decision log and the API spend, read from The Desk's GET /api/chart-league. It hides the grid while
-   it is open, as the Bot and Agent views do (?tab=league keeps it on a reload). Nothing in it sends an order. */
-let leagueView = null;
-/* 1.50.0 (the Colosseum's watch box): what ChartBridge says of its traders, to read and nothing else. The object has one key,
-   listen: no post, no send, no sendOrder, so nothing on the Colosseum can send a message (test/colosseum.test.js proves the
-   object's keys and that the view never calls a post it is handed). With no feed (accounts.js not served) it is null and the
-   box says ChartBridge's list is not on this page. */
-const colosseumLink = AF ? Object.freeze({ listen: part => AF.listen(part) }) : null;
-function startLeague() {
-  if (!window.LeagueView) return;
-  leagueView = window.LeagueView.create({ view: $('lgView'), tab: $('wsLeagueTab'), feed: hub, storagePrefix: PREFIX, watch: colosseumLink,
-    deskBase: () => window.AccountsPage.deskBase((u, o) => fetch(u, o)), fetch: (u, o) => fetch(u, o),
-    /* a past day in the address (?tab=league&day=YYYY-MM-DD, The Desk's Agent Stats links here), so a reload keeps it */
-    onDay: d => { const u = new URL(location.href); if (d) u.searchParams.set('day', d); else u.searchParams.delete('day'); history.replaceState(null, '', u.pathname + '?' + u.searchParams.toString() + u.hash); },
-    onTab: on => {
-      document.body.classList.toggle('lg-on', on);
-      if (on) { closePops(); restoreMax(); if (botDesk && botDesk.shown()) botDesk.showTab(false); if (agentDesk && agentDesk.shown()) agentDesk.showTab(false); if (fleetView && fleetView.shown()) fleetView.showTab(false); }
-      tabUrl(on ? 'colosseum' : '');                       // 1.50.0: the Colosseum's own word (?tab=league still opens it)
-      placeTabBtn();                                        // the Bot button in the top bar meanwhile (one click to the Bot)
-      if (!on) { if (leagueView.liveDay()) LG.day = leagueView.liveDay(); if (!LG.busy) leaguePoll(); }   // never a past day; the faint marks read on by themselves (a read under way schedules the next itself)
-    } });
-}
-/* 1.45.0 (build answers 7, part D1): the Legion tab (live/fleet.js, drafted as Fleet) on the same v3 connection (AF): the Lab's
-   roster (one GET /roster, ChartBridge 0.6.20, read only), the traders and the prop accounts as ChartBridge says them, and Kill
-   all for the prop accounts (ChartBridge 0.6.17's message, sent by fleet.js alone, asked first). It hides the grid while it is
-   open, as the other views do (?tab=legion keeps it on a reload). Beside the Agent, Bot and League tabs: it replaces none of them yet.
-   The tab is handed a connection that can do two things only: listen, and post what FleetCore.maySend passes (the review of
-   92, N5): agentKillAllProp and, since 1.46.0 (D2), the pick and a trader's mode to Auto or to Shadow, each with exactly its
-   keys. The feed's send and sendOrder never reach it, so "these messages and no other" is true by how it is built. With no
-   feed at all (accounts.js not served: AF is null, as the page has allowed since 1.16.0), or with fleet.js not served, the
-   tab gets no connection and the page starts exactly as before (the second look at 92, FIX A). */
-const legionGate = window.FleetCore && Object.isFrozen(window.FleetCore) ? window.FleetCore.maySend : null;
-const legionLink = AF && legionGate ? { listen: part => AF.listen(part), post: m => legionGate(m) === true && AF.post(m) === true } : null;
-let fleetView = null;
-/* 1.48.1 (B4): Legion reads the PC helper's GET /status for the lanes' runners, and only that: the client's status call is
-   handed over, never the client, so On and Off cannot be reached from the tab */
-let legionHelperStatus = null;
-startGuard('Legion helper link', () => {                 // release 1: a helper client that throws leaves Legion with no runner reads
-  legionHelperStatus = (() => {
-    const AH = window.AgentHelper;
-    if (!AH || typeof AH.createClient !== 'function' || typeof fetch !== 'function') return null;
-    const client = AH.createClient({ fetch: (u, i) => fetch(u, i), headers: () => (PIN ? PIN.headers() : {}) });
-    return () => client.status();
-  })();
-});
-function startFleet() {
-  if (!window.FleetView) return;
-  fleetView = window.FleetView.create({ view: $('flView'), tab: $('wsFleetTab'), v3: legionLink, realClick: OT.realClick, headers: () => (PIN ? PIN.headers() : {}),
-    helperStatus: legionHelperStatus,
-    /* 1.49.0 (Legion Live, the reuse map): a real chart as the League tab mounts one (no toolbar, no orders), the Accounts
-       tab's own rows for the prop accounts, and the trading day's start (18:00 New York, chart seconds) for the lanes' marks */
-    liveChart: el => (window.ChartLive && hub ? window.ChartLive.mount(el, { feed: hub, paneId: 'legion', storagePrefix: PREFIX, toolbar: false, compact: true, view: { root: 'MNQ', tf: 'm1' } }) : null),
-    accountRows: (el, key, filter) => window.workspace.accountRows(el, key, filter),
-    sessionStart: () => { const n = etNowSec(); return n - ((((n - 18 * 3600) % 86400) + 86400) % 86400); },
-    /* 1.48.0 (Legion Setup): a lane's accounts are the Multi-Account panel itself, one fixed group, the narrow feed (FleetCore.laneFeed),
-       never the page's feed; the tab hands the group and the lane's lock, the page mounts */
-    lanePanel: (el, key, opts) => (opts && typeof opts.group === 'string' && opts.group && typeof opts.locked === 'function' ? mountLegionLane(el, key, opts) : null),
-    /* the Traders fold of Legion Setup: builder 4's Legion trader desk (chart-engine 103), handed the page's own feed (AF): the desk
-       wraps it in Legion's gate itself and never posts on AF directly. None until live/legion-desk.js is on the page. */
-    traderDesk: el => (window.LegionDesk && typeof window.LegionDesk.mount === 'function' && el
-      ? window.LegionDesk.mount(el, { v3: AF, feed: hub, headers: () => (PIN ? PIN.headers() : {}), storage: store, storagePrefix: PREFIX, flatten: (a, r) => core.flattenAgent(a, r) })
-      : null),
-    onTab: on => {
-      document.body.classList.toggle('fl-on', on);
-      if (on) { closePops(); restoreMax(); if (botDesk && botDesk.shown()) botDesk.showTab(false); if (agentDesk && agentDesk.shown()) agentDesk.showTab(false); if (leagueView && leagueView.shown()) leagueView.showTab(false); }   // one tab at a time
-      tabUrl(on ? 'legion' : '');
-      placeTabBtn();                                        // the Bot button in the top bar meanwhile (one click to the Bot)
-    } });
+/* plan step 3.2: Legion's own page, in its own window (one window, reused), on the tab named; the chart page's old ?tab= words
+   land there by Legion's own mapping (LegionCore.tabFrom) */
+const LEGION_TABS = ['legion', 'fleet', 'league', 'colosseum', 'agent', 'praetorian'];
+const PR_SIDE_KEY = 'live-praetorian-side-v1';   // 1.51.0: Praetorian's side used last, 'bot' or 'agent' (a convenience in this browser)
+function openLegion(tab, sub, agent) {
+  const q = new URLSearchParams(); if (tab) q.set('tab', tab); if (sub) q.set('sub', sub); if (agent) q.set('agent', agent);
+  try { window.open('legion.html?' + q.toString(), 'legion'); } catch (e) { note('Legion did not open: open legion.html from this PC', true); }
 }
 /* 1.50.0 (the top tabs: Chart, Legion, Colosseum, Praetorian): Chart is pressed while no tab covers the grid, and a click on it
    closes whichever tab is open (the same calls a layout tab makes). It reads the tabs' own body classes, so a tab that opens or
    closes by any way (its button, a link, the Agents strip, a layout) moves it. */
-const TAB_CLASSES = ['bt-on', 'ag-on', 'lg-on', 'fl-on'];
+const TAB_CLASSES = ['bt-on'];   // plan step 3.2: the Bot tab is the one tab left on the chart page
 const tabCovering = () => TAB_CLASSES.some(c => document.body.classList.contains(c));
-function closeTabs() { for (const d of [botDesk, agentDesk, leagueView, fleetView]) if (d && d.shown()) d.showTab(false); }
-/* 1.51.0: Praetorian's button: offered when either side is (the Agent desk's or the Bot desk's own button), pressed while
-   either is open, a click opens the side used last (kept in this browser, a convenience) or closes it; its title says whether
-   a personal account is picked (with none, only Sim and None are offered there) */
-const PR_SIDE_KEY = 'live-praetorian-side-v1';
-const prSide = () => { try { return store.getItem(PR_SIDE_KEY) === 'bot' ? 'bot' : 'agent'; } catch (e) { return 'agent'; } };
-const prOpen = () => document.body.classList.contains('ag-on') || document.body.classList.contains('bt-on');
-function syncPraetorian() {
-  const b = $('wsPraetorianTab'); if (!b) return;
-  const offered = !!(($('wsAgentTab') && !$('wsAgentTab').hidden) || ($('wsBotTab') && !$('wsBotTab').hidden)), on = prOpen();
-  if (b.hidden !== !(offered || on)) b.hidden = !(offered || on);
-  if (b.getAttribute('aria-pressed') !== String(on)) b.setAttribute('aria-pressed', String(on));
-  document.body.classList.toggle('pr-tabs-on', on);
-  if (on) { try { store.setItem(PR_SIDE_KEY, document.body.classList.contains('bt-on') ? 'bot' : 'agent'); } catch (e) { /* blocked */ } }
-  /* no head row of its own (the Agent desk's Layout 5 needs the height): the button's title says what Praetorian reaches now */
-  const t = 'Praetorian: your agents and the bot on your personal account, Sim or None. A trader on a prop account is run from Legion; here it can only be stopped. ' +
-    (!praetorianLink ? 'Not connected to ChartBridge: nothing can be sent from here.' : praetorianLink.named() ? 'Your personal account is picked on the Accounts tab.' : 'No personal account is picked yet: Sim and None only (pick it on the Accounts tab).');
-  if (b.title !== t) b.title = t;
-}
-function openPraetorian() {
-  const agentOk = agentDesk && !$('wsAgentTab').hidden, botOk = botDesk && !$('wsBotTab').hidden;
-  const d = prSide() === 'bot' ? (botOk ? botDesk : agentOk ? agentDesk : null) : (agentOk ? agentDesk : botOk ? botDesk : null);
-  if (d) d.showTab(true);
-}
-if ($('wsPraetorianTab')) {
-  $('wsPraetorianTab').addEventListener('click', e => { e.currentTarget.blur(); closePops(); if (prOpen()) closeTabs(); else openPraetorian(); syncPraetorian(); });
-  if (typeof MutationObserver === 'function') for (const id of ['wsAgentTab', 'wsBotTab']) if ($(id)) new MutationObserver(syncPraetorian).observe($(id), { attributes: true, attributeFilter: ['hidden'] });
-}
+function closeTabs() { if (botDesk && botDesk.shown()) botDesk.showTab(false); }
 /* the row shows only while another tab is offered: alone, Chart would mean nothing and take the top bar's room (the status
    line and its clock warning, test/workspace-smoke.mjs at 1366 px) */
-const OTHER_TABS = ['wsFleetTab', 'wsLeagueTab', 'wsAgentTab', 'wsBotTab'];   // 1.51.0: Praetorian is offered when its Agent or Bot side is
+const OTHER_TABS = ['wsBotTab', 'wsLegion'];   // plan step 3.2: the Bot tab, and the link to Legion's own page
 function syncChartTab() {
   const b = $('wsChartTab'), v = String(!tabCovering());
   if (b && b.getAttribute('aria-pressed') !== v) b.setAttribute('aria-pressed', v);
   const row = $('wsTopTabs'), any = OTHER_TABS.some(id => $(id) && !$(id).hidden);
   if (row && row.hidden !== !any) row.hidden = !any;
-  syncPraetorian();
 }
 if ($('wsChartTab')) {
   $('wsChartTab').addEventListener('click', e => { e.currentTarget.blur(); closePops(); closeTabs(); syncChartTab(); });
@@ -3969,69 +3812,16 @@ if ($('wsChartTab')) {
     for (const id of OTHER_TABS) if ($(id)) new MutationObserver(syncChartTab).observe($(id), { attributes: true, attributeFilter: ['hidden'] });
   }
 }
-/* the league's trades, faint, on the charts whose ⋯ switch is on (kept in this browser, off by default): one read of The Desk
-   every 30 seconds while any is on, one overlay per such chart */
-const LG_GHOST_KEY = window.LeagueCore ? window.LeagueCore.GHOST_KEY : 'live-league-ghost-v1';
-const leagueGhosts = () => { try { return window.LeagueCore ? window.LeagueCore.cleanGhosts(store.getItem(LG_GHOST_KEY)) : {}; } catch (e) { return {}; } };
-const LG = { day: null, timer: 0, seq: 0, overlays: new Map(), problem: '', at: 0, reads: 0, busy: false };
-const LG_TIMEOUT_MS = 10000;                              // one league read waits at most this long for The Desk
-/* 1.36.0: the one league read serves the faint marks and the Agents strip: it runs while either is on the page (every 30 s,
-   15 s with a strip), and while the League view is open it reads nothing itself (that view reads every 15 s; its day is used) */
-const leagueWanted = () => LG.overlays.size > 0 || [...views.values()].some(v => v.panel.type === 'agents');
-/* review 3: the faint marks draw the League view's day only while it is open (it reads every 15 s); else this poll's (30 s), so
-   they never freeze on what the view read last */
-const leagueGhostDay = () => (leagueView && leagueView.shown() && leagueView.liveDay()) || LG.day;   // a past day shown is never drawn on the live charts
-function setLeagueGhost(id, on) {
-  const g = leagueGhosts();
-  if (on) g[id] = true; else delete g[id];
-  try { store.setItem(LG_GHOST_KEY, JSON.stringify(g)); } catch (e) { /* blocked: this window only */ }
-  syncLeagueGhosts();
-}
-function syncLeagueGhosts() {
-  if (!window.LeagueOverlay || !window.LeagueCore) return;
-  const g = leagueGhosts(), want = new Set();
-  for (const v of chartViews()) if (g[v.panel.id] && window.LeagueCore.ROOTS.includes(v.panel.root)) want.add(v.panel.id);
-  for (const [id, ov] of LG.overlays) if (!want.has(id) || !views.has(id) || ov.pane !== views.get(id).pane) { ov.o.destroy(); LG.overlays.delete(id); }
-  for (const id of want) if (!LG.overlays.has(id)) { const v = views.get(id); LG.overlays.set(id, { pane: v.pane, o: window.LeagueOverlay.attach(v.pane, v.body, leagueGhostDay, () => v.panel.root, true) }); }
-  if (leagueWanted() && !LG.timer && !LG.busy) leaguePoll();
-  if (!leagueWanted()) { clearTimeout(LG.timer); LG.timer = 0; }
-}
-function leaguePoll() {
-  clearTimeout(LG.timer); LG.timer = 0;
-  if (!leagueWanted()) return;
-  const seq = ++LG.seq;                                    // only the latest read schedules the next (one poll, never two)
-  const next = () => { if (seq === LG.seq && leagueWanted()) LG.timer = setTimeout(leaguePoll, stripViews().length ? 15000 : 30000); };
-  if (leagueView && leagueView.shown()) { next(); return; }   // the League view reads it now: its day is the one used
-  LG.reads++; LG.busy = true;
-  /* review: a Desk that never answers cannot hold the read for good: given up after 10 s (the fetch aborted), and the next read
-     is scheduled. The Desk's address (deskBase, shared by the page) is not aborted: the limit races it instead */
-  const ac = typeof AbortController === 'function' ? new AbortController() : null;
-  let giveUp = 0;
-  const limit = new Promise((_, no) => { giveUp = setTimeout(() => { if (ac) ac.abort(); const e = new Error('timeout'); e.name = 'AbortError'; no(e); }, LG_TIMEOUT_MS); });
-  Promise.race([limit, window.AccountsPage.deskBase((u, o) => fetch(u, o)).then(url => fetch(url + '/api/chart-league', { cache: 'no-store', mode: 'cors', credentials: 'omit', signal: ac ? ac.signal : undefined }))
-    .then(r => (r.ok ? r.json() : Promise.reject(new Error(r.status === 404 ? 'The Desk has no league view yet (it needs The Desk of chart 1.35.0).' : 'The Desk answered ' + r.status))))])
-    .then(j => { LG.day = window.LeagueCore.cleanDay(j); LG.problem = ''; LG.at = Date.now(); },
-      e => { LG.problem = (e && e.name === 'AbortError' ? 'The Desk did not answer in ' + LG_TIMEOUT_MS / 1000 + ' s.' : e && /^The Desk/.test(e.message) ? e.message : 'The Desk is not reachable: ' + (e && e.message ? e.message : 'no answer')) + (LG.day ? ' Showing what it last sent.' : ''); })   // the last marks stay
-    .then(() => { clearTimeout(giveUp); LG.busy = false; for (const x of LG.overlays.values()) x.o.redraw(); for (const v of stripViews()) v.strip.render(); next(); });
-}
-setInterval(syncLeagueGhosts, 3000);                      // a chart's instrument changed, a layout opened: the overlays follow
-window.addEventListener('storage', e => { if (e.key && e.key.endsWith(LG_GHOST_KEY)) syncLeagueGhosts(); });
 /* release 1 (the start guard): the charts and the order ticket first (the layout, the ticket's connection, the ticket taken),
    then each automation tab inside its own guard, told the layout the charts opened on; then the tab in the address, each in
    its tab's guard */
 const start = () => {
   openLayout(new URLSearchParams(location.search).get('layout') || W.DEFAULT_NAME); tconnect(); autoTake();
   startGuard('Bot tab', () => { startBot(); if (botDesk) { botDesk.layoutChanged(layout); botDesk.chartsChanged(); } }, 'wsBotTab');
-  startGuard('Agent tab', () => { startAgent(); if (agentDesk) agentDesk.layoutChanged(layout); }, 'wsAgentTab');
-  startGuard('Colosseum tab', startLeague, 'wsLeagueTab');
-  startGuard('Legion tab', startFleet, 'wsFleetTab');
+  startGuard('Agent desk', () => { startAgent(); if (agentDesk) agentDesk.layoutChanged(layout); });
   const tab = new URLSearchParams(location.search).get('tab');
   if (botDesk && tab === 'bot') startGuard('Bot tab', () => botDesk.showTab(true));
-  if (agentDesk && tab === 'agent') startGuard('Agent tab', () => agentDesk.showTab(true));
-  if (tab === 'praetorian') startGuard('Praetorian button', openPraetorian);   // 1.51.0: the side used last
-  if (fleetView && tab === 'legion') startGuard('Legion tab', () => fleetView.showTab(true));   // 1.45.0
-  if (leagueView && ['league', 'colosseum'].includes(tab)) startGuard('Colosseum tab', () => leagueView.openDay(new URLSearchParams(location.search).get('day')));   // a day checked first: a past one read only; 1.50.0: the old ?tab=league lands on the Colosseum
-  startGuard('Colosseum marks', syncLeagueGhosts); startGuard('Praetorian button', syncChartTab);
+  startGuard('Chart button', syncChartTab);
 };
 /* A window that opens (or reloads) with the ticket in its layout takes it when no other window has it (Anthony
    2026-10-01), Armed off. The same `ifAvailable` lock as any take: two windows opening at once give one holder, and a
@@ -4040,5 +3830,13 @@ function autoTake() {
   if (!link || !locks || holds() || !panels.some(p => p.type === 'ticket')) return;
   link.take().then(r => { if (r === 'held') { TK.published = ''; linkChanged(); } });
 }
-if (PIN) PIN.gate().then(start); else start();
+/* plan step 3.2: an old address of a tab that moved (?tab=legion, league or colosseum with its day, agent, praetorian) opens Legion's
+   own page with the same query: LegionCore.tabFrom maps each word to its tab there. Nothing on the chart page starts first. */
+const movedTab = String(new URLSearchParams(location.search).get('tab') || '').toLowerCase();
+/* the R12 review, N4: an old ?tab=praetorian opens the side used last, as 1.51.0 did: the Bot tab here when that was the Bot (kept
+   in this browser: the Bot tab writes it here, Legion's Praetorian side writes the Agent), else Praetorian on Legion */
+const prBotLast = movedTab === 'praetorian' && store.getItem(PR_SIDE_KEY) === 'bot' && !new URLSearchParams(location.search).has('agent');   // a trader named: Legion, on him
+if (prBotLast) { try { const q = new URLSearchParams(location.search); q.set('tab', 'bot'); history.replaceState(null, '', location.pathname + '?' + q.toString() + location.hash); } catch (e) { /* a file page */ } }
+if (LEGION_TABS.includes(movedTab) && !prBotLast) location.replace('legion.html' + location.search + location.hash);
+else if (PIN) PIN.gate().then(start); else start();
 });
