@@ -195,7 +195,7 @@ function mount(el, opts) {
           x.can && fresh ? raw(actBtn('veto', w.runId, x.name, true)) : cell(x.can ? 'Not vetoed' : x.then, x.allowed ? '' : 'cx-dim')] })));
         body += askBox('veto');
         body += '<p class="cx-window" data-cx-window="' + esc(w.state) + '">' + esc(w.words || ('The Desk gives no words for the window (' + w.state + ').')) + '</p>';
-        if (w.closes) body += note((w.state === 'open' ? 'The veto window closes ' : 'The veto window closed ') + w.closes + ', New York time.', 'cx-dim');
+        if (w.closes && w.timed) body += note((w.state === 'open' ? 'The veto window closes ' : 'The veto window closed ') + w.closes + ', New York time.', 'cx-dim');
       }
       body += '<p class="cx-sub">Applied changes</p>';
       const a = c.applied;
@@ -239,7 +239,7 @@ function mount(el, opts) {
     say('', false);
     render();
     desk.post(act.route, act.body)
-      .then(ans => say(K.sentWords(a.kind, ans), false), e => say(K.refusedWords(a.kind, e), true))
+      .then(ans => say(K.sentWords(a.kind, ans, act.body), !K.sentOk(a.kind, ans, act.body)), e => say(K.refusedWords(a.kind, e), true))   // a bad 200 is no answer, never done (the R12 review, B1)
       .then(() => { S.sending = ''; render(); if (S.shown) { read('centurion', K.ROUTES.centurion).then(render); render(); } });   // read again at once (the other reads keep their own turn)
   }
   function onYes(e) {

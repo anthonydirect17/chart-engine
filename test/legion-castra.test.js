@@ -365,11 +365,14 @@ test('Centurion v1, the week: Veto only on an allowed change while The Desk says
   assert.equal(by('sample_builds_a_night').why, 'Sample reason: more builds a night (made up).');
   assert.equal(c.week.words, 'Veto until the end of Sunday, New York time. The rest go in at Sunday night\'s run.');
   assert.equal(c.week.closes, 'Mon, Jan 8, 2001, 00:00 EST', 'closes_utc in New York time');
-  for (const state of ['closed', 'sealed', 'missed', 'reports only', 'not a Saturday report', 'something new']) {
+  for (const [state, then, timed] of [['closed', 'Not vetoed', true], ['sealed', 'Not vetoed', true], ['missed', '-', false], ['reports only', '-', false], ['not a Saturday report', '-', false], ['something new', '-', false]]) {
     const w = K.centurionView(F.centurionV1({ state })).week;
     assert.ok(w.changes.every(x => !x.can), state + ': no Veto');
-    assert.equal(w.changes.find(x => x.name === 'sample_builds_a_night').then, 'Not vetoed', state);
+    assert.equal(w.changes.find(x => x.name === 'sample_builds_a_night').then, then, state + ': "Not vetoed" only where the rest goes in (the R12 review, N1)');
+    assert.equal(w.timed, timed, state + ': the closing time is said for open, closed and sealed only (the R12 review, N3)');
   }
+  assert.equal(K.centurionView(F.centurionV1({ state: 'open' })).week.timed, true);
+  assert.match(read('live', 'legion-castra.js'), /if \(w\.closes && w\.timed\) body \+= note\(/);
   const done = K.centurionView(F.centurionV1({ state: 'sealed', vetoed: ['sample_neighbours'], outcomes: { sample_builds_a_night: ['applied', null], sample_neighbours: ['vetoed', null] } })).week;
   assert.deepEqual(done.changes.map(x => x.then), ['Applied', 'Vetoed', 'Refused by the allow-list: never applied']);
   assert.match(done.sealed, /^Mon, Jan 8, 2001, 00:05 EST$/);
@@ -418,14 +421,21 @@ test('Centurion v1: the one POST carries exactly { run_id, name }; nothing is se
 });
 
 test('Centurion v1: the answers in the contract\'s words; The Desk\'s refusal as it is; no answer is never called failed or done', () => {
-  assert.equal(K.sentWords('veto', { words: 'Vetoed: this change will not go in.' }), 'Vetoed: this change will not go in.');
-  assert.equal(K.sentWords('veto', {}), 'Vetoed: this change will not go in.');
-  assert.equal(K.sentWords('undo', null), 'Undo asked: it is done at the start of the next night\'s run.');
+  const NO_V = 'The Desk did not answer: the veto may or may not be recorded. Reading again.', NO_U = 'The Desk did not answer: the undo may or may not be recorded. Reading again.';
+  const sentV = { run_id: RUN, name: 'sample_builds_a_night' }, sentU = { run_id: 'centurion_20001230T110500Z', name: 'sample_builds_a_night' };
+  const goodV = { id: 'v_0123456789abcdef', run_id: RUN, name: 'sample_builds_a_night', at_utc: '2001-01-07T15:00:00Z', words: 'Vetoed: this change will not go in.' };
+  const goodU = { id: 'u_0123456789abcdef', run_id: 'centurion_20001230T110500Z', name: 'sample_builds_a_night', asked_utc: '2001-01-09T15:00:00Z', words: 'Undo asked: it is done at the start of the next night\'s run.' };
+  assert.equal(K.sentWords('veto', goodV, sentV), 'Vetoed: this change will not go in.');
+  assert.equal(K.sentOk('veto', goodV, sentV), true);
+  assert.equal(K.sentWords('undo', goodU, sentU), 'Undo asked: it is done at the start of the next night\'s run.');
+  assert.equal(K.sentOk('undo', goodU, sentU), true);
+  assert.equal(K.sentWords('veto', {}, sentV), NO_V, 'a 200 of {} is no answer, never done (the R12 review, B1)');
+  assert.equal(K.sentWords('undo', null, sentU), NO_U, 'a 200 of null is no answer');
   const late = 'The veto window closed at the end of Sunday, New York time. Sunday night\'s run takes the list as it was; use Undo after the run.';
   assert.equal(K.refusedWords('veto', { status: 409, body: { detail: late }, words: 'x' }), 'Refused: ' + late);
   assert.equal(K.refusedWords('veto', { status: null, body: null, words: 'The Desk did not answer /api/legion/centurion/veto in 15 s.' }), 'The Desk did not answer: the veto may or may not be recorded. Reading again.');
   assert.equal(K.refusedWords('undo', { status: null }), 'The Desk did not answer: the undo may or may not be recorded. Reading again.');
-  assert.match(K.refusedWords('veto', { status: 500, body: null, words: 'The Desk answered 500 to /api/legion/centurion/veto.' }), /^Refused: The Desk answered 500/);
+  assert.equal(K.refusedWords('veto', { status: 500, body: null, words: 'The Desk answered 500 to /api/legion/centurion/veto.' }), NO_V, 'a 5xx with no detail is no answer, never a refusal (the R12 review, B1)');
   assert.equal(K.VETO_Q, 'Veto this change? It will not go in at Sunday night\'s run. A veto cannot be taken back.');
   assert.equal(K.undoQuestion('sample_builds_a_night', '40'), 'Undo this change? sample_builds_a_night goes back to 40 at the start of the next night\'s run.');
   assert.equal(K.VETO_UNREACHABLE, 'The Desk did not answer, so no veto or undo can be sent now. If Sunday night\'s run cannot read the veto list, it applies nothing that week.');
@@ -467,4 +477,33 @@ test('Castra\'s card VII: the question in the card with Yes and Cancel, Escape c
   assert.match(read('live', 'legion-tabs.js'), /window\.LegionCastra\.mount\(\$\('cxView'\), \{ [^}]*realClick \}\)/);
   assert.doesNotMatch(read('test', 'fixtures', 'castra-sample.js').match(/function centurionV1[\s\S]*?\n}\n/)[0], /[\u2013\u2014]/);
   assert.match(JSON.stringify(F.centurionV1()), /Sample week \(made up\)/, 'the sample week says sample on screen');
+});
+
+test('Centurion v1 (the R12 review, B1): a 200 that is not the answer to the POST sent is no answer, said as bad, never done', () => {
+  const NO = { veto: 'The Desk did not answer: the veto may or may not be recorded. Reading again.', undo: 'The Desk did not answer: the undo may or may not be recorded. Reading again.' };
+  const sent = { run_id: RUN, name: 'sample_builds_a_night' };
+  const good = kind => ({ id: (kind === 'veto' ? 'v_' : 'u_') + '0123456789abcdef', run_id: RUN, name: 'sample_builds_a_night', words: 'Sample: done (made up).' });
+  for (const kind of ['veto', 'undo']) {
+    assert.equal(K.sentOk(kind, good(kind), sent), true, kind + ': the good answer');
+    const bad = [{}, null, undefined, 'garbage', 7, [], { id: 'x' }, { words: 'Vetoed: this change will not go in.' },
+      Object.assign(good(kind), { id: (kind === 'veto' ? 'u_' : 'v_') + '0123456789abcdef' }),     // the other kind's id
+      Object.assign(good(kind), { id: (kind === 'veto' ? 'v_' : 'u_') + '0123456789ABCDEF' }),     // not lower-case hex
+      Object.assign(good(kind), { id: (kind === 'veto' ? 'v_' : 'u_') + '0123' }),                 // too short
+      Object.assign(good(kind), { run_id: 'centurion_20001230T110500Z' }),                          // another week
+      Object.assign(good(kind), { name: 'sample_neighbours' }),                                     // another change
+      Object.assign(good(kind), { words: '' }), Object.assign(good(kind), { words: '   ' }), Object.assign(good(kind), { words: 5 })];
+    for (const b of bad) {
+      assert.equal(K.sentOk(kind, b, sent), false, kind + ' ' + JSON.stringify(b));
+      assert.equal(K.sentWords(kind, b, sent), NO[kind], kind + ' ' + JSON.stringify(b));
+    }
+    assert.equal(K.sentOk(kind, good(kind), null), false, 'nothing sent to compare with: no answer');
+  }
+  assert.equal(K.sentOk('seal', good('veto'), sent), false);
+  /* a failure: a 5xx with no detail is no answer; a 503 with The Desk's detail stays a refusal; a 4xx without detail is refused */
+  for (const status of [500, 502, 503, 504]) for (const body of [null, {}, { detail: '' }, { detail: 5 }]) assert.equal(K.refusedWords('veto', { status, body, words: 'The Desk answered ' + status + '.' }), NO.veto, status + ' ' + JSON.stringify(body));
+  assert.equal(K.refusedWords('undo', { status: 502, body: null }), NO.undo);
+  assert.equal(K.refusedWords('veto', { status: 503, body: { detail: 'Sample: the loop folder is not set (made up).' } }), 'Refused: Sample: the loop folder is not set (made up).');
+  assert.match(K.refusedWords('veto', { status: 400, body: null, words: 'The Desk answered 400.' }), /^Refused: The Desk answered 400\.$/);
+  const castra = read('live', 'legion-castra.js');
+  assert.match(castra, /say\(K\.sentWords\(a\.kind, ans, act\.body\), !K\.sentOk\(a\.kind, ans, act\.body\)\)/, 'the page passes what it sent, and a bad 200 is said as bad');
 });

@@ -75,6 +75,7 @@ async function open(vp, query, mode, port, cent) {
       desk.push('POST body ' + JSON.stringify(b));
       if (hold.postMode === 'abort') return x.abort('failed');
       if (hold.postMode === 'refuse') return json({ detail: LATE }, 409);
+      if (hold.postMode === 'empty') return json({});                       // a 200 that is not the answer (the R12 review, B1)
       if (hold.postSlow) await sleep(hold.postSlow);
       if (u.pathname.endsWith('/veto')) {
         const c = hold.cent.week.changes.find(z => z.name === b.name);
@@ -443,6 +444,17 @@ try {
     await sleep(300); await vo.page.click(vb('sample_neighbours')); await sleep(700); await clickAt(vo.page, '#cxView [data-cx-yes]');
     await until(vo.page, () => /may or may not/.test((document.querySelector('#cxView [data-cx-said]') || {}).textContent || ''));
     check((await said(vo.page)) === 'The Desk did not answer: the veto may or may not be recorded. Reading again.', 'no answer: may or may not be recorded, never failed or done: ' + await said(vo.page));
+    /* a 200 of {}: not the answer to this POST, so no answer, said as bad, never done (the R12 review, B1) */
+    vo.hold.postMode = 'empty';
+    await sleep(300); await vo.page.click(vb('sample_neighbours')); await sleep(700);
+    const e0 = posts(vo.desk).length;
+    await clickAt(vo.page, '#cxView [data-cx-yes]');
+    for (let i = 0; i < 40 && posts(vo.desk).length === e0; i++) await sleep(100);                      // the POST went (the said line was already this text)
+    await until(vo.page, () => window.LegionTabs.state().castra.sending === '');
+    await sleep(300);
+    check(posts(vo.desk).slice(e0).length === 2 && posts(vo.desk)[e0] === 'POST /api/legion/centurion/veto', 'the POST answered with {} was sent once: ' + JSON.stringify(posts(vo.desk).slice(e0)));
+    const emptySaid = await vo.page.evaluate(() => { const e = document.querySelector('#cxView [data-cx-said]'); return e ? [e.textContent, e.classList.contains('cx-bad'), window.LegionTabs.state().castra.saidBad] : null; });
+    check(!!emptySaid && emptySaid[0] === 'The Desk did not answer: the veto may or may not be recorded. Reading again.' && emptySaid[1] && emptySaid[2] && !/Vetoed: this change will not go in/.test(await text(vo.page, '#cxView .cx-cent')), 'a 200 of {}: may or may not be recorded, said as bad, never "Vetoed": ' + JSON.stringify(emptySaid));
     vo.hold.postMode = 'ok';
     /* Undo */
     const ub = '#cxView [data-cx-undo][data-name="sample_builds_a_night"]';

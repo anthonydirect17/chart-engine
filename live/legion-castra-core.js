@@ -257,6 +257,8 @@ const RUN_ID_RE = /^centurion_\d{8}T\d{6}Z$/;
 const NAME_RE = /^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$/;
 const UTC_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
 const WINDOW_STATES = Object.freeze(['open', 'closed', 'sealed', 'missed', 'reports only', 'not a Saturday report']);
+const NOTHING_GOES_IN = Object.freeze(['missed', 'reports only', 'not a Saturday report', 'unknown']);   // nothing of the report is applied (or this page cannot tell)
+const WINDOW_TIMED = Object.freeze(['open', 'closed', 'sealed']);                                        // the states the window's closing time is said for
 const OUTCOME_WORDS = Object.freeze({ applied: 'Applied', vetoed: 'Vetoed', refused: 'Refused', 'not applied': 'Not applied' });
 const UNDO_STATES = Object.freeze(['none', 'asked', 'done', 'refused']);
 const IN_SAMPLE = 'In-sample: nothing here is proven, and no change here trades.';
@@ -268,7 +270,8 @@ const NO_APPLIED = 'No change applied yet.';
 const ALLOW_REFUSED = 'Refused by the allow-list: never applied';
 const VETO_Q = 'Veto this change? It will not go in at Sunday night\'s run. A veto cannot be taken back.';
 const undoQuestion = (name, from) => 'Undo this change? ' + name + ' goes back to ' + from + ' at the start of the next night\'s run.';
-const SENT = Object.freeze({ veto: 'Vetoed: this change will not go in.', undo: 'Undo asked: it is done at the start of the next night\'s run.' });
+const ANSWER_ID_RE = Object.freeze({ veto: /^v_[0-9a-f]{16}$/, undo: /^u_[0-9a-f]{16}$/ });
+const noAnswer = kind => 'The Desk did not answer: the ' + (kind === 'undo' ? 'undo' : 'veto') + ' may or may not be recorded. Reading again.';
 
 /** A UTC stamp (YYYY-MM-DDTHH:MM:SSZ) in New York time, by the browser's own zone data: "Mon, Jan 8, 2001, 00:00 EST". '' when it is not one. */
 const NY_FMT = (() => { try { return new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'short', year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZoneName: 'short' }); } catch (e) { return null; } })();
@@ -295,11 +298,11 @@ function weekOf(w) {
     else if (veto) then = 'Vetoed' + (outcome && outcome !== 'vetoed' ? ' (the applied log says: ' + outWord + (outWhy ? ', ' + outWhy : '') + ')' : '');
     else if (outcome) then = outWord + (outWhy ? ': ' + outWhy : '');
     else if (state === 'open' && runOk && nameOk) can = true;
-    else then = 'Not vetoed';
+    else then = NOTHING_GOES_IN.includes(state) ? '-' : 'Not vetoed';   // the R12 review, N1: "Not vetoed" would read as "it goes in"
     return { name, from: valueText(c.from), to: valueText(c.to), why: str(c.why, 400), allowed: c.allowed === true, veto, outcome, then, can };
   });
   return { runId, runOk, madeUtc: str(w.made_utc, 20), saturday: str(w.saturday, 10), applies: w.applies === true, state, words: str(win.words, 400),
-    closes: nyTime(win.closes_utc), sealed: nyTime(win.sealed_utc), changes };
+    timed: WINDOW_TIMED.includes(state), closes: nyTime(win.closes_utc), sealed: nyTime(win.sealed_utc), changes };
 }
 
 /** The applied log's newest lines: { ok, problem, rows: [{ runId, name, from, to, when, state, then, can }], more }. */
@@ -373,11 +376,27 @@ function actionFor(view, fresh, kind, runId, name) {
   return { why: 'Nothing was sent.' };
 }
 
-/** The line after one POST. ans: The Desk's 200 answer, or e: { status, body, words } from deskClient (status null: no answer). */
-function sentWords(kind, ans) { return (isObj(ans) ? str(ans.words, 300) : '') || SENT[kind] || ''; }
+/**
+ * Is this 200 The Desk's answer to the POST that was sent (sent: exactly { run_id, name })? Only an object whose id is a veto's
+ * (v_ and 16 hex) or an undo's (u_ and 16 hex), whose run_id and name are the ones sent, and whose words are a non-empty string
+ * (the R12 review, B1). Anything else ({}, null, a string, another change's answer) is no answer: the change may or may not be
+ * recorded, and the page never calls it done.
+ */
+function sentOk(kind, ans, sent) {
+  const re = ANSWER_ID_RE[kind];
+  return !!re && isObj(ans) && isObj(sent) && typeof ans.id === 'string' && re.test(ans.id) && typeof ans.run_id === 'string' && ans.run_id === sent.run_id
+    && typeof ans.name === 'string' && ans.name === sent.name && typeof ans.words === 'string' && ans.words.trim().length > 0;
+}
+/** The line after a 200: The Desk's words when sentOk, else the no-answer words (said as bad). */
+function sentWords(kind, ans, sent) { return sentOk(kind, ans, sent) ? ans.words.slice(0, 300) : noAnswer(kind); }
+/**
+ * The line after a failure. e: { status, body, words } from deskClient (status null: no answer). A refusal is "Refused: " and The
+ * Desk's detail as it is; a 5xx with no detail is no answer (may or may not be recorded), never a refusal (the R12 review, B1).
+ */
 function refusedWords(kind, e) {
-  if (!e || e.status === null || e.status === undefined) return 'The Desk did not answer: the ' + (kind === 'undo' ? 'undo' : 'veto') + ' may or may not be recorded. Reading again.';
+  if (!e || typeof e.status !== 'number') return noAnswer(kind);
   const detail = e.body && typeof e.body.detail === 'string' ? e.body.detail.slice(0, 400) : '';
+  if (!detail && e.status >= 500) return noAnswer(kind);
   return 'Refused: ' + (detail || str(e.words, 300) || 'The Desk answered ' + e.status + ' and gave no reason.');
 }
 
@@ -501,6 +520,6 @@ function needsYou(o) {
 
 return Object.freeze({ ROUTES, FLEET_PATH, RN, NOT_BUILT, NOT_ENOUGH, SIM_LABEL, deskClient, esc, table, cell, raw, card, note, tone, plural,
   simStage, alarmOf, ALARM_NOT_KNOWN, readStatus, realCells, cardAccountWords, cardAccountLog, moneyView, goesInView, runningNow, todayLive, lastNight, centurionView, fleetIndex,
-  VETO_VERSION, ARM_MS, CONFIRM_MS, RUN_ID_RE, NAME_RE, IN_SAMPLE, VETO_UNKNOWN, VETO_UNREACHABLE, NO_WEEK, NO_CHANGE, NO_APPLIED, ALLOW_REFUSED, VETO_Q, SENT,
-  undoQuestion, nyTime, weekOf, appliedOf, askClick, actionFor, sentWords, refusedWords, chipOf, pickWords, cohortsView, directionWords, dropRefusal, moveWords, needsYou });
+  VETO_VERSION, ARM_MS, CONFIRM_MS, RUN_ID_RE, NAME_RE, IN_SAMPLE, VETO_UNKNOWN, VETO_UNREACHABLE, NO_WEEK, NO_CHANGE, NO_APPLIED, ALLOW_REFUSED, VETO_Q,
+  undoQuestion, nyTime, weekOf, appliedOf, askClick, actionFor, sentOk, sentWords, refusedWords, chipOf, pickWords, cohortsView, directionWords, dropRefusal, moveWords, needsYou });
 });
