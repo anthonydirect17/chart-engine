@@ -1414,7 +1414,8 @@ test('ChartBridge 0.5.8: ChartBridgeGroups.cs ships, never places an order, and 
   const elig = c.slice(c.indexOf('private static Account Eligible('), c.indexOf('private static void Skip('));
   assert.match(elig, /string grp = ChartBridgeGroups\.EntryCheck\("copier", a, fRoot, le\.Buy, fq, true, false\);[^\n]*\n\s*if \(grp != null\) \{ label = "group"; why = grp; return null; \}\s*double\? risk = [^\n]*\n\s*string hold = ChartBridgeOrders\.MachineHold\("the copier", "skipped", a, fRoot, fq, 0, risk\);\s*if \(hold != null\) \{ label = "limit"; why = hold; return null; \}\s*return a;/);   // 0.6.6: the firm's limits last
   const a = strip(read('ChartBridgeAgents.cs'));
-  assert.ok(a.indexOf('ChartBridgeGroups.EntryCheck("agent:" + Id') > a.indexOf('// 10. the owner lock') || /string groupWhy = ChartBridgeGroups\.EntryCheck\("agent:" \+ Id, a, root, p\.Side == "buy", p\.Qty, true, false\);/.test(a), 'check 10b');
+  // plan step 3.5 (the R12 review, nit 3): check 10b asks the same rules through AdvisoryEntryCheck (no Output line there)
+  assert.ok(a.indexOf('ChartBridgeGroups.AdvisoryEntryCheck("agent:" + Id') > a.indexOf('// 10. the owner lock') || /string groupWhy = ChartBridgeGroups\.AdvisoryEntryCheck\("agent:" \+ Id, a, root, p\.Side == "buy", p\.Qty, true, false\);/.test(a), 'check 10b');
   // accountState after the snapshot, from the 1 s pass and on every change; the end-of-day highs in the 17:00 ET break
   assert.match(a, /Snapshot\(served\);\s*lock \(Sync\) snapshotSent = true;[^\n]*\n\s*SendAccountState\(true\);/);
   assert.match(a, /SendState\(false\);[^\n]*\n\s*SendAccountState\(false\);/);
