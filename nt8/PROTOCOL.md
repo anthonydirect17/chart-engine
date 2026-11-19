@@ -4140,6 +4140,61 @@ Anthony 2026-11-13: "If I make a move, that's the move". Built in `ChartBridgeGr
 
 Checked in `check/AgentHarness.cs` (`PropAccounts`, the lane rule part, "0.6.23 hand") and `check/GroupsHarness.cs`.
 
+### The floor's highest close kept (unreleased, the floor fix)
+
+Anthony's ruling (2026-11-18): ChartBridge showed a Lucid 50K account's floor at $48,000 where the firm showed $48,151.
+A join with no highest close started the highs at the larger of the account size and the balance, and leaving a group,
+a deleted group and Hide forgot them. Built in `ChartBridgeGroups.cs`; no version bump yet.
+
+- **Every prop account's end-of-day high is kept at every close**, in a group or not. Prop is ChartBridge's own rule
+  (`ChartBridgeBranches.IsProp`: a personal account is picked, and this is not it, not Sim, not Backtest or Playback). In
+  the 17:00 to 18:00 ET break a prop account with no end-of-day high starts one at its equity then (a close ChartBridge
+  saw, so never above the firm's highest close), said once in the Output window; after that the same raise as a member's.
+  The R12 review (BLOCKER 1): a high started this way has not seen the closes before it, so that close's day is kept as
+  its `eodMissed` (the same 12 field line). An account in no group with the firm's rules applied (a copier follower, say)
+  then still reads `floor` null and NinjaTrader's own room (as before any close), with "no end-of-day high is known from
+  before <day>: give the minimum balance from the firm's dashboard"; the kept high still counts in a join (below). A join
+  or `firmMinimum` clears the mark. A group member with no high (its line gone from `account-marks.txt`, say) gets none
+  started at a close: it reads "no end-of-day high is known for this account" until the firm's minimum is given, as before.
+  With no personal account picked nothing is prop and nothing changes (the R12 review, SHOULD 2): no high is started, a
+  join or a move between groups starts as before (the larger of the size and the balance), leaving forgets, and `highEod`
+  is null.
+- **Kept through a leave, a deleted group, Hide and a restart.** A prop account keeps both highs and its missed-close
+  marks (`eodMissed`, `intradayMissed`) when it leaves a group by any way; a Sim or personal account forgets them as
+  before. **After a leave the account's earlier closes are not known** (the delta re-review: a kept high may have
+  started at the account size, a join with no highest close and nothing kept): an empty `eodMissed` is set to the latest
+  close and an empty `intradayMissed` to the day, so in no group with the firm's rules its `floor` is null and
+  NinjaTrader's own room is used ("no end-of-day high is known from before <day>"), until its minimum balance is given
+  (`firmMinimum`) or it joins a group again (the kept high counts in that join, which clears both marks). Anthony
+  2026-11-18 ("Keep both"): an ungrouped prop account keeps NinjaTrader's room until its minimum balance is given. `account-marks.txt` holds them in the same 12 field line (no new field, so any ChartBridge since 0.6.3 reads it).
+  The restart and missed-close rules (0.6.3, audit C2) are unchanged: a close it did not see while the account traded is
+  kept as `eodMissed` beside the kept high, and a gap with nothing traded takes the balance as that close.
+- **A join with no `highClose`** starts both highs at the larger of the kept end-of-day high, the account size and the
+  balance now (the intraday high never below a kept one either), for a prop account; any other account as before. A
+  `highClose` typed on the page is taken as given (the way to correct a high, with `firmMinimum`). **A kept high on a prop
+  account is never forgotten by ChartBridge**: after a firm reset that keeps the account's name, the way to lower it is a
+  typed highest close on the join or `firmMinimum`.
+- **The lane rule's join** carries The Desk's `highClose` from `/api/lane-accounts` when The Desk gives one; ChartBridge
+  starts at the larger of it, the kept end-of-day high (a close The Desk has not walked yet: its floor moves only after the
+  session) and the balance now (the R12 review, SHOULD 1: the old rule's balance floor stays), so **The Desk's highest
+  close can only raise the start**, never lower it. With neither, the join starts at the larger of the account size and
+  the balance, as before. The lane line says where the high
+  started: `added: 1 eval account, X, on the bench (rule); its end-of-day high starts at 50151.00 (The Desk's highest
+  close)`, `(ChartBridge's kept close, above The Desk's highest close 50100.00)`, `(its balance now, above The Desk's
+  highest close 50100.00)`, `(ChartBridge's kept close or its balance now; The Desk gave no highest close)`, or `; its end-of-day high starts at the account size 50000.00: no higher
+  close is known (none from The Desk, none kept by ChartBridge), so check the firm's dashboard and give its minimum balance
+  if the floor differs` (with The Desk's figure in place of "none from The Desk" when it gave the size itself). A `highClose` that reads but is not a plain number of dollars (a string, `true`) refuses that account's join with
+  `accountGroup`'s words; a bare token that is not a JSON number the reader takes (`NaN`, a negative) makes the whole
+  lane-accounts answer unreadable for that minute, so nothing moves until it reads again.
+- **The `accounts` entry gains `highEod`**: the end-of-day high kept for a prop account (dollars), or null when none is
+  kept, the account is not prop (the R12 review, SHOULD 2) or `account-marks.txt` does not read. The page's join prefills the highest close never below it (above The Desk's
+  seed too when that is lower), and warns once, in the join row, when the join must start at the account size, unless
+  NinjaTrader's own figure puts the floor within $25 of it (the same gap as the floor flag).
+- **Entries are unchanged**: an account whose floor is not known still trades as before ("Let them through", Anthony
+  2026-11-18); payouts are untouched.
+
+Checked in `check/GroupsHarness.cs` (`FloorHighs`) and `test/floor-highs.test.js`.
+
 ### The lanes run themselves (0.6.22)
 
 Anthony's standing rule (2026-11-13): a new eval account joins the eval lane by itself, always disarmed until he arms it;
@@ -4152,8 +4207,9 @@ Built in `ChartBridgeGroups.cs` (the rule) and `ChartBridgeAccounts.cs` (the res
 - **Once a minute** ChartBridge asks The Desk `GET <deskUrl>/api/lane-accounts` (10 s limit; the same guard as fills).
   The answer is `{"accounts":[{...}, ...]}`, one flat object per account: `account`, `kind` (`eval`, `funded` or
   `null`), `outcome` (`null`, `blown` or `promoted`), `archived`, `hasRules`, and the rules a join carries (`size`,
-  `dailyLoss`, `drawdown`, `drawdownType`, `lockAt`, `target`, `consistency`, `maxMinis`, `maxMicros`, `typeId`).
-  An answer that does not read moves nothing; that is said once in the Output window until it reads again.
+  `dailyLoss`, `drawdown`, `drawdownType`, `lockAt`, `target`, `consistency`, `maxMinis`, `maxMicros`, `typeId`);
+  unreleased (the floor fix): `highClose`, The Desk's highest close for the account (a number, or null; absent from an
+  older Desk), which the join carries (below). An answer that does not read moves nothing; that is said once in the Output window until it reads again.
 - **Join.** An account joins a lane only when all of these hold: its kind is `eval` or `funded`, it has no outcome and is
   not archived, The Desk knows its rules; NinjaTrader lists it and it is connected; it is prop by ChartBridge's own rule (a
   personal account is picked and this is not it, and it is not Sim); it is in no group now; and exactly one group has
@@ -4488,8 +4544,8 @@ Anthony's decisions of 2026-10-14 (items 4 and 5, with G1, G2, G3 and F-ALL) and
   (`accounts`) and to each agent (`accountState`). A number ChartBridge cannot give is null with the reason; it is never
   estimated. Bots are not in scope.
 - **G2 (b)**: when an account is put into a group, the page asks once for its "highest close so far" (from the firm's
-  dashboard; optional, prefilled with the larger of the account size and its balance now); ChartBridge starts both trailing
-  highs from it.
+  dashboard; optional, prefilled with the larger of the account size and its balance now, and, unreleased (the floor fix),
+  of the end-of-day high ChartBridge keeps for it); ChartBridge starts both trailing highs from it.
 
 **Files** (next to `config.txt`; written whole through a temp file, off NinjaTrader's thread; Anthony never edits them).
 `groups.txt`: two `#` lines, then one line per group, member and personal account:
@@ -4520,8 +4576,9 @@ in the 17:00 to 18:00 ET break by the same 2 s check that runs the daily reset (
 each session's first reading (`dayStartBalance`, the close before it) only when that reading falls in the 17:00 to 18:05 ET
 window (review of #48: a ChartBridge started at midday never takes a midday balance for a close). `dayStartAt` is the UTC ms of
 that reading. `peakIntraday`, the highest equity seen, raised by the
-1 s accounts check. The highs are kept only for an account in a group: joining sets both (G2), leaving or a deleted group
-clears them. `dayStartBalance`, the balance at the first reading of each session (`session`, `yyyy-MM-dd`, ChartBridge's
+1 s accounts check. The highs are kept for an account in a group: joining sets both (G2); leaving, a deleted group or Hide
+clears them for an account that is not prop. Unreleased (the floor fix, below): a prop account keeps both highs and its
+missed-close marks through all of those, and the break starts its end-of-day high at a close when it has none, in a group or not. `dayStartBalance`, the balance at the first reading of each session (`session`, `yyyy-MM-dd`, ChartBridge's
 18:00 ET session date, as `agentState.session`). Written at most every 5 s while something changed, and at the stop. A file
 that cannot be read is not rewritten that run: the trailing floors are null with that reason (a static floor still works) and
 `realizedToday` and `pnlToday` fall back to NinjaTrader's. A balance of 0 is taken as NinjaTrader not having given one yet (no
@@ -4570,7 +4627,7 @@ config switch):
 |---|---|---|
 | `groupSave` | `cid` (optional), `group` (optional: the id to change; absent makes a new group), `name` (1 to 30 characters, no tab, unique ignoring case), `noHedge` (bool), `dailyLoss` (0 for none), `drawdown` (more than 0), `drawdownType` (`eod`, `intraday`, `static`), `target` (0 for none), `size` (more than 0, more than `drawdown`), `lockAt` (0 for none; `eod` and `intraday` only, above `size - drawdown`), `consistency` (optional, 0 or absent for none, else a percent above 0 and at most 100), `accountType` (0.6.1, optional: `eval`, `funded` or `-` for not set; absent keeps the group's), `hero` (0.6.1, optional: a build name of 1 to 64 safe characters, or `-` for none; absent keeps the group's) | every field every time (but `accountType` and `hero`): Rename and the No hedging switch send the whole group. Money: plain numbers, at most 2 decimals, at most 100,000,000 |
 | `groupDelete` | `cid` (optional), `group` | its members go to None (personal, their own limits kept) |
-| `accountGroup` | `cid` (optional), `account`, `group` (an id, or `null` for None), `highClose` (optional, more than 0: G2 b, joining a group only) | refused when the move would leave the target group mixed (the account holds the other side, or the group is mixed already, with No hedging on). Joining: both trailing highs start at `highClose`, or without it at the larger of the account size and the balance now (the page always asks, prefilled so). 0.6.10: `group` `null` for a member NinjaTrader does not list is accepted (remove-only); joining still needs the account listed |
+| `accountGroup` | `cid` (optional), `account`, `group` (an id, or `null` for None), `highClose` (optional, more than 0: G2 b, joining a group only) | refused when the move would leave the target group mixed (the account holds the other side, or the group is mixed already, with No hedging on). Joining: both trailing highs start at `highClose`, or without it at the larger of the end-of-day high kept for the account (unreleased, the floor fix), the account size and the balance now (the page always asks, prefilled so, never below the kept high). 0.6.10: `group` `null` for a member NinjaTrader does not list is accepted (remove-only); joining still needs the account listed |
 | `accountLimits` | `cid` (optional), `account`, `floor` (0 for none), `dailyLoss` (0 for none) | personal accounts only: refused for an account in a group ("its group's rules apply") |
 
 **ChartBridge to page** (to every v3 page on ChartBridge's own origin, signed in or not, as `accounts`):
@@ -4915,7 +4972,7 @@ A group with risk on and no rules line reads in 0.6.1 to 0.6.4 as before (the 14
 | message | 0.6.5 adds |
 |---|---|
 | `groupSave` | `riskPct` (optional: 0 off, else above 0 and at most 100, at most 2 decimals; absent keeps the group's, so a page before 1.33.0 never drops it). Refused: "riskPct must be a percent of each member's max loss from 0 (off) to 100, at most 2 decimals" |
-| `accountGroup` | the member's own rules, all or none, joining a group only: `size`, `dailyLoss`, `drawdown`, `drawdownType`, `lockAt`, `target` (all needed once any is there), `consistency`, `maxMinis`, `maxMicros` (whole, 0 or absent none), `typeId` (The Desk's type id, or `-`). None sent (a page before 1.33.0): the group's rules apply, and any rules the account had go. The seed of both highs without `highClose`: the larger of its own size and its balance. Refused with `groupSave`'s words, and "rules go with joining a group only" |
+| `accountGroup` | the member's own rules, all or none, joining a group only: `size`, `dailyLoss`, `drawdown`, `drawdownType`, `lockAt`, `target` (all needed once any is there), `consistency`, `maxMinis`, `maxMicros` (whole, 0 or absent none), `typeId` (The Desk's type id, or `-`). None sent (a page before 1.33.0): the group's rules apply, and any rules the account had go. The seed of both highs without `highClose`: the larger of its kept end-of-day high (unreleased, the floor fix), its own size and its balance. Refused with `groupSave`'s words, and "rules go with joining a group only" |
 | `memberRules` (new) | `cid` (optional), `account`, and the same rule keys (size, dailyLoss, drawdown, drawdownType, lockAt, target needed): a member's rules changed later. Its highs stay as they are. Refused for an account in no group ("SIM-C is in no group: its own rules are for a member of a group (My floor and My daily are for an account in no group)"); 0.6.6 takes it there (below) |
 | `groups` | each group gains, after `holders`, `riskPct` (null off) and `ownRules` (the members with rules of their own). A page tells a 0.6.5 ChartBridge by `riskPct` being there |
 | `accounts` | each entry gains `rules`: a member's rules `{size, dailyLoss, drawdown, drawdownType, lockAt, target, consistency, maxMinis, maxMicros, typeId, own}` (null for none; `own` false: its group's), null in no group |

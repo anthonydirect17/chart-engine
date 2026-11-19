@@ -96,7 +96,7 @@ each in a reviewed change)". CME's Globex equity index session on Good Friday 20
   after it and on Monday (before, on the day itself it was Wednesday's). `nt8/check/DataHarness.cs` follows.
 - Docs: `CHART_STYLE.md` (the overnight range), `nt8/PROTOCOL.md` (closed, the prior settlement).
 
-## Unreleased (plan step 3.2, and 2026-11-04): Legion as its own app, and getting ready to go private
+## Unreleased (plan step 3.2, 2026-11-04 and 2026-11-18): Legion as its own app, the floor fix, and getting ready to go private
 
 ### Plan step 3.2: Legion as its own app (unreleased; no version bump until the release names it)
 
@@ -139,6 +139,48 @@ Page and ChartBridge (`ChartBridgeAgents.cs` only; `ChartBridge.cs` untouched, i
 - **COMPAT:** the release that ships this page raises `live/COMPAT.json` minChartBridge to the ChartBridge that knows
   agentStopAll and agentFlattenOff (`FLATOFF_MIN` in `agent-core.js` and `STOPALL_MIN` in `legion.js`, pinned to one version by
   `test/nt8-agents.test.js`).
+
+### The floor fix (2026-11-18): every prop account's highest close kept (ChartBridge and the page; no version bump yet)
+
+Anthony's ruling (2026-11-18): ChartBridge showed a Lucid 50K Flex account's floor at $48,000 where Lucid showed $48,151.
+A join with no highest close started the highs at the larger of the account size and the balance, the lane rule's join
+never sent a highest close, and leaving a group, deleting a group or Hide forgot the highs, so a rejoin started over at
+the size. Fixed in `nt8/ChartBridgeGroups.cs`, `live/groups.js`, `live/accounts.js` and `live/multi-account.js`
+(nt8/PROTOCOL.md "The floor's highest close kept").
+
+- **Every prop account's end-of-day high is kept at every close, in a group or not** (`EodMark`): in the 17:00 to 18:00
+  ET break a prop account (ChartBridge's own rule, `IsProp`) with no high starts one at that close, then rises as a
+  member's does. Kept in `account-marks.txt` as today (the same line, no new field).
+- **Kept through a leave, a deleted group, Hide and a restart** (`ForgetHighs` now forgets only an account that is not
+  prop: a Sim or personal account forgets them as before). The restart and missed-close rules (0.6.3) are unchanged.
+- **A join with no highest close** starts from the larger of the kept end-of-day high, the account size and the balance
+  now. A highest close typed on the page is still taken as given (the correction path, with the firm's minimum).
+- **The lane rule's join carries The Desk's highest close** (`highClose` in `/api/lane-accounts`, from The Desk's floor
+  plus the drawdown), raised to the kept high when that is higher; the lane line says where the high started, and says
+  to check the firm's dashboard when it had to start at the account size. A Desk that sends none: the kept high or the
+  size, as above.
+- **The page**: the `accounts` entry's new `highEod`; the join's highest close is prefilled never below it (also above
+  The Desk's seed when that is lower), and the join row (the Accounts tab and the Multi-Account panel) warns once when
+  the join must start at the account size, unless NinjaTrader's own figure is within $25 (`AccountsCore.sizeStartWarn`,
+  the same `FLOOR_GAP` as the floor flag).
+- **The R12 review's changes**: a high started at a close marks the closes before it as not known (`eodMissed`), so an
+  account in no group with the firm's rules applied keeps a null floor and NinjaTrader's own room (the review's probe: a
+  1,800 stop against a room of 1,749 is still held after the first close), with "no end-of-day high is known from before
+  <day>"; the kept high still counts in a join, which clears the mark. With no personal account picked nothing changes at
+  all (no kept high in a join or a move, `highEod` only for a prop account). A lane join never starts below the balance
+  now: The Desk's highest close can only raise the start. PROTOCOL says how a kept high is lowered after a firm reset that
+  keeps the name (a typed highest close or the firm's minimum) and that a `highClose` the reader cannot take as a number
+  (`NaN`, a negative) leaves the whole lane answer unread for that minute.
+- **The delta re-review's change**: a prop account that leaves a group (by hand, the lane rule, a deleted group or Hide)
+  keeps its highs with its earlier closes marked as not known (the empty `eodMissed` and `intradayMissed` set), so in no
+  group with the firm's rules it keeps NinjaTrader's room until its minimum balance is given (the review's P5 and P4a: a
+  1,800 entry against a room of 1,749 is held after the leave); a join or the firm's minimum clears the marks. A group
+  member with no high gets none started at a close (its words stay "no end-of-day high is known for this account").
+- **Unchanged**: an account whose floor is not known trades as before ("Let them through"); payouts; the order path.
+- Tests: `nt8/check/GroupsHarness.cs` `FloorHighs` (the case itself: a 50,151 close, then a join at a balance of 49,900
+  or 50,000 gives a floor of 48,151, not 48,000; a leave and rejoin; a restart; a deleted group; Hide; a missed close; the
+  lane rule with The Desk's highest close, without it, below the kept high, with neither, and not a number); 25 of its
+  checks fail on the code before the fix; the review's probes (BLOCKER 1, SHOULD 1, SHOULD 2) fail on 04c741c. `test/floor-highs.test.js` (the prefill, the warning, the join steps).
 
 ### Getting ready to go private (2026-11-04): the PC updater accepts the box job and reads a chart-engine token; placeholders
 

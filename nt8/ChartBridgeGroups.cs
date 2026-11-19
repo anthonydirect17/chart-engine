@@ -1274,8 +1274,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             SendGroups(false);
         }
 
-        // The 17:00 to 18:00 ET break (ChartBridgeBranches.Check, every 2 s in it): each end-of-day high a member has is raised to
-        // its equity now (the market is shut, so this is the day's close).
+        // The 17:00 to 18:00 ET break (ChartBridgeBranches.Check, every 2 s in it): each end-of-day high an account has is raised to
+        // its equity now (the market is shut, so this is the day's close). Unreleased (Anthony 2026-11-18, the floor fix): a prop
+        // account (ChartBridgeBranches.IsProp) with no end-of-day high yet starts one at this close, in a group or not, so its highest
+        // close is known when it joins a group later (a lower bound: the firm's highest close is never below a close ChartBridge saw).
         public static void EodMark()
         {
             EnsureLoaded();
@@ -1286,12 +1288,25 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (a == null || a.Name == null || !Up(a)) continue;
                 double? bal = Item(a, AccountItem.CashValue), un = Item(a, AccountItem.UnrealizedProfitLoss);
                 if (!bal.HasValue || bal.Value <= 0 || !un.HasValue) continue;
+                bool prop = ChartBridgeBranches.IsProp(a.Name);   // asked before Mem (it reads NinjaTrader's account list)
                 lock (Mem)
                 {
                     Mark m;
                     if (marksError != null || !Marks.TryGetValue(a.Name, out m)) continue;
                     string c = SessionNow();   // 0.6.3 (audit C2): in the break, the day's close is seen
                     if (m.CloseSeen == null || string.CompareOrdinal(c, m.CloseSeen) > 0) { m.CloseSeen = c; marksDirty = true; }
+                    // the delta re-review's nit: never for a group member with no high (account-marks.txt deleted, say): it keeps
+                    // "no end-of-day high is known for this account" until the firm's minimum is given, as before
+                    if (!m.PeakEod.HasValue && prop && !state.Members.ContainsKey(a.Name))
+                    {
+                        // R12 review (BLOCKER 1): a high started here has not seen the closes before this one, so they are marked
+                        // as not known (eodMissed = this close's day): a floor read from it stays null (NinjaTrader's own room is
+                        // used, as before any close), while a join still starts no lower than it (KeptEod); a join or the firm's
+                        // minimum clears the mark
+                        m.PeakEod = Math.Round(bal.Value + un.Value, 2); m.EodMissed = c; marksDirty = true;
+                        ChartBridgeServer.Log("groups: " + a.Name + "'s end-of-day high is kept from this close: " + m.PeakEod.Value.ToString("0.00", CultureInfo.InvariantCulture));
+                        continue;
+                    }
                     if (!m.PeakEod.HasValue) continue;
                     double eq = Math.Round(bal.Value + un.Value, 2);
                     if (eq > m.PeakEod.Value + 0.004) { m.PeakEod = eq; marksDirty = true; ChartBridgeServer.Log("groups: " + a.Name + "'s end-of-day high is " + eq.ToString("0.00", CultureInfo.InvariantCulture)); }
@@ -1796,8 +1811,13 @@ namespace NinjaTrader.NinjaScript.AddOns
                 {
                     double? peak = mark == null ? null : r.Type == "eod" ? mark.PeakEod : mark.PeakIntraday;
                     string gone = mark == null ? null : r.Type == "eod" ? mark.EodMissed : mark.IntradayMissed;
-                    if (gone != null) { floorWhy = r.Type == "eod" ? "ChartBridge was not running at the close of " + gone + ": give the minimum balance from the firm's dashboard (the account's settings), or " + again + " the highest close"
-                                                                  : "ChartBridge was not watching on " + gone + " while the account held a position or traded, so its intraday high may be missed: give the minimum balance from the firm's dashboard (the account's settings), or " + again + " the highest balance"; missedHigh = true; }
+                    // the floor fix: in no group, a kept high's earlier closes are not known (the first kept close, or a leave). A
+                    // member never has such a mark: EodMark starts no high for a member (the delta re-review's nit), so its words
+                    // stay those of a close ChartBridge did not see
+                    bool notKnown = g == null;
+                    if (gone != null) { floorWhy = notKnown ? "no " + (r.Type == "eod" ? "end-of-day" : "intraday") + " high is known from before " + gone + ": give the minimum balance from the firm's dashboard (the account's settings)" + (g != null ? ", or " + again + " the highest close" : "")
+                                                 : r.Type == "eod" ? "ChartBridge was not running at the close of " + gone + ": give the minimum balance from the firm's dashboard (the account's settings), or " + again + " the highest close"
+                                                 : "ChartBridge was not watching on " + gone + " while the account held a position or traded, so its intraday high may be missed: give the minimum balance from the firm's dashboard (the account's settings), or " + again + " the highest balance"; missedHigh = true; }
                     else if (!peak.HasValue) floorWhy = "no " + (r.Type == "eod" ? "end-of-day" : "intraday") + " high is known for this account: give the minimum balance from the firm's dashboard (the account's settings)";
                     else
                     {
@@ -1896,6 +1916,10 @@ namespace NinjaTrader.NinjaScript.AddOns
             SrcWhy(b, n, PageKeys);
             b.Append(",\"rules\":");   // 0.6.5: a member's rules (own true: its own; false: its group's), null in no group; 0.6.6: an account in no group with its own rules
             if (n.R == null) b.Append("null"); else RulesJson(b, n.R, true);
+            // unreleased (Anthony 2026-11-18, the floor fix): the account's kept end-of-day high (account-marks.txt), in a group or not,
+            // or null when none is kept; the page's join prefills its highest close with it (never below it)
+            double kept = ChartBridgeBranches.IsProp(name) ? KeptEod(name) : 0;   // R12 review (SHOULD 2): prop accounts only
+            b.Append(",\"highEod\":").Append(kept > 0 ? Num(kept) : "null");
         }
 
         // 0.6.5: a member's rules as the accounts message carries them (null for none, as the groups message)
@@ -2242,10 +2266,33 @@ namespace NinjaTrader.NinjaScript.AddOns
             return null;
         }
 
+        // An account leaves its group (by hand, the lane rule, a deleted group or Hide): a Sim or personal account's highs go, as
+        // before. Unreleased (Anthony 2026-11-18, the floor fix): a prop account (ChartBridgeBranches.IsProp) keeps its highs and
+        // its missed-close marks, so the floor does not drop to the account size when it joins a group again. The delta re-review
+        // (P5, P4a): a kept high may have started at the account size (a join with no highest close and nothing kept), so in no
+        // group its earlier closes are not known: the empty missed marks are set (the latest close, today), the floor reads null
+        // and NinjaTrader's own room holds, until the firm's minimum is given or a join (KeptEod still counts there) clears them.
         private static void ForgetHighs(IEnumerable<string> accounts)
         {
-            lock (Mem) foreach (string a in accounts) { Mark mk; if (Marks.TryGetValue(a, out mk) && (mk.PeakEod.HasValue || mk.PeakIntraday.HasValue || mk.EodMissed != null || mk.IntradayMissed != null)) { mk.PeakEod = null; mk.PeakIntraday = null; mk.EodMissed = null; mk.IntradayMissed = null; marksDirty = true; } }
+            List<string> all = accounts.ToList();
+            List<string> forget = all.Where(a => !ChartBridgeBranches.IsProp(a)).ToList();   // asked before Mem (it reads NinjaTrader's list)
+            DateTime et = NowEt();
+            string closeDay = LatestClose(et), today = et.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+            lock (Mem) foreach (string a in all.Except(forget, StringComparer.OrdinalIgnoreCase))
+            {
+                Mark mk;
+                if (marksError != null || !Marks.TryGetValue(a, out mk)) continue;
+                if (mk.PeakEod.HasValue && mk.EodMissed == null) { mk.EodMissed = closeDay; marksDirty = true; }
+                if (mk.PeakIntraday.HasValue && mk.IntradayMissed == null) { mk.IntradayMissed = today; marksDirty = true; }
+            }
+            lock (Mem) foreach (string a in forget) { Mark mk; if (Marks.TryGetValue(a, out mk) && (mk.PeakEod.HasValue || mk.PeakIntraday.HasValue || mk.EodMissed != null || mk.IntradayMissed != null)) { mk.PeakEod = null; mk.PeakIntraday = null; mk.EodMissed = null; mk.IntradayMissed = null; marksDirty = true; } }
             SaveMarks(true);
+        }
+
+        // Unreleased (the floor fix): the account's kept end-of-day high (account-marks.txt), 0 when none or the file does not read.
+        private static double KeptEod(string account)
+        {
+            lock (Mem) { Mark k; return marksError == null && account != null && Marks.TryGetValue(account, out k) && k.PeakEod.HasValue ? k.PeakEod.Value : 0; }
         }
 
         private static string AccountGroup(Dictionary<string, string> m) { return AccountGroup(m, "the page", false); }
@@ -2278,6 +2325,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             // another agent's (asked before the order lock: it reads the copier's and the bot's memory)
             if (id != null) { string taken = ChartBridgeAgents.JoinRefusal(name, id); if (taken != null) return taken; }
             string said = null, leftName = null, leftType = null;   // 0.6.23: the group it left (a hand move out of a lane sticks)
+            bool prop = ChartBridgeBranches.IsProp(name);   // R12 review (SHOULD 2): asked before the locks (it reads NinjaTrader's list)
             double seed = 0;
             // no entry passes the check while the membership changes (GroupEntryLock and PlaceLock); groups.txt is written after
             // PlaceLock is let go, so an exit never waits on the disk (review L1), with GroupEntryLock held through it (review L2)
@@ -2324,12 +2372,27 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (bench && id != null) next.Benched.Add(name);   // 0.6.22: a join by the lane rule starts ON the bench (disarmed)
                 // 0.6.5: its own rules when the page sent them; none sent (a page before 1.33.0): the group's, so any it had go
                 if (own != null) next.Own[name] = own; else next.Own.Remove(name);
+                string seedWords = null;
                 if (g != null)
                 {
                     double? bal = Up(a) ? Item(a, AccountItem.CashValue) : null;
-                    seed = high > 0 ? high : Math.Max(own != null ? own.Size : g.Size, bal.HasValue && bal.Value > 0 ? bal.Value : 0);   // 0.6.5: its own account size
+                    double size = own != null ? own.Size : g.Size;   // 0.6.5: its own account size
+                    double kept = prop ? KeptEod(name) : 0;   // R12 review (SHOULD 2): prop accounts only (no personal pick: nothing changes)
+                    double balNowJoin = bal.HasValue && bal.Value > 0 ? bal.Value : 0;
+                    // Unreleased (Anthony 2026-11-18, the floor fix): with no highest close given, the account's kept end-of-day high
+                    // counts too (kept through a leave and a rejoin, and from every close of a prop account in no group); the lane
+                    // rule's highest close from The Desk is raised to the kept high when that is higher (a close The Desk has not
+                    // counted yet: its walk moves the floor only after the session); a highest close typed on the page is his word
+                    // R12 review (SHOULD 1): a lane join never starts below the balance now either (the old rule): The Desk's highest
+                    // close can only raise the start
+                    seed = high > 0 ? (by == "the lane rule" ? Math.Max(Math.Max(high, kept), balNowJoin) : high) : Math.Max(kept, Math.Max(size, balNowJoin));
+                    if (high > 0) seedWords = by == "the lane rule" ? (seed > high + 0.004 ? (kept >= seed - 0.004 ? "ChartBridge's kept end-of-day high" : "its balance now") + ", above The Desk's highest close " + high.ToString("0.00", CultureInfo.InvariantCulture) : "The Desk's highest close")
+                                                                    : "the highest close given";
+                    else seedWords = kept > 0 && seed <= kept + 0.004 ? "no highest close given: its kept end-of-day high"
+                                   : seed <= size + 0.004 ? "no highest close given and no end-of-day high kept: the account size; check the firm's dashboard and give its minimum balance if it differs"
+                                   : "no highest close given: its balance now (above the account size" + (kept > 0 ? " and its kept end-of-day high" : "") + ")";
                 }
-                said = name + (g != null ? " joined " + g.Name + (own != null ? " with its own rules (" + MemberWords(own) + ")" : " with the group's rules") + " (its highs start at " + seed.ToString("0.00", CultureInfo.InvariantCulture) + (high > 0 ? ", the highest close given" : ", no highest close given: the larger of the account size and its balance") + ")" : " is in no group now") +
+                said = name + (g != null ? " joined " + g.Name + (own != null ? " with its own rules (" + MemberWords(own) + ")" : " with the group's rules") + " (its highs start at " + seed.ToString("0.00", CultureInfo.InvariantCulture) + ", " + seedWords + ")" : " is in no group now") +
                        (cur != null && next.Groups.ContainsKey(cur) ? ", left " + next.Groups[cur].Name : "");
                 return null;
             }, next => HeldWords(name, a), out inEffect);   // a failed write: the account holds something now: the change stays
@@ -2353,7 +2416,17 @@ namespace NinjaTrader.NinjaScript.AddOns
                     {
                         Mark mk;
                         if (!Marks.TryGetValue(name, out mk)) Marks[name] = mk = new Mark { Name = name };
-                        mk.PeakEod = Math.Round(seed, 2); mk.PeakIntraday = Math.Round(seed, 2); marksDirty = true;
+                        // Unreleased (the floor fix): a high kept and raised (the 17:00 mark) since the start was decided is never
+                        // lowered by this join unless a highest close was typed on the page; the intraday high never starts below a
+                        // kept one either (both are lower bounds of the firm's figure)
+                        double eodStart = seed, intraStart = seed;
+                        if (prop && (high <= 0 || by == "the lane rule"))   // R12 review (SHOULD 2): prop accounts only
+                        {
+                            if (mk.PeakEod.HasValue && mk.PeakEod.Value > eodStart) eodStart = mk.PeakEod.Value;
+                            if (mk.PeakIntraday.HasValue && mk.PeakIntraday.Value > intraStart) intraStart = mk.PeakIntraday.Value;
+                            if (eodStart > intraStart) intraStart = eodStart;
+                        }
+                        mk.PeakEod = Math.Round(eodStart, 2); mk.PeakIntraday = Math.Round(intraStart, 2); marksDirty = true;
                         mk.EodMissed = null; mk.IntradayMissed = null; mk.CloseSeen = LatestClose(NowEt());   // 0.6.3: the highs given now are the ones known
                         mk.Seen = true; mk.Legacy = false; mk.LastAt = NowMs(); if (balNow.HasValue && balNow.Value > 0) { mk.LastBal = Math.Round(balNow.Value, 2); mk.LastFlat = flatNow; }
                     }
@@ -2554,7 +2627,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         //    leaves once flat with no working orders (or at once when NinjaTrader no longer lists it).
         //  Anything else is left as it is. Every move, and every refusal once, is a line on its lane (the groups message's laneLog, the
         //  Output window); nothing silent. config.txt laneRule = off stops it (default on).
-        public sealed class LaneRow { public string Account, Kind, Outcome; public bool Archived, HasRules; public Dictionary<string, string> Rules; }
+        public sealed class LaneRow { public string Account, Kind, Outcome, HighClose; public bool Archived, HasRules; public Dictionary<string, string> Rules; }   // HighClose (unreleased, the floor fix): The Desk's highest close as its JSON text, null when it gives none
         private static readonly Dictionary<string, List<KeyValuePair<long, string>>> LaneLog = new Dictionary<string, List<KeyValuePair<long, string>>>(StringComparer.Ordinal);
         private static readonly HashSet<string> LaneSaid = new HashSet<string>(StringComparer.Ordinal);   // a refusal said once (account|reason)
         private static readonly string[] LaneRuleKeys = { "size", "dailyLoss", "drawdown", "drawdownType", "lockAt", "target", "consistency", "maxMinis", "maxMicros", "typeId" };
@@ -2609,6 +2682,11 @@ namespace NinjaTrader.NinjaScript.AddOns
                 {
                     r.Rules = new Dictionary<string, string>(StringComparer.Ordinal);
                     foreach (string k in LaneRuleKeys) { ChartBridgeBot.Val v; if (d.TryGetValue(k, out v) && v.K != 'z') r.Rules[k] = v.K == 'd' && v.T.EndsWith(".0", StringComparison.Ordinal) ? v.T.Substring(0, v.T.Length - 2) : v.T; }
+                    // unreleased (Anthony 2026-11-18, the floor fix): The Desk's highest close for the account (its floor plus the drawdown),
+                    // a number, or null or absent when The Desk has none (a Desk before this answers without it); anything else is
+                    // passed on as it came, so the join refuses it with accountGroup's own words and the account is not added
+                    ChartBridgeBot.Val hc;
+                    if (d.TryGetValue("highClose", out hc) && hc.K != 'z') r.HighClose = hc.K != 'd' && hc.K != 'n' ? "not a number" : hc.T.EndsWith(".0", StringComparison.Ordinal) ? hc.T.Substring(0, hc.T.Length - 2) : hc.T;
                 }
                 rows.Add(r);
             }
@@ -2939,7 +3017,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             // the message's values in their JSON form, as the page's would arrive (strings quoted, numbers bare)
             Dictionary<string, string> m = new Dictionary<string, string>(StringComparer.Ordinal) { { "account", CbJson.Str(name) }, { "group", CbJson.Str(lane.Id) } };
             foreach (KeyValuePair<string, string> kv in r.Rules) m[kv.Key] = kv.Key == "drawdownType" || kv.Key == "typeId" ? CbJson.Str(kv.Value) : kv.Value;
+            if (r.HighClose != null) m["highClose"] = r.HighClose;   // unreleased (the floor fix): The Desk's highest close, when it gives one
             string err;
+            double keptBefore = 0;
             lock (ChangeGate)
             {
                 // 0.6.23 (the review of 111): the first read above was taken without ChangeGate, so a hand Remove (or a hand move into
@@ -2951,12 +3031,30 @@ namespace NinjaTrader.NinjaScript.AddOns
                 HandState(name, out handErr, out byHand);
                 if (handErr != null || byHand) return false;
                 if (CopierHas(name) != null) return false;      // the copier took it meanwhile (its messages run under ChangeGate: CopierMessage)
+                keptBefore = KeptEod(name);   // R12 review: what was kept before the join, for the lane line's words
                 err = AccountGroup(m, "the lane rule", true);
             }
             if (err != null) { LaneSay(lane.Id, name + " is not added to " + lane.Name + ": " + err, name + "|joinfail|" + err); return false; }
-            LaneSay(lane.Id, "added: 1 " + r.Kind + " account, " + name + ", on the bench (rule)", null);
+            LaneSay(lane.Id, "added: 1 " + r.Kind + " account, " + name + ", on the bench (rule)" + LaneHighWords(name, r, keptBefore), null);
             lock (LaneSaid) LaneSaid.RemoveWhere(k => k.StartsWith(name + "|", StringComparison.Ordinal));
             return true;
+        }
+
+        // Unreleased (Anthony 2026-11-18, the floor fix): where a lane join's highs started, for its line on the lane. Starting at the
+        // account size with no highest close known is said plainly (the floor may be below the firm's: check its dashboard).
+        private static string LaneHighWords(string name, LaneRow r, double keptBefore)
+        {
+            double start = KeptEod(name), given = 0, size = 0;
+            if (start <= 0) return "";
+            string st = start.ToString("0.00", CultureInfo.InvariantCulture);
+            bool hasGiven = r.HighClose != null && double.TryParse(r.HighClose, NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out given) && given > 0;
+            // at the size whatever the source (The Desk's floor from the starting balance with no seed is the size too): no
+            // close above it is known, so said plainly once
+            string sz;
+            if (r.Rules != null && r.Rules.TryGetValue("size", out sz) && double.TryParse(sz, NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out size) && start <= size + 0.004)
+                return "; its end-of-day high starts at the account size " + st + ": no higher close is known (" + (hasGiven ? "The Desk's highest close is " + given.ToString("0.00", CultureInfo.InvariantCulture) : "none from The Desk") + ", none kept by ChartBridge), so check the firm's dashboard and give its minimum balance if the floor differs";
+            if (hasGiven) return "; its end-of-day high starts at " + st + (start > given + 0.004 ? " (" + (keptBefore >= start - 0.004 ? "ChartBridge's kept close" : "its balance now") + ", above The Desk's highest close " + given.ToString("0.00", CultureInfo.InvariantCulture) + ")" : " (The Desk's highest close)");
+            return "; its end-of-day high starts at " + st + " (ChartBridge's kept close or its balance now; The Desk gave no highest close)";
         }
 
         private static void Changed()

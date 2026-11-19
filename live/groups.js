@@ -234,10 +234,21 @@ function formOf(g) {
 /** The join question's words for a group: an intraday drawdown trails the balance with open P&L, so "highest balance so far
  *  (intraday)"; ChartBridge takes the one number as the start of both its highs (highClose), so only the words differ. */
 const highWord = g => (g && g.drawdownType === 'intraday' ? 'highest balance so far (intraday)' : 'highest close so far');
-/** G2 (b): the "highest close so far" box's prefill: the larger of the group's account size and the account's balance now. */
+/** Unreleased (Anthony 2026-11-18, the floor fix): the end-of-day high ChartBridge keeps for the account (its accounts entry's
+ *  highEod: kept at every close of a prop account, in a group or not, and through a leave), or 0 when none is kept (an older
+ *  ChartBridge sends no highEod). */
+const keptHigh = account => (account && isNum(account.highEod) && account.highEod > 0 ? account.highEod : 0);
+/** G2 (b): the "highest close so far" box's prefill: the larger of the group's account size and the account's balance now; the floor
+ *  fix: and of the end-of-day high ChartBridge keeps for it, so a join never starts the floor below a close ChartBridge saw. */
 function highCloseDefault(g, account) {
   const size = g && isNum(g.size) ? g.size : 0, bal = account && isNum(account.balance) ? account.balance : 0;
-  return Math.max(size, bal);
+  return Math.max(size, bal, keptHigh(account));
+}
+/** The floor fix: The Desk's seed (seedHigh) as the prefill, raised to the kept end-of-day high when that is higher (a close since the
+ *  seed's date): { value, kept } (kept true: the kept high won). */
+function seedOrKept(seed, account) {
+  const k = keptHigh(account);
+  return k > seed.value + 0.004 ? { value: k, kept: true } : { value: seed.value, kept: false };
 }
 /** accountGroup: into a group with the highest close typed ('' : none, ChartBridge then takes the prefill's rule), or out (group null). */
 function joinMessage(account, groupId, highText, cid, word, rules) {
@@ -508,7 +519,7 @@ function membersOff(g, link, typeOfAccount) {
 }
 
 return { NAME_MAX, MONEY_MAX, TYPES, TYPE_WORD, ACCOUNT_TYPES, HERO_RX, typeText, heroText, usd, parseMoney, moneyBox, summary, membersText, sideText, groupMessage, saveFrom, formOf,
-  highCloseDefault, highWord, joinMessage, limitsMessage, cleanGroups,
+  highCloseDefault, keptHigh, seedOrKept, highWord, joinMessage, limitsMessage, cleanGroups,
   TYPE_ID_RX, TYPES_CACHE_KEY, LINKS_KEY, cleanTypes, typeLabel, typeForm, rulesDiffer, typeLimits, applyWords, applySend, TRAILING_FLOOR_WORDS, asOfText, readTypesCache, writeTypesCache, readLinks, saveLink, membersOff,
   PLAN_OTHER, typeParts, stageRank, usedFirms, typeTree, cascadeOf, cascadeStart, cascadePick, cascadeView,
   maxText, perMemberVersion, rulesCheck, ruleKeys, memberRulesMessage, rulesForm, deskRules, seedHigh, riskText, riskDollars };

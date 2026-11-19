@@ -63,6 +63,7 @@
 /* 1.37.0 (Anthony 2026-10-22, "Join flow on the chip"): the join step under a chip of the firm's account in no group, the lane's width */
 .ma-join { flex: 1 0 100%; box-sizing: border-box; border: 1px solid var(--ws-tint-line); border-radius: 5px; background: var(--ws-field); padding: 6px 8px; display: flex; flex-direction: column; gap: 6px; }
 .ma-jwords { font-size: 11px; color: var(--ws-text2); }
+.ma-jwarn { font-size: 11px; color: var(--ws-warn-text); }   /* the floor fix: a join that must start the highs at the account size */
 .ma-jrow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
 .ma-jhigh { width: 96px; height: 26px; text-align: right; }
 .ma-jrow .ws-btn { height: 26px; }

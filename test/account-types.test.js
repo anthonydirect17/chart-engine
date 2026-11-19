@@ -130,7 +130,7 @@ test('groups: the join question for an intraday group asks the highest balance s
   assert.equal(GC.joinMessage('SIM-A', 'g2', 'x', 'c', 'Highest balance so far (intraday)').error, 'Highest balance so far (intraday): dollars above $0, or empty.');
   assert.deepEqual(GC.joinMessage('SIM-A', 'g2', '51000', 'c', 'Highest balance so far (intraday)').msg, { type: 'accountGroup', cid: 'c', account: 'SIM-A', group: 'g2', highClose: 51000 }, 'the same highClose key: ChartBridge seeds both highs from it');
   const cs = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'nt8', 'ChartBridgeGroups.cs'), 'utf8');
-  assert.match(cs, /mk\.PeakEod = Math\.Round\(seed, 2\); mk\.PeakIntraday = Math\.Round\(seed, 2\);/, 'ChartBridge 0.6.2 starts the intraday high from the same number');
+  assert.match(cs, /double eodStart = seed, intraStart = seed;[\s\S]{0,900}?mk\.PeakEod = Math\.Round\(eodStart, 2\); mk\.PeakIntraday = Math\.Round\(intraStart, 2\);/, 'ChartBridge 0.6.2 starts the intraday high from the same number (the floor fix: with none typed, never below a kept high)');
 });
 
 test('account types: this browser\'s copy of the list (the cache), and a page that works without storage', () => {
