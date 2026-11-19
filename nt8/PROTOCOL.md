@@ -861,7 +861,8 @@ trade).
   is the instrument's table until the next session's first trade (R12 N4); NinjaTrader's replay of that session's last trade at
   market data start keeps it (it is in the file already). A read that fails is tried again by the next save passes (3 tries in
   all); a file that is not this session's table, or still will not read, is set aside as `<file>.unread-<n>` and a fresh file is
-  started: a file that did not read back is never appended to. A table read back while a page loads reaches that page once it
+  started: a file that did not read back is never appended to. A set-aside file is kept on disk (pruned with the others after 14
+  days) but never read or joined again. A table read back while a page loads reaches that page once it
   is ready. No file is written for that instrument before the read is done. A file of
   another session is not read; a line cut by a power cut is left out (its seconds fall in the missed gap).
 

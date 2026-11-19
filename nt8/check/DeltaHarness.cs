@@ -615,6 +615,30 @@ public static partial class WindowHarness
             string j11 = t11.Snap(startEt + 20).Json("MNQ", null, null);
             Check(g11 == DeltaTable.BigUnknown && j11.Contains("\"rows\":[10,4,1,0]"), "delta round 2, item 11: a second whose largest trade is not known stays not known (sent as 0) after a smaller known one: " + j11.Substring(j11.IndexOf("\"rows\"")));
 
+            // R12 follow-up 1: an append written in full but failed, its cut back failed too (noted), then ChartBridge restarts in the same
+            // process: the new run reads those lines (their only copy) and never cuts them off
+            D2Clean();
+            RootBook f1 = D2Run(t1, 0, 2000, listening, true);
+            ChartBridgeServer.SaveDeltas();
+            Live(t1, 2000, 2600);
+            ChartBridgeServer.DeltaAppendForHarness = (f, text) => { File.AppendAllText(f, text); throw new IOException("the write-through flush failed (harness)"); };
+            ChartBridgeServer.DeltaCutBackForHarness = (f, len) => { throw new IOException("the file is locked (harness)"); };
+            ChartBridgeServer.SaveDeltas();
+            ChartBridgeServer.DeltaAppendForHarness = null; ChartBridgeServer.DeltaCutBackForHarness = null;
+            RootBook f1b = D2Run(t1, 2700, 3200, listening, true);   // the restart: its read takes the leftover lines in
+            ChartBridgeServer.SaveDeltas();
+            string fu1 = D2Same(D2File(startEt), D2Book(f1b, true));
+            Check(fu1 == null, "delta (R12 follow-up 1): a cut back noted before a restart in the same process is not done after the new run read the file: it reads back as the book" + (fu1 != null ? " (" + fu1 + ")" : ""));
+            // R12 follow-up 2: set-aside files are pruned by their date like the others
+            D2Clean();
+            string old = Path.Combine(D2Folder, "delta-MNQ-" + DeltaTable.TradingDate(startEt).AddDays(-30).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) + ".txt.unread-1");
+            string recent = Path.Combine(D2Folder, "delta-MNQ-" + DeltaTable.TradingDate(startEt).AddDays(-2).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) + ".txt.unread-1");
+            File.WriteAllText(old, "x\n"); File.WriteAllText(recent, "x\n");
+            D2Run(t1, 0, 500, listening, true);
+            ChartBridgeServer.SaveDeltas();   // a new file's first write prunes
+            Check(!File.Exists(old) && File.Exists(recent), "delta (R12 follow-up 2): a set-aside file over 14 days old (by the date in its name) is pruned, a recent one kept");
+            try { File.Delete(recent); } catch (Exception) { }
+
             // R12 N2: a profile push and a table push to the same page at once: neither skips it (200 rounds)
             D2Clean();
             RootBook bn2 = D2Run(t1, 0, 500, listening, true);

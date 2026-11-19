@@ -2652,6 +2652,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     cts = new CancellationTokenSource();
                     StartGate();   // review 6 S1: tick requests may go out again
                     lock (Books) Books.Clear();   // lf7 N1: nothing a load answered after the last stop left behind (a book waiting on a dropped request)
+                    lock (DeltaCutBack) DeltaCutBack.Clear();   // R12 follow-up 1: no cut back noted by an earlier run is done in this one
                     ResolveInstruments();
                     ChartBridgeOrders.NewToken();
                     ChartBridgeOrders.StartPlans();   // 0.3.7: planned_brackets.txt, read on a pool thread before the accounts are watched
@@ -5104,6 +5105,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                         saved = DeltaTable.Parse(text, startEt);
                         if (saved == null && text.Length > 0) { SetAside(f, "it is not this session's delta table"); }
                     }
+                    // R12 follow-up 1: read (or set aside) now: a cut back noted by an earlier run in this process is not done (its lines are
+                    // the only copy of those seconds, and this run counts them as saved)
+                    lock (DeltaCutBack) DeltaCutBack.Remove(f);
                     if (saved != null) { saved.Start = ss; saved.End = se; Log(book.Root + ": this session's delta table read back from " + Path.GetFileName(f) + " (" + (saved.Hi >= 0 ? saved.Hi - saved.Lo + 1 : 0) + " seconds)"); }
                 }
             }
@@ -5265,9 +5269,12 @@ namespace NinjaTrader.NinjaScript.AddOns
             try
             {
                 DateTime day = DeltaTable.TradingDate(startEt);
-                foreach (string f in Directory.GetFiles(ChartBridgeConfig.Folder, "delta-" + root + "-*.txt"))
+                // R12 follow-up 2: the set-aside files too (delta-<root>-<date>.txt.unread-<n>), by the date before ".txt"
+                foreach (string f in Directory.GetFiles(ChartBridgeConfig.Folder, "delta-" + root + "-*.txt").Concat(Directory.GetFiles(ChartBridgeConfig.Folder, "delta-" + root + "-*.txt.unread-*")))
                 {
-                    DateTime d; string stem = Path.GetFileNameWithoutExtension(f);
+                    string name = Path.GetFileName(f);
+                    int dot = name.IndexOf(".txt", StringComparison.Ordinal);
+                    DateTime d; string stem = dot > 0 ? name.Substring(0, dot) : Path.GetFileNameWithoutExtension(f);
                     if (stem.Length >= 10 && DateTime.TryParseExact(stem.Substring(stem.Length - 10), "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out d) && d < day.AddDays(-DeltaFileDays))
                         try { File.Delete(f); } catch (Exception) { }
                 }
