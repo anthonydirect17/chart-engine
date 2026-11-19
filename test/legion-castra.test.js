@@ -127,10 +127,13 @@ test('last night: the board\'s newest night; a board that does not read says why
   assert.equal(none.words, 'No screen night yet.');
 });
 
-test('Centurion\'s week: read only, the veto is not built, nothing is applied', () => {
+test('Centurion\'s week from an older Desk (its veto not built): read only, nothing to act on', () => {
   const c = K.centurionView(F.centurionAnswer());
   assert.equal(c.ok, true);
   assert.equal(c.vetoBuilt, false);
+  assert.equal(c.acts, false);
+  assert.equal(c.week, null);
+  assert.equal(c.applied, null);
   assert.equal(c.applies, false);
   assert.deepEqual(c.changes.map(x => [x.name, x.from, x.to, x.allowed]), [['sample_builds_a_night', '50', '60', true], ['sample_other', 'a', 'b', false]]);
   assert.equal(c.findings.length, 2);
@@ -227,13 +230,16 @@ test('the page: Castra and the cohort model are mounted from the tabs file at it
   assert.match(tabs, /cohortModel\.show\(tab === 'cohorts' && sub === 'legion'\)/);
 });
 
-test('Castra reads and never writes; Cohorts writes The Desk\'s cohort model only and sends ChartBridge nothing', () => {
+test('Castra writes only Centurion\'s veto and undo (one POST each); Cohorts writes The Desk\'s cohort model only; neither sends ChartBridge anything', () => {
   const castra = read('live', 'legion-castra.js'), cohorts = read('live', 'legion-cohorts.js'), core = read('live', 'legion-castra-core.js');
-  assert.doesNotMatch(castra, /\.put\(|\.post\(|method: ['"](PUT|POST|DELETE)/, 'Castra: no write');
+  assert.doesNotMatch(castra, /\.put\(|method: ['"](PUT|POST|DELETE)/, 'Castra: no PUT, no write of its own');
+  assert.equal((castra.match(/\.post\(/g) || []).length, 1, 'Castra: the one POST, its route and body from K.actionFor');
+  assert.match(castra, /desk\.post\(act\.route, act\.body\)/);
   assert.equal((cohorts.match(/desk\.put\(/g) || []).length, 1, 'Cohorts: the one write (the member move)');
   assert.match(cohorts, /desk\.put\(K\.ROUTES\.members, \{ version: v\.version, account, cohort: toId \}\)/);
   for (const [n, src] of [['castra', castra], ['cohorts', cohorts], ['core', core]]) assert.doesNotMatch(src, /WebSocket|AF\.post|\.send\(|sendOrder|createFeed/, n + ': no way to ChartBridge or an order');
   assert.equal((core.match(/method: 'PUT'/g) || []).length, 1, 'the client has the one PUT');
+  assert.equal((core.match(/method: 'POST'/g) || []).length, 1, 'and the one POST');
 });
 
 test('no dash, no sample numbers on screen outside the labelled fixtures, no purple', () => {
@@ -289,7 +295,7 @@ test('the Desk client gives up on a hang (about 15 s): an aborted request and a 
 
 test('veto, dollars per funded slot and the named type say "not built yet (law 1.6)" where they would be; the cohort pick words; the race is closed', () => {
   const castra = read('live', 'legion-castra.js'), cohorts = read('live', 'legion-cohorts.js');
-  assert.match(castra, /Veto: ' \+ K\.NOT_BUILT \+ ' \(plan steps 2\.9 and 3\.3\)/);
+  assert.match(castra, /K\.VETO_UNKNOWN \+ \(c\.vetoWords \? ' The Desk: ' \+ c\.vetoWords : ''\) \+ ' \(plan steps 2\.9 and 3\.3: Centurion applies nothing until the veto is on\.\)'/);
   assert.match(castra, /Dollars per funded slot per 30 sessions: ' \+ esc\(K\.NOT_BUILT\) \+ ' \(law 1\.6\)/);
   assert.match(castra, /Named account type: ' \+ esc\(K\.NOT_BUILT\) \+ ' \(law 1\.6\)/);
   assert.match(cohorts, /is set in The Desk and is not changed on this tab yet/);
@@ -308,4 +314,157 @@ test('a write that timed out is read again at once; the Centurion card cites pla
   assert.doesNotMatch(castra, /Veto: [^\n]*law 1\.6/);
   assert.match(castra, /is not read yet/);
   assert.match(castra, /could not be read/);
+});
+
+/* ---------------------------------------------------------------- Centurion's veto and undo (the contract v1, 2026-11-19, section 6) */
+const LC = require('../live/legion.js');
+const RUN = F.SAMPLE_RUN;
+
+test('Centurion: the routes Castra uses are three (the read, the veto, the undo); it never calls the seal or the undo list', () => {
+  assert.deepEqual([K.ROUTES.centurion, K.ROUTES.centurionVeto, K.ROUTES.centurionUndo], ['/api/legion/centurion', '/api/legion/centurion/veto', '/api/legion/centurion/undo']);
+  assert.ok(!Object.values(K.ROUTES).some(r => /\/seal|\/undos/.test(r)), 'no seal or undos route');
+  const code = f => read('live', f).replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  for (const f of ['legion-castra.js', 'legion-castra-core.js', 'legion-tabs.js']) assert.doesNotMatch(code(f), /\/seal\b|undos|centurionSeal/, f + ': no seal, no undo list, outside the comments');
+  for (const f of ['legion-castra.js', 'legion-castra-core.js']) {
+    const src = read('live', f);
+    for (const r of ['GET /api/legion/centurion', 'POST /api/legion/centurion/veto', 'POST /api/legion/centurion/undo']) assert.ok(src.includes(r), f + ' names ' + r + ' in its header');
+  }
+});
+
+test('Centurion: the question is Legion\'s Stop all question: ARM_MS 600, CONFIRM_MS 8000, the same answer at every click', () => {
+  assert.equal(K.ARM_MS, 600);
+  assert.equal(K.CONFIRM_MS, 8000);
+  assert.equal(K.ARM_MS, LC.ARM_MS);
+  assert.equal(K.CONFIRM_MS, LC.CONFIRM_MS);
+  for (const at of [0, 1000]) for (const age of [0, 1, 599, 600, 601, 4000, 7999, 8000, 8001, 20000]) for (const real of [true, false])
+    assert.equal(K.askClick(at, at + age, real), LC.stopClick(at, at + age, real), [at, age, real].join());
+  assert.equal(K.askClick(1000, 1300, true), 'early');
+  assert.equal(K.askClick(1000, 1700, true), 'yes');
+  assert.equal(K.askClick(1000, 1700, false), 'key');
+  assert.equal(K.askClick(1000, 9001, true), 'late');
+});
+
+test('Centurion v1: acted on only for veto.built true and version 1; anything else is read only', () => {
+  assert.equal(K.centurionView(F.centurionV1()).acts, true);
+  for (const veto of [{ built: true, version: 2 }, { built: true }, { built: 'true', version: 1 }, { built: true, version: '1' }, { built: false, version: 1 }, null]) {
+    const a = F.centurionV1(); a.veto = veto;
+    const c = K.centurionView(a);
+    assert.equal(c.acts, false, JSON.stringify(veto));
+    assert.equal(c.week, null);
+    assert.equal(K.actionFor(c, true, 'veto', RUN, 'sample_builds_a_night').why, K.VETO_UNKNOWN);
+  }
+  assert.equal(K.VETO_UNKNOWN, 'The Desk\'s veto is not one this page knows: read only.');
+});
+
+test('Centurion v1, the week: Veto only on an allowed change while The Desk says open; refused, vetoed and outcomes in words', () => {
+  const c = K.centurionView(F.centurionV1({ vetoed: ['sample_neighbours'] }));
+  const by = n => c.week.changes.find(x => x.name === n);
+  assert.deepEqual([by('sample_builds_a_night').can, by('sample_neighbours').can, by('sample_other').can], [true, false, false]);
+  assert.equal(by('sample_neighbours').then, 'Vetoed');
+  assert.equal(by('sample_other').then, 'Refused by the allow-list: never applied');
+  assert.equal(by('sample_builds_a_night').why, 'Sample reason: more builds a night (made up).');
+  assert.equal(c.week.words, 'Veto until the end of Sunday, New York time. The rest go in at Sunday night\'s run.');
+  assert.equal(c.week.closes, 'Mon, Jan 8, 2001, 00:00 EST', 'closes_utc in New York time');
+  for (const state of ['closed', 'sealed', 'missed', 'reports only', 'not a Saturday report', 'something new']) {
+    const w = K.centurionView(F.centurionV1({ state })).week;
+    assert.ok(w.changes.every(x => !x.can), state + ': no Veto');
+    assert.equal(w.changes.find(x => x.name === 'sample_builds_a_night').then, 'Not vetoed', state);
+  }
+  const done = K.centurionView(F.centurionV1({ state: 'sealed', vetoed: ['sample_neighbours'], outcomes: { sample_builds_a_night: ['applied', null], sample_neighbours: ['vetoed', null] } })).week;
+  assert.deepEqual(done.changes.map(x => x.then), ['Applied', 'Vetoed', 'Refused by the allow-list: never applied']);
+  assert.match(done.sealed, /^Mon, Jan 8, 2001, 00:05 EST$/);
+  const odd = K.centurionView(F.centurionV1({ state: 'sealed', vetoed: ['sample_neighbours'], outcomes: { sample_builds_a_night: ['refused', 'Sample: moved since (made up).'], sample_neighbours: ['applied', null] } })).week;
+  assert.equal(odd.changes[0].then, 'Refused: Sample: moved since (made up).');
+  assert.equal(odd.changes[1].then, 'Vetoed (the applied log says: Applied)', 'a log that disagrees with the veto is shown, never hidden');
+  const miss = K.centurionView(F.centurionV1({ state: 'missed', outcomes: { sample_builds_a_night: ['not applied', 'Sample: the seal did not answer (made up).'] } })).week;
+  assert.equal(miss.changes[0].then, 'Not applied: Sample: the seal did not answer (made up).');
+});
+
+test('Centurion v1: a run id or a setting name that is not one The Desk would send gets no button', () => {
+  const a = F.centurionV1(); a.week.run_id = 'centurion_2001';
+  assert.ok(K.centurionView(a).week.changes.every(x => !x.can));
+  const b = F.centurionV1(); b.week.changes[0].name = 'Sample-Bad';
+  assert.equal(K.centurionView(b).week.changes[0].can, false);
+  const r = F.centurionV1(); r.applied.rows[0].name = 'x'.repeat(65);
+  assert.equal(K.centurionView(r).applied.rows[0].can, false);
+});
+
+test('Centurion v1, the applied log: Undo on "none" only; asked, done, refused in words; a log that does not read shows nothing', () => {
+  const a = K.centurionView(F.centurionV1({ undo: { sample_neighbours: 'asked' }, more: 3 })).applied;
+  assert.equal(a.ok, true);
+  assert.deepEqual(a.rows.map(r => [r.name, r.can, r.then]), [['sample_builds_a_night', true, ''], ['sample_neighbours', false, 'Undo asked: done at the start of the next night\'s run'],
+    ['sample_spare', false, 'Undo refused: Sample: moved since: undo by hand (made up).']]);
+  assert.equal(a.rows[0].when, 'Mon, Jan 1, 2001, 00:05 EST');
+  assert.equal(a.more, 3);
+  assert.equal(K.centurionView(F.centurionV1({ undo: { sample_builds_a_night: 'done' } })).applied.rows[0].then, 'Undone');
+  const bad = K.centurionView(F.centurionV1({ applied: false })).applied;
+  assert.equal(bad.ok, false);
+  assert.match(bad.problem, /^The applied log does not read: nothing from it is shown, and no undo can be asked now\.$/);
+  assert.equal(K.actionFor(K.centurionView(F.centurionV1({ applied: false })), true, 'undo', 'centurion_20001230T110500Z', 'sample_builds_a_night').why.slice(0, 30), 'This change has no Undo now (T');
+  assert.deepEqual(K.centurionView(F.centurionV1({ rows: [] })).applied.rows, []);
+});
+
+test('Centurion v1: the one POST carries exactly { run_id, name }; nothing is sent on a stale read or for a change not offered', () => {
+  const c = K.centurionView(F.centurionV1({ vetoed: ['sample_neighbours'] }));
+  const v = K.actionFor(c, true, 'veto', RUN, 'sample_builds_a_night');
+  assert.deepEqual(v, { route: '/api/legion/centurion/veto', body: { run_id: RUN, name: 'sample_builds_a_night' } });
+  assert.deepEqual(Object.keys(v.body), ['run_id', 'name']);
+  const u = K.actionFor(c, true, 'undo', 'centurion_20001230T110500Z', 'sample_neighbours');
+  assert.deepEqual(u, { route: '/api/legion/centurion/undo', body: { run_id: 'centurion_20001230T110500Z', name: 'sample_neighbours' } });
+  assert.equal(K.actionFor(c, false, 'veto', RUN, 'sample_builds_a_night').why, K.VETO_UNREACHABLE, 'a stale or failed read sends nothing');
+  for (const [kind, run, name] of [['veto', RUN, 'sample_neighbours'], ['veto', RUN, 'sample_other'], ['veto', 'centurion_20001230T110500Z', 'sample_builds_a_night'], ['undo', 'centurion_20001223T110500Z', 'sample_spare'], ['seal', RUN, 'sample_builds_a_night']])
+    assert.ok(K.actionFor(c, true, kind, run, name).why, [kind, run, name].join());
+  assert.ok(K.actionFor(K.centurionView(F.centurionV1({ state: 'closed' })), true, 'veto', RUN, 'sample_builds_a_night').why, 'closed: no veto');
+});
+
+test('Centurion v1: the answers in the contract\'s words; The Desk\'s refusal as it is; no answer is never called failed or done', () => {
+  assert.equal(K.sentWords('veto', { words: 'Vetoed: this change will not go in.' }), 'Vetoed: this change will not go in.');
+  assert.equal(K.sentWords('veto', {}), 'Vetoed: this change will not go in.');
+  assert.equal(K.sentWords('undo', null), 'Undo asked: it is done at the start of the next night\'s run.');
+  const late = 'The veto window closed at the end of Sunday, New York time. Sunday night\'s run takes the list as it was; use Undo after the run.';
+  assert.equal(K.refusedWords('veto', { status: 409, body: { detail: late }, words: 'x' }), 'Refused: ' + late);
+  assert.equal(K.refusedWords('veto', { status: null, body: null, words: 'The Desk did not answer /api/legion/centurion/veto in 15 s.' }), 'The Desk did not answer: the veto may or may not be recorded. Reading again.');
+  assert.equal(K.refusedWords('undo', { status: null }), 'The Desk did not answer: the undo may or may not be recorded. Reading again.');
+  assert.match(K.refusedWords('veto', { status: 500, body: null, words: 'The Desk answered 500 to /api/legion/centurion/veto.' }), /^Refused: The Desk answered 500/);
+  assert.equal(K.VETO_Q, 'Veto this change? It will not go in at Sunday night\'s run. A veto cannot be taken back.');
+  assert.equal(K.undoQuestion('sample_builds_a_night', '40'), 'Undo this change? sample_builds_a_night goes back to 40 at the start of the next night\'s run.');
+  assert.equal(K.VETO_UNREACHABLE, 'The Desk did not answer, so no veto or undo can be sent now. If Sunday night\'s run cannot read the veto list, it applies nothing that week.');
+  assert.deepEqual([K.NO_WEEK, K.NO_CHANGE, K.NO_APPLIED], ['No Saturday report yet: nothing to veto.', 'No change proposed this week.', 'No change applied yet.']);
+  assert.equal(K.IN_SAMPLE, 'In-sample: nothing here is proven, and no change here trades.');
+});
+
+test('Centurion v1: New York time from the browser\'s zone data, in both offsets; anything not a UTC stamp is no time', () => {
+  assert.equal(K.nyTime('2026-11-23T05:00:00Z'), 'Mon, Nov 23, 2026, 00:00 EST');
+  assert.equal(K.nyTime('2026-07-13T04:00:00Z'), 'Mon, Jul 13, 2026, 00:00 EDT');
+  for (const x of ['2026-11-23', '2026-11-23T05:00:00+00:00', '', null, 5]) assert.equal(K.nyTime(x), '');
+  assert.match(read('live', 'legion-castra-core.js'), /new Intl\.DateTimeFormat\('en-US', \{ timeZone: 'America\/New_York'/);
+});
+
+test('the Desk client: POST with JSON and no credentials; a hang is a failure with no status (the may-or-may-not words)', async () => {
+  const calls = [];
+  const d = K.deskClient({ fetch: async (u, o) => { calls.push([u, o]); return { ok: true, status: 200, json: async () => ({ words: 'ok' }) }; }, deskBase: () => 'http://desk.example.com' });
+  assert.deepEqual(await d.post('/api/legion/centurion/veto', { run_id: RUN, name: 'sample_builds_a_night' }), { words: 'ok' });
+  assert.equal(calls[0][0], 'http://desk.example.com/api/legion/centurion/veto');
+  assert.deepEqual([calls[0][1].method, calls[0][1].credentials, calls[0][1].cache, calls[0][1].headers['Content-Type']], ['POST', 'omit', 'no-store', 'application/json']);
+  assert.equal(calls[0][1].body, JSON.stringify({ run_id: RUN, name: 'sample_builds_a_night' }));
+  const hang = K.deskClient({ fetch: () => new Promise(() => {}), deskBase: () => 'http://desk.example.com', timeoutMs: 30 });
+  await assert.rejects(hang.post('/api/legion/centurion/veto', {}), e => e.status === null && K.refusedWords('veto', e) === 'The Desk did not answer: the veto may or may not be recorded. Reading again.');
+});
+
+test('Castra\'s card VII: the question in the card with Yes and Cancel, Escape closes it, one send at a time, no button on a stale read', () => {
+  const castra = read('live', 'legion-castra.js');
+  assert.match(castra, /role="alertdialog"/);
+  assert.match(castra, /data-cx-yes>Yes, ' \+ esc\(kind\) \+ '<\/button><button type="button" class="lx-btn" data-cx-no>Cancel<\/button>/);
+  assert.match(castra, /e\.key === 'Escape' && S\.ask/);
+  assert.match(castra, /document\.removeEventListener\('keydown', onKey, true\)/);
+  assert.match(castra, /K\.askClick\(S\.ask \? S\.ask\.at : 0, Date\.now\(\), realClick\(e\)\)/);
+  assert.match(castra, /\(sending \? 'Sending\.\.\.' : label\)/);
+  assert.match(castra, /\(S\.sending \? ' disabled' : ''\)/);
+  assert.match(castra, /if \(!a \|\| S\.sending\) \{ render\(\); return; \}/);
+  assert.match(castra, /x\.can && fresh \? raw\(actBtn\('veto'/);
+  assert.match(castra, /r\.can && fresh \? raw\(actBtn\('undo'/);
+  assert.match(castra, /const realClick = typeof o\.realClick === 'function' \? o\.realClick : \(\) => false;/);
+  assert.match(read('live', 'legion-tabs.js'), /window\.LegionCastra\.mount\(\$\('cxView'\), \{ [^}]*realClick \}\)/);
+  assert.doesNotMatch(read('test', 'fixtures', 'castra-sample.js').match(/function centurionV1[\s\S]*?\n}\n/)[0], /[–—]/);
+  assert.match(JSON.stringify(F.centurionV1()), /Sample week \(made up\)/, 'the sample week says sample on screen');
 });

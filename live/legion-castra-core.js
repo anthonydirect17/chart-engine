@@ -10,7 +10,11 @@
  *   the cohorts   GET /api/legion/cohorts     the prop account groups, each cohort's pick, firm and PC, every prop account
  *   the move      PUT /api/legion/cohorts/members {version, account, cohort|null}   the one write: drag and drop
  *   the money     GET /api/legion/money       real profit per $1 per roster build beside the Prop Sim's own (law 9.2)
- *   Centurion     GET /api/legion/centurion   the weekly report (read only: its veto is not built yet)
+ *   Centurion     GET /api/legion/centurion   the weekly report, the week's veto window and the applied log (contract v1, 2026-11-19)
+ *   the veto      POST /api/legion/centurion/veto {run_id, name}   one change of this week's Saturday report turned off
+ *   the undo      POST /api/legion/centurion/undo {run_id, name}   one applied change asked back (done at the next night's run)
+ * Centurion's three routes are the only ones Castra uses for him. It never calls the seal or the undo list (POST
+ * /api/legion/centurion/seal, GET /api/legion/centurion/undos): those are Bot-Lab's night run's, on the box (a test pins it).
  *   the board     GET /api/legion/board       the loop board (last night's builds; LudusCore.boardOf reads it)
  *   the league    GET /api/chart-league       the Drone sky's day (LeagueCore.cleanDay)
  * What only the trading PC knows (a trader's mode, an account's position, its room to the floor and its day) comes from the
@@ -37,6 +41,8 @@ const ROUTES = Object.freeze({
   members: '/api/legion/cohorts/members',
   money: '/api/legion/money',
   centurion: '/api/legion/centurion',
+  centurionVeto: '/api/legion/centurion/veto',
+  centurionUndo: '/api/legion/centurion/undo',
   board: '/api/legion/board',
   league: '/api/chart-league',
 });
@@ -53,8 +59,9 @@ const plural = (n, one, many) => n.toLocaleString('en-US') + ' ' + (n === 1 ? on
 
 /* ---------------------------------------------------------------- the one Desk client (Castra and Cohorts share it) */
 /**
- * { get(path), put(path, body) }: The Desk's one address (deskBase(), AccountsPage.deskBase), no credentials, never cached.
- * A failed read or write rejects with { words, status, body }: words in plain language naming the route (LudusCore.failWords).
+ * { get(path), put(path, body), post(path, body) }: The Desk's one address (deskBase(), AccountsPage.deskBase), no credentials, never
+ * cached. A failed read or write rejects with { words, status, body }: words in plain language naming the route (LudusCore.failWords);
+ * status null when The Desk did not answer (off, a hang past the timeout, or an answer that does not read).
  */
 function deskClient(o) {
   const TIMEOUT_MS = isNum(o.timeoutMs) && o.timeoutMs > 0 ? o.timeoutMs : 15000;
@@ -71,6 +78,7 @@ function deskClient(o) {
   return {
     get: path => withTimeout(signal => base().then(b => o.fetch(b + path, { cache: 'no-store', mode: 'cors', credentials: 'omit', signal })).then(answer)).catch(e => fail(path, e)),
     put: (path, body) => withTimeout(signal => base().then(b => o.fetch(b + path, { method: 'PUT', cache: 'no-store', mode: 'cors', credentials: 'omit', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal })).then(answer)).catch(e => fail(path, e)),
+    post: (path, body) => withTimeout(signal => base().then(b => o.fetch(b + path, { method: 'POST', cache: 'no-store', mode: 'cors', credentials: 'omit', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal })).then(answer)).catch(e => fail(path, e)),
   };
 }
 
@@ -234,17 +242,143 @@ function lastNight(boardAns) {
     builds: isObj(b.board.line) && isObj(b.board.line.counts) && isNum(b.board.line.counts.in_the_line) ? b.board.line.counts.in_the_line : null };
 }
 
-/* ---------------------------------------------------------------- Centurion's week (read only: no veto action yet) */
+/* ---------------------------------------------------------------- Centurion's week, its veto and its undo (the contract v1, 2026-11-19) */
+/*
+ * The Desk serves the week (GET /api/legion/centurion, veto: { built: true, version: 1 }): the week's Saturday report, its veto window as The
+ * Desk counts it in New York time, each change with its veto and its outcome, and the applied log's newest lines with each one's undo. This
+ * page never decides the window: it shows The Desk's state, offers Veto only while The Desk says "open" and Undo only on an applied change
+ * whose undo state is "none", and The Desk refuses whatever is late. Any other veto answer (an older Desk, built false, another version):
+ * read only. Both actions ask first (ARM_MS and CONFIRM_MS, as Legion's Stop all question) and send one POST of exactly { run_id, name }.
+ */
+const VETO_VERSION = 1;
+const ARM_MS = 600;               // the question takes no answer for this long after it opens (LegionCore.ARM_MS; a test holds them equal)
+const CONFIRM_MS = 8000;          // and is gone after this long, by the clock (LegionCore.CONFIRM_MS)
+const RUN_ID_RE = /^centurion_\d{8}T\d{6}Z$/;
+const NAME_RE = /^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$/;
+const UTC_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
+const WINDOW_STATES = Object.freeze(['open', 'closed', 'sealed', 'missed', 'reports only', 'not a Saturday report']);
+const OUTCOME_WORDS = Object.freeze({ applied: 'Applied', vetoed: 'Vetoed', refused: 'Refused', 'not applied': 'Not applied' });
+const UNDO_STATES = Object.freeze(['none', 'asked', 'done', 'refused']);
+const IN_SAMPLE = 'In-sample: nothing here is proven, and no change here trades.';
+const VETO_UNKNOWN = 'The Desk\'s veto is not one this page knows: read only.';
+const VETO_UNREACHABLE = 'The Desk did not answer, so no veto or undo can be sent now. If Sunday night\'s run cannot read the veto list, it applies nothing that week.';
+const NO_WEEK = 'No Saturday report yet: nothing to veto.';
+const NO_CHANGE = 'No change proposed this week.';
+const NO_APPLIED = 'No change applied yet.';
+const ALLOW_REFUSED = 'Refused by the allow-list: never applied';
+const VETO_Q = 'Veto this change? It will not go in at Sunday night\'s run. A veto cannot be taken back.';
+const undoQuestion = (name, from) => 'Undo this change? ' + name + ' goes back to ' + from + ' at the start of the next night\'s run.';
+const SENT = Object.freeze({ veto: 'Vetoed: this change will not go in.', undo: 'Undo asked: it is done at the start of the next night\'s run.' });
+
+/** A UTC stamp (YYYY-MM-DDTHH:MM:SSZ) in New York time, by the browser's own zone data: "Mon, Jan 8, 2001, 00:00 EST". '' when it is not one. */
+const NY_FMT = (() => { try { return new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'short', year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZoneName: 'short' }); } catch (e) { return null; } })();
+function nyTime(utc) {
+  if (!NY_FMT || !UTC_RE.test(str(utc))) return '';
+  const d = new Date(utc);
+  return isFinite(d.getTime()) ? NY_FMT.format(d) : '';
+}
+const valueText = x => (isNum(x) || typeof x === 'string' ? String(x).slice(0, 40) : '-');
+
+/** The week The Desk serves: { runId, madeUtc, saturday, state, words, closes, sealed, changes: [{ name, from, to, why, allowed, veto, outcome, then, can }] }, or null. */
+function weekOf(w) {
+  if (!isObj(w)) return null;
+  const runId = str(w.run_id, 40), runOk = RUN_ID_RE.test(runId);
+  const win = isObj(w.window) ? w.window : {};
+  const state = WINDOW_STATES.includes(win.state) ? win.state : 'unknown';
+  const changes = (Array.isArray(w.changes) ? w.changes : []).filter(isObj).slice(0, 20).map(c => {
+    const name = str(c.name, 64), nameOk = NAME_RE.test(name) && str(c.name).length <= 64;
+    const veto = isObj(c.veto) ? { id: str(c.veto.id, 18), at: nyTime(c.veto.at_utc) } : null;
+    const outcome = typeof c.outcome === 'string' && c.outcome ? c.outcome.slice(0, 40) : null;
+    const outWord = outcome ? (OUTCOME_WORDS[outcome] || outcome) : '', outWhy = str(c.outcome_why, 300);
+    let then = '', can = false;
+    if (c.allowed !== true) then = ALLOW_REFUSED;
+    else if (veto) then = 'Vetoed' + (outcome && outcome !== 'vetoed' ? ' (the applied log says: ' + outWord + (outWhy ? ', ' + outWhy : '') + ')' : '');
+    else if (outcome) then = outWord + (outWhy ? ': ' + outWhy : '');
+    else if (state === 'open' && runOk && nameOk) can = true;
+    else then = 'Not vetoed';
+    return { name, from: valueText(c.from), to: valueText(c.to), why: str(c.why, 400), allowed: c.allowed === true, veto, outcome, then, can };
+  });
+  return { runId, runOk, madeUtc: str(w.made_utc, 20), saturday: str(w.saturday, 10), applies: w.applies === true, state, words: str(win.words, 400),
+    closes: nyTime(win.closes_utc), sealed: nyTime(win.sealed_utc), changes };
+}
+
+/** The applied log's newest lines: { ok, problem, rows: [{ runId, name, from, to, when, state, then, can }], more }. */
+function appliedOf(a) {
+  if (!isObj(a)) return { ok: false, problem: 'The applied log\'s answer is not one this page knows: nothing from it is shown, and no undo can be asked now.', rows: [], more: 0 };
+  if (a.ok !== true) return { ok: false, problem: str(a.problem, 400) || 'The applied log does not read: nothing from it is shown, and no undo can be asked now.', rows: [], more: 0 };
+  const rows = (Array.isArray(a.rows) ? a.rows : []).filter(isObj).slice(0, 20).map(r => {
+    const runId = str(r.run_id, 40), name = str(r.name, 64), u = isObj(r.undo) ? r.undo : {};
+    const state = UNDO_STATES.includes(u.state) ? u.state : 'unknown';
+    const keyOk = RUN_ID_RE.test(runId) && NAME_RE.test(name) && str(r.name).length <= 64;
+    let then = '', can = false;
+    if (state === 'none') { if (keyOk) can = true; else then = 'Not undone'; }
+    else if (state === 'asked') then = 'Undo asked: done at the start of the next night\'s run';
+    else if (state === 'done') then = 'Undone';
+    else if (state === 'refused') then = 'Undo refused: ' + (str(u.why, 300) || 'no reason given');
+    else then = 'Undo: could not tell';
+    return { runId, name, from: valueText(r.from), to: valueText(r.to), when: nyTime(r.applied_utc) || 'not stated', state, then, can };
+  });
+  return { ok: true, problem: null, rows, more: isNum(a.more) && a.more > 0 ? Math.floor(a.more) : 0 };
+}
+
+/**
+ * Centurion's answer as card VII shows it. acts: The Desk's veto is the one this page knows (built true, version 1); with any other
+ * answer the card is read only (VETO_UNKNOWN) and shows the report as before. week and applied: The Desk's (only when acts).
+ */
 function centurionView(ans) {
-  if (!isObj(ans)) return { ok: false, problem: 'Centurion\'s answer is not one this page knows.' };
-  if (!ans.ok || !isObj(ans.report)) return { ok: false, problem: str(ans.problem) || 'Centurion has not reported yet.' };
+  if (!isObj(ans)) return { ok: false, problem: 'Centurion\'s answer is not one this page knows.', acts: false, week: null, applied: null };
+  const v = isObj(ans.veto) ? ans.veto : {};
+  const acts = v.built === true && v.version === VETO_VERSION;
+  const extra = { acts, vetoBuilt: v.built === true, vetoWords: str(v.note, 300), week: acts ? weekOf(ans.week) : null, applied: acts ? appliedOf(ans.applied) : null };
+  if (!ans.ok || !isObj(ans.report)) return Object.assign({ ok: false, problem: str(ans.problem) || 'Centurion has not reported yet.' }, extra);
   const r = ans.report;
   const changes = isObj(r.proposal) && Array.isArray(r.proposal.changes) ? r.proposal.changes.filter(isObj).slice(0, 20).map(c => ({ name: str(c.name, 60),
-    from: isNum(c.from) || typeof c.from === 'string' ? String(c.from).slice(0, 40) : '-', to: isNum(c.to) || typeof c.to === 'string' ? String(c.to).slice(0, 40) : '-', allowed: c.allowed === true })) : [];
-  const v = isObj(ans.veto) ? ans.veto : {};
-  return { ok: true, problem: null, runId: str(r.run_id, 60), status: str(r.status, 40), applies: r.applies === true, summary: str(r.summary, 600),
-    findings: Array.isArray(r.findings) ? r.findings.filter(x => typeof x === 'string').slice(0, 20).map(x => x.slice(0, 400)) : [], changes,
-    vetoBuilt: v.built === true, vetoWords: str(v.note, 300) };
+    from: valueText(c.from), to: valueText(c.to), allowed: c.allowed === true })) : [];
+  return Object.assign({ ok: true, problem: null, runId: str(r.run_id, 60), status: str(r.status, 40), applies: r.applies === true, summary: str(r.summary, 600),
+    findings: Array.isArray(r.findings) ? r.findings.filter(x => typeof x === 'string').slice(0, 20).map(x => x.slice(0, 400)) : [], changes }, extra);
+}
+
+/**
+ * The question's state at a click on Yes, as Legion's Stop all (LegionCore.stopClick): 'yes' (send), 'early' (inside ARM_MS: nothing,
+ * the question stays), 'late' (past CONFIRM_MS: it closes, nothing sent), 'key' (Yes by the keyboard: refused), 'none' (no question open).
+ */
+function askClick(askedAt, now, real) {
+  if (!askedAt) return 'none';
+  const age = now - askedAt;
+  if (age > CONFIRM_MS) return 'late';
+  if (!real) return 'key';
+  if (age < ARM_MS) return 'early';
+  return 'yes';
+}
+
+/**
+ * What the page may send for one click, from the last answer it holds: { route, body } (exactly { run_id, name }), or { why } when
+ * nothing may be sent. view: centurionView; fresh: the read is held and its last refresh did not fail. kind 'veto' or 'undo'.
+ */
+function actionFor(view, fresh, kind, runId, name) {
+  if (!fresh) return { why: VETO_UNREACHABLE };
+  if (!view || !view.acts) return { why: VETO_UNKNOWN };
+  if (kind === 'veto') {
+    const w = view.week;
+    const c = w && w.runId === runId ? w.changes.find(x => x.name === name) : null;
+    if (!c || !c.can) return { why: 'This change has no Veto now (The Desk\'s last answer does not offer one): nothing was sent.' };
+    return { route: ROUTES.centurionVeto, body: { run_id: runId, name } };
+  }
+  if (kind === 'undo') {
+    const a = view.applied;
+    const r = a && a.ok ? a.rows.find(x => x.runId === runId && x.name === name) : null;
+    if (!r || !r.can) return { why: 'This change has no Undo now (The Desk\'s last answer does not offer one): nothing was sent.' };
+    return { route: ROUTES.centurionUndo, body: { run_id: runId, name } };
+  }
+  return { why: 'Nothing was sent.' };
+}
+
+/** The line after one POST. ans: The Desk's 200 answer, or e: { status, body, words } from deskClient (status null: no answer). */
+function sentWords(kind, ans) { return (isObj(ans) ? str(ans.words, 300) : '') || SENT[kind] || ''; }
+function refusedWords(kind, e) {
+  if (!e || e.status === null || e.status === undefined) return 'The Desk did not answer: the ' + (kind === 'undo' ? 'undo' : 'veto') + ' may or may not be recorded. Reading again.';
+  const detail = e.body && typeof e.body.detail === 'string' ? e.body.detail.slice(0, 400) : '';
+  return 'Refused: ' + (detail || str(e.words, 300) || 'The Desk answered ' + e.status + ' and gave no reason.');
 }
 
 /* ---------------------------------------------------------------- the cohorts (The Desk's model + what ChartBridge says live) */
@@ -366,5 +500,7 @@ function needsYou(o) {
 }
 
 return Object.freeze({ ROUTES, FLEET_PATH, RN, NOT_BUILT, NOT_ENOUGH, SIM_LABEL, deskClient, esc, table, cell, raw, card, note, tone, plural,
-  simStage, alarmOf, ALARM_NOT_KNOWN, readStatus, realCells, cardAccountWords, cardAccountLog, moneyView, goesInView, runningNow, todayLive, lastNight, centurionView, fleetIndex, chipOf, pickWords, cohortsView, directionWords, dropRefusal, moveWords, needsYou });
+  simStage, alarmOf, ALARM_NOT_KNOWN, readStatus, realCells, cardAccountWords, cardAccountLog, moneyView, goesInView, runningNow, todayLive, lastNight, centurionView, fleetIndex,
+  VETO_VERSION, ARM_MS, CONFIRM_MS, RUN_ID_RE, NAME_RE, IN_SAMPLE, VETO_UNKNOWN, VETO_UNREACHABLE, NO_WEEK, NO_CHANGE, NO_APPLIED, ALLOW_REFUSED, VETO_Q, SENT,
+  undoQuestion, nyTime, weekOf, appliedOf, askClick, actionFor, sentWords, refusedWords, chipOf, pickWords, cohortsView, directionWords, dropRefusal, moveWords, needsYou });
 });

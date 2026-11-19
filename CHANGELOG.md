@@ -63,6 +63,39 @@
   `test/pc-updater.test.js`: the allowed git subcommands, the box job's name, useHttpPath read before the one ask, the
   token only after a 404 or 401 and then through the Actions API, one place that asks for it and one that sends it.
 
+## chart 1.59.0 (2026-11-19): Centurion's veto and undo on Castra (page only, no F5)
+
+In plain words: Castra's card VII, Centurion's week, gains a Veto on each change of the week's Saturday report and an Undo
+on each applied change, as the contract "Centurion's veto" (v1, 2026-11-19, section 6) sets out. It does nothing until The
+Desk answers with its veto version 1, and Centurion applies nothing until Bot-Lab's one-line switch after this page and
+The Desk's routes are live (the contract's section 7). ChartBridge is unchanged; `live/COMPAT.json` `minChartBridge` stays
+0.6.2.
+
+- **Acts only on The Desk's veto version 1** (`veto.built === true && veto.version === 1` in `GET /api/legion/centurion`).
+  Any other answer (today's Desk, `built: false`, another version) is read only, as before, and says "The Desk's veto is not
+  one this page knows: read only."
+- **The week:** the report's summary and findings, labelled "In-sample: nothing here is proven, and no change here trades.",
+  then a table: Setting, From, To, Why, Then. Then is "Refused by the allow-list: never applied" for a refused change,
+  "Vetoed", the applied log's outcome in words, or, while The Desk says the window is `open`, a Veto button. Under it The
+  Desk's own words for the window and when it closes, in New York time (`Intl.DateTimeFormat`, `America/New_York`). The page
+  never decides the window: it shows The Desk's state, and The Desk refuses whatever is late.
+- **Applied changes:** the applied log's newest lines (setting, from, to, when, in New York time), Undo on each whose undo
+  is "none", "Undo asked: done at the start of the next night's run", "Undone", "Undo refused: <why>", and "and N older".
+  A log that does not read shows nothing from it and offers no Undo.
+- **The question** (Anthony 2026-11-19: keep the Yes for both; a veto is never taken back): a click opens it in the card,
+  as Legion's Stop all question: a real click on Yes only, no answer in the first 600 ms, gone after 8 s, Escape and Cancel
+  close it. Yes sends one POST of exactly `{ run_id, name }` to `POST /api/legion/centurion/veto` or `/undo`; the button
+  reads "Sending..." and nothing else is sent until the answer.
+- **Answers:** The Desk's words, then a read again at once; a refusal is "Refused: " and The Desk's own words; a timeout or
+  no answer is "The Desk did not answer: the veto may or may not be recorded. Reading again.", never failed or done.
+- **The Desk unreachable:** the last answer stays with the stale note, no Veto or Undo is drawn, and one line says no veto
+  or undo can be sent now and that if Sunday night's run cannot read the veto list it applies nothing that week.
+- **Never the seal or the undo list:** Castra uses three of The Desk's routes for Centurion (the read, the veto, the undo);
+  the seal and the undo list are Bot-Lab's night run's, on the box. A test pins it.
+- `deskClient` gains `post(path, body)` beside `put`. Tests: `test/legion-castra.test.js` (the core, made-up weeks only) and
+  `npm run smoke:castra` (open, the question, closed, sealed, unreachable, the empty states and a phone; screenshots
+  `castra-veto-*.png`). Every sample week says sample on screen.
+
 ## ChartBridge 0.6.25 and chart 1.58.0 (2026-11-19): Legion as its own app with Castra and the Ludus, the go-live guards, the delta table, the floor fix, the shared calendar and clock
 
 In plain words: the page goes first, by itself; ChartBridge 0.6.25 is one hand install, later, while flat. Legion becomes

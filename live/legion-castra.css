@@ -88,3 +88,17 @@
 
 @media (max-width: 760px) { .cx-money .cx-al { white-space: nowrap; display: inline-block; } .cx-money td::before { flex: 0 0 auto; white-space: nowrap; } .cx-money td { flex-wrap: wrap; } }
 @media (max-width: 760px) { .cx-goes td { display: block; text-align: left; } .cx-goes td::before { display: block; margin-bottom: 2px; } }
+
+/* Centurion's week: its veto and its undo (the contract v1, 2026-11-19). The question sits in the card, bronze and warn as the money
+   alarm (never the P&L red); its Yes and Cancel are Legion's buttons */
+.cx-sub { margin: 12px 0 2px; font: 600 10.5px var(--lx-head); letter-spacing: .08em; text-transform: uppercase; color: var(--lx-bronze); }
+.cx-act { padding: 4px 10px; font-size: 11px; }
+.cx-ask { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; padding: 10px 12px; border: 1px solid var(--ws-warn, #E8B85C); background: var(--ws-warn-ground, #1C150A); color: var(--ws-warn-text, #FFE2B0); font-size: 13px; }
+.cx-ask > span { flex: 1 1 280px; }
+.cx-window { margin: 8px 0 4px; padding: 6px 12px; border-left: 2px solid var(--lx-gold); color: var(--lx-fg); }
+.cx-said { margin: 8px 0; padding: 6px 12px; border: 1px solid var(--lx-line2); background: var(--lx-panel); overflow-wrap: anywhere; }
+.cx-said.cx-bad { border-color: var(--lx-bronze); }
+.cx-veto td.cx-num, .cx-applied td.cx-num { white-space: nowrap; }
+.cx-veto td:first-child, .cx-applied td:first-child { overflow-wrap: break-word; }
+@media (max-width: 760px) { .cx-veto td.cx-num, .cx-applied td.cx-num { white-space: normal; } }
+@media (max-width: 760px) { .cx-veto td::before, .cx-applied td::before { flex: 0 0 auto; white-space: nowrap; } }

@@ -151,7 +151,7 @@ function mount(env) {
   guard('Castra', () => {
     if (!window.LegionCastra || !$('cxView')) return;
     $('cxView').innerHTML = '';
-    castra = window.LegionCastra.mount($('cxView'), { fetch: (u, o) => fetch(u, o), deskBase, live: fleetLive, go: openTab });
+    castra = window.LegionCastra.mount($('cxView'), { fetch: (u, o) => fetch(u, o), deskBase, live: fleetLive, go: openTab, realClick });
     mounted.castra = !!castra;
   });
   let cohortModel = null;
