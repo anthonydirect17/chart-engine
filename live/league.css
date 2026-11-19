@@ -1,5 +1,5 @@
 /* The League tab and the league's marks (chart 1.35.0, live/league.js). The page's own look (the workspace tokens); each seat's
-   colour (H amber, S cyan, O bronze: Anthony 2026-10-21) appears only on its letter, its legend key and its marks. No green or
+   colour (H amber, S cyan, O violet: Anthony 2026-10-21) appears only on its letter, its legend key and its marks. No green or
    red: nothing here is P&L or a trade side of Anthony's. */
 .ws-btn.lg-tabbtn { font-weight: 600; letter-spacing: .02em; }
 .ws-btn.lg-tabbtn[aria-pressed="true"] { border-color: var(--ws-tint-line); background: var(--ws-tint); color: var(--ws-soft); box-shadow: inset 0 0 0 1px var(--ws-tint-line); }

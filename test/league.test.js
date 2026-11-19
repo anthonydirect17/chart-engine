@@ -24,7 +24,7 @@ const day = {
 };
 
 test('the seats: H Haiku amber, S Sonnet cyan, O Opus violet; SHADOW: no orders', () => {
-  assert.deepEqual(L.SEATS.map(s => [s.id, s.family, s.color]), [['H', 'Haiku', '#FFC266'], ['S', 'Sonnet', '#5DE0F0'], ['O', 'Opus', '#B07A3C']]);
+  assert.deepEqual(L.SEATS.map(s => [s.id, s.family, s.color]), [['H', 'Haiku', '#FFC266'], ['S', 'Sonnet', '#5DE0F0'], ['O', 'Opus', '#B69CFF']]);
   assert.equal(L.SHADOW, 'SHADOW: no orders');
 });
 

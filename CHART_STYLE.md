@@ -784,7 +784,7 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   look, pressed = the tint), opens the league view in place of the grid. It shows only once The Desk serves the league, so the
   top bar's room is never taken without it. A head line: "Shadow league", "SHADOW: no orders" (11 px mono capitals in a dashed
   purple box), the legend strip (each seat's letter in an 18 px ring of its color, then its name: H Haiku amber `#FFC266`, S
-  Sonnet cyan `#5DE0F0`, O Opus bronze `#B07A3C`, violet `#B69CFF` until plan step 3.2: no purple), and on the right the date, the time and "day closed, recording to 17:00"
+  Sonnet cyan `#5DE0F0`, O Opus violet `#B69CFF`), and on the right the date, the time and "day closed, recording to 17:00"
   after the close. Then one MNQ chart (the chart as everywhere) and a 420 px column: each seat's day (a 3 px left edge in its
   color), the API spend against the caps, the week and month table, the decision log (a refusal in amber). The seat colors are
   used only for the league's letters, legend and marks; no green or red in the view.
@@ -828,7 +828,7 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   each open trade's R under them (600 10 px mono, green up, red down, its letter and "B/E" at break-even). A drone per agent
   active today (a seat fades into "+N idle" once The Desk says the league's day is closed, unless it still holds a position or a resting order; a seat's own risk stop, "day stopped", keeps it a drone with that word), left to right in slots of at least a third of the width (150 px, 90 slim): a hexagon hull (13 px, 9 slim) with
   wings, the dark hull `#0B0F1C` and a 1.3 px line in its color, a lens of its color with a white arc turning, a ring at 2.2 times
-  the hull, dashed (4 4, turning) for SHADOW and solid for LIVE; colors H `#FFC266`, S `#5DE0F0`, O `#B07A3C` (the League's), a
+  the hull, dashed (4 4, turning) for SHADOW and solid for LIVE; colors H `#FFC266`, S `#5DE0F0`, O `#B69CFF` (the League's), a
   live agent and the bot `#9AA8B8` (the strip's own for them). Its text block, inside its slot (fields that do not fit are cut or
   dropped, never over the next slot): its letter (Orbitron 700, 15 px, 12 slim), the name in capitals, its one-word state in
   amber (red for the bot's alert) and the mode (Orbitron 700, 9 px, 8 slim, muted); position (green long, red short, or "flat"),

@@ -1,7 +1,7 @@
 /* The Agents panel (live/agents-sky.js, chart 1.38.0: the Drone sky; before it the 1.36.0 strip of cards). The page's own look
    (the workspace tokens, IBM Plex; Orbitron for the drones' letters, as the Agent tab's headers). The canvas does the motion
    (docs/MOTION.md "Allowed motion: the Agents panel"); nothing here transitions or animates. The hover card is the strip's card
-   (live/agents-strip.js): a seat's colour (H amber, S cyan, O bronze, as the League tab) only on its letter and its 3 px left edge,
+   (live/agents-strip.js): a seat's colour (H amber, S cyan, O violet, as the League tab) only on its letter and its 3 px left edge,
    green and red only for P&L and the trade side. */
 .ws-panel.agents .ws-body { overflow: hidden; }
 .ak-wrap { position: relative; height: 100%; min-height: 0; display: flex; flex-direction: column; background: var(--ws-bg); color: var(--ws-text); font-family: var(--ws-sans); }

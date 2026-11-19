@@ -121,7 +121,7 @@ function sampleDay() {
 
 test('the seats\' cards: one flat at the look cap, one with an open paper trade, one with a closed loss; what is not there says not reported', () => {
   const cards = A.seatCards(sampleDay(), { nowMs: min(5), last: 24010, pv: 2 });
-  assert.deepEqual(cards.map(c => c.letter + ' ' + c.name + ' ' + c.color), ['H Haiku #FFC266', 'S Sonnet #5DE0F0', 'O Opus #B07A3C']);
+  assert.deepEqual(cards.map(c => c.letter + ' ' + c.name + ' ' + c.color), ['H Haiku #FFC266', 'S Sonnet #5DE0F0', 'O Opus #B69CFF']);
   assert.ok(cards.every(c => c.mode.word === 'SHADOW'));
   const [h, s, o] = cards;
   assert.equal(h.state.word, 'look cap'); assert.match(h.state.why, /next look 10:35.*worked out on this page/);

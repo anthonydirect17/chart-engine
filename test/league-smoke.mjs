@@ -9,8 +9,8 @@
 // + Add panel offers no Bot (1.36.0) but Agents; a chart's ⋯ menu has no league switch; with an Agents strip the Bot button stays in
 // the top bar and the strip's bot drone opens the Bot view; the button stays in reach while it carries its red alert (review 2);
 // the Drone sky reads NQ bars from the NQ line already open (1.38.1); the chart page reads no league at all; nothing sends an order.
-// Checks on Legion's Colosseum: SHADOW: no orders, the legend H Haiku, S Sonnet, O Opus (O bronze, plan step 3.2: house style, no
-// purple), the seats' day, the week and month table ("not enough data yet" under 20), the decision log, the spend against the caps,
+// Checks on Legion's Colosseum: SHADOW: no orders, the legend H Haiku, S Sonnet, O Opus (O violet: Anthony's exception, kept
+// 2026-10-31, Anthony 2026-11-19), the seats' day, the week and month table ("not enough data yet" under 20), the decision log, the spend against the caps,
 // the day closed note, the leaderboard (1.57.0), the watch box, no chart and no subscribe (1.57.0); a dropped connection empties the
 // watch. Past days (Anthony's task "League view opens a given past day"): ?tab=colosseum&day=YYYY-MM-DD opens that day read only,
 // labelled, with Back to today; a day with no record says so; a bad day is refused and said; the chart page's old
@@ -233,7 +233,7 @@ try {
   check(/SHADOW: no orders/.test(text), 'SHADOW: no orders');
   check(/H\s*Haiku/.test(text) && /S\s*Sonnet/.test(text) && /O\s*Opus/.test(text), 'the legend strip: H Haiku, S Sonnet, O Opus');
   const legend = await q.$$eval('.lg-legend .lg-key', ks => ks.map(k => getComputedStyle(k.querySelector('i')).color));
-  check(legend.join('|') === 'rgb(255, 194, 102)|rgb(93, 224, 240)|rgb(176, 122, 60)', 'H amber, S cyan, O bronze (plan step 3.2: no purple): ' + legend.join(', '));
+  check(legend.join('|') === 'rgb(255, 194, 102)|rgb(93, 224, 240)|rgb(182, 156, 255)', 'H amber, S cyan, O violet (Anthony 2026-11-19: Opus stays violet, his 2026-10-31 exception): ' + legend.join(', '));
   check(/day closed, recording to 17:00/.test(text), 'the day closed note (status from the 16:01 close)');
   check(/LONG 3 MNQ/.test(text) && /Flag for you: cleared fence 2\.99 on day 60/.test(text), 'the seats\' day: S\'s open paper trade, O\'s flag');
   check(/not enough data yet \(n 4 of 20\)/.test(text) && /\+0\.12 R \(n 24\)/.test(text), 'the week and month table: net R with n, not enough data yet under 20');
