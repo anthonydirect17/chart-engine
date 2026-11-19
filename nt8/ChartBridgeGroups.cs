@@ -1488,7 +1488,9 @@ namespace NinjaTrader.NinjaScript.AddOns
         // ---------------------------------------------------------- the one-direction check (G3 a)
         // Null when this entry may go, else the refusal. Asked under PlaceLock (PlaceOrderLocked, the copier's Eligible); the agent's
         // plan check 10b asks it without (advisory). wantsLegs: a stop or a target asked with it; strategy: an Order Strategy.
-        public static string EntryCheck(string source, Account a, string root, bool isBuy, int qty, bool wantsLegs, bool strategy)
+        // R12 review nit 3: the agent's plan check 10b asks the same, advisory: a refusal there is the trader's own (its log), no Output line
+        public static string AdvisoryEntryCheck(string source, Account a, string root, bool isBuy, int qty, bool wantsLegs, bool strategy) { return EntryCheck(source, a, root, isBuy, qty, wantsLegs, strategy, true); }
+        public static string EntryCheck(string source, Account a, string root, bool isBuy, int qty, bool wantsLegs, bool strategy, bool advisory = false)
         {
             if (a == null || a.Name == null) return null;
             // Review of #48 (items 1 and 2): a true exit of the account's own position passes first, whatever else holds (an
@@ -1502,7 +1504,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             catch (Exception) { exit = false; }
             if (exit) return null;
-            string firmWhy = FirmEntryWhy(source, a, root, isBuy, opposite);   // plan step 3.5 (0.6.25): one direction per firm, one PC per firm
+            string firmWhy = FirmEntryWhy(source, a, root, isBuy, opposite, !advisory);   // plan step 3.5 (0.6.25): one direction per firm, one PC per firm; logged only for a real order attempt (advisory: plan check 10b)
             if (firmWhy != null) return firmWhy;
             EnsureLoaded();
             Group g;
@@ -3207,6 +3209,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             why = null;
             if (string.IsNullOrEmpty(body) || body.Length > 4 * 1024 * 1024) { why = "The Desk's cohorts answer is empty or too large"; return null; }
+            if (!ChartBridgeBot.JsonValid(body)) { why = "The Desk's cohorts answer is not valid JSON"; return null; }   // R12 review nit 2
             if (!body.TrimStart().StartsWith("{\"v\":1,", StringComparison.Ordinal)) { why = "The Desk's cohorts answer is not version 1"; return null; }
             const string Key = ",\"prop_accounts\":[";   // only ever a key: inside a string a quote is always escaped
             int k = body.IndexOf(Key, StringComparison.Ordinal);
@@ -3343,7 +3346,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         }
 
         // The firm guards of one new entry (EntryCheck, under PlaceLock, after an exit of the account's own position has passed).
-        private static string FirmEntryWhy(string source, Account a, string root, bool isBuy, bool opposite)
+        private static string FirmEntryWhy(string source, Account a, string root, bool isBuy, bool opposite, bool log)
         {
             string name = a.Name;
             if (!FirmScope(name)) return null;
@@ -3362,6 +3365,9 @@ namespace NinjaTrader.NinjaScript.AddOns
             List<Account> all;
             lock (Account.All) all = Account.All.ToList();
             List<ChartBridgeOrders.GroupHolding> held = new List<ChartBridgeOrders.GroupHolding>();
+            // R12 review B1: a prop account with no firm in the ledger may be of this firm. For a trader's or the bot's entry, what it
+            // holds on this market counts against the entry too (its firm cannot be known, so it is never taken as another firm's)
+            List<ChartBridgeOrders.GroupHolding> unknown = new List<ChartBridgeOrders.GroupHolding>();
             HashSet<string> seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             try
             {
@@ -3370,7 +3376,12 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if (m == null || m.Name == null || !seen.Add(m.Name)) continue;
                     if (ChartBridgeBranches.PersonalNamed && ChartBridgeBranches.IsPersonal(m.Name)) continue;   // only his personal account may go against it
                     string f = FirmIn(r, m.Name);
-                    if (f == null || FoldFirm(f) != key) continue;
+                    if (f == null)
+                    {
+                        if (!his && FirmScope(m.Name)) unknown.AddRange(ChartBridgeOrders.GroupHoldings(m).Where(h => FirmMarket(h.Root) == market));
+                        continue;
+                    }
+                    if (FoldFirm(f) != key) continue;
                     held.AddRange(ChartBridgeOrders.GroupHoldings(m).Where(h => FirmMarket(h.Root) == market));
                 }
             }
@@ -3381,9 +3392,19 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (longs && shorts) what = "Firm " + firm + " is long and short on " + market + " (" + HolderText(held) + "): no new entry on either side until it is one direction";
             else if (isBuy && shorts) what = "Firm " + firm + " is short on " + market + " (" + HolderText(held) + "): a buy on " + name + " would go against it";
             else if (!isBuy && longs) what = "Firm " + firm + " is long on " + market + " (" + HolderText(held) + "): a sell on " + name + " would go against it";
-            if (what == null) return null;
-            ChartBridgeServer.Log("firms: refused, " + (source ?? "?") + ": " + what);
-            return what + tail;
+            if (what != null)
+            {
+                if (log) ChartBridgeServer.Log("firms: refused, " + (source ?? "?") + ": " + what);
+                return what + tail;
+            }
+            // R12 review B1: against a prop account whose firm is not known (a trader or the bot only)
+            bool ul = unknown.Any(h => h.Side > 0), us = unknown.Any(h => h.Side < 0);
+            if (!(ul && us) && !(isBuy && us) && !(!isBuy && ul)) return null;
+            List<string> parts = unknown.Where(h => (ul && us) || (isBuy ? h.Side < 0 : h.Side > 0)).GroupBy(h => h.Account, StringComparer.OrdinalIgnoreCase)
+                .Select(g => g.Key + " is a prop account with no firm in The Desk's account ledger and holds " + (g.Any(h => h.Side > 0) && g.Any(h => h.Side < 0) ? "long and short" : g.First().Side > 0 ? "long" : "short") + " on " + market).ToList();
+            string un = string.Join("; ", parts) + ": one direction per firm cannot be checked. Exits and flattens still work.";
+            if (log) ChartBridgeServer.Log("firms: refused, " + (source ?? "?") + " on " + name + ": " + un);
+            return un;
         }
 
         // The groups message's firmGuard: { state: on | error, why, pc (this PC's name or null), readAt (UTC ms or null),

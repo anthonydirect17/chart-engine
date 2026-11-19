@@ -2,8 +2,9 @@
 
 ## Unreleased (plan step 3.5, the ChartBridge half): the go-live guards for ChartBridge 0.6.25
 
-No version bump: the release that ships ChartBridge 0.6.25 raises `Version` in `nt8/ChartBridge.cs` and `live/COMPAT.json`
-`minChartBridge` together (`test/lifecycle.test.js` and `test/account-types.test.js` pin both). ChartBridge only
+No version bump: the release that ships ChartBridge 0.6.25 raises `Version` in `nt8/ChartBridge.cs`
+(`test/lifecycle.test.js` pins it). `live/COMPAT.json` `minChartBridge` stays 0.6.2 for this step: the page needs nothing
+new from these guards (raised only if another part of the release needs it). ChartBridge only
 (`ChartBridgeGroups.cs`, `ChartBridgeAgents.cs`); the page is unchanged. Law 9.2 and 9.3 (Anthony 2026-11-17, items 78,
 111, 113 and 114). Bot-Lab's half (the GO and half size, the account type, the alarms, the funded scaling step in the
 runner's size check) is Bot-Lab's plan step 3.5 build. `nt8/PROTOCOL.md`, "One direction per firm, one PC per firm and
@@ -21,6 +22,11 @@ the GO size"; the cutover card's text with its rollback: `docs/CUTOVER_chartbrid
 - **The GO size is the file's:** a roster file whose GO size is not its playbook's is not served, so it cannot be picked
   or armed.
 - **`groups` gains `firmGuard`:** each firm, its PC, whether that is this PC, its accounts and its direction.
+- **The R12 review of 2f1ddb3:** a prop account with no firm in the ledger counts against a trader's or the bot's entry on
+  the same market (B1: its firm cannot be known, so it is never taken as another firm's); a GO key (live, playbook, bots,
+  stage, risk_dollars, the stage's playbook) written twice or with an escape refuses the roster file (nit 1); The Desk's
+  answer is checked as whole JSON first (nit 2); the advisory plan check 10b writes no Output line (a trader's refusal is
+  in its own log; nit 3).
 - Tests: `check/AgentHarness.cs` `GoLive35`; the older agent parts run with a made-up firm per account on this PC; two
   exact `groups` message checks in `check/GroupsHarness.cs` allow `firmGuard`.
 

@@ -4051,7 +4051,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 string lockWhy = ChartBridgeAgents.EntryCheck("agent:" + Id, a, root);
                 if (lockWhy != null) return lockWhy;
                 // 10b. 0.5.8 (G3 a): one direction per group (advisory here; the binding check runs under PlaceLock in PlaceOrderLocked)
-                string groupWhy = ChartBridgeGroups.EntryCheck("agent:" + Id, a, root, p.Side == "buy", p.Qty, true, false);
+                string groupWhy = ChartBridgeGroups.AdvisoryEntryCheck("agent:" + Id, a, root, p.Side == "buy", p.Qty, true, false);
                 if (groupWhy != null) return groupWhy;
             }
             else
@@ -4060,7 +4060,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if (outs[i] != null) continue;
                     // 10 and 10b on each seat (0.6.0): a position or order that is not the agent's, or the one-direction check, sits it out
                     Account a = FindAccount(seats[i]);
-                    outs[i] = ChartBridgeAgents.EntryCheck("agent:" + Id, a, root) ?? ChartBridgeGroups.EntryCheck("agent:" + Id, a, root, p.Side == "buy", p.Sizes[i], true, false);
+                    outs[i] = ChartBridgeAgents.EntryCheck("agent:" + Id, a, root) ?? ChartBridgeGroups.AdvisoryEntryCheck("agent:" + Id, a, root, p.Side == "buy", p.Sizes[i], true, false);
                 }
             // 11. the price (v2 gate 5): on the grid, a fresh last trade, the side of the market; a stop-limit's limit within 20 ticks
             bool buy = p.Side == "buy";
@@ -6335,13 +6335,17 @@ namespace NinjaTrader.NinjaScript.AddOns
         // the one rule ChartBridge reads from a roster file; Bot-Lab's runner checks the same and every other part of the GO.
         internal static string GoSizeProblem(string text, string fmt)
         {
+            // R12 review nit 1: a key the GO size is read from, written twice or with an escape, is refused (a JSON reader that takes
+            // the last of two, or reads the escape, would see another GO than this one)
+            string kp = KeysProblem(text, "", "live", "playbook", "bots") ?? KeysProblem(JsonMember(text, "playbook"), "playbook.", "eval", "funded");
+            if (kp != null) return kp;
             string playbook = JsonMember(text, "playbook");
             if (fmt == FormatBot) return GoWhy(text, playbook, "");
             string bots = JsonMember(text, "bots");
             if (bots == null || bots == "null") return null;
             List<string> items = JsonItems(bots);
             if (items == null) return "its bots are not a list";
-            for (int i = 0; i < items.Count; i++) { string w = GoWhy(items[i], playbook, "bots[" + i.ToString(CultureInfo.InvariantCulture) + "]: "); if (w != null) return w; }
+            for (int i = 0; i < items.Count; i++) { string w = KeysProblem(items[i], "bots[" + i.ToString(CultureInfo.InvariantCulture) + "].", "live") ?? GoWhy(items[i], playbook, "bots[" + i.ToString(CultureInfo.InvariantCulture) + "]: "); if (w != null) return w; }
             return null;
         }
         private static string GoWhy(string holder, string playbook, string where)
@@ -6349,16 +6353,62 @@ namespace NinjaTrader.NinjaScript.AddOns
             string live = JsonMember(holder, "live");
             if (live == null || live == "null") return null;
             if (!live.StartsWith("{", StringComparison.Ordinal)) return where + "its GO (live) is not an object: not served";
+            string kp = KeysProblem(live, where + "live.", "stage", "risk_dollars");
+            if (kp != null) return kp;
             string stage = JsonString(JsonMember(live, "stage"));
             if (stage != "eval" && stage != "funded") return where + "its GO (live) names no stage (eval or funded): not served";
             double? go = JsonNumber(JsonMember(live, "risk_dollars"));
             string pb = playbook == null ? null : JsonMember(playbook, stage);
+            kp = pb == null ? null : KeysProblem(pb, where + "playbook." + stage + ".", "risk_dollars");
+            if (kp != null) return kp;
             double? want = pb == null ? null : JsonNumber(JsonMember(pb, "risk_dollars"));
             if (!want.HasValue || want.Value <= 0) return where + "its playbook has no risk_dollars for " + stage + ", so its GO size cannot be checked: not served";
             if (!go.HasValue || go.Value != want.Value)
                 return where + "its GO size (live.risk_dollars " + (go.HasValue ? go.Value.ToString("0.##", CultureInfo.InvariantCulture) : "missing") + ") is not its playbook's for " + stage + " (" + want.Value.ToString("0.##", CultureInfo.InvariantCulture) +
                        "): the GO size is the file's (law 9.3); a new size is a new roster file with Anthony's word. Not served";
             return null;
+        }
+        // R12 review nit 1: null when each of these keys is a top-level key of obj at most once and never written with an escape; else
+        // why the file is not served. obj null or not an object: null (the lookups then find nothing).
+        internal static string KeysProblem(string obj, string where, params string[] keys)
+        {
+            if (obj == null) return null;
+            string t = obj.Trim();
+            if (t.Length == 0 || t[0] != '{') return null;
+            Dictionary<string, int> seen = new Dictionary<string, int>(StringComparer.Ordinal);
+            int n = t.Length, i = 1;
+            while (i < n)
+            {
+                while (i < n && (char.IsWhiteSpace(t[i]) || t[i] == ',')) i++;
+                if (i >= n || t[i] != '"') break;
+                int ke = SkipValue(t, i);
+                string raw = t.Substring(i + 1, Math.Max(0, ke - i - 2)), name = Unescape(raw);
+                if (Array.IndexOf(keys, name) >= 0)
+                {
+                    if (raw != name) return where + name + " is written with an escape: not served";
+                    int c; seen.TryGetValue(name, out c); seen[name] = c + 1;
+                    if (c + 1 > 1) return where + name + " is there twice: not served";
+                }
+                i = ke;
+                while (i < n && char.IsWhiteSpace(t[i])) i++;
+                if (i >= n || t[i] != ':') break;
+                i = SkipValue(t, i + 1);
+            }
+            return null;
+        }
+        private static string Unescape(string raw)
+        {
+            if (raw.IndexOf('\\') < 0) return raw;
+            StringBuilder b = new StringBuilder();
+            for (int i = 0; i < raw.Length; i++)
+            {
+                char c = raw[i];
+                if (c != '\\' || i + 1 >= raw.Length) { b.Append(c); continue; }
+                char e = raw[++i];
+                if (e == 'u' && i + 4 < raw.Length) { int v; if (int.TryParse(raw.Substring(i + 1, 4), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out v)) { b.Append((char)v); i += 4; continue; } }
+                b.Append(e == 'n' ? '\n' : e == 't' ? '\t' : e == 'r' ? '\r' : e == 'b' ? '\b' : e == 'f' ? '\f' : e);
+            }
+            return b.ToString();
         }
         // A small reader for valid JSON text (JsonValid passed first): the raw text of a value from its first character.
         private static int SkipValue(string t, int i)

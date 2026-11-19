@@ -64,8 +64,14 @@ chart-engine main **<MAIN_COMMIT>** (<RELEASE_PR>) carries ChartBridge 0.6.25 wi
 3. **F5 in the NinjaScript Editor while flat.**
 4. **After a rollback the go-live guards are gone** (no one direction per firm, no one PC per firm, no GO size check in
    ChartBridge): **no trader goes to Auto on a prop account** until 0.6.25 is back. Bot-Lab's runner still refuses a GO
-   whose size is not the file's.
-5. Report what went wrong (the Output window's lines, no account names) and stop.
+   whose size is not the file's. This is not only an instruction: the coordinator adds a guard on the page before the
+   release (planned, not built on this branch, since Legion changes in parallel): **Legion's Go live and Auto on a prop
+   account require ChartBridge 0.6.25 or later** (a `GOLIVE_MIN` in Legion, as `STOPALL_MIN` is for Stop all), so with
+   0.6.24 back the page greys Go live and Auto for prop accounts and says why.
+5. **Page installs after a rollback:** these guards need nothing new on the page, so `live/COMPAT.json` `minChartBridge`
+   stays 0.6.2 for step 3.5 (it is raised only if another part of the release needs it). With 0.6.24 back, the PC updater
+   keeps installing new pages as before; only the planned `GOLIVE_MIN` guard above changes what the page offers.
+6. Report what went wrong (the Output window's lines, no account names) and stop.
 
 ## Report
 
@@ -73,7 +79,13 @@ chart-engine main **<MAIN_COMMIT>** (<RELEASE_PR>) carries ChartBridge 0.6.25 wi
 
 ## For the release (not for the PCs)
 
-- The release that ships this raises `Version` in `nt8/ChartBridge.cs` to 0.6.25 and `live/COMPAT.json` `minChartBridge`
-  together, with a CHANGELOG heading for ChartBridge 0.6.25. `test/lifecycle.test.js` and `test/account-types.test.js` pin
-  both today (0.6.24 and 0.6.2), so the release changes the two and those tests in one step.
+- The release that ships this raises `Version` in `nt8/ChartBridge.cs` to 0.6.25, with a CHANGELOG heading for ChartBridge
+  0.6.25 (`test/lifecycle.test.js` pins the Version). `live/COMPAT.json` `minChartBridge` **stays 0.6.2 for step 3.5**:
+  the page needs nothing new from these guards (`test/account-types.test.js` pins 0.6.2). It is raised only if another
+  part of the release needs it, and then with its own CHANGELOG line.
+- The planned page guard: Legion's Go live and Auto on a prop account require ChartBridge 0.6.25 or later (`GOLIVE_MIN`,
+  pinned to the release's Version as `STOPALL_MIN` is), added by the coordinator with Legion's work.
+- **The firms are read into memory only** (R12 review nit 4, left as it is): after a ChartBridge restart no trader takes a
+  new entry on a prop account, goes to Auto there or gets Auto back until the first read of The Desk's firms (within
+  about a minute; the one Auto restore waits for it). Anthony's own ticket and the copier are not held by it.
 - The page needs nothing new from these guards: a refusal reaches the pages as every refusal does (`reject` and `status`).

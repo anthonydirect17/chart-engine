@@ -459,7 +459,7 @@ test('0.6.0 group trading: one plan, each seat through PlaceAgentEntry on its ow
   assert.ok(!/\.Submit\s*\(|\.CreateOrder\s*\(/.test(seats), 'no order call of its own');
   const checks = bodies(acode, 'Checks');
   assert.match(checks, /outs\[i\] = benchNow\.Contains\(seats\[i\]\) \|\| benchFresh\.Contains\(seats\[i\]\) \? "benched" : p\.Sizes\[i\] == 0 \? "its size is 0 \(no room for 1 contract\)" : AccountProblemFor\(seats\[i\], true\);/, 'Q1 b: size 0, not tradable or not connected: that seat sits out (0.6.7: a benched seat too)');
-  assert.match(checks, /outs\[i\] = ChartBridgeAgents\.EntryCheck\("agent:" \+ Id, a, root\) \?\? ChartBridgeGroups\.EntryCheck\("agent:" \+ Id, a, root, p\.Side == "buy", p\.Sizes\[i\], true, false\);/, 'Q1 b: the owner lock and the one-direction check per seat');
+  assert.match(checks, /outs\[i\] = ChartBridgeAgents\.EntryCheck\("agent:" \+ Id, a, root\) \?\? ChartBridgeGroups\.AdvisoryEntryCheck\("agent:" \+ Id, a, root, p\.Side == "buy", p\.Sizes\[i\], true, false\);/, 'Q1 b: the owner lock and the one-direction check per seat');
   assert.match(checks, /if \(outs\.All\(x => x != null\)\)\s*return "no seat of "/, 'refused only when no seat can take it');
   assert.match(bodies(acode, 'GroupPlanProblem'), /if \(p\.SeatsRev != rev\) return "the group changed; size again";/, 'a stale seatsRev refuses the whole plan');
   assert.match(checks, /open = Seats\.Values\.Any\(x => x\.openTag != null \|\| x\.Sticky\.Count > 0\);/, 'one at a time across every seat');
@@ -551,7 +551,7 @@ test('plan step 3.5 (0.6.25): one direction per firm, one PC per firm and the GO
   const gcode = strip(read('ChartBridgeGroups.cs'));
   // the order gate: every entry (every source) meets the firm guards after an exit of its own position has passed
   const ec = bodies(gcode, 'EntryCheck');
-  assert.match(ec, /if \(exit\) return null;\s*string firmWhy = FirmEntryWhy\(source, a, root, isBuy, opposite\);\s*if \(firmWhy != null\) return firmWhy;\s*EnsureLoaded\(\);/);
+  assert.match(ec, /if \(exit\) return null;\s*string firmWhy = FirmEntryWhy\(source, a, root, isBuy, opposite, !advisory\);\s*if \(firmWhy != null\) return firmWhy;\s*EnsureLoaded\(\);/);
   const fe = bodies(gcode, 'FirmEntryWhy');
   assert.doesNotMatch(fe, /Flatten\(|Cancel\(|Submit\(|Change\(/, 'the firm guard only refuses: it never closes, cancels or places');
   assert.match(fe, /FirmMarket\(h\.Root\) == market/);
@@ -565,4 +565,11 @@ test('plan step 3.5 (0.6.25): one direction per firm, one PC per firm and the GO
   // the GO size: a file whose GO size is not its playbook's is never served
   assert.match(bodies(acode, 'One'), /string go = GoSizeProblem\(text, fmt\);\s*if \(go != null\) \{ why = go; return null; \}\s*return text\.Trim\(\);/);
   assert.match(fs.readFileSync(path.join(nt8, 'check', 'AgentHarness.cs'), 'utf8'), /GoLive35\(\);/);
+  // the R12 review of 2f1ddb3: B1, an account with no firm counts against a trader's or the bot's entry; nit 1, the GO keys
+  // read strictly; nit 2, the answer is whole JSON first; nit 3, the plan check 10b is advisory (no Output line)
+  assert.match(fe, /if \(!his && FirmScope\(m\.Name\)\) unknown\.AddRange\(/);
+  assert.match(bodies(acode, 'GoSizeProblem'), /KeysProblem\(text, "", "live", "playbook", "bots"\)/);
+  assert.match(bodies(gcode, 'FirmsFrom'), /if \(!ChartBridgeBot\.JsonValid\(body\)\)/);
+  assert.equal((acode.match(/ChartBridgeGroups\.AdvisoryEntryCheck\("agent:" \+ Id, a, root, p\.Side == "buy", [^)]*, true, false\)/g) || []).length, 2, 'both plan check 10b calls are advisory');
+  assert.doesNotMatch(acode, /ChartBridgeGroups\.EntryCheck\(/, 'the agents file asks the group and firm rules only as advisory');
 });

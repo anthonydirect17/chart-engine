@@ -7135,7 +7135,9 @@ public static class AgentHarness
                 new[] { head + "\"prop_accounts\":[{\"account\":\"PROP-1\",\"firm\":{\"n\":\"A\"},\"pc\":null}]" + tail, "not one flat object" },
                 new[] { head + "\"prop_accounts\":[{\"account\":\"PROP-1\",\"firm\":\"A\\\"B\",\"pc\":null}]" + tail, "does not read" },
                 new[] { head + "\"prop_accounts\":[{\"account\":\"PROP-1\",\"firm\":\"A\"}]" + tail, "has no pc field" },
-                new[] { head + "\"prop_accounts\":[{\"account\":\"PROP-1\",\"firm\":\"A\",\"pc\":null}", "cut off" } })
+                new[] { head + "\"prop_accounts\":[{\"account\":\"PROP-1\",\"firm\":\"A\",\"pc\":null}", "not valid JSON" },
+                new[] { head + rows + tail + "}", "not valid JSON" },   // R12 review nit 2: JSON checked whole first
+                new[] { head + rows + ",\"x\":[1,}" + tail, "not valid JSON" } })
             {
                 ChartBridgeGroups.FirmReading x = ChartBridgeGroups.FirmsFrom(bad[0], 5, out why);
                 Check(x == null && why != null && why.Contains(bad[1]), "firms: refused whole (" + bad[1] + "): " + why);
@@ -7155,7 +7157,7 @@ public static class AgentHarness
             Check(s == null && prop2.Calls.Count == c2 && AgentReject().Contains("Firm " + Lucid + " is long on NQ, MNQ, ES and MES (PROP-1 +1 NQ): a sell on PROP-2 would go against it") && AgentReject().Contains("nothing is closed"),
                   "direction: a trader's short MNQ on PROP-2 while PROP-1 (same firm, no group) is long NQ: refused, nothing sent: " + AgentReject());
             Check(prop1.Calls.Count == c1 && PosOf(prop1, nq) == 1, "direction: PROP-1's open position is not touched (no order, no cancel)");
-            Check(Logged("firms: refused, agent:manrae: Firm " + Lucid + " is long"), "direction: the refusal is logged");
+            Check(FileText("agent-manrae.log").Contains("refused: Firm " + Lucid + " is long"), "direction: the refusal is logged (the trader's own log: its plan check refuses it before the order path)");
             Order b = PlacedOn(prop2, Good(NewId()));
             Check(b != null, "direction: a buy on PROP-2 (with the firm) is placed: " + AgentReject());
             Settle(prop2);
@@ -7332,6 +7334,72 @@ public static class AgentHarness
             ModeAuto("manrae", "gook.json", ShaOf(Path.Combine(rf, "gook.json")));
             Check(PageReject().Contains("auto refused: the picked file gook.json cannot be read now: its GO size (live.risk_dollars 275)") && ModeNow() == "shadow", "GO size: changed under the pick: Auto refused: " + PageReject());
             P("{\"type\":\"agentPick\",\"cid\":\"go3\",\"agent\":\"manrae\",\"file\":null}");
+            ChartBridgeRoster.FolderSetting = "";
+        });
+
+        // ---- the R12 review of 2f1ddb3 (round 2)
+        Part("R12 B1: a prop account with no firm in the ledger counts against a trader's entry, not Anthony's ticket", () =>
+        {
+            PropStart("PROP-1", true);
+            Firms(true, Here, 0, false);   // PROP-2 is a prop account with no account type on The Desk
+            SetPos(prop2, mnq, -1);        // short 1 MNQ there, from Anthony's ticket
+            Mode("manrae", "auto");
+            int c1 = prop1.Calls.Count, c2 = prop2.Calls.Count;
+            Order b = PlacedOn(prop1, Plan(NewId(), "NQ", "buy", "limit", "24999", 1, 8, 16, 600));
+            Check(b == null && prop1.Calls.Count == c1 && AgentReject().Contains("PROP-2 is a prop account with no firm in The Desk's account ledger and holds short on NQ, MNQ, ES and MES: one direction per firm cannot be checked. Exits and flattens still work."),
+                  "B1: a trader's buy NQ on PROP-1 (typed) against PROP-2 (untyped, short MNQ) is refused: " + AgentReject());
+            Check(prop2.Calls.Count == c2 && PosOf(prop2, mnq) == -1, "B1: PROP-2's position untouched");
+            Check(Gate("page", prop1, "NQ", true) == null && Gate("copier", prop1, "MES", true) == null, "B1: Anthony's own ticket and his copier are not refused by an account whose firm is not known");
+            Check((Gate("bot", prop1, "ES", true) ?? "").Contains("PROP-2 is a prop account with no firm") && Gate("agent:demob", prop1, "MNQ", false) == null && Gate("agent:demob", prop1, "CL", true) == null,
+                  "B1: the bot refused too; a sell (with PROP-2's side) and another market go");
+            SetPos(prop2, mnq, 0);
+            Order ok = PlacedOn(prop1, Good(NewId()));
+            Check(ok != null, "B1: PROP-2 flat: the buy is placed: " + AgentReject());
+            Mode("manrae", "shadow");
+            Settle(prop1); Settle(prop2);
+        });
+        Part("R12 nit 3: the advisory plan check (10b) logs no refusal; a real order attempt does", () =>
+        {
+            PropStart("PROP-2", true);
+            Firms(true, Here, 0);
+            SetPos(prop1, nq, 1);
+            Func<int> logged = () => { lock (NinjaTrader.Code.Output.Lines) return NinjaTrader.Code.Output.Lines.Count(x => x.Contains("firms: refused")); };
+            Mode("manrae", "shadow");
+            int n0 = logged();
+            A(Sell(NewId(), "MNQ"));
+            Check(logged() == n0, "nit 3: a plan checked in Shadow (check 10b, advisory) writes no firms line");
+            Mode("manrae", "auto");
+            int n1 = logged();
+            Order s = PlacedOn(prop2, Sell(NewId(), "MNQ"));
+            Check(s == null && logged() == n1 && FileText("agent-manrae.log").Contains("refused: Firm " + Lucid + " is long"), "nit 3: in Auto the plan check refuses it first: logged in the trader's own log, no Output line");
+            Check(Gate("page", prop2, "MNQ", false) != null && logged() == n1 + 1 && Logged("firms: refused, page: Firm " + Lucid + " is long"), "nit 3: an order the order path refuses (his ticket) is logged once");
+            Mode("manrae", "shadow");
+            Settle(prop1); Settle(prop2);
+        });
+        Part("R12 nit 1: a GO key written twice or with an escape is refused", () =>
+        {
+            string d = Path.Combine(home, "made-up-botlab-golive-r2", "roster");
+            Directory.CreateDirectory(d);
+            ChartBridgeRoster.FolderSetting = d;
+            string pb = "\"playbook\":{\"eval\":{\"risk_dollars\":250},\"funded\":{\"risk_dollars\":150}}";
+            string bad = "{\"stage\":\"eval\",\"risk_dollars\":300}", good = "{\"stage\":\"eval\",\"risk_dollars\":250}";
+            string[][] cases = {
+                new[] { "dup-live.json", "{\"format\":\"specrunner.roster/1\",\"bot\":\"d\"," + pb + ",\"live\":" + good + ",\"live\":" + bad + "}", "live is there twice" },
+                new[] { "dup-pb.json", "{\"format\":\"specrunner.roster/1\",\"bot\":\"d\"," + pb + ",\"live\":" + good + ",\"playbook\":{\"eval\":{\"risk_dollars\":300}}}", "playbook is there twice" },
+                new[] { "esc-live.json", "{\"format\":\"specrunner.roster/1\",\"bot\":\"d\"," + pb + ",\"li\\u0076e\":" + bad + "}", "live is written with an escape" },
+                new[] { "dup-risk.json", "{\"format\":\"specrunner.roster/1\",\"bot\":\"d\"," + pb + ",\"live\":{\"stage\":\"eval\",\"risk_dollars\":250,\"risk_dollars\":300}}", "live.risk_dollars is there twice" },
+                new[] { "dup-stage.json", "{\"format\":\"specrunner.roster/1\",\"bot\":\"d\",\"playbook\":{\"eval\":{\"risk_dollars\":250,\"risk_dollars\":300}},\"live\":" + good + "}", "playbook.eval.risk_dollars is there twice" },
+                new[] { "dup-eval.json", "{\"format\":\"specrunner.roster/1\",\"bot\":\"d\",\"playbook\":{\"eval\":{\"risk_dollars\":250},\"eval\":{\"risk_dollars\":300}},\"live\":" + good + "}", "playbook.eval is there twice" },
+                new[] { "dup-bot.json", "{\"format\":\"specrunner.lineup/1\",\"lineup\":\"l\"," + pb + ",\"bots\":[{\"bot\":\"a\",\"live\":" + good + ",\"live\":" + bad + "}]}", "bots[0].live is there twice" } };
+            string sha;
+            foreach (string[] c in cases)
+            {
+                File.WriteAllText(Path.Combine(d, c[0]), c[1]);
+                string w = ChartBridgeRoster.PickCheck(c[0], out sha);
+                Check(w != null && w.Contains(c[2]) && w.Contains("not served"), "nit 1: " + c[0] + " is not served (" + c[2] + "): " + w);
+            }
+            File.WriteAllText(Path.Combine(d, "plain.json"), "{\"format\":\"specrunner.roster/1\",\"bot\":\"d\",\"n\\u0061me\":1," + pb + ",\"live\":" + good + "}");
+            Check(ChartBridgeRoster.PickCheck("plain.json", out sha) == null, "nit 1: an escape in another key and one live and one playbook: served");
             ChartBridgeRoster.FolderSetting = "";
         });
 

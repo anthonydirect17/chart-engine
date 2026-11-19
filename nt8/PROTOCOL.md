@@ -4227,7 +4227,7 @@ Bot-Lab's `specrunner/` (its plan step 3.5 build); nothing here sizes a trader's
 - **The firms.** Once a minute, off the poll timer's thread, with or without the lane rule, ChartBridge reads The Desk's
   `GET <deskUrl>/api/legion/cohorts` (The Desk's plan step 3.1) and keeps its `prop_accounts` rows: `account`, `firm` and
   `pc` (the one trading PC the firm runs on, set on Legion's Cohorts; null: not set). Read strictly: the answer starts
-  `{"v":1,`; each row one flat object by the strict reader (no escape, no nested value); a row with no firm is left out
+  `{"v":1,` and is valid JSON as a whole; each row one flat object by the strict reader (no escape, no nested value); a row with no firm is left out
   (that account's firm is not known); one account with two firms, or one firm with two PCs, refuses the whole answer. A
   firm is the same firm whatever its case and spaces. A failure keeps the last reading and is said once in the Output
   window. The firm is never read from NinjaTrader's connection or provider name (item 113).
@@ -4242,7 +4242,11 @@ Bot-Lab's `specrunner/` (its plan step 3.5 build); nothing here sizes a trader's
   both sides until it is one direction. **Only the new entry is refused and logged** (`firms: refused, <source>: ...`):
   nothing is flattened or cancelled (item 111). An exit of the account's own position always goes (the check's first rule,
   as before). The personal account is never counted and never bound. The group rule (one direction per group, 0.5.8) is
-  unchanged beside it.
+  unchanged beside it. **A prop account with no firm in the ledger** (in scope, The Desk gives it no firm) counts against
+  a trader's or the bot's new entry on the same market: if it holds the other side (or both), the entry is refused ("...
+  is a prop account with no firm in The Desk's account ledger and holds short on ...: one direction per firm cannot be
+  checked"). Anthony's own ticket and the copier are not held by it. The Output line is written for an order the order
+  path refuses; a trader's plan refused by its plan check (10b, in every mode) is in the trader's own log.
 - **One PC per firm** (item 111): a trader (`agent:<id>`) is refused, with the reason,
   - at `agentPick` (a file, not None), at `agentMode` `auto`, and at the one Auto restore after a restart (which waits for
     the first read of The Desk's firms since the start), when its prop seats are of more than one firm ("a cohort trades
@@ -4255,7 +4259,9 @@ Bot-Lab's `specrunner/` (its plan step 3.5 build); nothing here sizes a trader's
   firm cannot be known (the 0.6.6 ruling's side for an unreadable `groups.txt`), and use the last reading whatever its age.
 - **The GO size is the file's** (law 9.3): a roster file that carries Anthony's GO (`live`, Bot-Lab's `_check_live`) is served
   only when `live.risk_dollars` equals its own `playbook.<live.stage>.risk_dollars` (`live.stage` eval or funded); a
-  lineup's each bot's `live` against the lineup's one playbook. Otherwise `GET /roster` lists it with why (`ok` false) and
+  lineup's each bot's `live` against the lineup's one playbook. A key the GO size is read from (`live`, `playbook`,
+  `bots`, `stage`, `risk_dollars`, the stage's playbook) written twice in its object, or with an escape, refuses the
+  file. Otherwise `GET /roster` lists it with why (`ok` false) and
   it cannot be picked, armed or restored. No `live` (or null): nothing to check. This is the only rule ChartBridge reads from
   a roster file; the runner checks it and the rest of the GO again.
 - **`groups` gains `firmGuard`** (after `laneRule`): `{state: "on" | "error", why, pc (this PC's name or null), readAt (UTC ms
