@@ -217,6 +217,7 @@ public static class AgentHarness
             DayLoss();        // 0.6.22: the day's loss stop: the plan's dollar value only (answers 31)
             Voice();          // 0.6.22: ChartBridge's own voice calls (answers 30): listen and play only
             PropAccounts();   // prop accounts: Auto through the 17:00 reset and one restore after a restart; the personal account, Sim and a no-setting install as before
+            GoLive35();       // plan step 3.5 (0.6.25): one direction per firm, one PC per firm, the GO size is the file's
         }
         catch (Exception ex) { Check(false, "agent harness threw: " + ex); }
         finally
@@ -232,12 +233,23 @@ public static class AgentHarness
             OrdersHarness.AllOffLines();
             ChartBridgeOrders.ResetConfig();
             ChartBridgeOrders.Clear();
+            ChartBridgeGroups.FirmsForCheck(null, null, 0);   // plan step 3.5: no firm reading left for the next harness
             Account.All.Clear(); Account.All.AddRange(accountsWas);
             Named().Clear(); foreach (KeyValuePair<string, Instrument> kv in namedWas) Named()[kv.Key] = kv.Value;
             Clients().Clear(); foreach (KeyValuePair<int, ChartBridgeClient> kv in clientsWas) Clients()[kv.Key] = kv.Value;
             NinjaTrader.Core.Globals.UserDataDir = dirWas;
             ChartBridgeConfig.Port = portWas;
         }
+    }
+
+    // Plan step 3.5 (0.6.25): the firm guards need The Desk's firms. Every part before GoLive35 runs as if each made-up live
+    // account were its own firm and every firm ran on this PC (read now, never stale), so what they test is as before.
+    static void DefaultFirms()
+    {
+        Dictionary<string, string> firms = new Dictionary<string, string>(), pcs = new Dictionary<string, string>();
+        foreach (string a in new[] { "EVAL-A", "MINE-1", "PROP-1" }) { firms[a] = "Made-up firm " + a; pcs["Made-up firm " + a] = ChartBridgeGroups.FirmHere(); }
+        firms["PROP-2"] = "Made-up firm PROP-1";   // PROP-1 and PROP-2 one firm: the older parts put them in one group
+        ChartBridgeGroups.FirmsForCheck(firms, pcs, double.MaxValue);
     }
 
     static void Config(params string[] extra)
@@ -280,6 +292,7 @@ public static class AgentHarness
         File.WriteAllLines(Path.Combine(Dir, "bot-account.txt"), new[] { "# made-up", "# test", "account\tSIM-Z" });   // the bot's account counts for agents even with the bot off
         Config();
         Last2();
+        DefaultFirms();   // plan step 3.5 (0.6.25): each made-up live account its own firm, every firm on this PC, never stale
         ChartBridgeOrders.NewToken();
         token = ChartBridgeOrders.SessionJson().Split('"')[3];
         Clients().Clear();
@@ -7081,6 +7094,261 @@ public static class AgentHarness
             ChartBridgeOrders.ReadConfig("tradeAccounts", "Sim101, EVAL-A, SIM-A, SIM-B, SIM-C, SIM-D, SIM-E");
             Restart();
             Check(!ChartBridgeBranches.PersonalNamed, "prop: the pick gone: nothing is prop again");
+        });
+    }
+
+    // ================================================================== plan step 3.5 (ChartBridge 0.6.25): the go-live guards
+    // Law 9.2 and 9.3: one direction per firm (NQ, MNQ, ES and MES one market; every prop account of the firm on this PC, grouped or
+    // not; the new entry refused, nothing closed), one PC per firm at the pick, Auto, its restore and every trader entry, and the GO
+    // size a roster file carries. Every firm, account and PC name here is made up.
+    const string Lucid = "Made-up Lucid", Other = "Made-up Other";
+    static double UtcMsNow() { return (DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds; }
+    // PROP-1 and PROP-2 of one firm (or each its own), EVAL-A of another; each firm on `pc` (null: not set); read `ageMs` ago
+    static void Firms(bool samefirm, string pc, double ageMs, bool prop2Known = true)
+    {
+        Dictionary<string, string> f = new Dictionary<string, string> { { "PROP-1", Lucid }, { "EVAL-A", Other } };
+        if (prop2Known) f["PROP-2"] = samefirm ? "made-up  lucid" : "Made-up Third";   // folded: one firm whatever its case and spaces
+        Dictionary<string, string> p = new Dictionary<string, string> { { Lucid, pc }, { Other, pc }, { "Made-up Third", pc } };
+        ChartBridgeGroups.FirmsForCheck(f, p, UtcMsNow() - ageMs);
+    }
+    static string Here { get { return ChartBridgeGroups.FirmHere(); } }
+    static string Sell(string id, string root) { return Plan(id, root, "sell", "limit", "25001", 1, 8, 16, 600); }
+    static string Gate(string source, Account a, string root, bool buy) { return ChartBridgeGroups.EntryCheck(source, a, root, buy, 1, true, false); }
+
+    static void GoLive35()
+    {
+        Part("firms: The Desk's GET /api/legion/cohorts read strictly", () =>
+        {
+            string head = "{\"v\":1,\"version\":3,\"note\":\"made up\",\"cohorts\":[{\"id\":\"c1\",\"accounts\":[{\"account\":\"PROP-1\",\"firm\":\"X\"}]}],\"firms\":[{\"firm\":\"Made-up Lucid\",\"pc\":\"WORK-X\",\"cohorts\":[\"c1\"]}],\"by_pc\":{},";
+            string rows = "\"prop_accounts\":[{\"account\":\"PROP-1\",\"firm\":\"Made-up  Lucid\",\"stage\":\"eval\",\"cohort\":\"c1\",\"pc\":\"WORK-X\"},{\"account\":\"PROP-2\",\"firm\":\"made-up lucid\",\"stage\":null,\"cohort\":null,\"pc\":\"WORK-X\"},{\"account\":\"NOFIRM-1\",\"firm\":null,\"stage\":null,\"cohort\":null,\"pc\":null},{\"account\":\"EVAL-A\",\"firm\":\"Made-up Other\",\"stage\":\"funded\",\"cohort\":null,\"pc\":null}]";
+            string tail = ",\"bought_for\":{},\"pick_history\":{},\"problems\":[]}";
+            string why;
+            ChartBridgeGroups.FirmReading r = ChartBridgeGroups.FirmsFrom(head + rows + tail, 5, out why);
+            Check(r != null && why == null && r.FirmOf["prop-1"] == "Made-up Lucid" && ChartBridgeGroups.FoldFirm(r.FirmOf["PROP-2"]) == "made-up lucid" && !r.FirmOf.ContainsKey("NOFIRM-1") &&
+                  r.PcOf["made-up lucid"] == "WORK-X" && r.PcOf["made-up other"] == null && r.At == 5,
+                  "firms: each account's firm (folded: case and spaces), each firm's PC, a row with no firm left out: " + why);
+            foreach (string[] bad in new[] {
+                new[] { "{\"v\":2," + head.Substring(7) + rows + tail, "not version 1" },
+                new[] { head + "\"accounts\":[]" + tail, "has no prop_accounts" },
+                new[] { head + "\"prop_accounts\":[{\"account\":\"PROP-1\",\"firm\":\"A\",\"pc\":null},{\"account\":\"prop-1\",\"firm\":\"B\",\"pc\":null}]" + tail, "gives prop-1 two firms" },
+                new[] { head + "\"prop_accounts\":[{\"account\":\"PROP-1\",\"firm\":\"A\",\"pc\":\"P1\"},{\"account\":\"PROP-2\",\"firm\":\"a\",\"pc\":\"P2\"}]" + tail, "two PCs" },
+                new[] { head + "\"prop_accounts\":[{\"account\":\"PROP-1\",\"firm\":{\"n\":\"A\"},\"pc\":null}]" + tail, "not one flat object" },
+                new[] { head + "\"prop_accounts\":[{\"account\":\"PROP-1\",\"firm\":\"A\\\"B\",\"pc\":null}]" + tail, "does not read" },
+                new[] { head + "\"prop_accounts\":[{\"account\":\"PROP-1\",\"firm\":\"A\"}]" + tail, "has no pc field" },
+                new[] { head + "\"prop_accounts\":[{\"account\":\"PROP-1\",\"firm\":\"A\",\"pc\":null}", "cut off" } })
+            {
+                ChartBridgeGroups.FirmReading x = ChartBridgeGroups.FirmsFrom(bad[0], 5, out why);
+                Check(x == null && why != null && why.Contains(bad[1]), "firms: refused whole (" + bad[1] + "): " + why);
+            }
+            Check(ChartBridgeGroups.FirmMarket("NQ") == ChartBridgeGroups.FirmMarket("mes") && ChartBridgeGroups.FirmMarket("ES") == ChartBridgeGroups.FirmMarket("MNQ") && ChartBridgeGroups.FirmMarket("CL") == "CL",
+                  "firms: NQ, MNQ, ES and MES are one market; any other root its own");
+        });
+
+        Part("one direction per firm: a new entry against the firm refused, ungrouped, its open position untouched", () =>
+        {
+            PropStart("PROP-2", true);
+            Firms(true, Here, 0);
+            SetPos(prop1, nq, 1);   // PROP-1 long 1 NQ, by hand, in no group
+            Mode("manrae", "auto");
+            int c1 = prop1.Calls.Count, c2 = prop2.Calls.Count;
+            Order s = PlacedOn(prop2, Sell(NewId(), "MNQ"));
+            Check(s == null && prop2.Calls.Count == c2 && AgentReject().Contains("Firm " + Lucid + " is long on NQ, MNQ, ES and MES (PROP-1 +1 NQ): a sell on PROP-2 would go against it") && AgentReject().Contains("nothing is closed"),
+                  "direction: a trader's short MNQ on PROP-2 while PROP-1 (same firm, no group) is long NQ: refused, nothing sent: " + AgentReject());
+            Check(prop1.Calls.Count == c1 && PosOf(prop1, nq) == 1, "direction: PROP-1's open position is not touched (no order, no cancel)");
+            Check(Logged("firms: refused, agent:manrae: Firm " + Lucid + " is long"), "direction: the refusal is logged");
+            Order b = PlacedOn(prop2, Good(NewId()));
+            Check(b != null, "direction: a buy on PROP-2 (with the firm) is placed: " + AgentReject());
+            Settle(prop2);
+            Mode("manrae", "shadow");
+            // every source, the correlated markets, the personal account, another firm, another market, an exit
+            foreach (string src in new[] { "page", "copier", "bot", "agent:demob" })
+                foreach (string root in new[] { "ES", "MES", "MNQ", "NQ" })
+                    Check((Gate(src, prop2, root, false) ?? "").Contains("Firm " + Lucid + " is long on NQ, MNQ, ES and MES"), "direction: " + src + " selling " + root + " on PROP-2 is refused (correlated markets as one)");
+            Check(Gate("page", prop2, "CL", false) == null, "direction: another market (CL) is its own");
+            Check(Gate("page", mine, "MNQ", false) == null && Gate("copier", mine, "NQ", false) == null, "direction: the personal account may go against the firm");
+            Check(Gate("page", eval, "MNQ", false) == null, "direction: another firm's account (EVAL-A) is not bound by this firm");
+            Check(ChartBridgeGroups.EntryCheck("page", prop1, "NQ", false, 1, false, false) == null, "direction: PROP-1 selling its own long NQ (an exit) always goes");
+            SetPos(prop2, mnq, -1);   // the firm now long and short (typed into NinjaTrader)
+            Check((Gate("page", prop1, "MNQ", true) ?? "").Contains("is long and short") && (Gate("page", prop1, "MNQ", false) ?? "").Contains("is long and short"),
+                  "direction: a firm long and short refuses a new entry on either side until it is one direction");
+            Check(PosOf(prop1, nq) == 1 && PosOf(prop2, mnq) == -1, "direction: and closes nothing");
+            Firms(false, Here, 0);   // PROP-2 of another firm now: no clash
+            Check(Gate("page", prop1, "MNQ", true) == null && Gate("page", prop2, "MNQ", false) == null, "direction: accounts of two firms each go their own way");
+            Settle(prop1); Settle(prop2);
+        });
+
+        Part("one direction per firm: grouped and ungrouped accounts of the firm together", () =>
+        {
+            string groupsWas = File.Exists(GroupsFile) ? File.ReadAllText(GroupsFile) : null;
+            try
+            {
+                WriteGroup("PROP-1");   // PROP-1 in group Lucid (No hedging on); PROP-2 in no group
+                PropStart("PROP-2", true);
+                Firms(true, Here, 0);
+                SetPos(prop1, mnq, 2);
+                Check((Gate("page", prop2, "NQ", false) ?? "").Contains("Firm " + Lucid + " is long"), "grouped: PROP-1 (in a group) long: a sell on PROP-2 (in no group) is refused by the firm");
+                Settle(prop1);
+                SetPos(prop2, mnq, -1);
+                Check((Gate("page", prop1, "ES", true) ?? "").Contains("Firm " + Lucid + " is short") && PosOf(prop2, mnq) == -1, "grouped: PROP-2 (no group) short: a buy on PROP-1 (in a group) is refused, PROP-2 untouched");
+                Mode("manrae", "auto");
+                Order b = PlacedOn(prop2, Good(NewId()));
+                Check(b == null, "grouped: (a trader's buy on PROP-2 itself short: its own owner rules or the firm refuse it)");
+                Mode("manrae", "shadow");
+                Settle(prop2);
+            }
+            finally { if (groupsWas != null) File.WriteAllText(GroupsFile, groupsWas); else Gone(GroupsFile); ChartBridgeGroups.StartNow(); }
+        });
+
+        Part("firms not known: a trader refused, Anthony's ticket and his copier go", () =>
+        {
+            PropStart("PROP-2", true);
+            Firms(true, Here, 0, false);   // PROP-2 has no account type on The Desk
+            Mode("manrae", "auto");
+            Check(PageReject().Contains("auto refused: PROP-2 has no firm in The Desk's account ledger") && ModeNow() == "shadow", "unknown: Auto refused for a seat with no firm: " + PageReject());
+            Check((Gate("agent:manrae", prop2, "MNQ", true) ?? "").Contains("PROP-2 has no firm in The Desk's account ledger") && (Gate("bot", prop2, "MNQ", true) ?? "").Contains("no firm"),
+                  "unknown: a trader's and the bot's entry on it is refused");
+            Check(Gate("page", prop2, "MNQ", true) == null && Gate("copier", prop2, "MNQ", false) == null, "unknown: his own ticket and the copier go (the 0.6.6 ruling's side)");
+            ChartBridgeGroups.FirmsForCheck(null, null, 0);
+            Check((Gate("agent:manrae", prop1, "MNQ", true) ?? "").Contains("has not been read") && Gate("page", prop1, "MNQ", true) == null, "unknown: nothing read at all: a trader refused, his ticket goes");
+            ChartBridgeGroups.FirmErrorForCheck("made-up: The Desk did not answer");
+            Check(ChartBridgeGroups.SeatsFirmWhy(new[] { "PROP-1" }).Contains("made-up: The Desk did not answer"), "unknown: the read's failure is named");
+            // a stale reading: a trader refused; his own ticket still uses it for the direction
+            Firms(true, Here, ChartBridgeGroups.FirmFreshMs + 60000);
+            SetPos(prop1, mnq, 1);
+            Mode("manrae", "auto");
+            Check(PageReject().Contains("auto refused: The Desk's account ledger (each prop account's firm and its PC) was last read 11 minutes ago") && ModeNow() == "shadow", "stale: Auto refused on an 11 minute old reading: " + PageReject());
+            Check((Gate("agent:demob", prop2, "MNQ", true) ?? "").Contains("was last read") && (Gate("page", prop2, "MNQ", false) ?? "").Contains("Firm " + Lucid + " is long"),
+                  "stale: a trader refused; his ticket's sell on PROP-2 still meets the firm's direction");
+            Check(ChartBridgeGroups.SeatsFirmWhy(new[] { "MINE-1", "SIM-E", "Sim101", "-" }) == null, "unknown: a trader with no prop seat (personal, Sim, None) is not bound");
+            Settle(prop1);
+        });
+
+        string rf = Path.Combine(home, "made-up-botlab-golive", "roster");
+        Part("one PC per firm: the pick, Auto and a trader's entry", () =>
+        {
+            Directory.CreateDirectory(rf);
+            ChartBridgeRoster.FolderSetting = rf;
+            File.WriteAllText(Path.Combine(rf, "alpha.json"), "{\"format\":\"specrunner.roster/1\",\"bot\":\"alpha\"}");
+            PropStart("PROP-2", true);
+            ChartBridgeRoster.FolderSetting = rf;
+            try { Gone(Path.Combine(Dir, "agent-manrae-pick.txt")); } catch (Exception) { }
+            Restart();
+            Firms(true, "OTHER-PC", 0);
+            P("{\"type\":\"agentPick\",\"cid\":\"fp1\",\"agent\":\"manrae\",\"file\":\"alpha.json\"}");
+            Check(PageReject().Contains("alpha.json cannot be picked for agent manrae on this PC: firm " + Lucid + " runs on OTHER-PC, not on this PC (" + Here + "): one PC per firm") && M.PickNow() == null,
+                  "one PC: the pick refused while the firm runs on another PC: " + PageReject());
+            Mode("manrae", "auto");
+            Check(PageReject().Contains("auto refused: firm " + Lucid + " runs on OTHER-PC") && ModeNow() == "shadow", "one PC: Auto refused: " + PageReject());
+            Firms(true, null, 0);
+            Mode("manrae", "auto");
+            Check(PageReject().Contains("auto refused: firm " + Lucid + " has no trading PC set (Legion's Cohorts)") && ModeNow() == "shadow", "one PC: a firm with no PC set: Auto refused: " + PageReject());
+            Firms(true, Here.ToLowerInvariant(), 0);   // the PC's name in any case
+            P("{\"type\":\"agentPick\",\"cid\":\"fp2\",\"agent\":\"manrae\",\"file\":\"alpha.json\"}");
+            Check(M.PickNow() == "alpha.json", "one PC: the firm on this PC: the pick is taken: " + PageReject());
+            ModeAuto("manrae", "alpha.json", ShaOf(Path.Combine(rf, "alpha.json")));
+            Check(ModeNow() == "auto", "one PC: and Auto: " + PageReject());
+            // the firm moved to another PC while in Auto: its next entry is refused; Anthony's own ticket is not bound to a PC
+            Firms(true, "OTHER-PC", 0);
+            int c2 = prop2.Calls.Count;
+            Order x = PlacedOn(prop2, Good(NewId()));
+            Check(x == null && prop2.Calls.Count == c2 && AgentReject().Contains("No new entry on PROP-2: firm " + Lucid + " runs on OTHER-PC"), "one PC: a trader's entry refused once the firm runs elsewhere: " + AgentReject());
+            Check(Gate("page", prop2, "MNQ", true) == null, "one PC: his own ticket on PROP-2 is not bound to a PC");
+            // its saved Auto is not restored after a restart while the firm runs elsewhere
+            Firms(true, Here, 0);
+            Check(AutoFileThere, "one PC: (its Auto saved)");
+            Firms(true, "OTHER-PC", 0);
+            Restart();
+            int s0 = N(page);
+            Advance(40000);
+            Check(ModeNow() == "shadow" && !AutoFileThere && Any(page, s0, "Auto was NOT restored after the restart (firm " + Lucid + " runs on OTHER-PC"), "one PC: the saved Auto is not restored: " + Last(page, "status"));
+            Firms(true, Here, 0);
+            P("{\"type\":\"agentPick\",\"cid\":\"fp3\",\"agent\":\"manrae\",\"file\":null}");
+        });
+
+        Part("one PC per firm: a trader whose seats are of two firms is refused at the pick and at Auto", () =>
+        {
+            string groupsWas = File.Exists(GroupsFile) ? File.ReadAllText(GroupsFile) : null;
+            try
+            {
+                WriteGroup("PROP-1", "PROP-2");
+                PropStart("group:g1", true);
+                ChartBridgeRoster.FolderSetting = rf;
+                try { Gone(Path.Combine(Dir, "agent-manrae-pick.txt")); } catch (Exception) { }
+                Restart();
+                Firms(false, Here, 0);   // PROP-1 Made-up Lucid, PROP-2 Made-up Third, both firms on this PC
+                P("{\"type\":\"agentPick\",\"cid\":\"fp4\",\"agent\":\"manrae\",\"file\":\"alpha.json\"}");
+                Check(PageReject().Contains("its prop accounts are of more than one firm (") && PageReject().Contains("a cohort trades one firm") && M.PickNow() == null, "two firms: the pick refused: " + PageReject());
+                Mode("manrae", "auto");
+                Check(PageReject().Contains("auto refused: its prop accounts are of more than one firm") && ModeNow() == "shadow", "two firms: Auto refused: " + PageReject());
+                Firms(true, Here, 0);
+                Mode("manrae", "auto");
+                Check(ModeNow() == "auto", "two firms: the same seats of one firm on this PC: Auto is taken: " + PageReject());
+                Mode("manrae", "shadow");
+            }
+            finally { if (groupsWas != null) File.WriteAllText(GroupsFile, groupsWas); else Gone(GroupsFile); ChartBridgeGroups.StartNow(); }
+            // two firms each on this PC, a trader on each one's account: both may run here (one PC may run several firms)
+            PropStart("EVAL-A", true);
+            Firms(true, Here, 0);
+            Mode("manrae", "auto");
+            Check(ModeNow() == "auto" && ChartBridgeGroups.SeatsFirmWhy(new[] { "PROP-1" }) == null, "two firms on this PC: a trader on each firm's account may run");
+            Mode("manrae", "shadow");
+        });
+
+        Part("the GO size is the file's: a roster file whose GO size is not its playbook's is not served", () =>
+        {
+            Directory.CreateDirectory(rf);
+            ChartBridgeRoster.FolderSetting = rf;
+            string pb = "\"playbook\":{\"eval\":{\"risk_dollars\":250,\"daily_loss_stop\":500},\"funded\":{\"risk_dollars\":150}}";
+            string spec = ",\"spec\":{\"file\":\"x.json\",\"sha256\":\"" + new string('a', 64) + "\"}";
+            File.WriteAllText(Path.Combine(rf, "gook.json"), "{\"format\":\"specrunner.roster/1\",\"bot\":\"gook\"" + spec + "," + pb + ",\"live\":{\"bot\":\"gook\",\"stage\":\"eval\",\"go\":\"2026-11-01 GO GOOK\",\"risk_dollars\":250.0,\"half_size\":true}}");
+            File.WriteAllText(Path.Combine(rf, "gofund.json"), "{\"format\":\"specrunner.roster/1\",\"bot\":\"gofund\"," + pb + ",\"live\":{\"stage\":\"funded\",\"risk_dollars\":150}}");
+            File.WriteAllText(Path.Combine(rf, "gonone.json"), "{\"format\":\"specrunner.roster/1\",\"bot\":\"gonone\"," + pb + ",\"live\":null}");
+            File.WriteAllText(Path.Combine(rf, "gobad.json"), "{\"format\":\"specrunner.roster/1\",\"bot\":\"gobad\"," + pb + ",\"live\":{\"stage\":\"eval\",\"risk_dollars\":300}}");
+            File.WriteAllText(Path.Combine(rf, "gostage.json"), "{\"format\":\"specrunner.roster/1\",\"bot\":\"gostage\"," + pb + ",\"live\":{\"stage\":\"funded\",\"risk_dollars\":250}}");
+            File.WriteAllText(Path.Combine(rf, "gonostage.json"), "{\"format\":\"specrunner.roster/1\",\"bot\":\"gonostage\"," + pb + ",\"live\":{\"stage\":\"sim\",\"risk_dollars\":250}}");
+            File.WriteAllText(Path.Combine(rf, "gotrick.json"), "{\"format\":\"specrunner.roster/1\",\"bot\":\"gotrick\",\"playbook\":{\"eval\":{\"risk_dollars\":300,\"note\":{\"risk_dollars\":250}}},\"live\":{\"stage\":\"eval\",\"risk_dollars\":250,\"why\":\"\\\"risk_dollars\\\":300\"}}");
+            File.WriteAllText(Path.Combine(rf, "goline.json"), "{\"format\":\"specrunner.lineup/1\",\"lineup\":\"goline\"," + pb + ",\"bots\":[{\"bot\":\"a\",\"live\":{\"stage\":\"eval\",\"risk_dollars\":250}},{\"bot\":\"b\",\"live\":null},{\"bot\":\"c\",\"live\":{\"stage\":\"funded\",\"risk_dollars\":100}}]}");
+            File.WriteAllText(Path.Combine(rf, "golineok.json"), "{\"format\":\"specrunner.lineup/1\",\"lineup\":\"golineok\"," + pb + ",\"bots\":[{\"bot\":\"a\",\"live\":{\"stage\":\"eval\",\"risk_dollars\":250}},{\"bot\":\"c\"}]}");
+            string sha;
+            foreach (string ok in new[] { "gook.json", "gofund.json", "gonone.json", "golineok.json", "alpha.json" })
+                Check(ChartBridgeRoster.PickCheck(ok, out sha) == null && sha != null, "GO size: " + ok + " is served (its GO size is its playbook's, or it has no GO)");
+            foreach (string[] bad in new[] { new[] { "gobad.json", "its GO size (live.risk_dollars 300) is not its playbook's for eval (250)" }, new[] { "gostage.json", "is not its playbook's for funded (150)" },
+                                             new[] { "gonostage.json", "names no stage" }, new[] { "gotrick.json", "its GO size (live.risk_dollars 250) is not its playbook's for eval (300)" },
+                                             new[] { "goline.json", "bots[2]: its GO size (live.risk_dollars 100) is not its playbook's for funded (150)" } })
+            {
+                string w = ChartBridgeRoster.PickCheck(bad[0], out sha);
+                Check(w != null && w.Contains(bad[1]) && w.Contains("Not served") || w != null && w.Contains(bad[1]) && w.Contains("not served"), "GO size: " + bad[0] + " is not served: " + w);
+            }
+            string why, all = ChartBridgeRoster.Read(out why);
+            Check(all != null && all.Contains("{\"name\":\"gobad.json\",\"ok\":false,\"why\":") && all.Contains("{\"name\":\"gook.json\",\"ok\":true"), "GO size: GET /roster lists it with why, and serves the rest");
+            PropStart("PROP-2", true);
+            ChartBridgeRoster.FolderSetting = rf;
+            Firms(true, Here, 0);
+            P("{\"type\":\"agentPick\",\"cid\":\"go1\",\"agent\":\"manrae\",\"file\":\"gobad.json\"}");
+            Check(PageReject().Contains("gobad.json cannot be picked: its GO size") && M.PickNow() == null, "GO size: it cannot be picked: " + PageReject());
+            P("{\"type\":\"agentPick\",\"cid\":\"go2\",\"agent\":\"manrae\",\"file\":\"gook.json\"}");
+            Check(M.PickNow() == "gook.json", "GO size: a file whose GO size is its playbook's is picked: " + PageReject());
+            File.WriteAllText(Path.Combine(rf, "gook.json"), File.ReadAllText(Path.Combine(rf, "gook.json")).Replace("\"risk_dollars\":250.0", "\"risk_dollars\":275"));
+            ModeAuto("manrae", "gook.json", ShaOf(Path.Combine(rf, "gook.json")));
+            Check(PageReject().Contains("auto refused: the picked file gook.json cannot be read now: its GO size (live.risk_dollars 275)") && ModeNow() == "shadow", "GO size: changed under the pick: Auto refused: " + PageReject());
+            P("{\"type\":\"agentPick\",\"cid\":\"go3\",\"agent\":\"manrae\",\"file\":null}");
+            ChartBridgeRoster.FolderSetting = "";
+        });
+
+        Part("firms: the groups message's firmGuard", () =>
+        {
+            PropStart("PROP-2", true);
+            Firms(true, Here, 0);
+            SetPos(prop1, nq, 1);
+            string g = ChartBridgeGroups.GroupsJson();
+            Check(g.Contains(",\"firmGuard\":{\"state\":\"on\",\"why\":null,\"pc\":" + CbJson.Str(Here)) && g.Contains("{\"firm\":\"Made-up Lucid\",\"pc\":" + CbJson.Str(Here) + ",\"here\":true,\"accounts\":[\"PROP-1\",\"PROP-2\"],\"sides\":[{\"market\":\"NQ, MNQ, ES and MES\",\"side\":\"long\"}]}"),
+                  "firmGuard: each firm, its PC, here or not, its accounts and its direction: " + g.Substring(Math.Max(0, g.IndexOf("firmGuard"))));
+            ChartBridgeGroups.FirmsForCheck(null, null, 0);
+            g = ChartBridgeGroups.GroupsJson();
+            Check(g.Contains(",\"firmGuard\":{\"state\":\"error\",\"why\":\"The Desk's account ledger (each prop account's firm and its PC) has not been read"), "firmGuard: not read: said");
+            Settle(prop1);
+            DefaultFirms();
+            Mode("manrae", "shadow");
         });
     }
 }

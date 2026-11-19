@@ -1502,6 +1502,8 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             catch (Exception) { exit = false; }
             if (exit) return null;
+            string firmWhy = FirmEntryWhy(source, a, root, isBuy, opposite);   // plan step 3.5 (0.6.25): one direction per firm, one PC per firm
+            if (firmWhy != null) return firmWhy;
             EnsureLoaded();
             Group g;
             List<string> members;
@@ -1617,7 +1619,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                  .Append(",\"benched\":[").Append(string.Join(",", members[g.Id].Where(x => bench.Contains(x)).Select(x => CbJson.Str(x)))).Append("]}");   // 0.6.7: the members on the bench (members still)
             }
             b.Append("],\"error\":").Append(err == null ? "null" : CbJson.Str(ReadFailedNow() + " (" + err + ")"));
-            b.Append(",\"laneRule\":").Append(LaneRuleJson()).Append('}');   // 0.6.23: on, off or an error, with why, and the accounts kept out by hand
+            b.Append(",\"laneRule\":").Append(LaneRuleJson());   // 0.6.23: on, off or an error, with why, and the accounts kept out by hand
+            b.Append(",\"firmGuard\":").Append(FirmGuardJson()).Append('}');   // plan step 3.5 (0.6.25): the firms, their PCs and each firm's direction
             NoteSides(sides);
             return b.ToString();
         }
@@ -2621,6 +2624,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         public static string LaneStatus { get { return !ChartBridgeConfig.LaneRule ? "off (config.txt laneRule = off)" : laneLastError ?? "on"; } }
         public static void LanePoll()
         {
+            try { FirmPoll(); } catch (Exception ex) { ChartBridgeServer.Log("firms: " + ex.Message); }   // plan step 3.5 (0.6.25): the firms and their PCs, with or without the lane rule
             if (LaneHarnessManual || !ChartBridgeConfig.LaneRule || string.IsNullOrEmpty(ChartBridgeConfig.DeskUrl)) return;
             double now = NowMs();
             if (now < laneNext) return;
@@ -3141,6 +3145,278 @@ namespace NinjaTrader.NinjaScript.AddOns
             ChartBridgeServer.SendToTraders("{\"type\":\"riskAlert\",\"kind\":" + CbJson.Str(kind) + ",\"account\":" + CbJson.Str(account) + ",\"text\":" + CbJson.Str(text) + "}");
         }
         private static string Usd(double v) { return (v < 0 ? "-$" : "$") + Math.Abs(v).ToString("#,0.00", CultureInfo.InvariantCulture); }
+
+        // ================================================================== plan step 3.5 (ChartBridge 0.6.25): firms
+        // Law 9.2 and 9.3 (Anthony 2026-11-17, items 78, 111, 113 and 114; Bot-Lab notes/BUILD_PLAN_2026-11-16_the_move.md row 3.5).
+        // The account ledger as the order path reads it: each prop account's firm and the one trading PC each firm runs on, from The
+        // Desk's GET /api/legion/cohorts (its prop_accounts rows: account, firm, stage, cohort, pc; The Desk's plan step 3.1). The
+        // firm is never read from NinjaTrader's connection or provider name (item 113). Two guards read it:
+        //  - ONE DIRECTION PER FIRM (item 78, 111, 114): every prop account of a firm on this PC, grouped or not, goes one way only,
+        //    with NQ, MNQ, ES and MES as one market (each other root a market of its own). A NEW ENTRY against the firm's open
+        //    direction (a position or a working entry on any of its accounts) is refused and logged; nothing is ever flattened or
+        //    cancelled by it, and an exit of an account's own position always goes (EntryCheck's first rule). The personal account
+        //    is never in it. Every source: a trader, the bot, the copier and Anthony's own ticket.
+        //  - ONE PC PER FIRM (item 111): a trader (agent:<id>) may pick a roster file, go to Auto (and get Auto back after a
+        //    restart) and place a new entry on a prop account only when that account's firm is set to THIS PC on Legion (The
+        //    Desk's firm_pcs; this PC's name is ChartBridgeBars.PcName(), the name every Desk message carries), and all its prop
+        //    seats are of ONE firm. Anthony's own trading is not bound to a PC (item 79).
+        // When the firm is not known (no reading yet, The Desk not reached, an account with no account type): a trader's or the
+        // bot's new entry on a prop account is refused (could not tell is never a yes); Anthony's own ticket and the copier go, as
+        // the 0.6.6 ruling did for an unreadable groups.txt, and are checked whenever the firm is known. A trader needs a reading
+        // from the last FirmFreshMs; Anthony's own entries use the last reading whatever its age.
+        public sealed class FirmReading
+        {
+            public Dictionary<string, string> FirmOf = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);   // account -> firm (as The Desk shows it)
+            public Dictionary<string, string> PcOf = new Dictionary<string, string>(StringComparer.Ordinal);               // folded firm -> its PC (null: not set)
+            public double At;                                                                                              // UTC ms it was read
+            private readonly Dictionary<string, string> shown = new Dictionary<string, string>(StringComparer.Ordinal);    // folded firm -> the first way The Desk wrote it
+            public string Shown(string firm) { string k = FoldFirm(firm), s; if (k == null) return null; if (!shown.TryGetValue(k, out s)) shown[k] = s = ShowFirm(firm); return s; }
+        }
+        public const double FirmFreshMs = 10 * 60 * 1000;
+        public static bool FirmHarnessManual;            // test hook: the harness gives the reading (FirmsForCheck) and no poll runs
+        private static volatile FirmReading firmReading;
+        private static volatile string firmLastError;
+        private static volatile bool firmTried, firmPolling;
+        private static int firmBusy;
+        private static double firmNext;
+        private static readonly Regex FirmSpace = new Regex("\\s+");
+        public static string FoldFirm(string firm) { return firm == null ? null : FirmSpace.Replace(firm, " ").Trim().ToLowerInvariant(); }
+        private static string ShowFirm(string firm) { return firm == null ? null : FirmSpace.Replace(firm, " ").Trim(); }
+        // A market for the direction: NQ, MNQ, ES and MES are one (item 114); any other root is its own.
+        public static string FirmMarket(string root)
+        {
+            string r = (root ?? "").Trim().ToUpperInvariant();
+            return r == "NQ" || r == "MNQ" || r == "ES" || r == "MES" ? "NQ, MNQ, ES and MES" : r;
+        }
+        public static string FirmHere() { string p = ChartBridgeBars.PcName(); return string.IsNullOrEmpty(p) ? null : p; }
+        // the harness only: a reading as if read at `at` (UTC ms; double.MaxValue: never stale), or null for none
+        internal static void FirmsForCheck(IDictionary<string, string> accountFirm, IDictionary<string, string> firmPc, double at)
+        {
+            if (accountFirm == null) { firmReading = null; firmTried = false; firmLastError = null; return; }
+            FirmReading r = new FirmReading { At = at };
+            foreach (KeyValuePair<string, string> kv in accountFirm) r.FirmOf[kv.Key] = r.Shown(kv.Value);
+            if (firmPc != null) foreach (KeyValuePair<string, string> kv in firmPc) r.PcOf[FoldFirm(kv.Key)] = kv.Value;
+            firmReading = r; firmTried = true; firmLastError = null;
+        }
+        internal static void FirmErrorForCheck(string why) { firmLastError = why; firmTried = true; }
+
+        // The Desk's answer, read strictly: {"v":1, ... ,"prop_accounts":[{flat row}, ...], ...}. Each row by the bot's strict reader
+        // (no escape, no nested value): account (a plain string), firm (a plain string or null: a row with no firm is left out),
+        // pc (a plain string or null). One account with two firms, or one firm with two PCs: the whole answer is refused.
+        public static FirmReading FirmsFrom(string body, double at, out string why)
+        {
+            why = null;
+            if (string.IsNullOrEmpty(body) || body.Length > 4 * 1024 * 1024) { why = "The Desk's cohorts answer is empty or too large"; return null; }
+            if (!body.TrimStart().StartsWith("{\"v\":1,", StringComparison.Ordinal)) { why = "The Desk's cohorts answer is not version 1"; return null; }
+            const string Key = ",\"prop_accounts\":[";   // only ever a key: inside a string a quote is always escaped
+            int k = body.IndexOf(Key, StringComparison.Ordinal);
+            if (k < 0) { why = "The Desk's cohorts answer has no prop_accounts (The Desk needs plan step 3.1)"; return null; }
+            FirmReading r = new FirmReading { At = at };
+            int i = k + Key.Length, n = body.Length;
+            while (i < n)
+            {
+                while (i < n && (body[i] == ' ' || body[i] == ',' || body[i] == '\n' || body[i] == '\r' || body[i] == '\t')) i++;
+                if (i < n && body[i] == ']') return r;
+                if (i >= n || body[i] != '{') { why = "The Desk's cohorts answer is malformed"; return null; }
+                int end = -1;
+                bool inStr = false;
+                for (int j = i + 1; j < n; j++)
+                {
+                    char c = body[j];
+                    if (inStr) { if (c == '\\') j++; else if (c == '"') inStr = false; continue; }
+                    if (c == '"') inStr = true;
+                    else if (c == '{' || c == '[') break;
+                    else if (c == '}') { end = j; break; }
+                }
+                if (end < 0) { why = "a prop_accounts row of The Desk's cohorts answer is not one flat object"; return null; }
+                string w;
+                Dictionary<string, ChartBridgeBot.Val> d = ChartBridgeBot.Parse(body.Substring(i, end - i + 1), out w);
+                i = end + 1;
+                if (d == null) { why = "a prop_accounts row of The Desk's cohorts answer does not read (" + w + ")"; return null; }
+                ChartBridgeBot.Val av, fv, pv;
+                if (!d.TryGetValue("account", out av) || av.K != 's' || av.T.Trim().Length == 0) { why = "a prop_accounts row has no account"; return null; }
+                if (!d.TryGetValue("firm", out fv) || (fv.K != 's' && fv.K != 'z')) { why = "the prop_accounts row of " + av.T + " has no firm field"; return null; }
+                if (!d.TryGetValue("pc", out pv) || (pv.K != 's' && pv.K != 'z')) { why = "the prop_accounts row of " + av.T + " has no pc field"; return null; }
+                string firm = fv.K == 's' && ShowFirm(fv.T).Length > 0 ? r.Shown(fv.T) : null, pc = pv.K == 's' && pv.T.Trim().Length > 0 ? pv.T.Trim() : null;
+                if (string.IsNullOrEmpty(firm)) continue;   // no firm: not known, so never counted as any firm's
+                string had;
+                if (r.FirmOf.TryGetValue(av.T, out had) && FoldFirm(had) != FoldFirm(firm)) { why = "The Desk's cohorts answer gives " + av.T + " two firms"; return null; }
+                r.FirmOf[av.T] = firm;
+                string key = FoldFirm(firm), hadPc;
+                if (r.PcOf.TryGetValue(key, out hadPc) && !string.Equals(hadPc, pc, StringComparison.OrdinalIgnoreCase)) { why = "The Desk's cohorts answer gives firm " + firm + " two PCs"; return null; }
+                r.PcOf[key] = pc;
+            }
+            why = "The Desk's cohorts answer is cut off";
+            return null;
+        }
+
+        // Every 2 s from LanePoll (ChartBridge's poll timer): once a minute, off the timer's thread, GET The Desk's
+        // /api/legion/cohorts. A failure keeps the last reading (its age still counts) and is said once until it reads again.
+        public static void FirmPoll()
+        {
+            if (FirmHarnessManual || string.IsNullOrEmpty(ChartBridgeConfig.DeskUrl)) return;
+            firmPolling = true;
+            double now = NowMs();
+            if (now < firmNext) return;
+            if (Interlocked.CompareExchange(ref firmBusy, 1, 0) != 0) return;
+            firmNext = now + 60000;
+            Task.Run(async () =>
+            {
+                try
+                {
+                    HttpWebRequest req = (HttpWebRequest)WebRequest.Create(ChartBridgeConfig.DeskUrl + "/api/legion/cohorts");
+                    req.Method = "GET";
+                    Task<WebResponse> call = req.GetResponseAsync();
+                    Task first = await Task.WhenAny(call, Task.Delay(10000));
+                    if (first != call)
+                    {
+                        try { req.Abort(); } catch (Exception) { }
+                        Task observed = call.ContinueWith(t => { Exception ignored = t.Exception; }, TaskContinuationOptions.OnlyOnFaulted);
+                        throw new TimeoutException("The Desk did not answer within 10 seconds");
+                    }
+                    string text;
+                    using (HttpWebResponse res = (HttpWebResponse)await call)
+                    using (StreamReader rd = new StreamReader(res.GetResponseStream(), Encoding.UTF8)) text = rd.ReadToEnd();
+                    string why;
+                    FirmReading r = FirmsFrom(text, NowMs(), out why);
+                    if (r == null) throw new InvalidDataException(why);
+                    firmReading = r;
+                    if (firmLastError != null) ChartBridgeServer.Log("firms: The Desk's account ledger (firms and their PCs) read again");
+                    firmLastError = null;
+                }
+                catch (Exception ex)
+                {
+                    string w = "The Desk's account ledger (firms and their PCs) could not be read (" + ex.Message + ")";
+                    if (firmLastError != w) ChartBridgeServer.Log("firms: " + w + ": a trader's new entries on prop accounts wait until it can");
+                    firmLastError = w;
+                }
+                finally { firmTried = true; Interlocked.Exchange(ref firmBusy, 0); }
+            });
+        }
+        // True while the poller runs and has not finished its first read since the start (a restore of Auto waits for it).
+        public static bool FirmsPending { get { return firmPolling && !firmTried; } }
+
+        // Null when a reading from the last FirmFreshMs is there, else why not.
+        private static string FirmStale(FirmReading r)
+        {
+            string err = firmLastError;
+            if (r == null) return "The Desk's account ledger (each prop account's firm and its PC) has not been read" + (err != null ? " (" + err + ")" : string.IsNullOrEmpty(ChartBridgeConfig.DeskUrl) ? " (config.txt has no deskUrl)" : " yet");
+            double age = NowMs() - r.At;
+            if (age > FirmFreshMs) return "The Desk's account ledger (each prop account's firm and its PC) was last read " + Math.Floor(age / 60000).ToString("0", CultureInfo.InvariantCulture) + " minutes ago" + (err != null ? " (" + err + ")" : "");
+            return null;
+        }
+        private static string FirmIn(FirmReading r, string account) { string f; return r != null && account != null && r.FirmOf.TryGetValue(account, out f) ? f : null; }
+        // A prop account for the firm guards: never None, Backtest, Playback or the personal account; prop by ChartBridge's own rule,
+        // typed by the lane ledger, or given a firm by The Desk's reading.
+        public static bool FirmScope(string name)
+        {
+            if (string.IsNullOrEmpty(name) || ChartBridgeBranches.IsNone(name)) return false;
+            if (ChartBridgeBranches.PersonalNamed && ChartBridgeBranches.IsPersonal(name)) return false;
+            if (ChartBridgeOrders.IsNeverTradable(name)) return false;
+            return ChartBridgeBranches.IsProp(name) || InLedger(name) || FirmIn(firmReading, name) != null;
+        }
+
+        // ONE PC PER FIRM for a trader's seats (the pick, Auto and its restore): null when every prop seat is of one firm and that
+        // firm runs on this PC (a trader with no prop seat: null), else why not.
+        public static string SeatsFirmWhy(IEnumerable<string> seats)
+        {
+            List<string> scope = (seats ?? Enumerable.Empty<string>()).Where(FirmScope).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            if (scope.Count == 0) return null;
+            FirmReading r = firmReading;
+            string stale = FirmStale(r);
+            if (stale != null) return stale + ": one PC per firm cannot be checked for " + string.Join(", ", scope);
+            List<string> none = scope.Where(x => FirmIn(r, x) == null).ToList();
+            if (none.Count > 0) return string.Join(", ", none) + (none.Count == 1 ? " has" : " have") + " no firm in The Desk's account ledger (give " + (none.Count == 1 ? "it" : "each") + " an account type on The Desk): one PC per firm cannot be checked";
+            List<IGrouping<string, string>> byFirm = scope.GroupBy(x => FoldFirm(FirmIn(r, x))).ToList();
+            if (byFirm.Count > 1) return "its prop accounts are of more than one firm (" + string.Join("; ", byFirm.Select(g => FirmIn(r, g.First()) + ": " + string.Join(", ", g))) + "): a cohort trades one firm";
+            return FirmPcWhy(r, FirmIn(r, scope[0]));
+        }
+        private static string FirmPcWhy(FirmReading r, string firm)
+        {
+            string pc;
+            r.PcOf.TryGetValue(FoldFirm(firm), out pc);
+            string here = FirmHere();
+            if (here == null) return "this PC's name is not known, so one PC per firm cannot be checked";
+            if (string.IsNullOrEmpty(pc)) return "firm " + firm + " has no trading PC set (Legion's Cohorts): one PC per firm";
+            if (!string.Equals(pc, here, StringComparison.OrdinalIgnoreCase)) return "firm " + firm + " runs on " + pc + ", not on this PC (" + here + "): one PC per firm; turn its cohorts off there and set its PC on Legion first";
+            return null;
+        }
+
+        // The firm guards of one new entry (EntryCheck, under PlaceLock, after an exit of the account's own position has passed).
+        private static string FirmEntryWhy(string source, Account a, string root, bool isBuy, bool opposite)
+        {
+            string name = a.Name;
+            if (!FirmScope(name)) return null;
+            bool trader = source != null && source.StartsWith("agent:", StringComparison.Ordinal);
+            bool his = source == "page" || source == "copier";   // Anthony's own ticket and his copier: the last reading, whatever its age
+            FirmReading r = firmReading;
+            if (trader) { string stale = FirmStale(r); if (stale != null) return "No new entry by a trader on " + name + ": " + stale + ", so one PC per firm and one direction per firm cannot be checked. Exits and flattens still work."; }
+            string firm = FirmIn(r, name);
+            if (firm == null)
+            {
+                if (his) return null;
+                return name + " has no firm in The Desk's account ledger" + (r == null ? " (" + FirmStale(r) + ")" : "") + ": no new entry by a trader or the bot there, as one direction per firm cannot be checked. Exits and flattens still work.";
+            }
+            if (trader) { string pw = FirmPcWhy(r, firm); if (pw != null) return "No new entry on " + name + ": " + pw + ". Exits and flattens still work."; }
+            string market = FirmMarket(root), key = FoldFirm(firm);
+            List<Account> all;
+            lock (Account.All) all = Account.All.ToList();
+            List<ChartBridgeOrders.GroupHolding> held = new List<ChartBridgeOrders.GroupHolding>();
+            HashSet<string> seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                foreach (Account m in all)
+                {
+                    if (m == null || m.Name == null || !seen.Add(m.Name)) continue;
+                    if (ChartBridgeBranches.PersonalNamed && ChartBridgeBranches.IsPersonal(m.Name)) continue;   // only his personal account may go against it
+                    string f = FirmIn(r, m.Name);
+                    if (f == null || FoldFirm(f) != key) continue;
+                    held.AddRange(ChartBridgeOrders.GroupHoldings(m).Where(h => FirmMarket(h.Root) == market));
+                }
+            }
+            catch (Exception ex) { return "ChartBridge could not read firm " + firm + "'s positions and orders (" + ex.Message + "): the new entry on " + name + " is refused"; }
+            bool longs = held.Any(h => h.Side > 0), shorts = held.Any(h => h.Side < 0);
+            string tail = " (one direction per firm: a new entry against it is refused, nothing is closed). Exits and flattens still work." + (opposite ? " With the exits already working this order could take " + name + " past flat: use Flatten, or cancel the working exits first." : "");
+            string what = null;
+            if (longs && shorts) what = "Firm " + firm + " is long and short on " + market + " (" + HolderText(held) + "): no new entry on either side until it is one direction";
+            else if (isBuy && shorts) what = "Firm " + firm + " is short on " + market + " (" + HolderText(held) + "): a buy on " + name + " would go against it";
+            else if (!isBuy && longs) what = "Firm " + firm + " is long on " + market + " (" + HolderText(held) + "): a sell on " + name + " would go against it";
+            if (what == null) return null;
+            ChartBridgeServer.Log("firms: refused, " + (source ?? "?") + ": " + what);
+            return what + tail;
+        }
+
+        // The groups message's firmGuard: { state: on | error, why, pc (this PC's name or null), readAt (UTC ms or null),
+        // firms: [{ firm, pc, here, accounts, sides: [{ market, side }] }] } from the last reading (each firm's accounts NinjaTrader
+        // lists, and its direction on each market where it holds something).
+        private static string FirmGuardJson()
+        {
+            FirmReading r = firmReading;
+            string stale = FirmStale(r), here = FirmHere();
+            StringBuilder b = new StringBuilder("{\"state\":").Append(stale == null ? "\"on\"" : "\"error\"").Append(",\"why\":").Append(stale == null ? "null" : CbJson.Str(stale))
+                .Append(",\"pc\":").Append(here == null ? "null" : CbJson.Str(here)).Append(",\"readAt\":").Append(r == null ? "null" : ((long)r.At).ToString(CultureInfo.InvariantCulture)).Append(",\"firms\":[");
+            if (r != null)
+            {
+                List<Account> all;
+                lock (Account.All) all = Account.All.ToList();
+                int n = 0;
+                foreach (IGrouping<string, KeyValuePair<string, string>> g in r.FirmOf.GroupBy(kv => FoldFirm(kv.Value)).OrderBy(g => g.Key, StringComparer.Ordinal))
+                {
+                    string pc;
+                    r.PcOf.TryGetValue(g.Key, out pc);
+                    List<string> names = g.Select(kv => kv.Key).Where(x => all.Any(a => a.Name != null && a.Name.Equals(x, StringComparison.OrdinalIgnoreCase)) && !(ChartBridgeBranches.PersonalNamed && ChartBridgeBranches.IsPersonal(x))).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
+                    List<ChartBridgeOrders.GroupHolding> held;
+                    try { held = Holdings(names); } catch (Exception) { held = new List<ChartBridgeOrders.GroupHolding>(); }
+                    List<string> sides = held.GroupBy(h => FirmMarket(h.Root)).OrderBy(x => x.Key, StringComparer.Ordinal)
+                        .Select(x => "{\"market\":" + CbJson.Str(x.Key) + ",\"side\":" + CbJson.Str(SideOf(x.ToList()) ?? "flat") + "}").ToList();
+                    if (n++ > 0) b.Append(',');
+                    b.Append("{\"firm\":").Append(CbJson.Str(g.First().Value)).Append(",\"pc\":").Append(pc == null ? "null" : CbJson.Str(pc))
+                     .Append(",\"here\":").Append(pc != null && here != null && pc.Equals(here, StringComparison.OrdinalIgnoreCase) ? "true" : "false")
+                     .Append(",\"accounts\":[").Append(string.Join(",", names.Select(x => CbJson.Str(x)))).Append("],\"sides\":[").Append(string.Join(",", sides)).Append("]}");
+                }
+            }
+            return b.Append("]}").ToString();
+        }
 
         private static string StatusJson(string level, string text) { return "{\"type\":\"status\",\"level\":\"" + level + "\",\"text\":" + CbJson.Str(text) + "}"; }
         private static void Alarm(string text) { ChartBridgeServer.Log("ALERT: " + text); ChartBridgeServer.SendToTraders(StatusJson("error", text)); }

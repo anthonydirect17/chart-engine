@@ -2410,6 +2410,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (m == "auto") return "agent " + Id + " is in Auto: the pick changes only while it is not (turn Armed off first)";
             if (Exposed()) return "agent " + Id + " has a position, a working entry or a proposal: the pick changes when it is flat";
             if (bad != null) return name + " cannot be picked: " + bad;
+            if (name != null) { string fw = ChartBridgeGroups.SeatsFirmWhy(SeatNames()); if (fw != null) return name + " cannot be picked for agent " + Id + " on this PC: " + fw; }   // plan step 3.5 (0.6.25): one PC per firm
             string was, brokenWas;
             lock (Sync) { was = pick; brokenWas = pickBroken; }
             // FIX 1: None always removes the file, also when it could not be read or understood at the start (memory said none
@@ -2610,11 +2611,12 @@ namespace NinjaTrader.NinjaScript.AddOns
                 else
                 {
                     if (seats.Any(x => ChartBridgeBranches.UnknownWhy(FindAccount(x), x) != null)) return;   // not known yet: this pass does not decide
+                    if (ChartBridgeGroups.FirmsPending) return;   // plan step 3.5 (0.6.25): The Desk's firms not read yet since the start: this pass does not decide
                     List<string> notProp = seats.Where(x => !ChartBridgeBranches.IsProp(x)).ToList();
                     List<string> busy = seats.Where(x => !ChartBridgeBranches.Idle(FindAccount(x))).ToList();
                     if (notProp.Count > 0) no = string.Join(", ", notProp) + (notProp.Count == 1 ? " is" : " are") + " not prop";
                     else if (busy.Count > 0 || Exposed()) no = (busy.Count > 0 ? string.Join(", ", busy) + (busy.Count == 1 ? " has" : " have") : "it has") + " a position or a working order";
-                    else { string why = AutoProblem(); if (why != null) no = why; }
+                    else { string why = AutoProblem() ?? ChartBridgeGroups.SeatsFirmWhy(seats); if (why != null) no = why; }   // plan step 3.5 (0.6.25): one PC per firm
                 }
                 if (no == null && pickNo != null) no = pickNo;
                 if (no == null && PickNow() != livePick) no = "its pick changed during the restore";
@@ -4996,6 +4998,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             }
             if (m == "auto" && NoneNow()) return "auto refused: agent " + Id + "'s account is None: no new entries until an account is chosen on the Agent tab";   // 0.5.7
             if (m == "auto") { string why = AutoProblem(); if (why != null) return "auto refused: " + why; }   // auto: its account must be tradable
+            if (m == "auto") { string fw = ChartBridgeGroups.SeatsFirmWhy(SeatNames()); if (fw != null) return "auto refused: " + fw; }   // plan step 3.5 (0.6.25): one PC per firm
             string old;
             List<Proposal> expired = new List<Proposal>();
             lock (Sync)
@@ -6324,6 +6327,113 @@ namespace NinjaTrader.NinjaScript.AddOns
             return null;
         }
 
+        // ---------------------------------------------------------- plan step 3.5 (0.6.25): the GO size is the file's (law 9.3)
+        // A roster file may carry Anthony's GO (`live`, Bot-Lab specrunner/roster.py _check_live): its risk_dollars is the GO size
+        // and must be the file's own playbook risk_dollars for the GO's stage, so a different size is a new roster file with his
+        // word. A file whose GO size differs is not served (GET /roster lists it with why), so it can never be picked, armed or
+        // restored. A lineup: each bot's GO against the lineup's one playbook. No GO (no live, or null): nothing to check. This is
+        // the one rule ChartBridge reads from a roster file; Bot-Lab's runner checks the same and every other part of the GO.
+        internal static string GoSizeProblem(string text, string fmt)
+        {
+            string playbook = JsonMember(text, "playbook");
+            if (fmt == FormatBot) return GoWhy(text, playbook, "");
+            string bots = JsonMember(text, "bots");
+            if (bots == null || bots == "null") return null;
+            List<string> items = JsonItems(bots);
+            if (items == null) return "its bots are not a list";
+            for (int i = 0; i < items.Count; i++) { string w = GoWhy(items[i], playbook, "bots[" + i.ToString(CultureInfo.InvariantCulture) + "]: "); if (w != null) return w; }
+            return null;
+        }
+        private static string GoWhy(string holder, string playbook, string where)
+        {
+            string live = JsonMember(holder, "live");
+            if (live == null || live == "null") return null;
+            if (!live.StartsWith("{", StringComparison.Ordinal)) return where + "its GO (live) is not an object: not served";
+            string stage = JsonString(JsonMember(live, "stage"));
+            if (stage != "eval" && stage != "funded") return where + "its GO (live) names no stage (eval or funded): not served";
+            double? go = JsonNumber(JsonMember(live, "risk_dollars"));
+            string pb = playbook == null ? null : JsonMember(playbook, stage);
+            double? want = pb == null ? null : JsonNumber(JsonMember(pb, "risk_dollars"));
+            if (!want.HasValue || want.Value <= 0) return where + "its playbook has no risk_dollars for " + stage + ", so its GO size cannot be checked: not served";
+            if (!go.HasValue || go.Value != want.Value)
+                return where + "its GO size (live.risk_dollars " + (go.HasValue ? go.Value.ToString("0.##", CultureInfo.InvariantCulture) : "missing") + ") is not its playbook's for " + stage + " (" + want.Value.ToString("0.##", CultureInfo.InvariantCulture) +
+                       "): the GO size is the file's (law 9.3); a new size is a new roster file with Anthony's word. Not served";
+            return null;
+        }
+        // A small reader for valid JSON text (JsonValid passed first): the raw text of a value from its first character.
+        private static int SkipValue(string t, int i)
+        {
+            int n = t.Length;
+            while (i < n && char.IsWhiteSpace(t[i])) i++;
+            if (i >= n) return n;
+            if (t[i] == '"') { int k = i + 1; while (k < n && t[k] != '"') { if (t[k] == '\\') k++; k++; } return Math.Min(n, k + 1); }
+            if (t[i] == '{' || t[i] == '[')
+            {
+                int depth = 0;
+                for (int k = i; k < n; k++)
+                {
+                    char c = t[k];
+                    if (c == '"') { k = SkipValue(t, k) - 1; continue; }
+                    if (c == '{' || c == '[') depth++;
+                    else if (c == '}' || c == ']') { depth--; if (depth == 0) return k + 1; }
+                }
+                return n;
+            }
+            int e = i;
+            while (e < n && t[e] != ',' && t[e] != '}' && t[e] != ']' && !char.IsWhiteSpace(t[e])) e++;
+            return e;
+        }
+        // The raw value of a TOP-LEVEL key of a JSON object (never a key of a nested object, never words inside a string), or null.
+        internal static string JsonMember(string obj, string key)
+        {
+            if (obj == null) return null;
+            int n = obj.Length, i = 0;
+            while (i < n && char.IsWhiteSpace(obj[i])) i++;
+            if (i >= n || obj[i] != '{') return null;
+            i++;
+            while (i < n)
+            {
+                while (i < n && (char.IsWhiteSpace(obj[i]) || obj[i] == ',')) i++;
+                if (i >= n || obj[i] == '}' || obj[i] != '"') return null;
+                int ke = SkipValue(obj, i);
+                string k = obj.Substring(i + 1, Math.Max(0, ke - i - 2));
+                i = ke;
+                while (i < n && char.IsWhiteSpace(obj[i])) i++;
+                if (i >= n || obj[i] != ':') return null;
+                i++;
+                while (i < n && char.IsWhiteSpace(obj[i])) i++;
+                int ve = SkipValue(obj, i);
+                if (k == key) return obj.Substring(i, ve - i).Trim();
+                i = ve;
+            }
+            return null;
+        }
+        // The raw items of a JSON list, or null when it is not one.
+        internal static List<string> JsonItems(string list)
+        {
+            if (list == null) return null;
+            string t = list.Trim();
+            if (t.Length < 2 || t[0] != '[') return null;
+            List<string> items = new List<string>();
+            int i = 1, n = t.Length;
+            while (i < n)
+            {
+                while (i < n && (char.IsWhiteSpace(t[i]) || t[i] == ',')) i++;
+                if (i >= n || t[i] == ']') return items;
+                int e = SkipValue(t, i);
+                items.Add(t.Substring(i, e - i).Trim());
+                i = e;
+            }
+            return items;
+        }
+        private static string JsonString(string raw) { return raw != null && raw.Length >= 2 && raw[0] == '"' && raw.IndexOf('\\') < 0 ? raw.Substring(1, raw.Length - 2) : null; }
+        private static double? JsonNumber(string raw)
+        {
+            double v;
+            if (raw == null || raw.Length == 0 || !(raw[0] == '-' || char.IsDigit(raw[0]))) return null;
+            return double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out v) && !double.IsNaN(v) && !double.IsInfinity(v) ? (double?)v : null;
+        }
+
         // One file's JSON text, or null with why it is not served.
         private static string One(FileInfo f, out string why, out string sha)
         {
@@ -6346,6 +6456,8 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (!ChartBridgeBot.JsonValid(text)) { why = "not valid JSON"; return null; }
                 string fmt = TopLevelFormat(text);
                 if (fmt != FormatBot && fmt != FormatLineup) { why = "not a roster file (its format is not specrunner.roster/1 or specrunner.lineup/1)"; return null; }
+                string go = GoSizeProblem(text, fmt);   // plan step 3.5 (0.6.25): the GO size is the file's (law 9.3)
+                if (go != null) { why = go; return null; }
                 return text.Trim();
             }
             catch (Exception ex) { why = "could not be read (" + ex.GetType().Name + ")"; return null; }

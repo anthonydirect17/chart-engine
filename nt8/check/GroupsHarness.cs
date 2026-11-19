@@ -302,7 +302,7 @@ public static class GroupsHarness
     // ------------------------------------------------------------ no groups.txt: no groups, every account personal, 0.5.7 exactly
     static void Migration()
     {
-        Check(!File.Exists(Path.Combine(folder, "groups.txt")) && Last("groups") == "{\"type\":\"groups\",\"list\":[],\"error\":null,\"laneRule\":{\"state\":\"on\",\"why\":null,\"handOut\":[],\"outside\":null}}", "no groups.txt: the page gets an empty list and no error (0.6.23: and the lane rule's state) (" + Last("groups") + ")");
+        Check(!File.Exists(Path.Combine(folder, "groups.txt")) && Last("groups").StartsWith("{\"type\":\"groups\",\"list\":[],\"error\":null,\"laneRule\":{\"state\":\"on\",\"why\":null,\"handOut\":[],\"outside\":null},\"firmGuard\":{", StringComparison.Ordinal), "no groups.txt: the page gets an empty list and no error (0.6.23: and the lane rule's state) (" + Last("groups") + ")");
         Check(ChartBridgeGroups.EntryCheck("page", simA, "MNQ", false, 1, false, false) == null, "no groups: nothing is checked");
         Pos(simA, mnq, 2);
         int b = Submits(simB);
@@ -1053,7 +1053,7 @@ public static class GroupsHarness
         Gone(Path.Combine(folder, "lane-hand.txt"));   // 0.6.23: the hand removals made earlier in this harness
         ChartBridgeGroups.LaneForget();
         ChartBridgeAccounts.StartNow(ChartBridgeTime.NowUtcMs());
-        Check(ChartBridgeGroups.GroupsJson().StartsWith("{\"type\":\"groups\",\"list\":[],\"error\":null,\"laneRule\":{", StringComparison.Ordinal) && ChartBridgeGroups.GroupsJson().EndsWith(",\"handOut\":[],\"outside\":null}}", StringComparison.Ordinal), "both files gone: no groups (0.5.7's behaviour)");
+        Check(ChartBridgeGroups.GroupsJson().StartsWith("{\"type\":\"groups\",\"list\":[],\"error\":null,\"laneRule\":{", StringComparison.Ordinal) && ChartBridgeGroups.GroupsJson().Contains(",\"handOut\":[],\"outside\":null},\"firmGuard\":{"), "both files gone: no groups (0.5.7's behaviour)");
     }
 
     // Anthony's ruling of 2026-10-21: an unreadable groups.txt never blocks the bot, the agents or the copier. They run on the last
