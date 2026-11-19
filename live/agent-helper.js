@@ -96,6 +96,11 @@ function pollStep(prev, r, now) {
     return { reach: 'ok', status: p.status, why: p.why || '', okAt: p.okAt, misses, slow: true };
   return { reach: 'down', status: null, why, okAt: p.okAt || 0, misses, slow: false };
 }
+/** Round 5, S1: does a held (failed Off) lane stop being held? Yes when the poll is ok and the helper reports him neither on nor
+ *  running (the Off was done from another window, or he is off already). Never on any other answer, never while he is on or running. */
+function holdClears(hold, holdFailed, reach, h) {
+  return !!hold && !!holdFailed && reach === 'ok' && !!h && !h.on && !h.running;
+}
 /** The quiet note while one poll was missed (pollStep's slow). */
 const SLOW_TEXT = 'PC helper slow';
 
@@ -563,5 +568,5 @@ function createClient(env) {
   };
 }
 
-return { VERSION, PORT, BASE, POLL_MS, TIMEOUT_MS, MISS_GRACE_MS, pollStep, SLOW_TEXT, FLAT_WAIT_MS, SHADOW_WAIT_MS, HAND_WAIT_MS, handLine, ASSIGN_WAIT_MS, slotFree, startBegin, startStep, onGate, TIERS, TYPE_NAME, tierOf, tierChip, tierFit, proving, PROVING_OF, heroOptions, preselect, freeSlot, assignStart, assignStep, usd, spendText, stateText, pickerRows, pickerNote, nonHero, modeBlock, accountBlock, offStep, offQuestion, flat, flatOffStart, flatOffStep, FO_SENT, FO_WAIT, modeWord, TURN_KEY, TURN_TTL_MS, TURN_SCAN_MS, createTurnShare, heldList, seatsHeld, seatsUnclear, jobWhere, names, settingsBody, createClient };
+return { VERSION, PORT, BASE, POLL_MS, TIMEOUT_MS, MISS_GRACE_MS, pollStep, holdClears, SLOW_TEXT, FLAT_WAIT_MS, SHADOW_WAIT_MS, HAND_WAIT_MS, handLine, ASSIGN_WAIT_MS, slotFree, startBegin, startStep, onGate, TIERS, TYPE_NAME, tierOf, tierChip, tierFit, proving, PROVING_OF, heroOptions, preselect, freeSlot, assignStart, assignStep, usd, spendText, stateText, pickerRows, pickerNote, nonHero, modeBlock, accountBlock, offStep, offQuestion, flat, flatOffStart, flatOffStep, FO_SENT, FO_WAIT, modeWord, TURN_KEY, TURN_TTL_MS, TURN_SCAN_MS, createTurnShare, heldList, seatsHeld, seatsUnclear, jobWhere, names, settingsBody, createClient };
 });

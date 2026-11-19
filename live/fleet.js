@@ -498,9 +498,9 @@ function killAllState(version, accountsMsg, signedIn, connected, needPersonal) {
 const killAllMsg = (cid, version) => Object.assign({ type: atLeast(version, STOPALL_MIN) ? 'agentStopAll' : 'agentKillAllProp' }, cid ? { cid } : {});
 /** Is this status line ChartBridge's answer to a Kill all? Its own words for either command (X1). */
 const KILL_ANSWER_RX = /^(Kill all \(prop accounts\)|Stop all automation)/;
-/** Is this status line the answer to this tab's Kill all (pending: its cid, or '')? Round 4: ChartBridge 0.6.25 puts the press's
- *  cid on it, and then only the pending press with that cid takes it (the header's or another window's press is not this one's);
- *  a line with no cid (an older ChartBridge) is taken by its words as before. */
+/** Is this status line the answer to this tab's Kill all (pending: its cid, or '')? Round 4: once ChartBridge echoes the press's
+ *  cid on it, only the pending press with that cid takes it (the header's or another window's press is not this one's);
+ *  until then (this branch's ChartBridge sends no cid) the line is matched by its words as before. */
 const killAnswerOf = (m, pending) => !!m && m.type === 'status' && typeof m.text === 'string' && KILL_ANSWER_RX.test(m.text) &&
   (!Object.prototype.hasOwnProperty.call(m, 'cid') || (typeof pending === 'string' && pending !== '' && m.cid === pending));
 

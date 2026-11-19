@@ -932,6 +932,8 @@ function create(o) {
        401, 403, 400, 409 and every good answer are taken as they come, as before */
     const st = AH.pollStep(H, r, Date.now());
     H.reach = st.reach; H.status = st.status; H.why = st.why; H.okAt = st.okAt; H.misses = st.misses; H.slow = st.slow;
+    /* round 5, S1: a failed Off's hold ends when the helper itself says he is off and not running (done from another window) */
+    if (AH.holdClears(H.hold, H.holdFailed, st.reach, helperOf(H.hold))) { H.hold = ''; H.holdFailed = false; shareSync(); }
     renderPanel();
   }
   /* asked every few seconds while the tab is shown (a timeout set again each time: no interval on this page) */

@@ -2055,4 +2055,18 @@ test('the R12 delta of plan step 3.2, B1r: a lane whose trader a desk is turning
   assert.match(ag, /window\.addEventListener\('pageshow', e => \{ if \(e && e\.persisted\) \{ shareGone = false; shareSync\(true\); \} \}\);/);
   assert.match(ag, /if \(H\.hold === id\) \{ if \(r\.reach === 'ok'\) \{ H\.hold = ''; H\.holdFailed = false; \} else H\.holdFailed = true; \}/, 'S2: a failed Off marks the hold');
   assert.ok(!/syncTurning/.test(ag), 'no copy kept by renderPanel');
+  /* round 5, S1: a hold left by a failed Off ends when the helper says he is off and not running, and Armed is free of it again */
+  const AHm = require('../live/agent-helper.js');
+  assert.match(ag, /if \(AH\.holdClears\(H\.hold, H\.holdFailed, st\.reach, helperOf\(H\.hold\)\)\) \{ H\.hold = ''; H\.holdFailed = false; shareSync\(\); \}/, 'pollHelper clears the hold');
+  assert.strictEqual(AHm.holdClears('legion1', true, 'ok', { on: false, running: false }), true, 'off and not running, reach ok: the hold clears');
+  assert.strictEqual(AHm.holdClears('legion1', true, 'ok', { on: true, running: false }), false, 'still on: the hold stays');
+  assert.strictEqual(AHm.holdClears('legion1', true, 'ok', { on: false, running: true }), false, 'still running: the hold stays');
+  assert.strictEqual(AHm.holdClears('legion1', true, 'down', { on: false, running: false }), false, 'no good answer: the hold stays');
+  assert.strictEqual(AHm.holdClears('legion1', true, 'ok', null), false, 'he is not in the answer: the hold stays');
+  assert.strictEqual(AHm.holdClears('legion1', false, 'ok', { on: false, running: false }), false, 'an Off still in flight is not a failed one');
+  assert.strictEqual(AHm.holdClears('', true, 'ok', { on: false, running: false }), false, 'no hold: nothing to clear');
+  const freed = []; Object.defineProperty(freed, 'held', { value: [] });
+  assert.strictEqual(F.lanes(both, groups, accounts, V, cards, freed)[0].armable, true, 'with the hold gone, Armed is not blocked by it');
+  const stays = ['legion1']; Object.defineProperty(stays, 'held', { value: ['legion1'] });
+  assert.strictEqual(F.lanes(both, groups, accounts, V, cards, stays)[0].armable, false, 'while the hold stays, the lane is out of Armed');
 });

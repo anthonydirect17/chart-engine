@@ -145,9 +145,9 @@ function stopMaySend(m) {
 }
 
 /** Is this ChartBridge message the answer to a Stop all? ChartBridge answers a press with one status line (warn) whose text
- *  starts with its own words, or with a reject carrying the press's cid. Round 4: ChartBridge 0.6.25 puts the press's cid on that
- *  status line; a line carrying a cid is the answer only to the pending press with that cid (another window's press is not
- *  this one's answer); a line with none (an older ChartBridge) is matched by its words as before. -> { text, bad } or null. */
+ *  starts with its own words, or with a reject carrying the press's cid. Round 4: once ChartBridge echoes the press's cid on that
+ *  status line, a line carrying a cid is the answer only to the pending press with that cid (another window's press is not
+ *  this one's answer); until then (this branch's ChartBridge sends no cid) the line is matched by its words as before. -> { text, bad } or null. */
 function stopAnswer(m, cid) {
   if (!m || typeof m !== 'object') return null;
   if (m.type === 'reject' && cid && m.cid === cid) return { text: 'Not done: ' + String(m.reason || 'ChartBridge refused it'), bad: true };
