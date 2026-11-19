@@ -1532,28 +1532,50 @@ function prBotWhy(botMsg, accountsMsg) {
 /**
  * Auto from Praetorian on a Sim account (Anthony 2026-11-19): "Any account The Desk's ledger types as eval or funded needs
  * ChartBridge 0.6.25 or later for Auto in Praetorian, whatever NinjaTrader calls it"; a true Sim account (one the ledger does
- * not type as prop) keeps Auto on any version. From GOLIVE_MIN ChartBridge itself reads the ledger (FirmScope: an account the
- * lane ledger types or The Desk gives a firm is under the firm and GO-size guards, a Sim-listed one too), so nothing here
- * changes there. Below it, only ChartBridge's own words can tell the page what the ledger says, and none carries the whole
- * ledger: the groups message's laneRule.outside (0.6.23) names only the typed accounts that are in no lane, with no outcome
- * and not archived. So below GOLIVE_MIN an account it names is refused as prop, and every other Sim account is refused too,
- * since the page cannot read its type (the careful side, the coordinator's brief of 2026-11-19). names: the trader's accounts
- * (gateAccounts) or the bot's one. '' when Auto may go; else the words (the personal account and None are never held here).
+ * not type as prop) keeps Auto testing. names: the trader's accounts (gateAccounts) or the bot's one. '' when Auto may go;
+ * else the words. Only a Sim account is held here (the personal account and None never are; a prop account is refused before).
+ *  - Below GOLIVE_MIN only ChartBridge's own words can tell the page what the ledger says, and none carries the whole ledger:
+ *    the groups message's laneRule.outside (0.6.23) names only the typed accounts in no lane, with no outcome and not
+ *    archived. An account it names is refused as prop; every other Sim account is refused too, since the page cannot read
+ *    its type (Anthony 2026-11-19, "Yes, update to test": the words say that 0.6.25 lets a true Sim account test).
+ *  - From GOLIVE_MIN ChartBridge reads the ledger itself (FirmScope: an account the lane ledger types or The Desk gives a firm
+ *    is under the firm and GO-size guards, a Sim-listed one too), but only once it has read The Desk's lane-accounts: until
+ *    then (and after a failed read) it takes a Sim-listed prop account for plain Sim. The page sees that read in laneRule
+ *    (ChartBridgeGroups.LaneRuleJson): `outside` is null until the first read since the start, and it is set in the same step
+ *    as the ledger Stop all and the firm guards read (NoteTyped); `state` is 'on' only while the last read worked ('off':
+ *    laneRule = off or no deskUrl, so no read; 'error': the last read failed, or lane-hand.txt does not read, which also hides
+ *    a failed read). So Auto on a Sim account goes only with state 'on' and an `outside` list (the coordinator, 2026-11-19:
+ *    the careful side).
  */
+const SIM_AUTO_UPDATE = '. Update ChartBridge to ' + GOLIVE_MIN + ' or later and a true Sim account (one the ledger does not type eval or funded) can test in Auto';
+/** Whether ChartBridge (GOLIVE_MIN or later) has read The Desk's account types and its last read worked: '' when so, else
+ *  the words (the groups message's laneRule; see prAutoWhy). */
+function ledgerReadWhy(groupsMsg) {
+  const lr = plainObj(groupsMsg) && plainObj(groupsMsg.laneRule) ? groupsMsg.laneRule : null;
+  const why = lr && typeof lr.why === 'string' && lr.why ? ' (' + lr.why.slice(0, 200) + ')' : '';
+  if (!plainObj(groupsMsg)) return 'ChartBridge has not read The Desk\'s account types yet (it has not sent its groups)';
+  if (!lr) return 'ChartBridge has not read The Desk\'s account types yet (its groups message says nothing of them)';
+  if (lr.state === 'off') return 'ChartBridge does not read The Desk\'s account types' + why;
+  if (lr.state === 'error') return 'ChartBridge\'s last read of The Desk\'s account types did not work' + why;
+  if (lr.state !== 'on' || !Array.isArray(lr.outside)) return 'ChartBridge has not read The Desk\'s account types yet' + why;
+  return '';
+}
 function prAutoWhy(names, accountsMsg, groupsMsg, version) {
-  if (atLeast(version, GOLIVE_MIN)) return '';
   const FC = fleetCore(), rows = plainObj(accountsMsg) && Array.isArray(accountsMsg.list) ? accountsMsg.list : [];
   const lr = plainObj(groupsMsg) && plainObj(groupsMsg.laneRule) ? groupsMsg.laneRule : null;
   const outside = lr && Array.isArray(lr.outside) ? lr.outside : [];
   const same = (a, b) => typeof a === 'string' && typeof b === 'string' && a.toLowerCase() === b.toLowerCase();   // ChartBridge's names ignore case
+  const newer = atLeast(version, GOLIVE_MIN), read = newer ? ledgerReadWhy(groupsMsg) : '';
+  if (newer && !read) return '';
   for (const n of Array.isArray(names) ? names : []) {
     if (typeof n !== 'string' || !n) continue;
     const row = rows.find(r => plainObj(r) && r.name === n);
     if (!row || !FC || typeof FC.kindOf !== 'function' || FC.kindOf(row) !== 'sim') continue;   // only a Sim account is held here
-    const typed = outside.find(x => plainObj(x) && same(x.account, n) && (x.kind === 'eval' || x.kind === 'funded'));
     const shown = n.slice(0, 40);
+    if (newer) return read + ', so it cannot tell whether ' + shown + ' is a prop account NinjaTrader lists as Sim: Auto on a Sim account waits until it has read them';
+    const typed = outside.find(x => plainObj(x) && same(x.account, n) && (x.kind === 'eval' || x.kind === 'funded'));
     if (typed) return shown + ' is typed ' + typed.kind + ' on The Desk\'s ledger, though NinjaTrader lists it as Sim: ' + goLiveWhy(version);
-    return 'The Desk\'s ledger may type ' + shown + ' eval or funded (NinjaTrader lists it as Sim) and this ChartBridge cannot say: ' + goLiveWhy(version);
+    return 'The Desk\'s ledger may type ' + shown + ' eval or funded (NinjaTrader lists it as Sim) and this ChartBridge cannot say: ' + goLiveWhy(version) + SIM_AUTO_UPDATE;
   }
   return '';
 }
@@ -1883,6 +1905,6 @@ return {
   createCopilotRouter, copilotRouter, KEY_LOCK_MS, KEY_MIN_SHOWN_MS, KEY_SAY,
   boardRows, boardRoom, boardPosition, rWords, leagueChoices, standDownClearMsg, sdWhen,
   LIGHT, STEPS, PANELS, LIGHT_HOLD, LAP_MS, lightEvents, lightState, stepLines, ageText, entryRisk, tradesR, heatNow, rowTone, decisionRecord, sessionTrail, roomLines, MOTION_KEY, motionPref, setMotionPref,
-  gateAccounts, leftoverWhy, botAccountOf, noHomeWhy, traderFlat, gatedLink, MOVE_MS, prChoices, prBotChoices, praetorianLink, lgAccountOk, lgGroupWhy, lgTraderWhy, lgBotWhy, lgCheck, legionGate, legionLink, FLATOFF_MIN, GOLIVE_MIN, goLiveWhy, PR_AGENT_TYPES, PR_BOT_TYPES, prIsPersonal, prNotPersonalWhy, prTraderWhy, prBotWhy, prAutoWhy, prCheck, praetorianGate
+  gateAccounts, leftoverWhy, botAccountOf, noHomeWhy, traderFlat, gatedLink, MOVE_MS, prChoices, prBotChoices, praetorianLink, lgAccountOk, lgGroupWhy, lgTraderWhy, lgBotWhy, lgCheck, legionGate, legionLink, FLATOFF_MIN, GOLIVE_MIN, goLiveWhy, PR_AGENT_TYPES, PR_BOT_TYPES, prIsPersonal, prNotPersonalWhy, prTraderWhy, prBotWhy, prAutoWhy, ledgerReadWhy, prCheck, praetorianGate
 };
 });

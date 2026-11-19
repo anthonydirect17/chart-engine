@@ -138,17 +138,26 @@ try {
   await page.evaluate(() => { const b = document.querySelector('#agView [data-mode="auto"]'); b.disabled = false; b.click(); }); await sleep(500);
   await page.evaluate(() => { const b = document.querySelector('#agView [data-mode="auto"]'); b.disabled = false; b.click(); }); await sleep(300);
   const simWords = await page.evaluate(() => document.body.innerText);
-  check((await posted()).length === 0 && /Not sent from Praetorian: The Desk's ledger may type SIM-A eval or funded \(NinjaTrader lists it as Sim\) and this ChartBridge cannot say: Auto on a prop account needs ChartBridge 0\.6\.25 or later \(its firm and GO-size guards\); this one is 0\.6\.21\./.test(simWords),
-    '2026-11-19: Auto on SIM-A on ChartBridge 0.6.21: nothing goes, and the line says why with the version: ' + JSON.stringify(await posted()));
+  check((await posted()).length === 0 && /Not sent from Praetorian: The Desk's ledger may type SIM-A eval or funded \(NinjaTrader lists it as Sim\) and this ChartBridge cannot say: Auto on a prop account needs ChartBridge 0\.6\.25 or later \(its firm and GO-size guards\); this one is 0\.6\.21\. Update ChartBridge to 0\.6\.25 or later and a true Sim account \(one the ledger does not type eval or funded\) can test in Auto\./.test(simWords),
+    '2026-11-19: Auto on SIM-A on ChartBridge 0.6.21: nothing goes, and the line says why with the version and that 0.6.25 lets a true Sim account test: ' + JSON.stringify(await posted()));
   await page.screenshot({ path: path.join(SHOTS, 'praetorian-agent-sim-old.png') });
   await feed({ type: 'groups', list: [], laneRule: { state: 'on', why: null, handOut: [], outside: [{ account: 'SIM-A', kind: 'funded', group: null, copier: null, byHand: false }] } }); await clear();
   await page.evaluate(() => { const b = document.querySelector('#agView [data-mode="auto"]'); b.disabled = false; b.click(); }); await sleep(500);
   await page.evaluate(() => { const b = document.querySelector('#agView [data-mode="auto"]'); b.disabled = false; b.click(); }); await sleep(300);
   check((await posted()).length === 0 && /Not sent from Praetorian: SIM-A is typed funded on The Desk's ledger, though NinjaTrader lists it as Sim: Auto on a prop account needs ChartBridge 0\.6\.25 or later/.test(await page.evaluate(() => document.body.innerText)),
     '2026-11-19: a Sim account the ledger types funded: refused as prop below 0.6.25, said so');
-  await feed({ type: 'hello', version: '0.6.25', features: ['v3'], instruments: [{ root: 'MNQ', tick: 0.25, pointValue: 2 }] }); await feed(agent({ account: 'SIM-A', sim: true })); await sleep(200); await clear();
+  /* on 0.6.25, until ChartBridge has read The Desk's account types (laneRule's outside null: no read since its start), Auto on a
+     Sim account waits too, said plainly (the coordinator 2026-11-19: ChartBridge takes a Sim-listed prop account for plain Sim then) */
+  await feed({ type: 'hello', version: '0.6.25', features: ['v3'], instruments: [{ root: 'MNQ', tick: 0.25, pointValue: 2 }] });
+  await feed({ type: 'groups', list: [], laneRule: { state: 'on', why: null, handOut: [], outside: null } });
+  await feed(agent({ account: 'SIM-A', sim: true })); await sleep(200); await clear();
+  await page.click('#agView [data-mode="auto"]'); await sleep(500); await page.click('#agView [data-mode="auto"]'); await sleep(300);
+  check((await posted()).length === 0 && /Not sent from Praetorian: ChartBridge has not read The Desk's account types yet, so it cannot tell whether SIM-A is a prop account NinjaTrader lists as Sim: Auto on a Sim account waits until it has read them\./.test(await page.evaluate(() => document.body.innerText)),
+    '2026-11-19: on ChartBridge 0.6.25 before its read of The Desk\'s account types: Auto on SIM-A waits, said plainly: ' + JSON.stringify(await posted()));
+  await page.screenshot({ path: path.join(SHOTS, 'praetorian-agent-sim-unread.png') });
+  await feed({ type: 'groups', list: [], laneRule: { state: 'on', why: null, handOut: [], outside: [] } }); await sleep(150); await clear();
   await page.click('#agView [data-mode="auto"]'); await sleep(500); await page.click('#agView [data-mode="auto"]'); await sleep(200);
-  check(JSON.stringify(await posted()) === JSON.stringify(['agentMode:demo:auto']), '2026-11-19: on ChartBridge 0.6.25 Auto on the Sim account goes as before (ChartBridge guards a typed one): ' + JSON.stringify(await posted()));
+  check(JSON.stringify(await posted()) === JSON.stringify(['agentMode:demo:auto']), '2026-11-19: on ChartBridge 0.6.25 with The Desk\'s account types read, Auto on the Sim account goes as before (ChartBridge guards a typed one): ' + JSON.stringify(await posted()));
   await feed({ type: 'hello', version: '0.6.21', features: ['v3'], instruments: [{ root: 'MNQ', tick: 0.25, pointValue: 2 }] }); await feed({ type: 'groups', list: [] });
   await feed(agent({ account: 'MINE-1' })); await sleep(150); await clear();
 

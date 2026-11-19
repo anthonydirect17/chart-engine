@@ -151,7 +151,10 @@ picked), with `personalNamed` saying whether a pick exists. `FleetCore.kindOf(ro
   later (`GOLIVE_MIN`) for Auto, whatever NinjaTrader calls it. From 0.6.25 ChartBridge reads the ledger itself (its firm
   and GO-size guards), so the gate passes Auto as before. Below it the gate (`prAutoWhy`, hearing `hello` and the groups
   message's `laneRule.outside`) refuses Auto on a Sim account the ledger types, and on every other Sim account too, since
-  no older ChartBridge says the whole ledger (the careful side). The personal account and None never wait.
+  no older ChartBridge says the whole ledger (the careful side; the words say 0.6.25 lets a true Sim account test). On 0.6.25
+  or later it also waits until ChartBridge has read The Desk's account types and its last read worked (`laneRule.state` 'on'
+  with an `outside` list), since before that read ChartBridge takes a Sim-listed prop account for plain Sim. The personal
+  account and None never wait.
 - The pickers: `AgentCore.prChoices` and `prBotChoices` mark a prop account, a live account the page cannot tell and
   every group "not on Praetorian" (listed, not offered); they never offer what the desk did not.
 - None ("nothing trades") is always offered: it reaches no account.

@@ -8,10 +8,12 @@ const AC = require('../live/agent-core.js');
 const accounts = (o) => Object.assign({ type: 'accounts', personalNamed: true, list: [
   { name: 'SIM-A', sim: true, tradable: true }, { name: 'LIVE-X', tradable: true }, { name: 'PROP-1', prop: true, tradable: true }, { name: 'PROP-2', prop: true, tradable: true }, { name: 'MINE-1', personal: true, tradable: true }] }, o || {});
 const agent = o => Object.assign({ type: 'agent', agent: 'demo', name: 'Demo Agent', mode: 'shadow', enabled: true, connected: true, account: 'MINE-1' }, o || {});
-/* Anthony 2026-11-19 (prAutoWhy): Auto on a Sim account below ChartBridge 0.6.25 waits for it unless the page can tell the ledger
-   does not type it; these tests start from a 0.6.25 hello, as Legion's do, and the rule's own test below starts from older ones */
+/* Anthony 2026-11-19 (prAutoWhy): Auto on a Sim account waits for ChartBridge 0.6.25, and there for its read of The Desk's account
+   types (the groups message's laneRule: state 'on' with an outside list); these tests start from a 0.6.25 hello and a read
+   ledger, as Legion's start from its hello, and the rule's own test below starts from the other cases */
 const HELLO = { type: 'hello', version: '0.6.25' };
-const gateWith = (...msgs) => { const g = AC.praetorianGate(); g.hear(HELLO); for (const m of msgs) g.hear(m); return g; };
+const LEDGER_READ = { type: 'groups', list: [], laneRule: { state: 'on', why: null, handOut: [], outside: [] } };
+const gateWith = (...msgs) => { const g = AC.praetorianGate(); g.hear(HELLO); g.hear(LEDGER_READ); for (const m of msgs) g.hear(m); return g; };
 
 /* every message the two desks post (agent.js, bot.js, agent-core.js, bot-core.js), one each */
 const AGENT_MSGS = id => [
@@ -350,7 +352,8 @@ test('2026-11-19: Auto on a Sim account the ledger types (or may type) needs Cha
   const gate = (v, ...msgs) => { const g = AC.praetorianGate(); if (v !== null) g.hear({ type: 'hello', version: v }); for (const m of msgs) g.hear(m); return g; };
   const autoA = { type: 'agentMode', agent: 'demo', mode: 'auto' }, autoB = { type: 'botMode', mode: 'auto' };
   const tail = w => 'Auto on a prop account needs ChartBridge 0.6.25 or later (its firm and GO-size guards); this one is ' + w + '.';
-  /* on 0.6.25 or later: as before, typed or not (ChartBridge's own firm and GO-size guards read the ledger there) */
+  /* on 0.6.25 or later with The Desk's account types read (laneRule on, an outside list): as before, typed or not (ChartBridge's
+     own firm and GO-size guards read the ledger there) */
   for (const v of ['0.6.25', '0.6.26', '0.7.0', '1.0.0'])
     for (const a of ['SIM-A', 'SIM-B']) {
       const g = gate(v, acc, typed, agent({ account: a }), { type: 'bot', account: a, mode: 'shadow' });
@@ -365,7 +368,8 @@ test('2026-11-19: Auto on a Sim account the ledger types (or may type) needs Cha
     for (const g of [gate(v, acc, typed, agent({ account: 'SIM-A' }), { type: 'bot', account: 'SIM-A', mode: 'shadow' }),
       gate(v, acc, agent({ account: 'SIM-A' }), { type: 'bot', account: 'SIM-A', mode: 'shadow' }),
       gate(v, acc, lane(null), agent({ account: 'SIM-A' }), { type: 'bot', account: 'SIM-A', mode: 'shadow' })]) {
-      const no = 'Not sent from Praetorian: The Desk\'s ledger may type SIM-A eval or funded (NinjaTrader lists it as Sim) and this ChartBridge cannot say: ' + tail(w);
+      const no = 'Not sent from Praetorian: The Desk\'s ledger may type SIM-A eval or funded (NinjaTrader lists it as Sim) and this ChartBridge cannot say: ' + tail(w).slice(0, -1) +
+        '. Update ChartBridge to 0.6.25 or later and a true Sim account (one the ledger does not type eval or funded) can test in Auto.';
       assert.equal(g.check(autoA), no, String(v) + ' agent'); assert.equal(g.check(autoB), no, String(v) + ' bot');
       assert.equal(g.check({ type: 'agentMode', agent: 'demo', mode: 'copilot' }), '', 'Copilot is not Auto (each plan is Anthony\'s own yes)');
       for (const m of [{ type: 'agentMode', agent: 'demo', mode: 'shadow' }, { type: 'agentKill', agent: 'demo', on: true }, { type: 'agentKill', agent: 'demo', on: false },
@@ -387,16 +391,61 @@ test('2026-11-19: Auto on a Sim account the ledger types (or may type) needs Cha
   const subs = [], posted = [];
   const link = AC.praetorianLink({ listen: p => { subs.push(p); return () => {}; }, post: x => { posted.push(x); return true; } });
   for (const x of [{ type: 'hello', version: '0.6.24' }, acc, typed, agent({ account: 'SIM-A' })]) subs[0].message(x);
-  assert.equal(link.post(autoA), false); assert.match(link.why(autoA), /may type SIM-A eval or funded .* this one is 0\.6\.24\.$/);
+  assert.equal(link.post(autoA), false); assert.match(link.why(autoA), /may type SIM-A eval or funded .* this one is 0\.6\.24\. Update ChartBridge to 0\.6\.25 or later and a true Sim account .* can test in Auto\.$/);
   subs[0].message({ type: 'hello', version: '0.6.25' });
   assert.equal(link.post(autoA), true); assert.equal(link.why(autoA), '');
-  subs[0].closed(); for (const x of [acc, agent({ account: 'SIM-A' })]) subs[0].message(x);
-  assert.match(link.why(autoA), /this one is not known\.$/);
+  subs[0].closed(); for (const x of [acc, typed, agent({ account: 'SIM-A' })]) subs[0].message(x);
+  assert.match(link.why(autoA), /this one is not known\. Update ChartBridge to 0\.6\.25 or later and a true Sim account .* can test in Auto\.$/);
   assert.deepEqual(posted.map(x => x.type + ':' + x.mode), ['agentMode:auto']);
   /* the pure reader */
-  assert.equal(AC.prAutoWhy(['SIM-A'], acc, null, '0.6.25'), '');
+  assert.equal(AC.prAutoWhy(['SIM-A'], acc, lane([]), '0.6.25'), '');
+  assert.match(AC.prAutoWhy(['SIM-A'], acc, null, '0.6.25'), /^ChartBridge has not read The Desk's account types yet/);
   assert.equal(AC.prAutoWhy([], acc, null, '0.6.24'), '');
   assert.equal(AC.prAutoWhy(['MINE-1', 'NOT-LISTED', '', null], acc, null, '0.6.24'), '', 'only a listed Sim account is held here');
   assert.match(AC.prAutoWhy(['SIM-B'], acc, lane([{ account: 'SIM-B', kind: 'funded' }]), '0.6.24'), /^SIM-B is typed funded on The Desk's ledger/);
   assert.match(AC.prAutoWhy(['SIM-B'], acc, lane([{ account: 'SIM-B', kind: 'other' }]), '0.6.24'), /^The Desk's ledger may type SIM-B/, 'a kind that is not eval or funded is not read as typed, and still waits');
+});
+
+/* The coordinator 2026-11-19 (the gap in Q2): on 0.6.25 ChartBridge takes a Sim-listed prop account for plain Sim until it has read
+   The Desk's lane-accounts (InLedger and FirmScope are empty until then). The page sees that read in the groups message's laneRule:
+   outside is null until the first read since the start, state is 'on' only while the last read worked. Until then Auto on a Sim
+   account waits, said plainly; the personal account, None, the stops and Copilot never wait. */
+test('2026-11-19: on ChartBridge 0.6.25 Auto on a Sim account waits until ChartBridge has read The Desk\'s account types', () => {
+  const lr = o => ({ type: 'groups', list: [], laneRule: Object.assign({ state: 'on', why: null, handOut: [], outside: [] }, o) });
+  const gate = (...msgs) => { const g = AC.praetorianGate(); g.hear({ type: 'hello', version: '0.6.25' }); for (const m of msgs) g.hear(m); return g; };
+  const autoA = { type: 'agentMode', agent: 'demo', mode: 'auto' }, autoB = { type: 'botMode', mode: 'auto' };
+  const tail = ', so it cannot tell whether SIM-A is a prop account NinjaTrader lists as Sim: Auto on a Sim account waits until it has read them.';
+  const cases = [
+    [null, 'ChartBridge has not read The Desk\'s account types yet (it has not sent its groups)'],
+    [{ type: 'groups', list: [] }, 'ChartBridge has not read The Desk\'s account types yet (its groups message says nothing of them)'],
+    [lr({ outside: null }), 'ChartBridge has not read The Desk\'s account types yet'],
+    [lr({ outside: undefined }), 'ChartBridge has not read The Desk\'s account types yet'],
+    [lr({ state: 'off', why: 'config.txt has no deskUrl, so the rule cannot ask The Desk', outside: null }), 'ChartBridge does not read The Desk\'s account types (config.txt has no deskUrl, so the rule cannot ask The Desk)'],
+    [lr({ state: 'off', why: 'config.txt has laneRule = off' }), 'ChartBridge does not read The Desk\'s account types (config.txt has laneRule = off)'],
+    [lr({ state: 'error', why: 'The Desk\'s lane-accounts could not be read (The Desk did not answer within 10 seconds): no account moves until it can' }),
+      'ChartBridge\'s last read of The Desk\'s account types did not work (The Desk\'s lane-accounts could not be read (The Desk did not answer within 10 seconds): no account moves until it can)'],
+    [lr({ state: 'error', why: 'lane-hand.txt does not read (sample): the rule adds no account until it does' }), 'ChartBridge\'s last read of The Desk\'s account types did not work (lane-hand.txt does not read (sample): the rule adds no account until it does)'],
+    [lr({ state: 'starting' }), 'ChartBridge has not read The Desk\'s account types yet'],
+  ];
+  for (const [g0, words] of cases) {
+    const g = g0 ? gate(accounts(), g0, agent({ account: 'SIM-A' }), { type: 'bot', account: 'SIM-A', mode: 'shadow' }) : gate(accounts(), agent({ account: 'SIM-A' }), { type: 'bot', account: 'SIM-A', mode: 'shadow' });
+    const said = 'Not sent from Praetorian: ' + words + tail;
+    assert.equal(g.check(autoA), said, JSON.stringify(g0) + ' agent'); assert.equal(g.check(autoB), said, JSON.stringify(g0) + ' bot');
+    assert.equal(AC.ledgerReadWhy(g0), words);
+    for (const m of [{ type: 'agentMode', agent: 'demo', mode: 'copilot' }, { type: 'agentMode', agent: 'demo', mode: 'shadow' }, { type: 'agentKill', agent: 'demo', on: true },
+      { type: 'botMode', mode: 'shadow' }, { type: 'botKill', on: true }, { type: 'agentFlattenOff', agent: 'demo' }, { type: 'agentRules', agent: 'demo', maxTrades: 2 }])
+      assert.equal(g.check(m), '', JSON.stringify(g0) + ' ' + m.type + ' ' + (m.mode || '') + ': only Auto waits');
+    /* the personal account and None never wait for it */
+    const p = g0 ? gate(accounts(), g0, agent({ account: 'MINE-1' }), { type: 'bot', account: null, mode: 'shadow' }) : gate(accounts(), agent({ account: 'MINE-1' }), { type: 'bot', account: null, mode: 'shadow' });
+    assert.equal(p.check(autoA), '', 'personal'); assert.equal(p.check(autoB), '', 'the bot on None');
+  }
+  /* read: Auto goes; a later failed read holds it again; a good read frees it */
+  const g = gate(accounts(), lr({}), agent({ account: 'SIM-A' }));
+  assert.equal(g.check(autoA), '');
+  g.hear(lr({ state: 'error', why: 'sample' })); assert.match(g.check(autoA), /did not work \(sample\), so it cannot tell whether SIM-A/);
+  g.hear(lr({})); assert.equal(g.check(autoA), '');
+  /* a drop forgets the read: Auto waits for the next groups message */
+  g.lost(); for (const m of [{ type: 'hello', version: '0.6.25' }, accounts(), agent({ account: 'SIM-A' })]) g.hear(m);
+  assert.match(g.check(autoA), /has not read The Desk's account types yet \(it has not sent its groups\)/);
+  assert.equal(AC.ledgerReadWhy(lr({})), '');
 });
