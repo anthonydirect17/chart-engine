@@ -543,4 +543,6 @@ test('plan step 3.2 (the R12 review, B1): Stop all and Flatten and turn off wait
   assert.ok(flat && stop, 'both minimums are plain versions');
   assert.equal(flat[1], stop[1], 'FLATOFF_MIN (agent-core.js) and STOPALL_MIN (legion.js) name the same ChartBridge');
   assert.equal(require('../live/agent-core.js').FLATOFF_MIN, flat[1]);
+  const kill = /const STOPALL_MIN = '(\d+\.\d+\.\d+)';/.exec(read('fleet.js'));   // the R12 delta, X1: the Cohorts tab's Kill all too
+  assert.ok(kill && kill[1] === stop[1], 'STOPALL_MIN (fleet.js, Kill all) names the same ChartBridge');
 });

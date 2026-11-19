@@ -457,6 +457,53 @@ test('the question: everything is checked again at the Yes; closing the tab or a
   assert.strictEqual(P.posts.length, 1, 'Kill all is never sent again by a hello, a reconnect or a timer');
 });
 
+test('X1 (the R12 delta): on a ChartBridge that knows agentStopAll, Kill all sends it, with no personal account picked, and takes its answer', t => {
+  timers(t);
+  const L = require('../live/legion.js');
+  assert.strictEqual(F.STOPALL_MIN, L.STOPALL_MIN, 'Kill all and the header\'s Stop all switch at the same ChartBridge');
+  const nopersonal = Object.assign({}, accounts, { personalNamed: false });
+  /* the state: the personal-account refusal is ChartBridge's own prop rule; agentStopAll also reads the ledger, so it is not the page's to refuse */
+  assert.deepStrictEqual(F.killAllState('0.6.25', nopersonal, true, true), { ok: true, why: '' });
+  assert.match(F.killAllState('0.6.24', nopersonal, true, true).why, /No personal account is picked yet/, 'an older ChartBridge: as before');
+  assert.match(F.killAllState('0.6.25', nopersonal, true, true, true).why, /No personal account is picked yet/, 'Armed\'s own use still asks for it');
+  for (const v of ['0.6.25-rc1', 'v0.6.25']) assert.match(F.killAllState(v, accounts, true, true).why, /needs ChartBridge 0\.6\.17 or later/, v + ': not a version, so not offered (X3)');
+  assert.match(F.killAllState('0.6.25', nopersonal, false, true).why, /Sign in to trading first/);
+  assert.match(F.killAllState('0.6.25', nopersonal, true, false).why, /not connected/);
+  /* the message, by version, and the gate: exactly type and cid */
+  assert.deepStrictEqual(F.killAllMsg('c1', '0.6.25'), { type: 'agentStopAll', cid: 'c1' });
+  assert.deepStrictEqual(F.killAllMsg('c1', '0.7.0'), { type: 'agentStopAll', cid: 'c1' });
+  for (const v of ['0.6.24', '0.6.17', '0.6.25-rc1', '', undefined]) assert.deepStrictEqual(F.killAllMsg('c1', v), { type: 'agentKillAllProp', cid: 'c1' }, String(v));
+  assert.strictEqual(F.maySend({ type: 'agentStopAll', cid: 'c1' }), true);
+  assert.strictEqual(F.maySend({ type: 'agentStopAll' }), true);
+  for (const bad of [{ type: 'agentStopAll', cid: 'c1', agent: 'legion1' }, { type: 'agentStopAll', cid: '' }, { type: 'agentStopAll', cid: 7 }, { type: 'agentStopAll', cid: 'x'.repeat(41) }])
+    assert.strictEqual(F.maySend(bad), false, JSON.stringify(bad));
+  /* the words: a trader on the personal account and a prop one loses its prop seats; a Sim account the ledger types counts */
+  const rows = [{ name: 'mix1', autoProp: true, kind: 'mixed', grouped: true, connected: true }, { name: 'mix2', autoProp: true, kind: 'mixed', grouped: false, connected: true }];
+  assert.match(F.autoLine(rows, true), /Kill all will NOT stop it: stop it on Praetorian\): mix1.*Kill all will NOT stop it: stop it on Praetorian\): mix2/);
+  const said = F.autoLine(rows, true, true);
+  assert.match(said, /^In Auto on a group with your personal account in it \(Kill all takes its prop seats only; your personal account is not touched\): mix1\. In Auto on your personal account with a prop account left over \(Kill all takes its prop seats only; your personal account is not touched\): mix2$/);
+  assert.ok(!/NOT stop/.test(said));
+  /* the tab: no personal account picked, Kill all is offered and sends agentStopAll */
+  const P = page(t); P.fv.showTab(true); P.ready('0.6.25'); P.feed(nopersonal);
+  assert.deepStrictEqual([P.part('kill').attrs['aria-disabled'], /^Kill all is Stop all automation here: .*The Desk's account ledger/.test(P.part('hint').textContent)], [undefined, true], P.part('hint').textContent);
+  P.click('ask'); P.T += 700; P.click('yes');
+  assert.deepStrictEqual(P.posts.map(m => Object.keys(m).sort().join(',') + ' ' + m.type), ['cid,type agentStopAll']);
+  P.feed({ type: 'status', level: 'warn', text: 'Stop all automation: agent germanicus on EVAL-A: flattening what it owns, the kill switch on, mode shadow' });
+  assert.deepStrictEqual([P.part('answer').textContent.replace(/^\d\d:\d\d:\d\d {2}/, ''), P.part('answer').cls.has('bad'), P.fv.state().pending],
+    ['Stop all automation: agent germanicus on EVAL-A: flattening what it owns, the kill switch on, mode shadow', false, false], 'ChartBridge\'s Stop all line is the answer');
+  P.click('ask'); P.T += 700; P.click('yes');
+  P.feed({ type: 'status', level: 'warn', text: 'Stop all automation: agent a: stopped. FAILED, stop it on Legion\'s Cohorts now: b' });
+  assert.strictEqual(P.part('answer').cls.has('bad'), true, 'a FAILED in it is marked bad');
+  P.click('ask'); P.T += 700; P.click('yes');
+  P.feed({ type: 'reject', cid: P.posts[P.posts.length - 1].cid, reason: 'no account is known to be prop' });
+  assert.match(P.part('answer').textContent, /ChartBridge refused Kill all: no account is known to be prop$/);
+  assert.deepStrictEqual(P.posts.map(m => m.type), ['agentStopAll', 'agentStopAll', 'agentStopAll'], 'never agentKillAllProp on this ChartBridge');
+  /* an older ChartBridge on the same tab: agentKillAllProp, with the personal account picked */
+  const Q = page(t); Q.fv.showTab(true); Q.ready('0.6.24');
+  Q.click('ask'); Q.T += 700; Q.click('yes');
+  assert.deepStrictEqual(Q.posts.map(m => m.type), ['agentKillAllProp']);
+});
+
 test('Kill all is there and works whatever the roster does: a 404, a 500, an answer that never comes, a broken body', async t => {
   timers(t);
   for (const answer of [{ status: 404 }, { status: 500, json: () => Promise.resolve({ error: 'x' }) }, null, { status: 200, json: () => Promise.reject(new Error('bad')) }, { status: 200, json: () => Promise.resolve('junk') }]) {

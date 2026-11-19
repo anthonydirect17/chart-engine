@@ -36,9 +36,15 @@
  * "Prop" is ChartBridge's word (`prop` on each row of the `accounts` message, 0.6.16): every live account that is not the
  * personal account Anthony picked. With no pick nothing is prop, and the tab says how to pick.
  *
- * Nothing here places an order. It can send three messages and no other (FleetCore.maySend, which workspace.js puts in
- * front of the connection): `agentKillAllProp`, `agentPick`, and `agentMode` to Auto or to Shadow. The one request it makes
- * is GET /roster.
+ * Nothing here places an order. It can send four messages and no other (FleetCore.maySend, which workspace.js puts in
+ * front of the connection): `agentKillAllProp` or, on a ChartBridge that knows it, `agentStopAll` (Kill all), `agentPick`, and
+ * `agentMode` to Auto or to Shadow. The one request it makes is GET /roster.
+ *
+ * Plan step 3.2 (the R12 delta, X1): on a ChartBridge that knows Legion's Stop all automation (STOPALL_MIN), Kill all sends that
+ * same command, agentStopAll: ChartBridge then finds the prop accounts by its own rule AND by The Desk's account ledger (an account
+ * the ledger types eval or funded that NinjaTrader lists as Sim is still covered, law 9.3), takes a trader's prop seats when it
+ * also trades the personal account, and refuses only when it knows neither (its own words). Kill all then reaches what the header's
+ * Stop all reaches, no less.
  *
  * Two parts, as league.js: FleetCore (pure: Node tests, test/fleet.test.js) and, in a browser, FleetView (the tab).
  */
@@ -49,6 +55,7 @@
 'use strict';
 
 const KILL_MIN = '0.6.17';       // ChartBridge that knows agentKillAllProp
+const STOPALL_MIN = '0.6.25';    // ... agentStopAll, Legion's Stop all automation (LegionCore.STOPALL_MIN; a test holds them equal)
 const SWITCH_MIN = '0.6.18';     // ... the two entry switches
 const DAYSTOP_MIN = '0.6.19';    // ... the day's profit stop
 const ROSTER_MIN = '0.6.20';     // ... GET /roster
@@ -472,33 +479,42 @@ function rosterProblem(status, error) {
   return 'ChartBridge answered ' + status + ' for the roster.';
 }
 
-/** May Kill all be sent now? -> { ok, why }. */
-function killAllState(version, accountsMsg, signedIn, connected) {
+/** May Kill all be sent now? -> { ok, why }. needPersonal (the Armed switch's own use): the personal account must be picked
+ *  on every version (Armed is never offered more widely than before X1). */
+function killAllState(version, accountsMsg, signedIn, connected, needPersonal) {
   if (!connected) return { ok: false, why: 'ChartBridge is not connected' };
   if (!atLeast(version, KILL_MIN)) return { ok: false, why: 'Kill all needs ChartBridge ' + KILL_MIN + ' or later (this one is ' + (version || 'not known') + ')' };
   if (!signedIn) return { ok: false, why: 'Sign in to trading first (the PIN in the top bar)' };
+  /* X1: agentStopAll needs no personal account picked: the ledger's eval and funded accounts are prop to it, and ChartBridge
+     refuses in its own words when it knows neither */
+  if (!needPersonal && atLeast(version, STOPALL_MIN)) return { ok: true, why: '' };
   /* PROP 5: "not heard yet" is not "no". Before the first accounts message the tab does not know whether a personal account
      is picked; when that is the only thing missing, Yes sends and ChartBridge answers (it knows) */
   if (accountsMsg && accountsMsg.personalNamed !== true) return { ok: false, why: 'No personal account is picked yet, so no account is prop: pick it on the Accounts tab (an account\'s settings, This is my personal account)' };
   return { ok: true, why: '' };
 }
-const killAllMsg = cid => Object.assign({ type: 'agentKillAllProp' }, cid ? { cid } : {});
+/** Kill all's one message: agentStopAll on a ChartBridge that knows it (X1), else agentKillAllProp. */
+const killAllMsg = (cid, version) => Object.assign({ type: atLeast(version, STOPALL_MIN) ? 'agentStopAll' : 'agentKillAllProp' }, cid ? { cid } : {});
+/** Is this status line ChartBridge's answer to a Kill all? Its own words for either command (X1). */
+const KILL_ANSWER_RX = /^(Kill all \(prop accounts\)|Stop all automation)/;
 
 /**
  * The line beside the title: every trader in Auto that Kill all counts, and which of them it will NOT stop (the review of
  * 92, PROP 3). It never says nobody is trading while a trader is in Auto on a group with the personal account in it, or on
  * an account NinjaTrader does not list now.
  */
-function autoLine(rows, heard) {
+function autoLine(rows, heard, stopAll) {
   if (heard === false) return 'Not heard from ChartBridge yet which accounts are prop';
+  /* X1: agentStopAll takes a trader's prop seats when it also trades the personal account (the personal one is never touched) */
+  const notStopped = stopAll ? 'Kill all takes its prop seats only; your personal account is not touched' : 'Kill all will NOT stop it: stop it on Praetorian';
   const on = rows.filter(t => t.autoProp), nm = t => t.name + (t.connected ? '' : ' (its program is not connected now)');
   const plain = on.filter(t => t.kind === 'prop' || t.kind === 'propsim'), unl = on.filter(t => t.kind === 'unlisted'), mixed = on.filter(t => t.kind === 'mixed');
   const parts = [];
   if (plain.length) parts.push('In Auto on prop accounts: ' + plain.map(nm).join(', '));
   if (unl.length) parts.push('In Auto on an account NinjaTrader does not list now (Kill all stops it): ' + unl.map(nm).join(', '));
   const mixedGroup = mixed.filter(t => t.grouped), mixedOne = mixed.filter(t => !t.grouped);
-  if (mixedGroup.length) parts.push('In Auto on a group with your personal account in it (Kill all will NOT stop it: stop it on Praetorian): ' + mixedGroup.map(nm).join(', '));
-  if (mixedOne.length) parts.push('In Auto on your personal account with a prop account left over (Kill all will NOT stop it: stop it on Praetorian): ' + mixedOne.map(nm).join(', '));   // 104-D: not a group
+  if (mixedGroup.length) parts.push('In Auto on a group with your personal account in it (' + notStopped + '): ' + mixedGroup.map(nm).join(', '));
+  if (mixedOne.length) parts.push('In Auto on your personal account with a prop account left over (' + notStopped + '): ' + mixedOne.map(nm).join(', '));   // 104-D: not a group
   // 104-B (answers 27): never quiet about a trader in Auto whose accounts the page cannot read
   const cannot = rows.filter(t => t.cannotTell);
   if (cannot.length) parts.push('In Auto on accounts the page cannot read (Kill all may not reach it): ' + cannot.map(nm).join(', '));
@@ -627,8 +643,9 @@ function lanes(agents, groupsMsg, accountsMsg, version, cards, turningOff) {
 function outsideAuto(ls, agents, accountsMsg, version) {
   const onLane = new Set([].concat.apply([], (ls || []).map(l => l.traders)));
   const rows = traders(agents, accountsMsg, version).filter(t => t.mode === 'auto' && t.tone !== 'off' && t.tone !== 'killed' && t.kind !== 'personal' && !onLane.has(t.id));
-  const where = t => (t.kind === 'sim' ? 'on a Sim account (Kill all does not reach it)' : t.kind === 'prop' || t.kind === 'propsim' ? 'on a prop account'
-    : t.kind === 'mixed' ? 'on a prop account and your personal account (Kill all will NOT stop it)'   // 104-D (answers 27)
+  const stopAll = atLeast(version, STOPALL_MIN);   // X1: Kill all is agentStopAll, which reads the ledger and takes a mixed trader's prop seats
+  const where = t => (t.kind === 'sim' ? (stopAll ? 'on a Sim account (Kill all reaches it only if The Desk\'s ledger types it eval or funded)' : 'on a Sim account (Kill all does not reach it)') : t.kind === 'prop' || t.kind === 'propsim' ? 'on a prop account'
+    : t.kind === 'mixed' ? (stopAll ? 'on a prop account and your personal account (Kill all takes its prop seats only)' : 'on a prop account and your personal account (Kill all will NOT stop it)')   // 104-D (answers 27)
     : t.kind === 'unlisted' ? 'on an account NinjaTrader does not list now'
     : t.readsAccounts === false ? '(the page cannot read its accounts; Kill all may not reach it)'   // answers B4-8, F4
     : 'on an account ChartBridge has not marked prop or personal (Kill all may not reach it)');
@@ -645,7 +662,7 @@ function outsideAuto(ls, agents, accountsMsg, version) {
  * then only switches off (FIX 2, note 8).
  */
 function armState(ls, version, signedIn, connected, accountsMsg, groupsMsg, heard, outside) {
-  const kill = killAllState(version, accountsMsg, signedIn, connected);
+  const kill = killAllState(version, accountsMsg, signedIn, connected, true);
   const known = connected && signedIn && !!groupsMsg && !!accountsMsg && heard;
   if (!known) {
     const why = !connected ? 'ChartBridge is not connected' : !signedIn ? 'Sign in to trading first (the PIN in the top bar)' : !accountsMsg || !groupsMsg ? 'Not heard from ChartBridge yet' : 'No trader heard from ChartBridge yet';
@@ -716,7 +733,7 @@ function maySend(m) {
   const keys = Object.keys(m), only = allowed => keys.every(k => allowed.includes(k));
   const cidOk = !own(m, 'cid') || (typeof m.cid === 'string' && m.cid.length > 0 && m.cid.length <= 40);
   if (!cidOk) return false;
-  if (m.type === 'agentKillAllProp') return only(['type', 'cid']);
+  if (m.type === 'agentKillAllProp' || m.type === 'agentStopAll') return only(['type', 'cid']);   // Kill all (X1: agentStopAll from STOPALL_MIN)
   if (m.type === 'agentPick') return only(['type', 'cid', 'agent', 'file']) && own(m, 'file') && typeof m.agent === 'string' && ID_RX.test(m.agent) && (m.file === null || (typeof m.file === 'string' && FILE_RX.test(m.file)));
   if (m.type === 'agentMode') {
     if (!(typeof m.agent === 'string' && ID_RX.test(m.agent))) return false;
@@ -1005,7 +1022,7 @@ const badAnswer = text => /NOT STOPPED|FAILED|could NOT/.test(String(text || '')
 const clock = d => [d.getHours(), d.getMinutes(), d.getSeconds()].map(x => String(x).padStart(2, '0')).join(':');
 
 return Object.freeze({ displayNameOk, shownName, cardText, LANE_KEEP_MIN, laneLogOf, hhmm, laneWord, LANE_HELP, one, laneAccounts, RULE_OWNED_WORDS, HAND_MIN, laneRuleOf, unassigned, modeRulesLoaded, NOT_KNOWN, NOT_READABLE, groupLock, accountsReadable, MAX_FILLS, LANE_COLOR, LANE_LETTER, propRows, todayOf, liveTiles, cleanFill, laneMarks, traderDays, laneRunner, readableName, rosterFamilies, FILTERS, laneLock, laneMaySend, laneFeed, PICK_MIN, STAGES, lanes, outsideAuto, armState, armMsgs, armWords, pickChoices, waitingChoices, pickMsg, maySend, KILL_MIN, SWITCH_MIN, DAYSTOP_MIN, ROSTER_MIN, ROSTER_FORMAT, LINEUP_FORMAT, CONFIRM_MS, ARM_MS, ANSWER_WAIT_MS, ROSTER_WAIT_MS, MAX_CARDS, MAX_MEMBERS, MAX_NOT_SHOWN, MODE_NAME, atLeast, usd, signed, stageCard, rosterCards, rosterProblem,
-  kindOf, seatsKind, dayMark, traderAccounts, statusText, traders, propAccounts, killAllState, killAllMsg, autoLine, badAnswer, clock });
+  kindOf, seatsKind, dayMark, traderAccounts, statusText, traders, propAccounts, STOPALL_MIN, killAllState, killAllMsg, KILL_ANSWER_RX, autoLine, badAnswer, clock });
 });
 
 /* ================================================================================================ the tab (browser only) */
@@ -1015,6 +1032,8 @@ if (typeof window === 'undefined' || typeof document === 'undefined') return;
 const C = window.FleetCore;
 const esc = s => String(s === undefined || s === null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const HINT = 'Kill all stops every trader on a prop account and closes its position there whole, a contract you added by hand on that account and contract included. Your personal account, a trader on Sim accounts only, the bot and the copier are never touched.';
+/* X1: the same words for agentStopAll, which also counts the ledger's accounts and takes a mixed trader's prop seats */
+const HINT_STOPALL = 'Kill all is Stop all automation here: every trader on a prop account, by ChartBridge\'s own rule and by The Desk\'s account ledger (an account it types eval or funded counts, even one NinjaTrader lists as Sim), is stopped and its position there closed whole, a contract you added by hand on that account and contract included. A trader that also trades your personal account loses its prop seats only. Your personal account, the bot and the copier are never touched.';
 
 /*
  * HOW IT IS DRAWN (the review of 92, STOP 2). The head (Kill all, the question's two buttons, the two lines under them) is
@@ -1123,7 +1142,7 @@ function create(o) {
         else if (typeof m.cid === 'string' && S.modeSent.has(m.cid)) { const x = S.modeSent.get(m.cid); S.modeSent.delete(m.cid); armSay('ChartBridge refused ' + (x.mode === 'auto' ? 'Auto' : 'Shadow') + ' for ' + x.agent + (typeof m.reason === 'string' && m.reason ? ': ' + m.reason : ''), true); }
         else if (typeof m.cid === 'string' && S.pickSent.has(m.cid)) { const id = S.pickSent.get(m.cid); S.pickSent.delete(m.cid); armSay('ChartBridge refused the pick for ' + id + (typeof m.reason === 'string' && m.reason ? ': ' + m.reason : ''), true); S.drawn.lanes = null; }
         break;
-      case 'status': if (typeof m.text === 'string' && /^Kill all \(prop accounts\)/.test(m.text)) answered(m.text, m.level === 'error' || C.badAnswer(m.text)); break;
+      case 'status': if (typeof m.text === 'string' && C.KILL_ANSWER_RX.test(m.text)) answered(m.text, m.level === 'error' || C.badAnswer(m.text)); break;
       default: return;
     }
     if (S.hintState && killState().why !== S.hint) hint('', false);
@@ -1198,7 +1217,7 @@ function create(o) {
     if (!st.ok) { hint(st.why, true, true); render(); return; }
     const id = cid();
     S.sent++;
-    const ok = !!V3 && V3.post(C.killAllMsg(id)) === true;
+    const ok = !!V3 && V3.post(C.killAllMsg(id, S.version)) === true;   // X1: agentStopAll on a ChartBridge that knows it
     if (ok) {
       S.pending = id; S.pendingAt = now();
       S.answer = C.clock(new Date(now())) + '  Kill all sent: waiting for ChartBridge\'s answer'; S.answerBad = false;
@@ -1586,13 +1605,13 @@ function create(o) {
   }
   function renderHead(rows) {
     const st = killState(), asking = S.ask > 0;
-    setText(el.autoline, C.autoLine(rows, !!S.accounts));
+    setText(el.autoline, C.autoLine(rows, !!S.accounts, C.atLeast(S.version, C.STOPALL_MIN)));
     setHidden(el.ask, !asking); setHidden(el.yes, !asking); setHidden(el.no, !asking); setHidden(el.kill, asking);
     if (el.kill) {
       if (st.ok) { el.kill.removeAttribute('aria-disabled'); el.kill.removeAttribute('title'); }
       else { el.kill.setAttribute('aria-disabled', 'true'); el.kill.setAttribute('title', st.why); }
     }
-    setText(el.hint, S.hint || (st.ok ? HINT : st.why));
+    setText(el.hint, S.hint || (st.ok ? (C.atLeast(S.version, C.STOPALL_MIN) ? HINT_STOPALL : HINT) : st.why));
     if (el.hint) el.hint.classList.toggle('bad', S.hintBad);
     setText(el.answer, S.answer); setHidden(el.answer, !S.answer);
     if (el.answer) el.answer.classList.toggle('bad', S.answerBad);
