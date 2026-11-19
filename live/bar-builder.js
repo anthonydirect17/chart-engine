@@ -379,7 +379,8 @@ class RangeReplay {
  * page gets after it (its `at`: the store's length when it came). decodeDeltaTable reads the message's session ({ from,
  * coveredFrom, why, missed, big, rows: [dt, buy, sell, big, ...], unknown: [dt, volume, big, ...] }, dt from `from` and then from
  * the row before; with `big` true each row ends with the second's largest single trade, any side, 0 when not known (a second
- * ChartBridge read back from a file saved before it kept it); a table without `big` has rows of 3 and unknowns of 2 and no
+ * ChartBridge read back from a file saved before it kept it), -1 when it is one of the trades the page gets live after the table
+ * (that second's live trades bring it); a table without `big` has rows of 3 and unknowns of 2 and no
  * largest trade) into columns sorted by second: { from, coveredFrom, why, missed, n, sec, buy, sell, unk, big }; null when it is
  * not one.
  */
@@ -396,8 +397,8 @@ function decodeDeltaTable(ses) {
     const t = j >= nu || (i < nr && tr <= tu) ? tr : tu;
     if (n && sec[n - 1] === t) n--;                      // the same second again (never sent so; kept whole if it were)
     else { sec[n] = t; buy[n] = 0; sell[n] = 0; unk[n] = 0; big[n] = 0; }
-    if (i < nr && tr === t) { buy[n] += +R[RS * i + 1] || 0; sell[n] += +R[RS * i + 2] || 0; if (G) big[n] = Math.max(big[n], +R[RS * i + 3] || 0); i++; if (i < nr) tr += +R[RS * i]; }
-    if (j < nu && tu === t) { unk[n] += +Un[US * j + 1] || 0; if (G) big[n] = Math.max(big[n], +Un[US * j + 2] || 0); j++; if (j < nu) tu += +Un[US * j]; }
+    if (i < nr && tr === t) { buy[n] += +R[RS * i + 1] || 0; sell[n] += +R[RS * i + 2] || 0; if (G) big[n] = +R[RS * i + 3] || 0; i++; if (i < nr) tr += +R[RS * i]; }
+    if (j < nu && tu === t) { unk[n] += +Un[US * j + 1] || 0; if (G && !(big[n] > 0)) big[n] = +Un[US * j + 2] || 0; j++; if (j < nu) tu += +Un[US * j]; }
     n++;
     if (!(isFinite(tr) && isFinite(tu))) return null;
   }

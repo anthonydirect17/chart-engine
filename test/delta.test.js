@@ -678,3 +678,19 @@ test('delta table: a table read back from an older file (no largest trade) build
   assert.deepEqual(cd.bars.map(b => [b.t, b.c, b.buy, b.sell]), truth.bars.map(b => [b.t, b.c, b.buy, b.sell]));
   assert.ok(cd.bars.every(b => b.bigMissing && b.big === 0));
 });
+
+test('delta table (R12 N5): a second whose largest trade is one the page gets live after the table says -1; the bar takes it from that live trade', () => {
+  const T = BB.decodeDeltaTable({ from: 1000, coveredFrom: 1000, big: true, rows: [0, 5, 3, -1], unknown: [0, 2, -1] });
+  assert.deepEqual([...T.big], [-1]);
+  const T0 = et(2026, 9, 29, 10, 0), cd = new CE.CumulativeDelta({ seconds: 60 });
+  cd.addSecond(T0 + 1, 5, 3, 2, undefined, -1);
+  assert.deepEqual([cd.last.big, !!cd.last.bigMissing], [0, false], 'not missing: the largest comes live');
+  cd.add(T0 + 1.5, 6, 1, undefined, 2);                    // the held trade, released after ready
+  assert.equal(cd.last.big, 6);
+  // on range bars the rest of that second cannot take it: its bar's largest print is not known
+  const st = new BB.TickStore(); st.push(1000.2, 100, 1, 1, 2); const T2 = BB.decodeDeltaTable({ from: 1000, coveredFrom: 1000, big: true, rows: [0, 9, 3, -1], unknown: [] });
+  T2.at = 0; const rd = new CE.CumulativeDelta({ seconds: 0 });
+  const tr = new BB.TableReplay(st, T2, rd, new BB.BarBuilder({ mode: 'range', rangeTicks: 8, rangeMode: 'nt', tick: 0.25, sessionStart: S18 }));
+  while (!tr.step(10));
+  assert.equal(rd.bars[0].bigMissing, true);
+});

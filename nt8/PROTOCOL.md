@@ -839,13 +839,21 @@ trade).
   seconds. A file saved before the largest trade was kept has four fields a line: it is still read, with those seconds' largest
   trade not known (0). Every 10 s (the accounts timer, on a pool thread, one pass at a
   time) the closed seconds since the last pass (the forming one waits), the late trades (at most 20,000 kept between passes) and
-  the missed seconds are copied under the book's lock and appended, written through (`ChartBridgeFiles.Append`); the market data
-  thread never writes or waits, and a failed write is tried again the next pass (`/diag` counts it). A finished session's table
+  the missed seconds are copied under the book's lock (the text is made after it) and appended, written through
+  (`ChartBridgeFiles.Append`); the market data thread never writes or waits, and a failed write is tried again the next pass
+  (`/diag` counts it). A trade for a second the pass is writing, arriving while it writes, is kept as a late trade for the next
+  pass (review R12 S1). A file whose last line has no newline (a crash in the middle of an append) is cut back to its last whole
+  line before the next append, and a reader leaves such a line out, though it may look whole (R12 S2). A finished session's table
   is written to its last second, then let go.
-- **Read back at a start.** When an instrument's book is made (off the thread that made it), the current session's file is read;
-  joined to the live table (its seconds added, its start and `why` kept, the seconds between counted missed) at the session's
-  first trade, or at once when that trade came first; then every live page that asked gets the table again (no `sub`), in order
-  with its live trades (as a pushed `profile`). No file is written for that instrument before the read is done. A file of
+- **Read back at a start.** When an instrument's book is made (off the thread that made it), the current session's file is read
+  (on a day with no session, a weekend or a CME holiday, the last session's); joined to the live table (its seconds added, its
+  start and `why` kept, the seconds between counted missed) at the session's first trade, or at once when that trade came first;
+  then every live page that asked gets the table again (no `sub`), in order with its live trades (as a pushed `profile`; one push
+  to a page at a time, so a profile push and a table push never skip each other's page, R12 N2). The saved seconds are never
+  written again (R12 B1: each restart used to append them once more); this run's own seconds at or below the last saved one are
+  written as late lines. With the market closed (the break, a weekend, a holiday) and no trade yet, the finished session's table
+  is the instrument's table until the next session's first trade (R12 N4). No file is written for that instrument before the read
+  is done. A file of
   another session is not read; a line cut by a power cut is left out (its seconds fall in the missed gap).
 
 **The `deltaTable` message.** Asked for with `"deltaTable": true` on `subscribe` (the page sends it when hello's `features` lists
@@ -860,7 +868,8 @@ trade).
 `"feed"`, `missed` whole seconds. `big` true: each row ends with the second's largest single trade. `rows`: for each second with
 buy or sell volume, `dt` (seconds since the row before; the first since `from`), buy, sell, largest trade. `unknown`: for each
 second with unknown volume, `dt` (the same way, in its own list), the volume and the largest trade (the same number as in `rows`
-for a second in both). A largest trade of 0 is not known (a second read back from an older file). So a full session is only the
+for a second in both). A largest trade of 0 is not known (a second read back from an older file); -1 says it is one of the held
+trades the page gets live after the table, in that same second (R12 N5: the largest of the table's own part of it is not known). So a full session is only the
 seconds that traded, delta coded: a busy NQ session at every second of 23 hours is about 0.89 MB (the harness's case; the fake
 bridge's full session at 15 trades a second, about 0.66 MB). A page reads a table without `big` (rows of 3, unknowns of 2) with no
 largest trade known. `session` is null when the instrument has no table
@@ -886,7 +895,8 @@ that second's trades are in (before the window: in one bar no chart bar shows, w
 that second's largest trade only when it is larger than every sided trade of that second the window holds (it is then the
 rest's own; else the bar's largest print is not known). The
 pane says "since 18:00 ET", "since HH:MM ET (ChartBridge started)" or "(data connection down at 18:00)", and ", missed N s"
-with ChartBridge's missed seconds. An older ChartBridge (no `deltaTable` in `features`): as before (live/COMPAT.json's
+with ChartBridge's missed seconds (only while the newest session is the table's: a chart open across 18:00 drops them, R12 S3).
+An older ChartBridge (no `deltaTable` in `features`): as before (live/COMPAT.json's
 minChartBridge is unchanged).
 
 **Never touched:** the order path (no order file changes; `ChartBridgeOrders.cs` is not edited), the agents' loads (an agent's

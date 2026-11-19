@@ -70,9 +70,9 @@ public static partial class WindowHarness
         long[] rows = Ints(json, "rows"), unk = Ints(json, "unknown");
         long sec = 0;
         int rs = json.Contains("\"big\":true") ? 4 : 3, us = rs - 1;   // with each second's largest trade: rows of 4, unknowns of 3
-        for (int i = 0; i + rs - 1 < rows.Length; i += rs) { sec += rows[i]; long[] a; if (!d.TryGetValue(sec, out a)) { a = new long[4]; d[sec] = a; } a[0] += rows[i + 1]; a[1] += rows[i + 2]; if (rs == 4 && rows[i + 3] > a[3]) a[3] = rows[i + 3]; }
+        for (int i = 0; i + rs - 1 < rows.Length; i += rs) { sec += rows[i]; long[] a; if (!d.TryGetValue(sec, out a)) { a = new long[4]; d[sec] = a; } a[0] += rows[i + 1]; a[1] += rows[i + 2]; if (rs == 4) a[3] = rows[i + 3]; }
         sec = 0;
-        for (int i = 0; i + us - 1 < unk.Length; i += us) { sec += unk[i]; long[] a; if (!d.TryGetValue(sec, out a)) { a = new long[4]; d[sec] = a; } a[2] += unk[i + 1]; if (us == 3 && unk[i + 2] > a[3]) a[3] = unk[i + 2]; }
+        for (int i = 0; i + us - 1 < unk.Length; i += us) { sec += unk[i]; long[] a; if (!d.TryGetValue(sec, out a)) { a = new long[4]; d[sec] = a; } a[2] += unk[i + 1]; if (us == 3 && a[3] == 0) a[3] = unk[i + 2]; }
         return d;
     }
     static long[] Ints(string json, string key)
@@ -136,6 +136,13 @@ public static partial class WindowHarness
         SortedDictionary<long, long[]> wantMsg = DeltaTruth(tape.Take(tape.Count - 400), d.StartEt), allBig = DeltaTruth(tape, d.StartEt);
         foreach (KeyValuePair<long, long[]> kv in wantMsg) kv.Value[3] = allBig[kv.Key][3];
         string d2 = DiffSec(sentRows, wantMsg);
+        // R12 N5: a second whose largest trade is a held one (the page gets it live after) says -1
+        foreach (KeyValuePair<long, long[]> kv in wantMsg)
+        {
+            long heldMax = held.Where(x => DeltaTable.SecondOf(EtSec(x.T)) - (long)d.StartEt == kv.Key).Select(x => x.V).DefaultIfEmpty(0).Max();
+            if (heldMax >= kv.Value[3]) kv.Value[3] = -1;
+        }
+        d2 = DiffSec(sentRows, wantMsg);
         Check(d2 == null && f == d.StartEt && c == d.StartEt && why == null && m == 0 && json.StartsWith("{\"type\":\"deltaTable\",\"root\":\"MNQ\",\"sub\":9,"),
             "delta message: the table less the trades the page is about to get live equals every trade before them" + (d2 != null ? " (" + d2 + ")" : ""));
         // A full session at every second (82,800 seconds, a busy NQ day's sizes): its size and the time to copy and write it.
@@ -317,6 +324,47 @@ public static partial class WindowHarness
             string kept = DiffSec(want, new SortedDictionary<long, long[]>(truth.Where(kv => kv.Key <= back.Hi).ToDictionary(kv => kv.Key, kv => kv.Value)));
             Check(rm != null && from == startEt && cov == startEt && why == null && Math.Abs(missed - Math.Round(expectMissed)) <= 1 && diff == null && kept == null,
                 "delta after a restart: the page's table is the saved seconds plus the new run's, from 18:00 ET, with the " + Math.Round(expectMissed) + " s between them missed (" + missed + ")" + (diff != null ? "; " + diff : "") + (kept != null ? "; " + kept : ""));
+            // R12 S1: a trade for a second the pass is writing, arriving while it writes, is written by the next pass
+            bool hookRan = false;
+            Trade lateOne = new Trade { T = after[600].T, P = after[600].P, V = 9 };
+            ChartBridgeServer.DeltaSaveHookForHarness = () => { if (hookRan) return; hookRan = true; Live(new List<Trade> { lateOne }, 0, 1); simNow = after[1199].T; };
+            ChartBridgeServer.SaveDeltas();
+            ChartBridgeServer.DeltaSaveHookForHarness = null;
+            ChartBridgeServer.SaveDeltas();
+            // R12 S2: a crash cut the file's last line in its fourth field ("100 2 0 1" of "100 2 0 13 5"): taken off before the next append
+            File.AppendAllText(file, "100 2 0 1");
+            DeltaTable cutRead = DeltaTable.Parse(File.ReadAllText(file), startEt);
+            int c100b, c100s, c100u; cutRead.Get(100, out c100b, out c100s, out c100u);
+            int b100, s100, u100; lock (nb.Sync) nb.Delta.Get(100, out b100, out s100, out u100);
+            Check(hookRan && c100b == b100 && c100u == u100, "delta file (R12 S2): a last line with no newline is not read, though it looks whole");
+            Live(after, 1200, 1500);
+            ChartBridgeServer.SaveDeltas();
+            string afterCut = File.ReadAllText(file);
+            Check(!afterCut.Contains("100 2 0 1" + "\n") && afterCut.EndsWith("\n"), "delta file (R12 S2): the cut line is taken off before the next append");
+            // R12 B1: a second restart in the session: the file read back is the book, the first run's seconds once (never twice), the
+            // second run's the tape's with the late trade
+            SortedDictionary<long, long[]> book2 = BookDelta(nb);
+            DateTime restart2 = after[1499].T.AddSeconds(60);
+            List<Trade> third0 = Walk(restart2, 600, 84, 100);
+            simNow = restart2;
+            ChartBridgeServer.ResetBooks(ChartBridgeTime.ToUtc(restart2).AddSeconds(-1));
+            RootBook nb2 = ChartBridgeServer.BookOf("MNQ", inst);
+            WaitFor(() => { lock (nb2.Sync) return nb2.DeltaReadDone; }, 3000);
+            Live(third0, 0, 300);
+            ChartBridgeServer.SaveDeltas();
+            SortedDictionary<long, long[]> now2 = BookDelta(nb2), read2 = OfTable(DeltaTable.Parse(File.ReadAllText(file), startEt));
+            long forming = now2.Keys.Max(); now2.Remove(forming);
+            string fileDiff = DiffSec(read2, now2);
+            string firstRun = DiffSec(OfTable(back), new SortedDictionary<long, long[]>(BookDelta(nb2).Where(kv => kv.Key <= back.Hi).ToDictionary(kv => kv.Key, kv => kv.Value)));
+            // the second run's seconds against the tape (volumes a second), its last second lost at the restart (counted missed)
+            Dictionary<long, long> tapeVol = new Dictionary<long, long>();
+            foreach (Trade x in after.Take(1500).Concat(new[] { lateOne })) { long k = DeltaTable.SecondOf(EtSec(x.T)) - (long)startEt; long had; tapeVol.TryGetValue(k, out had); tapeVol[k] = had + x.V; }
+            long lost = DeltaTable.SecondOf(EtSec(after[1499].T)) - (long)startEt;
+            SortedDictionary<long, long[]> all2 = BookDelta(nb2);
+            string run2 = null;
+            foreach (KeyValuePair<long, long> kv in tapeVol) { if (kv.Key == lost) continue; long[] a; long got = all2.TryGetValue(kv.Key, out a) ? a[0] + a[1] + a[2] : 0; if (got != kv.Value) { run2 = "second " + kv.Key + ": " + got + " against the tape's " + kv.Value; break; } }
+            Check(fileDiff == null && firstRun == null && run2 == null,
+                "delta file (R12 B1): after a second restart the file reads back as the book, the first run's seconds once, the second run's as the tape (with the trade that came while a pass wrote)" + (fileDiff != null ? "; file: " + fileDiff : "") + (firstRun != null ? "; first run: " + firstRun : "") + (run2 != null ? "; second run: " + run2 : ""));
             // A page live before the file is read back is told: the table comes again, pushed (no sub), in order with its trades.
             simNow = after[1199].T;
             ChartBridgeServer.ResetBooks(ChartBridgeTime.ToUtc(simNow).AddSeconds(-1));

@@ -1391,6 +1391,7 @@ function mount(container, options) {
     sub: 0, window: false, table: null, vpTable: null, sync: null,
     loadAt: 0, loadMsgAt: 0 };   // 1.38.1: when the load began, and its last message   // served window and session table (1.8.0): see "Served window" below
   /* 1.15.0: this chart's 4h, 1D or 1W bars from ChartBridge (htfSync below): asked for which root and timeframe, and how it went */
+  let deltaViewDay = null;                                     // the delta session the pane's label was last made for (deltaView)
   const H = { root: null, tf: '', id: 0, state: 'idle', bars: [], error: '', retry: 0, wait: 0, tries: 0, at: 0, retryAt: 0, pending: false, stale: '' };
   let htfSeq = 0;
   /* The chart signals' objects (G1c, see sigReplay below): what the chart draws, made again with the bars. */
@@ -1938,7 +1939,8 @@ function mount(container, options) {
     // store's `at`, then the store's trades: the same count on every load, reload, timeframe, instrument or layout switch
     if (D.dtab) {
       const T = D.dtab;
-      return { from: T.coveredFrom, by: 'table', why: T.why === 'start' ? 'ChartBridge started' : T.why === 'feed' ? 'data connection down at 18:00' : '', index: T.at, table: true, missed: T.missed };
+      return { from: T.coveredFrom, by: 'table', why: T.why === 'start' ? 'ChartBridge started' : T.why === 'feed' ? 'data connection down at 18:00' : '', index: T.at, table: true, missed: T.missed,
+        day: U.tradeDay(T.from + 1, SESSION) };   // the table's trading day: its missed seconds are that session's only (R12 S3)
     }
     if (!(K.started && K.root === D.root && K.load !== loadSeq)) return storeCoverage();
     const live = K.liveFrom + liveLate(), first = K.firstT !== null ? K.firstT : Infinity;
@@ -2056,9 +2058,13 @@ function mount(container, options) {
   const deltaWhy = () => D.deltaCov ? D.deltaCov.why : '';
   /* 0.6.25: a count from ChartBridge's delta table says from when it counts even from 18:00 ("since 18:00 ET"), and the seconds
      ChartBridge did not see (a feed drop, a NinjaTrader restart) as its missed seconds */
+  /* R12 S3: a chart left open across 18:00 counts the new session from the live trades: the table's missed seconds were the
+     session before's, so they show only while the newest session is the table's (onTick calls this at the first trade of a
+     later trading day) */
   function deltaView() {
-    const tab = D.deltaCov && D.deltaCov.table ? D.deltaCov : null;
-    chart.setDeltaView({ note: '', reason: deltaWhy(), missed: tab ? tab.missed : countMissed(), start: !!tab });
+    const tab = D.deltaCov && D.deltaCov.table ? D.deltaCov : null, ses = D.delta && D.delta.session;
+    deltaViewDay = ses ? ses.day : null;
+    chart.setDeltaView({ note: '', reason: deltaWhy(), missed: tab ? (ses && ses.day === tab.day ? tab.missed : 0) : countMissed(), start: !!tab });
   }
   /* Written only when it changes (the badge, the notes): no layout for an unchanged value. */
   const put = (el, k, v) => { if (el && el[k] !== v) el[k] = v; };
@@ -2290,7 +2296,10 @@ function mount(container, options) {
       else for (let i = 0; i < ch.length; i++) chart.update(ch[i]);   // a finished range bar, phantom bars, the new bar
       barT = r.bar.t;
     }
-    if (D.delta && !deltaFed) D.delta.add(t, v, m.s, barT, m.sm);   // one trade, one bar: never a rebuild per trade
+    if (D.delta && !deltaFed) {
+      D.delta.add(t, v, m.s, barT, m.sm);              // one trade, one bar: never a rebuild per trade
+      if (D.delta.session && D.delta.session.day !== deltaViewDay) deltaView();   // a new session (18:00 ET): its own label (R12 S3)
+    }
     sigTrade(t, p, v, m.s, barT);                      // the chart signals (G1c): O(1) a trade, a step per bar close
     const now = nowMs();
     pushDelay(delays.feed, m.rx - m.u);

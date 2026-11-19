@@ -8,7 +8,7 @@
 //   ready (ChartBridge reading the session's saved table back). Each is labelled "since 18:00 ET". The Data Box's largest print on
 //   a bar built from the table is the bar's largest trade; from an older saved file (no largest trade kept) it shows "-".
 // Then: ChartBridge started after 18:00 ("since HH:MM ET (ChartBridge started)", the count from then); the seconds ChartBridge
-// missed ("missed 8 s"); an older ChartBridge (no deltaTable in hello): the page counts from its opening as before, and its
+// missed ("missed 8 s"), and not carried into the next session across 18:00; an older ChartBridge (no deltaTable in hello): the page counts from its opening as before, and its
 // subscribe asks for no table. Screenshots in test/out (SHOTS=dir), labelled as sample data.
 //   npm run smoke:delta-held        (CHROMIUM_PATH=/path/to/chrome for a preinstalled browser)
 import { chromium } from 'playwright';
@@ -206,6 +206,22 @@ try {
   check(startedAt > t2.s0 && d.c === t2.net && /since \d\d:\d\d(:\d\d(\.\d+)?)? ET \(ChartBridge started\)/.test(d.title), 'ChartBridge started after 18:00: the count from its start, labelled: ' + d.title + ' (net ' + t2.net + ', ' + k2.n + ' sample trades in the tape)');
   await shot(p2, 'delta-held-started.png', 'ChartBridge started mid-session: "since HH:MM ET (ChartBridge started)".');
   await ctx2.close(); b2.kill();
+
+  // ------------------------------------------------------------ R12 S3: across 18:00 the table's missed seconds stay with its session
+  const OFF4 = offsetTo(17, 59) + 35;                     // 17:59:35 ET
+  const b4 = await startBridge(OFF4, ['--delta-table']);
+  await post(b4.port, '/test/delta-missed?s=8');
+  const ctx4 = await context(OFF4, 'm1');
+  const p4 = await ctx4.newPage();
+  await p4.goto(hostUrl(b4.port));
+  await waitLive(p4);
+  d = await settled(p4, /missed 8 s/);
+  check(/missed 8 s/.test(d.title), 'before 18:00: the table\'s missed seconds show: ' + d.title);
+  await p4.waitForFunction(() => { const D = window.liveMount.data(); return D.delta && D.delta.session && D.delta.sessions.length > 1; }, null, { timeout: 60000 });
+  await p4.waitForTimeout(300);
+  d = await deltaNow(p4);
+  check(!/missed/.test(d.title), 'after 18:00 the new session counts live, without the session before\'s missed seconds: ' + d.title);
+  await ctx4.close(); b4.kill();
 
   // ------------------------------------------------------------ an older ChartBridge: as before
   const b3 = await startBridge(OFF, []);

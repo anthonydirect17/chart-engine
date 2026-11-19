@@ -1692,6 +1692,9 @@ namespace NinjaTrader.NinjaScript.AddOns
         public long Trades, Volume, BuyVol, SellVol, UnknownVol, LateTrades, Outside;
         // the file (SaveDeltas): seconds up to SavedThrough are written; a later trade for one of them is kept in Late until written
         public int SavedThrough = -1; public bool FileStarted; public double MissedUnsaved;
+        // R12 S1: the seconds a save pass has taken and is writing (SavedThrough once written): a trade for one of them meanwhile is
+        // late too, so it is written by the next pass
+        public int PendingThrough = -1;
         public readonly List<int[]> Late = new List<int[]>(); public long LateLost;
         public bool Restored; public double RestoredMissed;
 
@@ -1707,7 +1710,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             int i = (int)sec;
             Put(i, side == 1 ? (int)volume : 0, side == -1 ? (int)volume : 0, side != 1 && side != -1 ? (int)volume : 0, (int)volume);
             Trades++;
-            if (i <= SavedThrough) { LateTrades++; if (Late.Count < LateMax) Late.Add(new[] { i, side == 1 ? (int)volume : 0, side == -1 ? (int)volume : 0, side != 1 && side != -1 ? (int)volume : 0, (int)volume }); else LateLost++; }
+            if (i <= Math.Max(SavedThrough, PendingThrough)) { LateTrades++; if (Late.Count < LateMax) Late.Add(new[] { i, side == 1 ? (int)volume : 0, side == -1 ? (int)volume : 0, side != 1 && side != -1 ? (int)volume : 0, (int)volume }); else LateLost++; }
         }
         // Volumes into second i (a live trade, or a restored file's line); big: a trade's volume, or a saved second's largest trade (0
         // not known: kept as it is, a larger known one wins).
@@ -1727,6 +1730,19 @@ namespace NinjaTrader.NinjaScript.AddOns
             int b = i / Block, k = i % Block;
             if (i < 0 || i >= Seconds || B[b] == null) { buy = sell = unknown = big = 0; return; }
             buy = B[b][k]; sell = S[b][k]; unknown = U[b][k]; big = G[b][k];
+        }
+
+        // Under the book's lock (R12 N1): seconds from..to copied (Array.Copy a block at a time), formatted after with no lock held.
+        public void CopyRange(int from, int to, out int[] b, out int[] s, out int[] u, out int[] g)
+        {
+            int n = Math.Max(0, to - from + 1);
+            b = new int[n]; s = new int[n]; u = new int[n]; g = new int[n];
+            for (int i = 0; i < n;)
+            {
+                int sec = from + i, k = sec / Block, j = sec % Block, m = Math.Min(n - i, Block - j);
+                if (B[k] != null) { Array.Copy(B[k], j, b, i, m); Array.Copy(S[k], j, s, i, m); Array.Copy(U[k], j, u, i, m); Array.Copy(G[k], j, g, i, m); }
+                i += m;
+            }
         }
 
         // Under the book's lock: a copy of the seconds with trades (three ints a second, at most about 1 MB: well under a millisecond),
@@ -1758,11 +1774,14 @@ namespace NinjaTrader.NinjaScript.AddOns
             string[] lines = text.Split('\n');
             string[] h = lines[0].Trim().Split(' ');
             if (h.Length < 5 || h[0] != "deltatable" || h[1] != "1") return null;
+            // R12 S2: a last line with no newline was cut by a power cut or a crash (it may still look whole: "100 2 0 1" from
+            // "100 2 0 13 5"): left out; its seconds are after the last whole line, so they count as missed
+            int whole = text.EndsWith("\n", StringComparison.Ordinal) ? lines.Length : lines.Length - 1;
             double s0, cov;
             if (!double.TryParse(h[2], NumberStyles.Float, CultureInfo.InvariantCulture, out s0) || !double.TryParse(h[3], NumberStyles.Float, CultureInfo.InvariantCulture, out cov)) return null;
             if (Math.Abs(s0 - startEt) > 0.5) return null;
             DeltaTable d = new DeltaTable { StartEt = s0, CoveredFromEt = cov, Why = h[4] == "-" ? null : h[4], Restored = true };
-            for (int i = 1; i < lines.Length; i++)
+            for (int i = 1; i < whole; i++)
             {
                 string[] f = lines[i].Trim().Split(' ');
                 if (f.Length == 2 && f[0] == "m") { double m; if (double.TryParse(f[1], NumberStyles.Float, CultureInfo.InvariantCulture, out m) && m > 0) d.Missed += m; continue; }
@@ -1786,6 +1805,19 @@ namespace NinjaTrader.NinjaScript.AddOns
         public double Join(DeltaTable saved)
         {
             double runFrom = CoveredFromEt;
+            // R12 B1: the saved seconds are in the file already: they are never written again (each restart used to append them once
+            // more, and Parse adds lines up). This run's own seconds at or below the saved last second (a clock overlap) are not in
+            // the file: they go to Late, so they are written.
+            if (saved.Hi >= 0)
+            {
+                for (int i = Hi >= 0 ? Lo : 0; i <= Math.Min(Hi, saved.Hi); i++)
+                {
+                    int b, s, u, g; Get(i, out b, out s, out u, out g);
+                    if (b + s + u == 0) continue;
+                    if (Late.Count < LateMax) Late.Add(new[] { i, b, s, u, g }); else LateLost++;
+                }
+                SavedThrough = Math.Max(SavedThrough, saved.Hi);
+            }
             for (int i = saved.Hi >= 0 ? saved.Lo : 0; i <= saved.Hi; i++) { int b, s, u, g; saved.Get(i, out b, out s, out u, out g); if (b + s + u > 0) Put(i, b, s, u, g); }
             double savedEnd = saved.Hi >= 0 ? StartEt + saved.Hi + 1 : saved.CoveredFromEt;
             double gap = runFrom > savedEnd ? ChartBridgeServer.OpenSeconds(savedEnd, runFrom) : 0;
@@ -1804,13 +1836,14 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         // The message: rows [dt, buy, sell, big, ...] for each second with buy or sell volume, unknown [dt, volume, big, ...] for each
         // second with unknown volume, dt the seconds since the row before (the first since `from`), big the second's largest single
-        // trade, any side (0: not known, a second read back from an older file), the same in both lists; "big": true says the rows
-        // carry it. A full session of NQ is well under a MB.
+        // trade, any side (0: not known, a second read back from an older file; -1: it is one of the held trades the page gets
+        // after the table, R12 N5), the same in both lists; "big": true says the rows carry it. A full session of NQ is well under a MB.
         // `less`: the held trades released after it (the page counts them as live ticks), taken off their seconds.
         public string Json(string root, string sub, List<SeamTick> less)
         {
             int n = Buy != null ? Buy.Length : 0;
             int[] b = (int[])(Buy ?? new int[0]).Clone(), s = (int[])(Sell ?? new int[0]).Clone(), u = (int[])(Unknown ?? new int[0]).Clone(), g = Big ?? new int[n];
+            Dictionary<long, int> lessBig = null;
             if (less != null)
                 foreach (SeamTick h in less)
                 {
@@ -1819,7 +1852,16 @@ namespace NinjaTrader.NinjaScript.AddOns
                     if (i < 0 || i >= n) continue;
                     int v = (int)Math.Min(int.MaxValue, h.Volume);
                     if (h.Side == 1) b[i] = Math.Max(0, b[i] - v); else if (h.Side == -1) s[i] = Math.Max(0, s[i] - v); else u[i] = Math.Max(0, u[i] - v);
+                    if (lessBig == null) lessBig = new Dictionary<long, int>();
+                    int was; lessBig.TryGetValue(i, out was); if (v > was) lessBig[i] = v;
                 }
+            // R12 N5: a second whose largest trade is one the page gets after the table (a held trade) sends -1: the second's largest
+            // comes in a live trade of that same second; the largest of the table's own part of it is not known
+            if (lessBig != null)
+            {
+                g = (int[])g.Clone();
+                foreach (KeyValuePair<long, int> kv in lessBig) if (g[kv.Key] > 0 && kv.Value >= g[kv.Key]) g[kv.Key] = -1;
+            }
             StringBuilder o = new StringBuilder(64 + n * 10);
             o.Append("{\"type\":\"deltaTable\",\"root\":").Append(CbJson.Str(root));
             if (sub != null) o.Append(",\"sub\":").Append(sub);
@@ -2017,6 +2059,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         public int SubscribeSeq;                // bumped under the Pending lock on every subscribe: a load for an older one is dropped
         public volatile bool WantsProfile;      // 0.3.5: the page's subscribe asked for "profile" messages (set under the Pending lock)
         public volatile bool WantsDelta;        // 0.6.25: the page's subscribe asked for the delta table ("deltaTable"; set under the Pending lock)
+        public readonly object PushSync = new object();   // R12 N2: one push (profile or delta table) to this page at a time, so neither skips the page the other just held
         public readonly Dictionary<string, ChartBridgeServer.HtfWatch> Htf = new Dictionary<string, ChartBridgeServer.HtfWatch>();   // 0.3.7: higher-timeframe series this page asked for (lock it)
         public bool WeekBusy;   // 0.3.7: one weekProfile answer in progress per page (under the Htf lock)
         public readonly List<string[]> WeekQueue = new List<string[]>();   // requests meanwhile, folded per root: {root, latest id}, in order (Htf lock)
@@ -4843,24 +4886,28 @@ namespace NinjaTrader.NinjaScript.AddOns
             foreach (ChartBridgeClient c in Clients.Values)
             {
                 if (c.Root != book.Root || !c.WantsProfile) continue;
-                int seq; ProfileSnap snap;
-                lock (book.Sync)
-                lock (c.Pending)
-                {
-                    if (!c.Ready || c.Root != book.Root || !c.WantsProfile) continue;   // still loading: its "ready" brings a fresh one
-                    c.Ready = false; c.Pending.Clear(); seq = Volatile.Read(ref c.SubscribeSeq);
-                    snap = book.Snap();
-                }
-                string json = snap.Json(null, null);
-                lock (c.Pending)
-                {
-                    if (Volatile.Read(ref c.SubscribeSeq) != seq) continue;   // it subscribed again: that load owns it now
-                    List<string> burst = new List<string>(c.Pending.Count + 1) { json };
-                    foreach (SeamTick h in c.Pending) burst.Add(h.Json);
-                    c.SendAll(burst);
-                    c.Pending.Clear();
-                    c.Ready = true;
-                }
+                lock (c.PushSync) PushProfileTo(book, c);
+            }
+        }
+        private static void PushProfileTo(RootBook book, ChartBridgeClient c)
+        {
+            int seq; ProfileSnap snap;
+            lock (book.Sync)
+            lock (c.Pending)
+            {
+                if (!c.Ready || c.Root != book.Root || !c.WantsProfile) return;   // still loading: its "ready" brings a fresh one
+                c.Ready = false; c.Pending.Clear(); seq = Volatile.Read(ref c.SubscribeSeq);
+                snap = book.Snap();
+            }
+            string json = snap.Json(null, null);
+            lock (c.Pending)
+            {
+                if (Volatile.Read(ref c.SubscribeSeq) != seq) return;   // it subscribed again: that load owns it now
+                List<string> burst = new List<string>(c.Pending.Count + 1) { json };
+                foreach (SeamTick h in c.Pending) burst.Add(h.Json);
+                c.SendAll(burst);
+                c.Pending.Clear();
+                c.Ready = true;
             }
         }
 
@@ -4871,24 +4918,28 @@ namespace NinjaTrader.NinjaScript.AddOns
             foreach (ChartBridgeClient c in Clients.Values)
             {
                 if (c.Root != book.Root || !c.WantsDelta) continue;
-                int seq; DeltaSnap snap;
-                lock (book.Sync)
-                lock (c.Pending)
-                {
-                    if (!c.Ready || c.Root != book.Root || !c.WantsDelta || book.Delta == null) continue;   // still loading: its "ready" brings a fresh one
-                    c.Ready = false; c.Pending.Clear(); seq = Volatile.Read(ref c.SubscribeSeq);
-                    snap = book.Delta.Snap();
-                }
-                string json = snap.Json(book.Root, null, null);
-                lock (c.Pending)
-                {
-                    if (Volatile.Read(ref c.SubscribeSeq) != seq) continue;   // it subscribed again: that load owns it now
-                    List<string> burst = new List<string>(c.Pending.Count + 1) { json };
-                    foreach (SeamTick h in c.Pending) burst.Add(h.Json);
-                    c.SendAll(burst);
-                    c.Pending.Clear();
-                    c.Ready = true;
-                }
+                lock (c.PushSync) PushDeltaTo(book, c);   // R12 N2: never beside a profile push to the same page
+            }
+        }
+        private static void PushDeltaTo(RootBook book, ChartBridgeClient c)
+        {
+            int seq; DeltaSnap snap;
+            lock (book.Sync)
+            lock (c.Pending)
+            {
+                if (!c.Ready || c.Root != book.Root || !c.WantsDelta || book.Delta == null) return;   // still loading: its "ready" brings a fresh one
+                c.Ready = false; c.Pending.Clear(); seq = Volatile.Read(ref c.SubscribeSeq);
+                snap = book.Delta.Snap();
+            }
+            string json = snap.Json(book.Root, null, null);
+            lock (c.Pending)
+            {
+                if (Volatile.Read(ref c.SubscribeSeq) != seq) return;   // it subscribed again: that load owns it now
+                List<string> burst = new List<string>(c.Pending.Count + 1) { json };
+                foreach (SeamTick h in c.Pending) burst.Add(h.Json);
+                c.SendAll(burst);
+                c.Pending.Clear();
+                c.Ready = true;
             }
         }
 
@@ -4915,6 +4966,30 @@ namespace NinjaTrader.NinjaScript.AddOns
         public const int DeltaFileDays = 14;
         public static string DeltaFile(string root, double startEt) { return Path.Combine(ChartBridgeConfig.Folder, "delta-" + root + "-" + DeltaTable.TradingDate(startEt).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) + ".txt"); }
         private static int deltaSaving; private static long deltaSaves, deltaSaveErrors; private static string deltaSaveError;
+        public static Action DeltaSaveHookForHarness;   // null in NinjaTrader: the harness's trade in the middle of a save pass
+        // R12 S2: a file whose last line has no newline (a crash or a power cut in the middle of an append) is cut back to its last
+        // whole line before the next append, so the cut line is never read as a whole one ("100 2 0 1" from "100 2 0 13 5"). Reads
+        // back from the end a block at a time; a file with no newline at all is left as it is (its header is cut: Parse refuses it).
+        public static void CutToLastLine(string f)
+        {
+            if (!File.Exists(f)) return;
+            using (FileStream fs = new FileStream(f, FileMode.Open, FileAccess.ReadWrite, FileShare.Read))
+            {
+                long len = fs.Length;
+                if (len == 0) return;
+                fs.Seek(-1, SeekOrigin.End);
+                if (fs.ReadByte() == '\n') return;
+                byte[] buf = new byte[4096];
+                for (long end = len; end > 0;)
+                {
+                    int n = (int)Math.Min(buf.Length, end);
+                    fs.Seek(end - n, SeekOrigin.Begin);
+                    int got = 0; while (got < n) { int r = fs.Read(buf, got, n - got); if (r <= 0) break; got += r; }
+                    for (int k = got - 1; k >= 0; k--) if (buf[k] == '\n') { fs.SetLength(end - n + k + 1); fs.Flush(true); return; }
+                    end -= n;
+                }
+            }
+        }
 
         // At a book's start (off the thread that made it): the current session's saved table, joined to the live one (or kept until the
         // session's first trade); then the pages are told. No file is written before this read is done.
@@ -4925,20 +5000,31 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 if (DeltaFiles)
                 {
-                    DateTime ss, se; SessionClock.Bounds(NowNt(), out ss, out se);
+                    // R12 N4: the session holding now; on a day with no session (a weekend from Friday 18:00, a CME holiday) the last
+                    // session that had one, so a start then reads the finished session the charts show
+                    DateTime now = NowNt(), ss, se; SessionClock.Bounds(now, out ss, out se);
+                    for (int k = 0; k < 6 && !ChartBridgeCme.SessionDay(DeltaTable.TradingDate(ChartBridgeTime.EtSeconds(ChartBridgeTime.ToUtc(ss)))); k++)
+                        SessionClock.Bounds(ss.AddHours(-12), out ss, out se);
                     double startEt = ChartBridgeTime.EtSeconds(ChartBridgeTime.ToUtc(ss));
                     string f = DeltaFile(book.Root, startEt);
                     if (File.Exists(f)) saved = DeltaTable.Parse(File.ReadAllText(f), startEt);
-                    if (saved != null) Log(book.Root + ": this session's delta table read back from " + Path.GetFileName(f) + " (" + (saved.Hi >= 0 ? saved.Hi - saved.Lo + 1 : 0) + " seconds)");
+                    if (saved != null) { saved.Start = ss; saved.End = se; Log(book.Root + ": this session's delta table read back from " + Path.GetFileName(f) + " (" + (saved.Hi >= 0 ? saved.Hi - saved.Lo + 1 : 0) + " seconds)"); }
                 }
             }
             catch (Exception ex) { Log(book.Root + ": the delta table's file not read: " + ex.Message); }
-            bool push = false;
+            bool push = false, closed = saved != null && MarketClosedNow();
             lock (book.Sync)
             {
                 if (saved != null)
                 {
                     if (book.Delta != null && Math.Abs(book.Delta.StartEt - saved.StartEt) < 0.5 && !book.Delta.Restored) { book.Delta.Join(saved); push = true; }
+                    else if (book.Delta == null && closed)
+                    {
+                        // R12 N4: the market is closed (the break, a weekend, a holiday): the finished session's table is the instrument's
+                        // table until the next session's first trade (every second of it is in the file already: nothing more is written)
+                        saved.FileStarted = true; saved.SavedThrough = saved.Hi; saved.PendingThrough = saved.Hi;
+                        book.Delta = saved; push = true;
+                    }
                     else if (book.Delta == null) book.DeltaPending = saved;
                 }
                 book.DeltaReadDone = true;
@@ -4964,25 +5050,30 @@ namespace NinjaTrader.NinjaScript.AddOns
                     {
                         bool done = !ReferenceEquals(d, cur);   // a finished session's table: written to its last second
                         StringBuilder text = new StringBuilder();
-                        int upTo, lateTaken; double missed; bool header;
-                        lock (book.Sync)
+                        int upTo, from, lateTaken; double missed; bool header; int[] cb, cs, cu, cg; List<int[]> late;
+                        lock (book.Sync)   // R12 N1: only copies under the lock; the text is made after it
                         {
                             upTo = done ? d.Hi : d.Hi - 1;   // the second still forming waits for the next pass
+                            from = Math.Max(d.SavedThrough + 1, d.Hi >= 0 ? d.Lo : 0);
+                            if (upTo > d.SavedThrough) d.PendingThrough = upTo;   // R12 S1: a trade for one of these meanwhile goes to Late
                             header = !d.FileStarted;
-                            if (header) text.Append(d.Header());
-                            for (int i = Math.Max(d.SavedThrough + 1, d.Hi >= 0 ? d.Lo : 0); i <= upTo; i++)
-                            {
-                                int b, sl, u, g; d.Get(i, out b, out sl, out u, out g);
-                                if (b + sl + u == 0) continue;
-                                text.Append(i.ToString(CultureInfo.InvariantCulture)).Append(' ').Append(b.ToString(CultureInfo.InvariantCulture)).Append(' ')
-                                    .Append(sl.ToString(CultureInfo.InvariantCulture)).Append(' ').Append(u.ToString(CultureInfo.InvariantCulture)).Append(' ').Append(g.ToString(CultureInfo.InvariantCulture)).Append('\n');
-                            }
+                            d.CopyRange(from, upTo, out cb, out cs, out cu, out cg);
                             lateTaken = d.Late.Count;
-                            foreach (int[] x in d.Late) text.Append(x[0].ToString(CultureInfo.InvariantCulture)).Append(' ').Append(x[1].ToString(CultureInfo.InvariantCulture)).Append(' ')
-                                .Append(x[2].ToString(CultureInfo.InvariantCulture)).Append(' ').Append(x[3].ToString(CultureInfo.InvariantCulture)).Append(' ').Append(x[4].ToString(CultureInfo.InvariantCulture)).Append('\n');
+                            late = new List<int[]>(d.Late);
                             missed = d.MissedUnsaved;
-                            if (missed > 0) text.Append("m ").Append(CbJson.Num3(missed)).Append('\n');
                         }
+                        if (header) text.Append(d.Header());
+                        for (int k = 0; k < cb.Length; k++)
+                        {
+                            if (cb[k] + cs[k] + cu[k] == 0) continue;
+                            text.Append((from + k).ToString(CultureInfo.InvariantCulture)).Append(' ').Append(cb[k].ToString(CultureInfo.InvariantCulture)).Append(' ')
+                                .Append(cs[k].ToString(CultureInfo.InvariantCulture)).Append(' ').Append(cu[k].ToString(CultureInfo.InvariantCulture)).Append(' ').Append(cg[k].ToString(CultureInfo.InvariantCulture)).Append('\n');
+                        }
+                        foreach (int[] x in late) text.Append(x[0].ToString(CultureInfo.InvariantCulture)).Append(' ').Append(x[1].ToString(CultureInfo.InvariantCulture)).Append(' ')
+                            .Append(x[2].ToString(CultureInfo.InvariantCulture)).Append(' ').Append(x[3].ToString(CultureInfo.InvariantCulture)).Append(' ').Append(x[4].ToString(CultureInfo.InvariantCulture)).Append('\n');
+                        if (missed > 0) text.Append("m ").Append(CbJson.Num3(missed)).Append('\n');
+                        Action hook = DeltaSaveHookForHarness;
+                        if (hook != null) hook();   // the harness: a trade arriving while the pass writes
                         string f = DeltaFile(book.Root, d.StartEt);
                         if (text.Length > 0)
                         {
@@ -4990,15 +5081,30 @@ namespace NinjaTrader.NinjaScript.AddOns
                             {
                                 Directory.CreateDirectory(Path.GetDirectoryName(f));
                                 if (header && File.Exists(f) && new FileInfo(f).Length > 0) text.Remove(0, d.Header().Length);   // an earlier run's file not read back (a read error): appended to, its header kept
+                                CutToLastLine(f);   // R12 S2: a line cut by a crash is taken off first (else it would read as whole once ours follow it)
                                 ChartBridgeFiles.Append(f, text.ToString());
                                 Interlocked.Increment(ref deltaSaves);
                             }
-                            catch (Exception ex) { Interlocked.Increment(ref deltaSaveErrors); deltaSaveError = ex.Message; CbLogLimit.Error("delta table not saved", ex); continue; }
+                            catch (Exception ex)
+                            {
+                                Interlocked.Increment(ref deltaSaveErrors); deltaSaveError = ex.Message; CbLogLimit.Error("delta table not saved", ex);
+                                // R12 S1: nothing of this pass is written: the seconds are taken again next pass, and a late trade of one of
+                                // them meanwhile is in them already (it went to Late only because they were being written)
+                                lock (book.Sync)
+                                {
+                                    d.PendingThrough = d.SavedThrough;
+                                    List<int[]> keep = new List<int[]>(d.Late.Count);
+                                    for (int k = 0; k < d.Late.Count; k++) if (k < lateTaken || d.Late[k][0] <= d.SavedThrough) keep.Add(d.Late[k]);
+                                    d.Late.Clear(); d.Late.AddRange(keep);
+                                }
+                                continue;
+                            }
                         }
                         lock (book.Sync)
                         {
                             d.FileStarted = true;
                             if (upTo > d.SavedThrough) d.SavedThrough = upTo;
+                            d.PendingThrough = d.SavedThrough;
                             d.Late.RemoveRange(0, Math.Min(lateTaken, d.Late.Count));
                             d.MissedUnsaved -= missed;
                             if (done) book.DeltaDone.Remove(d);
