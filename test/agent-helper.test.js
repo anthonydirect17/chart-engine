@@ -361,20 +361,30 @@ test('the R12 delta of plan step 3.2, X4: the traders being turned off are share
   const A = AH.createTurnShare({ storage: () => ls, channel: chan, now, token: 'wa' }), B = AH.createTurnShare({ storage: () => ls, channel: chan, now, token: 'wb' });
   assert.deepEqual([A.list(), B.list()], [[], []]);
   A.set(['legion1']);
-  assert.deepEqual([A.list(), B.list()], [['legion1'], ['legion1']], 'window B sees what window A is turning off');
+  assert.deepEqual([A.list(), B.list()], [['legion1'], ['legion1']], 'window B sees what window A is turning off (its channel at once)');
+  const Bs = AH.createTurnShare({ storage: () => ls, now, token: 'ws' });   // a window with storage only, no channel
+  assert.deepEqual(Bs.list(), ['legion1'], 'and storage alone says it too');
   assert.ok([...ls.m.keys()].every(k => k.startsWith(AH.TURN_KEY)), 'its own key: ' + [...ls.m.keys()]);
   B.set(['legion1', 'legion2']);
   A.set([]);
   assert.deepEqual([A.list().sort(), B.list().sort()], [['legion1', 'legion2'], ['legion1', 'legion2']], 'A ends its job: B\'s own entry for legion1 stays');
   B.set([]);
   assert.deepEqual([A.list(), B.list()], [[], []], 'both ended');
+  t += AH.TURN_SCAN_MS;
+  assert.deepEqual(Bs.list(), [], 'storage alone: gone at its next read (at most TURN_SCAN_MS later)');
   /* a window closed mid-wait: its entry goes TURN_TTL_MS after its last write, and is cleaned away */
   A.set(['legion1']);
   t += AH.TURN_TTL_MS - 1;
   assert.deepEqual(B.list(), ['legion1']);
   t += 2;
   assert.deepEqual(B.list(), [], 'not written again in time: gone');
+  t += AH.TURN_SCAN_MS; B.list();
   assert.equal(ls.m.size, 0, 'and its entry removed');
+  /* storage is read at most once each TURN_SCAN_MS, however often a page asks */
+  let reads = 0; const counted = { get length() { reads++; return 0; }, key: () => null, getItem: () => null, setItem() {}, removeItem() {} };
+  const R = AH.createTurnShare({ storage: () => counted, now, token: 'wr' });
+  for (let i = 0; i < 50; i++) R.list();
+  assert.equal(reads, 1); t += AH.TURN_SCAN_MS; R.list(); assert.equal(reads, 2);
   /* storage that cannot be used: no throw; this window's own, and what the channel said */
   const bad = { get length() { throw new Error('denied'); }, key() { throw new Error('denied'); }, getItem() { throw new Error('denied'); }, setItem() { throw new Error('denied'); }, removeItem() { throw new Error('denied'); } };
   const chan2 = bus();
@@ -387,6 +397,7 @@ test('the R12 delta of plan step 3.2, X4: the traders being turned off are share
   assert.deepEqual(AH.createTurnShare().list(), [], 'nothing given: an empty list, no throw');
   /* odd entries are never read as a trader */
   ls.setItem(AH.TURN_KEY + 'wx:Not-An-Id', JSON.stringify({ until: t + 5000 })); ls.setItem(AH.TURN_KEY + 'wx:legion9', 'not json');
+  t += AH.TURN_SCAN_MS;
   assert.deepEqual(B.list(), []);
   /* a channel word for a past time takes the trader off */
   const F2 = AH.createTurnShare({ storage: () => null, channel: chan2, now, token: 'wf' });

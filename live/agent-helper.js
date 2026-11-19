@@ -363,6 +363,7 @@ function flatOffStep(job, a, now) {
    nothing throws. */
 const TURN_KEY = 'live-agent-turning-v1:';
 const TURN_TTL_MS = 10000;
+const TURN_SCAN_MS = 1000;
 const TURN_ID = /^[a-z][a-z0-9]{0,11}$/;
 /**
  * env { storage: () => localStorage or null, channel: () => a BroadcastChannel or null, now, token }. -> { set(ids): this window's
@@ -392,20 +393,29 @@ function createTurnShare(env) {
     for (const id of mine) if (!want.has(id)) { try { if (s) s.removeItem(TURN_KEY + token + ':' + id); } catch (x) { /* blocked */ } say(id, 0); }
     mine.clear(); for (const id of want) mine.add(id);
   }
-  function list() {
-    const t = now(), out = new Set(mine), old = [];
-    for (const [k, until] of heard) { if (until > t) out.add(k.slice(k.indexOf(':') + 1)); else heard.delete(k); }
-    const s = store();
+  /* the browser entries are read at most once each TURN_SCAN_MS (a page asks at every draw, and reading every key of the origin's
+     storage each time slowed the page): the channel carries a new entry at once meanwhile, and each entry carries its own time */
+  let scanAt = -Infinity, scanned = [];
+  function scan(t) {
+    if (t - scanAt < TURN_SCAN_MS && t >= scanAt) return scanned;
+    scanAt = t; scanned = [];
+    const s = store(), old = [];
     try {
       if (s) for (let i = 0; i < s.length; i++) {
         const k = s.key(i);
         if (typeof k !== 'string' || k.indexOf(TURN_KEY) !== 0) continue;
         const id = k.slice(k.lastIndexOf(':') + 1);
         let v = null; try { v = JSON.parse(s.getItem(k)); } catch (x) { v = null; }
-        if (TURN_ID.test(id) && v && isNum(v.until) && v.until > t) out.add(id); else old.push(k);
+        if (TURN_ID.test(id) && v && isNum(v.until) && v.until > t) scanned.push({ id, until: v.until }); else old.push(k);
       }
       for (const k of old) s.removeItem(k);             // a closed window's entries, once they are past their time
     } catch (x) { /* storage cannot be read: this window's own and what the channel said */ }
+    return scanned;
+  }
+  function list() {
+    const t = now(), out = new Set(mine);
+    for (const [k, until] of heard) { if (until > t) out.add(k.slice(k.indexOf(':') + 1)); else heard.delete(k); }
+    for (const e of scan(t)) if (e.until > t) out.add(e.id);
     return [...out];
   }
   return { set, list, token };
@@ -541,5 +551,5 @@ function createClient(env) {
   };
 }
 
-return { VERSION, PORT, BASE, POLL_MS, TIMEOUT_MS, MISS_GRACE_MS, pollStep, SLOW_TEXT, FLAT_WAIT_MS, SHADOW_WAIT_MS, HAND_WAIT_MS, handLine, ASSIGN_WAIT_MS, slotFree, startBegin, startStep, onGate, TIERS, TYPE_NAME, tierOf, tierChip, tierFit, proving, PROVING_OF, heroOptions, preselect, freeSlot, assignStart, assignStep, usd, spendText, stateText, pickerRows, pickerNote, nonHero, modeBlock, accountBlock, offStep, offQuestion, flat, flatOffStart, flatOffStep, FO_SENT, FO_WAIT, modeWord, TURN_KEY, TURN_TTL_MS, createTurnShare, seatsHeld, seatsUnclear, jobWhere, names, settingsBody, createClient };
+return { VERSION, PORT, BASE, POLL_MS, TIMEOUT_MS, MISS_GRACE_MS, pollStep, SLOW_TEXT, FLAT_WAIT_MS, SHADOW_WAIT_MS, HAND_WAIT_MS, handLine, ASSIGN_WAIT_MS, slotFree, startBegin, startStep, onGate, TIERS, TYPE_NAME, tierOf, tierChip, tierFit, proving, PROVING_OF, heroOptions, preselect, freeSlot, assignStart, assignStep, usd, spendText, stateText, pickerRows, pickerNote, nonHero, modeBlock, accountBlock, offStep, offQuestion, flat, flatOffStart, flatOffStep, FO_SENT, FO_WAIT, modeWord, TURN_KEY, TURN_TTL_MS, TURN_SCAN_MS, createTurnShare, seatsHeld, seatsUnclear, jobWhere, names, settingsBody, createClient };
 });
