@@ -252,7 +252,9 @@ reads "not enough data yet". New files: `live/legion-castra-core.js`, `legion-ca
   can be covered by Legion's floating alert lines, and the lines are never hidden (Stop all's answer and ChartBridge's
   errors stay in view): Kill all's and Armed's rows and their question stack above the lines, and the lines take the
   lowest band of the window clear of those rows and of every question open on the page, scrolling inside it; at 360 px
-  and narrower Kill all, Yes and Cancel keep one row (`CHART_STYLE.md`).
+  and narrower Kill all, Yes and Cancel keep one row (`CHART_STYLE.md`). The lines also keep clear of the trader desk's
+  and Praetorian's Kill switch, Off and "Flatten and turn off" wherever they are in view, so a phone with many lines up
+  never covers a stop.
 - **The Ludus** (plan step 3.4): Pipeline (stations I to VII from the loop's board), Board (the line of 30 and every build,
   best first, each leading with profit per $1, pass rate, days to pass and payout per funded account beside its sample,
   each half of the line with its own; with no board the builds come from The Desk's ledger and the page says why),

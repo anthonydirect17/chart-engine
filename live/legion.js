@@ -271,6 +271,8 @@ function floatFit() {
   if (S.tab === 'cohorts' && S.sub === 'legion') { clear(document.querySelector('#flView .fl-head')); clear(document.querySelector('#flView .fl-armrow')); }
   const main = document.querySelector('.lx-main');
   if (main) for (const q of main.querySelectorAll('[role="alertdialog"]')) if (!q.closest('[hidden]')) clear(q);
+  /* Praetorian's and the trader desk's stops (live/agent.js): the Kill switch, Off and "Flatten and turn off", wherever they are in view */
+  if (main) for (const b of main.querySelectorAll('.ag-kill[data-act="kill"], [data-onoff="off"], [data-act="hFlatOff"]')) if (!b.closest('[hidden]')) clear(b);
   let v = '';
   if (keep.length) {
     keep.sort((a, b) => a[0] - b[0]);

@@ -291,6 +291,55 @@ try {
       check(pr.pe.length === 0, tag + ': no page error: ' + pr.pe.join(' | '));
       await pr.ctx.close();
     }
+
+    /* the stops on a phone with many long lines up (the release review's follow-up): the floating lines keep clear of the Kill switch
+       and of Off (the way to "Flatten and turn him off"), on the trader desk in Cohorts' Traders fold (ChartBridge's alert lines float
+       there) and on Praetorian (its desk keeps ChartBridge's lines in its own tray; Stop all's answer floats), each stop scrolled to
+       the window's foot, where the lines sit: reached at 15 of 15 points */
+    const stopsAt = async (page, side) => {
+      const res = {};
+      for (const [name, sel] of [['kill', side + ' [data-act="kill"]'], ['off', side + ' [data-onoff="off"]']]) {
+        const shown = await page.evaluate(q => { const b = document.querySelector(q); return !!b && !b.closest('[hidden]') && b.getClientRects().length > 0; }, sel);
+        if (!shown) { res[name] = 'not shown'; continue; }
+        await page.evaluate(q => document.querySelector(q).scrollIntoView({ block: 'end' }), sel);
+        await sleep(500);
+        const where = await page.evaluate(q => Math.round(innerHeight - document.querySelector(q).getBoundingClientRect().bottom), sel);
+        res[name] = await reach(page, sel);
+        res[name + 'Foot'] = where;
+      }
+      res.float = await page.evaluate(() => { const r = document.getElementById('lxFloat').getBoundingClientRect(); return [Math.round(r.top), Math.round(r.bottom)]; });
+      return res;
+    };
+    const longLines = async () => { for (let i = 0; i < 6; i++) await status(i % 2 ? 'warn' : 'error', 'Sample: made-up line ' + (i + 1) + ' from ChartBridge, long enough to wrap on a phone: NOT FLAT? check the accounts, the traders and the groups first', PB); };
+    for (const vp of [{ width: 390, height: 844 }, { width: 320, height: 568 }]) {
+      const tag = vp.width + 'x' + vp.height;
+      /* the trader desk, in Cohorts' Traders fold */
+      const td = await open(vp, '?tab=cohorts', null, PB);
+      await until(td.page, () => !!document.querySelector('[data-do="desk"]'));
+      await sleep(800);
+      await td.page.click('[data-do="desk"]');
+      await until(td.page, () => { const b = document.querySelector('#flDesk [data-act="kill"]'); return !!b && b.getClientRects().length > 0; }, null, 15000);
+      await longLines();
+      await until(td.page, () => !document.getElementById('wsAlert').hidden);
+      await sleep(400);
+      const t = await stopsAt(td.page, '#flDesk');
+      check(await td.page.isVisible('#wsAlert') && t.kill === 15 && t.off === 15, 'stops ' + tag + ', the trader desk: with six long alert lines up, its Kill switch and Off (Flatten and turn him off) are reached at 15 of 15 points at the window\'s foot: ' + JSON.stringify(t));
+      await td.page.screenshot({ path: path.join(SHOTS, 'trader-desk-stops-lines-' + tag + '.png') });
+      check(td.pe.length === 0, 'stops ' + tag + ', the trader desk: no page error: ' + td.pe.join(' | '));
+      await td.ctx.close();
+      /* Praetorian: Stop all's answer floats over the foot, with ChartBridge's lines in the desk's tray */
+      const pr = await open(vp, '?tab=cohorts&sub=praetorian', null, PB);
+      await until(pr.page, () => window.LegionTabs.state().praetorian && window.LegionTabs.state().praetorian.shown);
+      await sleep(1500);
+      await longLines();
+      await until(pr.page, () => !document.getElementById('wsAlert').hidden);
+      await stopAnswer(pr.page);
+      const r = await stopsAt(pr.page, '#agView');
+      check(r.kill === 15 && r.off === 15, 'stops ' + tag + ', Praetorian: with Stop all\'s answer and six long alert lines up, its Kill switch and Off are reached at 15 of 15 points at the window\'s foot: ' + JSON.stringify(r));
+      await pr.page.screenshot({ path: path.join(SHOTS, 'praetorian-stops-lines-' + tag + '.png') });
+      check(pr.pe.length === 0, 'stops ' + tag + ', Praetorian: no page error: ' + pr.pe.join(' | '));
+      await pr.ctx.close();
+    }
     } finally { pb.kill(); }
 
     /* a question at the very foot of the window (a made-up one stands in, the way a LIVE question can sit under the lanes): the lines

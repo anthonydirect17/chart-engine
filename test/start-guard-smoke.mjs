@@ -116,7 +116,7 @@ try {
     await page.waitForSelector('.cb-pin-key', { timeout: 15000 }); await enterPin(page, TEST_PIN);
     await page.waitForFunction(() => document.getElementById('lxConn').dataset.state === 'on', null, { timeout: 30000 });
     const st = await page.evaluate(() => window.LegionApp.state());
-    check(JSON.stringify(st.failed) === JSON.stringify(['the cohorts', 'the Colosseum']) && st.mounted.join() === 'praetorian', 'Legion names the two that did not start; Praetorian still mounted: ' + JSON.stringify(st));
+    check(JSON.stringify(st.failed) === JSON.stringify(['the cohorts', 'the Colosseum']) && st.mounted.join() === 'praetorian,castra,cohortModel,ludus', 'Legion names the two that did not start; Praetorian, Castra, the cohort model and the Ludus (plan steps 3.3 and 3.4, each in its own guard) still mounted: ' + JSON.stringify(st));
     check(/the cohorts, the Colosseum did not start: Stop all automation and the other tabs work/.test(await page.textContent('#lxFailed')), 'and says so on the page');
     await page.click('#lxStop');
     check((await page.evaluate(() => window.LegionApp.state())).asking, 'Stop all automation still asks');
