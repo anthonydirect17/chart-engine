@@ -96,7 +96,11 @@ from the chart's opening only, from the trades' sides as ChartBridge sends them,
 Cumulative delta (1.7.0): a pane under the chart with market buys minus market sells, on for `paneId` `'main'` and off
 for any other pane until added from its Indicators menu. The side of each trade comes from ChartBridge (every trade carries
 `s` since 0.3.4; chart 1.21.0 needs ChartBridge 0.5.2, so the note for 0.3.3 and older is gone). A relay must pass the `s` and `sm` fields of `tick` messages and the fourth and fifth places of each `ticks`
-trade through unchanged. The pane starts at about 20% of the chart's height; the line above it can be dragged (or
+trade through unchanged. With ChartBridge 0.6.25 (hello's `features` lists `deltaTable`) the chart asks for the session's delta
+table on every subscribe (`"deltaTable": true`) and counts from it, so every load shows the same count from 18:00 ET (or from
+ChartBridge's start, "since HH:MM ET (ChartBridge started)"): a relay that passes `features` must also pass the subscribe's
+`deltaTable` key and the `deltaTable` message (with or without `sub`), or leave `deltaTable` out of `features` (the chart then
+counts from its opening, as with an older ChartBridge). The delta API of a mounted chart is unchanged. The pane starts at about 20% of the chart's height; the line above it can be dragged (or
 focused with Tab and moved with the up and down arrow keys, Page Up, Page Down, Home and End), and its height is saved
 per pane (`live-pane-heights-v1`). The divider is an element inside the chart; nothing new listens on `document` or
 `window`.

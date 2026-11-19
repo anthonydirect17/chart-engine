@@ -231,7 +231,7 @@ public static class DataHarness
         WaitFor(() => ChartBridgeServer.SettlementsIdle);   // 0.4.0: the snapshot goes through the one settlement queue too
         Check(HelloOf("MNQ").EndsWith(SetOf("MNQ", "21456.25", "2026-09-28")) && HelloOf("NQ").EndsWith(SetOf("NQ", "null", "2026-09-28")) && HelloOf("ES").EndsWith(SetOf("ES", "null", "2026-09-28")),
             "settlement: hello on Tuesday has Monday's settlement for MNQ, with its date; NQ's snapshot is dated a Saturday (no session: no reliable date), so null, never a guess: " + HelloOf("MNQ") + " " + HelloOf("NQ"));
-        Check(Hello().Contains("\"features\":[\"liveFirst\",\"profile\",\"settlement\",\"htf\",\"weekProfile\",\"v3\",\"cutHalf\"]"), "hello: features list settlement, htf and weekProfile (0.4.0: and v3; release 1 (1.6c): and cutHalf, so a page knows Cut half is there)");
+        Check(Hello().Contains("\"features\":[\"liveFirst\",\"profile\",\"settlement\",\"htf\",\"weekProfile\",\"v3\",\"cutHalf\",\"deltaTable\"]"), "hello: features list settlement, htf and weekProfile (0.4.0: and v3; release 1 (1.6c): and cutHalf, so a page knows Cut half is there; the next build: and deltaTable, the delta table)");
         Check(Logged("NQ settlement 25010 (NinjaTrader's, snapshot) is dated 2026-09-26, a day with no Globex session"), "settlement: the undated one is said in the Output window");
         List<string> a = new List<string>(), b = new List<string>();
         ChartBridgeClient pa = Page(5101, a), pb = Page(5102, b);

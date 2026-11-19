@@ -1,4 +1,4 @@
-# ChartBridge protocol (v1 market data and fills, v2 orders, v3 accounts, strategies, copier and bot, 0.5.0 agents, 0.5.1 accounts, 0.5.8 prop groups, 0.6.0 group trading, 0.6.1 a group's Type and default hero, 0.6.3 the audit fixes, 0.6.4 the no-trade-record alarm and Merge on an off follower, 0.6.8 the minute book, 0.6.10 the account lifecycle and the NQ tick file, 0.6.11 the bar trail and the narrower 1 second request, 0.6.12 the bar trail follow-ups, 0.6.13 the tick day's morning catch-up and the raw deleted once packed, 0.6.14 the tick day check's rule: short and holes, 0.6.15 the 1 second pull retired: the NQ tick file is the one source, 0.6.16 prop accounts: one Auto restore after a restart (Auto ends at 17:00 ET since 0.6.18), 0.6.17 Kill all for the prop accounts, 0.6.18 entry rules per trader: market entry and no target, 0.6.19 the day's profit stop: a dollar mark per account, 0.6.20 the roster served, 0.6.21 the pick and the day's profit side, 0.6.22 the lanes run themselves, the day's loss stop and the voice calls, 0.6.23 a hand move is the move)
+# ChartBridge protocol (v1 market data and fills, v2 orders, v3 accounts, strategies, copier and bot, 0.5.0 agents, 0.5.1 accounts, 0.5.8 prop groups, 0.6.0 group trading, 0.6.1 a group's Type and default hero, 0.6.3 the audit fixes, 0.6.4 the no-trade-record alarm and Merge on an off follower, 0.6.8 the minute book, 0.6.10 the account lifecycle and the NQ tick file, 0.6.11 the bar trail and the narrower 1 second request, 0.6.12 the bar trail follow-ups, 0.6.13 the tick day's morning catch-up and the raw deleted once packed, 0.6.14 the tick day check's rule: short and holes, 0.6.15 the 1 second pull retired: the NQ tick file is the one source, 0.6.16 prop accounts: one Auto restore after a restart (Auto ends at 17:00 ET since 0.6.18), 0.6.17 Kill all for the prop accounts, 0.6.18 entry rules per trader: market entry and no target, 0.6.19 the day's profit stop: a dollar mark per account, 0.6.20 the roster served, 0.6.21 the pick and the day's profit side, 0.6.22 the lanes run themselves, the day's loss stop and the voice calls, 0.6.23 a hand move is the move, the next build the delta table)
 
 ChartBridge is a NinjaTrader 8 add-on. It serves the live chart page at `http://localhost:8765/` and
 talks to it over one WebSocket at `ws://localhost:8765/ws`. Everything stays on the local machine.
@@ -199,10 +199,11 @@ Bars are stamped with their **start** time. NinjaTrader stamps bars at their clo
 
 | type | fields | when |
 |---|---|---|
-| `hello` | `version`, `now` (UTC ms), `instruments`: `[{root, name, tick, pointValue, settlement, settlementDate}]` (0.3.7: `settlement` the prior session's settlement for that contract, null when ChartBridge has no dated value for it; `settlementDate` the trading date it settles, `yyyy-MM-dd`), `accounts`: `[name]`, `trading` (0.3.0 and later: the `trading` object below, always with `enabled` false until the page signs in), `features` (0.3.5: `["liveFirst", "profile"]`, see Served window and session table; 0.3.7 adds `"settlement"`, `"htf"`, `"weekProfile"`), `pcClock` (0.5.6: this PC's clock against a time server, see Delay readout) | on connect |
+| `hello` | `version`, `now` (UTC ms), `instruments`: `[{root, name, tick, pointValue, settlement, settlementDate}]` (0.3.7: `settlement` the prior session's settlement for that contract, null when ChartBridge has no dated value for it; `settlementDate` the trading date it settles, `yyyy-MM-dd`), `accounts`: `[name]`, `trading` (0.3.0 and later: the `trading` object below, always with `enabled` false until the page signs in), `features` (0.3.5: `["liveFirst", "profile"]`, see Served window and session table; 0.3.7 adds `"settlement"`, `"htf"`, `"weekProfile"`; the next build after 0.6.24 adds `"deltaTable"`, see The delta table), `pcClock` (0.5.6: this PC's clock against a time server, see Delay readout) | on connect |
 | `history` | `root`, `name`, `barSeconds` (60), `sub` (0.3.3), `bars`: `[[t,o,h,l,c,v], ...]`, `done` (bool) | after `subscribe`, chunked. Since 0.3.3 the history is split: the chunks before the last minute (the last of them now says `done` false), then the last (forming) minute in its own message with `done` true, rebuilt from trades when it can be (see Backfill and live below) |
 | `ticks` | `root`, `sub` (0.3.3), `ticks`: `[[t,p,v], ...]`, since 0.3.4 `[[t,p,v,s,sm], ...]` (side and method, see Trade side; the first three keep their places); 0.3.7 sends `[t,p,v]` again; since 0.3.8 a trade with a known Time and Sales category is `[t,p,v,null,null,q]` (see Time and Sales category), `done` (bool) | after `history`, the current session's trades, chunked |
 | `ready` | `root`, `sub` (0.3.3), `filled` (0.6.8, minute and hour loads only: how many of the history's bars came from ChartBridge's minute book, 0 when none; see The minute book below), `minuteTimedOut`, `minuteFailed`, `standIn`, `tailTimedOut`, `historyFrom` (0.6.8, see The minute book) | history and tick backfill complete; live ticks follow (since 0.3.3 only those not already in the backfill; see Backfill and live below) |
+| `deltaTable` | `root`, `sub` (the load's; none when pushed after ChartBridge read the session's saved table back), `session`: `{from, coveredFrom, why, missed, rows: [dt, buy, sell, ...], unknown: [dt, volume, ...]}` or null (the delta table, see there) | after `profile` and right before `ready` when the subscribe asked for it (`deltaTable`); again, without `sub`, when a saved table of the session is joined after the load |
 | `profile` | `root`, `sub` (the load's; none when pushed after the session's backfill), `tick`, `bucketSeconds` (1800), `session` and `last`: `{from, whole, coveredFrom, rows: [[t, priceTicks, v], ...]}` or null (0.3.5, see Served window and session table) | right before `ready` when the subscribe asked for it; again, without `sub`, when the session's one backfill makes the table whole |
 | `tick` | `root`, `t`, `u`, `rx` (UTC ms when the add-on received it), `p`, `v`, and since 0.3.4 `s`, `sm` (side and method, see Trade side), since 0.3.8 `q` (Time and Sales category, see there; absent when unknown) | every trade, live |
 | `execs` | `list`: `[exec]` | on connect: executions NinjaTrader already has for today |
@@ -219,7 +220,7 @@ Bars are stamped with their **start** time. NinjaTrader stamps bars at their clo
 
 | type | fields |
 |---|---|
-| `subscribe` | `root` (`MNQ`, `NQ`, `MES`, `ES`), `days` (1m history, default 5), `tickHours` (tick backfill cap, default 8), `sub` (0.3.3, optional: a whole number of up to 15 digits, echoed as a plain number without leading zeros on that load's `history`, `ticks` and `ready`; without it ChartBridge numbers the page's subscribes 1, 2, 3, ...), `liveFirst` (sent by chart 1.8.0; ChartBridge 0.3.5 gives every subscribe with `tickHours` above 0 the served window, with or without it), `profile` (0.3.5: send the `profile` message) |
+| `subscribe` | `root` (`MNQ`, `NQ`, `MES`, `ES`), `days` (1m history, default 5), `tickHours` (tick backfill cap, default 8), `sub` (0.3.3, optional: a whole number of up to 15 digits, echoed as a plain number without leading zeros on that load's `history`, `ticks` and `ready`; without it ChartBridge numbers the page's subscribes 1, 2, 3, ...), `liveFirst` (sent by chart 1.8.0; ChartBridge 0.3.5 gives every subscribe with `tickHours` above 0 the served window, with or without it), `profile` (0.3.5: send the `profile` message), `deltaTable` (the next build after 0.6.24: send the `deltaTable` message, and the served window's live trades with their sides) |
 | `ping` | `c` (page clock, echoed back in a `pong` with the server clock `s`) |
 | `htf` | `root`, `tf` (`4h`, `1D` or `1W`), `id` (optional) (0.3.7, strict: see below) |
 | `weekProfile` | `root`, `id` (optional) (0.3.7, strict: see below) |
@@ -546,7 +547,8 @@ added for it: the live Bid and Ask updates ChartBridge already follows are the o
 when it is known. Only trades ChartBridge saw live, with a usable quote, and keeps in the served window (see Served
 window and session table) have it: the trades of NinjaTrader's own tick answer, the session table and the files have
 no stored quote, so they stay `[t, p, v]`, unknown, never guessed. The side places stay `null` as in 0.3.7, so a page
-that reads `s` and `sm` from places 4 and 5 sees no side, exactly as for `[t, p, v]`.
+that reads `s` and `sm` from places 4 and 5 sees no side, exactly as for `[t, p, v]` (unless the load asked for the delta table:
+then a trade seen live carries its side there again, see The delta table).
 
 **Older pages** ignore it: chart 1.12.0 reads places 1 to 5 of a trade (`null` there is "no side") and only the
 fields it knows of a `tick`. `/diag` counts the live trades by category (`sides.<root>.live.q`).
@@ -804,6 +806,85 @@ then `gate` (`now`: the request out, `windowsQueued`, `backfillsQueued`, `barsQu
 and `backfillTotalMs` (the backfills' times added up). `windows` lists the last 20 window loads: `client`, `root`, `sub`,
 `atUtcMs`, `fromCache`, `askedByCount` (the counts asked, "shared" for a load that waited on another's request), `trades`,
 `from`, `timeToLiveMs`, `error`.
+
+## The delta table (the next build after 0.6.24; Anthony 2026-11-19)
+
+Anthony, 2026-11-19: "When I switch between chart timeframes or tickers, my Cum Delta resets. That should not be: once the data is
+in there, it should be there." Until this build the page counted only trades whose side it saw live (the served window's trades
+carry no side, 0.3.7), so a ticker switch, a layout or laptop-tab switch, a reload and a ChartBridge reconnect each began a new
+count. ChartBridge already sides every live trade (Trade side); it now keeps the session's sides and gives them to every load.
+**It asks NinjaTrader for nothing**: the 0.3.4 backfill sides came from historical quotes, which froze NinjaTrader (0.3.4.1,
+removed in 0.3.7); none of that comes back.
+
+**What ChartBridge keeps.** Per instrument in `roots` (`RootBook.Delta`, `DeltaTable`), the session's buy, sell and unknown volume
+per second of New York wall time: buy for side 1, sell for side -1, unknown for side 0 (no usable quote and no previous trade).
+Built in OnMarketData from the side `LiveSideTagger` gave the trade, under the book's lock, beside the session table (the same
+session, the same 18:00 ET reset by `SessionClock.Bounds`, the same rule that a trade more than 2 minutes off the clock never
+opens a session). A second is `floor(round(et, 3))`: the second the page reads from the trade's `t` on the wire. At most 86,400
+seconds, in blocks of an hour made as they are reached (about 1 MB an instrument for a full session; three adds a trade).
+
+- **From when.** From 18:00 ET when ChartBridge was listening before the session and the feed was up (the session table's
+  whole rule); else from its first live trade of the session (`coveredFrom`), `why` `"start"` (ChartBridge started after 18:00:
+  NinjaTrader started, or the add-on was compiled) or `"feed"` (the feed was down at 18:00). The session table's one backfill
+  makes the profile whole later; it never sides those trades, so the delta table keeps its own start.
+- **Missed seconds** (`missed`): seconds of open market (`ChartBridgeCme.Closed`: the break, a weekend, the holiday halts are
+  never missed) the table did not see: a feed drop while the market is open, from the drop to the next trade; a NinjaTrader
+  restart, from the last saved second to the new run's first trade.
+- **Saved per session**, in `delta-<ROOT>-<yyyy-MM-dd>.txt` (its trading day) in ChartBridge's folder, kept 14 days: a header
+  `deltatable 1 <from> <coveredFrom> <why or ->`, then additive lines `<second since from> <buy> <sell> <unknown>` (a late trade
+  writes its second again) and `m <seconds>` for missed seconds. Every 10 s (the accounts timer, on a pool thread, one pass at a
+  time) the closed seconds since the last pass (the forming one waits), the late trades (at most 20,000 kept between passes) and
+  the missed seconds are copied under the book's lock and appended, written through (`ChartBridgeFiles.Append`); the market data
+  thread never writes or waits, and a failed write is tried again the next pass (`/diag` counts it). A finished session's table
+  is written to its last second, then let go.
+- **Read back at a start.** When an instrument's book is made (off the thread that made it), the current session's file is read;
+  joined to the live table (its seconds added, its start and `why` kept, the seconds between counted missed) at the session's
+  first trade, or at once when that trade came first; then every live page that asked gets the table again (no `sub`), in order
+  with its live trades (as a pushed `profile`). No file is written for that instrument before the read is done. A file of
+  another session is not read; a line cut by a power cut is left out (its seconds fall in the missed gap).
+
+**The `deltaTable` message.** Asked for with `"deltaTable": true` on `subscribe` (the page sends it when hello's `features` lists
+`deltaTable`; never for an agent). Sent after `profile` and right before `ready`, in the same outbox entry:
+
+```
+{"type":"deltaTable","root":"NQ","sub":12,"session":{"from":1790618400,"coveredFrom":1790618400,"why":null,"missed":0,
+ "rows":[0,12,9, 1,4,7, 1,0,3, ...],"unknown":[0,2, 3600,1, ...]}}
+```
+
+`from` the session's 18:00 start and `coveredFrom` from when every trade is in (bar-time seconds), `why` null, `"start"` or
+`"feed"`, `missed` whole seconds. `rows`: for each second with buy or sell volume, `dt` (seconds since the row before; the first
+since `from`), buy, sell. `unknown`: for each second with unknown volume, `dt` (the same way, in its own list) and the volume. So a
+full session is only the seconds that traded, delta coded: a busy NQ session at every second of 23 hours is about 0.64 MB (the
+harness's case; the fake bridge's full session at 15 trades a second, 0.51 MB). `session` is null when the instrument has no table
+(no trade this session since ChartBridge started): the page then counts as with an older ChartBridge.
+
+**The seam** (the `profile` message's): the table is copied under the book's lock together with the held trades, in the moment
+the profile's table is copied, and the held trades `Dedupe` releases after `ready` are taken off their seconds (`less`). So the
+page's delta from the table plus every tick after `ready` is the session's, every trade once: none in both, none in neither
+(the harness checks it with trades arriving during a minute load and a window load). The table is copied in about 0.6 ms for a
+full session (Mono) and formatted with no lock held.
+
+**The served window's sides.** For a load that asked for the table, a served window trade ChartBridge saw live carries its side
+again: `[t, p, v, s, sm]`, or `[t, p, v, s, sm, q]` with a Time and Sales category. A trade from NinjaTrader's tick answer has no
+stored side and stays `[t, p, v]` or `[t, p, v, null, null, q]`. A load that did not ask gets the window exactly as before. The
+page uses them on range bars, where a second's volume cannot be placed in a bar by time alone.
+
+**The page** (live/live.js, live/bar-builder.js `TableReplay`): with the table, the delta is built from it and the trades after
+it, the same on every load: time bars (15 s, 1 m, 5 m and up) take the table a second at a time (`CumulativeDelta.addSecond`:
+the cumulative moves once a second, so a bar's high and low are known to the second, and the bar's largest single trade stays
+unknown); range bars take the window's sided trades in the bars they made, and the rest of the table (the session before the
+window, and the window's part from NinjaTrader's answer, which has no side) a second at a time in the bar the builder holds once
+that second's trades are in (before the window: in one bar no chart bar shows, whose value the next bars carry on from). The
+pane says "since 18:00 ET", "since HH:MM ET (ChartBridge started)" or "(data connection down at 18:00)", and ", missed N s"
+with ChartBridge's missed seconds. An older ChartBridge (no `deltaTable` in `features`): as before (live/COMPAT.json's
+minChartBridge is unchanged).
+
+**Never touched:** the order path (no order file changes; `ChartBridgeOrders.cs` is not edited), the agents' loads (an agent's
+subscribe never gets the table or sided rows), NinjaTrader requests (none added).
+
+`/diag` `books.<root>.delta`: `from`, `coveredFrom`, `why`, `missedSec`, `seconds`, `trades`, `buy`, `sell`, `unknown`,
+`lateTrades`, `outside` (a trade outside the session's 86,400 seconds), `restored`, `savedThrough`, `lateLost`, `saves`,
+`saveErrors`, `saveError`.
 
 ## Settlement, higher-timeframe bars and the weekly profile (0.3.7)
 
