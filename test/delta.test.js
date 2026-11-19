@@ -694,3 +694,12 @@ test('delta table (R12 N5): a second whose largest trade is one the page gets li
   while (!tr.step(10));
   assert.equal(rd.bars[0].bigMissing, true);
 });
+
+test('delta table (review round 2, item 12): a second in both lists merges its largest trade the same whatever the order', () => {
+  const dec = (rowBig, unkBig) => [...BB.decodeDeltaTable({ from: 0, coveredFrom: 0, big: true, rows: [5, 1, 1, rowBig], unknown: [5, 1, unkBig] }).big];
+  for (const [a, b, want] of [[7, 7, 7], [7, 3, 7], [3, 7, 7], [0, 7, 0], [7, 0, 0], [-1, 7, -1], [7, -1, -1], [0, -1, 0]]) {
+    assert.deepEqual(dec(a, b), [want], a + ' and ' + b);
+    assert.deepEqual(dec(b, a), [want], b + ' and ' + a + ' (the other order)');
+  }
+  assert.deepEqual([...BB.decodeDeltaTable({ from: 0, coveredFrom: 0, rows: [5, 1, 1], unknown: [] }).big], [0], 'a table without "big": none known');
+});

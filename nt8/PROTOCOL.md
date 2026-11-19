@@ -831,19 +831,25 @@ trade).
   NinjaTrader started, or the add-on was compiled) or `"feed"` (the feed was down at 18:00). The session table's one backfill
   makes the profile whole later; it never sides those trades, so the delta table keeps its own start.
 - **Missed seconds** (`missed`): seconds of open market (`ChartBridgeCme.Closed`: the break, a weekend, the holiday halts are
-  never missed) the table did not see: a feed drop while the market is open, from the drop to the next trade; a NinjaTrader
-  restart, from the last saved second to the new run's first trade.
+  never missed) the table did not see: a feed drop while the market is open, from the drop to the next trade (or to the
+  session's end when it is still open at 18:00; a page loading while it is open is told the seconds so far); a NinjaTrader
+  restart, from the last saved second to the new run's first trade. Sent rounded up.
 - **Saved per session**, in `delta-<ROOT>-<yyyy-MM-dd>.txt` (its trading day) in ChartBridge's folder, kept 14 days: a header
   `deltatable 1 <from> <coveredFrom> <why or ->`, then additive lines `<second since from> <buy> <sell> <unknown> <largest trade>`
-  (a late trade writes its second again; the largest of a second's lines is its largest trade) and `m <seconds>` for missed
+  (a late trade writes its second again; the largest of a second's lines is its largest trade, and a second with a line whose
+  largest trade is not known (0) stays not known) and `m <seconds>` for missed
   seconds. A file saved before the largest trade was kept has four fields a line: it is still read, with those seconds' largest
   trade not known (0). Every 10 s (the accounts timer, on a pool thread, one pass at a
   time) the closed seconds since the last pass (the forming one waits), the late trades (at most 20,000 kept between passes) and
   the missed seconds are copied under the book's lock (the text is made after it) and appended, written through
-  (`ChartBridgeFiles.Append`); the market data thread never writes or waits, and a failed write is tried again the next pass
-  (`/diag` counts it). A trade for a second the pass is writing, arriving while it writes, is kept as a late trade for the next
+  (`ChartBridgeFiles.Append`), the missed seconds first, then the late trades, then the seconds (a cut loses the least); the
+  market data thread never writes or waits. A failed write is cut back off the file (or, when that fails too, before the next
+  append) and tried again the next pass (`/diag` counts it, `health.memory.deltaSaveError` says why). The newest second is
+  written once it is over (the clock 2 s past it, or the market closed) and at ChartBridge's stop, which writes every table to
+  its last second before the books go. Late trades are kept a second each (merged), bounded by the session's seconds. A trade for a second the pass is writing, arriving while it writes, is kept as a late trade for the next
   pass (review R12 S1). A file whose last line has no newline (a crash in the middle of an append) is cut back to its last whole
-  line before the next append, and a reader leaves such a line out, though it may look whole (R12 S2). A finished session's table
+  line before the next append (emptied, and its header written again, when the cut was in the header), and a reader leaves such
+  a line out, though it may look whole (R12 S2). A finished session's table
   is written to its last second, then let go.
 - **Read back at a start.** When an instrument's book is made (off the thread that made it), the current session's file is read
   (on a day with no session, a weekend or a CME holiday, the last session's); joined to the live table (its seconds added, its
@@ -852,8 +858,11 @@ trade).
   to a page at a time, so a profile push and a table push never skip each other's page, R12 N2). The saved seconds are never
   written again (R12 B1: each restart used to append them once more); this run's own seconds at or below the last saved one are
   written as late lines. With the market closed (the break, a weekend, a holiday) and no trade yet, the finished session's table
-  is the instrument's table until the next session's first trade (R12 N4). No file is written for that instrument before the read
-  is done. A file of
+  is the instrument's table until the next session's first trade (R12 N4); NinjaTrader's replay of that session's last trade at
+  market data start keeps it (it is in the file already). A read that fails is tried again by the next save passes (3 tries in
+  all); a file that is not this session's table, or still will not read, is set aside as `<file>.unread-<n>` and a fresh file is
+  started: a file that did not read back is never appended to. A table read back while a page loads reaches that page once it
+  is ready. No file is written for that instrument before the read is done. A file of
   another session is not read; a line cut by a power cut is left out (its seconds fall in the missed gap).
 
 **The `deltaTable` message.** Asked for with `"deltaTable": true` on `subscribe` (the page sends it when hello's `features` lists

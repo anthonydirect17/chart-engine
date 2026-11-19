@@ -127,7 +127,7 @@ public static partial class WindowHarness
         // The message: rows and unknowns delta coded, less the trades the page gets live after it.
         List<SidedTrade> held = tape.Skip(tape.Count - 400).ToList();
         List<SeamTick> less = held.Select(x => new SeamTick { Time = x.T, Price = x.P, Volume = x.V, Side = x.S }).ToList();
-        DeltaSnap snap; lock (book.Sync) snap = d.Snap();
+        DeltaSnap snap; lock (book.Sync) snap = d.Snap(d.StartEt);
         string json = snap.Json("MNQ", "9", less);
         double f, c, m; string why;
         SortedDictionary<long, long[]> sentRows = DecodeDelta(json, out f, out c, out why, out m);
@@ -153,7 +153,7 @@ public static partial class WindowHarness
         for (int sec = 0; sec < 82800; sec++) for (int k = 0; k < 3; k++) heavy.Add(new SidedTrade { T = fs.AddSeconds(sec + 0.1 + 0.3 * k), P = 20000, V = 1 + rnd.Next(0, 30), S = k == 2 ? (rnd.Next(0, 50) == 0 ? 0 : -1) : 1 });
         FeedSided(full, heavy, ChartBridgeTime.ToUtc(fs).AddHours(-1), ChartBridgeTime.ToUtc(fs).AddHours(-1));
         System.Diagnostics.Stopwatch sw = System.Diagnostics.Stopwatch.StartNew();
-        DeltaSnap fsnap; lock (full.Sync) fsnap = full.Delta.Snap();
+        DeltaSnap fsnap; lock (full.Sync) fsnap = full.Delta.Snap(full.Delta.StartEt);
         double snapMs = sw.Elapsed.TotalMilliseconds; sw.Restart();
         string fj = fsnap.Json("NQ", "1", null);
         double jsonMs = sw.Elapsed.TotalMilliseconds;
@@ -196,7 +196,7 @@ public static partial class WindowHarness
         DeltaTable saved = DeltaTable.Parse(d.Header() + "0 5 3 0 4\n100 2 0 1 2\n100 1 1 0 1\n50 1 0 0\nm 12.5\n7 9 9", d.StartEt);
         DeltaTable other = DeltaTable.Parse(d.Header() + "0 5 3 0\n", d.StartEt + 86400);
         int g0, g100, g50, xb, xs, xu; saved.Get(0, out xb, out xs, out xu, out g0); saved.Get(100, out xb, out xs, out xu, out g100); saved.Get(50, out xb, out xs, out xu, out g50);
-        Check(saved != null && other == null && saved.Missed == 12.5 && saved.Hi == 100 && saved.BuyVol == 9 && saved.SellVol == 4 && saved.UnknownVol == 1 && g0 == 4 && g100 == 2 && g50 == 0,
+        Check(saved != null && other == null && saved.Missed == 12.5 && saved.Hi == 100 && saved.BuyVol == 9 && saved.SellVol == 4 && saved.UnknownVol == 1 && g0 == 4 && g100 == 2 && g50 == DeltaTable.BigUnknown,
             "delta file: lines add up (a second written again by a late trade; its largest trade the larger), a cut last line is left out, missed seconds are kept; a line of an older file (four fields) reads with its largest trade not known (0); another session's file is not read");
         DeltaTable run = new DeltaTable { StartEt = d.StartEt, CoveredFromEt = d.StartEt + 1000, Why = "start" };
         run.Put(1000, 4, 0, 0, 4);
@@ -399,5 +399,263 @@ public static partial class WindowHarness
             foreach (string f in Directory.GetFiles(folder, "delta-MNQ-*.txt")) try { File.Delete(f); } catch (Exception) { }
             ChartBridgeServer.ResetBooks(DateTime.MinValue);
         }
+    }
+
+    // ------------------------------------------------------------ round 2 (the R12 delta review, second opinion folded in)
+    static string D2Folder { get { return ChartBridgeConfig.Folder; } }
+    static void D2Clean() { foreach (string f in Directory.GetFiles(D2Folder, "delta-MNQ-*")) try { File.Delete(f); } catch (Exception) { } }
+    // A fresh ChartBridge run, listening since before the session (whole), fed `tape` [from, to); its book.
+    static RootBook D2Run(List<Trade> tape, int from, int to, DateTime listeningUtc, bool readFile)
+    {
+        bool was = ChartBridgeServer.DeltaFiles;
+        ChartBridgeServer.DeltaFiles = readFile;
+        simNow = tape[from].T;
+        ChartBridgeServer.ResetBooks(listeningUtc);
+        RootBook b = ChartBridgeServer.BookOf("MNQ", inst);
+        WaitFor(() => { lock (b.Sync) return b.DeltaReadDone || b.DeltaReadTries > 0; }, 3000);
+        ChartBridgeServer.DeltaFiles = was;
+        Live(tape, from, to);
+        return b;
+    }
+    static SortedDictionary<long, long[]> D2File(double startEt)
+    {
+        string f = ChartBridgeServer.DeltaFile("MNQ", startEt);
+        DeltaTable t = File.Exists(f) ? DeltaTable.Parse(File.ReadAllText(f), startEt) : null;
+        return t != null ? OfTable(t) : null;
+    }
+    static SortedDictionary<long, long[]> D2Book(RootBook b, bool dropLast)
+    {
+        SortedDictionary<long, long[]> d = BookDelta(b);
+        if (dropLast && d.Count > 0) d.Remove(d.Keys.Max());
+        return d;
+    }
+    static string D2Same(SortedDictionary<long, long[]> file, SortedDictionary<long, long[]> book) { return file == null ? "no file read back" : DiffSec(file, book); }
+
+    static void DeltaRound2()
+    {
+        DateTime ss, se; SessionClock.Bounds(SimBase, out ss, out se);
+        DateTime listening = ChartBridgeTime.ToUtc(ss).AddMinutes(-5);
+        double startEt = EtSec(ss);
+        ChartBridgeServer.DeltaFiles = true;
+        try
+        {
+            // 1. a partial append: its bytes are cut back off, so the next pass never writes those seconds twice; and when the cut back
+            // fails too, the next pass cuts back first
+            D2Clean();
+            List<Trade> t1 = Walk(SimBase.AddMinutes(-40), 6000, 91, 150);
+            RootBook b1 = D2Run(t1, 0, 3000, listening, true);
+            ChartBridgeServer.SaveDeltas();
+            Live(t1, 3000, 4500);
+            int calls = 0;
+            ChartBridgeServer.DeltaAppendForHarness = (f, text) => { calls++; File.AppendAllText(f, text.Substring(0, text.Length / 2)); throw new IOException("the disk is full (harness)"); };
+            ChartBridgeServer.SaveDeltas();
+            ChartBridgeServer.DeltaAppendForHarness = null;
+            ChartBridgeServer.SaveDeltas();
+            string d1 = D2Same(D2File(startEt), D2Book(b1, true));
+            Check(calls == 1 && d1 == null, "delta round 2, item 1: an append that fails half written is cut back off: the file reads back as the book, no second twice" + (d1 != null ? " (" + d1 + ")" : ""));
+            Live(t1, 4500, 5200);
+            ChartBridgeServer.DeltaAppendForHarness = (f, text) => { File.AppendAllText(f, text.Substring(0, text.Length / 3)); throw new IOException("the disk is full (harness)"); };
+            ChartBridgeServer.DeltaCutBackForHarness = (f, len) => { throw new IOException("the file is locked (harness)"); };
+            ChartBridgeServer.SaveDeltas();
+            ChartBridgeServer.DeltaAppendForHarness = null; ChartBridgeServer.DeltaCutBackForHarness = null;
+            ChartBridgeServer.SaveDeltas();
+            d1 = D2Same(D2File(startEt), D2Book(b1, true));
+            Check(d1 == null, "delta round 2, item 1: when that cut back fails too, the next pass cuts back first: the file reads back as the book" + (d1 != null ? " (" + d1 + ")" : ""));
+
+            // 2. the first write cut inside its header: the file is emptied and the header written again
+            D2Clean();
+            RootBook b2 = D2Run(t1, 0, 2000, listening, false);   // nothing read (the file is written below, as a crashed first write left it)
+            File.WriteAllText(ChartBridgeServer.DeltaFile("MNQ", startEt), "deltatable 1 17906");
+            ChartBridgeServer.SaveDeltas();
+            string d2 = D2Same(D2File(startEt), D2Book(b2, true));
+            Check(d2 == null, "delta round 2, item 2: a first write cut inside its header: emptied, the header written again, the file reads back as the book" + (d2 != null ? " (" + d2 + ")" : ""));
+
+            // 3. the forming second: written at a stop (final) and once the clock is 2 s past it
+            D2Clean();
+            RootBook b3 = D2Run(t1, 0, 2500, listening, true);
+            ChartBridgeServer.SaveDeltas(true);
+            string d3 = D2Same(D2File(startEt), D2Book(b3, false));
+            Live(t1, 2500, 2800);
+            simNow = t1[2799].T.AddSeconds(3);
+            ChartBridgeServer.SaveDeltas();
+            string d3b = D2Same(D2File(startEt), D2Book(b3, false));
+            Check(d3 == null && d3b == null, "delta round 2, item 3: at a stop every second is written, the forming one too; and a pass 2 s after the newest second writes it" + (d3 != null ? " (stop: " + d3 + ")" : "") + (d3b != null ? " (clock: " + d3b + ")" : ""));
+
+            // 5. ChartBridge started in the break with the finished session's table read back; NinjaTrader replays its last trade
+            D2Clean();
+            DateTime close = Et(2026, 9, 29, 16, 55, 0);
+            List<Trade> t5 = Walk(close, 3000, 95, 150);
+            t5 = t5.Where(x => x.T < Et(2026, 9, 29, 16, 59, 59)).ToList();
+            RootBook b5 = D2Run(t5, 0, t5.Count, listening, true);
+            ChartBridgeServer.SaveDeltas(true);
+            SortedDictionary<long, long[]> saved5 = D2Book(b5, false);
+            simNow = Et(2026, 9, 29, 17, 1, 0);
+            ChartBridgeServer.ResetBooks(ChartBridgeTime.ToUtc(simNow).AddSeconds(-30));
+            RootBook nb5 = ChartBridgeServer.BookOf("MNQ", inst);
+            WaitFor(() => { lock (nb5.Sync) return nb5.DeltaReadDone; }, 3000);
+            DeltaTable installed; lock (nb5.Sync) installed = nb5.Delta;
+            Trade replay = t5[t5.Count - 1];
+            Priv("OnMarketData", null, new MarketDataEventArgs { Instrument = inst, MarketDataType = MarketDataType.Last, Price = replay.P, Volume = replay.V, Time = replay.T });
+            DeltaTable after5; lock (nb5.Sync) after5 = nb5.Delta;
+            string d5 = installed != null ? DiffSec(OfTable(after5), saved5) : "nothing installed";
+            Check(installed != null && ReferenceEquals(after5, installed) && d5 == null,
+                "delta round 2, item 5 and R12 N4: started in the break, the finished session's table is installed, and NinjaTrader's replay of its last trade keeps it (not replaced, not counted twice)" + (d5 != null ? " (" + d5 + ")" : ""));
+            lock (sent) sent.Clear();
+            int m5 = MadeCount();
+            SubDelta(client, "905", 0, true);
+            AnswerMinutes(m5);
+            WaitFor(() => Ready(Sent(), "905"), 3000);
+            BarsRequest l5 = Find(m5, r => IsTrades(r) && r.BarsBack == ChartBridgeServer.SeamTicksBack);
+            if (l5 != null && !l5.Answered) l5.Answer(new Bars(), ErrorCode.NoError);
+            WaitFor(() => Ready(Sent(), "905"));
+            SortedDictionary<long, long[]> page5 = PageDelta(Sent(), "905", startEt);
+            string p5 = page5 != null ? DiffSec(page5, saved5) : "no table";
+            Check(p5 == null, "delta round 2 (R12 N4): a page loading in the break gets the finished session's table" + (p5 != null ? " (" + p5 + ")" : ""));
+
+            // 6. a read error at the start is tried again, never appended past; a file that is not this session's is set aside
+            D2Clean();
+            RootBook b6a = D2Run(t1, 0, 2000, listening, true);
+            ChartBridgeServer.SaveDeltas(true);
+            SortedDictionary<long, long[]> saved6 = D2Book(b6a, false);
+            int reads = 0;
+            ChartBridgeServer.DeltaReadForHarness = f => { if (++reads == 1) throw new IOException("the file is busy (harness)"); return File.ReadAllText(f); };
+            RootBook b6 = D2Run(t1, 2600, 3200, listening, true);
+            bool notRead; lock (b6.Sync) notRead = !b6.DeltaReadDone;
+            ChartBridgeServer.SaveDeltas();
+            ChartBridgeServer.DeltaReadForHarness = null;
+            bool joined6; lock (b6.Sync) joined6 = b6.Delta != null && b6.Delta.Restored;
+            SortedDictionary<long, long[]> book6 = D2Book(b6, false);
+            string kept6 = DiffSec(saved6, new SortedDictionary<long, long[]>(book6.Where(kv => kv.Key <= saved6.Keys.Max()).ToDictionary(kv => kv.Key, kv => kv.Value)));
+            string d6 = D2Same(D2File(startEt), D2Book(b6, true));
+            Check(notRead && reads == 2 && joined6 && kept6 == null && d6 == null,
+                "delta round 2, item 6: a read that fails at the start writes nothing, is tried again by the next pass and joined; the file reads back as the book" + (kept6 != null ? " (" + kept6 + ")" : "") + (d6 != null ? " (" + d6 + ")" : ""));
+            D2Clean();
+            File.WriteAllText(ChartBridgeServer.DeltaFile("MNQ", startEt), "deltatable 1 123 123 -\n5 1 1 0 1\n");   // another session's
+            RootBook b6c = D2Run(t1, 0, 1500, listening, true);
+            ChartBridgeServer.SaveDeltas(true);
+            string d6c = D2Same(D2File(startEt), D2Book(b6c, false));
+            Check(File.Exists(ChartBridgeServer.DeltaFile("MNQ", startEt) + ".unread-1") && d6c == null,
+                "delta round 2, item 6: a file that is not this session's table is set aside (.unread-1) and a fresh one started, never appended to" + (d6c != null ? " (" + d6c + ")" : ""));
+
+            // 7. a table read back while a page load is in flight: the page gets it pushed once ready
+            D2Clean();
+            RootBook b7a = D2Run(t1, 0, 2000, listening, true);
+            ChartBridgeServer.SaveDeltas(true);
+            RootBook b7 = D2Run(t1, 2600, 3000, listening, false);   // its read found nothing (the file is read below, mid-load)
+            lock (sent) sent.Clear();
+            bool hooked = false;
+            ChartBridgeServer.LoadSnapHookForHarness = root => { if (hooked) return; hooked = true; Priv("ReadDelta", b7); };
+            int m7 = MadeCount();
+            SubDelta(client, "907", 0, true);
+            AnswerMinutes(m7);
+            WaitFor(() => Ready(Sent(), "907"), 3000);
+            BarsRequest l7 = Find(m7, r => IsTrades(r) && r.BarsBack == ChartBridgeServer.SeamTicksBack);
+            if (l7 != null && !l7.Answered) l7.Answer(Answer(t1, 2600, 3000), ErrorCode.NoError);
+            WaitFor(() => Ready(Sent(), "907"));
+            ChartBridgeServer.LoadSnapHookForHarness = null;
+            WaitFor(() => Sent().Any(x => x.StartsWith("{\"type\":\"deltaTable\"") && !x.Contains("\"sub\":")), 2000);
+            Live(t1, 3000, 3100);
+            Thread.Sleep(80);
+            SortedDictionary<long, long[]> page7 = PageDelta(Sent(), "907", startEt);
+            string p7 = page7 != null ? DiffSec(page7, BookDelta(b7)) : "no table";
+            bool pushed7 = Sent().Any(x => x.StartsWith("{\"type\":\"deltaTable\"") && !x.Contains("\"sub\":"));
+            Check(hooked && pushed7 && p7 == null, "delta round 2, item 7: a table read back while a page loads is pushed to it once ready; its table plus ticks equals ChartBridge's" + (p7 != null ? " (" + p7 + ")" : ""));
+
+            // 8. a page loading while the feed is down is told the seconds missed so far (rounded up)
+            D2Clean();
+            RootBook b8 = D2Run(t1, 0, 1000, listening, true);
+            double dropAt = EtSec(t1[999].T) + 0.5;
+            lock (b8.Sync) b8.FeedDropped(dropAt, "harness");
+            simNow = t1[999].T.AddSeconds(30.2);
+            lock (sent) sent.Clear();
+            int m8 = MadeCount();
+            SubDelta(client, "908", 0, true);
+            AnswerMinutes(m8);
+            WaitFor(() => Ready(Sent(), "908"), 3000);
+            BarsRequest l8 = Find(m8, r => IsTrades(r) && r.BarsBack == ChartBridgeServer.SeamTicksBack);
+            if (l8 != null && !l8.Answered) l8.Answer(new Bars(), ErrorCode.NoError);
+            WaitFor(() => Ready(Sent(), "908"));
+            string dm8 = DeltaOf(Sent(), "908");
+            double f8, c8, missed8; string w8;
+            if (dm8 != null) DecodeDelta(dm8, out f8, out c8, out w8, out missed8); else missed8 = -1;
+            Check(missed8 >= 30 && missed8 <= 31, "delta round 2, item 8: a page loading 30 s into a feed drop is told 30 s or more missed, rounded up (" + missed8 + ")");
+
+            // 9. late trades by second, not capped: 30,000 late trades all written; and a finished table let go is said
+            D2Clean();
+            RootBook b9 = D2Run(t1, 0, 3000, listening, true);
+            ChartBridgeServer.SaveDeltas();
+            List<Trade> late9 = new List<Trade>(30000);
+            Random rnd9 = new Random(9);
+            for (int i = 0; i < 30000; i++) { Trade x = t1[rnd9.Next(0, 2900)]; late9.Add(new Trade { T = x.T, P = x.P, V = 1 + rnd9.Next(0, 3) }); }
+            Live(late9, 0, late9.Count);
+            simNow = t1[2999].T;
+            ChartBridgeServer.SaveDeltas();
+            string d9 = D2Same(D2File(startEt), D2Book(b9, true));
+            Check(d9 == null, "delta round 2, item 9: 30,000 late trades (over the old cap of 20,000) are all written, merged a second each" + (d9 != null ? " (" + d9 + ")" : ""));
+
+            // 10. the missed seconds are written first in a pass (a cut later in it loses the least)
+            D2Clean();
+            RootBook b10 = D2Run(t1, 0, 1500, listening, true);
+            ChartBridgeServer.SaveDeltas();
+            lock (b10.Sync) b10.FeedDropped(EtSec(t1[1499].T) + 0.2, "harness");
+            Live(t1, 1600, 1700);
+            Live(new List<Trade> { new Trade { T = t1[100].T, P = t1[100].P, V = 2 } }, 0, 1);   // a late trade
+            simNow = t1[1699].T;
+            string before10 = File.ReadAllText(ChartBridgeServer.DeltaFile("MNQ", startEt));
+            ChartBridgeServer.SaveDeltas();
+            string added10 = File.ReadAllText(ChartBridgeServer.DeltaFile("MNQ", startEt)).Substring(before10.Length);
+            string[] lines10 = added10.Split('\n');
+            int lateLine = Array.FindIndex(lines10, x => x.StartsWith(((long)(DeltaTable.SecondOf(EtSec(t1[100].T)) - (long)startEt)).ToString(CultureInfo.InvariantCulture) + " "));
+            Check(lines10.Length > 3 && lines10[0].StartsWith("m ") && lateLine == 1, "delta round 2, item 10: a pass writes its missed seconds first, then the late trades, then the seconds (" + string.Join(" | ", lines10.Take(3)) + ")");
+
+            // 11. a second's largest trade that is not known stays so (a later small known one never shows as the largest)
+            DeltaTable t11 = new DeltaTable { StartEt = startEt };
+            t11.Put(10, 4, 0, 0, 0); t11.Put(10, 0, 1, 0, 1);
+            int x11, y11, z11, g11; t11.Get(10, out x11, out y11, out z11, out g11);
+            string j11 = t11.Snap(startEt + 20).Json("MNQ", null, null);
+            Check(g11 == DeltaTable.BigUnknown && j11.Contains("\"rows\":[10,4,1,0]"), "delta round 2, item 11: a second whose largest trade is not known stays not known (sent as 0) after a smaller known one: " + j11.Substring(j11.IndexOf("\"rows\"")));
+
+            // R12 N2: a profile push and a table push to the same page at once: neither skips it (200 rounds)
+            D2Clean();
+            RootBook bn2 = D2Run(t1, 0, 500, listening, true);
+            lock (sent) sent.Clear();
+            int mn = MadeCount();
+            SubDelta(client, "909", 0, true);
+            AnswerMinutes(mn);
+            WaitFor(() => Ready(Sent(), "909"), 3000);
+            BarsRequest ln = Find(mn, r => IsTrades(r) && r.BarsBack == ChartBridgeServer.SeamTicksBack);
+            if (ln != null && !ln.Answered) ln.Answer(new Bars(), ErrorCode.NoError);
+            WaitFor(() => Ready(Sent(), "909"));
+            int rounds = 200, missedPush = 0;
+            for (int r = 0; r < rounds; r++)
+            {
+                int p0, q0; lock (sent) { p0 = sent.Count(x => x.StartsWith("{\"type\":\"profile\"") && !x.Contains("\"sub\":")); q0 = sent.Count(x => x.StartsWith("{\"type\":\"deltaTable\"") && !x.Contains("\"sub\":")); }
+                System.Threading.Tasks.Task a = System.Threading.Tasks.Task.Run(() => Priv("PushProfile", bn2)), bt = System.Threading.Tasks.Task.Run(() => ChartBridgeServer.PushDelta(bn2));
+                System.Threading.Tasks.Task.WaitAll(a, bt);
+                WaitFor(() => { lock (sent) return sent.Count(x => x.StartsWith("{\"type\":\"profile\"") && !x.Contains("\"sub\":")) > p0 && sent.Count(x => x.StartsWith("{\"type\":\"deltaTable\"") && !x.Contains("\"sub\":")) > q0; }, 200);
+                lock (sent) if (!(sent.Count(x => x.StartsWith("{\"type\":\"profile\"") && !x.Contains("\"sub\":")) > p0 && sent.Count(x => x.StartsWith("{\"type\":\"deltaTable\"") && !x.Contains("\"sub\":")) > q0)) missedPush++;
+            }
+            Check(missedPush == 0, "delta round 2 (R12 N2): a profile push and a table push to one page at the same moment, " + rounds + " times: the page gets both every time (" + missedPush + " skipped)");
+        }
+        finally
+        {
+            ChartBridgeServer.DeltaAppendForHarness = null; ChartBridgeServer.DeltaCutBackForHarness = null; ChartBridgeServer.DeltaReadForHarness = null; ChartBridgeServer.LoadSnapHookForHarness = null;
+            ChartBridgeServer.DeltaFiles = false;
+            D2Clean();
+            ChartBridgeServer.ResetBooks(DateTime.MinValue);
+        }
+    }
+
+    // round 2, item 4 (pure): a feed drop still open at 18:00 counts missed to the session's end
+    static void DeltaRound2Pure()
+    {
+        RootBook b = new RootBook("MNQ", 0.25);
+        DateTime listening = ChartBridgeTime.ToUtc(Et(2026, 9, 28, 17, 0, 0));
+        FeedSided(b, new[] { new SidedTrade { T = Et(2026, 9, 29, 16, 58, 0), P = 20000, V = 1, S = 1 } }, listening, listening);
+        DeltaTable old = b.Delta;
+        lock (b.Sync) b.FeedDropped(EtSec(Et(2026, 9, 29, 16, 59, 0)), "harness");
+        FeedSided(b, new[] { new SidedTrade { T = Et(2026, 9, 29, 18, 0, 1), P = 20000, V = 1, S = -1 } }, listening, listening);
+        Check(b.Delta != old && Math.Abs(old.Missed - 60) < 0.01 && old.MissedUnsaved > 59 && old.DownSinceEt < 0 && b.Delta.Missed == 0,
+            "delta round 2, item 4: a feed drop at 16:59 still open at 18:00: the finished session missed 60 s (to 17:00), the new one none (" + old.Missed + ")");
     }
 }

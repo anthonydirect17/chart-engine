@@ -1494,7 +1494,7 @@ test('ChartBridge 0.6.6 (Anthony 2026-10-21): the stop record ships, is compile-
 test('0.6.25: the delta table is fed by every live trade under the book\'s lock with its tagged side, asks NinjaTrader for nothing, and goes only to a page that asks', () => {
   const md = bodyOf(code, 'private static void OnMarketData(');
   assert.match(md, /lock \(book\.Sync\)\s*\{[\s\S]*book\.OnTrade\([^;]*ChartBridgeSides\.QCode\(cat\), side, method\);/, 'OnTrade takes the side under the book\'s lock');
-  assert.match(code, /if \(Delta != null && Delta\.Start == Table\.Start\) Delta\.Add\(et, side, volume\);/);
+  assert.match(code, /if \(Delta != null && Delta\.Start == Table\.Start && !\(Delta\.Restored && [^\n]*\)\) Delta\.Add\(et, side, volume\);/);   // review round 2, item 5: a replayed trade of a read-back table is not counted twice
   const table = code.slice(code.indexOf('public class DeltaTable'), code.indexOf('public class LiveQuoteSide'));
   assert.ok(table.length > 1000 && !/BarsRequest|MarketDataType|File\./.test(table), 'the table and its message make no request and touch no file');
   for (const f of ['public static void SaveDeltas(', 'private static void ReadDelta(', 'public static void PushDelta('])
@@ -1503,4 +1503,11 @@ test('0.6.25: the delta table is fed by every live trade under the book\'s lock 
   assert.match(bodyOf(code, 'private static string HelloJsonFor('), /\\"deltaTable\\"\]/);
   assert.match(code, /Delta = delta && !agent/, 'never to an agent: an agent\'s load is as before');
   assert.match(code, /Task\.Run\(\(\) => SaveDeltas\(\)\)/, 'written off the market data thread, on the 10 s timer');
+});
+
+test('review round 2, item 3: Stop writes every delta table to its last second after the feeds are unhooked and before the books go', () => {
+  const stop = bodyOf(code, 'public static void Stop()');
+  const unhook = stop.indexOf('md.Update -= OnMarketData'), save = stop.indexOf('SaveDeltas(true)'), clear = stop.indexOf('lock (Books) Books.Clear();');
+  assert.ok(unhook > 0 && save > unhook && clear > save, 'unhook, then SaveDeltas(true), then Books.Clear()');
+  assert.match(bodyOf(code, 'public static void SaveDeltas(bool final)'), /upTo = done \|\| final \|\| closedNow \|\| over \? d\.Hi : d\.Hi - 1;/);
 });

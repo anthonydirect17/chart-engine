@@ -30,6 +30,7 @@ public static partial class WindowHarness   // 0.6.25: the delta table's cases a
         WholeRule();
         Format();
         DeltaPure();   // 0.6.25: the delta table (check/DeltaHarness.cs)
+        DeltaRound2Pure();
     }
 
     // ------------------------------------------------------------ helpers
@@ -428,6 +429,7 @@ public static partial class WindowHarness   // 0.6.25: the delta table's cases a
             WindowSingleFlight();
             FeedDrop();
             DeltaLoads();   // 0.6.25: the delta table through the server (check/DeltaHarness.cs)
+            DeltaRound2();  // the delta table, review round 2 (check/DeltaHarness.cs)
         }
         finally
         {
