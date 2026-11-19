@@ -83,6 +83,9 @@ const KILL_MIN = '0.6.17';       // ChartBridge's Kill all for the prop accounts
    that carries it names the number and sets this to it); until then no installed ChartBridge reports it, and the page uses Kill
    all as above: the careful side. */
 const STOPALL_MIN = '0.6.25';
+/* round 4: Go live (and Auto on a prop account) needs the ChartBridge with the firm and GO-size guards; AgentCore.GOLIVE_MIN, held
+   equal by test/nt8-agents.test.js. The Go live tab asks goLivePlan before any button of its sends anything */
+const GOLIVE_MIN = '0.6.25';
 const CONFIRM_MS = 8000;         // the question stays this long (compared at the Yes, by the clock)
 const ARM_MS = 600;              // and takes no answer for this long after it opens: a double click answers nothing
 const ANSWER_WAIT_MS = 5000;     // a Stop all sent and not answered in this long is said, marked bad
@@ -119,6 +122,12 @@ function questionFor(p) {
   return QUESTION + ' This ChartBridge finds them by its own prop rule only: an account The Desk\'s ledger types eval or funded that NinjaTrader lists as Sim is NOT stopped: stop such a trader with its own kill switch on Cohorts.';
 }
 
+/** May Go live act on this ChartBridge? -> { ok, why }: a plain line naming the version when it may not (round 4). */
+function goLivePlan(version) {
+  if (atLeast(version, GOLIVE_MIN)) return { ok: true, why: '' };
+  return { ok: false, why: 'Go live needs ChartBridge ' + GOLIVE_MIN + ' or later (its firm and GO-size guards); this one is ' + (typeof version === 'string' && version ? version.slice(0, 40) : 'not known') + '. Nothing goes live from here until it is updated.' };
+}
+
 /** The one message a press sends, with exactly its keys. */
 function stopMsg(kind, cid) {
   if (typeof cid !== 'string' || !cid) return null;
@@ -136,10 +145,13 @@ function stopMaySend(m) {
 }
 
 /** Is this ChartBridge message the answer to a Stop all? ChartBridge answers a press with one status line (warn) whose text
- *  starts with its own words, or with a reject carrying the press's cid. -> { text, bad } or null. */
+ *  starts with its own words, or with a reject carrying the press's cid. Round 4: ChartBridge 0.6.25 puts the press's cid on that
+ *  status line; a line carrying a cid is the answer only to the pending press with that cid (another window's press is not
+ *  this one's answer); a line with none (an older ChartBridge) is matched by its words as before. -> { text, bad } or null. */
 function stopAnswer(m, cid) {
   if (!m || typeof m !== 'object') return null;
   if (m.type === 'reject' && cid && m.cid === cid) return { text: 'Not done: ' + String(m.reason || 'ChartBridge refused it'), bad: true };
+  if (m.type === 'status' && Object.prototype.hasOwnProperty.call(m, 'cid') && !(cid && m.cid === cid)) return null;
   if (m.type === 'status' && typeof m.text === 'string' && /^(Stop all automation|Kill all \(prop accounts\))/.test(m.text)) {
     return { text: m.text.slice(0, 2000), bad: /NOT STOPPED|FAILED|could NOT/.test(m.text) };
   }
@@ -159,7 +171,7 @@ function stopClick(askedAt, now, real) {
   return 'yes';
 }
 
-return Object.freeze({ TABS, TAB_IDS, OLD_TABS, COHORT_SUBS, roman, tabFrom, tabSearch, KILL_MIN, STOPALL_MIN, CONFIRM_MS, ARM_MS, ANSWER_WAIT_MS, QUESTION,
+return Object.freeze({ TABS, TAB_IDS, OLD_TABS, COHORT_SUBS, roman, tabFrom, tabSearch, KILL_MIN, STOPALL_MIN, GOLIVE_MIN, goLivePlan, CONFIRM_MS, ARM_MS, ANSWER_WAIT_MS, QUESTION,
   questionFor, atLeast, stopPlan, stopMsg, stopMaySend, stopAnswer, stopClick });
 });
 
@@ -209,6 +221,9 @@ function renderHead() {
   if (q && q.textContent !== qt) q.textContent = qt;
   /* the R12 delta, S-a: the floating line carries Stop all's answers only; the standing word (an older ChartBridge, not connected)
      sits in the header's fixed caption beside the button */
+  /* round 4: below GOLIVE_MIN the Go live tab says so plainly (its buttons ask goLivePlan before they send) */
+  const gl = $('lxGoLiveWhy'), gw = S.connected ? C.goLivePlan(S.version).why : '';
+  if (gl) { if (gl.textContent !== gw) gl.textContent = gw; gl.hidden = !gw; }
   const words = S.said, standing = !p.ok ? p.why : p.note, cap = $('lxStopNote');
   if (line) { if (line.textContent !== words) line.textContent = words; line.hidden = !words; line.classList.toggle('bad', !!S.saidBad); line.classList.toggle('lx-put', !!words); line.title = words ? 'Click to put this away' : ''; }
   if (cap) { if (cap.textContent !== standing) cap.textContent = standing; cap.title = standing; cap.classList.toggle('bad', !p.ok); }   // a standing line (not an answer): Praetorian's compact chrome keeps it in the button's title
@@ -271,8 +286,9 @@ function onHeadMessage(m) {
   if (!m || typeof m !== 'object') return;
   if (m.type === 'hello') { S.version = typeof m.version === 'string' ? m.version : ''; S.connected = true; }
   if (m.type === 'trading') S.signedIn = !!m.enabled;
-  if (m.type === 'status' && typeof m.text === 'string' && (m.level === 'warn' || m.level === 'error') && !C.stopAnswer(m, '')) alertLoud(m.text, m.level !== 'error');
   const a = C.stopAnswer(m, S.pending);
+  /* a warning that is not this press's answer goes to the alert line (round 4: another window's Stop all, its cid not ours, too) */
+  if (m.type === 'status' && typeof m.text === 'string' && (m.level === 'warn' || m.level === 'error') && !a) alertLoud(m.text, m.level !== 'error');
   if (a && (S.pending || m.type === 'status')) { if (S.pending) { S.pending = ''; clearTimeout(S.waitTimer); } say(a.text, a.bad); }
   renderHead();
 }

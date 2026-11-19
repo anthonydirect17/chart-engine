@@ -362,18 +362,24 @@ function flatOffStep(job, a, now) {
    Storage or a channel that cannot be used is skipped: the list is then this window's own and what it can still hear, and
    nothing throws. */
 const TURN_KEY = 'live-agent-turning-v1:';
-const TURN_TTL_MS = 10000;
+/* round 4, S1: longer than Chrome's timer throttle in a hidden window (a timer there may wait about a minute; 75 s is the margin
+   asked), so a window in the background, still turning a trader off, never lets its entry lapse; a closed window clears its own
+   at once (live/agent.js, pagehide) */
+const TURN_TTL_MS = 90000;
 const TURN_SCAN_MS = 1000;
 const TURN_ID = /^[a-z][a-z0-9]{0,11}$/;
 /**
- * env { storage: () => localStorage or null, channel: () => a BroadcastChannel or null, now, token }. -> { set(ids): this window's
- * traders being turned off now (each written again, the ones gone removed), list(): every trader any window of this origin is
- * turning off now }.
+ * env { storage: () => localStorage or null, channel: () => a BroadcastChannel or null, now, token }. -> { set(ids, held): this
+ * window's traders being turned off now (each written again, the ones gone removed; held: those of them kept only because their
+ * Off failed, round 4 S2), list(): every trader any window of this origin is turning off now, with .held (not enumerable): the
+ * ones every window keeps only for a failed Off }.
  */
+/** ids with .held (not enumerable): the ones kept only for a failed Off (round 4, S2). */
+function heldList(ids, held) { Object.defineProperty(ids, 'held', { value: held, enumerable: false }); return ids; }
 function createTurnShare(env) {
   const e = env || {}, now = typeof e.now === 'function' ? e.now : () => Date.now();
   const token = typeof e.token === 'string' && /^[a-z0-9]{1,16}$/.test(e.token) ? e.token : Math.random().toString(36).slice(2, 10) || 'w';
-  const mine = new Set(), heard = new Map();          // heard: 'token:id' -> until, from other windows' channel words
+  const mine = new Map(), heard = new Map();          // mine: id -> held; heard: 'token:id' -> { until, hold }, from other windows
   const store = () => { try { return typeof e.storage === 'function' ? e.storage() || null : null; } catch (x) { return null; } };
   let chan = null;
   try { chan = typeof e.channel === 'function' ? e.channel() || null : null; } catch (x) { chan = null; }
@@ -382,16 +388,21 @@ function createTurnShare(env) {
       chan.onmessage = ev => {
         const d = ev && ev.data;
         if (!d || typeof d.w !== 'string' || d.w === token || typeof d.agent !== 'string' || !TURN_ID.test(d.agent) || !isNum(d.until)) return;
-        if (d.until > now()) heard.set(d.w + ':' + d.agent, d.until); else heard.delete(d.w + ':' + d.agent);
+        if (d.until > now()) heard.set(d.w + ':' + d.agent, { until: d.until, hold: d.hold === true }); else heard.delete(d.w + ':' + d.agent);
       };
     } catch (x) { chan = null; }
   }
-  const say = (agent, until) => { if (chan) { try { chan.postMessage({ w: token, agent, until }); } catch (x) { /* closed */ } } };
-  function set(ids) {
+  const say = (agent, until, hold) => { if (chan) { try { chan.postMessage({ w: token, agent, until, hold: !!hold }); } catch (x) { /* closed */ } } };
+  function set(ids, held) {
     const want = new Set((Array.isArray(ids) ? ids : []).filter(x => typeof x === 'string' && TURN_ID.test(x))), t = now(), s = store();
-    for (const id of want) { const until = t + TURN_TTL_MS; try { if (s) s.setItem(TURN_KEY + token + ':' + id, JSON.stringify({ until })); } catch (x) { /* blocked */ } say(id, until); }
-    for (const id of mine) if (!want.has(id)) { try { if (s) s.removeItem(TURN_KEY + token + ':' + id); } catch (x) { /* blocked */ } say(id, 0); }
-    mine.clear(); for (const id of want) mine.add(id);
+    const h = new Set(Array.isArray(held) ? held : []);
+    for (const id of want) {
+      const until = t + TURN_TTL_MS, hold = h.has(id);
+      try { if (s) s.setItem(TURN_KEY + token + ':' + id, JSON.stringify(hold ? { until, hold: true } : { until })); } catch (x) { /* blocked */ }
+      say(id, until, hold);
+    }
+    for (const id of mine.keys()) if (!want.has(id)) { try { if (s) s.removeItem(TURN_KEY + token + ':' + id); } catch (x) { /* blocked */ } say(id, 0); }
+    mine.clear(); for (const id of want) mine.set(id, h.has(id));
   }
   /* the browser entries are read at most once each TURN_SCAN_MS (a page asks at every draw, and reading every key of the origin's
      storage each time slowed the page): the channel carries a new entry at once meanwhile, and each entry carries its own time */
@@ -406,17 +417,18 @@ function createTurnShare(env) {
         if (typeof k !== 'string' || k.indexOf(TURN_KEY) !== 0) continue;
         const id = k.slice(k.lastIndexOf(':') + 1);
         let v = null; try { v = JSON.parse(s.getItem(k)); } catch (x) { v = null; }
-        if (TURN_ID.test(id) && v && isNum(v.until) && v.until > t) scanned.push({ id, until: v.until }); else old.push(k);
+        if (TURN_ID.test(id) && v && isNum(v.until) && v.until > t) scanned.push({ id, until: v.until, hold: v.hold === true }); else old.push(k);
       }
       for (const k of old) s.removeItem(k);             // a closed window's entries, once they are past their time
     } catch (x) { /* storage cannot be read: this window's own and what the channel said */ }
     return scanned;
   }
   function list() {
-    const t = now(), out = new Set(mine);
-    for (const [k, until] of heard) { if (until > t) out.add(k.slice(k.indexOf(':') + 1)); else heard.delete(k); }
-    for (const e of scan(t)) if (e.until > t) out.add(e.id);
-    return [...out];
+    const t = now(), all = new Map(mine);              // id -> held, true only while every source says held (S2)
+    const add = (id, hold) => all.set(id, all.has(id) ? all.get(id) && hold : hold);
+    for (const [k, v] of heard) { if (v.until > t) add(k.slice(k.indexOf(':') + 1), v.hold); else heard.delete(k); }
+    for (const e of scan(t)) if (e.until > t) add(e.id, e.hold);
+    return heldList([...all.keys()], [...all].filter(([, h]) => h).map(([id]) => id));
   }
   return { set, list, token };
 }
@@ -551,5 +563,5 @@ function createClient(env) {
   };
 }
 
-return { VERSION, PORT, BASE, POLL_MS, TIMEOUT_MS, MISS_GRACE_MS, pollStep, SLOW_TEXT, FLAT_WAIT_MS, SHADOW_WAIT_MS, HAND_WAIT_MS, handLine, ASSIGN_WAIT_MS, slotFree, startBegin, startStep, onGate, TIERS, TYPE_NAME, tierOf, tierChip, tierFit, proving, PROVING_OF, heroOptions, preselect, freeSlot, assignStart, assignStep, usd, spendText, stateText, pickerRows, pickerNote, nonHero, modeBlock, accountBlock, offStep, offQuestion, flat, flatOffStart, flatOffStep, FO_SENT, FO_WAIT, modeWord, TURN_KEY, TURN_TTL_MS, TURN_SCAN_MS, createTurnShare, seatsHeld, seatsUnclear, jobWhere, names, settingsBody, createClient };
+return { VERSION, PORT, BASE, POLL_MS, TIMEOUT_MS, MISS_GRACE_MS, pollStep, SLOW_TEXT, FLAT_WAIT_MS, SHADOW_WAIT_MS, HAND_WAIT_MS, handLine, ASSIGN_WAIT_MS, slotFree, startBegin, startStep, onGate, TIERS, TYPE_NAME, tierOf, tierChip, tierFit, proving, PROVING_OF, heroOptions, preselect, freeSlot, assignStart, assignStep, usd, spendText, stateText, pickerRows, pickerNote, nonHero, modeBlock, accountBlock, offStep, offQuestion, flat, flatOffStart, flatOffStep, FO_SENT, FO_WAIT, modeWord, TURN_KEY, TURN_TTL_MS, TURN_SCAN_MS, createTurnShare, heldList, seatsHeld, seatsUnclear, jobWhere, names, settingsBody, createClient };
 });

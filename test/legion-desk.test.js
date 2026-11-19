@@ -15,7 +15,9 @@ const accounts = o => Object.assign({ type: 'accounts', personalNamed: true, lis
 const groups = { type: 'groups', list: [{ id: 'g1', name: 'Evals', members: ['PROP-1', 'PROP-2'] }, { id: 'g2', name: 'Prop and Sim', members: ['PROP-1', 'SIM-A'] },
   { id: 'g3', name: 'Mixed', members: ['PROP-1', 'MINE-1'] }, { id: 'g4', name: 'Sims', members: ['SIM-A'] }, { id: 'g5', name: 'Empty', members: [] }, { id: 'g6', name: 'Unknown', members: ['LIVE-X'] }, { id: 'g7', name: 'Mine only', members: ['MINE-1'] }] };
 const agent = o => Object.assign({ type: 'agent', agent: 'demo', name: 'Demo Agent', mode: 'shadow', enabled: true, connected: true, account: 'PROP-1' }, o || {});
-const gateWith = (...msgs) => { const g = AC.legionGate(); for (const m of msgs) g.hear(m); return g; };
+/* round 4 (GOLIVE_MIN): Legion's gate passes Auto only after a hello from a ChartBridge that guards it; these tests start there */
+const HELLO = { type: 'hello', version: '0.6.25' };
+const gateWith = (...msgs) => { const g = AC.legionGate(); g.hear(HELLO); for (const m of msgs) g.hear(m); return g; };
 const AGENT_MSGS = id => [
   { type: 'agentMode', agent: id, mode: 'auto' }, { type: 'agentMode', agent: id, mode: 'copilot' }, { type: 'agentKill', agent: id, on: false },
   { type: 'agentRules', agent: id, maxTrades: 2 }, { type: 'agentAnswer', agent: id, id: 'p1', answer: 'accept' }, { type: 'agentAccount', agent: id, account: null, keepMode: 'shadow' }];
@@ -137,7 +139,7 @@ test('the connection drops: everything heard is forgotten; the link has no send,
   assert.deepStrictEqual(Object.keys(link).sort(), ['accountOk', 'botWhy', 'close', 'groupOk', 'groups', 'limit', 'listen', 'name', 'named', 'noHome', 'notHere', 'post', 'traderWhy', 'why']);
   assert.ok(Object.isFrozen(link)); assert.equal(link.name, 'Legion'); assert.equal(link.groups, true); assert.equal(link.personal, undefined, 'not Praetorian');
   assert.equal(subs.length, 1);
-  for (const x of [accounts(), groups, agent(), { type: 'bot', account: 'PROP-1' }]) subs[0].message(x);
+  for (const x of [HELLO, accounts(), groups, agent(), { type: 'bot', account: 'PROP-1' }]) subs[0].message(x);
   assert.equal(link.post({ type: 'agentMode', agent: 'demo', mode: 'auto' }), true);
   assert.equal(link.groupOk('g1'), true); assert.equal(link.groupOk('g3'), false);
   subs[0].closed();
@@ -315,7 +317,7 @@ test('item 6: a move goes only in Shadow; the link sends Shadow first and the mo
   const feed = { listen: p => { subs.push(p); return () => { subs.splice(subs.indexOf(p), 1); }; }, post: x => { posted.push(x); return true; } };
   const link = AC.legionLink(feed);
   const hear = m => { for (const s of subs.slice()) s.message(m); };
-  hear(accounts()); hear(groups); hear(agent({ mode: 'auto', account: null })); hear({ type: 'bot', account: null, mode: 'auto' });
+  hear(HELLO); hear(accounts()); hear(groups); hear(agent({ mode: 'auto', account: null })); hear({ type: 'bot', account: null, mode: 'auto' });
   const L = gateWith(accounts(), groups, agent({ mode: 'auto', account: null }), { type: 'bot', account: null, mode: 'auto' });
   assert.match(L.check({ type: 'agentAccount', agent: 'demo', account: 'PROP-1', keepMode: 'auto' }), /goes only while the trader is in Shadow/);
   assert.match(L.check({ type: 'botAccount', account: 'PROP-1' }), /the bot changes account only in Shadow/);
@@ -358,7 +360,7 @@ test('item 6, the reviewer\'s sequence: Legion sets the bot to Auto on None, Pra
     setTimeout(() => { for (const s of subs) s.message(Object.assign({ type: 'bot' }, bridge)); }, 0);
     return true; } };
   const legion = AC.legionLink(feed), praet = AC.praetorianLink(feed);
-  for (const s of subs) { s.message(accounts()); s.message(groups); s.message(Object.assign({ type: 'bot' }, bridge)); }
+  for (const s of subs) { s.message(HELLO); s.message(accounts()); s.message(groups); s.message(Object.assign({ type: 'bot' }, bridge)); }
   return new Promise(done => setTimeout(() => {
     assert.equal(legion.post({ type: 'botMode', mode: 'auto' }), true, 'None: Legion may set Auto');
     setTimeout(() => {
@@ -377,7 +379,7 @@ test('item 6, the reviewer\'s sequence: Legion sets the bot to Auto on None, Pra
 const stand = more => {   // a stand-in ChartBridge for one link: it applies Shadow, Auto and moves as ChartBridge does (keepMode rule)
   const posted = [], subs = [];
   const st = Object.assign({ agent: { mode: 'shadow', account: null }, bot: { mode: 'shadow', account: null } }, more || {});
-  const say = () => { for (const s of subs) { s.message(agent(Object.assign({}, st.agent, { owns: false, position: null }))); s.message(Object.assign({ type: 'bot' }, st.bot)); } };
+  const say = () => { for (const s of subs) { s.message(HELLO); s.message(agent(Object.assign({}, st.agent, { owns: false, position: null }))); s.message(Object.assign({ type: 'bot' }, st.bot)); } };
   const feed = { listen: p => { subs.push(p); return () => subs.splice(subs.indexOf(p), 1); }, post: x => {
     posted.push(x);
     if (x.type === 'agentMode') st.agent.mode = x.mode;
@@ -497,4 +499,23 @@ test('answers B4-4, G2: a no-home trader in Auto, flat, moved to None from PRAET
   assert.deepEqual(B.posted, [{ type: 'agentMode', agent: 'demo', mode: 'shadow' }]);
   B.say();
   assert.deepEqual(B.posted[1], { type: 'agentAccount', agent: 'demo', account: null, keepMode: 'shadow' });
+});
+
+test('round 4, GOLIVE_MIN: Auto on Legion\'s desks needs ChartBridge 0.6.25 or later, said with the version; the stops and Shadow never wait', () => {
+  assert.equal(AC.GOLIVE_MIN, '0.6.25');
+  const msgs = [{ type: 'agentMode', agent: 'demo', mode: 'auto' }, { type: 'botMode', mode: 'auto' }];
+  const with_ = v => { const g = AC.legionGate(); if (v !== null) g.hear({ type: 'hello', version: v }); for (const m of [accounts(), groups, agent(), { type: 'bot', account: 'PROP-1', mode: 'shadow' }]) g.hear(m); return g; };
+  for (const m of msgs) assert.equal(with_('0.6.25').check(m), '', '0.6.25: ' + m.type);
+  for (const m of msgs) assert.equal(with_('0.7.0').check(m), '', '0.7.0: ' + m.type);
+  for (const [v, word] of [['0.6.24', '0.6.24'], ['0.6.25-rc1', '0.6.25-rc1'], ['', 'not known'], [null, 'not known']]) {
+    const g = with_(v);
+    for (const m of msgs) assert.equal(g.check(m), 'Not sent from Legion: Auto on a prop account needs ChartBridge 0.6.25 or later (its firm and GO-size guards); this one is ' + word + '.', String(v) + ' ' + m.type);
+    /* the stops and Shadow go whatever the version */
+    for (const m of [{ type: 'agentMode', agent: 'demo', mode: 'shadow' }, { type: 'agentKill', agent: 'demo', on: true }, { type: 'botMode', mode: 'shadow' }, { type: 'botKill', on: true }, { type: 'agentFlattenOff', agent: 'demo' }])
+      assert.equal(g.check(m), '', String(v) + ' ' + m.type + ' ' + (m.mode || ''));
+    assert.equal(g.check({ type: 'agentMode', agent: 'demo', mode: 'copilot' }), '', 'Copilot is not Auto (each plan is Anthony\'s own yes)');
+  }
+  /* a drop forgets the version: Auto waits for the next hello */
+  const g = with_('0.6.25'); g.lost(); for (const m of [accounts(), groups, agent()]) g.hear(m);
+  assert.match(g.check(msgs[0]), /this one is not known/);
 });

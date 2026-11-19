@@ -404,3 +404,31 @@ test('the R12 delta of plan step 3.2, X4: the traders being turned off are share
   C.set([]);
   assert.deepEqual(F2.list(), [], 'C said it ended');
 });
+
+test('round 4, S1 and S2: an entry outlives a hidden window\'s throttled timer; a trader kept only for a failed Off is marked so in every window', () => {
+  assert.ok(AH.TURN_TTL_MS > 75000, 'longer than the 75 s margin over Chrome\'s timer throttle in a hidden window: ' + AH.TURN_TTL_MS);
+  let t = 7000000;
+  const now = () => t;
+  const mem = () => { const m = new Map(); return { get length() { return m.size; }, key: i => [...m.keys()][i] ?? null, getItem: k => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: k => m.delete(k), m }; };
+  const bus = () => { const ends = []; return () => { const c = { onmessage: null, postMessage: d => { for (const o of ends) if (o !== c && o.onmessage) o.onmessage({ data: JSON.parse(JSON.stringify(d)) }); } }; ends.push(c); return c; }; };
+  const ls = mem(), chan = bus();
+  const A = AH.createTurnShare({ storage: () => ls, channel: chan, now, token: 'wa' }), B = AH.createTurnShare({ storage: () => ls, channel: chan, now, token: 'wb' });
+  const S = AH.createTurnShare({ storage: () => ls, now, token: 'ws' });   // storage only
+  /* a window whose timer waits a minute (hidden): its entry is still there 75 s after its last write */
+  A.set(['legion1']);
+  t += 75000;
+  assert.deepEqual([B.list(), S.list()], [['legion1'], ['legion1']]);
+  /* held: kept only because its Off failed */
+  A.set(['legion1', 'legion2'], ['legion2']);
+  t += AH.TURN_SCAN_MS;
+  for (const W of [A, B, S]) { const l = W.list(); assert.deepEqual([l.slice().sort(), l.held], [['legion1', 'legion2'], ['legion2']]); }
+  assert.deepEqual(Object.keys(B.list()), ['0', '1'], 'held is not an enumerable key: a list still reads as plain ids');
+  /* another window running a job for the same trader: not "held" any more (a job under way wins) */
+  B.set(['legion2']);
+  t += AH.TURN_SCAN_MS;
+  assert.deepEqual([A.list().held, S.list().held], [[], []]);
+  B.set([]); A.set([]);
+  t += AH.TURN_SCAN_MS;
+  assert.deepEqual([A.list(), B.list(), S.list()], [[], [], []], 'a window going away (pagehide sends set([])) clears its entries at once');
+  assert.deepEqual(AH.heldList(['a'], ['a']).held, ['a']);
+});

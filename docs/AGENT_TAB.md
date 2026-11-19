@@ -313,7 +313,10 @@ at sign-in, which starts and stops the agent's runner. The logic is `live/agent-
   30 s at most. With an older ChartBridge: Shadow first (`agentMode` shadow, 10 s at most), then the line says where to flatten
   him by hand (in NinjaTrader, or Flatten on the chart page's ticket), 15 minutes at most, then Off. Off goes only in Shadow and
   flat; out of Shadow, or not flat in time, he stays on and the line says so until the next On or Off. No desk sends a Flatten of
-  its own. Keep him on sends nothing. The page never builds an order for him.
+  its own. Keep him on sends nothing. The page never builds an order for him. Until his Off answers ok he stays on the list of
+  traders being turned off, shared by every window of the page's origin, and Legion's Armed leaves his lane out; a failed Off is
+  said there ("Off was not done on a desk: press Off (or On) for him there"). On Legion's desks Auto on a prop account needs
+  ChartBridge 0.6.25 or later (GOLIVE_MIN), said with the version when it is older.
 - **A build that is not a hero** runs in Shadow on a Sim account only: Copilot, Auto and a LIVE account are closed with the
   reason, the helper refuses On for it in any other mode or account, and the runner refuses every plan there. The page fails
   closed: without the helper's word it reads it from his hello (such a runner says its build id as its name).

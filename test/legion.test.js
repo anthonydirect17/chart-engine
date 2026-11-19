@@ -211,3 +211,25 @@ test('plain hyphens only in Legion\'s files', () => {
     if (fs.existsSync(p)) assert.ok(!/[\u2013\u2014]/.test(fs.readFileSync(p, 'utf8')), f);
   }
 });
+
+test('round 4: a status line carrying a cid answers only the pending press with that cid; one with none is matched by its words', () => {
+  const line = { type: 'status', level: 'warn', text: 'Stop all automation: agent a on P: stopped' };
+  assert.deepEqual(L.stopAnswer(Object.assign({ cid: 'lx1' }, line), 'lx1'), { text: line.text, bad: false }, 'its own press');
+  assert.equal(L.stopAnswer(Object.assign({ cid: 'other' }, line), 'lx1'), null, 'another window\'s press: not this answer');
+  assert.equal(L.stopAnswer(Object.assign({ cid: 'lx1' }, line), ''), null, 'nothing pending: a line with a cid is not taken');
+  assert.equal(L.stopAnswer(Object.assign({ cid: 'lx1' }, line, { text: 'Kill all (prop accounts): x' }), 'lx2'), null);
+  assert.deepEqual(L.stopAnswer(line, 'lx1'), { text: line.text, bad: false }, 'an older ChartBridge (no cid): by its words, as before');
+  assert.deepEqual(L.stopAnswer(line, ''), { text: line.text, bad: false });
+  const js = read('live', 'legion.js');
+  assert.match(js, /const a = C\.stopAnswer\(m, S\.pending\);\n[^\n]*\n\s+if \(m\.type === 'status' && typeof m\.text === 'string' && \(m\.level === 'warn' \|\| m\.level === 'error'\) && !a\) alertLoud/, 'a line that is not this press\'s answer goes to the alert line');
+});
+
+test('round 4, GOLIVE_MIN: Go live needs ChartBridge 0.6.25 or later, said with the version on its tab', () => {
+  assert.equal(L.GOLIVE_MIN, '0.6.25');
+  assert.deepEqual(L.goLivePlan('0.6.25'), { ok: true, why: '' });
+  assert.deepEqual(L.goLivePlan('0.7.0'), { ok: true, why: '' });
+  for (const [v, w] of [['0.6.24', '0.6.24'], ['0.6.25-rc1', '0.6.25-rc1'], ['', 'not known'], [null, 'not known']])
+    assert.deepEqual(L.goLivePlan(v), { ok: false, why: 'Go live needs ChartBridge 0.6.25 or later (its firm and GO-size guards); this one is ' + w + '. Nothing goes live from here until it is updated.' }, String(v));
+  assert.match(read('live', 'legion.html'), /<section class="lx-view" id="lx-golive"[\s\S]*?<p class="lx-muted" id="lxGoLiveWhy" role="note" hidden><\/p>/);
+  assert.match(read('live', 'legion.js'), /const gl = \$\('lxGoLiveWhy'\), gw = S\.connected \? C\.goLivePlan\(S\.version\)\.why : '';/);
+});

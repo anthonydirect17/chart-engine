@@ -1028,6 +1028,8 @@ function agentUpgrade(req, sock) {
   const gone = () => { if (a.conn === c) desk.agentDrop(id, 'the agent disconnected'); };
   sock.on('close', gone); sock.on('error', gone);
 }
+/* round 4: ChartBridge 0.6.25 puts the press's cid on its Stop all and Kill all status lines; the fake does so from --version=0.6.25 */
+if (desk) desk.pressCid = (v => { const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(v || ''); return !!m && (+m[1] * 1e6 + +m[2] * 1e3 + +m[3]) >= 6025; })(flagValue('version'));
 /* the agents' test controls (see the header); sample data only */
 function agentControl(p, q, req, res) {
   const json = (code, v) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(v)); };

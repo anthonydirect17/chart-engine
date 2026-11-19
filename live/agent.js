@@ -62,24 +62,40 @@ const LIGHT_HTML = '<div class="ag-light" data-parity="LT02" aria-hidden="true">
    answers), so Legion's Armed never puts one of them in Auto meanwhile (FleetCore.lanes reads AgentDesk.turningOff). Each desk is
    read at the moment it is asked (never a copy made at a render), and the R12 delta X4 shares the list with every window of this
    origin (AgentHelper.createTurnShare: a browser entry per trader with a short life, and a BroadcastChannel) */
-const TURNING = new Map();   // desk -> () => [the agent ids it is turning off now]
+const TURNING = new Map();   // desk -> () => [{ id, hold }]: the traders it is turning off now (hold: kept only for a failed Off, S2)
 const SHARE = AH && typeof AH.createTurnShare === 'function' ? AH.createTurnShare({
   storage: () => window.localStorage,
   channel: () => (typeof BroadcastChannel === 'function' ? new BroadcastChannel('live-agent-turning-v1') : null) }) : null;
-function localTurning() { const out = new Set(); for (const f of TURNING.values()) { try { for (const id of f()) if (id) out.add(id); } catch (e) { /* a desk gone */ } } return [...out]; }
+/* id -> held (true only while every desk keeps him for a failed Off alone) */
+function localTurning() {
+  const out = new Map();
+  for (const f of TURNING.values()) { try { for (const e of f()) if (e && e.id) out.set(e.id, out.has(e.id) ? out.get(e.id) && !!e.hold : !!e.hold); } catch (e) { /* a desk gone */ } }
+  return out;
+}
 /* this window's list, written for the others: at once when it changes, and again each second while it is not empty */
-let shareTimer = 0, shareSig = '';
+let shareTimer = 0, shareSig = '', shareGone = false;
 function shareSync(force) {
-  const ids = localTurning(), sig = ids.slice().sort().join(',');
-  if (SHARE && (force || sig !== shareSig)) { try { SHARE.set(ids); } catch (e) { /* never in the way */ } }
+  if (shareGone) return;                                  // the window is going (pagehide): nothing written again
+  const m = localTurning(), ids = [...m.keys()], held = ids.filter(id => m.get(id)), sig = ids.slice().sort().join(',') + '|' + held.slice().sort().join(',');
+  if (SHARE && (force || sig !== shareSig)) { try { SHARE.set(ids, held); } catch (e) { /* never in the way */ } }
   shareSig = sig;
   clearTimeout(shareTimer); shareTimer = 0;
   if (ids.length) shareTimer = setTimeout(() => shareSync(true), 1000);
 }
+/* round 4, S1: a window closed (or put in the back-forward cache) clears its own entries at once, never left for TURN_TTL_MS. The
+   desks' own list (TURNING) is kept: a window brought back from that cache writes it again (pageshow), so a job still under way is
+   never dropped from Armed's list */
+if (typeof window.addEventListener === 'function') {
+  window.addEventListener('pagehide', () => { clearTimeout(shareTimer); shareTimer = 0; shareSig = ''; shareGone = true; if (SHARE) { try { SHARE.set([]); } catch (e) { /* going anyway */ } } });
+  window.addEventListener('pageshow', e => { if (e && e.persisted) { shareGone = false; shareSync(true); } });
+}
+/** The traders a desk of any window of this origin is turning off: [ids], with .held (not enumerable): the ones kept only because
+ *  their Off failed (round 4, S2: Armed then says so). */
 function turningOff() {
-  const ids = new Set(localTurning());
-  if (SHARE) { try { for (const id of SHARE.list()) ids.add(id); } catch (e) { /* this window's own only */ } }
-  return [...ids];
+  const all = localTurning();
+  if (SHARE) { try { const s = SHARE.list(), h = new Set(s.held || []); for (const id of s) all.set(id, all.has(id) ? all.get(id) && h.has(id) : h.has(id)); } catch (e) { /* this window's own only */ } }
+  const ids = [...all.keys()];
+  return AH && typeof AH.heldList === 'function' ? AH.heldList(ids, ids.filter(id => all.get(id))) : ids;
 }
 function create(o) {
   o = o || {};
@@ -123,8 +139,8 @@ function create(o) {
   const api0 = {};                                  // this desk, as TURNING knows it
   /* H.hold: the trader whose Off a Flatten-and-off sent, kept in TURNING until that Off answers ok (a failed Off: until the next
      On or Off for him), so Armed never takes him between the job's end and his program's end (the R12 delta, nit) */
-  const H = { reach: '', why: '', status: null, okAt: 0, misses: 0, slow: false, pick: {}, busy: false, ask: null, job: null, hold: '', lines: {}, said: '', saidAt: 0, setFilled: '' };
-  TURNING.set(api0, () => [H.job && H.job.agent, H.hold]);
+  const H = { reach: '', why: '', status: null, okAt: 0, misses: 0, slow: false, pick: {}, busy: false, ask: null, job: null, hold: '', holdFailed: false, lines: {}, said: '', saidAt: 0, setFilled: '' };
+  TURNING.set(api0, () => [H.job && { id: H.job.agent, hold: false }, H.hold && { id: H.hold, hold: H.holdFailed && !(H.job && H.job.agent === H.hold) }]);
   { const v = readJson(K.chart); if (v && TF_NAMES[v.tf]) S.chartTf = v.tf; }
   { const v = readJson(K.feed); if (v && FILTERS.some(f => f[0] === v.filter)) S.feedFilter = v.filter; }
 
@@ -975,7 +991,7 @@ function create(o) {
     const held = heldWhy(a.agent); if (held) { helperSay('Not started from ' + tabName + ': ' + held + '.'); renderPanel(); return; }   // 1.51.0
     if (H.slow) { helperSay(SLOW_SENT); renderPanel(); return; }   // 1.29.1: never on an old answer; the press is told why
     delete H.lines[a.agent];
-    if (H.hold === a.agent) H.hold = '';               // On pressed: he is not being turned off any more
+    if (H.hold === a.agent) { H.hold = ''; H.holdFailed = false; }               // On pressed: he is not being turned off any more
     H.busy = true; helperSay('Asking the PC helper to start him...'); renderPanel();
     const r = await HC.on(a.agent, build, a.mode, a.sim);
     H.busy = false;
@@ -983,19 +999,19 @@ function create(o) {
     await pollHelper();
   }
   /* the Off of a Flatten-and-off: he stays in TURNING until it answers ok (H.hold) */
-  function offAfter(id, after) { H.hold = id; return helperOff(id, after); }
+  function offAfter(id, after) { H.hold = id; H.holdFailed = false; return helperOff(id, after); }
   async function helperOff(id, after) {
     H.busy = true; helperSay('Turning him off...'); renderPanel();
     const r = await HC.off(id);
     H.busy = false;
-    if (r.reach === 'ok' && H.hold === id) H.hold = '';
+    if (H.hold === id) { if (r.reach === 'ok') { H.hold = ''; H.holdFailed = false; } else H.holdFailed = true; }   // S2: a failed Off is said as one
     const said = r.reach === 'ok' ? (after || '') + 'Off: his program ends, no more model calls.' : 'Off was not done: ' + (r.body && r.body.error ? r.body.error : AH.stateText(null, r.reach, H.why));
     if (r.reach === 'ok') { delete H.lines[id]; helperSay(said); } else H.lines[id] = said;   // a failure stays until the next On or Off
     await pollHelper();
   }
   function offPressed(a) {
     delete H.lines[a.agent];
-    if (H.hold === a.agent) H.hold = '';               // a new Off for him: the one that failed is not waited for any more
+    if (H.hold === a.agent) { H.hold = ''; H.holdFailed = false; }               // a new Off for him: the one that failed is not waited for any more
     if (AH.offStep(a) === 'ask') { H.ask = { agent: a.agent, text: AH.offQuestion(a, AC.agentName(a)) }; renderPanel(); const y = q('[data-act="hAskNo"]'); if (y) y.focus(); return; }
     helperOff(a.agent);
   }

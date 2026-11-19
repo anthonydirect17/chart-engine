@@ -374,6 +374,15 @@ try {
   check((await text('[data-do="arm"]')) === 'Armed: off' && await page.locator('#flView [role="switch"]').count() === 1 && await page.locator('[data-do="arm"]').getAttribute('aria-checked') === 'false', 'one Armed switch, off');
   await page.evaluate(() => { document.getElementById('flView').scrollTop = 0; });
   await page.screenshot({ path: path.join(SHOTS, 'fleet-lanes.png') });
+  /* round 4, GOLIVE_MIN: on ChartBridge 0.6.21 Armed is not offered (aria-disabled, the plain line naming the version as its title);
+     a click forced on it opens no question and sends nothing */
+  const goRef = await page.evaluate(() => { const b = document.querySelector('[data-do="arm"]'); return { dis: b.getAttribute('aria-disabled'), title: b.title }; });
+  await page.click('[data-do="arm"]', { force: true }); await sleep(200);
+  check(goRef.dis === 'true' && /^Armed needs ChartBridge 0\.6\.25 or later for Auto on a prop account \(its firm and GO-size guards\); this one is 0\.6\.21/.test(goRef.title) && !(await armAsking()) && (await sentD2()).length === 0,
+    'round 4: Armed on ChartBridge 0.6.21: not offered, the version said, a forced click opens nothing and sends nothing: ' + JSON.stringify(goRef));
+  await feed({ type: 'hello', version: '0.6.25' }); await feed({ type: 'trading', enabled: true }); await feed(accounts); await feed(groups);
+  await feed(lane1()); await feed(lane2()); await feed({ type: 'agentStandDowns', list: [] });
+  await page.waitForFunction(() => window.fleet.state().lanes[0].armable === true);
   // a double click anywhere on the switch arms nothing, at every width; where the switch was, the question has Cancel, never Yes
   for (const width of [1440, 1024, 700, 390]) {
     await page.setViewportSize({ width, height: 900 });

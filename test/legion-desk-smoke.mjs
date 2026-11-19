@@ -128,8 +128,15 @@ try {
   check(!dis.auto && !dis.acct && !dis.rules, 'Legion\'s desk offers his modes, account and rules: ' + JSON.stringify(dis));
   await page.screenshot({ path: path.join(SHOTS, 'legion-desk-agent.png') });
   await clear();
+  /* round 4, GOLIVE_MIN: on ChartBridge 0.6.21 Auto on a prop account is refused, with the version said; on 0.6.25 it goes */
+  await page.click(L + ' [data-mode="auto"]'); await sleep(500); await page.click(L + ' [data-mode="auto"]'); await sleep(300);
+  const goWords = await page.evaluate(() => document.body.innerText);
+  check((await posted()).length === 0 && /Auto on a prop account needs ChartBridge 0\.6\.25 or later \(its firm and GO-size guards\); this one is 0\.6\.21/.test(goWords),
+    'round 4: Auto from Legion\'s desk on ChartBridge 0.6.21: nothing goes, and the line names the version: ' + JSON.stringify(await posted()));
+  await feed({ type: 'hello', version: '0.6.25', features: ['v3'], instruments: [{ root: 'MNQ', tick: 0.25, pointValue: 2 }] }); await feed(agent()); await sleep(200);
   await page.click(L + ' [data-mode="auto"]'); await sleep(500); await page.click(L + ' [data-mode="auto"]'); await sleep(200);
-  check(JSON.stringify(await posted()) === JSON.stringify(['agentMode:demo:auto']), 'Auto from Legion\'s desk (its second click) goes: ' + JSON.stringify(await posted()));
+  check(JSON.stringify(await posted()) === JSON.stringify(['agentMode:demo:auto']), 'Auto from Legion\'s desk (its second click) goes on ChartBridge 0.6.25: ' + JSON.stringify(await posted()));
+  await feed({ type: 'hello', version: '0.6.21', features: ['v3'], instruments: [{ root: 'MNQ', tick: 0.25, pointValue: 2 }] }); await feed(agent()); await sleep(200);
   await clear();
   await page.evaluate(() => { for (const b of document.querySelectorAll('#prAg [data-k="modes"] button')) b.disabled = false; document.querySelector('#prAg [data-mode="copilot"]').click(); });
   await sleep(200);

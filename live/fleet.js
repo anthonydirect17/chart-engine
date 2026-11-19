@@ -56,6 +56,7 @@
 
 const KILL_MIN = '0.6.17';       // ChartBridge that knows agentKillAllProp
 const STOPALL_MIN = '0.6.25';    // ... agentStopAll, Legion's Stop all automation (LegionCore.STOPALL_MIN; a test holds them equal)
+const GOLIVE_MIN = '0.6.25';     // ... the firm and GO-size guards: Armed's Auto waits for it (round 4; AgentCore.GOLIVE_MIN, held equal)
 const SWITCH_MIN = '0.6.18';     // ... the two entry switches
 const DAYSTOP_MIN = '0.6.19';    // ... the day's profit stop
 const ROSTER_MIN = '0.6.20';     // ... GET /roster
@@ -497,6 +498,11 @@ function killAllState(version, accountsMsg, signedIn, connected, needPersonal) {
 const killAllMsg = (cid, version) => Object.assign({ type: atLeast(version, STOPALL_MIN) ? 'agentStopAll' : 'agentKillAllProp' }, cid ? { cid } : {});
 /** Is this status line ChartBridge's answer to a Kill all? Its own words for either command (X1). */
 const KILL_ANSWER_RX = /^(Kill all \(prop accounts\)|Stop all automation)/;
+/** Is this status line the answer to this tab's Kill all (pending: its cid, or '')? Round 4: ChartBridge 0.6.25 puts the press's
+ *  cid on it, and then only the pending press with that cid takes it (the header's or another window's press is not this one's);
+ *  a line with no cid (an older ChartBridge) is taken by its words as before. */
+const killAnswerOf = (m, pending) => !!m && m.type === 'status' && typeof m.text === 'string' && KILL_ANSWER_RX.test(m.text) &&
+  (!Object.prototype.hasOwnProperty.call(m, 'cid') || (typeof pending === 'string' && pending !== '' && m.cid === pending));
 
 /**
  * The line beside the title: every trader in Auto that Kill all counts, and which of them it will NOT stop (the review of
@@ -550,6 +556,8 @@ const SHA_RX = /^[0-9a-f]{64}$/;
  */
 function lanes(agents, groupsMsg, accountsMsg, version, cards, turningOff) {
   const turning = new Set(Array.isArray(turningOff) ? turningOff.filter(x => typeof x === 'string') : []);   // the R12 delta, B1r
+  /* round 4, S2: the ones kept only because an Off a desk sent failed (AgentDesk.turningOff().held) */
+  const heldOff = new Set(Array.isArray(turningOff) && Array.isArray(turningOff.held) ? turningOff.held.filter(x => typeof x === 'string') : []);
   const groups = groupIndex(groupsMsg), idx = accountIndex(accountsMsg), files = new Map();
   if (cards && cards.ok) for (const c of cards.lineups.concat(cards.bots)) files.set(c.file, c);
   const list = (Array.isArray(agents) ? agents : []).filter(a => plainObj(a) && typeof a.agent === 'string').sort((x, y) => (x.agent < y.agent ? -1 : x.agent > y.agent ? 1 : 0));
@@ -612,6 +620,7 @@ function lanes(agents, groupsMsg, accountsMsg, version, cards, turningOff) {
       : !accountsReadable(a) ? 'The page cannot tell its accounts (what ChartBridge sent is not an account, a group or a list of seats)'
       : !Array.isArray(g.members) ? 'Not known yet: ChartBridge sent its group without its members, so the page cannot tell who else is on its accounts'   // N3, as groupLock
       : shareWhy ? shareWhy
+      : turning.has(a.agent) && heldOff.has(a.agent) ? 'Off was not done on a desk: press Off (or On) for ' + a.agent + ' there'
       : turning.has(a.agent) ? 'A desk is turning ' + a.agent + ' off (Flatten and turn off): not armed until that ends'
       : a.enabled === false ? 'The trader is off in ChartBridge'
       : a.killed ? 'Its kill switch is on (it is released on his desk, by you: the Traders fold here, or Praetorian)'
@@ -677,6 +686,7 @@ function armState(ls, version, signedIn, connected, accountsMsg, groupsMsg, hear
   if (out.length) reasons.push('Not a lane, so not armed from here: ' + (Array.isArray(out.words) && out.words.length === out.length ? out.words : out).join('; ') + ' in Auto (a click sends it to Shadow; or on Praetorian)');
   const state = !busy.length && !out.length ? 'off' : !reasons.length && ready.length && ready.every(l => l.auto) ? 'on' : 'partly';
   const why = !kill.ok ? kill.why : !atLeast(version, PICK_MIN) ? 'Armed needs ChartBridge ' + PICK_MIN + ' or later (this one is ' + (version || 'not known') + ')'
+    : !atLeast(version, GOLIVE_MIN) ? 'Armed needs ChartBridge ' + GOLIVE_MIN + ' or later for Auto on a prop account (its firm and GO-size guards); this one is ' + (version || 'not known') + '. Switching off still works'   // round 4
     : !ready.length ? 'No lane is ready: ' + ls.map(l => l.title + ': ' + l.why).join(' ') : '';
   return { state, text: state === 'on' ? 'Armed: ON' : state === 'partly' ? 'Armed: PARTLY' : 'Armed: off', can: !why, canOff: true, why, reasons, outside: out };
 }
@@ -1022,7 +1032,7 @@ const badAnswer = text => /NOT STOPPED|FAILED|could NOT/.test(String(text || '')
 const clock = d => [d.getHours(), d.getMinutes(), d.getSeconds()].map(x => String(x).padStart(2, '0')).join(':');
 
 return Object.freeze({ displayNameOk, shownName, cardText, LANE_KEEP_MIN, laneLogOf, hhmm, laneWord, LANE_HELP, one, laneAccounts, RULE_OWNED_WORDS, HAND_MIN, laneRuleOf, unassigned, modeRulesLoaded, NOT_KNOWN, NOT_READABLE, groupLock, accountsReadable, MAX_FILLS, LANE_COLOR, LANE_LETTER, propRows, todayOf, liveTiles, cleanFill, laneMarks, traderDays, laneRunner, readableName, rosterFamilies, FILTERS, laneLock, laneMaySend, laneFeed, PICK_MIN, STAGES, lanes, outsideAuto, armState, armMsgs, armWords, pickChoices, waitingChoices, pickMsg, maySend, KILL_MIN, SWITCH_MIN, DAYSTOP_MIN, ROSTER_MIN, ROSTER_FORMAT, LINEUP_FORMAT, CONFIRM_MS, ARM_MS, ANSWER_WAIT_MS, ROSTER_WAIT_MS, MAX_CARDS, MAX_MEMBERS, MAX_NOT_SHOWN, MODE_NAME, atLeast, usd, signed, stageCard, rosterCards, rosterProblem,
-  kindOf, seatsKind, dayMark, traderAccounts, statusText, traders, propAccounts, STOPALL_MIN, killAllState, killAllMsg, KILL_ANSWER_RX, autoLine, badAnswer, clock });
+  kindOf, seatsKind, dayMark, traderAccounts, statusText, traders, propAccounts, STOPALL_MIN, GOLIVE_MIN, killAllState, killAllMsg, KILL_ANSWER_RX, killAnswerOf, autoLine, badAnswer, clock });
 });
 
 /* ================================================================================================ the tab (browser only) */
@@ -1142,7 +1152,7 @@ function create(o) {
         else if (typeof m.cid === 'string' && S.modeSent.has(m.cid)) { const x = S.modeSent.get(m.cid); S.modeSent.delete(m.cid); armSay('ChartBridge refused ' + (x.mode === 'auto' ? 'Auto' : 'Shadow') + ' for ' + x.agent + (typeof m.reason === 'string' && m.reason ? ': ' + m.reason : ''), true); }
         else if (typeof m.cid === 'string' && S.pickSent.has(m.cid)) { const id = S.pickSent.get(m.cid); S.pickSent.delete(m.cid); armSay('ChartBridge refused the pick for ' + id + (typeof m.reason === 'string' && m.reason ? ': ' + m.reason : ''), true); S.drawn.lanes = null; }
         break;
-      case 'status': if (typeof m.text === 'string' && C.KILL_ANSWER_RX.test(m.text)) answered(m.text, m.level === 'error' || C.badAnswer(m.text)); break;
+      case 'status': if (C.killAnswerOf(m, S.pending)) answered(m.text, m.level === 'error' || C.badAnswer(m.text)); break;
       default: return;
     }
     if (S.hintState && killState().why !== S.hint) hint('', false);

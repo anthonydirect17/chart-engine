@@ -23,6 +23,16 @@ Page and ChartBridge (`ChartBridgeAgents.cs` only; `ChartBridge.cs` untouched, i
   leaves out a lane whose trader a desk in any window of this browser is turning off, until his Off answers.
 - **One version rule:** ChartBridge's version is read as exactly a.b.c on every gate (Stop all, Kill all, Flatten and turn off);
   anything else counts as no version.
+- **Go live and Auto on a prop account need ChartBridge 0.6.25** (`GOLIVE_MIN` in `agent-core.js`, `fleet.js` and `legion.js`,
+  pinned together): below it Armed is not offered, Legion's desks refuse Auto (Copilot and every stop still go), and the Go live
+  tab says so, each with a plain line naming the version. A PC rolled back to an older ChartBridge never runs a trader past its
+  firm and GO-size guards.
+- **Answers matched by cid:** ChartBridge 0.6.25 puts the press's cid on its Stop all and Kill all status lines; the header and
+  Kill all then take a line only for their own pending press (another window's goes to the alert line). A line with no cid (an
+  older ChartBridge) is matched by its opening words as before.
+- **The turning-off list across windows** keeps an entry 90 s (longer than a hidden window's throttled timer) and a closing window
+  clears its own at once (pagehide). A lane held out of Armed only because an Off failed says "Off was not done on a desk: press
+  Off (or On) for X there".
 - **The chart page** keeps Chart, the Bot tab, the bot strip and a small Legion link (shown with a v3 ChartBridge, opening
   `legion.html` in its own window). Legion, the Colosseum and Praetorian's Agent tab left it, and so did its league read: the
   Drone sky shows the agents and the bot only, and a chart's ⋯ has no League trades switch. The Agent desk stays on the chart page

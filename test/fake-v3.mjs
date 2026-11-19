@@ -1456,10 +1456,13 @@ Object.assign(OrderDeskV3.prototype, {
   },
   /* plan step 3.2 (Legion's header). The fake bridge knows no prop account and no account ledger (sample data only), so both
      answer with ChartBridge's status line and touch no trader; a test that wants the effect reads nt8/check (AgentHarness.cs). */
+  /* round 4 (ChartBridge 0.6.25, PressStatus): the press's cid after the text when it sent one; pressCid off (a ChartBridge before
+     0.6.25, set by the fake bridge from its --version) leaves it out, as an older ChartBridge does */
+  pressStatus(m, text) { return Object.assign({ type: 'status', level: 'warn', text }, this.pressCid && m && typeof m.cid === 'string' ? { cid: m.cid } : {}); },
   check_agentStopAll() { return null; },
-  do_agentStopAll() { this.broadcastV3({ type: 'status', level: 'warn', text: 'Stop all automation: no bot or agent is on a prop account: nothing was done (the fake bridge knows no prop account and no ledger)' }); },
+  do_agentStopAll(m) { this.broadcastV3(this.pressStatus(m, 'Stop all automation: no bot or agent is on a prop account: nothing was done (the fake bridge knows no prop account and no ledger)')); },
   check_agentKillAllProp() { return null; },
-  do_agentKillAllProp() { this.broadcastV3({ type: 'status', level: 'warn', text: 'Kill all (prop accounts): no agent is on prop accounts: nothing was done (the fake bridge knows no prop account)' }); },
+  do_agentKillAllProp(m) { this.broadcastV3(this.pressStatus(m, 'Kill all (prop accounts): no agent is on prop accounts: nothing was done (the fake bridge knows no prop account)')); },
   /* plan step 3.2: Shadow, its unfilled entries cancelled, its Copilot proposals expired, then its own flatten (as ChartBridge) */
   /* the R12 delta X2: a refusal set by the test control /test/agent-refuse-flatoff (once), as ChartBridge's action rate refuses */
   check_agentFlattenOff(m) {
