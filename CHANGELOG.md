@@ -106,8 +106,9 @@ page beside the ChartBridge each PC runs today.
     floor must start at the account size, with the firm's dashboard as the way to type the real highest close. The kept
     highs themselves are ChartBridge 0.6.25's: until then a leave, a deleted group or Hide still forgets them.
   - **Castra, the cohort model and the Ludus** read The Desk only (the cohort model's drag and drop writes only The Desk's
-    `PUT /api/legion/cohorts/members`); none sends ChartBridge anything, so the version does not matter to them. A route
-    The Desk does not have yet reads as a failed read, in plain words.
+    `PUT /api/legion/cohorts/members`); none sends ChartBridge anything, so the version does not matter to them. They need
+    The Desk's Legion routes (TheDesk #112, and #120 for Castra's "could not tell" line); a route The Desk does not have
+    yet reads as a failed read, in plain words.
   - Legion's page itself (`live/legion.html` and its files) is served by any ChartBridge from its www folder.
 - **ChartBridge 0.6.25 (by hand, when Anthony says go and he is flat in every account):** `update-pc.ps1
   -InstallChartBridge`, then F5 in the NinjaScript Editor while flat; the card is `docs/CUTOVER_chartbridge_0_6_25_golive.md`
@@ -229,7 +230,10 @@ reads "not enough data yet". New files: `live/legion-castra-core.js`, `legion-ca
 
 - **Castra** (plan step 3.3, Legion's home tab): ROI first, real money against simulated money per roster build with the
   money alarm (law 9.2: real profit per $1 under the low end of the Prop Sim's range for the same number of evals shows as
-  tripped; it never trips until that range is served; it decides nothing by itself: the stop is step 3.5's);
+  tripped; it never trips until that range is served; it decides nothing by itself: the stop is step 3.5's; beside each
+  build's real profit per $1, The Desk's words when it could not tell which account the card had when an entry was booked
+  (TheDesk #120; the number is still shown), and one line for the ledger under the money; a Desk from before #120 gets
+  no line);
   who goes in today (each build's profit per $1, days to pass and payout speed; the split by zone and regime stays off);
   running now; Needs you (the one place a decision waits; it keeps its last answer, tells a pending read from a failed one,
   and is never all clear while a read is pending); last night; today (live only). Centurion's week shows its report; the
@@ -244,10 +248,13 @@ reads "not enough data yet". New files: `live/legion-castra-core.js`, `legion-ca
   an account of the tray under Auto). A move that timed out is read again at once and never called unmoved. Under it the
   Agents strip and the Drone sky.
 - **The Ludus** (plan step 3.4): Pipeline (stations I to VII from the loop's board), Board (the line of 30 and every build,
-  best first, each leading with profit per $1, pass rate, days to pass and payout per funded account beside its sample;
-  with no board the builds come from The Desk's ledger and the page says why), Builder, Seeds and Agents (read only), and
-  the build page (per account type its best eval and funded playbooks, the plain-code checks, its trades 20 a page, and
-  one trade on chart-engine's own chart from The Desk's stored bars of its session). The address keeps the view.
+  best first, each leading with profit per $1, pass rate, days to pass and payout per funded account beside its sample,
+  each half of the line with its own; with no board the builds come from The Desk's ledger and the page says why),
+  Builder, Seeds and Agents (read only; each edge with its sample, under 20 trades "not enough data yet"), and the build
+  page (per account type its best eval and funded playbooks, the plain-code checks, its trades 20 a page, and one trade on
+  chart-engine's own chart: its own bars first, from Bot-Lab, checked as The Desk checks them, else The Desk's stored bars
+  of its session, said plainly). It reads only The Desk's Legion routes (`/api/legion/board`, `lab`, `ledger`, `roster`,
+  `build/<id>/trades`, `bars`; TheDesk #112), which give Legion's page CORS; no Lab route. The address keeps the view.
 - Tests: `test/legion-castra.test.js`, `test/ludus.test.js`, `npm run smoke:castra`, `npm run smoke:ludus` (made-up data
   only); `test/legion.test.js` and `npm run smoke:legion` now expect Castra and the Ludus mounted.
 
@@ -363,10 +370,9 @@ the size. Fixed in `nt8/ChartBridgeGroups.cs`, `live/groups.js`, `live/accounts.
   (page 1.58.0, `minChartBridge` 0.6.2, its history line), `nt8/ChartBridge.cs` `Version` 0.6.25; the tests that hold a
   ChartBridge version range now reach 0.6.25 (`test/lifecycle.test.js`, `nt8-bars`, `history-gap`, `multi-account`,
   `nt8-agents`, `nt8-source`, `nt8-record`: 0.6.25 changes none of the files it pins), and `nt8/check/BarsHarness.cs` S2
-  names 0.6.25. `test/fleet.test.js`: the trader desk is still mounted with the page's own feed and hub, now kept as
-  `legionDesk` for the cohort model's Drone sky (plan step 3.3).
-- `npm test` (Linux): 1,288 tests, 1,287 pass, 1 skipped (Windows only). `npm run test:markup`: 173 pass.
-  `npm run check:orders` (Mono): 5,170 checks pass on the merged code; `npm run check:nt8` compiles. The PowerShell tests
+  names 0.6.25.
+- `npm test` (Linux): 1,292 tests, 1,291 pass, 1 skipped (Windows only). `npm run test:markup`: 173 pass.
+  `npm run check:orders` (Mono): 5,170 checks pass; `npm run check:nt8` compiles. The PowerShell tests
   (`test/pc-updater.tests.ps1`) run on the Windows job only.
 
 ## ChartBridge 0.6.24 and chart 1.57.1 (2026-11-18): release 1: the start guard, the personal bot, Cut half and the mini ticket, the way back
