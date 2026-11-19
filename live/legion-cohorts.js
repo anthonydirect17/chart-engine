@@ -70,8 +70,8 @@ function mount(el, opts) {
       say(account + (toId === null ? ' is out of its cohort.' : ' is in ' + (to ? to.name : 'the cohort') + '.'), false);
     }, e => {
       S.busy = false;
-      say(K.moveWords(e), true);
-      if (e && (e.status === 409 || e.status === 404)) readCohorts();
+      say(K.moveWords(e, account), true);
+      if (e && (e.status === 409 || e.status === 404 || e.status === null)) readCohorts();      // a timeout or a dropped answer: The Desk may have applied it, so it is read at once
     });
   }
 

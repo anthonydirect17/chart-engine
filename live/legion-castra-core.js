@@ -285,11 +285,12 @@ function dropRefusal(view, account, toId) {
   return '';
 }
 /** What The Desk refused (or that it did not answer), in plain words. e: { words, status, body } from deskClient. */
-function moveWords(e) {
+function moveWords(e, account) {
   const detail = e && e.body && typeof e.body.detail === 'string' ? e.body.detail.slice(0, 300) : '';
   if (e && e.status === 409) return 'Another change came first, so nothing was moved: the cohorts are read again, then drag again.';
   if (e && e.status === 404) return 'The Desk says ' + (detail || 'there is no such cohort') + '. The cohorts are read again.';
   if (e && e.status === 400) return 'The Desk refused it: ' + (detail || 'it gave no reason') + '.';
+  if (e && e.status === null) return 'The Desk did not answer, so this page cannot tell whether ' + (account || 'the account') + ' moved: the cohorts are read again.';
   return e && e.words ? e.words + ' Nothing was moved.' : 'Nothing was moved.';
 }
 
@@ -327,8 +328,9 @@ function needsYou(o) {
     if (!isObj(t) || (t.kind !== 'prop' && t.kind !== 'propsim' && t.kind !== 'unlisted' && t.kind !== 'mixed')) continue;
     if (t.tone === 'killed' || t.tone === 'standDown' || (t.tone === 'lost' && t.mode === 'auto')) out.push({ kind: 'trader', words: str(t.name) + ': ' + str(t.status), where: 'cohorts' });
   }
-  const failed = Object.keys(o && o.reads ? o.reads : {}).filter(k => o.reads[k] !== 'ok');
-  return { items: out, cannotTell: failed };
+  const names = Object.keys(o && o.reads ? o.reads : {});
+  const failed = names.filter(k => o.reads[k] === 'fail'), pending = names.filter(k => o.reads[k] !== 'ok' && o.reads[k] !== 'fail');
+  return { items: out, cannotTell: names.filter(k => o.reads[k] !== 'ok'), failed, pending };
 }
 
 return Object.freeze({ ROUTES, FLEET_PATH, RN, NOT_BUILT, NOT_ENOUGH, SIM_LABEL, deskClient, esc, table, cell, raw, card, note, tone, plural,

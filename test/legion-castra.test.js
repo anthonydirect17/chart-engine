@@ -146,7 +146,8 @@ test('a drag is refused here in plain words: a position, Auto, or not being able
   assert.match(K.dropRefusal(K.cohortsView(F.cohortsAnswer(), [row('EVAL-B', { position: 'Not connected' })], [], true), 'EVAL-B', 'gamma'), /not connected/);
   assert.match(K.moveWords({ status: 400, body: { detail: 'EVAL-B is of stage eval: this cohort is funded' } }), /^The Desk refused it: EVAL-B is of stage eval: this cohort is funded\.$/);
   assert.match(K.moveWords({ status: 409, body: { detail: 'stale', version: 5 } }), /Another change came first, so nothing was moved/);
-  assert.match(K.moveWords({ status: null, words: 'The Desk did not answer /api/legion/cohorts/members (it is off, or it does not let this page read it yet).' }), /did not answer.*Nothing was moved\.$/);
+  assert.equal(K.moveWords({ status: null, words: 'x' }, 'EVAL-B'), 'The Desk did not answer, so this page cannot tell whether EVAL-B moved: the cohorts are read again.', 'a timeout: The Desk may have applied it');
+  assert.match(K.moveWords({ status: 500, words: 'The Desk answered 500 to /x.' }), /Nothing was moved\.$/);
 });
 
 test('Needs you: one list; a pick to redo, a stood-down trader, an account in no cohort; reads that failed are said, never hidden', () => {
@@ -239,6 +240,7 @@ test('a read keeps its last answer while refreshed; pending or failed with no an
   const n = K.needsYou({ money: null, cohorts: null, traders: [], reads: { money: 'pending', roster: 'ok', cohorts: 'fail' } });
   assert.deepEqual(n.items, []);
   assert.deepEqual(n.cannotTell, ['money', 'cohorts'], 'nothing read yet: cannot tell, which the page says instead of "nothing needs you"');
+  assert.deepEqual([n.failed, n.pending], [['cohorts'], ['money']], 'failed and pending are told apart');
   const src = read('live', 'legion-castra.js');
   assert.match(src, /S\.reads\[name\] = \{ state: 'loading', why: '', ans: r\.ans \}/, 'the refresh starts from the last answer');
   assert.match(src, /state: 'fail', why: e && e\.words \? e\.words : 'The read failed\.', ans: r\.ans/, 'a failed refresh keeps it');
@@ -256,7 +258,7 @@ test('the Desk client gives up on a hang (about 15 s): an aborted request and a 
 
 test('veto, dollars per funded slot and the named type say "not built yet (law 1.6)" where they would be; the cohort pick words; the race is closed', () => {
   const castra = read('live', 'legion-castra.js'), cohorts = read('live', 'legion-cohorts.js');
-  assert.match(castra, /Veto: ' \+ K\.NOT_BUILT \+ ' \(law 1\.6\)/);
+  assert.match(castra, /Veto: ' \+ K\.NOT_BUILT \+ ' \(plan steps 2\.9 and 3\.3\)/);
   assert.match(castra, /Dollars per funded slot per 30 sessions: ' \+ esc\(K\.NOT_BUILT\) \+ ' \(law 1\.6\)/);
   assert.match(castra, /Named account type: ' \+ esc\(K\.NOT_BUILT\) \+ ' \(law 1\.6\)/);
   assert.match(cohorts, /is set in The Desk and is not changed on this tab yet/);
@@ -265,4 +267,14 @@ test('veto, dollars per funded slot and the named type say "not built yet (law 1
   assert.doesNotMatch(castra, /Simulated: ' \+ K\.SIM_LABEL/);
   assert.match(read('live', 'legion-tabs.js'), /heard: !!\(s\.arm && s\.arm\.state !== 'unknown'\)/);
   assert.match(read('live', 'legion-castra.css'), /\.cx-money \.cx-al \{ white-space: nowrap; display: inline-block; \}/);
+});
+
+test('a write that timed out is read again at once; the Centurion card cites plan steps 2.9 and 3.3 once; Needs you tells pending from failed', () => {
+  const cohorts = read('live', 'legion-cohorts.js'), castra = read('live', 'legion-castra.js');
+  assert.match(cohorts, /e\.status === 409 \|\| e\.status === 404 \|\| e\.status === null\)\) readCohorts\(\)/);
+  assert.match(cohorts, /K\.moveWords\(e, account\)/);
+  assert.doesNotMatch(castra, /There is no veto action yet/);
+  assert.doesNotMatch(castra, /Veto: [^\n]*law 1\.6/);
+  assert.match(castra, /is not read yet/);
+  assert.match(castra, /could not be read/);
 });

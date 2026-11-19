@@ -122,7 +122,7 @@ function mount(el, opts) {
     if (nv.items.length) {
       body = '<ul class="cx-needs">' + nv.items.map(i => '<li><span class="cx-kind">' + esc(i.kind) + '</span> ' + esc(i.words) + ' ' + (i.where && i.where !== 'castra' ? go(i.where, 'Open ' + i.where) : '') + '</li>').join('') + '</ul>';
     } else body = nv.cannotTell.length ? '' : '<p class="cx-ok"><b>Nothing needs you</b> in what this page can read.</p>';
-    if (nv.cannotTell.length) body += note('Cannot tell: ' + nv.cannotTell.join(', ') + ' could not be read, so what they would add is not shown here.', 'cx-bad');
+    if (nv.cannotTell.length) body += note('Cannot tell: ' + [nv.failed.length ? nv.failed.join(', ') + ' could not be read' : '', nv.pending.length ? nv.pending.join(', ') + ' is not read yet' : ''].filter(Boolean).join('; ') + ', so what they would add is not shown here.', 'cx-bad');
     body += note('Not wired here yet: the drift alarm and the posts into The Desk\'s Alerts (step 3.5, ' + K.NOT_BUILT + '). Nothing on this list acts by itself.', 'cx-dim');
     return card('II', 'Needs you', body, nv.items.length ? 'cx-needsyou' : '');
   }
@@ -147,8 +147,7 @@ function mount(el, opts) {
     let body = '<p>' + esc(c.summary || 'The report has no summary.') + '</p>';
     if (c.findings.length) body += '<ul class="cx-list">' + c.findings.map(f => '<li>' + esc(f) + '</li>').join('') + '</ul>';
     body += c.changes.length ? table('cx-chg', ['Change', 'From', 'To', 'Allowed'], c.changes.map(x => ({ cells: [cell(x.name, 'cx-lead'), cell(x.from, 'cx-num'), cell(x.to, 'cx-num'), cell(x.allowed ? 'yes' : 'no', x.allowed ? '' : 'cx-dim')] }))) : note('No change proposed.', 'cx-dim');
-    body += note('Veto: ' + K.NOT_BUILT + ' (law 1.6): this page has no veto action, and Centurion applies nothing until the veto exists.', 'cx-dim');
-    body += note('Read only. ' + (c.vetoBuilt ? 'The Desk says its veto exists, and this page has no veto action yet.' : 'There is no veto action yet: Centurion reports and applies nothing' + (c.applies ? ' (the report says it applies, which this page does not take to mean anything)' : '') + '.'), 'cx-dim');
+    body += note('Read only. Veto: ' + K.NOT_BUILT + ' (plan steps 2.9 and 3.3): this page has no veto action, and Centurion applies nothing until the veto exists' + (c.vetoBuilt ? ' (The Desk says its veto exists; this page does not act on it)' : '') + (c.applies ? ' (the report says it applies, which this page does not take to mean anything)' : '') + '.', 'cx-dim');
     return card('VII', 'Centurion\'s week', body + note('Report ' + (c.runId || 'without an id') + (c.status ? ', ' + c.status : '') + '.', 'cx-dim'));
   }
 

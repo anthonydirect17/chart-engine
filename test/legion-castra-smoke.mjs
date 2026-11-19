@@ -117,11 +117,11 @@ try {
     check(/sample_a_v1/.test(await text(a.page, '.cx-goes')) && /approved by Anthony/.test(await text(a.page, '.cx-goes')) && /11 sessions \(median, simulated\)/.test(cx) && /19 sessions to the first payout/.test(cx), 'who goes in today: the approved build with days to pass and payout speed');
     check(/Split by zone and regime: off\./.test(cx) && /Off until a zone version passes test 3/.test(cx), 'the zone split is shown as off');
     check(/Needs you/.test(cx) && /1 prop account in no cohort \(EVAL-A\)/.test(await text(a.page, '#cxView .cx-needs')) && !/money alarm/.test(await text(a.page, '#cxView .cx-needs')), 'Needs you lists what waits, and the alarm is not on it');
-    check(/Named account type: not built yet \(law 1\.6\)/.test(cx) && /Dollars per funded slot per 30 sessions: not built yet \(law 1\.6\)/.test(cx) && /Veto: not built yet \(law 1\.6\)/.test(cx), 'the named type, dollars per funded slot and the veto say not built yet (law 1.6)');
+    check(/Named account type: not built yet \(law 1\.6\)/.test(cx) && /Dollars per funded slot per 30 sessions: not built yet \(law 1\.6\)/.test(cx) && /Veto: not built yet \(plan steps 2\.9 and 3\.3\)/.test(cx), 'the named type, dollars per funded slot and the veto say not built yet (law 1.6)');
     check(/Nothing is running now|No trader is listed|ChartBridge is not connected/.test(await text(a.page, '#cxView')) || await a.page.isVisible('.cx-run'), 'running now says what ChartBridge says');
     check(/Today, live only/.test(cx) && /Live only: what ChartBridge reports now/.test(cx), 'today, live only');
     check(/Last night/.test(cx) && /2001-03-01/.test(cx) && /9 \(7 new, 2 neighbours/.test(cx), 'last night: the board\'s newest night');
-    check(/Centurion's week/.test(cx) && /made-up finding one/.test(cx) && /There is no veto action yet/.test(cx) && !(await a.page.$('#cxView button[data-cx-veto]')), 'Centurion\'s week is read only, no veto action');
+    check(/Centurion's week/.test(cx) && /made-up finding one/.test(cx) && /this page has no veto action/.test(cx) && !(await a.page.$('#cxView button[data-cx-veto]')), 'Centurion\'s week is read only, no veto action');
     /* a refresh keeps the last answer: the page is not blanked and Needs you is not all clear while it reads */
     a.hold.slow = 2000;
     await a.page.click('[data-cx-again]'); await sleep(400);
@@ -207,7 +207,7 @@ try {
     const slow = await open({ width: 1600, height: 900 }, '?tab=castra', 'slow');
     await sleep(600);
     const st = await text(slow.page, '#cxView');
-    check(/Cannot tell: .*roster/.test(st) && !/Nothing needs you/.test(st), 'while the reads are pending Needs you says cannot tell, not all clear: ' + st.slice(0, 200));
+    check(/Cannot tell: .*roster.* is not read yet/.test(st) && !/Nothing needs you/.test(st), 'while the reads are pending Needs you says cannot tell, not all clear: ' + st.slice(0, 200));
     await slow.ctx.close();
 
     /* ---------------- before the sign-in replay: accounts are there, the traders are not heard. FleetView says so through its Armed state
