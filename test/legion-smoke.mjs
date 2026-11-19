@@ -60,7 +60,8 @@ try {
     check(head.word === 'LEGION' && /Cinzel/.test(head.font), 'the wordmark LEGION in Cinzel: ' + JSON.stringify(head));
     check(JSON.stringify(head.tabs) === JSON.stringify(['ICastra', 'IICohorts', 'IIIColosseum', 'IVLudus', 'VGo live']), 'the five tabs in order with their numerals: ' + JSON.stringify(head.tabs));
     check(head.stop === 'Stop all automation' && /0\.6\.24: on/.test(head.conn), 'Stop all automation and ChartBridge\'s state in the header');
-    const note = await page.textContent('#lxStopSaid');
+    const note = await page.getAttribute('#lxStopNote', 'title');   // the R12 delta, S-a: the standing word in the header's caption
+    check(await page.evaluate(() => document.getElementById('lxHead').contains(document.getElementById('lxStopNote')) && document.getElementById('lxStopSaid').hidden), 'the R12 delta, S-a: the standing word sits in the header beside Stop all; no floating line for it');
     check(/own prop rule only .* not by the account ledger/.test(note), 'ChartBridge 0.6.24: the header says Stop all is Kill all by ChartBridge\'s own rule, not the ledger: ' + note);
     for (const t of ['castra', 'cohorts', 'colosseum', 'ludus', 'golive']) {
       await page.click('[data-lx-tab="' + t + '"]');
@@ -143,7 +144,7 @@ try {
   /* the next ChartBridge: Stop all automation with the ledger */
   await withBridge('0.6.25', BASE_PORT + 1, async port => {
     const { ctx, page, pe } = await open(port, { width: 1600, height: 900 });
-    check((await page.textContent('#lxStopSaid')) === '' && await page.locator('#lxStopSaid').isHidden(), 'ChartBridge 0.6.25: no note beside Stop all');
+    check((await page.textContent('#lxStopSaid')) === '' && await page.locator('#lxStopSaid').isHidden() && (await page.textContent('#lxStopNote')) === '', 'ChartBridge 0.6.25: no note beside Stop all');
     const r0 = await received(port);
     await page.click('#lxStop'); await sleep(700); await page.click('#lxStopYes');
     await page.waitForFunction(() => /^Stop all automation:/.test(document.getElementById('lxStopSaid').textContent), null, { timeout: 5000 }).catch(() => {});

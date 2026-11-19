@@ -195,8 +195,11 @@ function renderHead() {
     btn.setAttribute('aria-expanded', String(!!S.ask));
   }
   if (ask) ask.hidden = !S.ask;
-  const words = S.said || (!p.ok ? p.why : p.note);
-  if (line) { if (line.textContent !== words) line.textContent = words; line.hidden = !words; line.classList.toggle('bad', !!(S.said ? S.saidBad : !p.ok)); line.classList.toggle('note', !S.said); line.classList.toggle('lx-put', !!S.said); line.title = S.said ? 'Click to put this away' : ''; }   // a standing line (not an answer): Praetorian's compact chrome keeps it in the button's title
+  /* the R12 delta, S-a: the floating line carries Stop all's answers only; the standing word (an older ChartBridge, not connected)
+     sits in the header's fixed caption beside the button */
+  const words = S.said, standing = !p.ok ? p.why : p.note, cap = $('lxStopNote');
+  if (line) { if (line.textContent !== words) line.textContent = words; line.hidden = !words; line.classList.toggle('bad', !!S.saidBad); line.classList.toggle('lx-put', !!words); line.title = words ? 'Click to put this away' : ''; }
+  if (cap) { if (cap.textContent !== standing) cap.textContent = standing; cap.title = standing; cap.classList.toggle('bad', !p.ok); }   // a standing line (not an answer): Praetorian's compact chrome keeps it in the button's title
   fitDesk(); floatRoom();
 }
 function say(text, bad) { S.said = String(text || ''); S.saidBad = !!bad; renderHead(); }

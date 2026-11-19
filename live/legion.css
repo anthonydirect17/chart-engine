@@ -40,6 +40,11 @@ body.lx { font: 14px/1.45 "IBM Plex Sans", system-ui, sans-serif; overflow-y: au
 .lx-nav button:focus-visible, .lx-sub button:focus-visible, .lx-btn:focus-visible { outline: 1px solid var(--lx-gold-hot); outline-offset: 2px; }
 .lx-rn { font-family: var(--ws-title-font); font-weight: 700; color: var(--lx-bronze); letter-spacing: .04em; font-size: 12px; }
 .lx-nav button[aria-selected="true"] .lx-rn { color: var(--lx-gold); }
+/* the standing word beside Stop all: fixed room (one line, a fixed width, the rest in its title), there even when empty, so the
+   header never changes size when it comes or goes */
+.lx-stopnote { display: block; width: 240px; height: 1.35em; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 11px; line-height: 1.35em; color: var(--lx-muted); text-align: right; }
+.lx-stopnote.bad { color: var(--lx-fg); }
+@media (max-width: 720px) { .lx-stopnote { width: 100%; order: 9; text-align: left; } }
 .lx-right { margin-left: auto; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .lx-clock { font: 500 12px "IBM Plex Mono", monospace; color: var(--lx-fg); font-variant-numeric: tabular-nums; }
 .lx-et { color: var(--lx-dim); }
@@ -106,7 +111,7 @@ body.lx-pr .lx-sub { margin: 0; flex-wrap: nowrap; }
 body.lx-pr .lx-sub-long, body.lx-pr .lx-pill { display: none; }
 .lx-subslot:empty { display: none; }
 body.lx-pr .lx-sub button { padding: 3px 9px; }
-body.lx-pr .lx-said.note { display: none; }   /* the version note is the Stop button's title meanwhile; an answer still shows */
+body.lx-pr .lx-stopnote { display: none; }   /* the standing word is the Stop button's title meanwhile; an answer still shows */
 
 /* tables in Legion's own content stack on a phone, each cell with its column's name (the mockup's .tbl) */
 @media (max-width: 760px) {

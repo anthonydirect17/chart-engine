@@ -3835,7 +3835,7 @@ function autoTake() {
 const movedTab = String(new URLSearchParams(location.search).get('tab') || '').toLowerCase();
 /* the R12 review, N4: an old ?tab=praetorian opens the side used last, as 1.51.0 did: the Bot tab here when that was the Bot (kept
    in this browser: the Bot tab writes it here, Legion's Praetorian side writes the Agent), else Praetorian on Legion */
-const prBotLast = movedTab === 'praetorian' && store.getItem(PR_SIDE_KEY) === 'bot';
+const prBotLast = movedTab === 'praetorian' && store.getItem(PR_SIDE_KEY) === 'bot' && !new URLSearchParams(location.search).has('agent');   // a trader named: Legion, on him
 if (prBotLast) { try { const q = new URLSearchParams(location.search); q.set('tab', 'bot'); history.replaceState(null, '', location.pathname + '?' + q.toString() + location.hash); } catch (e) { /* a file page */ } }
 if (LEGION_TABS.includes(movedTab) && !prBotLast) location.replace('legion.html' + location.search + location.hash);
 else if (PIN) PIN.gate().then(start); else start();
