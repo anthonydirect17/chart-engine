@@ -264,7 +264,9 @@ test('0.6.16 prop accounts: every new branch passes through IsProp; nothing is p
   assert.match(tr, /if \(seats\.Any\(x => ChartBridgeBranches\.UnknownWhy\(FindAccount\(x\), x\) != null\)\) return;/, 'a seat not known yet: this pass does not decide');
   assert.match(tr, /List<string> notProp = seats\.Where\(x => !ChartBridgeBranches\.IsProp\(x\)\)\.ToList\(\);/);
   assert.match(tr, /List<string> busy = seats\.Where\(x => !ChartBridgeBranches\.Idle\(FindAccount\(x\)\)\)\.ToList\(\);/);
-  assert.match(tr, /if \(notProp\.Count > 0\) no = [^\n]*\n\s*else if \(busy\.Count > 0 \|\| Exposed\(\)\) no = [^\n]*\n\s*else \{ string why = AutoProblem\(\); if \(why != null\) no = why; \}/);
+  assert.match(tr, /if \(notProp\.Count > 0\) no = [^\n]*\n\s*else if \(busy\.Count > 0 \|\| Exposed\(\)\) no = [^\n]*\n\s*else \{ string why = AutoProblem\(\) \?\? ChartBridgeGroups\.SeatsFirmWhy\(seats\); if \(why != null\) no = why; \}/);
+  // plan step 3.5 (0.6.25): one PC per firm at the restore too, and it waits for the first read of The Desk's firms since the start
+  assert.match(tr, /if \(ChartBridgeGroups\.FirmsPending\) return;/);
   assert.equal((acode.match(/mode = "auto";/g) || []).length, 1, 'the restore is the only place ChartBridge itself sets Auto');
   assert.match(tr, /if \(no != null\)\s*\{\s*DropAutoIntent\(/, 'a no removes the file: one try per start');
   assert.match(tr, /lock \(Sync\) \{ mode = "auto"; autoRestorePending = false; autoDay = ChartBridgeBranches\.DueDay\(NowEt\(\)\); autoPick = savedPick; autoPickSha = savedSha; \}/);
@@ -543,4 +545,24 @@ test('plan step 3.2 (the R12 review, B1): Stop all and Flatten and turn off wait
   assert.ok(flat && stop, 'both minimums are plain versions');
   assert.equal(flat[1], stop[1], 'FLATOFF_MIN (agent-core.js) and STOPALL_MIN (legion.js) name the same ChartBridge');
   assert.equal(require('../live/agent-core.js').FLATOFF_MIN, flat[1]);
+});
+
+test('plan step 3.5 (0.6.25): one direction per firm, one PC per firm and the GO size, where each binds', () => {
+  const gcode = strip(read('ChartBridgeGroups.cs'));
+  // the order gate: every entry (every source) meets the firm guards after an exit of its own position has passed
+  const ec = bodies(gcode, 'EntryCheck');
+  assert.match(ec, /if \(exit\) return null;\s*string firmWhy = FirmEntryWhy\(source, a, root, isBuy, opposite\);\s*if \(firmWhy != null\) return firmWhy;\s*EnsureLoaded\(\);/);
+  const fe = bodies(gcode, 'FirmEntryWhy');
+  assert.doesNotMatch(fe, /Flatten\(|Cancel\(|Submit\(|Change\(/, 'the firm guard only refuses: it never closes, cancels or places');
+  assert.match(fe, /FirmMarket\(h\.Root\) == market/);
+  assert.match(bodies(gcode, 'FirmMarket'), /r == "NQ" \|\| r == "MNQ" \|\| r == "ES" \|\| r == "MES"/);
+  // one PC per firm at the pick, Auto and the restore
+  assert.match(bodies(acode, 'SetPickLocked'), /if \(name != null\) \{ string fw = ChartBridgeGroups\.SeatsFirmWhy\(SeatNames\(\)\); if \(fw != null\) return /);
+  assert.match(bodies(acode, 'SetModeLocked'), /if \(m == "auto"\) \{ string fw = ChartBridgeGroups\.SeatsFirmWhy\(SeatNames\(\)\); if \(fw != null\) return "auto refused: " \+ fw; \}/);
+  // the firms are read with or without the lane rule
+  assert.match(bodies(gcode, 'LanePoll'), /try \{ FirmPoll\(\); \}[^\n]*\n\s*if \(LaneHarnessManual \|\| !ChartBridgeConfig\.LaneRule/);
+  assert.match(bodies(gcode, 'FirmPoll'), /"\/api\/legion\/cohorts"/);
+  // the GO size: a file whose GO size is not its playbook's is never served
+  assert.match(bodies(acode, 'One'), /string go = GoSizeProblem\(text, fmt\);\s*if \(go != null\) \{ why = go; return null; \}\s*return text\.Trim\(\);/);
+  assert.match(fs.readFileSync(path.join(nt8, 'check', 'AgentHarness.cs'), 'utf8'), /GoLive35\(\);/);
 });
