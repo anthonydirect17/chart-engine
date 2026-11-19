@@ -229,8 +229,10 @@ test('the page: Agents in + Add panel, one a layout, installed, read only, no da
   assert.doesNotMatch(src, /\.send\(|\.post\(|fetch\(|method: ?'(POST|PUT)'|type: ?'(order|change|cancel|flatten|plan|agent[A-Z]\w*)'/, 'reads only: no request and no message of its own');
   assert.doesNotMatch(src, /setInterval|setTimeout/, 'no poller of its own');
   const ws = read('live/workspace.js');
-  /* plan step 3.2: the chart page's league poll went with the Colosseum to Legion; the strip's league card says where it is */
-  assert.match(ws, /day: \(\) => null,\s*reach: \(\) => \(\{ problem: 'The league is on Legion\\'s Colosseum now/, 'the strip has no league read on the chart page');
+  /* plan step 3.2: the chart page's league poll went with the Colosseum to Legion: no league read, no seats, no league warning */
+  assert.match(ws, /league: false,\s*day: \(\) => null,\s*reach: \(\) => \(\{\}\),/, 'the strip has no league read on the chart page');
+  assert.doesNotMatch(ws, /chart-league/, 'the chart page never asks The Desk for the league');
+  assert.match(read('live/agents-sky.js'), /reach\.problem \|\| \(o\.league === false \? '' :/, 'the sky says nothing of the league where none is read');
   assert.equal((ws.match(/chart-league/g) || []).length, 0, 'the chart page no longer asks The Desk for the league');
   assert.match(ws, /openLeague: \(\) => openLegion\('colosseum', ''\)/, 'its league card opens Legion\'s Colosseum');
   /* review: one fills read a tick for every agent */
