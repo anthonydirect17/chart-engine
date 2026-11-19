@@ -123,7 +123,7 @@ function create(o) {
   const api0 = {};                                  // this desk, as TURNING knows it
   /* H.hold: the trader whose Off a Flatten-and-off sent, kept in TURNING until that Off answers ok (a failed Off: until the next
      On or Off for him), so Armed never takes him between the job's end and his program's end (the R12 delta, nit) */
-  const H = { reach: '', why: '', status: null, okAt: 0, misses: 0, slow: false, pick: {}, busy: false, ask: null, job: null, flatSent: false, hold: '', lines: {}, said: '', saidAt: 0, setFilled: '' };
+  const H = { reach: '', why: '', status: null, okAt: 0, misses: 0, slow: false, pick: {}, busy: false, ask: null, job: null, hold: '', lines: {}, said: '', saidAt: 0, setFilled: '' };
   TURNING.set(api0, () => [H.job && H.job.agent, H.hold]);
   { const v = readJson(K.chart); if (v && TF_NAMES[v.tf]) S.chartTf = v.tf; }
   { const v = readJson(K.feed); if (v && FILTERS.some(f => f[0] === v.filter)) S.feedFilter = v.filter; }
@@ -903,7 +903,8 @@ function create(o) {
   const servedRoots = () => AC.RULE_ROOTS.filter(r => S.instruments[r] && !S.instruments[r].quoteOnly);
 
   /* ---------------- On/Off, spend and the picker: the PC helper (Bot-Lab manrae/helper.py) on localhost:8767, behind this
-     page's PIN unlock (AgentHelper). It never sends an order; Flatten-and-off is this page's own Flatten (o.flatten), then Off */
+     page's PIN unlock (AgentHelper). It never sends an order or a Flatten: Flatten-and-off is ChartBridge's agentFlattenOff, or on an
+     older ChartBridge Shadow and a flatten by hand, then Off (the R12 delta: the page's own Flatten, o.flatten, is gone) */
   const HC = AH && typeof fetch === 'function' ? AH.createClient({ fetch: (u, i) => fetch(u, i), headers: () => (typeof o.headers === 'function' ? o.headers() : {}) }) : null;
   function helperOf(id) { return H.status && H.status.agents ? H.status.agents[id] || null : null; }
   /* the group he trades as the groups message has it (its Type and default hero), or null */
@@ -998,9 +999,9 @@ function create(o) {
     if (AH.offStep(a) === 'ask') { H.ask = { agent: a.agent, text: AH.offQuestion(a, AC.agentName(a)) }; renderPanel(); const y = q('[data-act="hAskNo"]'); if (y) y.focus(); return; }
     helperOff(a.agent);
   }
-  /* "Flatten and turn off", for the agent the question was asked about only (H.ask.agent), his position read again now:
-     Shadow first (nothing more placed for him), then this page's own Flatten for his account and root, then Off once flat.
-     The pop-out has no order connection: it says where to flatten. */
+  /* "Flatten and turn off", for the agent the question was asked about only (H.ask.agent), his position read again now. No desk
+     sends a Flatten of its own (none is given one since plan step 3.2: the chart page, Legion and the pop-out): ChartBridge's one
+     command when it knows it, else Shadow first and a flatten by hand, then Off once flat. */
   function flattenThenOff() {
     const ask = H.ask; H.ask = null;
     const a = ask ? agents.get(ask.agent) : null;
@@ -1014,50 +1015,30 @@ function create(o) {
       const c = sendAgent(fm, 'flatoff');
       if (!c) { H.lines[a.agent] = (no || 'Flatten and turn off could not be sent (not signed in to ChartBridge).') + ' Nothing was flattened and he stays on.'; renderPanel(); return; }
       /* the R12 delta X2: the job keeps the command's cid (a refusal ends it, onReject) and says Shadow only once ChartBridge says it */
-      H.job = Object.assign(AH.flatOffStart(a, Date.now(), false, true).job, { cid: c }); H.flatSent = true;
+      H.job = Object.assign(AH.flatOffStart(a, Date.now(), true).job, { cid: c });
       H.lines[a.agent] = AH.FO_SENT;
       jobStep(); flatLoop(); return;
     }
-    /* the R12 review of plan step 3.2, B1: an older ChartBridge, and this page has no Flatten of its own (Legion, the pop-out): the
-       stop half still goes (Shadow first, nothing more placed for him), he is flattened by hand, and Off goes once he is flat */
-    const hand = typeof o.flatten !== 'function';
-    const st = AH.flatOffStart(a, Date.now(), hand);
+    /* the R12 review of plan step 3.2, B1: an older ChartBridge: the stop half still goes (Shadow first, nothing more placed for
+       him), he is flattened by hand (where: the line, from his seats or his account), and Off goes once he is flat, in Shadow */
+    const st = AH.flatOffStart(a, Date.now());
     if (st.error) { H.lines[a.agent] = st.error; renderPanel(); return; }
     if (st.action === 'off') { offAfter(a.agent); return; }
-    H.job = st.job; H.flatSent = false;
-    if (st.action === 'hand') { H.lines[a.agent] = AH.handLine(st.job); jobStep(); flatLoop(); return; }   // in Shadow already: the wait at once
+    H.job = st.job;
     if (st.action === 'shadow') {
       const sm = AC.modeMsg(a.agent, 'shadow'), no = refusal(sm);   // 1.51.0 (the review of 102, F2): the gate's own words, never "not signed in"
       if (!sendAgent(sm, 'mode')) { H.job = null; H.lines[a.agent] = no ? no + ' Nothing was flattened and he stays on.' : 'Shadow could not be sent (not signed in to ChartBridge): nothing was flattened and he stays on.'; renderPanel(); return; }
-    } else jobFlatten(st.job);                       // in Shadow already: the Flatten at once
-    if (H.job) { jobStep(); flatLoop(); } else renderPanel();
-  }
-  /* the Flatten of a job, his position and account read again right before it goes */
-  function jobFlatten(j) {
-    const a = agents.get(j.agent);
-    if (Array.isArray(j.seats)) {   // 1.27.0: a group: the page's Flatten on every seat that still holds his trade (read again now)
-      const held = a ? AH.seatsHeld(a) : [];
-      const same = held.length === j.seats.length && j.seats.every(x => held.some(h => h.account === x.account && h.root === x.root));
-      if (!a || AH.offStep(a) !== 'ask' || !same) { H.job = null; H.lines[j.agent] = 'His seats changed before the Flatten: nothing was sent. He stays on, in Shadow.'; return; }
-      const failed = j.seats.filter(x => o.flatten(x.account, x.root) === false);
-      if (failed.length === j.seats.length) { H.job = null; H.lines[j.agent] = 'The Flatten was not sent (see the chart\'s line): he stays on, in Shadow.'; }
-      else { H.flatSent = true; if (failed.length) H.lines[j.agent] = 'The Flatten for ' + failed.map(x => x.account + ' ' + x.root).join(', ') + ' was not sent: flatten it in NinjaTrader; he turns off once every seat is flat.'; }
-      return;
-    }
-    // the next release (answers B4-9, N1): never by his own account while a seats list is there (a seat may hold the trade)
-    if (!a || AH.offStep(a) !== 'ask' || a.account !== j.account || !a.position || a.position.root !== j.root || (Array.isArray(a.seats) && a.seats.length > 0)) { H.job = null; H.lines[j.agent] = 'His position changed before the Flatten: nothing was sent. He stays on, in Shadow.'; }
-    else if (o.flatten(j.account, j.root) === false) { H.job = null; H.lines[j.agent] = 'The Flatten was not sent (see the chart\'s line): he stays on, in Shadow.'; }
-    else H.flatSent = true;
+    } else H.lines[a.agent] = AH.handLine(st.job);   // in Shadow already: the wait at once
+    jobStep(); flatLoop();
   }
   /* each second, and at each `agent` message, while a Flatten-and-off is under way */
   let flatTimer = 0;
   function flatLoop() { clearTimeout(flatTimer); if (H.job) flatTimer = setTimeout(() => { jobStep(); flatLoop(); }, 1000); }
   function jobStep() {
     const j = H.job; if (!j) return;
-    const r = AH.flatOffStep(j, agents.get(j.agent) || null, Date.now(), H.flatSent);
+    const r = AH.flatOffStep(j, agents.get(j.agent) || null, Date.now());
     H.job = r.job; H.lines[j.agent] = r.line;
-    if (r.action === 'flatten') { jobFlatten(r.job); if (H.job) H.lines[j.agent] = 'Flatten sent for ' + AH.jobWhere(j) + ' (he is in Shadow): turning him off once flat...'; }
-    else if (r.action === 'off') { H.job = null; offAfter(j.agent, 'Flat. '); }
+    if (r.action === 'off') { H.job = null; offAfter(j.agent, 'Flat. '); }
     if (H.job) flatLoop();
     renderPanel();
   }

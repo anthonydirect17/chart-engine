@@ -173,7 +173,8 @@ try {
   check(JSON.stringify(await posted()) === JSON.stringify(['agentKill:demo:true']), 'Kill switch ON from Legion\'s desk goes for anyone');
 
   /* answers B4-4, G3 on Legion's desk: a trader on None with a leftover seat on PROP-1: stops only, said; Off asks, "Flatten and
-     turn off" sends Shadow, then the flatten of that seat only, then Off once flat */
+     turn off" sends Shadow, then the line names that seat only (the R12 delta: no desk sends a Flatten of its own, even with one
+     offered as here), then Off once flat */
   await page.evaluate(() => { Object.assign(window.helperState.demo, { on: true, running: true, why: 'on', runningBuild: 'sample-build-1' }); window.flattened.length = 0; window.helperCalls.length = 0; });
   const left = (mode, qty) => agent({ account: null, mode, killed: false, owns: !!qty, position: qty ? { root: 'MNQ', qty, avg: 25000 } : null, seats: [{ account: 'PROP-1', owns: !!qty, position: qty ? { root: 'MNQ', qty, avgPrice: 25000 } : null }] });
   await feed(left('auto', 1));
@@ -187,8 +188,9 @@ try {
   await sleep(300);
   check(JSON.stringify(await page.evaluate(() => window.fromLegion)) === JSON.stringify(['agentMode']) && JSON.stringify(await posted()) === JSON.stringify(['agentMode:demo:shadow']), 'G3 (Legion): "Flatten and turn off" sends Shadow first: ' + JSON.stringify(await posted()));
   await feed(left('shadow', 1));
-  await page.waitForFunction(() => window.flattened.length > 0, null, { timeout: 5000 }).catch(() => {});
-  check(JSON.stringify(await page.evaluate(() => window.flattened)) === JSON.stringify(['PROP-1 MNQ']), 'G3 (Legion): then the flatten of that seat only (PROP-1 MNQ): ' + JSON.stringify(await page.evaluate(() => window.flattened)));
+  await page.waitForFunction(L2 => /^He is in Shadow: flatten PROP-1 MNQ in NinjaTrader/.test(document.querySelector(L2 + ' [data-k="hWhy"]').textContent), L, { timeout: 5000 }).catch(() => {});
+  check(/^He is in Shadow: flatten PROP-1 MNQ in NinjaTrader/.test(await page.$eval(L + ' [data-k="hWhy"]', e => e.textContent)) && JSON.stringify(await page.evaluate(() => window.flattened)) === '[]',
+    'G3 (Legion): then the line names that seat only (PROP-1 MNQ), and no Flatten of the page\'s own: ' + await page.$eval(L + ' [data-k="hWhy"]', e => e.textContent));
   await feed(agent({ account: null, mode: 'shadow', killed: false, owns: false, position: null, seats: [] }));
   await page.waitForFunction(() => window.helperCalls.includes('POST /off'), null, { timeout: 5000 }).catch(() => {});
   check(await page.evaluate(() => window.helperCalls.includes('POST /off')) && JSON.stringify(await posted()) === JSON.stringify(['agentMode:demo:shadow']), 'G3 (Legion): then Off once flat; nothing but Shadow was sent to ChartBridge');

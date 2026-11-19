@@ -10,11 +10,12 @@
  *   On         the helper starts the runner with the build picked here (it fetches a missing build from The Desk)
  *   Off        the helper ends the runner process: no more model calls, so spend stops. ChartBridge cancels his unfilled
  *              entries when he disconnects (as built); a position keeps its stop and target.
- *   Off in a trade   asks "Flatten and turn him off?" (offStep), for that agent only. Yes (flatOffStart, flatOffStep):
- *              first Shadow (ChartBridge then places nothing more for him and cancels his unfilled entries; SHADOW_WAIT_MS
- *              at most), then the page's own Flatten for his account and root (the chart's Flatten path, never an order built
- *              here), then Off once ChartBridge says he is flat (FLAT_WAIT_MS at most). Not in Shadow or not flat in time: he
- *              stays on, and the line says so until Anthony acts. No: nothing is sent.
+ *   Off in a trade   asks "Flatten and turn him off?" (offStep), for that agent only. Yes (flatOffStart, flatOffStep), plan
+ *              step 3.2: a ChartBridge that knows agentFlattenOff gets that one command (ChartBridge puts him in Shadow and
+ *              flattens what he owns); the job waits to see him in Shadow (SHADOW_WAIT_MS at most), then for flat (FLAT_WAIT_MS
+ *              at most). An older one: Shadow first (agentMode), then he is flattened by hand (HAND_WAIT_MS at most). Off goes
+ *              only in Shadow and flat; out of Shadow, not in Shadow or not flat in time: he stays on, and the line says so
+ *              until Anthony acts. No page sends a Flatten of its own (the R12 delta). No: nothing is sent.
  *   Spend      this session's and the overall dollars of the live agent only (the runner's own journal of its calls)
  *   Picker     DECISION w: Copilot, Auto and a LIVE account list heroes only; Shadow on a Sim account lists heroes and the
  *              builds that pass the Shadow bar (pickerRows). A build that is not a hero keeps the mode at Shadow on Sim:
@@ -266,16 +267,15 @@ const handLine = j => (Array.isArray(j.seats) && j.seats.length
 function flat(a) { return offStep(a) === 'off'; }
 
 /**
- * "Flatten and turn off" pressed for agent a: { job, action } or { error } (nothing sent). The job: { agent, account, root,
- * phase, until }. action: 'shadow' (send agentMode shadow first), 'flatten' (already in Shadow), or 'off' (he is flat now).
- * His account must be known: never a default.
+ * "Flatten and turn off" pressed for agent a: { job, action } or { error } (nothing sent). fo: ChartBridge knows agentFlattenOff
+ * (action 'flatoff', send it). Else the hand job (job.hand): { agent, account, root (or seats), phase, until }; action 'shadow'
+ * (send agentMode shadow first), 'hand' (already in Shadow: the wait for a flatten by hand), or 'off' (he is flat now). His
+ * account must be known: never a default (the line says where to flatten him).
  */
-function flatOffStart(a, now, hand, fo) {
+function flatOffStart(a, now, fo) {
   if (fo) return foStart(a, now);
   const r = flatOffStart1(a, now);
-  /* hand: this page sends no Flatten (no order connection of its own, and a ChartBridge with no agentFlattenOff): the same Shadow
-     first, then the job waits for him to be flattened by hand */
-  if (hand && r.job && r.job.phase !== 'off') { r.job.hand = true; if (r.job.phase === 'flatten') { r.job.until = now + HAND_WAIT_MS; r.action = 'hand'; } }
+  if (r.job && r.job.phase !== 'off') { r.job.hand = true; if (r.job.phase === 'flatten') { r.job.until = now + HAND_WAIT_MS; r.action = 'hand'; } }
   return r;
 }
 /* plan step 3.2, the R12 delta X2: the job of one agentFlattenOff (fo). ChartBridge puts him in Shadow and flattens what he owns
@@ -312,11 +312,12 @@ function flatOffStart1(a, now) {
 }
 
 /**
- * The job's next step, at each `agent` message and each second: { action, job, line }. action: '' (wait), 'flatten' (he is
- * in Shadow now: send the Flatten), 'off' (flat: send Off), 'giveup' (time is up: he stays on; line says why and stays).
- * a: his `agent` message now (null when ChartBridge no longer tells of him). sent: the Flatten has gone.
+ * The job's next step, at each `agent` message and each second: { action, job, line }. action: '' (wait), 'off' (in Shadow and
+ * flat: send Off), 'giveup' (he left Shadow, or time is up: he stays on; line says why and stays). a: his `agent` message now
+ * (null when ChartBridge no longer tells of him). Every job is fo (agentFlattenOff) or hand (Shadow, then a flatten by hand):
+ * no page sends a Flatten of its own, so a job of neither kind is taken as a hand job (it never sends one either).
  */
-function flatOffStep(job, a, now, sent) {
+function flatOffStep(job, a, now) {
   const j = job, x = a || {};
   if (!j) return { action: '', job: null, line: '' };
   if (!a) {                                     // no word from ChartBridge (the connection dropped): never read as flat
@@ -335,27 +336,20 @@ function flatOffStep(job, a, now, sent) {
     if (now > j.until) return { action: 'giveup', job: null, line: 'Not flat ' + FLAT_WAIT_MS / 1000 + ' s after Flatten and turn off: he stays on, in Shadow. Flatten ' + whereWords(j) + ' in NinjaTrader, then press Off.' };
     return { action: '', job: j, line: FO_WAIT };
   }
-  if (j.phase === 'shadow' && j.hand) {   // a hand flatten: Shadow first, then the wait for him to be flattened by hand
+  /* the hand job: Shadow first, then the wait for him to be flattened by hand */
+  if (j.phase === 'shadow') {
     if (x.mode === 'shadow') return flat(x) ? { action: 'off', job: Object.assign({}, j, { phase: 'off' }), line: 'In Shadow and flat: turning him off...' }
       : { action: '', job: Object.assign({}, j, { phase: 'flatten', until: now + HAND_WAIT_MS }), line: handLine(j) };
+    if (now > j.until) return { action: 'giveup', job: null, line: 'ChartBridge did not put him in Shadow within ' + SHADOW_WAIT_MS / 1000 + ' s: nothing was flattened and he stays on.' };
+    return { action: '', job: j, line: 'Putting him in Shadow first (no new entries)...' };
   }
-  if (j.phase === 'flatten' && j.hand) {
+  if (j.phase === 'flatten') {
     /* the R12 delta, B1r: an older ChartBridge refuses nothing, and Legion's Armed can put him back in Auto: out of Shadow the wait
        ends (never "He is in Shadow" when he is not, and no Off while he trades) */
     if (x.mode !== 'shadow') return { action: 'giveup', job: null, line: 'He left Shadow (now ' + (x.mode || 'not known') + ') before he was flat: he stays on. Flatten ' + jobWhere(j) + ', then press Off.' };
     if (flat(x)) return { action: 'off', job: Object.assign({}, j, { phase: 'off' }), line: 'Flat: turning him off...' };
     if (now > j.until) return { action: 'giveup', job: null, line: 'Not flat ' + HAND_WAIT_MS / 60000 + ' minutes after he went to Shadow: he stays on, in Shadow. Flatten ' + jobWhere(j) + ', then press Off.' };
     return { action: '', job: j, line: handLine(j) };
-  }
-  if (j.phase === 'shadow') {
-    if (x.mode === 'shadow') return { action: flat(x) ? 'off' : 'flatten', job: Object.assign({}, j, { phase: flat(x) ? 'off' : 'flatten', until: now + FLAT_WAIT_MS }), line: flat(x) ? 'In Shadow and flat: turning him off...' : 'In Shadow: flattening ' + jobWhere(j) + '...' };
-    if (now > j.until) return { action: 'giveup', job: null, line: 'ChartBridge did not put him in Shadow within ' + SHADOW_WAIT_MS / 1000 + ' s: nothing was flattened and he stays on.' };
-    return { action: '', job: j, line: 'Putting him in Shadow first (no new entries)...' };
-  }
-  if (j.phase === 'flatten') {
-    if (sent && flat(x)) return { action: 'off', job: Object.assign({}, j, { phase: 'off' }), line: 'Flat: turning him off...' };
-    if (now > j.until) return { action: 'giveup', job: null, line: 'Not flat ' + FLAT_WAIT_MS / 1000 + ' s after the Flatten for ' + jobWhere(j) + ': he stays on, in Shadow. Flatten in NinjaTrader, then press Off.' };
-    return { action: '', job: j, line: 'Flatten sent for ' + jobWhere(j) + ' (he is in Shadow): turning him off once flat...' };
   }
   return { action: '', job: j, line: 'Turning him off...' };
 }

@@ -288,7 +288,7 @@ test('answers B4-3, item 3: a None trader with a leftover seat is not a personal
 });
 
 /* answers B4-4, G3: "flatten it first" is true: a leftover seat is flattened per seat, never through an account he lacks */
-test('a None trader with a leftover seat: Off asks, and "Flatten and turn off" flattens that seat only', () => {
+test('a None trader with a leftover seat: Off asks, and "Flatten and turn off" names that seat only (flattened by hand, or by ChartBridge)', () => {
   const AH = require('../live/agent-helper.js');
   const left = (mode, qty) => agent({ account: null, mode, owns: !!qty, position: qty ? { root: 'MNQ', qty, avgPrice: 25000 } : null,
     seats: [{ account: 'MINE-1', owns: !!qty, position: qty ? { root: 'MNQ', qty, avgPrice: 25000 } : null }] });
@@ -297,7 +297,8 @@ test('a None trader with a leftover seat: Off asks, and "Flatten and turn off" f
   const st = AH.flatOffStart(left('auto', 1), 1000);
   assert.equal(st.action, 'shadow');
   assert.deepEqual(st.job.seats, [{ account: 'MINE-1', root: 'MNQ' }]); assert.equal(st.job.account, '');
-  assert.equal(AH.flatOffStart(left('shadow', 1), 1000).action, 'flatten');
+  assert.equal(AH.flatOffStart(left('shadow', 1), 1000).action, 'hand');
+  assert.match(AH.handLine(st.job), /flatten MINE-1 MNQ in NinjaTrader/, 'the line names that seat');
   assert.equal(AH.offStep(left('shadow', 0)), 'off', 'a flat leftover seat: Off at once');
   assert.match(AH.flatOffStart(agent({ account: null, mode: 'auto', position: { root: 'MNQ', qty: 1 }, seats: [{ account: 'MINE-1', position: { qty: 1 } }] }), 1000).error, /A seat's instrument is not known: nothing was sent/);
   /* answers B4-6, H1: a trader on an account whose seats list holds his trade (the reviewer's probe: MINE-1, seat PROP-1 long
@@ -323,13 +324,13 @@ test('a None trader with a leftover seat: Off asks, and "Flatten and turn off" f
   assert.equal(AH.seatsUnclear(h1), false); assert.equal(AH.seatsUnclear(agent({ account: 'MINE-1', seats: [] })), false);
 });
 
-/* answers B4-9, N1: the desk's own Flatten for a job by his account reads his seats again at the moment it sends: with a
-   seats list there, nothing goes by his own account (source test: the desk runs only in a browser) */
+/* answers B4-9, N1: nothing is flattened by his own account while a seats list is there. Since the R12 delta no desk sends a Flatten
+   of its own: the job (and its line) names the seats holding his trade, never his own account, and refuses when no seat says */
 test('N1: the desk never flattens by his own account while his message carries a seats list', () => {
-  const fs = require('node:fs'), path = require('node:path');
+  const fs = require('node:fs'), path = require('node:path'), AH = require('../live/agent-helper.js');
   const ag = fs.readFileSync(path.join(__dirname, '..', 'live', 'agent.js'), 'utf8');
-  const m = ag.match(/function jobFlatten\(j\) \{[\s\S]*?\n  \}\n/);
-  assert.ok(m, 'jobFlatten found');
-  const acctBranch = m[0].split('\n').find(l => l.includes('a.account !== j.account'));
-  assert.ok(acctBranch && acctBranch.includes('(Array.isArray(a.seats) && a.seats.length > 0)'), 'the account branch refuses a message with seats: ' + acctBranch);
+  assert.ok(!/function jobFlatten\(|o\.flatten\(/.test(ag), 'the desk sends no Flatten of its own');
+  const j = AH.flatOffStart(agent({ account: 'MINE-1', mode: 'shadow', position: { root: 'MNQ', qty: 1 }, seats: [{ account: 'PROP-1', position: { root: 'MNQ', qty: 1 } }] }), 1000).job;
+  assert.deepEqual([j.account, j.seats], ['', [{ account: 'PROP-1', root: 'MNQ' }]]);
+  assert.doesNotMatch(AH.handLine(j), /MINE-1/);
 });

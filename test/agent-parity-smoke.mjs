@@ -864,17 +864,19 @@ try {
     await click('OH08-no');
     await sleep(500);
     item('OH08', !(await info('OH08')).shown && helper.calls.filter(c => c.route === 'POST /off').length === 1 && (await sent()).filter(m => m.type === 'agentFlattenOff').length === fl0 && (await agentNow('demo')).connected, '"Keep him on": nothing sent, he stays on');
-    /* Flatten and turn off (plan step 3.2, on Legion): one ChartBridge command (held here a moment), Off once flat */
-    await page.evaluate(() => { window.__dropFlatten = true; });
+    /* Flatten and turn off (plan step 3.2, on Legion): one ChartBridge command; ChartBridge puts him in Shadow (its flatten held here a
+       moment by the fake's control); Shadow is said once ChartBridge says it (the R12 delta X2); Off once flat, in Shadow */
+    await control('agent-flatoff-nofill', { agent: 'demo', on: 1 });
     await click('OH04');
     await until(async () => (await info('OH08')).shown, 'asked again');
     await click('OH08-flat');
     await until(async () => (await sent()).filter(m => m.type === 'agentFlattenOff').length === fl0 + 1, 'the one command goes');
     const fl = (await sent()).filter(m => m.type === 'agentFlattenOff').pop();
-    await shows('OH09', async () => /^Flatten sent for SIM-AG1 MNQ \(he is in Shadow\): turning him off once flat\.\.\.$/.test(await text('OH07')) && fl.agent === 'demo' && Object.keys(fl).filter(k => !k.startsWith('__')).sort().join() === 'agent,cid,type' && /Turning him off/.test(await P('attr', 'LM02-copilot', 'title')),
+    await until(async () => (await text('OH07')) === 'In Shadow: ChartBridge flattens what he owns; he turns off once flat...', 'Shadow said once ChartBridge says it');
+    await shows('OH09', async () => (await text('OH07')) === 'In Shadow: ChartBridge flattens what he owns; he turns off once flat...' && fl.agent === 'demo' && Object.keys(fl).filter(k => !k.startsWith('__')).sort().join() === 'agent,cid,type' && /Turning him off/.test(await P('attr', 'LM02-copilot', 'title')),
       'one agentFlattenOff {agent} (ChartBridge puts him in Shadow and flattens what he owns); the line waits for flat; the modes wait too: ' + await text('OH07'));
-    await page.evaluate(() => { window.__dropFlatten = false; });
-    await control('price', { root: 'MNQ', p: 25399 });                                     // out at the target: flat
+    await control('agent-flatoff-nofill', { agent: 'demo', on: 0 });
+    await control('price', { root: 'MNQ', p: 25399 });                                     // out at the target: flat, in Shadow
     await until(async () => helper.calls.filter(c => c.route === 'POST /off').length === 2, 'Off once he is flat', 20000);
     item('OH09', !!(await until(async () => (await text('OH07')) === 'Flat. Off: his program ends, no more model calls.', 'the line says flat, then off')) && !(await sent()).some(m => m.type === 'order' && m.account === 'SIM-AG1'), 'flat, then Off; the page built no order for him');
     /* the folded settings */
