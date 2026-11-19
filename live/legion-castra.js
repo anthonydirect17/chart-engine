@@ -31,11 +31,12 @@ function mount(el, opts) {
   const S = { shown: false, gen: 0, timer: 0, tick: 0, readAt: 0, last: '', reads: {} };
   for (const n of NAMES) S.reads[n] = { state: 'idle', why: '', ans: null };
 
+  /* a read keeps its last answer while it is refreshed, and when a refresh fails (shown with a note): never blanked, never all clear */
   function read(name, path) {
-    const g = S.gen;
-    S.reads[name].state = 'loading';
+    const g = S.gen, r = S.reads[name];
+    S.reads[name] = { state: 'loading', why: '', ans: r.ans };
     return desk.get(path).then(ans => { if (g === S.gen) S.reads[name] = { state: 'ok', why: '', ans }; },
-      e => { if (g === S.gen) S.reads[name] = { state: 'fail', why: e && e.words ? e.words : 'The read failed.', ans: null }; });
+      e => { if (g === S.gen) S.reads[name] = { state: 'fail', why: e && e.words ? e.words : 'The read failed.', ans: r.ans }; });
   }
   function readAll() {
     S.gen++;
@@ -45,17 +46,19 @@ function mount(el, opts) {
     Promise.all(done).then(render);
   }
   const live = () => { try { return (typeof o.live === 'function' && o.live()) || null; } catch (e) { return null; } };
-  const status = n => S.reads[n].state;
-  const failNote = n => (status(n) === 'fail' ? note(S.reads[n].why, 'cx-bad') : status(n) === 'loading' || status(n) === 'idle' ? note('Reading...', 'cx-dim') : '');
+  const status = n => K.readStatus(S.reads[n]).state;
+  const staleNote = n => (K.readStatus(S.reads[n]).stale ? note('The last refresh failed (' + S.reads[n].why + ') so this is the last answer, not a current one.', 'cx-bad') : '');
+  const failNote = n => (S.reads[n].state === 'fail' ? note(S.reads[n].why, 'cx-bad') : note('Reading...', 'cx-dim'));
   const go = (tab, text) => '<button type="button" class="cx-link" data-cx-go="' + esc(tab) + '">' + esc(text) + '</button>';
 
   /* I. real against simulated money, per roster build, the money alarm on top */
   function money(mv) {
     if (status('money') !== 'ok') return card('I', 'Real against simulated money', failNote('money') + note(K.SIM_LABEL, 'cx-sim'), 'cx-first');
     if (!mv.ok) return card('I', 'Real against simulated money', note(mv.problem, 'cx-bad'), 'cx-first');
-    const banner = mv.tripped ? '<p class="cx-alarm" role="alert"><b>Money alarm: ' + K.plural(mv.tripped, 'roster build') + ' under the low end of the Prop Sim\'s range.</b> It is shown here and decides nothing by itself yet (the stop is step 3.5, ' + esc(K.NOT_BUILT) + ').</p>'
-      : mv.builds.length ? '<p class="cx-ok"><b>Money alarm: none tripped.</b> A build with no real figure yet cannot trip it (it reads "not enough data yet").</p>' : '';
-    let body = banner;
+    const banner = mv.tripped ? '<p class="cx-alarm" role="alert"><b>Money alarm: ' + K.plural(mv.tripped, 'roster build') + ' under the low end of the Prop Sim\'s range for the same number of evals.</b> It is shown here and decides nothing by itself yet (the stop is step 3.5, ' + esc(K.NOT_BUILT) + ').</p>'
+      : mv.builds.some(b => b.alarm.state === 'unknown' && b.alarm.words === K.ALARM_NOT_KNOWN) ? '<p class="cx-ok"><b>Money alarm: not known yet.</b> ' + esc(K.ALARM_NOT_KNOWN) + ' Until it is served the alarm never trips and never tops Needs you.</p>'
+      : mv.builds.length ? '<p class="cx-ok"><b>Money alarm: none tripped.</b></p>' : '';
+    let body = staleNote('money') + banner;
     if (!mv.builds.length) body += note('No roster build has real money yet: the prop ledger has nothing attributed to a build (not enough data yet).', 'cx-dim');
     else {
       body += table('cx-money', ['Build', 'Real profit per $1', 'Simulated profit per $1 (eval)', 'Real costs', 'Real payouts', 'Real net', 'Real sample', 'Money alarm'], mv.builds.map(b => ({ attrs: ' data-cx-build="' + esc(b.bot) + '"', cells: [
@@ -63,8 +66,8 @@ function mount(el, opts) {
         raw(esc(b.real.ppd) + (b.real.words && !b.real.has && b.real.words !== K.NOT_ENOUGH ? '<br><span class="cx-dim">' + esc(b.real.words) + '</span>' : ''), 'cx-num cx-lead ' + b.real.ppdTone),
         cell(b.hasSim ? b.sim.eval.text : 'no simulated figure (not on the roster)', 'cx-sim'),
         cell(b.real.costs, 'cx-num'), cell(b.real.payouts, 'cx-num'), cell(b.real.net, 'cx-num ' + b.real.netTone), cell(b.real.sample, 'cx-dim'),
-        raw('<span class="cx-al cx-al-' + esc(b.alarm.state) + '">' + esc(b.alarm.state === 'tripped' ? 'Tripped' : b.alarm.state === 'clear' ? 'Clear' : 'Cannot tell') + '</span> <span class="cx-dim">' + esc(b.alarm.words) + '</span>')] })));
-      body += note('Real: the prop ledger, split by the day each account ran the build (The Desk). Simulated: ' + K.SIM_LABEL, 'cx-dim');
+        raw('<span class="cx-al cx-al-' + esc(b.alarm.state) + '">' + esc(b.alarm.state === 'tripped' ? 'Tripped' : b.alarm.state === 'clear' ? 'Clear' : 'Not known yet') + '</span> <span class="cx-dim">' + esc(b.alarm.words) + '</span>')] })));
+      body += note('Real: the prop ledger, split by the day each account ran the build (The Desk). ' + K.SIM_LABEL, 'cx-dim');
     }
     if (mv.total) body += note('The ledger in all: ' + K.plural(mv.total.entries, 'entry', 'entries') + ', costs ' + mv.total.costs + ', payouts ' + mv.total.payouts + (mv.unattributed ? '; of it ' + K.plural(mv.unattributed.entries, 'entry', 'entries') + ' (costs ' + mv.unattributed.costs + ') belong to no build' : '') + '.', 'cx-dim');
     for (const p of mv.problems) body += note(p, 'cx-bad');
@@ -78,10 +81,10 @@ function mount(el, opts) {
     let body = '';
     if (!gv.rows.length) body += note('The roster has no build yet: nothing is approved or placed (not enough data yet).', 'cx-dim');
     else {
-      body += table('cx-goes', ['Build', 'Overall profit per $1', 'Days to pass', 'Payout speed', 'In a cohort today', 'Sample'], gv.rows.map(r => ({ cells: [
-        raw('<b>' + esc(r.name) + '</b> <span class="cx-dim">' + esc(r.kind) + '</span><br><span class="' + (r.approved ? 'cx-gold' : 'cx-dim') + '">' + esc(r.label) + '</span>' + (r.live ? '' : '<br><span class="cx-dim">cannot run live' + (r.whyNot ? ': ' + esc(r.whyNot) : '') + '</span>'), 'cx-lead'),
+      body = staleNote('roster') + body + table('cx-goes', ['Build', 'Overall profit per $1', 'Days to pass', 'Payout speed', 'In a cohort today', 'Sample'], gv.rows.map(r => ({ cells: [
+        raw('<b>' + esc(r.name) + '</b> <span class="cx-dim">' + esc(r.kind) + '</span><br><span class="' + (r.approved ? 'cx-gold' : 'cx-dim') + '">' + esc(r.label) + '</span>' + '<br><span class="cx-dim">Named account type: ' + esc(K.NOT_BUILT) + ' (law 1.6)</span>' + (r.live ? '' : '<br><span class="cx-dim">cannot run live' + (r.whyNot ? ': ' + esc(r.whyNot) : '') + '</span>'), 'cx-lead'),
         cell(r.ppdText, 'cx-num cx-lead ' + tone(r.ppd)), raw(esc(r.daysText) + '<br><span class="cx-dim">pass rate ' + esc(r.passText) + '</span>', 'cx-num'),
-        raw(esc(r.payoutText) + '<br><span class="cx-dim">' + esc(r.paidText) + '</span>', 'cx-num'),
+        raw(esc(r.payoutText) + '<br><span class="cx-dim">' + esc(r.paidText) + '<br>Dollars per funded slot per 30 sessions: ' + esc(K.NOT_BUILT) + ' (law 1.6)</span>', 'cx-num'),
         cell(r.picked.length ? r.picked.join(', ') : 'in none', r.picked.length ? '' : 'cx-dim'), cell(r.sample, 'cx-dim')] })));
       if (gv.left) body += note('And ' + K.plural(gv.left, 'more file') + ' not shown.', 'cx-dim');
     }
@@ -93,12 +96,13 @@ function mount(el, opts) {
   /* III. running now, VI. today live only: from ChartBridge, through FleetView */
   function running(lv) {
     if (!lv) return card('IV', 'Running now', note('ChartBridge is not connected, so this page cannot tell what is running: not read.', 'cx-dim'));
-    const r = K.runningNow(lv.traders);
+    const r = K.runningNow(lv.traders, lv.heard);
     let body;
-    if (!r.total) body = note('No trader is listed by ChartBridge (nothing running, as far as it says).', 'cx-dim');
+    if (r.cannotTell && !r.total && !r.running.length) body = note(r.cannotTell, 'cx-bad');
+    else if (!r.total) body = note('No trader is listed by ChartBridge (nothing running, as far as it says).', 'cx-dim');
     else if (!r.running.length) body = note('Nothing is running now: ' + K.plural(r.total, 'trader') + ' listed' + (r.shadow ? ', ' + r.shadow + ' in Shadow' : '') + ', none in Auto or Copilot.', 'cx-dim');
     else body = table('cx-run', ['Trader', 'Build', 'Mode', 'Accounts', 'Status', 'Today'], r.running.map(t => ({ cells: [cell(t.name, 'cx-lead'), cell(t.build || 'not stated', t.build ? '' : 'cx-dim'), cell(t.mode), cell(t.accounts), cell(t.status), cell(t.today === null ? 'not reported' : (t.today >= 0 ? '+' : '-') + L.usd(Math.abs(t.today)) + (t.trades === null ? '' : ' on ' + K.plural(t.trades, 'trade')), 'cx-num ' + tone(t.today))] })));
-    return card('IV', 'Running now', body + note('Live, from ChartBridge on this PC. Your personal account and the chart\'s Bot tab are not Legion\'s.', 'cx-dim'));
+    return card('IV', 'Running now', body + (r.cannotTell && (r.total || r.running.length) ? note(r.cannotTell, 'cx-bad') : '') + note('Live, from ChartBridge on this PC. Your personal account and the chart\'s Bot tab are not Legion\'s.', 'cx-dim'));
   }
   function today(lv) {
     if (!lv) return card('V', 'Today, live only', note('ChartBridge is not connected: not read.', 'cx-dim'));
@@ -143,6 +147,7 @@ function mount(el, opts) {
     let body = '<p>' + esc(c.summary || 'The report has no summary.') + '</p>';
     if (c.findings.length) body += '<ul class="cx-list">' + c.findings.map(f => '<li>' + esc(f) + '</li>').join('') + '</ul>';
     body += c.changes.length ? table('cx-chg', ['Change', 'From', 'To', 'Allowed'], c.changes.map(x => ({ cells: [cell(x.name, 'cx-lead'), cell(x.from, 'cx-num'), cell(x.to, 'cx-num'), cell(x.allowed ? 'yes' : 'no', x.allowed ? '' : 'cx-dim')] }))) : note('No change proposed.', 'cx-dim');
+    body += note('Veto: ' + K.NOT_BUILT + ' (law 1.6): this page has no veto action, and Centurion applies nothing until the veto exists.', 'cx-dim');
     body += note('Read only. ' + (c.vetoBuilt ? 'The Desk says its veto exists, and this page has no veto action yet.' : 'There is no veto action yet: Centurion reports and applies nothing' + (c.applies ? ' (the report says it applies, which this page does not take to mean anything)' : '') + '.'), 'cx-dim');
     return card('VII', 'Centurion\'s week', body + note('Report ' + (c.runId || 'without an id') + (c.status ? ', ' + c.status : '') + '.', 'cx-dim'));
   }
@@ -151,9 +156,9 @@ function mount(el, opts) {
     if (!S.shown) return;
     try {
       const lv = live();
-      const cv = status('cohorts') === 'ok' ? K.cohortsView(S.reads.cohorts.ans, lv ? lv.accounts : [], lv ? lv.traders : []) : null;
+      const cv = status('cohorts') === 'ok' ? K.cohortsView(S.reads.cohorts.ans, lv ? lv.accounts : [], lv ? lv.traders : [], !!(lv && lv.heard)) : null;
       const mv = status('money') === 'ok' ? K.moneyView(S.reads.money.ans) : null;
-      const reads = {}; for (const n of NAMES) reads[n] = S.reads[n].state;
+      const reads = {}; for (const n of NAMES) { const rs = K.readStatus(S.reads[n]); reads[n] = rs.stale ? 'fail' : rs.state; }
       const nv = K.needsYou({ money: mv, cohorts: cv, traders: lv ? lv.traders : [], reads });
       const gv = status('roster') === 'ok' ? K.goesInView(S.reads.roster.ans, status('cohorts') === 'ok' ? S.reads.cohorts.ans : null) : null;
       const html = '<div class="cx cx-body">' + money(mv) + needs(nv) + goes(gv) + '<div class="cx-two">' + running(lv) + today(lv) + '</div>' + '<div class="cx-two">' + night() + centurion() + '</div>'

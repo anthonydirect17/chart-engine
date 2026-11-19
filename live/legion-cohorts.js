@@ -42,7 +42,7 @@ function mount(el, opts) {
     press: 0, sky: null, skyWhy: '', league: { day: null, problem: '', at: 0, timer: 0, busy: false } };
 
   const live = () => { try { return (typeof o.live === 'function' && o.live()) || null; } catch (e) { return null; } };
-  const view = () => (S.ans ? K.cohortsView(S.ans, live() ? live().accounts : [], live() ? live().traders : []) : null);
+  const view = () => (S.ans ? K.cohortsView(S.ans, live() ? live().accounts : [], live() ? live().traders : [], !!(live() && live().heard)) : null);
 
   function readCohorts() {
     const g = ++S.gen;
@@ -62,7 +62,8 @@ function mount(el, opts) {
       if ((from ? from.id : null) === toId) { say(account + ' is already there: nothing to change.', false); return; }
     }
     if (S.busy || !v || !v.ok) return;
-    S.busy = true; say('Asking The Desk to move ' + account + '...', false);
+    S.busy = true; S.gen++;                                   // a cohorts read still in flight must not overwrite this write's newer answer
+    say('Asking The Desk to move ' + account + '...', false);
     desk.put(K.ROUTES.members, { version: v.version, account, cohort: toId }).then(ans => {
       S.busy = false; S.ans = ans; S.state = 'ok'; S.readAt = Date.now();
       const to = toId === null ? null : (ans.cohorts || []).find(c => c && c.id === toId);
@@ -108,7 +109,7 @@ function mount(el, opts) {
       '<p>Prop account groups with the roster build each trades. Drag an account chip onto a cohort, or use its "Move to" list. ' + (S.fleetHref ? '<a class="lx-btn lx-link" href="' + esc(S.fleetHref) + '" target="_blank" rel="noopener">Fleet</a> ' : '') + '<span class="cx-dim">Fleet is The Desk\'s one place for every prop account\'s book.</span></p>' +
       (v.firms.length ? '<dl class="cx-kv">' + v.firms.map(f => '<dt>' + esc(f.firm) + '</dt><dd>' + (f.pc ? 'its cohorts run on ' + esc(f.pc) : 'no PC set') + ', ' + K.plural(f.cohorts, 'cohort') + '. <span class="cx-dim">' + esc(K.directionWords()) + '</span></dd>').join('') + '</dl>' : note('The ledger names no firm yet (not enough data yet).', 'cx-dim')) +
       v.problems.map(p => note(p, 'cx-bad')).join('') +
-      note('Refused while a cohort is in Auto or the account holds a position; The Desk refuses a wrong stage, firm or type and says why. The cohort\'s pick is changed in the lanes further down this tab, not here. Version ' + v.version + ', read ' + (S.readAt ? new Date(S.readAt).toLocaleTimeString('en-US', { hour12: false }) : 'not yet') + '.', 'cx-dim') + '</section>';
+      note('Refused while a cohort is in Auto or the account holds a position; The Desk refuses a wrong stage, firm or type and says why. The cohort\'s pick is set in The Desk and is not changed on this tab yet. Version ' + v.version + ', read ' + (S.readAt ? new Date(S.readAt).toLocaleTimeString('en-US', { hour12: false }) : 'not yet') + '.', 'cx-dim') + '</section>';
     html += v.cohorts.length ? '<div class="ch-grid">' + v.cohorts.map((c, i) => cohortCard(c, i, v)).join('') + '</div>' : note('No cohort yet (not enough data yet): The Desk holds none.', 'cx-dim');
     const dropT = S.drag ? (K.dropRefusal(v, S.drag, null) ? ' ch-drop-no' : ' ch-drop-ok') : '';
     html += '<section class="lx-card cx-card ch-tray' + dropT + '" data-ch-drop="" aria-label="Prop accounts in no cohort"><h2>In no cohort</h2>' +
@@ -175,6 +176,7 @@ function mount(el, opts) {
     const p = o.sky;
     if (!p || !window.AgentsSky || !window.AgentsStrip || !window.AgentsStripCore) { S.skyWhy = 'The Agents strip is not served here (agents-sky.js or agents-strip.js is missing).'; skyEl.innerHTML = note(S.skyWhy, 'cx-dim'); return; }
     try {
+      skyEl.insertAdjacentHTML('afterend', '<p class="cx-note cx-dim">No price line on this page: the sky\'s pillars need the chart page\'s NQ quote, so it can say "Waiting for NQ bars". Its drones and their cards come from the Agent desks.</p>');
       S.sky = window.AgentsSky.mount(skyEl, Object.assign({}, p, { day: () => S.league.day, reach: () => ({ problem: S.league.problem, at: S.league.at }) }));
     } catch (e) { S.skyWhy = 'The Drone sky could not start: ' + (e && e.message); skyEl.innerHTML = note(S.skyWhy, 'cx-bad'); }
   }

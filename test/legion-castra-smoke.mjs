@@ -32,22 +32,26 @@ const PORT = +(process.env.CASTRA_SMOKE_PORT || 8996);
 const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
 const CORS = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': 'GET, PUT' };
 
+function startBridge(port, flags) {
+  const bridge = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(port), '--v3', '--test-controls', '--test-pin=' + TEST_PIN, '--version=0.6.24', '--personal=FUNDED-C', '--gone-grace-ms=600000'].concat(flags), { stdio: ['ignore', 'pipe', 'inherit'] });
+  return new Promise((res, rej) => { bridge.stdout.once('data', () => res(bridge)); bridge.once('exit', c => rej(new Error('bridge exited ' + c))); });
+}
 async function withBridge(fn) {
-  const bridge = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(PORT), '--v3', '--trading', '--test-controls', '--test-pin=' + TEST_PIN, '--version=0.6.24', '--personal=FUNDED-C', '--gone-grace-ms=600000'], { stdio: ['ignore', 'pipe', 'inherit'] });
-  try {
-    await new Promise((res, rej) => { bridge.stdout.once('data', res); bridge.once('exit', c => rej(new Error('bridge exited ' + c))); });
-    await fn();
-  } finally { bridge.kill(); }
+  const bridge = await startBridge(PORT, ['--trading', '--agents=demo']);
+  try { await fn(); } finally { bridge.kill(); }
 }
 /* The Desk (made-up answers), with a cohort model that moves: a stage that is not the cohort's is refused, a stale version is a 409 */
-async function open(vp, query, mode) {
+async function open(vp, query, mode, port) {
+  const PT = port || PORT;
   const ctx = await browser.newContext({ viewport: vp, deviceScaleFactor: 1 });
   const desk = [];
   const model = F.cohortsAnswer({ tray: 'EVAL-A' });
+  const hold = { slow: mode === 'slow' ? 2500 : 0 };
   await ctx.route(/localhost:8800\//, async x => {
     const u = new URL(x.request().url()), m = x.request().method();
     desk.push(m + ' ' + u.pathname);
     if (mode === 'off') return x.abort('failed');
+    if (hold.slow && m === 'GET') await sleep(hold.slow);
     if (m === 'OPTIONS') return x.fulfill({ status: 204, headers: CORS });
     const json = (b, status) => x.fulfill({ status: status || 200, contentType: 'application/json', headers: CORS, body: JSON.stringify(b) });
     if (m === 'GET') {
@@ -78,14 +82,15 @@ async function open(vp, query, mode) {
   const pe = [];
   page.on('pageerror', e => pe.push(e.message));
   page.on('dialog', d => { pe.push('a browser dialog: ' + d.message()); d.dismiss(); });
-  await page.goto(`http://localhost:${PORT}/live/legion.html${query || ''}`);
+  await page.goto(`http://localhost:${PT}/live/legion.html${query || ''}`);
   await page.waitForSelector('.cb-pin-key', { timeout: 15000 });
   await enterPin(page, TEST_PIN);
   await page.waitForFunction(() => document.getElementById('lxConn').dataset.state === 'on', null, { timeout: 20000 });
   /* the fake's EVAL-B starts without a connection: it is given one, flat, so a drag of it is allowed (EVAL-A holds 2 MNQ; FUNDED-C is the personal pick: not a prop row) */
-  await page.request.post(`http://localhost:${PORT}/test/account?name=EVAL-B&connection=connected`);
-  await page.waitForFunction(() => { const f = window.LegionTabs.parts.fleet; if (!f) return false; const a = f.state().accounts.find(x => x.name === 'EVAL-B'); return !!a && a.position === 'Flat'; }, null, { timeout: 10000 });
-  return { ctx, page, pe, desk, model };
+  if (port) return { ctx, page, pe, desk, model, hold };
+  await page.request.post(`http://localhost:${PT}/test/account?name=EVAL-B&connection=connected`);
+  await page.waitForFunction(() => { const f = window.LegionTabs.parts.fleet; if (!f) return false; const a = f.state().accounts.find(x => x.name === 'EVAL-B'); return !!a && a.position === 'Flat' && f.state().arm.state !== 'unknown'; }, null, { timeout: 15000 });   // and the traders are heard (the demo trader is in Shadow)
+  return { ctx, page, pe, desk, model, hold };
 }
 const until = (page, fn, arg, ms) => page.waitForFunction(fn, arg, { timeout: ms || 8000 }).catch(() => {});
 const text = (page, sel) => page.textContent(sel).then(t => (t || '').replace(/\s+/g, ' ').trim());
@@ -108,14 +113,21 @@ try {
     check(/-0\.40 per \$1/.test(cx) && /\+1\.10 per \$1 \(range \+0\.20 to \+2\.00\), simulated/.test(cx), 'real profit per $1 beside the simulated one, which says simulated');
     check(/3 ledger entries on 2 accounts/.test(cx) && /not enough data yet/.test(await text(a.page, '#cxView [data-cx-build="sample_b_v1"]')), 'each with its sample; no costs reads "not enough data yet"');
     check(/Simulated by the Prop Sim on in-sample days: not proven/.test(cx), 'the simulated label');
-    check(/Money alarm: 1 roster build under the low end/.test(cx) && /step 3\.5 \(not built yet\)/.test(cx), 'the money alarm is shown and says it stops nothing yet');
+    check(/Money alarm: not known yet\./.test(cx) && /range for the same number of evals is not served yet/.test(cx) && !/TRIPPED/i.test(cx), 'the money alarm reads not known yet: it does not trip on a range for another number of evals');
     check(/sample_a_v1/.test(await text(a.page, '.cx-goes')) && /approved by Anthony/.test(await text(a.page, '.cx-goes')) && /11 sessions \(median, simulated\)/.test(cx) && /19 sessions to the first payout/.test(cx), 'who goes in today: the approved build with days to pass and payout speed');
     check(/Split by zone and regime: off\./.test(cx) && /Off until a zone version passes test 3/.test(cx), 'the zone split is shown as off');
-    check(/Needs you/.test(cx) && /money alarm\s+sample_a_v1/.test(await text(a.page, '.cx-needsyou')), 'Needs you lists the alarm');
+    check(/Needs you/.test(cx) && /1 prop account in no cohort \(EVAL-A\)/.test(await text(a.page, '#cxView .cx-needs')) && !/money alarm/.test(await text(a.page, '#cxView .cx-needs')), 'Needs you lists what waits, and the alarm is not on it');
+    check(/Named account type: not built yet \(law 1\.6\)/.test(cx) && /Dollars per funded slot per 30 sessions: not built yet \(law 1\.6\)/.test(cx) && /Veto: not built yet \(law 1\.6\)/.test(cx), 'the named type, dollars per funded slot and the veto say not built yet (law 1.6)');
     check(/Nothing is running now|No trader is listed|ChartBridge is not connected/.test(await text(a.page, '#cxView')) || await a.page.isVisible('.cx-run'), 'running now says what ChartBridge says');
     check(/Today, live only/.test(cx) && /Live only: what ChartBridge reports now/.test(cx), 'today, live only');
     check(/Last night/.test(cx) && /2001-03-01/.test(cx) && /9 \(7 new, 2 neighbours/.test(cx), 'last night: the board\'s newest night');
     check(/Centurion's week/.test(cx) && /made-up finding one/.test(cx) && /There is no veto action yet/.test(cx) && !(await a.page.$('#cxView button[data-cx-veto]')), 'Centurion\'s week is read only, no veto action');
+    /* a refresh keeps the last answer: the page is not blanked and Needs you is not all clear while it reads */
+    a.hold.slow = 2000;
+    await a.page.click('[data-cx-again]'); await sleep(400);
+    const mid = await text(a.page, '#cxView');
+    check(/-0\.40 per \$1/.test(mid) && /1 prop account in no cohort/.test(mid) && !/Nothing needs you/.test(mid), 'during a refresh the last answer stays and Needs you is not all clear');
+    a.hold.slow = 0;
     check(a.desk.filter(d => /\/api\/legion\//.test(d) && !/^GET /.test(d)).length === 0, 'Castra sends The Desk only GETs on its Legion routes: ' + a.desk.filter(d => /\/api\/legion\//.test(d) && !/^GET /.test(d)).join());
     check((await innerScrolls(a.page, '#lx-castra')).length === 0, 'no box scrolls inside Castra: ' + JSON.stringify(await innerScrolls(a.page, '#lx-castra')));
     await a.page.screenshot({ path: path.join(SHOTS, 'castra.png'), fullPage: true });
@@ -190,6 +202,30 @@ try {
     check(/The Desk did not answer \/api\/legion\/cohorts/.test(await text(off.page, '#chView')), 'and the cohorts too');
     check(off.pe.length === 0, 'no page error: ' + off.pe.join(' | '));
     await off.ctx.close();
+
+    /* ---------------- nothing read yet: Needs you cannot tell, it is never all clear */
+    const slow = await open({ width: 1600, height: 900 }, '?tab=castra', 'slow');
+    await sleep(600);
+    const st = await text(slow.page, '#cxView');
+    check(/Cannot tell: .*roster/.test(st) && !/Nothing needs you/.test(st), 'while the reads are pending Needs you says cannot tell, not all clear: ' + st.slice(0, 200));
+    await slow.ctx.close();
+
+    /* ---------------- before the sign-in replay: accounts are there, the traders are not heard. FleetView says so through its Armed state
+       ('unknown'); here that state is forced (the fake cannot be held in the moment between the two), and the page must refuse every drag */
+    const q = await open({ width: 1600, height: 900 }, '?tab=cohorts');
+    await until(q.page, () => window.LegionTabs.state().cohortModel && window.LegionTabs.state().cohortModel.state === 'ok');
+    await sleep(1200);
+    await q.page.evaluate(() => { const f = window.LegionTabs.parts.fleet, was = f.state; f.state = () => Object.assign(was.call(f), { arm: { state: 'unknown', text: 'Armed: not known' } }); });
+    await sleep(2200);
+    const nq = q.desk.length;
+    await q.page.dragAndDrop('[data-ch-account="EVAL-B"]', '[data-ch-drop="gamma"]');
+    await sleep(300);
+    check(/cannot tell whether a cohort is in Auto: ChartBridge has not sent the traders yet/.test(await text(q.page, '.ch-said')), 'a drag before the traders are heard is refused in plain words: ' + await text(q.page, '.ch-said'));
+    check(q.desk.slice(nq).filter(d => /^PUT/.test(d)).length === 0, 'and no PUT is sent');
+    await q.page.click('[data-lx-tab="castra"]'); await sleep(1300);
+    check(/cannot tell what is running/.test(await text(q.page, '#cxView')), 'Castra says it cannot tell what is running, not "nothing"');
+    check(q.pe.length === 0, 'no page error: ' + q.pe.join(' | '));
+    await q.ctx.close();
 
     /* ---------------- a phone, 390 x 844 */
     const p = await open({ width: 390, height: 844 }, '?tab=castra');

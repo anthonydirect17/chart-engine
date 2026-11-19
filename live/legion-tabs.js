@@ -115,7 +115,7 @@ function mount(env) {
     const t = Date.now();
     if (t - liveAt < 800) return liveCache;
     liveAt = t;
-    try { const s = fleet.state(); liveCache = s.connected ? { traders: s.traders, accounts: s.accounts } : null; } catch (e) { liveCache = null; }
+    try { const s = fleet.state(); liveCache = s.connected ? { traders: s.traders, accounts: s.accounts, heard: !!(s.arm && s.arm.state !== 'unknown') } : null;    /* heard: the traders are known (ChartBridge's replay after sign-in is done); with accounts but no traders every cohort would read not in Auto */ } catch (e) { liveCache = null; }
     return liveCache;
   };
   const openTab = id => { const b = document.querySelector('[data-lx-tab="' + id + '"]'); if (b) b.click(); };

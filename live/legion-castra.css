@@ -85,3 +85,6 @@
 .cx-money td:first-child { min-width: 120px; }
 @media (max-width: 760px) { .cx-money td:first-child { min-width: 0; } }
 .ch-chip .ch-tag { align-self: flex-start; }
+
+@media (max-width: 760px) { .cx-money .cx-al { white-space: nowrap; display: inline-block; } .cx-money td::before { flex: 0 0 auto; white-space: nowrap; } .cx-money td { flex-wrap: wrap; } }
+@media (max-width: 760px) { .cx-goes td { display: block; text-align: left; } .cx-goes td::before { display: block; margin-bottom: 2px; } }

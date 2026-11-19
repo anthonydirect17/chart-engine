@@ -57,12 +57,20 @@ const plural = (n, one, many) => n.toLocaleString('en-US') + ' ' + (n === 1 ? on
  * A failed read or write rejects with { words, status, body }: words in plain language naming the route (LudusCore.failWords).
  */
 function deskClient(o) {
+  const TIMEOUT_MS = isNum(o.timeoutMs) && o.timeoutMs > 0 ? o.timeoutMs : 15000;
+  /* a hang becomes a failure: the request is aborted (AbortController) and, whatever the fetch does, the answer is not waited for past TIMEOUT_MS */
+  const withTimeout = (go) => {
+    const ac = typeof AbortController === 'function' ? new AbortController() : null;
+    let timer = 0;
+    const late = new Promise((_, no) => { timer = setTimeout(() => { if (ac) ac.abort(); no({ status: null, timedOut: true }); }, TIMEOUT_MS); });
+    return Promise.race([go(ac ? ac.signal : undefined), late]).then(r => { clearTimeout(timer); return r; }, e => { clearTimeout(timer); return Promise.reject(e); });
+  };
   const base = () => Promise.resolve().then(() => o.deskBase());
-  const fail = (path, e) => Promise.reject({ words: L.failWords(path.split('?')[0], e && typeof e.status === 'number' ? e.status : null), status: e && typeof e.status === 'number' ? e.status : null, body: e && e.body ? e.body : null });
+  const fail = (path, e) => Promise.reject({ words: e && e.timedOut ? 'The Desk did not answer ' + path.split('?')[0] + ' in ' + Math.round(TIMEOUT_MS / 1000) + ' s.' : L.failWords(path.split('?')[0], e && typeof e.status === 'number' ? e.status : null), status: e && typeof e.status === 'number' ? e.status : null, body: e && e.body ? e.body : null });
   const answer = r => (r.ok ? r.json() : r.json().catch(() => null).then(b => Promise.reject({ status: r.status, body: b })));
   return {
-    get: path => base().then(b => o.fetch(b + path, { cache: 'no-store', mode: 'cors', credentials: 'omit' })).then(answer).catch(e => fail(path, e)),
-    put: (path, body) => base().then(b => o.fetch(b + path, { method: 'PUT', cache: 'no-store', mode: 'cors', credentials: 'omit', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).then(answer).catch(e => fail(path, e)),
+    get: path => withTimeout(signal => base().then(b => o.fetch(b + path, { cache: 'no-store', mode: 'cors', credentials: 'omit', signal })).then(answer)).catch(e => fail(path, e)),
+    put: (path, body) => withTimeout(signal => base().then(b => o.fetch(b + path, { method: 'PUT', cache: 'no-store', mode: 'cors', credentials: 'omit', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal })).then(answer)).catch(e => fail(path, e)),
   };
 }
 
@@ -89,17 +97,20 @@ function simStage(sim, stage) {
     text: L.perDollar(s.profit_per_dollar) + (r ? ' (range ' + L.signed(r[0]) + ' to ' + L.signed(r[1]) + ')' : ' (no range given)') + ', simulated' };
 }
 /**
- * The money alarm of one build (law 9.2): real profit per $1 under the low end of the Prop Sim's range for the build.
- * -> { state: 'tripped' | 'clear' | 'unknown', words }. unknown: there is no real figure yet, or no simulated range to hold it to.
- * The range is the eval stage's (the stage the capped evals are bought for). It stops nothing here (step 3.5).
+ * The money alarm of one build (law 9.2, Anthony 2026-11-19): real results are held to the Prop Sim's range for the SAME NUMBER of
+ * evals. The Desk serves only the range of the sim's own run (range95), not a range for N evals, so until that is served the alarm
+ * reads "not known yet" and never trips: a range for a different number of evals would trip it wrongly. rangeForN is that served range,
+ * { low } for the build's number of evals, or null (always null today). -> { state: 'tripped' | 'clear' | 'unknown', words }.
+ * It stops nothing here (step 3.5).
  */
-function alarmOf(real, simEval) {
+const ALARM_NOT_KNOWN = 'Not known yet: the Prop Sim\'s range for the same number of evals is not served yet (law 9.2), so real money cannot be judged against it.';
+function alarmOf(real, simEval, rangeForN) {
+  if (!rangeForN || !isNum(rangeForN.low)) return { state: 'unknown', words: ALARM_NOT_KNOWN };
   if (!isObj(real) || !isNum(real.profit_per_dollar) || !isNum(real.costs) || real.costs <= 0) return { state: 'unknown', words: 'No real figure yet (' + NOT_ENOUGH + '): nothing to hold to the simulated range.' };
-  if (!simEval || simEval.low === null) return { state: 'unknown', words: 'No simulated range for this build: the alarm cannot be judged.' };
-  if (real.profit_per_dollar < simEval.low) {
-    return { state: 'tripped', words: 'Money alarm: real profit per $1 (' + L.signed(real.profit_per_dollar) + ') is under the low end of the Prop Sim\'s range (' + L.signed(simEval.low) + '). It decides nothing by itself yet: the stop on new entries and on buying evals is step 3.5 (' + NOT_BUILT + '), so decide here.' };
+  if (real.profit_per_dollar < rangeForN.low) {
+    return { state: 'tripped', words: 'Money alarm: real profit per $1 (' + L.signed(real.profit_per_dollar) + ') is under the low end of the Prop Sim\'s range for the same number of evals (' + L.signed(rangeForN.low) + '). It decides nothing by itself yet: the stop is step 3.5 (' + NOT_BUILT + ').' };
   }
-  return { state: 'clear', words: 'Real profit per $1 (' + L.signed(real.profit_per_dollar) + ') is not under the low end of the Prop Sim\'s range (' + L.signed(simEval.low) + ').' };
+  return { state: 'clear', words: 'Real profit per $1 (' + L.signed(real.profit_per_dollar) + ') is not under the low end of the Prop Sim\'s range for the same number of evals (' + L.signed(rangeForN.low) + ').' };
 }
 /** One build's real money cells: { ppd, costs, payouts, net, sample } as words ("not enough data yet" with no figure). */
 function realCells(real) {
@@ -117,7 +128,7 @@ function moneyView(ans) {
     const sim = { eval: simStage(b.simulated, 'eval'), funded: simStage(b.simulated, 'funded') };
     const real = realCells(b.real);
     return { bot: str(b.bot, 60), file: str(b.file, 60), onRoster: b.on_roster === true, accounts: Array.isArray(b.accounts) ? b.accounts.filter(x => typeof x === 'string').slice(0, 50) : [],
-      real, sim, hasSim: isObj(b.simulated), alarm: alarmOf(b.real, sim.eval) };
+      real, sim, hasSim: isObj(b.simulated), alarm: alarmOf(b.real, sim.eval, null) };
   });
   const un = isObj(ans.unattributed) ? ans.unattributed : null, tot = isObj(ans.ledger_total) ? ans.ledger_total : null;
   return { ok: true, problem: null, builds, tripped: builds.filter(b => b.alarm.state === 'tripped').length,
@@ -163,11 +174,12 @@ function goesInView(rosterAns, cohortsAns) {
 
 /* ---------------------------------------------------------------- running now and today, live only (from ChartBridge, by FleetView) */
 /** The traders running now: in Auto or Copilot (never a Shadow one, never one that is off, killed or stood down). rows: FleetCore.traders. */
-function runningNow(traders) {
+function runningNow(traders, heard) {
+  if (heard === false) return { running: [], total: 0, shadow: 0, cannotTell: 'ChartBridge has not sent the traders yet (it is signing in, or signed out), so this page cannot tell what is running.' };
   const list = Array.isArray(traders) ? traders.filter(isObj) : [];
   const running = list.filter(t => (t.mode === 'auto' || t.mode === 'copilot') && t.tone !== 'off' && t.tone !== 'killed' && t.tone !== 'standDown');
   return { running: running.map(t => ({ id: str(t.id), name: str(t.name), build: str(t.build), mode: str(t.modeText), accounts: str(t.accountText), status: str(t.status), tone: str(t.tone), today: isNum(t.pnlToday) ? t.pnlToday : null, trades: isNum(t.trades) ? t.trades : null, auto: t.mode === 'auto' })),
-    total: list.length, shadow: list.filter(t => t.mode === 'shadow').length };
+    total: list.length, shadow: list.filter(t => t.mode === 'shadow').length, cannotTell: list.some(t => t.cannotTell) ? 'A trader in Auto whose accounts this page cannot read: what is running cannot be told in full.' : '' };
 }
 /** Today, live only: the day's result of the prop accounts ChartBridge lists now. rows: FleetCore.propAccounts. Nothing simulated. */
 function todayLive(accounts) {
@@ -227,21 +239,22 @@ function pickWords(p) {
  * -> { ok, problem, version, cohorts: [{ id, name, stage, firm, pc, pick, chips, problems, auto, openPositions }], tray, firms, problems }
  * auto: a trader in Auto holds one of the cohort's accounts (what only this PC knows); openPositions: its accounts that hold a position.
  */
-function cohortsView(ans, accounts, traders) {
+function cohortsView(ans, accounts, traders, heard) {
   if (!isObj(ans) || !Array.isArray(ans.cohorts) || !isNum(ans.version)) return { ok: false, problem: 'The cohorts\' answer is not one this page knows.', cohorts: [], tray: [], firms: [], problems: [] };
   const idx = fleetIndex(accounts);
   const autos = (Array.isArray(traders) ? traders : []).filter(t => isObj(t) && t.mode === 'auto' && t.tone !== 'off' && t.tone !== 'killed' && t.tone !== 'standDown');
+  const cannotTell = (Array.isArray(traders) ? traders : []).some(t => isObj(t) && t.cannotTell);
   const inAuto = name => autos.some(t => Array.isArray(t.accounts) && t.accounts.some(n => lc(n) === lc(name)));
   const cohorts = ans.cohorts.filter(isObj).slice(0, 100).map(c => {
-    const chips = (Array.isArray(c.accounts) ? c.accounts : []).filter(isObj).slice(0, 100).map(a => chipOf(a, idx));
+    const chips = (Array.isArray(c.accounts) ? c.accounts : []).filter(isObj).slice(0, 100).map(a => Object.assign(chipOf(a, idx), { inAuto: inAuto(a.account) }));
     return { id: str(c.id, 40), name: str(c.name, 40), stage: str(c.stage, 10), firm: str(c.firm, 40), firms: Array.isArray(c.firms) ? c.firms.filter(x => typeof x === 'string') : [], pc: str(c.pc, 64),
       pick: pickWords(c.pick), chips, problems: Array.isArray(c.problems) ? c.problems.filter(x => typeof x === 'string').slice(0, 10) : [],
-      auto: chips.some(k => inAuto(k.account)), openPositions: chips.filter(k => k.listed && !flat(k.position) && k.position !== 'Not connected').map(k => k.account) };
+      auto: chips.some(k => k.inAuto), openPositions: chips.filter(k => k.listed && !flat(k.position) && k.position !== 'Not connected').map(k => k.account) };
   });
   const inCohort = new Set(cohorts.flatMap(c => c.chips.map(k => lc(k.account))));
   const tray = (Array.isArray(ans.prop_accounts) ? ans.prop_accounts : []).filter(a => isObj(a) && !a.cohort && !inCohort.has(lc(a.account))).slice(0, 100)
-    .map(a => chipOf({ account: a.account, firm: a.firm, stage: a.stage, type: null, problem: null }, idx));
-  return { ok: true, problem: null, version: ans.version, cohorts, tray,
+    .map(a => Object.assign(chipOf({ account: a.account, firm: a.firm, stage: a.stage, type: null, problem: null }, idx), { inAuto: inAuto(a.account) }));
+  return { ok: true, problem: null, version: ans.version, heard: heard === true, cannotTell, cohorts, tray,
     firms: (Array.isArray(ans.firms) ? ans.firms : []).filter(isObj).map(f => ({ firm: str(f.firm, 40), pc: str(f.pc, 64), cohorts: Array.isArray(f.cohorts) ? f.cohorts.length : 0 })),
     problems: Array.isArray(ans.problems) ? ans.problems.filter(x => typeof x === 'string').slice(0, 10) : [], note: str(ans.note, 400) };
 }
@@ -262,8 +275,11 @@ function dropRefusal(view, account, toId) {
   const to = toId === null ? null : all.find(c => c.id === toId) || null;
   if (toId !== null && !to) return 'That cohort is not there any more: the page reads the cohorts again.';
   if ((from ? from.id : null) === (to ? to.id : null)) return '';
+  if (!view.heard) return 'This page cannot tell whether a cohort is in Auto: ChartBridge has not sent the traders yet (it is signing in, or signed out). Nothing is moved.';
+  if (view.cannotTell) return 'This page cannot tell whether a cohort is in Auto: a trader in Auto has accounts it cannot read. Nothing is moved.';
   if (!chip.listed) return account + ' is not listed by ChartBridge now, so this page cannot tell whether it holds a position: nothing is moved.';
   if (chip.position !== 'Flat') return account + (chip.position === 'Not connected' ? ' is not connected, so this page cannot tell whether it holds a position' : ' holds a position (' + chip.position + ')') + ': nothing is moved while it does. Close the position first.';
+  if (chip.inAuto) return account + ' has a trader in Auto on it: nothing is moved. Turn the trader off first.';
   const busy = [from, to].filter(c => c && c.auto)[0];
   if (busy) return busy.name + ' is in Auto (a trader is running on its accounts): nothing is moved into or out of it. Turn the trader off first.';
   return '';
@@ -277,10 +293,21 @@ function moveWords(e) {
   return e && e.words ? e.words + ' Nothing was moved.' : 'Nothing was moved.';
 }
 
+/* ---------------------------------------------------------------- one read's state, as the views and Needs you take it */
+/**
+ * r: { state: 'idle' | 'loading' | 'ok' | 'fail', ans }. A read keeps its LAST answer while it is refreshed and when a refresh fails
+ * (stale), so a refresh never blanks the page or reads as all clear. -> 'ok' (an answer is held), 'fail' (it failed and nothing is held)
+ * or 'pending' (nothing yet, and not failed): a pending or failed read is never "nothing needs you". stale: a held answer whose last refresh failed.
+ */
+function readStatus(r) {
+  const has = !!r && r.ans !== null && r.ans !== undefined;
+  return { state: has ? 'ok' : r && r.state === 'fail' ? 'fail' : 'pending', stale: has && r.state === 'fail' };
+}
+
 /* ---------------------------------------------------------------- Needs you: the one place a decision waits */
 /**
  * Everything that waits for a decision, in one list: [{ kind, words, where }], worst first. money: moneyView, cohorts: cohortsView,
- * traders: FleetCore.traders, reads: { name: 'ok' | 'fail' | 'idle' } for the reads Castra depends on.
+ * traders: FleetCore.traders, reads: { name: readStatus(...).state } for the reads Castra depends on: any that is not 'ok' (failed or still pending) is named under cannotTell, never read as all clear.
  */
 function needsYou(o) {
   const out = [];
@@ -300,10 +327,10 @@ function needsYou(o) {
     if (!isObj(t) || (t.kind !== 'prop' && t.kind !== 'propsim' && t.kind !== 'unlisted' && t.kind !== 'mixed')) continue;
     if (t.tone === 'killed' || t.tone === 'standDown' || (t.tone === 'lost' && t.mode === 'auto')) out.push({ kind: 'trader', words: str(t.name) + ': ' + str(t.status), where: 'cohorts' });
   }
-  const failed = Object.keys(o && o.reads ? o.reads : {}).filter(k => o.reads[k] === 'fail');
+  const failed = Object.keys(o && o.reads ? o.reads : {}).filter(k => o.reads[k] !== 'ok');
   return { items: out, cannotTell: failed };
 }
 
 return Object.freeze({ ROUTES, FLEET_PATH, RN, NOT_BUILT, NOT_ENOUGH, SIM_LABEL, deskClient, esc, table, cell, raw, card, note, tone, plural,
-  simStage, alarmOf, realCells, moneyView, goesInView, runningNow, todayLive, lastNight, centurionView, fleetIndex, chipOf, pickWords, cohortsView, directionWords, dropRefusal, moveWords, needsYou });
+  simStage, alarmOf, ALARM_NOT_KNOWN, readStatus, realCells, moneyView, goesInView, runningNow, todayLive, lastNight, centurionView, fleetIndex, chipOf, pickWords, cohortsView, directionWords, dropRefusal, moveWords, needsYou });
 });
