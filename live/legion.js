@@ -244,10 +244,25 @@ function noteLine(text, warn) {
 let roomPx = 0;
 function floatRoom(reset) {
   const f = $('lxFloat'); if (!f) return;
+  floatFit();
   const fh = Math.ceil(f.getBoundingClientRect().height), h = fh > 0 ? fh + 16 : 0;   // nothing showing: no room
   if (reset) roomPx = 0;
   if (h > roomPx) { roomPx = h; document.documentElement.style.setProperty('--lx-float-room', roomPx + 'px'); }
 }
+/* the lanes' head on Cohorts (Kill all, Armed and their questions) stacks above the floating lines (live/legion.css); so that the lines
+   never slip under it either, on a short window or a phone they keep to the room below the head and scroll inside it (the R12 delta
+   review of 3.3). Read again on a scroll, a resize, a line, and whenever the tab's content (the head with it) changes size */
+let fitWas = '';
+function floatFit() {
+  const f = $('lxFloat'); if (!f) return;
+  const h = S.tab === 'cohorts' && S.sub === 'legion' ? document.querySelector('#flView .fl-top') : null;
+  const r = h && h.getClientRects().length ? h.getBoundingClientRect() : null;
+  const v = r && r.bottom > 0 ? 'min(45vh, ' + Math.max(48, Math.floor(window.innerHeight - 10 - r.bottom - 8)) + 'px)' : '';
+  if (v !== fitWas) { fitWas = v; f.style.maxHeight = v; }
+}
+window.addEventListener('scroll', floatFit, { passive: true });
+window.addEventListener('resize', floatFit);
+if (typeof ResizeObserver === 'function') { const fv = $('flView'); if (fv) new ResizeObserver(floatFit).observe(fv); }
 function placeAsk() { const h = $('lxHead'); if (h) document.documentElement.style.setProperty('--lx-ask-top', Math.max(0, Math.round(h.getBoundingClientRect().bottom) + 6) + 'px'); }
 window.addEventListener('scroll', () => { if (S.ask) placeAsk(); }, { passive: true });
 function endAsk() { S.ask = 0; clearTimeout(S.askTimer); S.askTimer = 0; }

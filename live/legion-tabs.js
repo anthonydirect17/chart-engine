@@ -72,7 +72,8 @@ function mount(env) {
     })();
     const lanes = new Map();
     $('flView').innerHTML = '';
-    fleet = window.FleetView.create({ view: $('flView'), tab: null, v3: legionLink, realClick, headers,
+    /* the cohort model and the Drone sky sit under the lanes' head, not above it (Anthony 2026-11-19: "Yes, Kill all at the top") */
+    fleet = window.FleetView.create({ view: $('flView'), tab: null, v3: legionLink, realClick, headers, underHead: $('chView'),
       helperStatus: legionHelperStatus,
       liveChart: el => (window.ChartLive && hub ? window.ChartLive.mount(el, { feed: hub, paneId: 'legion', storagePrefix: PREFIX, toolbar: false, compact: true, view: { root: 'MNQ', tf: 'm1' } }) : null),
       accountRows: (el, key, filter) => {
