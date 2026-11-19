@@ -189,7 +189,7 @@ test('a past day: the page wiring (the address, read only, never on the live cha
   const lt = read('live/legion-tabs.js');
   assert.match(lt, /league\.openDay\(new URLSearchParams\(location\.search\)\.get\('day'\)\)/);
   assert.match(ws, /const LEGION_TABS = \['legion', 'fleet', 'league', 'colosseum', 'agent', 'praetorian'\];/);
-  assert.match(ws, /if \(LEGION_TABS\.includes\(movedTab\)\) location\.replace\('legion\.html' \+ location\.search \+ location\.hash\);/, '?tab=league&day= lands on Legion with its day');
+  assert.match(ws, /if \(LEGION_TABS\.includes\(movedTab\) && !prBotLast\) location\.replace\('legion\.html' \+ location\.search \+ location\.hash\);/, '?tab=league&day= lands on Legion with its day');
   assert.doesNotMatch(ws, /LeagueOverlay|leagueGhost/, 'no faint league marks on the live charts any more');
 });
 

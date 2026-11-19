@@ -70,7 +70,7 @@ test('the top tabs (plan step 3.2): the chart page keeps Chart, the Bot tab and 
   assert.match(ws, /const OTHER_TABS = \['wsBotTab', 'wsLegion'\];/);
   assert.match(ws, /if \(\$\('wsLegion'\)\) \$\('wsLegion'\)\.hidden = !\(Array\.isArray\(m\.features\) && m\.features\.includes\('v3'\)\);/, 'offered with a v3 ChartBridge');
   assert.match(ws, /const LEGION_TABS = \['legion', 'fleet', 'league', 'colosseum', 'agent', 'praetorian'\];/);
-  assert.match(ws, /if \(LEGION_TABS\.includes\(movedTab\)\) location\.replace\('legion\.html' \+ location\.search \+ location\.hash\);\nelse if \(PIN\)/, 'an old address forwards before anything starts');
+  assert.match(ws, /if \(LEGION_TABS\.includes\(movedTab\) && !prBotLast\) location\.replace\('legion\.html' \+ location\.search \+ location\.hash\);\nelse if \(PIN\)/, 'an old address forwards before anything starts');
   const L = require('../live/legion.js');
   for (const t of ['legion', 'fleet', 'league', 'colosseum', 'agent', 'praetorian']) assert.notEqual(L.tabFrom('?tab=' + t).tab, 'castra', t + ' lands on its tab on Legion');
   assert.match(ws, /const TAB_CLASSES = \['bt-on'\];/);

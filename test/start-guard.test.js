@@ -104,5 +104,13 @@ test('the guard in the source: every part start, the hello and a layout change g
   assert.ok(openLayout.indexOf('renderOrders();') < openLayout.indexOf('startGuard('), 'a layout change places the charts and the ticket before it tells the parts');
   assert.strictEqual((openLayout.match(/startGuard\(/g) || []).length, 2, 'the Bot tab and the Agent desk told inside their own guards');
   assert.match(ws, /startGuard\('Praetorian link', \(\) => \{\n  praetorianLink = /);
-  assert.match(ws, /if \(LEGION_TABS\.includes\(movedTab\)\) location\.replace\('legion\.html' \+ location\.search \+ location\.hash\);\nelse if \(PIN\) PIN\.gate\(\)\.then\(start\); else start\(\);/, 'the page starts the same way, after forwarding a moved tab');
+  assert.match(ws, /if \(LEGION_TABS\.includes\(movedTab\) && !prBotLast\) location\.replace\('legion\.html' \+ location\.search \+ location\.hash\);\nelse if \(PIN\) PIN\.gate\(\)\.then\(start\); else start\(\);/, 'the page starts the same way, after forwarding a moved tab');
+});
+
+test('the R12 review of plan step 3.2, N4: an old ?tab=praetorian opens the side used last (the Bot tab here, else Praetorian on Legion)', () => {
+  const ws = fs.readFileSync(path.join(__dirname, '..', 'live', 'workspace.js'), 'utf8');
+  assert.match(ws, /const PR_SIDE_KEY = 'live-praetorian-side-v1';/, '1.51.0\'s key, kept');
+  assert.match(ws, /const prBotLast = movedTab === 'praetorian' && store\.getItem\(PR_SIDE_KEY\) === 'bot';\nif \(prBotLast\) \{ try \{ const q = new URLSearchParams\(location\.search\); q\.set\('tab', 'bot'\);/, 'the Bot last: ?tab=bot here');
+  assert.match(ws, /if \(on\) \{ closePops\(\); restoreMax\(\); store\.setItem\(PR_SIDE_KEY, 'bot'\); \}/, 'the Bot tab writes it');
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'live', 'legion-tabs.js'), 'utf8'), /onTab: on => \{ if \(on\) \{ try \{ store\.setItem\('live-praetorian-side-v1', 'agent'\); \}/, 'Legion\'s Praetorian side writes the Agent');
 });

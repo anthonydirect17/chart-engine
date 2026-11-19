@@ -1,7 +1,7 @@
 /*
  * Legion's own look (plan step 3.2): the Imperial look of the Legion mockup (version 8) on the page's own tokens (workspace.css,
- * house style V2): black and charcoal, gold trim with bronze beside it, cut corners, Roman numerals in Cinzel. No purple, no
- * crimson; green and red only for P&L and trade sides, and the page's sell tone for the one stop button (as the chart page's
+ * house style V2): black and charcoal, gold trim with bronze beside it, cut corners, Roman numerals in Cinzel. No purple (the
+ * Colosseum's Opus seat keeps its violet, Anthony's exception of 2026-10-31, kept 2026-11-19), no crimson; green and red only for P&L and trade sides, and the page's sell tone for the one stop button (as the chart page's
  * Flatten all). Wide pages, the page itself scrolls and nothing inside it does; on a phone the tables stack.
  */
 :root {

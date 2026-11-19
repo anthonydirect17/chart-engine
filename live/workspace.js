@@ -3820,7 +3820,7 @@ const start = () => {
   startGuard('Bot tab', () => { startBot(); if (botDesk) { botDesk.layoutChanged(layout); botDesk.chartsChanged(); } }, 'wsBotTab');
   startGuard('Agent desk', () => { startAgent(); if (agentDesk) agentDesk.layoutChanged(layout); });
   const tab = new URLSearchParams(location.search).get('tab');
-  if (botDesk && (tab === 'bot' || prBotLast)) startGuard('Bot tab', () => botDesk.showTab(true));
+  if (botDesk && tab === 'bot') startGuard('Bot tab', () => botDesk.showTab(true));
   startGuard('Chart button', syncChartTab);
 };
 /* A window that opens (or reloads) with the ticket in its layout takes it when no other window has it (Anthony
@@ -3836,6 +3836,7 @@ const movedTab = String(new URLSearchParams(location.search).get('tab') || '').t
 /* the R12 review, N4: an old ?tab=praetorian opens the side used last, as 1.51.0 did: the Bot tab here when that was the Bot (kept
    in this browser: the Bot tab writes it here, Legion's Praetorian side writes the Agent), else Praetorian on Legion */
 const prBotLast = movedTab === 'praetorian' && store.getItem(PR_SIDE_KEY) === 'bot';
+if (prBotLast) { try { const q = new URLSearchParams(location.search); q.set('tab', 'bot'); history.replaceState(null, '', location.pathname + '?' + q.toString() + location.hash); } catch (e) { /* a file page */ } }
 if (LEGION_TABS.includes(movedTab) && !prBotLast) location.replace('legion.html' + location.search + location.hash);
 else if (PIN) PIN.gate().then(start); else start();
 });
