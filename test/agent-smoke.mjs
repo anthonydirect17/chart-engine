@@ -603,7 +603,7 @@ try {
   await toggleTab(cp, 'bot');                                                        // 1.35.0: + Add panel, Bot
   await until(async () => (await cp.evaluate(() => window.workspace.bot().shown)), 'the Bot tab opens');
   await sleep(1500);                                                                   // its entrance
-  const botModes = async () => (await sentOn(cp)).filter(m => m.type === 'botMode').length;
+  const botModes = async () => (await cp.evaluate(() => window.__socks.flatMap(s => s.types))).filter(t => t === 'botMode').length;   // the spy keeps every type (its messages: agent ones only)
   const bm0 = await botModes();
   await cp.dblclick('.bt-modes [data-mode="auto"]');
   await sleep(500);
@@ -612,7 +612,9 @@ try {
      or more after arming is the confirming one either way) */
   if ((await cp.textContent('.bt-modes [data-mode="auto"]')).trim() !== 'Confirm') { await cp.click('.bt-modes [data-mode="auto"]'); await sleep(450); }
   await cp.click('.bt-modes [data-mode="auto"]');
-  await until(async () => (await control('v3')).bot.mode === 'auto', 'a later second click confirms it, as before');
+  /* release 1 (1.6b): ChartBridge lets the bot trade the personal account only, and this smoke's bot is on Sim101 with a personal
+     account named, so ChartBridge refuses Auto; the page's part is that the confirming click sends botMode auto, once */
+  await until(async () => (await botModes()) === bm0 + 1, 'a later second click confirms it, as before: botMode sent once');
   await cp.click('.bt-modes [data-mode="shadow"]');
   await cp.click('.bt-kill');
   await until(async () => (await control('v3')).bot.killed, 'the bot\'s kill on in one click');
@@ -667,10 +669,11 @@ try {
   const [pop] = await Promise.all([ctx.waitForEvent('page'), page.click('.ag-popbtn')]);
   pop.on('pageerror', e => fail('pop-out error: ' + e.message));
   await pop.waitForLoadState();
-  if (await pop.$('.cb-pin-key')) await enterPin(pop, TEST_PIN);
+  if (await pop.waitForSelector('.cb-pin-key', { timeout: 8000 }).catch(() => null)) await enterPin(pop, TEST_PIN);   // the PIN door can come a moment after the load on a busy machine
   await pop.waitForFunction(() => window.agentDesk && window.agentDesk.state().agents.length === 2, null, { timeout: 20000 });
   await pop.waitForFunction(() => /Demo Agent/.test(document.querySelector('.ag-strip').textContent), null, { timeout: 10000 });
   check(/\/live\/agent\.html$/.test(pop.url()), 'an agent-only page (agent.html) for a third monitor');
+  await pop.evaluate(() => document.fonts.ready.then(() => null)).catch(() => {});   // the fonts load from this PC; on a busy machine after the first look
   check(await pop.evaluate(() => getComputedStyle(document.querySelector('.ag-view')).fontFamily.includes('Chakra Petch') && document.fonts.check('600 12px "Chakra Petch"') && document.fonts.check('12px "JetBrains Mono"') && document.fonts.check('12px "IBM Plex Sans"')), 'the pop-out has the tab\'s fonts, from this PC');
   await pop.setViewportSize({ width: 1500, height: 900 });
   await sleep(1500);

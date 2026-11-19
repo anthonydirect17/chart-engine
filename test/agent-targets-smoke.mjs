@@ -155,6 +155,9 @@ try {
     await page.setViewportSize({ width: w, height: h });
     await sleep(600);
     await toTop(page);
+    /* the fake bridge's made-up "EVAL-B is gone" line arrives about 10 s after the start; on a busy machine it is up by now and
+       takes the band's first lines (the ChartBridge line's own checks are below): put away, so this checks the notices alone */
+    if (await page.isVisible('#wsAlertClose')) { await page.click('#wsAlertClose'); await sleep(200); }
     await notices(page, 4);
     await sleep(100);
     /* above 1100 px over the chart's lower left; at 1100 px and narrower pinned at the top of the tab (the tray), the newest in
