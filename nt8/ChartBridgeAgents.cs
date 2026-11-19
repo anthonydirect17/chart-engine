@@ -5106,7 +5106,8 @@ namespace NinjaTrader.NinjaScript.AddOns
         // The harness only (nt8/check): makes this agent's flatten throw inside Kill all, to show the kill switch is already on (N1).
         // Always null in NinjaTrader.
         internal static string FlattenFaultForCheck;
-        internal static string FlattenOffFaultForCheck;   // plan step 3.5: the harness makes Flatten and turn off fail after Shadow, before its flatten
+        internal static string FlattenOffFaultForCheck;
+        internal static string FlattenOffEarlyFaultForCheck;   // plan step 3.5 (R12 nit): the same, before its saved Auto is removed   // plan step 3.5: the harness makes Flatten and turn off fail after Shadow, before its flatten
         internal string KillProp()
         {
             lock (PlaceGate)
@@ -5236,15 +5237,16 @@ namespace NinjaTrader.NinjaScript.AddOns
                 // plan step 3.5 (the Legion review): once the mode is Shadow, a failure is answered with a status line saying so and
                 // what was and was not done, never a bare "ChartBridge error" reject (the page's words then stay true)
                 int n = -1, roots = 0;
-                bool flatTried = false;
+                bool dropped = false;
                 string flatErr = null;
                 try
                 {
                     foreach (Proposal p in expired) { ToPages(ProposalJson(p)); ToAgent(AnswerJson(p.P.Id, "not answered", "Flatten and turn off")); }
+                    if (FlattenOffEarlyFaultForCheck == Id) throw new InvalidOperationException("a fault made by the harness");
                     DropAutoIntent("Flatten and turn off");
+                    dropped = true;
                     n = CancelUnfilled("Flatten and turn off");
                     if (FlattenOffFaultForCheck == Id) throw new InvalidOperationException("a fault made by the harness");
-                    flatTried = true;
                     try
                     {
                         if (FlattenFaultForCheck == Id) throw new InvalidOperationException("a fault made by the harness");
@@ -5255,8 +5257,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                 catch (Exception ex)
                 {
                     string w = "Agent " + Id + ": Flatten and turn off: mode shadow" + (old != "shadow" ? " (was " + old + ")" : "") + ", then ChartBridge failed (" + ex.Message + "): " +
+                               (dropped ? "" : "its saved Auto may NOT be removed (delete agent-" + Id + "-auto.txt); ") +
                                (n < 0 ? "its unfilled entries may NOT be cancelled" : n + " unfilled entr" + (n == 1 ? "y" : "ies") + " cancelled") + "; " +
-                               (flatTried ? (roots > 0 ? "flattening what it owns" : "its flatten may NOT have started") : "its flatten was NOT started") + " on " + AccountWords() + ": check NinjaTrader and act there now";
+                               "its flatten was NOT started on " + AccountWords() + ": check NinjaTrader and act there now";   // the outer catch fires only before the flatten (its own try catches the flatten's failure)
                     try { Log("agent " + Id + ": " + w); AgentLog(w); } catch (Exception) { }
                     ToPages(StatusJson("error", w));
                     try { ChartBridgeOrders.AgentAlarm(w); } catch (Exception) { }

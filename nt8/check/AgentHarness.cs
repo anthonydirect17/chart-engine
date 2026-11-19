@@ -7454,6 +7454,23 @@ public static class AgentHarness
             Restart();
             Settle(prop1);
         });
+        Part("R12 nit: Flatten and turn off failing before its saved Auto is removed says to delete the file", () =>
+        {
+            PropStart("PROP-1", true);
+            DefaultFirms();
+            Mode("manrae", "auto");
+            Check(AutoFileThere, "early fail: (manrae in Auto on PROP-1, its Auto saved)");
+            ChartBridgeAgent.FlattenOffEarlyFaultForCheck = "manrae";
+            int s0 = N(page);
+            try { P("{\"type\":\"agentFlattenOff\",\"cid\":\"fo-early\",\"agent\":\"manrae\"}"); }
+            finally { ChartBridgeAgent.FlattenOffEarlyFaultForCheck = null; }
+            Check(!PageReject().Contains("\"cid\":\"fo-early\"") && ModeNow() == "shadow" &&
+                  Any(page, s0, "Agent manrae: Flatten and turn off: mode shadow (was auto), then ChartBridge failed (a fault made by the harness): its saved Auto may NOT be removed (delete agent-manrae-auto.txt); its unfilled entries may NOT be cancelled; its flatten was NOT started on PROP-1: check NinjaTrader and act there now"),
+                  "early fail: the line says the saved Auto may not be removed and names the file: " + Last(page, "status"));
+            Check(AutoFileThere, "early fail: (the file is still there, as the line says)");
+            Restart();
+            try { Gone(AutoFilePath); } catch (Exception) { }
+        });
         Part("firms: the groups message's firmGuard", () =>
         {
             PropStart("PROP-2", true);
