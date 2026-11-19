@@ -1367,7 +1367,7 @@ function create(o) {
         <span class="fl-armsaid" data-k="armsaid" role="status" aria-live="polite"></span>
       </div>
       <p class="fl-ask fl-armask" data-k="armask" role="alertdialog" aria-label="Armed" hidden></p>
-      <p class="fl-ask" data-k="ask" role="alertdialog" aria-label="Kill all" hidden>Close every trader's position on the prop accounts and stop them? Yes, or Cancel, at the top right.</p>
+      <p class="fl-ask" data-k="ask" role="alertdialog" aria-label="Kill all" hidden>Close every trader's position on the prop accounts and stop them? Yes, or Cancel, in the row above, where Kill all was.</p>
       <p class="fl-autoline" data-k="autoline"></p>
       <p class="fl-said" data-k="hint" role="status" aria-live="polite"></p>
       <p class="fl-answer" data-k="answer" role="status" aria-live="polite" hidden></p>

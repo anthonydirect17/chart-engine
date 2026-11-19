@@ -250,20 +250,46 @@ function floatRoom(reset) {
   if (reset) roomPx = 0;
   if (h > roomPx) { roomPx = h; document.documentElement.style.setProperty('--lx-float-room', roomPx + 'px'); }
 }
-/* the lanes' head on Cohorts (Kill all, Armed and their questions) stacks above the floating lines (live/legion.css); so that the lines
-   never slip under it either, on a short window or a phone they keep to the room below the head and scroll inside it (the R12 delta
-   review of 3.3). Read again on a scroll, a resize, a line, and whenever the tab's content (the head with it) changes size */
+/* no confirm is ever under the floating lines (the R12 delta reviews of 3.3), and the lines themselves are never hidden: Stop all's
+   answer and ChartBridge's errors stay in sight and are announced whatever is open. What the lines keep clear of: the lanes' controls
+   on Cohorts (Kill all's row and Armed's; they also stack above the lines, live/legion.css) and every question open in the page
+   (role alertdialog: a Copilot proposal, "Trade a LIVE account", "Flatten and turn him off", the rules window's question). The box
+   takes the lowest band of the window that none of them is in (it sits at the bottom when nothing is open), at most its usual
+   45 percent of the window, and scrolls inside it. Read again on a scroll, a resize, a line, and when the page's content changes */
+const FIT_MIN = 48, FIT_GAP = 8;
 let fitWas = '';
 function floatFit() {
   const f = $('lxFloat'); if (!f) return;
-  const h = S.tab === 'cohorts' && S.sub === 'legion' ? document.querySelector('#flView .fl-top') : null;
-  const r = h && h.getClientRects().length ? h.getBoundingClientRect() : null;
-  const v = r && r.bottom > 0 ? 'min(45vh, ' + Math.max(48, Math.floor(window.innerHeight - 10 - r.bottom - 8)) + 'px)' : '';
-  if (v !== fitWas) { fitWas = v; f.style.maxHeight = v; }
+  const H = window.innerHeight, W = window.innerWidth, hd = $('lxHead');
+  const top0 = hd ? Math.max(0, Math.ceil(hd.getBoundingClientRect().bottom)) : 0, left = Math.max(12, W - 12 - 760), right = W - 12;
+  const keep = [];
+  const clear = e => {
+    if (!e || !e.getClientRects().length) return;
+    const r = e.getBoundingClientRect();
+    if (r.width <= 0 || r.height <= 0 || r.bottom <= top0 || r.top >= H || r.right <= left || r.left >= right) return;   // not where the box can be
+    keep.push([Math.max(top0, Math.floor(r.top) - FIT_GAP), Math.min(H, Math.ceil(r.bottom) + FIT_GAP)]);
+  };
+  if (S.tab === 'cohorts' && S.sub === 'legion') { clear(document.querySelector('#flView .fl-head')); clear(document.querySelector('#flView .fl-armrow')); }
+  const main = document.querySelector('.lx-main');
+  if (main) for (const q of main.querySelectorAll('[role="alertdialog"]')) if (!q.closest('[hidden]')) clear(q);
+  let v = '';
+  if (keep.length) {
+    keep.sort((a, b) => a[0] - b[0]);
+    const free = [];
+    let at = top0;
+    for (const [t, b] of keep) { if (t > at) free.push([at, t]); at = Math.max(at, b); }
+    if (H - 10 > at) free.push([at, H - 10]);
+    const fit = free.filter(x => x[1] - x[0] >= FIT_MIN).pop() || free.sort((a, b) => (b[1] - b[0]) - (a[1] - a[0]))[0];
+    if (fit && !(fit[1] === H - 10 && fit[1] - fit[0] >= 0.45 * H)) v = Math.round(H - fit[1]) + 'px|' + Math.max(FIT_MIN, Math.floor(Math.min(0.45 * H, fit[1] - fit[0]))) + 'px';
+  }
+  if (v !== fitWas) { fitWas = v; const [b, m] = v ? v.split('|') : ['', '']; f.style.bottom = b; f.style.maxHeight = m; }
 }
-window.addEventListener('scroll', floatFit, { passive: true });
-window.addEventListener('resize', floatFit);
-if (typeof ResizeObserver === 'function') { const fv = $('flView'); if (fv) new ResizeObserver(floatFit).observe(fv); }
+let fitRaf = 0;
+const fitSoon = () => { if (!fitRaf) fitRaf = requestAnimationFrame(() => { fitRaf = 0; floatFit(); }); };
+window.addEventListener('scroll', fitSoon, { passive: true });
+window.addEventListener('resize', fitSoon);
+if (typeof ResizeObserver === 'function') { const fv = $('flView'); if (fv) new ResizeObserver(fitSoon).observe(fv); }
+if (typeof MutationObserver === 'function') { const mn = document.querySelector('.lx-main'); if (mn) new MutationObserver(fitSoon).observe(mn, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden', 'role'] }); }
 function placeAsk() { const h = $('lxHead'); if (h) document.documentElement.style.setProperty('--lx-ask-top', Math.max(0, Math.round(h.getBoundingClientRect().bottom) + 6) + 'px'); }
 window.addEventListener('scroll', () => { if (S.ask) placeAsk(); }, { passive: true });
 function endAsk() { S.ask = 0; clearTimeout(S.askTimer); S.askTimer = 0; }
@@ -334,6 +360,7 @@ function alertLoud(text, warn) {
   if (!warn) alertErr = true;
   t.textContent = alerts.join('\n'); box.hidden = false; box.classList.toggle('warn', !alertErr);
   fitDesk(); floatRoom();
+  const f = $('lxFloat'); if (f && f.contains(box) && f.scrollHeight > f.clientHeight) f.scrollTop = f.scrollHeight;   // kept to a small band, the newest line shows
 }
 
 /* ---------------- the tabs */

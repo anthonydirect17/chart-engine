@@ -245,14 +245,19 @@ test('the stacking order: the floating lines under the lanes\' head (Kill all an
     assert.ok(v, sel + ' sets a z-index');
     return +v[1];
   };
-  const float = z('.lx-float'), head = z('.lx-fl .fl-top'), header = z('.lx-head'), stopAsk = z('.lx-ask');
+  const float = z('.lx-float'), head = z('.lx-fl .fl-head, .lx-fl .fl-armrow, .lx-fl .fl-top > .fl-ask'), header = z('.lx-head'), stopAsk = z('.lx-ask');
   assert.ok(head > float, 'the lanes\' head (' + head + ') must stack above the floating lines (' + float + ')');
   assert.ok(header > head, 'Legion\'s header (' + header + ') must stack above the lanes\' head (' + head + '), so Stop all is never covered');
   assert.ok(stopAsk > header, 'Stop all\'s question (' + stopAsk + ') must stack above the header (' + header + ')');
+  /* the head itself makes no layer of its own on Legion's page (fleet.css gives it 2), or its controls' z-index would count only inside it */
+  assert.match(css, /\.lx-fl \.fl-top \{[^}]*z-index: auto;/);
   /* FleetView's own rule is still the weaker one: the lift is Legion's, and nothing in fleet.css outranks it */
   assert.ok(/\.fl-top\s*\{[^}]*z-index:\s*2;/.test(read('live', 'fleet.css')));
-  /* and every other question in the page makes the lines step aside while it is open */
-  assert.match(css, /body\.lx:has\(\.lx-main \[role="alertdialog"\]:not\(\[hidden\], \[hidden\] \*, \.fl-top \*\)\) \.lx-float \{ visibility: hidden; \}/);
+  /* the lines are never hidden (Stop all's answer and ChartBridge's errors stay in sight and are announced): they keep clear of every
+     open question in the page instead (live/legion.js floatFit, the second R12 delta review of 3.3) */
+  assert.doesNotMatch(css, /\.lx-float\s*\{[^}]*(visibility:\s*hidden|display:\s*none|opacity:\s*0)/);
+  assert.doesNotMatch(css, /:has\([^)]*alertdialog[^{]*\{[^}]*(visibility|display|opacity)/);
+  assert.match(read('live', 'legion.js'), /querySelectorAll\('\[role="alertdialog"\]'\)/);
   /* the cohort model goes under the head, not above it */
   assert.match(read('live', 'legion-tabs.js'), /FleetView\.create\(\{[^\n]*underHead: \$\('chView'\)/);
   assert.match(read('live', 'fleet.js'), /if \(underHead\) \{ const top = view\.querySelector\('\.fl-top'\); if \(top\) top\.after\(underHead\); \}/);
