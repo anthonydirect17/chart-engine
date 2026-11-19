@@ -494,8 +494,8 @@ function autoLine(rows, heard) {
   if (plain.length) parts.push('In Auto on prop accounts: ' + plain.map(nm).join(', '));
   if (unl.length) parts.push('In Auto on an account NinjaTrader does not list now (Kill all stops it): ' + unl.map(nm).join(', '));
   const mixedGroup = mixed.filter(t => t.grouped), mixedOne = mixed.filter(t => !t.grouped);
-  if (mixedGroup.length) parts.push('In Auto on a group with your personal account in it (Kill all will NOT stop it: stop it on the Agent tab): ' + mixedGroup.map(nm).join(', '));
-  if (mixedOne.length) parts.push('In Auto on your personal account with a prop account left over (Kill all will NOT stop it: stop it on the Agent tab): ' + mixedOne.map(nm).join(', '));   // 104-D: not a group
+  if (mixedGroup.length) parts.push('In Auto on a group with your personal account in it (Kill all will NOT stop it: stop it on Praetorian): ' + mixedGroup.map(nm).join(', '));
+  if (mixedOne.length) parts.push('In Auto on your personal account with a prop account left over (Kill all will NOT stop it: stop it on Praetorian): ' + mixedOne.map(nm).join(', '));   // 104-D: not a group
   // 104-B (answers 27): never quiet about a trader in Auto whose accounts the page cannot read
   const cannot = rows.filter(t => t.cannotTell);
   if (cannot.length) parts.push('In Auto on accounts the page cannot read (Kill all may not reach it): ' + cannot.map(nm).join(', '));
@@ -544,7 +544,7 @@ function lanes(agents, groupsMsg, accountsMsg, version, cards) {
       L.why = 'No trader is on a group of Type ' + stage + '. Give a trader the group in Legion\'s Traders section below (a group with Type ' + stage + ': New group on the Multi-Account panel). From ChartBridge ' + LANE_KEEP_MIN + ' a lane keeps its trader through the 17:00 reset; an older one puts a flat trader on None each trading day.';
       return L;
     }
-    if (on.length > 1) { L.why = on.length + ' traders are on ' + stage + ' groups (' + on.map(a => a.agent).join(', ') + '): Legion runs one lane a stage. Take all but one off on the Agent tab.'; return L; }
+    if (on.length > 1) { L.why = on.length + ' traders are on ' + stage + ' groups (' + on.map(a => a.agent).join(', ') + '): Legion runs one lane a stage. Take all but one off on their desks (the Traders fold here, or Praetorian).'; return L; }
     const a = on[0], g = groups.get(a.group.id);
     L.id = a.agent; L.name = str(a.name, 40) || a.agent; L.mode = own(MODE_NAME, a.mode) ? a.mode : ''; L.modeText = L.mode ? MODE_NAME[L.mode] : 'Not known';
     L.connected = a.connected === true; L.status = laneStatus(a); L.exposed = a.owns === true; L.stoodDown = !!a.standDown;
@@ -591,7 +591,7 @@ function lanes(agents, groupsMsg, accountsMsg, version, cards) {
       : !Array.isArray(g.members) ? 'Not known yet: ChartBridge sent its group without its members, so the page cannot tell who else is on its accounts'   // N3, as groupLock
       : shareWhy ? shareWhy
       : a.enabled === false ? 'The trader is off in ChartBridge'
-      : a.killed ? 'Its kill switch is on (it is released on the Agent tab, by you)'
+      : a.killed ? 'Its kill switch is on (it is released on his desk, by you: the Traders fold here, or Praetorian)'
       : a.standDown ? 'It is stood down: ' + str(a.standDown, 300)
       : typeof a.pickProblem === 'string' && a.pickProblem ? 'Its saved pick could not be read: ' + str(a.pickProblem, 200)
       : !L.pick ? 'No bot is picked for it'
@@ -604,7 +604,7 @@ function lanes(agents, groupsMsg, accountsMsg, version, cards) {
       : kinds.some(k => k === 'personal') ? 'Its group holds your personal account'
       : kinds.some(k => k === '') ? 'ChartBridge has not said whether ' + L.seats.filter((n, i) => kinds[i] === '').join(', ') + ' is prop'
       : !kinds.every(k => k === 'prop' || k === 'sim') ? 'An account of its group is neither prop nor Sim'
-      : atLeast(version, SWITCH_MIN) && r.marketEntry !== true ? 'Market entry is off in its rules (the Agent tab): the runner\'s entries would be refused'
+      : atLeast(version, SWITCH_MIN) && r.marketEntry !== true ? 'Market entry is off in its rules (his desk): the runner\'s entries would be refused'
       : !allowed.ok ? allowed.why
       : '';
     L.armable = !L.why;
@@ -650,7 +650,7 @@ function armState(ls, version, signedIn, connected, accountsMsg, groupsMsg, hear
   for (const l of ls) if (l.traders.length && l.notShadow && !l.auto) reasons.push(l.title + ' has a trader not in Shadow: ' + (l.notShadowIds || []).join(', '));
   for (const l of busy) if (l.auto && !l.armable) reasons.push(l.title + ' is in Auto but not ready (' + l.why + ')');
   for (const l of ready) if (!l.auto && l.mode === 'shadow' && busy.length) reasons.push(l.title + ' is not in Auto');
-  if (out.length) reasons.push('Not a lane, so not armed from here: ' + (Array.isArray(out.words) && out.words.length === out.length ? out.words : out).join('; ') + ' in Auto (a click sends it to Shadow; or Praetorian, the Agent tab until Praetorian merges)');
+  if (out.length) reasons.push('Not a lane, so not armed from here: ' + (Array.isArray(out.words) && out.words.length === out.length ? out.words : out).join('; ') + ' in Auto (a click sends it to Shadow; or on Praetorian)');
   const state = !busy.length && !out.length ? 'off' : !reasons.length && ready.length && ready.every(l => l.auto) ? 'on' : 'partly';
   const why = !kill.ok ? kill.why : !atLeast(version, PICK_MIN) ? 'Armed needs ChartBridge ' + PICK_MIN + ' or later (this one is ' + (version || 'not known') + ')'
     : !ready.length ? 'No lane is ready: ' + ls.map(l => l.title + ': ' + l.why).join(' ') : '';
@@ -795,7 +795,7 @@ const NOT_READABLE = 'Not known yet: a trader on this connection could not be re
 function laneLock(l, heard) {
   if (heard !== true || !plainObj(l) || !Array.isArray(l.traders)) return NOT_KNOWN;
   if (!l.traders.length) return '';
-  if (l.traders.length > 1) return 'Two traders are on this lane\'s groups: no account moves here until one is taken off (the Agent tab).';
+  if (l.traders.length > 1) return 'Two traders are on this lane\'s groups: no account moves here until one is taken off (on their desks: the Traders fold here, or Praetorian).';
   if (l.auto || l.mode === 'auto') return 'The lane is in Auto: switch Armed off before an account moves.';
   if (l.exposed) return 'The lane\'s trader holds a position or a working entry: an account moves once it is flat.';
   if (l.mode !== 'shadow') return 'The lane\'s trader is not in Shadow (' + (l.modeText || 'not known') + '): an account moves only while it is.';
@@ -823,7 +823,7 @@ function groupLock(gid, list, heard, groupsMsg) {
   if (direct.length) return direct.map(name).join(', ') + (direct.length > 1 ? ' are' : ' is') + ' seated on an account of that group: no account moves out of it while another trader is on one of its accounts, in any mode.';
   const on = list.filter(onIt);
   if (!on.length) return '';
-  if (on.length > 1) return 'Two traders are on that group (' + on.map(name).join(', ') + '): no account moves out of it until one is taken off (the Agent tab).';
+  if (on.length > 1) return 'Two traders are on that group (' + on.map(name).join(', ') + '): no account moves out of it until one is taken off (on their desks: the Traders fold here, or Praetorian).';
   const a = on[0];
   if (a.mode !== 'shadow') return name(a) + ' trades that group in ' + (own(MODE_NAME, a.mode) ? MODE_NAME[a.mode] : 'a mode not known') + ': an account moves out of it only while it is in Shadow.';
   if (a.owns === true) return name(a) + ' holds a position or a working entry on that group: an account moves out of it once it is flat.';

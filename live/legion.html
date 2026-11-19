@@ -44,8 +44,8 @@
   <div class="lx-right">
     <span class="lx-clock"><span id="lxClock">--:--:--</span> <span class="lx-et">ET</span></span>
     <span class="lx-pill" id="lxConn" role="status" data-state="off">ChartBridge: not connected</span>
-    <!-- the chart page, in this window's own tab of the browser: Legion is not attached to the charts -->
-    <a class="lx-btn lx-link" href="./" title="The chart page: Chart, the Bot tab and the bot strip">Charts</a>
+    <!-- the chart page in its own window, named chart as the Bot links open it (the R12 review, N2) -->
+    <a class="lx-btn lx-link" href="./" target="chart" title="The chart page, in its own window (the one the Bot links open): Chart, the Bot tab and the bot strip">Charts</a>
     <!-- law 9.3: on every tab. One message to ChartBridge, which does all of it itself (live/legion.js, "Stop all automation") -->
     <button type="button" class="lx-btn lx-stop" id="lxStop" aria-haspopup="dialog" aria-expanded="false" aria-controls="lxStopAsk">Stop all automation</button>
   </div>
@@ -55,11 +55,17 @@
   <button type="button" class="lx-btn lx-stop" id="lxStopYes">Yes, stop all</button>
   <button type="button" class="lx-btn" id="lxStopNo">Cancel</button>
 </div>
-<p class="lx-said" id="lxStopSaid" role="status" aria-live="polite" hidden></p>
-<!-- ChartBridge's warnings and errors, the newest three, until dismissed: the chart page's alert line, the same ids (the Agent desk
-     holds it in its board's tray) -->
-<div class="ws-alerts lx-alerts" id="wsAlerts">
-  <div class="ws-alert" id="wsAlert" role="alert" hidden><b>ChartBridge</b><span id="wsAlertText"></span><button type="button" class="ws-btn" id="wsAlertClose">Dismiss</button></div>
+<!-- the R12 review of plan step 3.2 (S1, S2): Stop all's line, the panels' note line and ChartBridge's warnings float over the bottom
+     of the window, so nothing under the pointer ever moves when one comes or goes (the page keeps room below its last line for them).
+     Stop all's line is Stop all's only; a click puts an answer away -->
+<div class="lx-float" id="lxFloat">
+  <p class="lx-said" id="lxStopSaid" role="status" aria-live="polite" hidden></p>
+  <p class="lx-said lx-note" id="lxNote" role="status" aria-live="polite" hidden></p>
+  <!-- ChartBridge's warnings and errors, the newest three, until dismissed: the chart page's alert line, the same ids (the Agent
+       desk holds it in its board's tray) -->
+  <div class="ws-alerts lx-alerts" id="wsAlerts">
+    <div class="ws-alert" id="wsAlert" role="alert" hidden><b>ChartBridge</b><span id="wsAlertText"></span><button type="button" class="ws-btn" id="wsAlertClose">Dismiss</button></div>
+  </div>
 </div>
 <p class="lx-said bad" id="lxFailed" role="alert" hidden></p>
 

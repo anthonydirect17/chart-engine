@@ -3756,7 +3756,7 @@ function startBot() {
     charts: () => chartViews().map(v => ({ id: v.panel.id, root: v.panel.root, chart: v.pane.chart })),
     onTab: on => {
       document.body.classList.toggle('bt-on', on);
-      if (on) { closePops(); restoreMax(); }
+      if (on) { closePops(); restoreMax(); store.setItem(PR_SIDE_KEY, 'bot'); }   // Praetorian's side used last (an old ?tab=praetorian)
       tabUrl(on ? 'bot' : '');
       placeTabBtn();                                        // 1.35.0: its button in the top bar while open (the way back)
     } });
@@ -3785,6 +3785,7 @@ function startAgent() {
 /* plan step 3.2: Legion's own page, in its own window (one window, reused), on the tab named; the chart page's old ?tab= words
    land there by Legion's own mapping (LegionCore.tabFrom) */
 const LEGION_TABS = ['legion', 'fleet', 'league', 'colosseum', 'agent', 'praetorian'];
+const PR_SIDE_KEY = 'live-praetorian-side-v1';   // 1.51.0: Praetorian's side used last, 'bot' or 'agent' (a convenience in this browser)
 function openLegion(tab, sub, agent) {
   const q = new URLSearchParams(); if (tab) q.set('tab', tab); if (sub) q.set('sub', sub); if (agent) q.set('agent', agent);
   try { window.open('legion.html?' + q.toString(), 'legion'); } catch (e) { note('Legion did not open: open legion.html from this PC', true); }
@@ -3819,7 +3820,7 @@ const start = () => {
   startGuard('Bot tab', () => { startBot(); if (botDesk) { botDesk.layoutChanged(layout); botDesk.chartsChanged(); } }, 'wsBotTab');
   startGuard('Agent desk', () => { startAgent(); if (agentDesk) agentDesk.layoutChanged(layout); });
   const tab = new URLSearchParams(location.search).get('tab');
-  if (botDesk && tab === 'bot') startGuard('Bot tab', () => botDesk.showTab(true));
+  if (botDesk && (tab === 'bot' || prBotLast)) startGuard('Bot tab', () => botDesk.showTab(true));
   startGuard('Chart button', syncChartTab);
 };
 /* A window that opens (or reloads) with the ticket in its layout takes it when no other window has it (Anthony
@@ -3832,6 +3833,9 @@ function autoTake() {
 /* plan step 3.2: an old address of a tab that moved (?tab=legion, league or colosseum with its day, agent, praetorian) opens Legion's
    own page with the same query: LegionCore.tabFrom maps each word to its tab there. Nothing on the chart page starts first. */
 const movedTab = String(new URLSearchParams(location.search).get('tab') || '').toLowerCase();
-if (LEGION_TABS.includes(movedTab)) location.replace('legion.html' + location.search + location.hash);
+/* the R12 review, N4: an old ?tab=praetorian opens the side used last, as 1.51.0 did: the Bot tab here when that was the Bot (kept
+   in this browser: the Bot tab writes it here, Legion's Praetorian side writes the Agent), else Praetorian on Legion */
+const prBotLast = movedTab === 'praetorian' && store.getItem(PR_SIDE_KEY) === 'bot';
+if (LEGION_TABS.includes(movedTab) && !prBotLast) location.replace('legion.html' + location.search + location.hash);
 else if (PIN) PIN.gate().then(start); else start();
 });

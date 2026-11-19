@@ -158,7 +158,7 @@ function create(o) {
         '<span class="ag-motion" data-parity="ST13" role="group" aria-label="Motion of the light" title="The light around the panels and the grid: Full moves them, Off keeps them still (kept in this browser). Your system\'s reduced motion keeps them still too."><span class="ag-lbl">Motion</span>' +
           '<button type="button" data-motion="full" data-parity="ST13-full" aria-pressed="true">Full</button><button type="button" data-motion="off" data-parity="ST13-off" aria-pressed="false">Off</button></span>' +
         '<button type="button" class="ws-btn ag-boardbtn" data-act="board" title="Heroes on duty: every agent slot, every group, Kill all agents">Board</button>' +
-        (popout || embedded ? '' : '<button type="button" class="ws-btn ag-popbtn" data-act="popout" data-parity="ST14" title="Open the Agent tab in its own window (for a third monitor)">Pop out</button>') +
+        (popout || embedded ? '' : '<button type="button" class="ws-btn ag-popbtn" data-act="popout" data-parity="ST14" title="Open this desk in its own window (for a third monitor)">Pop out</button>') +
       '</header>' +
       /* the newest word of each step, still (the grid's words in one line); empty steps say nothing */
       '<div class="ag-nowline" data-k="nowline" aria-label="The newest word of each step">' + AC.STEPS.map((x, i) => '<span class="t-' + x[0] + '"><b>' + x[1] + '</b><span class="ag-nw" data-k="nw' + i + '"></span></span>').join('') + '</div>' +
@@ -603,7 +603,7 @@ function create(o) {
     /* the corner's line, off the tab: every agent's open proposals (the bot's are its own cards there) */
     if (cornerLine) {
       const all = openCounts(false, ''), on = !S.shown && all.length > 0;
-      writeLine(cornerLine, lineHtml(all, lineOut, now, false, x => 'Open the Agent tab on ' + x.name + ': its proposals are answered there'));
+      writeLine(cornerLine, lineHtml(all, lineOut, now, false, x => 'Open Praetorian on ' + x.name + ' (Legion, Cohorts): its proposals are answered there'));
       put(cornerLine, 'hidden', !on);
     }
     const next = Math.min(...[...lineIn.up.values(), ...lineOut.up.values()].filter(t => t > now));
@@ -757,7 +757,7 @@ function create(o) {
       tog(tabBtn, 'ag-alert', bad);
       tog(tabBtn, 'ag-waiting', !S.shown && [...cards.values()].some(x => !x.ended));
       put(tabBtn.dataset, 'parity', 'W01 W02' + (bad ? ' W02-alert' : '') + (tabBtn.classList.contains('ag-waiting') ? ' W02-waiting' : ''));
-      attr(tabBtn, 'title', off ? 'Agents: ' + AC.offText(offCtx()) : 'Agent tab: ' + agents.size() + (agents.size() === 1 ? ' agent' : ' agents'));
+      attr(tabBtn, 'title', off ? 'Agents: ' + AC.offText(offCtx()) : 'Praetorian: ' + agents.size() + (agents.size() === 1 ? ' agent' : ' agents'));
     }
     if (view) {
       put(q('[data-k="off"]'), 'hidden', !off); put(q('[data-k="main"]'), 'hidden', off || S.board); put(q('[data-k="board"]'), 'hidden', off || !S.board);
@@ -1712,7 +1712,7 @@ function create(o) {
   }
 
   /* ---------------- the Agent tab's chart: a normal live chart on the window's feed, never animated, takes no orders */
-  const chartHost = { pressOff: () => 'The Agent tab\'s chart is for watching: it takes no orders. Its lines are the agent\'s own working orders.', place: () => {}, move: () => {}, cancel: () => {} };
+  const chartHost = { pressOff: () => 'His desk\'s chart is for watching: it takes no orders. Its lines are the agent\'s own working orders.', place: () => {}, move: () => {}, cancel: () => {} };
   /* the chart's root: the one picked here, else the position's, else a working entry's, else the agent's first root */
   function rootFor(a) {
     const roots = (AC.parseRules(a && a.rules) || { roots: [] }).roots.filter(r => S.instruments[r] || !Object.keys(S.instruments).length);

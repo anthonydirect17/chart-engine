@@ -55,13 +55,22 @@ body.lx { font: 14px/1.45 "IBM Plex Sans", system-ui, sans-serif; overflow-y: au
 /* the one stop button: the chart page's own exit tone (ws-flat: the sell colour on its ground), never a new red */
 .lx-btn.lx-stop { color: var(--ws-sell, #E2685D); border-color: color-mix(in srgb, var(--ws-sell, #E2685D) 55%, transparent); background: var(--ws-sell-ground, #1e0d0b); }
 .lx-btn.lx-stop:hover:not(:disabled) { color: var(--lx-fg); }
-.lx-ask { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--ws-sell, #E2685D) 45%, transparent); background: var(--ws-sell-ground, #1e0d0b); color: var(--lx-fg); font-size: 13px; }
+.lx-ask { position: fixed; z-index: 45; right: 12px; top: var(--lx-ask-top, 64px); width: min(640px, calc(100vw - 24px)); box-shadow: 0 10px 28px rgba(0, 0, 0, .55); display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--ws-sell, #E2685D) 45%, transparent); background: var(--ws-sell-ground, #1e0d0b); color: var(--lx-fg); font-size: 13px; }
 .lx-ask > span { flex: 1 1 320px; }
 .lx-said { margin: 10px 0 0; padding: 8px 12px; border: 1px solid var(--lx-line2); background: var(--lx-panel); font-size: 12.5px; color: var(--lx-muted); white-space: pre-wrap; overflow-wrap: anywhere; }
 .lx-said.bad { color: var(--lx-fg); border-color: color-mix(in srgb, var(--ws-sell, #E2685D) 45%, transparent); }
 
-/* ChartBridge's alert line (workspace.css draws it): in the page's flow under Legion's header, never over the Stop all question */
-.lx-alerts { position: static; padding: 0; margin-top: 8px; }
+/* the R12 review of plan step 3.2 (S2): the question floats under the header beside Stop all; Stop all's line, the note line and
+   ChartBridge's alert line (workspace.css draws it) float over the bottom of the window. Nothing in the page's flow moves when one
+   comes or goes; the page keeps that much room below its last line (live/legion.js sets --lx-float-room) */
+.lx-float { position: fixed; z-index: 40; left: 12px; right: 12px; bottom: 10px; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; max-height: 45vh; overflow-y: auto; pointer-events: none; }
+.lx-float > :not([hidden]) { pointer-events: auto; width: min(760px, 100%); box-shadow: 0 8px 24px rgba(0, 0, 0, .5); }
+.lx-float .lx-said { margin: 0; background: var(--lx-ground); cursor: default; }
+.lx-float .lx-said.lx-put { cursor: pointer; }
+.lx-float .lx-alerts { position: static; padding: 0; margin: 0; }
+.lx-float .lx-alerts:not(:has(> :not([hidden]))) { display: none; }
+.lx-float .ws-alert { margin-top: 0; }
+.lx-main { padding-bottom: var(--lx-float-room, 0px); }
 
 /* the tabs' pages: the page scrolls, never a box inside it */
 .lx-main { padding-top: 18px; }

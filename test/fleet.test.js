@@ -90,13 +90,13 @@ test('legion: the head line never says nobody is trading while a trader is in Au
   // the very trader Kill all does NOT stop: a group holding the personal account and a prop account
   const mixed = agent('mix', { account: null, group: { id: 'g9', name: 'Both' }, seats: [{ account: 'MINE-1' }, { account: 'EVAL-A' }] });
   assert.strictEqual(F.traders([mixed], accounts, '0.6.19')[0].kind, 'mixed');
-  assert.strictEqual(line([mixed]), 'In Auto on a group with your personal account in it (Kill all will NOT stop it: stop it on the Agent tab): mix');
+  assert.strictEqual(line([mixed]), 'In Auto on a group with your personal account in it (Kill all will NOT stop it: stop it on Praetorian): mix');
   // a prop account NinjaTrader does not list now: in scope for Kill all (ChartBridgeAgents.KillScope), and said
   const gone = agent('gone', { account: 'DROPPED-1' });
   assert.strictEqual(F.traders([gone], accounts, '0.6.19')[0].kind, 'unlisted');
   assert.strictEqual(line([gone]), 'In Auto on an account NinjaTrader does not list now (Kill all stops it): gone');
   assert.strictEqual(line([agent('germanicus'), gone, mixed, agent('away', { account: 'EVAL-B', connected: false })]),
-    'In Auto on prop accounts: away (its program is not connected now), germanicus. In Auto on an account NinjaTrader does not list now (Kill all stops it): gone. In Auto on a group with your personal account in it (Kill all will NOT stop it: stop it on the Agent tab): mix');
+    'In Auto on prop accounts: away (its program is not connected now), germanicus. In Auto on an account NinjaTrader does not list now (Kill all stops it): gone. In Auto on a group with your personal account in it (Kill all will NOT stop it: stop it on Praetorian): mix');
   // prop and Sim seats together: stopped by Kill all (its prop seats flattened), counted with the prop ones
   const ps = agent('ps', { account: null, group: { id: 'g8', name: 'PS' }, seats: [{ account: 'EVAL-A' }, { account: 'Sim101' }] });
   assert.deepStrictEqual([F.traders([ps], accounts, '0.6.19')[0].kind, line([ps])], ['propsim', 'In Auto on prop accounts: ps']);
@@ -746,7 +746,7 @@ test('lanes: a lane is the trader on a group of that Type; each reason a lane ca
   const why = (more, o) => F.lanes([evalTrader(more)], (o && o.groups) || groups, o && 'accounts' in o ? o.accounts : accounts, (o && o.v) || V, o && 'cards' in o ? o.cards : cards)[0];
   assert.match(why({}, { v: '0.6.20' }).why, /^The pick needs ChartBridge 0\.6\.21 or later \(this one is 0\.6\.20\)$/);
   assert.match(why({ enabled: false }).why, /off in ChartBridge/);
-  assert.match(why({ killed: true }).why, /kill switch is on \(it is released on the Agent tab, by you\)/);
+  assert.match(why({ killed: true }).why, /kill switch is on \(it is released on his desk, by you: the Traders fold here, or Praetorian\)/);
   assert.match(why({ standDown: 'the day stop' }).why, /^It is stood down: the day stop$/);
   assert.match(why({ pickProblem: 'not one pick line' }).why, /saved pick could not be read: not one pick line/);
   assert.match(why({ pick: undefined }).why, /No bot is picked/);
@@ -831,7 +831,7 @@ test('the Armed switch: offered only when Kill all is, "not known" until heard, 
   const loose = [evalTrader(), fundTrader({ pick: 'duo.json' }), agent('loose', { mode: 'auto', account: 'EVAL-A' })];
   const sl = A(L(loose), loose);
   assert.strictEqual(sl.state, 'partly');
-  assert.match(sl.reasons.join(' '), /^Not a lane, so not armed from here: loose on a prop account in Auto \(a click sends it to Shadow; or Praetorian, the Agent tab until Praetorian merges\)$/);
+  assert.match(sl.reasons.join(' '), /^Not a lane, so not armed from here: loose on a prop account in Auto \(a click sends it to Shadow; or on Praetorian\)$/);
   assert.deepStrictEqual(F.armMsgs(L(loose), false, loose, null, F.outsideAuto(L(loose), loose, accounts, V)).map(m => [m.agent, m.mode]), [['loose', 'shadow']]);
   // off: every trader of every lane that is not in Shadow, the second trader of a doubled lane included, and the loose one
   const mixed = [evalTrader({ mode: 'auto' }), fundTrader({ mode: 'copilot' }), agent('twin', { mode: 'auto', account: null, group: { id: 'g1', name: 'Evals' }, seats: [] }), agent('solo', { mode: 'auto', account: 'EVAL-A' })];
@@ -1718,7 +1718,7 @@ test('answers 27, 104-B and 104-D: the Kill all line names a trader in Auto whos
   const left = agent('m1', { mode: 'auto', account: 'MINE', group: null, seats: [{ account: 'EVAL-A' }] });
   const lr = F.traders([left], accts, V);
   assert.strictEqual(lr[0].accountText, 'MINE, left over: EVAL-A', 'every account, as Kill all counts them');
-  assert.match(F.autoLine(lr, true), /^In Auto on your personal account with a prop account left over \(Kill all will NOT stop it: stop it on the Agent tab\): m1$/);
+  assert.match(F.autoLine(lr, true), /^In Auto on your personal account with a prop account left over \(Kill all will NOT stop it: stop it on Praetorian\): m1$/);
   assert.doesNotMatch(F.autoLine(lr, true), /a group/);
   const out = F.outsideAuto([], [left], accts, V);
   assert.deepStrictEqual(out.words, ['m1 on a prop account and your personal account (Kill all will NOT stop it)']);
@@ -1819,7 +1819,7 @@ test('the re-review of 94, R3: any trader in Auto outside the lanes reads PARTLY
   const st = F.armState(ls, V, true, true, acc, groups, true, out);
   assert.strictEqual(st.state, 'partly');
   assert.match(st.reasons.join(' '), /simmy on a Sim account \(Kill all does not reach it\)/);
-  assert.match(st.reasons.join(' '), /or Praetorian, the Agent tab until Praetorian merges/);
+  assert.match(st.reasons.join(' '), /or on Praetorian\)/);
   // no personal account picked: Kill all is refused, the switch still reads PARTLY (never "off") and may only switch off
   const noPick = Object.assign({}, acc, { personalNamed: false });
   const st2 = F.armState(F.lanes(list, groups, noPick, V, cards), V, true, true, noPick, groups, true, F.outsideAuto(F.lanes(list, groups, noPick, V, cards), list, noPick, V));

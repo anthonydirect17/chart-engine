@@ -629,8 +629,10 @@ function create(o) {
     else if (b.dataset.do === 'brow') { const k = String(b.dataset.key || ''); if (S.boardOpen.has(k)) S.boardOpen.delete(k); else S.boardOpen.add(k); renderBoard(); }
   });
   q('[data-k="today"]').addEventListener('click', () => { S.dayProblem = ''; if (setPast(null)) poll(); render(); });
-  probe();
-  const probeTimer = setInterval(probe, 300000);
+  /* the R12 review of plan step 3.2, N1: the probe only offers a tab button; a page with none (Legion's Colosseum: its own tab) asks
+     The Desk nothing until the view is shown (the view's own read) */
+  if (tabBtn) probe();
+  const probeTimer = tabBtn ? setInterval(probe, 300000) : 0;
   render();
   return {
     showTab, openDay, shown: () => S.shown, poll, offered: () => S.offered,

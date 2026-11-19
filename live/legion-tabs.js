@@ -41,9 +41,10 @@ const U = window.ChartEngine && window.ChartEngine.util ? window.ChartEngine.uti
 const etNowSec = () => (U && typeof U.zoneSeconds === 'function' ? U.zoneSeconds(Date.now() / 1000) : Date.now() / 1000);
 
 function mount(env) {
-  const { AF, hub, store, PREFIX, PIN, realClick, hooks, mounted, guard, say } = env;
+  const { AF, hub, store, PREFIX, PIN, realClick, hooks, mounted, guard, noteLine } = env;
   const headers = () => (PIN ? PIN.headers() : {});
-  const note = (t, w) => say(t, !!w);   // the panels' notes in Legion's one line, as the chart page's note line shows them
+  /* the panels' notes in Legion's note line (the chart page's note line), never Stop all's line (the R12 review, S1) */
+  const note = (t, w) => { if (typeof noteLine === 'function') noteLine(t, !!w); };
   /* the redraw loop of the panels mounted from here (the chart page's renderAccountPages): each second, and at each change */
   const panels = new Map();
   let raf = 0;
@@ -116,7 +117,7 @@ function mount(env) {
     praetorian = window.AgentDesk.create({ v3: link, headers, feed: hub, storage: store, storagePrefix: '',
       els: { view: $('agView'), tab: prBtn },
       openBot: () => { try { window.open('./?tab=bot', 'chart'); } catch (e) { /* blocked */ } },
-      onTab: on => { if (window.LegionApp && typeof window.LegionApp.show === 'function') { const st = window.LegionApp.state(); if (on) window.LegionApp.show('cohorts', 'praetorian'); else if (st.tab === 'cohorts' && st.sub === 'praetorian') window.LegionApp.show('cohorts', 'legion'); } } });
+      onTab: on => { if (on) { try { store.setItem('live-praetorian-side-v1', 'agent'); } catch (e) { /* blocked */ } } if (window.LegionApp && typeof window.LegionApp.show === 'function') { const st = window.LegionApp.state(); if (on) window.LegionApp.show('cohorts', 'praetorian'); else if (st.tab === 'cohorts' && st.sub === 'praetorian') window.LegionApp.show('cohorts', 'legion'); } } });
     /* the chart page opens Praetorian on one trader (?agent=id, from its corner line or a drone): chosen here, then dropped from
        the address so a reload keeps the trader chosen last */
     const asked = new URLSearchParams(location.search).get('agent');

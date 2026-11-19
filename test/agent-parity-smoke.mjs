@@ -304,7 +304,7 @@ try {
     await until(async () => (await text('ST11')) === 'KILLED', 'the strip says KILLED');
     await shows('ST11', /^KILLED$/, 'killed');
     await shows('LM04', /^Kill switch on · Release$/, 'the kill switch on');
-    item('W02', !!(await until(async () => / W02-alert/.test(await P('attr', 'W02', 'data-parity')), 'the tab button marks an agent in trouble')) && /^Agent tab: 1 agent$/.test(await P('attr', 'W02', 'title')), 'the tab button marks a killed agent (alert); its title: ' + await P('attr', 'W02', 'title'));
+    item('W02', !!(await until(async () => / W02-alert/.test(await P('attr', 'W02', 'data-parity')), 'the tab button marks an agent in trouble')) && /^Praetorian: 1 agent$/.test(await P('attr', 'W02', 'title')), 'the tab button marks a killed agent (alert); its title: ' + await P('attr', 'W02', 'title'));
     await until(async () => (await info('N01')).shown > 0, 'a notice');
     await shows('N01', /Kill switch/, 'the notices: one for the kill switch');
     item('N01', (await page.$$eval(H('N01'), l => l.every(e => ['status', 'alert'].includes(e.getAttribute('role'))))), 'each notice is a status (an alert for red)');

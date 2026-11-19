@@ -196,15 +196,35 @@ function renderHead() {
   }
   if (ask) ask.hidden = !S.ask;
   const words = S.said || (!p.ok ? p.why : p.note);
-  if (line) { if (line.textContent !== words) line.textContent = words; line.hidden = !words; line.classList.toggle('bad', !!(S.said ? S.saidBad : !p.ok)); line.classList.toggle('note', !S.said); }   // a standing line (not an answer): Praetorian's compact chrome keeps it in the button's title
-  fitDesk();
+  if (line) { if (line.textContent !== words) line.textContent = words; line.hidden = !words; line.classList.toggle('bad', !!(S.said ? S.saidBad : !p.ok)); line.classList.toggle('note', !S.said); line.classList.toggle('lx-put', !!S.said); line.title = S.said ? 'Click to put this away' : ''; }   // a standing line (not an answer): Praetorian's compact chrome keeps it in the button's title
+  fitDesk(); floatRoom();
 }
 function say(text, bad) { S.said = String(text || ''); S.saidBad = !!bad; renderHead(); }
+/* the panels' notes and the feed's own warnings: their own line, gone after a few seconds or a click (the R12 review, S1) */
+let noteTimer = 0;
+function noteLine(text, warn) {
+  const el = $('lxNote'); if (!el) return;
+  clearTimeout(noteTimer);
+  el.textContent = String(text || ''); el.hidden = !text; el.classList.toggle('bad', !!warn);
+  if (text) noteTimer = setTimeout(() => { el.hidden = true; el.textContent = ''; floatRoom(); }, warn ? 8000 : 5000);
+  floatRoom();
+}
+/* the floating lines cover the bottom of the window: the page keeps that much room below its last line, grown only (a shrink
+   could move what is under the pointer), set again on a tab change; the question sits under the header wherever it is */
+let roomPx = 0;
+function floatRoom(reset) {
+  const f = $('lxFloat'); if (!f) return;
+  const h = Math.ceil(f.getBoundingClientRect().height) + 16;
+  if (reset) roomPx = 0;
+  if (h > roomPx) { roomPx = h; document.documentElement.style.setProperty('--lx-float-room', roomPx + 'px'); }
+}
+function placeAsk() { const h = $('lxHead'); if (h) document.documentElement.style.setProperty('--lx-ask-top', Math.max(0, Math.round(h.getBoundingClientRect().bottom) + 6) + 'px'); }
+window.addEventListener('scroll', () => { if (S.ask) placeAsk(); }, { passive: true });
 function endAsk() { S.ask = 0; clearTimeout(S.askTimer); S.askTimer = 0; }
 function openAsk() {
   const p = plan();
   if (!p.ok) { say(p.why, true); return; }
-  S.ask = Date.now(); clearTimeout(S.askTimer);
+  S.ask = Date.now(); clearTimeout(S.askTimer); placeAsk();
   S.askTimer = setTimeout(() => { if (S.ask && Date.now() - S.ask >= C.CONFIRM_MS) { endAsk(); say('', false); } }, C.CONFIRM_MS + 50);
   say('', false);
   renderHead();
@@ -266,7 +286,7 @@ function alertLoud(text, warn) {
   alerts.push(new Date().toLocaleTimeString() + '  ' + text); while (alerts.length > 3) alerts.shift();
   if (!warn) alertErr = true;
   t.textContent = alerts.join('\n'); box.hidden = false; box.classList.toggle('warn', !alertErr);
-  fitDesk();
+  fitDesk(); floatRoom();
 }
 
 /* ---------------- the tabs */
@@ -281,7 +301,7 @@ function showTab(tab, sub, keepUrl) {
   for (const b of document.querySelectorAll('[data-lx-sub]')) b.setAttribute('aria-selected', String(b.dataset.lxSub === S.sub));
   for (const v of document.querySelectorAll('[data-lx-subview]')) v.hidden = v.dataset.lxSubview !== S.sub;
   if (!keepUrl) { try { history.replaceState(null, '', location.pathname + C.tabSearch(location.search, S.tab, S.sub) + location.hash); } catch (e) { /* file: */ } }
-  fitDesk();
+  fitDesk(); floatRoom(true);
   for (const fn of HOOKS.tab) { try { fn(S.tab, S.sub); } catch (e) { failed('the ' + S.tab + ' tab', e); } }
   const t = C.TABS.find(x => x.id === tab);
   document.title = (t ? t.name + ' · ' : '') + 'Legion · Imperium';
@@ -319,6 +339,8 @@ function start() {
   for (const b of document.querySelectorAll('[data-lx-sub]')) b.addEventListener('click', () => { if (b.dataset.lxOwn !== '1') showTab('cohorts', b.dataset.lxSub); });
   const head = $('lxHead'); if (head) head.addEventListener('click', onStopClick);
   const ask = $('lxStopAsk'); if (ask) ask.addEventListener('click', onStopClick);
+  const sl = $('lxStopSaid'); if (sl) sl.addEventListener('click', () => { if (S.said && !S.pending) say('', false); });   // an answer put away
+  const nl = $('lxNote'); if (nl) nl.addEventListener('click', () => noteLine('', false));
   const ac = $('wsAlertClose'); if (ac) ac.addEventListener('click', () => { alerts.length = 0; alertErr = false; $('wsAlert').hidden = true; fitDesk(); });
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && S.ask) { endAsk(); say('', false); e.preventDefault(); } }, true);
   /* the window's two connections, as the chart page and agent.html open them: the chart feed (prices, for a chart inside a tab)
@@ -326,13 +348,13 @@ function start() {
   guard('the chart feed', () => { hub = window.ChartFeed && typeof window.ChartFeed.create === 'function' ? window.ChartFeed.create({ wsUrl }) : null; });
   guard('the ChartBridge connection', () => {
     AF = window.AccountsPage && typeof window.AccountsPage.createFeed === 'function' ? window.AccountsPage.createFeed({ wsUrl, pin: PIN, framed, fetch: (u, o) => fetch(u, o),
-      note: (t, warn) => { if (warn) say(t, true); }, changed: () => { for (const fn of HOOKS.message) { try { fn(null); } catch (e) { /* its own guard */ } } } }) : null;
+      note: (t, warn) => { if (warn) noteLine(t, true); }, changed: () => { for (const fn of HOOKS.message) { try { fn(null); } catch (e) { /* its own guard */ } } } }) : null;
   });
   /* the header's own link: listen, and post only what stopMaySend passes (the two Stop all messages, exactly their keys) */
   link = AF ? Object.freeze({ post: m => C.stopMaySend(m) === true && AF.post(m) === true }) : null;
   if (AF) AF.listen({ message: m => { onHeadMessage(m); for (const fn of HOOKS.message) { try { fn(m); } catch (e) { /* its own guard */ } } },
     closed: () => { S.connected = false; S.signedIn = false; if (S.ask) endAsk(); renderHead(); } });
-  if (window.LegionTabs && typeof window.LegionTabs.mount === 'function') guard('the moved tabs', () => window.LegionTabs.mount({ AF, hub, store, PREFIX, PIN, realClick, hooks: HOOKS, mounted: S.mounted, guard, say }));
+  if (window.LegionTabs && typeof window.LegionTabs.mount === 'function') guard('the moved tabs', () => window.LegionTabs.mount({ AF, hub, store, PREFIX, PIN, realClick, hooks: HOOKS, mounted: S.mounted, guard, noteLine }));
   const want = C.tabFrom(location.search);
   showTab(want.tab, want.sub, false);
   renderHead();

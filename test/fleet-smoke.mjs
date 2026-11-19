@@ -175,7 +175,7 @@ try {
   check(await page.locator('.fl-others').count() === 0 && await page.locator('.fl-trader').count() === 0 && !/Other connections/.test(await text('#flView')), 'no Other connections on Legion');
   // PROP 3: a trader in Auto on a group with the personal account in it is named as the one Kill all will not stop
   await feed(agent('mixed', { account: null, group: { id: 'g9', name: 'Sample both' }, seats: [{ account: 'SAMPLE-MINE' }, { account: 'SAMPLE-EVAL-2' }] }));
-  check((await text('.fl-autoline')).includes('In Auto on a group with your personal account in it (Kill all will NOT stop it: stop it on the Agent tab): mixed'), 'the head line names the trader Kill all will not stop: ' + await text('.fl-autoline'));
+  check((await text('.fl-autoline')).includes('In Auto on a group with your personal account in it (Kill all will NOT stop it: stop it on Praetorian): mixed'), 'the head line names the trader Kill all will not stop: ' + await text('.fl-autoline'));
   await feed(agent('mixed', { mode: 'shadow', account: null }));
 
   await page.click('[data-do="sub"][data-sub="live"]');
@@ -620,13 +620,33 @@ try {
     check(await lg.evaluate(() => !document.querySelector('.fl-chart .ce-canvas') && !document.querySelector('.fl-acctrows [data-ap]')), 'Legion: back on Setup, the chart and the rows are taken down');
     await lg.click('[data-lx-sub="praetorian"]');
     await sleep(500);
-    const sides = () => lg.evaluate(() => { const t = window.LegionTabs.state(); return { pr: !!(t.praetorian && t.praetorian.shown), fl: !!(t.cohorts && t.cohorts.shown), url: location.search }; });
+    /* each side by the desks' own state and by what is really on screen (an element with boxes: no hidden ancestor) */
+    const sides = () => lg.evaluate(() => { const t = window.LegionTabs.state(), seen = id => { const e = document.getElementById(id); return !!e && e.getClientRects().length > 0 && e.getBoundingClientRect().height > 0; };
+      return { pr: !!(t.praetorian && t.praetorian.shown), fl: !!(t.cohorts && t.cohorts.shown), prSeen: seen('agView'), flSeen: seen('flView'), url: location.search }; });
     const s1 = await sides();
-    check(s1.pr && !s1.fl && /sub=praetorian/.test(s1.url), 'Legion: the Praetorian side shows the Agent desk and hides FleetView (one side at a time): ' + JSON.stringify(s1));
+    check(s1.pr && !s1.fl && s1.prSeen && !s1.flSeen && /sub=praetorian/.test(s1.url), 'Legion: the Praetorian side shows the Agent desk and hides FleetView (one side at a time, on screen too): ' + JSON.stringify(s1));
     await lg.click('[data-lx-sub="legion"]');
     await sleep(500);
     const s2 = await sides();
-    check(s2.fl && !s2.pr && /sub=legion/.test(s2.url), 'Legion: and the Legion side brings FleetView back: ' + JSON.stringify(s2));
+    check(s2.fl && !s2.pr && s2.flSeen && !s2.prSeen && /sub=legion/.test(s2.url), 'Legion: and the Legion side brings FleetView back: ' + JSON.stringify(s2));
+    /* the R12 review of plan step 3.2, S2: ChartBridge's warning and error lines and a panel's note come and go over the bottom of
+       the window: Kill all and Armed never move, and every point of each still reaches it */
+    const killArm = () => lg.evaluate(() => ['[data-do="ask"]', '[data-do="arm"]'].map(q => { const b = document.querySelector(q), r = b.getBoundingClientRect(); let n = 0;
+      for (let i = 0; i < 15; i++) { const e = document.elementFromPoint(r.left + 1 + (r.width - 2) * i / 14, r.top + r.height / 2); if (e && (e === b || b.contains(e))) n++; } return [Math.round(r.x), Math.round(r.y), n]; }));
+    const before = await killArm();
+    const st = (level, text) => fetch(`http://127.0.0.1:${PORT}/test/status?` + new URLSearchParams({ level, text }), { method: 'POST' });
+    await st('warn', 'Sample: a made-up warning line from ChartBridge'); await st('error', 'Sample: a made-up error line from ChartBridge');
+    await lg.evaluate(() => { const n = document.getElementById('lxNote'); n.textContent = 'Sample: a made-up note of a panel'; n.hidden = false; });
+    await lg.waitForFunction(() => !document.getElementById('wsAlert').hidden, null, { timeout: 8000 }).catch(() => {});
+    await sleep(300);
+    const during = await killArm(), float = await lg.evaluate(() => { const f = document.getElementById('lxFloat').getBoundingClientRect(); return { top: Math.round(f.top), alert: !document.getElementById('wsAlert').hidden, said: !document.getElementById('lxStopSaid').hidden }; });
+    await lg.screenshot({ path: path.join(SHOTS, 'fleet-legion-alerts.png') });
+    await lg.click('#wsAlertClose');
+    await lg.evaluate(() => { document.getElementById('lxNote').hidden = true; });
+    await sleep(300);
+    const after = await killArm();
+    check(float.alert && JSON.stringify(during) === JSON.stringify(before) && JSON.stringify(after) === JSON.stringify(before) && before.every(x => x[2] === 15),
+      'Legion, Cohorts: with the alert lines, a note and Stop all\'s line showing, then gone, Kill all and Armed stay put and every point reaches them: ' + JSON.stringify({ before, during, after, float }));
     await lg.close();
     /* an old address on the chart page forwards to Legion */
     await page.goto(`http://localhost:${PORT}/live/?layout=Main&tab=legion`);
