@@ -710,7 +710,14 @@ try {
       await control('status', { level: 'error', text: 'Sample: NOT FLAT? a made-up error line from ChartBridge' });
       await control('status', { level: 'warn', text: 'Sample: a second made-up line' });
       await p2.waitForFunction(() => !document.getElementById('wsAlert').hidden, null, { timeout: 8000 }).catch(() => {});
+      /* Castra (plan step 3.3) puts the cohort model and the Drone sky above the lanes' head on the Cohorts tab, so the head starts
+         low in the window, where Legion's floating lines (the R12 review of 3.2, S2) lie over the bottom of it by design. Brought to
+         the top of the view, just under Legion's header, as it stood before the cohort model, the banner must still not lie on it */
+      const toHead = () => p2.evaluate(() => { const h = document.querySelector('.fl-top'), lx = document.getElementById('lxHead');
+        window.scrollTo(0, Math.max(0, h.getBoundingClientRect().top + window.scrollY - (lx ? lx.getBoundingClientRect().height : 0) - 12)); });
       const reach = sel => p2.evaluate(q => { const b = document.querySelector(q), r = b.getBoundingClientRect(); let n = 0; for (let i = 0; i < 15; i++) { const e = document.elementFromPoint(r.left + 1 + (r.width - 2) * i / 14, r.top + r.height / 2); if (e && (e === b || b.contains(e))) n++; } return n; }, sel);
+      check(await reach('[data-do="ask"]') === 15, 'banner, ' + width + ' px: where the page opens, with the banner up, 15 of 15 points of Kill all reach it (' + await reach('[data-do="ask"]') + ')');
+      await toHead(); await sleep(150);
       const overlap = () => p2.evaluate(() => { const a = document.getElementById('wsAlert').getBoundingClientRect(), h = document.querySelector('.fl-top').getBoundingClientRect(); return !(a.bottom <= h.top || a.top >= h.bottom); });
       check(await p2.isVisible('#wsAlert') && !(await overlap()) && await reach('[data-do="ask"]') === 15, 'banner, ' + width + ' px: with the alert banner up it does not lie on the head, and 15 of 15 points of Kill all reach it (' + await reach('[data-do="ask"]') + ')');
       const kb = await p2.locator('[data-do="ask"]').boundingBox();
