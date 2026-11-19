@@ -353,6 +353,12 @@ try {
   // the firm's minimum seeds the floor
   const before = await control(CL_PORT, 'received');
   await p5.fill(`${AP} input[data-act="firm-min"][data-id="EVAL-A"]`, '49500');
+  /* Anthony's pause between typing and Set, while the flag is up and EVAL-A's room ticks with its open position: the box keeps
+     what he typed (the list was rebuilt each second, emptying it, so Set sent nothing: the 1.58.0 release flake) */
+  await p5.evaluate(() => { const l = document.querySelector('.ws-panel[data-id="ap"] [data-list]'); window.__reb = 0; new MutationObserver(() => { window.__reb++; }).observe(l, { childList: true }); });
+  await wait(2500);
+  const typed = await p5.$eval(`${AP} input[data-act="firm-min"][data-id="EVAL-A"]`, e => e.value);
+  check(typed === '49500', 'the typed minimum stays in its box while the room ticks (box ' + JSON.stringify(typed) + ', list rebuilt ' + await p5.evaluate(() => window.__reb) + ' times in 2.5 s)');
   await p5.click(`${AP} button[data-act="firm-min-set"][data-id="EVAL-A"]`);
   const fl = await until(async () => { const a = (await v3(CL_PORT)).accounts.list.find(x => x.name === 'EVAL-A'); return a && a.floor === 49500 ? a : null; }, 'EVAL-A\'s floor from the firm\'s minimum');
   check(!!fl && fl.src.roomFloor === 'computed', 'firmMinimum: ChartBridge\'s floor is the firm\'s 49,500, the room computed from it (' + JSON.stringify(fl && { floor: fl.floor, roomFloor: fl.roomFloor, nt: fl.roomFloorNt }) + ')');

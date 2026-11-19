@@ -1862,7 +1862,7 @@ function mount(v, host) {
           ` <button type="button" class="ac-btn apg-yes" data-act="personal-yes" data-id="${esc(a.name)}">${pq.clear ? 'Take it away' : 'Yes, it is mine'}</button><button type="button" class="ac-btn" data-act="personal-no" data-id="${esc(a.name)}">Cancel</button></span>`, 'apg-ask');
         const hideBtn = canAct && a.canHide === true ? `<button type="button" class="ac-btn apg-hide" data-act="archive" data-id="${esc(a.name)}" title="Hide ${esc(a.name)}: it leaves every list until you Show it; its fills and history stay">Hide</button>` : '';
         const drawer = row('dr|' + a.name, `<span role="cell" class="apg-drawer">` + fld('Group', unrole(grp)) + fld('Account type', unrole(typeCell(a))) + fld('Limits', unrole(lims)) +
-          fld('Firm minimum', firm) + fld('Label', labBox) + fld('', hideBtn) + fld('Prop', outcomeCell(a.name)) + fld('Personal', personalCell) + (flags.length ? `<span class="apg-dflags">${esc(flags.join(' · '))}</span>` : '') + '</span>', 'apg-ask apg-drawerrow');
+          fld('Firm minimum', firm) + fld('Label', labBox) + fld('', hideBtn) + fld('Prop', outcomeCell(a.name)) + fld('Personal', personalCell) + (flags.length ? ci(flags.join(' · '), 'apg-dflags') : '') + '</span>', 'apg-ask apg-drawerrow');
         return main + drawer + askPersonal + ask(a) + askOutcome(a.name) + askJoin(a) + askRules(a) + typeRow(a) + askApply(a);
       };
       /* the sections: each group (its members), then the accounts in no group, then the Sim accounts (folded until opened) */
@@ -1995,9 +1995,12 @@ function mount(v, host) {
     /* 1.32.0 (review): a control with the focus keeps it when the list is rebuilt (the same data-act and data-id), so an arrow key
        on the Change row's Firm or Plan moves through the list there */
     const had = document.activeElement, keep = had && had !== listEl && listEl.contains(had) && had.dataset && had.dataset.act ? { act: had.dataset.act, id: had.dataset.id || '' } : null;
-    let rebuilt = false;
+    let rebuilt = false, typed = [];
     if (P.key !== html) {
       rebuilt = true;
+      /* a box with no value of its own in the html (the firm's minimum, the join's highest close) keeps what was typed in it when
+         the list is rebuilt, so Set or Put in never reads an empty box Anthony did not empty */
+      typed = [...listEl.querySelectorAll('input[type="text"][data-act]:not([data-p])')].filter(e => e.value !== e.defaultValue).map(e => ({ act: e.dataset.act, id: e.dataset.id || '', v: e.value }));
       P.key = html; const top = listEl.scrollTop; listEl.innerHTML = html; listEl.scrollTop = top;
       P.cells = []; for (const e of listEl.querySelectorAll('[data-c]')) P.cells[+e.dataset.c] = e;
       P.props = []; for (const e of listEl.querySelectorAll('[data-p]')) P.props[+e.dataset.p] = e;
@@ -2016,6 +2019,7 @@ function mount(v, host) {
       if ('value' in x && e !== document.activeElement && e.value !== x.value) e.value = x.value;
     }
     const findAct = (act, id) => [...listEl.querySelectorAll(`[data-act="${act}"]`)].find(e => (e.dataset.id || '') === id) || null;
+    for (const t of typed) { const e = findAct(t.act, t.id); if (e && !e.dataset.p && e.value === e.defaultValue) e.value = t.v; }
     if (rebuilt && keep) { const e = findAct(keep.act, keep.id); if (e && !e.disabled) e.focus(); }
     /* after Cancel, Not set or Save: the account's Change or Set button (once it is back, after a save; only while nothing else
        has the focus) */

@@ -249,9 +249,10 @@ reads "not enough data yet". New files: `live/legion-castra-core.js`, `legion-ca
   Agents strip and the Drone sky.
 - **Kill all at the top of Cohorts** (Anthony 2026-11-19: "Yes, Kill all at the top"): the lanes' head (Armed, Kill all and
   their questions) comes first, where the tab opens, then the cohort model and the Drone sky, then the lanes. No question
-  can be covered by Legion's floating alert lines: the head and Stop all's question stack above them, the lines keep to the
-  room below the head (a phone's long alert never slips under it), and every other question on the page makes them step
-  aside while it is open (`CHART_STYLE.md`).
+  can be covered by Legion's floating alert lines, and the lines are never hidden (Stop all's answer and ChartBridge's
+  errors stay in view): Kill all's and Armed's rows and their question stack above the lines, and the lines take the
+  lowest band of the window clear of those rows and of every question open on the page, scrolling inside it; at 360 px
+  and narrower Kill all, Yes and Cancel keep one row (`CHART_STYLE.md`).
 - **The Ludus** (plan step 3.4): Pipeline (stations I to VII from the loop's board), Board (the line of 30 and every build,
   best first, each leading with profit per $1, pass rate, days to pass and payout per funded account beside its sample,
   each half of the line with its own; with no board the builds come from The Desk's ledger and the page says why),
@@ -368,6 +369,14 @@ the size. Fixed in `nt8/ChartBridgeGroups.cs`, `live/groups.js`, `live/accounts.
   lower balance gives the floor from that close, not from the size; a leave and rejoin; a restart; a deleted group; Hide; a missed close; the
   lane rule with The Desk's highest close, without it, below the kept high, with neither, and not a number); 25 of its
   checks fail on the code before the fix; the review's probes (BLOCKER 1, SHOULD 1, SHOULD 2) fail on 04c741c. `test/floor-highs.test.js` (the prefill, the warning, the join steps).
+
+### A fix on the Accounts tab (the page only)
+
+- Accounts: a typed firm minimum or highest close is no longer cleared while a figure in the open drawer moves (a figure
+  moving about once a second used to rebuild the list, so Set could read an empty box). The drawer's flag text is now a
+  value updated in place (`live/accounts.js`), and a box with no value of its own in the list (the firm minimum, the
+  join's highest close) keeps what was typed if the list is rebuilt. Main had it too; found by an intermittent
+  `test/accounts-smoke.mjs` failure, which now waits 2.5 s after typing and checks the box still holds the minimum.
 
 ### Tests
 
