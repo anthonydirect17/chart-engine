@@ -154,7 +154,9 @@ try {
     const href = await c.page.getAttribute('#chView a.lx-link', 'href');
     check(/^http:\/\/localhost:8800\/#\/prop\/fleet$/.test(href || ''), 'the link to Fleet: ' + href);
     check(await c.page.$('#chView .ak-wrap') !== null, 'the Drone sky is mounted');
-    check(await c.page.$('#flView .fl-head, #flView section, #flView .fl-box') !== null, 'FleetView stays under it');
+    check(await c.page.evaluate(() => { const t = document.querySelector('#flView .fl-top'), ch = document.getElementById('chView'), pg = document.querySelector('#flView .fl-page');
+      return !!(t && ch && pg && (t.compareDocumentPosition(ch) & Node.DOCUMENT_POSITION_FOLLOWING) && (ch.compareDocumentPosition(pg) & Node.DOCUMENT_POSITION_FOLLOWING)); }),
+      'FleetView\'s head (Armed, Kill all) comes first, then the cohort model and the Drone sky, then the lanes (Anthony 2026-11-19: "Yes, Kill all at the top")');
     await c.page.screenshot({ path: path.join(SHOTS, 'cohorts.png'), fullPage: true });
 
     /* a drag onto a cohort: one PUT with the version read */
@@ -195,6 +197,63 @@ try {
     check((await innerScrolls(c.page, '#lx-cohorts .lx-card:not(.fl-box)')).filter(x => /ch-|cx-/.test(String(x))).length === 0, 'no box scrolls inside the cohort cards');
     check(c.pe.length === 0, 'no page error: ' + c.pe.join(' | '));
     await c.ctx.close();
+
+    /* ---------------- Kill all at the top (Anthony 2026-11-19: "Yes, Kill all at the top"; the R12 delta review of 3.3): on the
+       Cohorts tab the lanes' head (Armed, Kill all and its question) sits above the cohort model and the Drone sky, where the tab
+       opens, with real cohorts. With ChartBridge's two alert lines up, and a third arriving while the question is up, Kill all, Yes
+       and Cancel are reached at 15 of 15 points at each window height, never scrolled first */
+    const reach = (page, sel) => page.evaluate(q => { const b = document.querySelector(q); if (!b) return -1; const r = b.getBoundingClientRect(); let n = 0;
+      for (let i = 0; i < 15; i++) { const e = document.elementFromPoint(r.left + 1 + (r.width - 2) * i / 14, r.top + r.height / 2); if (e && (e === b || b.contains(e))) n++; } return n; }, sel);
+    const status = (level, words) => fetch(`http://127.0.0.1:${PORT}/test/status?` + new URLSearchParams({ level, text: words }), { method: 'POST' });
+    for (const vp of [{ width: 1366, height: 768 }, { width: 1600, height: 752 }, { width: 1600, height: 770 }, { width: 1600, height: 800 }, { width: 1280, height: 900 }, { width: 390, height: 844 }]) {
+      const tag = vp.width + 'x' + vp.height;
+      const k = await open(vp, '?tab=cohorts');
+      await until(k.page, () => window.LegionTabs.state().cohortModel && window.LegionTabs.state().cohortModel.state === 'ok' && document.querySelectorAll('#chView .ch-cohort').length === 3);
+      await until(k.page, () => { const b = document.querySelector('[data-do="ask"]'); return !!b && !b.hasAttribute('aria-disabled'); }, null, 10000);
+      await sleep(400);
+      const order = await k.page.evaluate(() => { const h = document.querySelector('#flView .fl-top').getBoundingClientRect(), c = document.getElementById('chView').getBoundingClientRect();
+        return { y: window.scrollY, head: Math.round(h.bottom), cohorts: Math.round(c.top), kill: Math.round(document.querySelector('[data-do="ask"]').getBoundingClientRect().bottom) }; });
+      check(order.y === 0 && order.head <= order.cohorts && order.kill < vp.height, tag + ': the lanes\' head is above the cohort model and the Drone sky, Kill all in view where the tab opens: ' + JSON.stringify(order));
+      await status('error', 'Sample: NOT FLAT? a made-up error line from ChartBridge');
+      await status('warn', 'Sample: a second made-up line');
+      await until(k.page, () => !document.getElementById('wsAlert').hidden);
+      await sleep(200);
+      const killN = await reach(k.page, '[data-do="ask"]'), armN = await reach(k.page, '[data-do="arm"]');
+      check(await k.page.isVisible('#wsAlert') && killN === 15 && armN === 15, tag + ': with the two alert lines up, where the page opens, Kill all and Armed are reached at 15 of 15 points (' + killN + ', ' + armN + ')');
+      const kb = await k.page.locator('[data-do="ask"]').boundingBox();
+      await k.page.mouse.click(kb.x + kb.width / 2, kb.y + kb.height / 2);
+      await until(k.page, () => window.legion.fleet().asking);
+      await status('error', 'Sample: another made-up error, arriving while the question is up');
+      await sleep(700);
+      const yes = await reach(k.page, '[data-do="yes"]'), no = await reach(k.page, '[data-do="no"]');
+      check((await k.page.evaluate(() => window.legion.fleet().asking)) && yes === 15 && no === 15, tag + ': an alert that arrives while the question is up covers neither Yes nor Cancel (' + yes + ', ' + no + ' of 15)');
+      if (vp.height === 768 || vp.width === 390) await k.page.screenshot({ path: path.join(SHOTS, 'cohorts-killtop-' + tag + '.png') });
+      const nb = await k.page.locator('[data-do="no"]').boundingBox().catch(() => null);
+      if (nb) await k.page.mouse.click(nb.x + nb.width / 2, nb.y + nb.height / 2);
+      check(!(await k.page.evaluate(() => window.legion.fleet().asking)) && await k.page.isVisible('#wsAlert'), tag + ': Cancel closes the question, and the alert lines are back');
+      check(k.pe.length === 0, tag + ': no page error: ' + k.pe.join(' | '));
+      await k.ctx.close();
+    }
+
+    /* every other question drawn in the page (Praetorian's and the trader desk's "Flatten and turn him off", "Trade a LIVE account"):
+       while one is open, the floating lines step aside, wherever it sits; a made-up question at the foot of the window stands in */
+    const g = await open({ width: 1366, height: 768 }, '?tab=cohorts');
+    await status('error', 'Sample: a made-up error line from ChartBridge');
+    await until(g.page, () => !document.getElementById('wsAlert').hidden);
+    await g.page.evaluate(() => { const d = document.createElement('div'); d.id = 'smokeAsk'; d.setAttribute('role', 'alertdialog');
+      d.style.cssText = 'position:fixed;left:0;right:0;bottom:0;height:120px;display:flex;align-items:flex-end;justify-content:flex-end;background:#111';
+      d.innerHTML = '<button type="button" id="smokeYes" style="width:300px;height:40px">Sample: Yes</button>'; document.querySelector('#flView .fl-page').appendChild(d); });
+    await sleep(150);
+    const gy = await reach(g.page, '#smokeYes'), gAside = await g.page.evaluate(() => getComputedStyle(document.getElementById('lxFloat')).visibility);
+    await g.page.evaluate(() => { document.getElementById('smokeAsk').hidden = true; });
+    await sleep(150);
+    const gBack = await g.page.evaluate(() => getComputedStyle(document.getElementById('lxFloat')).visibility);
+    check(gy === 15 && gAside === 'hidden' && gBack === 'visible' && await g.page.isVisible('#wsAlert'), 'any question in the page: the floating lines step aside while it is open (' + gy + ' of 15, ' + gAside + ') and come back when it closes (' + gBack + ')');
+    /* the lanes' head stacks above the floating lines, under Legion's header and Stop all's question */
+    const zs = await g.page.evaluate(() => { const z = s => +getComputedStyle(document.querySelector(s)).zIndex || 0; return { float: z('#lxFloat'), head: z('#flView .fl-top'), header: z('#lxHead'), stopAsk: z('#lxStopAsk') }; });
+    check(zs.head > zs.float && zs.header > zs.head && zs.stopAsk > zs.header, 'the lanes\' head (Kill all and its question) stacks above the floating lines, under the header and Stop all\'s question: ' + JSON.stringify(zs));
+    check(g.pe.length === 0, 'no page error: ' + g.pe.join(' | '));
+    await g.ctx.close();
 
     /* ---------------- The Desk off: both say so and show no number */
     const off = await open({ width: 1600, height: 900 }, '?tab=castra', 'off');

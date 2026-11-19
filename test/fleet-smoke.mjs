@@ -628,6 +628,9 @@ try {
     /* 1.49.0 Legion Live: a real chart (the League tab's way), the Accounts tab's own rows, and Kill all and Armed in the very same
        place as on Setup */
     const head = () => lg.evaluate(() => ['[data-do="ask"]', '[data-do="arm"]'].map(s => { const r = document.querySelector(s).getBoundingClientRect(); return [Math.round(r.x), Math.round(r.y)]; }));
+    /* on Legion's page the head scrolls with the page (not sticky there since the R12 delta of 3.3): the Live button is brought into
+       view as a click brings it, then nothing may move */
+    await lg.locator('[data-do="sub"][data-sub="live"]').scrollIntoViewIfNeeded();
     const onSetup = await head();
     await lg.click('[data-do="sub"][data-sub="live"]');
     await lg.waitForFunction(() => document.querySelector('.fl-chart .ce-canvas'), null, { timeout: 10000 }).catch(() => {});
@@ -701,36 +704,32 @@ try {
       } });
     });
     const control = (what, q) => fetch(`http://127.0.0.1:${PORT}/test/${what}?` + new URLSearchParams(q || {}), { method: 'POST' });
-    for (const width of [1600, 1024, 700]) {
-      await p2.setViewportSize({ width, height: 900 });
+    /* at several window heights and a phone (the R12 delta review of 3.3): every check where the page opens, never scrolled first */
+    for (const [w, h] of [[1600, 900], [1024, 900], [700, 900], [1366, 768], [1600, 752], [1600, 770], [1600, 800], [390, 844]]) {
+      const width = w + 'x' + h;
+      await p2.setViewportSize({ width: w, height: h });
       await p2.goto(`http://localhost:${PORT}/live/?layout=Main&tab=legion`);
       await p2.waitForSelector('.cb-pin-key', { timeout: 15000 }).then(() => enterPin(p2, TEST_PIN)).catch(() => {});
       await p2.waitForFunction(() => /legion\.html/.test(location.pathname) && document.querySelector('[data-do="ask"]') && !document.querySelector('[data-do="ask"]').hasAttribute('aria-disabled'), null, { timeout: 30000 }).catch(() => {});
-      check(await p2.evaluate(() => !document.querySelector('[data-do="ask"]').hasAttribute('aria-disabled')), 'banner, ' + width + ' px: Kill all is offered (signed in, a personal account picked)');
+      check(await p2.evaluate(() => !document.querySelector('[data-do="ask"]').hasAttribute('aria-disabled')), 'banner, ' + width + ': Kill all is offered (signed in, a personal account picked)');
       await control('status', { level: 'error', text: 'Sample: NOT FLAT? a made-up error line from ChartBridge' });
       await control('status', { level: 'warn', text: 'Sample: a second made-up line' });
       await p2.waitForFunction(() => !document.getElementById('wsAlert').hidden, null, { timeout: 8000 }).catch(() => {});
-      /* Castra (plan step 3.3) puts the cohort model and the Drone sky above the lanes' head on the Cohorts tab, so the head starts
-         low in the window, where Legion's floating lines (the R12 review of 3.2, S2) lie over the bottom of it by design. Brought to
-         the top of the view, just under Legion's header, as it stood before the cohort model, the banner must still not lie on it */
-      const toHead = () => p2.evaluate(() => { const h = document.querySelector('.fl-top'), lx = document.getElementById('lxHead');
-        window.scrollTo(0, Math.max(0, h.getBoundingClientRect().top + window.scrollY - (lx ? lx.getBoundingClientRect().height : 0) - 12)); });
       const reach = sel => p2.evaluate(q => { const b = document.querySelector(q), r = b.getBoundingClientRect(); let n = 0; for (let i = 0; i < 15; i++) { const e = document.elementFromPoint(r.left + 1 + (r.width - 2) * i / 14, r.top + r.height / 2); if (e && (e === b || b.contains(e))) n++; } return n; }, sel);
-      check(await reach('[data-do="ask"]') === 15, 'banner, ' + width + ' px: where the page opens, with the banner up, 15 of 15 points of Kill all reach it (' + await reach('[data-do="ask"]') + ')');
-      await toHead(); await sleep(150);
       const overlap = () => p2.evaluate(() => { const a = document.getElementById('wsAlert').getBoundingClientRect(), h = document.querySelector('.fl-top').getBoundingClientRect(); return !(a.bottom <= h.top || a.top >= h.bottom); });
-      check(await p2.isVisible('#wsAlert') && !(await overlap()) && await reach('[data-do="ask"]') === 15, 'banner, ' + width + ' px: with the alert banner up it does not lie on the head, and 15 of 15 points of Kill all reach it (' + await reach('[data-do="ask"]') + ')');
+      check(await p2.isVisible('#wsAlert') && !(await overlap()) && await reach('[data-do="ask"]') === 15, 'banner, ' + width + ': with the alert banner up it does not lie on the head, and 15 of 15 points of Kill all reach it (' + await reach('[data-do="ask"]') + ')');
       const kb = await p2.locator('[data-do="ask"]').boundingBox();
       await p2.mouse.click(kb.x + kb.width / 2, kb.y + kb.height / 2);
-      check(await p2.evaluate(() => window.legion.fleet().asking), 'banner, ' + width + ' px: a click on Kill all opens the question');
+      check(await p2.evaluate(() => window.legion.fleet().asking), 'banner, ' + width + ': a click on Kill all opens the question');
       await control('status', { level: 'error', text: 'Sample: another made-up error, arriving while the question is up' });
       await sleep(700);
-      check(!(await overlap()) && await reach('[data-do="yes"]') === 15 && await reach('[data-do="no"]') === 15, 'banner, ' + width + ' px: an alert that arrives while the question is up covers neither Yes nor Cancel (' + await reach('[data-do="yes"]') + ', ' + await reach('[data-do="no"]') + ' of 15)');
+      check(!(await overlap()) && await reach('[data-do="yes"]') === 15 && await reach('[data-do="no"]') === 15, 'banner, ' + width + ': an alert that arrives while the question is up covers neither Yes nor Cancel (' + await reach('[data-do="yes"]') + ', ' + await reach('[data-do="no"]') + ' of 15)');
       const yb = await p2.locator('[data-do="yes"]').boundingBox();
       await p2.mouse.click(yb.x + yb.width / 2, yb.y + yb.height / 2);
       const frames = await p2.evaluate(() => window.__frames.filter(m => m.type === 'agentKillAllProp'));
-      check(frames.length === 1 && Object.keys(frames[0]).sort().join() === 'cid,type', 'banner, ' + width + ' px: Kill all then Yes sends, with the banner up: ' + JSON.stringify(frames));
-      if (width === 1600) await p2.screenshot({ path: path.join(SHOTS, 'fleet-banner.png') });
+      check(frames.length === 1 && Object.keys(frames[0]).sort().join() === 'cid,type', 'banner, ' + width + ': Kill all then Yes sends, with the banner up: ' + JSON.stringify(frames));
+      if (width === '1600x900') await p2.screenshot({ path: path.join(SHOTS, 'fleet-banner.png') });
+      if (width === '1366x768' || width === '390x844') await p2.screenshot({ path: path.join(SHOTS, 'fleet-banner-' + width + '.png') });
       await p2.click('#wsAlertClose').catch(() => {});
     }
     check(pe2.length === 0, 'banner: no page errors: ' + pe2.join(' | '));
