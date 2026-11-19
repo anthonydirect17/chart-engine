@@ -3,16 +3,27 @@
  * reads). ROI first (Rule 1): at the top, real money against simulated money per roster build with the money alarm (law 9.2);
  * then the daily "who goes in today" view (each roster build's overall profit per $1, days to pass and payout speed; its split
  * by zone and regime stays off), what is running now, Needs you (the one place a decision waits), last night, today (live only)
- * and Centurion's week (read only: its veto is not built yet, so there is no veto action).
+ * and Centurion's week with its veto and undo (the contract v1 of 2026-11-19, section 6).
  *
- * Read only: this file sends nothing to ChartBridge, writes nothing to The Desk and places nothing. A hidden Castra reads
- * nothing; a shown one reads The Desk once, then every READ_EVERY_MS while it stays shown, or at "Read again". What only the
- * trading PC knows (the traders, the prop accounts' day) is read from FleetView's own state (o.live()), never a second time.
+ * It sends ChartBridge nothing and places nothing. Its only writes are Centurion's two, to The Desk, each one POST of exactly
+ * { run_id, name } after a Yes: POST /api/legion/centurion/veto (a change of this week's Saturday report turned off) and
+ * POST /api/legion/centurion/undo (an applied change asked back). The three routes it uses for Centurion are those two and
+ * GET /api/legion/centurion; it never calls the seal or the undo list, which are Bot-Lab's night run's (a test pins it). It acts only on
+ * The Desk's veto version 1 (veto.built true, veto.version 1); any other answer is read only. The page never decides the veto window:
+ * it shows The Desk's state and The Desk refuses. A hidden Castra reads nothing; a shown one reads The Desk once, then every
+ * READ_EVERY_MS while it stays shown, at "Read again", and at once after each answer to a veto or an undo. What only the trading PC
+ * knows (the traders, the prop accounts' day) is read from FleetView's own state (o.live()), never a second time.
  *
- *   const v = LegionCastra.mount(el, { deskBase, fetch, live, go });
+ * THE QUESTION (Veto and Undo, Anthony 2026-11-19: keep the Yes for both; a veto is never taken back): a click opens it in the card,
+ * as Legion's Stop all question: a real click on Yes only (realClick, the page's one rule), no answer in the first K.ARM_MS, gone after
+ * K.CONFIRM_MS by the clock, Escape and Cancel close it. Yes sends one POST; the button reads "Sending..." and nothing else is sent
+ * until the answer. No button is drawn on a stale or failed read.
+ *
+ *   const v = LegionCastra.mount(el, { deskBase, fetch, live, go, realClick });
  *     deskBase()  The Desk's address (AccountsPage.deskBase); fetch: window.fetch
  *     live()      { traders, accounts } from FleetView.state() (FleetCore.traders and FleetCore.propAccounts), or null
  *     go(tab)     opens another Legion tab (Needs you's links)
+ *     realClick(e)  OrderTicket.realClick (legion-tabs.js hands Legion's own); none: Yes is never taken, as in Legion's header
  *   v.show(on); v.state(); v.destroy()
  */
 (function () {
@@ -28,7 +39,8 @@ function mount(el, opts) {
   const o = opts || {};
   if (!el || !K || !L) return null;
   const desk = K.deskClient({ fetch: o.fetch, deskBase: o.deskBase });
-  const S = { shown: false, gen: 0, timer: 0, tick: 0, readAt: 0, last: '', reads: {} };
+  const realClick = typeof o.realClick === 'function' ? o.realClick : () => false;   // none: Yes is never taken (Legion's header does the same)
+  const S = { shown: false, gen: 0, timer: 0, tick: 0, readAt: 0, last: '', reads: {}, ask: null, askTimer: 0, sending: '', said: '', saidBad: false };
   for (const n of NAMES) S.reads[n] = { state: 'idle', why: '', ans: null };
 
   /* a read keeps its last answer while it is refreshed, and when a refresh fails (shown with a note): never blanked, never all clear */
@@ -142,16 +154,100 @@ function mount(el, opts) {
     return card('VI', 'Last night', body);
   }
 
-  /* VII. Centurion's week, read only */
+  /* VII. Centurion's week, its veto and its undo */
+  const keyOf = (kind, runId, name) => kind + '|' + runId + '|' + name;
+  const centFresh = () => { const rs = K.readStatus(S.reads.centurion); return rs.state === 'ok' && !rs.stale; };
+  function askBox(kind) {
+    const a = S.ask;
+    if (!a || a.kind !== kind) return '';
+    return '<div class="cx-ask" role="alertdialog" aria-modal="false" aria-labelledby="cxAskQ" data-cx-ask="' + esc(kind) + '"><span id="cxAskQ">' + esc(a.words) + '</span>'
+      + '<button type="button" class="lx-btn cx-yes" data-cx-yes>Yes, ' + esc(kind) + '</button><button type="button" class="lx-btn" data-cx-no>Cancel</button></div>';
+  }
+  function actBtn(kind, runId, name, can) {
+    if (!can) return '';
+    const k = keyOf(kind, runId, name), sending = S.sending === k, label = kind === 'veto' ? 'Veto' : 'Undo';
+    return '<button type="button" class="lx-btn cx-act" data-cx-' + kind + ' data-run="' + esc(runId) + '" data-name="' + esc(name) + '"'
+      + (S.sending ? ' disabled' : '') + (S.ask && S.ask.key === k ? ' aria-expanded="true"' : '') + '>' + (sending ? 'Sending...' : label) + '</button>';
+  }
   function centurion() {
-    if (status('centurion') !== 'ok') return card('VII', 'Centurion\'s week', failNote('centurion'));
-    const c = K.centurionView(S.reads.centurion.ans);
-    if (!c.ok) return card('VII', 'Centurion\'s week', note(c.problem, 'cx-dim'));
-    let body = '<p>' + esc(c.summary || 'The report has no summary.') + '</p>';
-    if (c.findings.length) body += '<ul class="cx-list">' + c.findings.map(f => '<li>' + esc(f) + '</li>').join('') + '</ul>';
-    body += c.changes.length ? table('cx-chg', ['Change', 'From', 'To', 'Allowed'], c.changes.map(x => ({ cells: [cell(x.name, 'cx-lead'), cell(x.from, 'cx-num'), cell(x.to, 'cx-num'), cell(x.allowed ? 'yes' : 'no', x.allowed ? '' : 'cx-dim')] }))) : note('No change proposed.', 'cx-dim');
-    body += note('Read only. Veto: ' + K.NOT_BUILT + ' (plan steps 2.9 and 3.3): this page has no veto action, and Centurion applies nothing until the veto exists' + (c.vetoBuilt ? ' (The Desk says its veto exists; this page does not act on it)' : '') + (c.applies ? ' (the report says it applies, which this page does not take to mean anything)' : '') + '.', 'cx-dim');
-    return card('VII', 'Centurion\'s week', body + note('Report ' + (c.runId || 'without an id') + (c.status ? ', ' + c.status : '') + '.', 'cx-dim'));
+    const failed = S.reads.centurion.state === 'fail';
+    const away = failed ? note(K.VETO_UNREACHABLE, 'cx-bad') : '';
+    if (status('centurion') !== 'ok') return card('VII', 'Centurion\'s week', failNote('centurion') + away);
+    const c = K.centurionView(S.reads.centurion.ans), fresh = centFresh();
+    let body = staleNote('centurion');
+    if (c.ok) {
+      body += '<p>' + esc(c.summary || 'The report has no summary.') + '</p>';
+      if (c.findings.length) body += '<ul class="cx-list">' + c.findings.map(f => '<li>' + esc(f) + '</li>').join('') + '</ul>';
+      body += note(K.IN_SAMPLE, 'cx-sim');
+    } else body += note(c.problem, 'cx-dim');
+    if (!c.acts) {
+      /* an older Desk (its veto not built) or a veto this page does not know: the report as before, and nothing to act on */
+      if (c.ok) body += c.changes.length ? table('cx-chg', ['Change', 'From', 'To', 'Allowed'], c.changes.map(x => ({ cells: [cell(x.name, 'cx-lead'), cell(x.from, 'cx-num'), cell(x.to, 'cx-num'), cell(x.allowed ? 'yes' : 'no', x.allowed ? '' : 'cx-dim')] }))) : note('No change proposed.', 'cx-dim');
+      body += note(K.VETO_UNKNOWN + (c.vetoWords ? ' The Desk: ' + c.vetoWords : '') + ' (plan steps 2.9 and 3.3: Centurion applies nothing until the veto is on.)', 'cx-dim');
+    } else {
+      const w = c.week;
+      body += '<p class="cx-sub">This week\'s changes</p>';
+      if (!w) body += note(K.NO_WEEK, 'cx-dim');
+      else {
+        if (c.ok && c.runId && w.runId && c.runId !== w.runId) body += note('The summary above is from report ' + c.runId + (c.status ? ' (' + c.status + ')' : '') + '; the changes below are from this week\'s Saturday report, ' + w.runId + '.', 'cx-dim');
+        if (!w.changes.length) body += note(K.NO_CHANGE, 'cx-dim');
+        else body += table('cx-veto', ['Setting', 'From', 'To', 'Why', 'Then'], w.changes.map(x => ({ attrs: ' data-cx-change="' + esc(x.name) + '"', cells: [cell(x.name, 'cx-lead'), cell(x.from, 'cx-num'), cell(x.to, 'cx-num'), cell(x.why || 'not stated', x.why ? '' : 'cx-dim'),
+          x.can && fresh ? raw(actBtn('veto', w.runId, x.name, true)) : cell(x.can ? 'Not vetoed' : x.then, x.allowed ? '' : 'cx-dim')] })));
+        body += askBox('veto');
+        body += '<p class="cx-window" data-cx-window="' + esc(w.state) + '">' + esc(w.words || ('The Desk gives no words for the window (' + w.state + ').')) + '</p>';
+        if (w.closes && w.timed) body += note((w.state === 'open' ? 'The veto window closes ' : 'The veto window closed ') + w.closes + ', New York time.', 'cx-dim');
+      }
+      body += '<p class="cx-sub">Applied changes</p>';
+      const a = c.applied;
+      if (!a.ok) body += note(a.problem, 'cx-bad');
+      else if (!a.rows.length) body += note(K.NO_APPLIED, 'cx-dim');
+      else {
+        body += table('cx-applied', ['Setting', 'From', 'To', 'When', 'Undo'], a.rows.map(r => ({ attrs: ' data-cx-applied="' + esc(r.runId + ' ' + r.name) + '"', cells: [cell(r.name, 'cx-lead'), cell(r.from, 'cx-num'), cell(r.to, 'cx-num'), cell(r.when, 'cx-dim'),
+          r.can && fresh ? raw(actBtn('undo', r.runId, r.name, true)) : cell(r.can ? 'Not undone' : r.then, r.state === 'refused' ? '' : 'cx-dim')] })));
+        if (a.more) body += note('And ' + a.more.toLocaleString('en-US') + ' older.', 'cx-dim');
+      }
+      body += askBox('undo');
+    }
+    if (S.said) body += '<p class="cx-said' + (S.saidBad ? ' cx-bad' : '') + '" role="status" aria-live="polite" data-cx-said>' + esc(S.said) + '</p>';
+    body += away;
+    return card('VII', 'Centurion\'s week', body + note('Report ' + (c.runId || 'without an id') + (c.status ? ', ' + c.status : '') + '.', 'cx-dim'), 'cx-cent');
+  }
+  /* the question: open, close, Yes */
+  function endAsk() { S.ask = null; clearTimeout(S.askTimer); S.askTimer = 0; }
+  function say(text, bad) { S.said = String(text || ''); S.saidBad = !!bad; }
+  function openAsk(kind, runId, name) {
+    if (S.sending) return;
+    const k = keyOf(kind, runId, name);
+    if (S.ask && S.ask.key === k) { endAsk(); render(); return; }                  // the same button again closes it, as Stop all
+    const v = K.centurionView(S.reads.centurion.ans), act = K.actionFor(v, centFresh(), kind, runId, name);
+    if (act.why) { endAsk(); say(act.why, true); render(); return; }
+    const row = kind === 'undo' ? v.applied.rows.find(r => r.runId === runId && r.name === name) : null;
+    S.ask = { kind, runId, name, key: k, at: Date.now(), words: kind === 'veto' ? K.VETO_Q : K.undoQuestion(name, row ? row.from : '-') };
+    clearTimeout(S.askTimer);
+    S.askTimer = setTimeout(() => { if (S.ask && S.ask.key === k && Date.now() - S.ask.at >= K.CONFIRM_MS) { endAsk(); render(); } }, K.CONFIRM_MS + 50);
+    say('', false);
+    render();
+    const no = el.querySelector('[data-cx-no]'); if (no) no.focus();
+  }
+  function send() {
+    const a = S.ask;
+    endAsk();
+    if (!a || S.sending) { render(); return; }
+    const act = K.actionFor(K.centurionView(S.reads.centurion.ans), centFresh(), a.kind, a.runId, a.name);    // read again at the Yes: the last answer still offers it
+    if (act.why) { say('Not sent: ' + act.why, true); render(); return; }
+    S.sending = keyOf(a.kind, a.runId, a.name);
+    say('', false);
+    render();
+    desk.post(act.route, act.body)
+      .then(ans => say(K.sentWords(a.kind, ans, act.body), !K.sentOk(a.kind, ans, act.body)), e => say(K.refusedWords(a.kind, e), true))   // a bad 200 is no answer, never done (the R12 review, B1)
+      .then(() => { S.sending = ''; render(); if (S.shown) { read('centurion', K.ROUTES.centurion).then(render); render(); } });   // read again at once (the other reads keep their own turn)
+  }
+  function onYes(e) {
+    const r = K.askClick(S.ask ? S.ask.at : 0, Date.now(), realClick(e));
+    if (r === 'late') { endAsk(); say('The question closed (8 s): nothing was sent.', false); render(); return; }
+    if (r === 'key') { say('A veto or an undo is confirmed by a click on Yes only, not by keyboard. Cancel and Escape work from the keyboard.', true); render(); return; }
+    if (r === 'early') { say('Too soon: read the question, then click Yes.', true); render(); return; }
+    if (r === 'yes') send();
   }
 
   function render() {
@@ -170,23 +266,30 @@ function mount(el, opts) {
   }
   const onClick = e => {
     const g = e.target.closest('[data-cx-go]'), a = e.target.closest('[data-cx-again]');
+    const v = e.target.closest('[data-cx-veto]'), u = e.target.closest('[data-cx-undo]');
     if (g && typeof o.go === 'function') { e.preventDefault(); o.go(g.dataset.cxGo); }
     else if (a && S.shown) readAll();
+    else if (v || u) { const b = v || u; if (!b.disabled) openAsk(v ? 'veto' : 'undo', b.dataset.run || '', b.dataset.name || ''); }
+    else if (e.target.closest('[data-cx-yes]')) onYes(e);
+    else if (e.target.closest('[data-cx-no]')) { endAsk(); render(); }
   };
   el.addEventListener('click', onClick);
+  const onKey = e => { if (e.key === 'Escape' && S.ask) { endAsk(); render(); e.preventDefault(); } };
+  document.addEventListener('keydown', onKey, true);
   function show(on) {
     on = on === true;
     if (on === S.shown) return S.shown;
     S.shown = on;
     clearInterval(S.timer); clearInterval(S.tick);
     if (on) { readAll(); S.timer = setInterval(readAll, READ_EVERY_MS); S.tick = setInterval(render, 1000); }
-    else S.gen++;                                              // a hidden Castra reads nothing, and an answer in flight is dropped
+    else { S.gen++; endAsk(); }                                // a hidden Castra reads nothing, an answer in flight is dropped, a question closes
     return S.shown;
   }
   render();
   return { show, state: () => ({ shown: S.shown, readAt: S.readAt, reads: Object.fromEntries(NAMES.map(n => [n, S.reads[n].state])),
-      money: S.reads.money.ans ? K.moneyView(S.reads.money.ans) : null, needs: K.needsYou({ money: S.reads.money.ans ? K.moneyView(S.reads.money.ans) : null, cohorts: null, traders: [], reads: {} }).items }),
-    readAgain: readAll, destroy() { clearInterval(S.timer); clearInterval(S.tick); S.gen++; el.removeEventListener('click', onClick); } };
+      money: S.reads.money.ans ? K.moneyView(S.reads.money.ans) : null, needs: K.needsYou({ money: S.reads.money.ans ? K.moneyView(S.reads.money.ans) : null, cohorts: null, traders: [], reads: {} }).items,
+      centurion: S.reads.centurion.ans ? K.centurionView(S.reads.centurion.ans) : null, asking: S.ask ? { kind: S.ask.kind, runId: S.ask.runId, name: S.ask.name } : null, sending: S.sending, said: S.said, saidBad: S.saidBad }),
+    readAgain: readAll, destroy() { clearInterval(S.timer); clearInterval(S.tick); endAsk(); S.gen++; el.removeEventListener('click', onClick); document.removeEventListener('keydown', onKey, true); } };
 }
 
 window.LegionCastra = { mount };

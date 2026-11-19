@@ -4,13 +4,19 @@
 // Checks, Castra: real against simulated money first, ROI led, each with its sample, simulated labelled; the money alarm shown (and
 // says it stops nothing yet); who goes in today (approved first, overall profit per $1, days to pass, payout speed, the zone split
 // off); Needs you as the one place; running now and today (live, from ChartBridge); last night; Centurion's week read only with
-// no veto action. Checks, Cohorts: the cohorts with their picks, firm, PC and "direction: not built yet"; account chips with
+// no veto action from an older Desk (its veto not built: read only). Centurion's veto and undo (the contract v1, 2026-11-19): with The
+// Desk's veto version 1 (made-up SAMPLE weeks), Veto on each allowed change while the window is open and Undo on each applied change; the
+// question in the card (no answer in the first 600 ms, a keyboard Yes refused, Escape and Cancel close it, gone after 8 s); one POST of
+// exactly { run_id, name } per Yes, "Sending..." until the answer and no second send; The Desk's words, its refusal as it is, and no answer
+// read as "may or may not be recorded", each read again at once; closed, sealed, the empty states and The Desk unreachable (the last answer
+// with the stale note, no button, the one line); never the seal or the undo list. Checks, Cohorts: the cohorts with their picks, firm, PC and "direction: not built yet"; account chips with
 // ChartBridge's live figures; the link to Fleet; the Drone sky mounted; a drag onto a cohort sends The Desk exactly one PUT with the
 // version it read; a position and a cannot-tell are refused in plain words before anything is sent; The Desk's own refusal and a
 // stale version come back in plain words; the "Move to" list does the same as a drag. The two tabs send The Desk only GETs and
 // that one PUT; nothing to ChartBridge. No page error, no box that scrolls inside the page, no sideways scroll on a phone.
 // With The Desk off, both say so and show no number. Screenshots (test/out): castra, castra-off, cohorts, cohorts-refused,
-// cohorts-moved (1600 x 900) and castra-phone, cohorts-phone (390 x 844).
+// cohorts-moved, castra-veto-open, castra-veto-question, castra-veto-closed, castra-veto-sealed, castra-veto-unreachable (1600 x 900)
+// and castra-phone, cohorts-phone, castra-veto-phone (390 x 844).
 import { chromium } from 'playwright';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
@@ -30,7 +36,8 @@ const check = (ok, m) => { checks++; if (!ok) { errors.push(m); console.error(' 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const PORT = +(process.env.CASTRA_SMOKE_PORT || 8996);
 const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
-const CORS = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': 'GET, PUT' };
+const CORS = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': 'GET, PUT, POST' };
+const LATE = 'The veto window closed at the end of Sunday, New York time. Sunday night\'s run takes the list as it was; use Undo after the run.';
 
 function startBridge(port, flags) {
   const bridge = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(port), '--v3', '--test-controls', '--test-pin=' + TEST_PIN, '--version=0.6.24', flags.some(f => /^--personal=/.test(f)) ? '' : '--personal=FUNDED-C', '--gone-grace-ms=600000'].concat(flags).filter(Boolean), { stdio: ['ignore', 'pipe', 'inherit'] });
@@ -41,16 +48,16 @@ async function withBridge(fn) {
   try { await fn(); } finally { bridge.kill(); }
 }
 /* The Desk (made-up answers), with a cohort model that moves: a stage that is not the cohort's is refused, a stale version is a 409 */
-async function open(vp, query, mode, port) {
+async function open(vp, query, mode, port, cent) {
   const PT = port || PORT;
   const ctx = await browser.newContext({ viewport: vp, deviceScaleFactor: 1 });
   const desk = [];
   const model = F.cohortsAnswer({ tray: 'EVAL-A' });
-  const hold = { slow: mode === 'slow' ? 2500 : 0 };
+  const hold = { slow: mode === 'slow' ? 2500 : 0, cent: cent || null, postMode: 'ok', postSlow: 0, down: false };
   await ctx.route(/localhost:8800\//, async x => {
     const u = new URL(x.request().url()), m = x.request().method();
     desk.push(m + ' ' + u.pathname);
-    if (mode === 'off') return x.abort('failed');
+    if (mode === 'off' || hold.down) return x.abort('failed');
     if (hold.slow && m === 'GET') await sleep(hold.slow);
     if (m === 'OPTIONS') return x.fulfill({ status: 204, headers: CORS });
     const json = (b, status) => x.fulfill({ status: status || 200, contentType: 'application/json', headers: CORS, body: JSON.stringify(b) });
@@ -58,9 +65,26 @@ async function open(vp, query, mode, port) {
       if (u.pathname === '/api/legion/money') return json(F.moneyAnswer());
       if (u.pathname === '/api/legion/cohorts') return json(model);
       if (u.pathname === '/api/legion/roster') return json(F.rosterAnswer());
-      if (u.pathname === '/api/legion/centurion') return json(F.centurionAnswer());
+      if (u.pathname === '/api/legion/centurion') return json(hold.cent || F.centurionAnswer());
       if (u.pathname === '/api/legion/board') return json(F.boardAnswer());
       if (u.pathname === '/api/chart-league') return json({ date: '2001-02-01', trades: [], open: [], decisions: [] });
+    }
+    /* Centurion's veto and undo (the contract v1, section 4.3), on the made-up week: accepted, refused (409, The Desk's words), or no answer */
+    if (m === 'POST' && hold.cent && /^\/api\/legion\/centurion\/(veto|undo)$/.test(u.pathname)) {
+      const b = JSON.parse(x.request().postData() || '{}');
+      desk.push('POST body ' + JSON.stringify(b));
+      if (hold.postMode === 'abort') return x.abort('failed');
+      if (hold.postMode === 'refuse') return json({ detail: LATE }, 409);
+      if (hold.postMode === 'empty') return json({});                       // a 200 that is not the answer (the R12 review, B1)
+      if (hold.postSlow) await sleep(hold.postSlow);
+      if (u.pathname.endsWith('/veto')) {
+        const c = hold.cent.week.changes.find(z => z.name === b.name);
+        if (c) c.veto = { id: 'v_' + 'a'.repeat(16), at_utc: '2001-01-07T15:00:00Z' };
+        return json({ id: 'v_' + 'a'.repeat(16), run_id: b.run_id, name: b.name, at_utc: '2001-01-07T15:00:00Z', words: 'Vetoed: this change will not go in.' });
+      }
+      const r = hold.cent.applied.rows.find(z => z.run_id === b.run_id && z.name === b.name);
+      if (r) r.undo = { state: 'asked', id: 'u_' + 'b'.repeat(16), asked_utc: '2001-01-09T15:00:00Z', why: null };
+      return json({ id: 'u_' + 'b'.repeat(16), run_id: b.run_id, name: b.name, asked_utc: '2001-01-09T15:00:00Z', words: 'Undo asked: it is done at the start of the next night\'s run.' });
     }
     if (m === 'PUT' && u.pathname === '/api/legion/cohorts/members') {
       const b = JSON.parse(x.request().postData() || '{}');
@@ -122,11 +146,11 @@ try {
     check(/sample_a_v1/.test(await text(a.page, '.cx-goes')) && /approved by Anthony/.test(await text(a.page, '.cx-goes')) && /11 sessions \(median, simulated\)/.test(cx) && /19 sessions to the first payout/.test(cx), 'who goes in today: the approved build with days to pass and payout speed');
     check(/Split by zone and regime: off\./.test(cx) && /Off until a zone version passes test 3/.test(cx), 'the zone split is shown as off');
     check(/Needs you/.test(cx) && /1 prop account in no cohort \(EVAL-A\)/.test(await text(a.page, '#cxView .cx-needs')) && !/money alarm/.test(await text(a.page, '#cxView .cx-needs')), 'Needs you lists what waits, and the alarm is not on it');
-    check(/Named account type: not built yet \(law 1\.6\)/.test(cx) && /Dollars per funded slot per 30 sessions: not built yet \(law 1\.6\)/.test(cx) && /Veto: not built yet \(plan steps 2\.9 and 3\.3\)/.test(cx), 'the named type, dollars per funded slot and the veto say not built yet (law 1.6)');
+    check(/Named account type: not built yet \(law 1\.6\)/.test(cx) && /Dollars per funded slot per 30 sessions: not built yet \(law 1\.6\)/.test(cx), 'the named type and dollars per funded slot say not built yet (law 1.6)');
     check(/Nothing is running now|No trader is listed|ChartBridge is not connected/.test(await text(a.page, '#cxView')) || await a.page.isVisible('.cx-run'), 'running now says what ChartBridge says');
     check(/Today, live only/.test(cx) && /Live only: what ChartBridge reports now/.test(cx), 'today, live only');
     check(/Last night/.test(cx) && /2001-03-01/.test(cx) && /9 \(7 new, 2 neighbours/.test(cx), 'last night: the board\'s newest night');
-    check(/Centurion's week/.test(cx) && /made-up finding one/.test(cx) && /this page has no veto action/.test(cx) && !(await a.page.$('#cxView button[data-cx-veto]')), 'Centurion\'s week is read only, no veto action');
+    check(/Centurion's week/.test(cx) && /made-up finding one/.test(cx) && /The Desk's veto is not one this page knows: read only\./.test(cx) && !(await a.page.$('#cxView button[data-cx-veto], #cxView button[data-cx-undo]')), 'Centurion\'s week from an older Desk (veto not built) is read only: no Veto, no Undo');
     /* a refresh keeps the last answer: the page is not blanked and Needs you is not all clear while it reads */
     a.hold.slow = 2000;
     await a.page.click('[data-cx-again]'); await sleep(400);
@@ -362,6 +386,132 @@ try {
     check(zs.head > zs.float && zs.header > zs.head && zs.stopAsk > zs.header, 'the lanes\' head (Kill all and its question) stacks above the floating lines, under the header and Stop all\'s question: ' + JSON.stringify(zs));
     check(g.pe.length === 0, 'no page error: ' + g.pe.join(' | '));
     await g.ctx.close();
+
+    /* ---------------- Centurion's veto and undo (the contract v1, 2026-11-19), made-up SAMPLE weeks */
+    const cxAll = (page, sel) => page.$$('#cxView ' + sel);
+    const said = page => text(page, '#cxView [data-cx-said]').catch(() => '');
+    const posts = d => d.filter(z => /^POST /.test(z));
+    const vb = n => '#cxView [data-cx-veto][data-name="' + n + '"]';
+    const clickAt = async (page, sel) => { const b = await page.locator(sel).boundingBox(); await page.mouse.click(b.x + b.width / 2, b.y + b.height / 2); };
+    const centOk = page => until(page, () => window.LegionTabs.state().castra.reads.centurion === 'ok' && !!window.LegionTabs.state().castra.centurion);
+    const vo = await open({ width: 1600, height: 900 }, '?tab=castra', null, null, F.centurionV1({ state: 'open' }));
+    await centOk(vo.page); await sleep(600);
+    let vt = await text(vo.page, '#lx-castra .cx-cent');
+    check((await cxAll(vo.page, '[data-cx-veto]')).length === 2 && (await cxAll(vo.page, '[data-cx-undo]')).length === 2, 'open: Veto on each allowed change (2), Undo on each applied change whose undo is "none" (2)');
+    check(/Sample week \(made up\)/.test(vt) && /In-sample: nothing here is proven, and no change here trades\./.test(vt), 'the sample week says sample, and the in-sample label');
+    check((await vo.page.$$eval('#cxView .cx-veto thead th', t => t.map(x => x.textContent).join('|'))) === 'Setting|From|To|Why|Then' && /Refused by the allow-list: never applied/.test(vt) && /Sample reason: more builds a night/.test(vt), 'the table: Setting, From, To, Why, Then; a refused change says so');
+    check(/Veto until the end of Sunday, New York time\. The rest go in at Sunday night's run\./.test(vt) && /The veto window closes Mon, Jan 8, 2001, 00:00 EST, New York time\./.test(vt), 'the window\'s words as The Desk sent them, and closes_utc in New York time');
+    check(/Undo refused: Sample: moved since: undo by hand/.test(vt) && /Mon, Jan 1, 2001, 00:05 EST/.test(vt), 'applied: when in New York time, an undo refused with its why');
+    await vo.page.screenshot({ path: path.join(SHOTS, 'castra-veto-open.png'), fullPage: true });
+    /* the question: too soon, a keyboard Yes, Escape, Cancel */
+    await vo.page.click(vb('sample_builds_a_night'));
+    check(/Veto this change\? It will not go in at Sunday night's run\. A veto cannot be taken back\./.test(await text(vo.page, '#cxView [data-cx-ask="veto"]').catch(() => '')) && await vo.page.evaluate(() => document.activeElement && document.activeElement.hasAttribute('data-cx-no')), 'a click opens the question in the card, Cancel focused');
+    await clickAt(vo.page, '#cxView [data-cx-yes]');
+    await sleep(100);
+    check(/Too soon: read the question, then click Yes\./.test(await said(vo.page)) && !!(await vo.page.$('#cxView [data-cx-ask]')) && posts(vo.desk).length === 0, 'Yes inside 600 ms answers nothing: the question stays, nothing sent');
+    await vo.page.screenshot({ path: path.join(SHOTS, 'castra-veto-question.png'), fullPage: true });
+    await vo.page.keyboard.press('Escape'); await sleep(100);
+    check(!(await vo.page.$('#cxView [data-cx-ask]')), 'Escape closes it');
+    await vo.page.click(vb('sample_builds_a_night')); await sleep(700);
+    await vo.page.focus('#cxView [data-cx-yes]'); await vo.page.keyboard.press('Enter'); await sleep(100);
+    check(/confirmed by a click on Yes only, not by keyboard/.test(await said(vo.page)) && posts(vo.desk).length === 0, 'a keyboard Yes is refused, nothing sent');
+    await vo.page.click('#cxView [data-cx-no]'); await sleep(100);
+    check(!(await vo.page.$('#cxView [data-cx-ask]')) && posts(vo.desk).length === 0, 'Cancel closes it, nothing sent');
+    /* gone after 8 s */
+    await vo.page.click(vb('sample_neighbours'));
+    await sleep(8400);
+    check(!(await vo.page.$('#cxView [data-cx-ask]')) && posts(vo.desk).length === 0, 'the question is gone after 8 s, nothing sent');
+    /* Yes: one POST, "Sending..." and no second send until the answer, then The Desk's words and a read again */
+    vo.hold.postSlow = 1500;
+    await vo.page.click(vb('sample_builds_a_night')); await sleep(700);
+    const g0 = vo.desk.filter(z => z === 'GET /api/legion/centurion').length;
+    await clickAt(vo.page, '#cxView [data-cx-yes]'); await sleep(300);
+    const sending = await vo.page.evaluate(() => [...document.querySelectorAll('#cxView [data-cx-veto], #cxView [data-cx-undo]')].map(b => [b.textContent, b.disabled]));
+    check(sending.some(b => b[0] === 'Sending...') && sending.every(b => b[1]), 'the button reads Sending... and every Veto and Undo is off until the answer: ' + JSON.stringify(sending));
+    await vo.page.click(vb('sample_neighbours'), { force: true }).catch(() => {}); await sleep(100);
+    check(!(await vo.page.$('#cxView [data-cx-ask]')), 'no second question while one is sending');
+    await until(vo.page, () => /Vetoed: this change will not go in\./.test((document.querySelector('#cxView [data-cx-said]') || {}).textContent || ''));
+    await until(vo.page, () => !document.querySelector('#cxView [data-cx-veto][data-name="sample_builds_a_night"]'));
+    vo.hold.postSlow = 0;
+    check(JSON.stringify(posts(vo.desk)) === JSON.stringify(['POST /api/legion/centurion/veto', 'POST body {"run_id":"centurion_20010106T110500Z","name":"sample_builds_a_night"}']), 'one POST of exactly { run_id, name }: ' + JSON.stringify(posts(vo.desk)));
+    check(vo.desk.filter(z => z === 'GET /api/legion/centurion').length > g0 && /^Vetoed$/.test(await text(vo.page, '#cxView [data-cx-change="sample_builds_a_night"] td:last-child')), 'The Desk\'s words, read again at once: the change reads Vetoed, its button gone');
+    /* a refusal, The Desk's words as they are; then no answer */
+    vo.hold.postMode = 'refuse';
+    await vo.page.click(vb('sample_neighbours')); await sleep(700); await clickAt(vo.page, '#cxView [data-cx-yes]');
+    await until(vo.page, () => /^Refused: /.test((document.querySelector('#cxView [data-cx-said]') || {}).textContent || ''));
+    check((await said(vo.page)) === 'Refused: ' + LATE, 'a refusal: "Refused: " and The Desk\'s detail as it is: ' + await said(vo.page));
+    vo.hold.postMode = 'abort';
+    await sleep(300); await vo.page.click(vb('sample_neighbours')); await sleep(700); await clickAt(vo.page, '#cxView [data-cx-yes]');
+    await until(vo.page, () => /may or may not/.test((document.querySelector('#cxView [data-cx-said]') || {}).textContent || ''));
+    check((await said(vo.page)) === 'The Desk did not answer: the veto may or may not be recorded. Reading again.', 'no answer: may or may not be recorded, never failed or done: ' + await said(vo.page));
+    /* a 200 of {}: not the answer to this POST, so no answer, said as bad, never done (the R12 review, B1) */
+    vo.hold.postMode = 'empty';
+    await sleep(300); await vo.page.click(vb('sample_neighbours')); await sleep(700);
+    const e0 = posts(vo.desk).length;
+    await clickAt(vo.page, '#cxView [data-cx-yes]');
+    for (let i = 0; i < 40 && posts(vo.desk).length === e0; i++) await sleep(100);                      // the POST went (the said line was already this text)
+    await until(vo.page, () => window.LegionTabs.state().castra.sending === '');
+    await sleep(300);
+    check(posts(vo.desk).slice(e0).length === 2 && posts(vo.desk)[e0] === 'POST /api/legion/centurion/veto', 'the POST answered with {} was sent once: ' + JSON.stringify(posts(vo.desk).slice(e0)));
+    const emptySaid = await vo.page.evaluate(() => { const e = document.querySelector('#cxView [data-cx-said]'); return e ? [e.textContent, e.classList.contains('cx-bad'), window.LegionTabs.state().castra.saidBad] : null; });
+    check(!!emptySaid && emptySaid[0] === 'The Desk did not answer: the veto may or may not be recorded. Reading again.' && emptySaid[1] && emptySaid[2] && !/Vetoed: this change will not go in/.test(await text(vo.page, '#cxView .cx-cent')), 'a 200 of {}: may or may not be recorded, said as bad, never "Vetoed": ' + JSON.stringify(emptySaid));
+    vo.hold.postMode = 'ok';
+    /* Undo */
+    const ub = '#cxView [data-cx-undo][data-name="sample_builds_a_night"]';
+    await sleep(300); await vo.page.click(ub);
+    check((await text(vo.page, '#cxView [data-cx-ask="undo"] #cxAskQ').catch(() => '')) === 'Undo this change? sample_builds_a_night goes back to 40 at the start of the next night\'s run.', 'Undo asks first, naming the setting and its from');
+    await sleep(700); const n0 = posts(vo.desk).length;
+    await clickAt(vo.page, '#cxView [data-cx-yes]');
+    await until(vo.page, () => /Undo asked: it is done at the start of the next night's run\./.test((document.querySelector('#cxView [data-cx-said]') || {}).textContent || ''));
+    await until(vo.page, () => /Undo asked: done at the start/.test((document.querySelector('#cxView [data-cx-applied="centurion_20001230T110500Z sample_builds_a_night"]') || {}).textContent || ''));
+    check(JSON.stringify(posts(vo.desk).slice(n0)) === JSON.stringify(['POST /api/legion/centurion/undo', 'POST body {"run_id":"centurion_20001230T110500Z","name":"sample_builds_a_night"}']), 'Undo: one POST of exactly { run_id, name }: ' + JSON.stringify(posts(vo.desk).slice(n0)));
+    check(/Undo asked: done at the start of the next night's run/.test(await text(vo.page, '#cxView [data-cx-applied="centurion_20001230T110500Z sample_builds_a_night"]')), 'the applied row reads Undo asked');
+    check(vo.desk.every(z => !/\/seal|\/undos/.test(z)) && posts(vo.desk).every(z => /^POST (\/api\/legion\/centurion\/(veto|undo)|body )/.test(z)), 'never the seal or the undo list; no other POST');
+    check(vo.pe.length === 0, 'veto, open: no page error: ' + vo.pe.join(' | '));
+    /* The Desk unreachable: the last answer stays with the stale note, no button, the one line */
+    vo.hold.down = true;
+    await vo.page.click('[data-cx-again]');
+    await until(vo.page, () => window.LegionTabs.state().castra.reads.centurion === 'fail');
+    await sleep(300);
+    vt = await text(vo.page, '#lx-castra .cx-cent');
+    check(/Sample week \(made up\)/.test(vt) && /The last refresh failed/.test(vt) && /The Desk did not answer, so no veto or undo can be sent now\. If Sunday night's run cannot read the veto list, it applies nothing that week\./.test(vt)
+      && (await cxAll(vo.page, '[data-cx-veto], [data-cx-undo]')).length === 0, 'unreachable: the last answer with the stale note, no Veto or Undo, the one line');
+    await vo.page.screenshot({ path: path.join(SHOTS, 'castra-veto-unreachable.png'), fullPage: true });
+    await vo.ctx.close();
+    /* closed, sealed */
+    const vc = await open({ width: 1600, height: 900 }, '?tab=castra', null, null, F.centurionV1({ state: 'closed', vetoed: ['sample_neighbours'] }));
+    await centOk(vc.page); await sleep(600);
+    vt = await text(vc.page, '#lx-castra .cx-cent');
+    check((await cxAll(vc.page, '[data-cx-veto]')).length === 0 && /Closed\. Sunday night's run takes the list\./.test(vt) && /The veto window closed Mon, Jan 8, 2001, 00:00 EST/.test(vt) && /Not vetoed/.test(vt) && /Vetoed/.test(vt), 'closed: no Veto, The Desk\'s words, the vetoed one says so');
+    await vc.page.screenshot({ path: path.join(SHOTS, 'castra-veto-closed.png'), fullPage: true });
+    await vc.ctx.close();
+    const vs = await open({ width: 1600, height: 900 }, '?tab=castra', null, null, F.centurionV1({ state: 'sealed', vetoed: ['sample_neighbours'], outcomes: { sample_builds_a_night: ['applied', null], sample_neighbours: ['vetoed', null] } }));
+    await centOk(vs.page); await sleep(600);
+    vt = await text(vs.page, '#lx-castra .cx-cent');
+    check((await cxAll(vs.page, '[data-cx-veto]')).length === 0 && /Sunday night's run read the list/.test(vt) && /^Applied$/.test(await text(vs.page, '#cxView [data-cx-change="sample_builds_a_night"] td:last-child')) && /The veto window closed Mon, Jan 8, 2001, 00:00 EST, New York time\./.test(vt), 'sealed: no Veto, The Desk\'s words, the outcome of each change');
+    await vs.page.screenshot({ path: path.join(SHOTS, 'castra-veto-sealed.png'), fullPage: true });
+    /* the empty states: no week, no change, nothing applied, the log that does not read */
+    vs.hold.cent = F.centurionV1({ week: false, rows: [] });
+    await vs.page.click('[data-cx-again]'); await sleep(800);
+    vt = await text(vs.page, '#lx-castra .cx-cent');
+    check(/No Saturday report yet: nothing to veto\./.test(vt) && /No change applied yet\./.test(vt), 'no week, nothing applied: said so');
+    vs.hold.cent = F.centurionV1({ changes: [], applied: false });
+    await vs.page.click('[data-cx-again]'); await sleep(800);
+    vt = await text(vs.page, '#lx-castra .cx-cent');
+    check(/No change proposed this week\./.test(vt) && /The applied log does not read: nothing from it is shown, and no undo can be asked now\./.test(vt) && (await cxAll(vs.page, '[data-cx-undo]')).length === 0, 'no change proposed; a log that does not read: no Undo');
+    check(vs.pe.length === 0 && vc.pe.length === 0, 'closed and sealed: no page error');
+    await vs.ctx.close();
+    /* a phone */
+    const vph = await open({ width: 390, height: 844 }, '?tab=castra', null, null, F.centurionV1({ state: 'open' }));
+    await centOk(vph.page); await sleep(600);
+    await vph.page.locator(vb('sample_builds_a_night')).scrollIntoViewIfNeeded();
+    await vph.page.click(vb('sample_builds_a_night')); await sleep(200);
+    const pq = await vph.page.evaluate(() => { const r = s => document.querySelector(s).getBoundingClientRect(); const y = r('#cxView [data-cx-yes]'), n = r('#cxView [data-cx-no]'); return { y: [Math.round(y.left), Math.round(y.right)], n: [Math.round(n.left), Math.round(n.right)], w: innerWidth, sw: document.documentElement.scrollWidth }; });
+    check(pq.y[0] >= 0 && pq.n[1] <= pq.w && pq.sw <= pq.w + 1, 'a phone: the question\'s Yes and Cancel whole in the window, no sideways scroll: ' + JSON.stringify(pq));
+    await vph.page.locator('#cxView [data-cx-ask]').scrollIntoViewIfNeeded();
+    await vph.page.screenshot({ path: path.join(SHOTS, 'castra-veto-phone.png') });
+    check(vph.pe.length === 0, 'a phone: no page error: ' + vph.pe.join(' | '));
+    await vph.ctx.close();
 
     /* ---------------- The Desk off: both say so and show no number */
     const off = await open({ width: 1600, height: 900 }, '?tab=castra', 'off');
