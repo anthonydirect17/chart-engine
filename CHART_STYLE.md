@@ -795,9 +795,11 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   line, the panels' note line and ChartBridge's alert line float over the bottom of the window (the page keeps that much room
   below its last line), so nothing under the pointer ever moves. No confirm is ever under those lines (the R12 delta review of
   plan step 3.3): on Cohorts the lanes' head (Armed, Kill all and their questions) comes first, above the cohort model and the
-  Drone sky (Anthony 2026-11-19: "Yes, Kill all at the top"), scrolls with the page, and stacks above the lines, which keep to
-  the room below it; every other question drawn in the page makes the lines step aside while it is open. Stacking, low to
-  high: the lines, the lanes' head, the header, Stop all's question. Praetorian's side shows the Agent desk on one screen: Legion's
+  Drone sky (Anthony 2026-11-19: "Yes, Kill all at the top"), scrolls with the page, and stacks above the lines. The lines are
+  never hidden (Stop all's answer and ChartBridge's errors stay in sight and announced): they take the lowest band of the window
+  clear of the lanes' head and of every question open in the page (a Copilot proposal, "Trade a LIVE account", "Flatten and turn
+  him off"), and scroll inside it. Stacking, low to high: the lines, the lanes' head, the header, Stop all's question. The Kill
+  all question says Yes and Cancel are in the row above, where Kill all was; on a 320 px phone their words take two lines. Praetorian's side shows the Agent desk on one screen: Legion's
   chrome goes compact (the Cohorts sides move into the header) while it is shown. The moved views keep their own drawing.
 - **The League tab (1.35.0, Anthony 2026-10-21; from plan step 3.2 Legion's Colosseum, its third tab):** on the chart page it
   was the top bar's League button, right after the Agent tab, opening the league view in place of the grid. A head line: "Shadow league", "SHADOW: no orders" (11 px mono capitals in a dashed

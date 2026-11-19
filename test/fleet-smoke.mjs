@@ -705,7 +705,7 @@ try {
     });
     const control = (what, q) => fetch(`http://127.0.0.1:${PORT}/test/${what}?` + new URLSearchParams(q || {}), { method: 'POST' });
     /* at several window heights and a phone (the R12 delta review of 3.3): every check where the page opens, never scrolled first */
-    for (const [w, h] of [[1600, 900], [1024, 900], [700, 900], [1366, 768], [1600, 752], [1600, 770], [1600, 800], [390, 844]]) {
+    for (const [w, h] of [[1600, 900], [1024, 900], [700, 900], [1366, 768], [1600, 752], [1600, 770], [1600, 800], [390, 844], [320, 640]]) {
       const width = w + 'x' + h;
       await p2.setViewportSize({ width: w, height: h });
       await p2.goto(`http://localhost:${PORT}/live/?layout=Main&tab=legion`);
@@ -716,7 +716,11 @@ try {
       await control('status', { level: 'warn', text: 'Sample: a second made-up line' });
       await p2.waitForFunction(() => !document.getElementById('wsAlert').hidden, null, { timeout: 8000 }).catch(() => {});
       const reach = sel => p2.evaluate(q => { const b = document.querySelector(q), r = b.getBoundingClientRect(); let n = 0; for (let i = 0; i < 15; i++) { const e = document.elementFromPoint(r.left + 1 + (r.width - 2) * i / 14, r.top + r.height / 2); if (e && (e === b || b.contains(e))) n++; } return n; }, sel);
-      const overlap = () => p2.evaluate(() => { const a = document.getElementById('wsAlert').getBoundingClientRect(), h = document.querySelector('.fl-top').getBoundingClientRect(); return !(a.bottom <= h.top || a.top >= h.bottom); });
+      /* the head's controls: Kill all's row (Yes and Cancel in it while asking), Armed's row and the question (the R12 delta of 3.3: the
+         lines may lie over the head's lines of words on the smallest phone, never over these) */
+      const overlap = () => p2.evaluate(() => { const w = document.getElementById('wsAlert').getBoundingClientRect(), f = document.getElementById('lxFloat');
+        const c = f ? f.getBoundingClientRect() : w, a = { top: Math.max(w.top, c.top), bottom: Math.min(w.bottom, c.bottom) };   // what shows of it: the box scrolls inside its band
+        return ['.fl-head', '.fl-armrow', '.fl-top > [data-k="ask"]'].some(q => { const e = document.querySelector(q); if (!e || !e.getClientRects().length) return false; const h = e.getBoundingClientRect(); return !(a.bottom <= h.top || a.top >= h.bottom); }); });
       check(await p2.isVisible('#wsAlert') && !(await overlap()) && await reach('[data-do="ask"]') === 15, 'banner, ' + width + ': with the alert banner up it does not lie on the head, and 15 of 15 points of Kill all reach it (' + await reach('[data-do="ask"]') + ')');
       const kb = await p2.locator('[data-do="ask"]').boundingBox();
       await p2.mouse.click(kb.x + kb.width / 2, kb.y + kb.height / 2);

@@ -33,7 +33,7 @@ const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePa
 const CORS = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': 'GET, PUT' };
 
 function startBridge(port, flags) {
-  const bridge = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(port), '--v3', '--test-controls', '--test-pin=' + TEST_PIN, '--version=0.6.24', '--personal=FUNDED-C', '--gone-grace-ms=600000'].concat(flags), { stdio: ['ignore', 'pipe', 'inherit'] });
+  const bridge = spawn(process.execPath, [path.join(root, 'test', 'fake-bridge.mjs'), String(port), '--v3', '--test-controls', '--test-pin=' + TEST_PIN, '--version=0.6.24', flags.some(f => /^--personal=/.test(f)) ? '' : '--personal=FUNDED-C', '--gone-grace-ms=600000'].concat(flags).filter(Boolean), { stdio: ['ignore', 'pipe', 'inherit'] });
   return new Promise((res, rej) => { bridge.stdout.once('data', () => res(bridge)); bridge.once('exit', c => rej(new Error('bridge exited ' + c))); });
 }
 async function withBridge(fn) {
@@ -204,8 +204,8 @@ try {
        and Cancel are reached at 15 of 15 points at each window height, never scrolled first */
     const reach = (page, sel) => page.evaluate(q => { const b = document.querySelector(q); if (!b) return -1; const r = b.getBoundingClientRect(); let n = 0;
       for (let i = 0; i < 15; i++) { const e = document.elementFromPoint(r.left + 1 + (r.width - 2) * i / 14, r.top + r.height / 2); if (e && (e === b || b.contains(e))) n++; } return n; }, sel);
-    const status = (level, words) => fetch(`http://127.0.0.1:${PORT}/test/status?` + new URLSearchParams({ level, text: words }), { method: 'POST' });
-    for (const vp of [{ width: 1366, height: 768 }, { width: 1600, height: 752 }, { width: 1600, height: 770 }, { width: 1600, height: 800 }, { width: 1280, height: 900 }, { width: 390, height: 844 }]) {
+    const status = (level, words, port) => fetch(`http://127.0.0.1:${port || PORT}/test/status?` + new URLSearchParams({ level, text: words }), { method: 'POST' });
+    for (const vp of [{ width: 1366, height: 768 }, { width: 1600, height: 752 }, { width: 1600, height: 770 }, { width: 1600, height: 800 }, { width: 1280, height: 900 }, { width: 390, height: 844 }, { width: 320, height: 640 }]) {
       const tag = vp.width + 'x' + vp.height;
       const k = await open(vp, '?tab=cohorts');
       await until(k.page, () => window.LegionTabs.state().cohortModel && window.LegionTabs.state().cohortModel.state === 'ok' && document.querySelectorAll('#chView .ch-cohort').length === 3);
@@ -227,7 +227,12 @@ try {
       await sleep(700);
       const yes = await reach(k.page, '[data-do="yes"]'), no = await reach(k.page, '[data-do="no"]');
       check((await k.page.evaluate(() => window.legion.fleet().asking)) && yes === 15 && no === 15, tag + ': an alert that arrives while the question is up covers neither Yes nor Cancel (' + yes + ', ' + no + ' of 15)');
-      if (vp.height === 768 || vp.width === 390) await k.page.screenshot({ path: path.join(SHOTS, 'cohorts-killtop-' + tag + '.png') });
+      /* the question's words are true at every width: Yes and Cancel are in the row above them, where Kill all was, whole in the window */
+      const fitq = await k.page.evaluate(() => { const r = s => document.querySelector(s).getBoundingClientRect(), y = r('[data-do="yes"]'), n = r('[data-do="no"]'), a = r('[data-k="ask"]');
+        return { words: document.querySelector('[data-k="ask"]').textContent, above: y.bottom <= a.top && n.bottom <= a.top, inside: y.left >= 0 && n.left >= 0 && y.right <= innerWidth && n.right <= innerWidth,
+          sideways: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1, yes: [Math.round(y.left), Math.round(y.right)], no: [Math.round(n.left), Math.round(n.right)], w: innerWidth }; });
+      check(/Yes, or Cancel, in the row above, where Kill all was\./.test(fitq.words) && fitq.above && fitq.inside && !fitq.sideways, tag + ': the question says where Yes and Cancel are, and they are there, whole in the window: ' + JSON.stringify(fitq) + (fitq.sideways ? ' wider: ' + await k.page.evaluate(() => [...document.querySelectorAll('body *')].filter(e => e.getBoundingClientRect().right > innerWidth + 1).slice(0, 6).map(e => e.tagName + '.' + e.className).join(' | ')) : ''));
+      if (vp.height === 768 || vp.width <= 390) await k.page.screenshot({ path: path.join(SHOTS, 'cohorts-killtop-' + tag + '.png') });
       const nb = await k.page.locator('[data-do="no"]').boundingBox().catch(() => null);
       if (nb) await k.page.mouse.click(nb.x + nb.width / 2, nb.y + nb.height / 2);
       check(!(await k.page.evaluate(() => window.legion.fleet().asking)) && await k.page.isVisible('#wsAlert'), tag + ': Cancel closes the question, and the alert lines are back');
@@ -235,22 +240,76 @@ try {
       await k.ctx.close();
     }
 
-    /* every other question drawn in the page (Praetorian's and the trader desk's "Flatten and turn him off", "Trade a LIVE account"):
-       while one is open, the floating lines step aside, wherever it sits; a made-up question at the foot of the window stands in */
+    /* every other question drawn in the page ("Trade a LIVE account", a Copilot proposal, "Flatten and turn him off"): the floating lines
+       are never hidden (Stop all's answer and ChartBridge's errors stay in sight and announced, the second R12 delta review of 3.3);
+       they keep clear of the open question instead, and neither covers the question's buttons */
+    const lines = (page, qsel) => page.evaluate(q => {
+      const seen = id => { const e = document.getElementById(id); if (!e || e.hidden || !e.textContent.trim()) return { id, shown: false };
+        const r = e.getBoundingClientRect(), hit = document.elementFromPoint(r.left + r.width / 2, r.top + Math.min(r.height / 2, 12));
+        const live = e.getAttribute('role') === 'alert' || /polite|assertive/.test(e.getAttribute('aria-live') || '');
+        return { id, rect: [Math.round(r.left), Math.round(r.top), Math.round(r.right), Math.round(r.bottom)], shown: e.checkVisibility({ visibilityProperty: true, opacityProperty: true }) && r.height > 0 && r.top >= 0 && r.bottom <= innerHeight + 1 && r.left >= 0 && r.right <= innerWidth + 1, top: !!hit && (hit === e || e.contains(hit)),
+          announced: live && !e.closest('[aria-hidden="true"]') && getComputedStyle(e).visibility === 'visible' }; };
+      const qe = document.querySelector(q), qr = qe ? qe.getBoundingClientRect() : null;
+      const apart = id => { const e = document.getElementById(id); if (!e || e.hidden || !qr) return true; const r = e.getBoundingClientRect(); return r.bottom <= qr.top || r.top >= qr.bottom || r.right <= qr.left || r.left >= qr.right; };
+      return { w: innerWidth, sw: document.documentElement.scrollWidth, sx: scrollX, alert: seen('wsAlert'), said: seen('lxStopSaid'), apart: apart('wsAlert') && apart('lxStopSaid'), q: qr ? [Math.round(qr.top), Math.round(qr.bottom)] : null };
+    }, qsel);
+    const linesOk = x => x.alert.shown && x.alert.top && x.alert.announced && x.said.shown && x.said.top && x.said.announced && x.apart;
+    const stopAnswer = async page => {      // Stop all, a real click on Yes: Praetorian's side is your personal account, which it never touches
+      await page.click('#lxStop'); await sleep(800);
+      const yb = await page.locator('#lxStopYes').boundingBox();
+      await page.mouse.click(yb.x + yb.width / 2, yb.y + yb.height / 2);
+      await until(page, () => !document.getElementById('lxStopSaid').hidden && /Stop all|Kill all|ChartBridge/.test(document.getElementById('lxStopSaid').textContent));
+      await sleep(400);
+    };
+    /* a second fake ChartBridge whose personal account is a LIVE one the demo trader can be pointed at (EVAL-A), for Praetorian's question */
+    const PB = PORT + 1, pb = await startBridge(PB, ['--trading', '--agents=demo', '--personal=EVAL-A']);
+    try {
+    for (const vp of [{ width: 1366, height: 768 }, { width: 390, height: 844 }]) {
+      const tag = vp.width + 'x' + vp.height;
+      const pr = await open(vp, '?tab=cohorts&sub=praetorian', null, PB);
+      await until(pr.page, () => window.LegionTabs.state().praetorian && window.LegionTabs.state().praetorian.shown);
+      await sleep(1500);
+      /* "Trade a LIVE account": the question that has no timeout. The demo trader is pointed at a LIVE account on Praetorian's desk */
+      await pr.page.click('#agView [data-act="acctOpen"]');
+      const opts = await pr.page.$$eval('#agView [data-k="acctSel"] option', o => o.map(x => [x.value, x.textContent, x.disabled]));
+      const live = (opts.find(x => /\(LIVE\)/.test(x[1]) && !x[2]) || [''])[0];
+      if (live) { await pr.page.selectOption('#agView [data-k="acctSel"]', live); await pr.page.click('#agView [data-act="acctSave"]'); }
+      await until(pr.page, () => { const c = document.querySelector('#agView [data-k="acctAsk"]'); return !!c && !c.hidden && c.getClientRects().length > 0; });
+      const has = await pr.page.evaluate(() => { const c = document.querySelector('#agView [data-k="acctAsk"]'); return !!c && !c.hidden && c.getAttribute('role') === 'alertdialog' && c.getClientRects().length > 0; });
+      check(has, tag + ': "Trade a LIVE account" is open on Praetorian\'s side (role alertdialog, no timeout): ' + JSON.stringify(opts));
+      await status('error', 'Sample: NOT FLAT? a made-up error line from ChartBridge, while the question is open', PB);
+      await until(pr.page, () => !document.getElementById('wsAlert').hidden);
+      await stopAnswer(pr.page);
+      await status('warn', 'Sample: a second made-up line, while the question is open', PB);
+      await sleep(400);
+      const x = await lines(pr.page, '#agView [data-k="acctAsk"]');
+      const go = await reach(pr.page, '#agView [data-act="acctYes"]'), no = await reach(pr.page, '#agView [data-act="acctNo"]');
+      const still = await pr.page.evaluate(() => !document.querySelector('#agView [data-k="acctAsk"]').hidden);
+      check(has && still && linesOk(x) && go === 15 && no === 15, tag + ': with "Trade a LIVE account" open, ChartBridge\'s error and Stop all\'s answer stay in sight, on top and announced, and neither covers the question or its Continue and Cancel (' + go + ', ' + no + ' of 15): ' + JSON.stringify(x));
+      await pr.page.screenshot({ path: path.join(SHOTS, 'praetorian-live-ask-lines-' + tag + '.png') });
+      if (still) await pr.page.click('#agView [data-act="acctNo"]');
+      check(pr.pe.length === 0, tag + ': no page error: ' + pr.pe.join(' | '));
+      await pr.ctx.close();
+    }
+    } finally { pb.kill(); }
+
+    /* a question at the very foot of the window (a made-up one stands in, the way a LIVE question can sit under the lanes): the lines
+       move up clear of it, still shown, and come back down when it closes */
     const g = await open({ width: 1366, height: 768 }, '?tab=cohorts');
     await status('error', 'Sample: a made-up error line from ChartBridge');
     await until(g.page, () => !document.getElementById('wsAlert').hidden);
+    await stopAnswer(g.page);
     await g.page.evaluate(() => { const d = document.createElement('div'); d.id = 'smokeAsk'; d.setAttribute('role', 'alertdialog');
       d.style.cssText = 'position:fixed;left:0;right:0;bottom:0;height:120px;display:flex;align-items:flex-end;justify-content:flex-end;background:#111';
       d.innerHTML = '<button type="button" id="smokeYes" style="width:300px;height:40px">Sample: Yes</button>'; document.querySelector('#flView .fl-page').appendChild(d); });
-    await sleep(150);
-    const gy = await reach(g.page, '#smokeYes'), gAside = await g.page.evaluate(() => getComputedStyle(document.getElementById('lxFloat')).visibility);
+    await sleep(300);
+    const gx = await lines(g.page, '#smokeAsk'), gy = await reach(g.page, '#smokeYes');
     await g.page.evaluate(() => { document.getElementById('smokeAsk').hidden = true; });
-    await sleep(150);
-    const gBack = await g.page.evaluate(() => getComputedStyle(document.getElementById('lxFloat')).visibility);
-    check(gy === 15 && gAside === 'hidden' && gBack === 'visible' && await g.page.isVisible('#wsAlert'), 'any question in the page: the floating lines step aside while it is open (' + gy + ' of 15, ' + gAside + ') and come back when it closes (' + gBack + ')');
+    await sleep(300);
+    const gBack = await g.page.evaluate(() => Math.round(innerHeight - document.getElementById('lxFloat').getBoundingClientRect().bottom));
+    check(linesOk(gx) && gy === 15 && gBack === 10, 'a question at the foot of the window: the lines move up clear of it, shown and announced (' + gy + ' of 15 on its Yes), and come back down when it closes (' + gBack + ' px): ' + JSON.stringify(gx));
     /* the lanes' head stacks above the floating lines, under Legion's header and Stop all's question */
-    const zs = await g.page.evaluate(() => { const z = s => +getComputedStyle(document.querySelector(s)).zIndex || 0; return { float: z('#lxFloat'), head: z('#flView .fl-top'), header: z('#lxHead'), stopAsk: z('#lxStopAsk') }; });
+    const zs = await g.page.evaluate(() => { const z = s => +getComputedStyle(document.querySelector(s)).zIndex || 0; return { float: z('#lxFloat'), head: Math.min(z('#flView .fl-head'), z('#flView .fl-armrow'), z('#flView [data-k="ask"]')), header: z('#lxHead'), stopAsk: z('#lxStopAsk') }; });
     check(zs.head > zs.float && zs.header > zs.head && zs.stopAsk > zs.header, 'the lanes\' head (Kill all and its question) stacks above the floating lines, under the header and Stop all\'s question: ' + JSON.stringify(zs));
     check(g.pe.length === 0, 'no page error: ' + g.pe.join(' | '));
     await g.ctx.close();
