@@ -2906,7 +2906,8 @@ function mount(container, options) {
       index: i, t: b.t, end: barEnd(b, i), forming: !!e.forming, hovering: !!e.hovering,
       o: b.o, h: b.h, l: b.l, c: b.c, v: b.v || 0,
       // buys, sells, unknown and the largest trade from the delta pane's core (null: not counted there); why not
-      delta: db ? { buy: db.buy, sell: db.sell, unknown: db.unknown, big: db.big || 0 } : null,
+      // a bar built from ChartBridge's delta table with a second whose largest trade is not known (an older saved file): none (0, '-')
+      delta: db ? { buy: db.buy, sell: db.sell, unknown: db.unknown, big: db.bigMissing ? 0 : db.big || 0 } : null,
       deltaWhy: db ? '' : !S.layers.delta ? 'off' : masked('delta') ? 'htf' : deltaBuilding() || !cd ? 'building' : 'before',
       deltaFrom: cd && cd.session && cd.session.partial ? cd.session.from : null,
       bubbles: bubblesOn(b.t, next),

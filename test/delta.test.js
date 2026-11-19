@@ -580,26 +580,31 @@ function sidedTape(from, n, stepMs) {
   }
   return out;
 }
-/* ChartBridge's message for these trades (its DeltaSnap.Json): rows [dt, buy, sell], unknown [dt, v], dt from `from`. */
-function tableMsg(from, trades, cov, why, missed) {
+/* ChartBridge's message for these trades (its DeltaSnap.Json): rows [dt, buy, sell, big], unknown [dt, v, big], dt from `from`,
+   big each second's largest single trade (oldFile: 0, not known, as a table read back from a file saved before it was kept). */
+function tableMsg(from, trades, cov, why, missed, oldFile) {
   const m = new Map();
-  for (const x of trades) { const sec = Math.floor(x[0]), a = m.get(sec) || [0, 0, 0]; a[x[3] === 1 ? 0 : x[3] === -1 ? 1 : 2] += x[2]; m.set(sec, a); }
+  for (const x of trades) { const sec = Math.floor(x[0]), a = m.get(sec) || [0, 0, 0, 0]; a[x[3] === 1 ? 0 : x[3] === -1 ? 1 : 2] += x[2]; a[3] = Math.max(a[3], x[2]); m.set(sec, a); }
   const rows = [], unknown = []; let pr = from, pu = from;
   for (const sec of [...m.keys()].sort((a, b) => a - b)) {
-    const a = m.get(sec);
-    if (a[0] || a[1]) { rows.push(sec - pr, a[0], a[1]); pr = sec; }
-    if (a[2]) { unknown.push(sec - pu, a[2]); pu = sec; }
+    const a = m.get(sec), g = oldFile ? 0 : a[3];
+    if (a[0] || a[1]) { rows.push(sec - pr, a[0], a[1], g); pr = sec; }
+    if (a[2]) { unknown.push(sec - pu, a[2], g); pu = sec; }
   }
-  return { from, coveredFrom: cov === undefined ? from : cov, why: why || null, missed: missed || 0, rows, unknown };
+  return { from, coveredFrom: cov === undefined ? from : cov, why: why || null, missed: missed || 0, big: true, rows, unknown };
 }
-const cumOf = cd => cd.bars.map(b => [b.t, b.o, b.c, b.buy, b.sell, b.unknown]);
+const cumOf = cd => cd.bars.map(b => [b.t, b.o, b.c, b.buy, b.sell, b.unknown, b.big, !!b.bigMissing]);
 
-test('delta table: decoded into columns by second, the rows and the unknowns merged (a second in both is one row)', () => {
-  const T = BB.decodeDeltaTable({ from: 1000, coveredFrom: 1000, why: 'start', missed: 8, rows: [0, 5, 3, 2, 1, 0, 10, 4, 4], unknown: [2, 7, 9, 1] });
+test('delta table: decoded into columns by second, the rows and the unknowns merged (a second in both is one row), with each second\'s largest trade', () => {
+  const T = BB.decodeDeltaTable({ from: 1000, coveredFrom: 1000, why: 'start', missed: 8, big: true, rows: [0, 5, 3, 4, 2, 1, 0, 6, 10, 4, 4, 0], unknown: [2, 7, 6, 9, 1, 1] });
   assert.deepEqual([...T.sec], [1000, 1002, 1011, 1012]);
   assert.deepEqual([...T.buy], [5, 1, 0, 4]);
   assert.deepEqual([...T.sell], [3, 0, 0, 4]);
   assert.deepEqual([...T.unk], [0, 7, 1, 0]);
+  assert.deepEqual([...T.big], [4, 6, 1, 0], 'the largest trade, 0 where not known');
+  // a table without "big" (rows of 3, unknowns of 2): no largest trade known
+  const O = BB.decodeDeltaTable({ from: 1000, coveredFrom: 1000, rows: [0, 5, 3, 2, 1, 0], unknown: [2, 7] });
+  assert.deepEqual([...O.sec], [1000, 1002]); assert.deepEqual([...O.unk], [0, 7]); assert.deepEqual([...O.big], [0, 0]);
   assert.equal(T.why, 'start'); assert.equal(T.missed, 8);
   assert.equal(BB.decodeDeltaTable({ from: 'x', rows: [], unknown: [] }), null);
   assert.equal(BB.decodeDeltaTable(null), null);
@@ -654,5 +659,22 @@ test('delta table: the engine\'s addSecond moves the cumulative once per second 
   assert.equal(cd.addSecond(T0 + 1, 10, 4, 0), true);
   assert.equal(cd.addSecond(T0 + 2, 0, 9, 2), true);
   assert.equal(cd.addSecond(T0 + 3, 0, 0, 0), false);
-  assert.deepEqual([cd.last.o, cd.last.h, cd.last.l, cd.last.c, cd.last.buy, cd.last.sell, cd.last.unknown, cd.last.big], [0, 6, -3, -3, 10, 13, 2, 0]);
+  assert.deepEqual([cd.last.o, cd.last.h, cd.last.l, cd.last.c, cd.last.buy, cd.last.sell, cd.last.unknown, cd.last.big, !!cd.last.bigMissing], [0, 6, -3, -3, 10, 13, 2, 0, true]);
+  // with each second's largest trade: the bar's largest print is the largest of them
+  const k = new CE.CumulativeDelta({ seconds: 60 });
+  k.addSecond(T0 + 1, 10, 4, 0, undefined, 7); k.addSecond(T0 + 2, 0, 9, 2, undefined, 5);
+  assert.deepEqual([k.last.big, !!k.last.bigMissing], [7, false]);
+  k.addSecond(T0 + 3, 1, 0, 0, undefined, 0);            // a second from an older saved file: the bar's largest print not known
+  assert.equal(k.last.bigMissing, true);
+});
+
+test('delta table: a table read back from an older file (no largest trade) builds the same delta, its bars\' largest print not known', () => {
+  const from = et(2026, 9, 28, 18, 0), all = sidedTape(from, 3000, 1200);
+  const T = BB.decodeDeltaTable(tableMsg(from, all, undefined, null, 0, true)); T.at = 0;
+  const cd = new CE.CumulativeDelta({ sessionStart: S18, seconds: 60, coveredFrom: T.coveredFrom });
+  const tr = new BB.TableReplay(new BB.TickStore(), T, cd, null); while (!tr.step(1000));
+  const truth = new CE.CumulativeDelta({ sessionStart: S18, seconds: 60, coveredFrom: from });
+  for (const x of all) truth.add(x[0], x[2], x[3], undefined, x[4]);
+  assert.deepEqual(cd.bars.map(b => [b.t, b.c, b.buy, b.sell]), truth.bars.map(b => [b.t, b.c, b.buy, b.sell]));
+  assert.ok(cd.bars.every(b => b.bigMissing && b.big === 0));
 });

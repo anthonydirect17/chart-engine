@@ -203,7 +203,7 @@ Bars are stamped with their **start** time. NinjaTrader stamps bars at their clo
 | `history` | `root`, `name`, `barSeconds` (60), `sub` (0.3.3), `bars`: `[[t,o,h,l,c,v], ...]`, `done` (bool) | after `subscribe`, chunked. Since 0.3.3 the history is split: the chunks before the last minute (the last of them now says `done` false), then the last (forming) minute in its own message with `done` true, rebuilt from trades when it can be (see Backfill and live below) |
 | `ticks` | `root`, `sub` (0.3.3), `ticks`: `[[t,p,v], ...]`, since 0.3.4 `[[t,p,v,s,sm], ...]` (side and method, see Trade side; the first three keep their places); 0.3.7 sends `[t,p,v]` again; since 0.3.8 a trade with a known Time and Sales category is `[t,p,v,null,null,q]` (see Time and Sales category), `done` (bool) | after `history`, the current session's trades, chunked |
 | `ready` | `root`, `sub` (0.3.3), `filled` (0.6.8, minute and hour loads only: how many of the history's bars came from ChartBridge's minute book, 0 when none; see The minute book below), `minuteTimedOut`, `minuteFailed`, `standIn`, `tailTimedOut`, `historyFrom` (0.6.8, see The minute book) | history and tick backfill complete; live ticks follow (since 0.3.3 only those not already in the backfill; see Backfill and live below) |
-| `deltaTable` | `root`, `sub` (the load's; none when pushed after ChartBridge read the session's saved table back), `session`: `{from, coveredFrom, why, missed, rows: [dt, buy, sell, ...], unknown: [dt, volume, ...]}` or null (the delta table, see there) | after `profile` and right before `ready` when the subscribe asked for it (`deltaTable`); again, without `sub`, when a saved table of the session is joined after the load |
+| `deltaTable` | `root`, `sub` (the load's; none when pushed after ChartBridge read the session's saved table back), `session`: `{from, coveredFrom, why, missed, big, rows: [dt, buy, sell, big, ...], unknown: [dt, volume, big, ...]}` or null (the delta table, see there) | after `profile` and right before `ready` when the subscribe asked for it (`deltaTable`); again, without `sub`, when a saved table of the session is joined after the load |
 | `profile` | `root`, `sub` (the load's; none when pushed after the session's backfill), `tick`, `bucketSeconds` (1800), `session` and `last`: `{from, whole, coveredFrom, rows: [[t, priceTicks, v], ...]}` or null (0.3.5, see Served window and session table) | right before `ready` when the subscribe asked for it; again, without `sub`, when the session's one backfill makes the table whole |
 | `tick` | `root`, `t`, `u`, `rx` (UTC ms when the add-on received it), `p`, `v`, and since 0.3.4 `s`, `sm` (side and method, see Trade side), since 0.3.8 `q` (Time and Sales category, see there; absent when unknown) | every trade, live |
 | `execs` | `list`: `[exec]` | on connect: executions NinjaTrader already has for today |
@@ -817,11 +817,14 @@ count. ChartBridge already sides every live trade (Trade side); it now keeps the
 removed in 0.3.7); none of that comes back.
 
 **What ChartBridge keeps.** Per instrument in `roots` (`RootBook.Delta`, `DeltaTable`), the session's buy, sell and unknown volume
-per second of New York wall time: buy for side 1, sell for side -1, unknown for side 0 (no usable quote and no previous trade).
+per second of New York wall time: buy for side 1, sell for side -1, unknown for side 0 (no usable quote and no previous trade);
+and each second's largest single trade, any side (Anthony 2026-11-19, "Yes, add it": the Data Box's largest print on bars built
+from the table).
 Built in OnMarketData from the side `LiveSideTagger` gave the trade, under the book's lock, beside the session table (the same
 session, the same 18:00 ET reset by `SessionClock.Bounds`, the same rule that a trade more than 2 minutes off the clock never
 opens a session). A second is `floor(round(et, 3))`: the second the page reads from the trade's `t` on the wire. At most 86,400
-seconds, in blocks of an hour made as they are reached (about 1 MB an instrument for a full session; three adds a trade).
+seconds, in blocks of an hour made as they are reached (about 1.4 MB an instrument for a full session; three adds and a compare a
+trade).
 
 - **From when.** From 18:00 ET when ChartBridge was listening before the session and the feed was up (the session table's
   whole rule); else from its first live trade of the session (`coveredFrom`), `why` `"start"` (ChartBridge started after 18:00:
@@ -831,8 +834,10 @@ seconds, in blocks of an hour made as they are reached (about 1 MB an instrument
   never missed) the table did not see: a feed drop while the market is open, from the drop to the next trade; a NinjaTrader
   restart, from the last saved second to the new run's first trade.
 - **Saved per session**, in `delta-<ROOT>-<yyyy-MM-dd>.txt` (its trading day) in ChartBridge's folder, kept 14 days: a header
-  `deltatable 1 <from> <coveredFrom> <why or ->`, then additive lines `<second since from> <buy> <sell> <unknown>` (a late trade
-  writes its second again) and `m <seconds>` for missed seconds. Every 10 s (the accounts timer, on a pool thread, one pass at a
+  `deltatable 1 <from> <coveredFrom> <why or ->`, then additive lines `<second since from> <buy> <sell> <unknown> <largest trade>`
+  (a late trade writes its second again; the largest of a second's lines is its largest trade) and `m <seconds>` for missed
+  seconds. A file saved before the largest trade was kept has four fields a line: it is still read, with those seconds' largest
+  trade not known (0). Every 10 s (the accounts timer, on a pool thread, one pass at a
   time) the closed seconds since the last pass (the forming one waits), the late trades (at most 20,000 kept between passes) and
   the missed seconds are copied under the book's lock and appended, written through (`ChartBridgeFiles.Append`); the market data
   thread never writes or waits, and a failed write is tried again the next pass (`/diag` counts it). A finished session's table
@@ -847,15 +852,18 @@ seconds, in blocks of an hour made as they are reached (about 1 MB an instrument
 `deltaTable`; never for an agent). Sent after `profile` and right before `ready`, in the same outbox entry:
 
 ```
-{"type":"deltaTable","root":"NQ","sub":12,"session":{"from":1790618400,"coveredFrom":1790618400,"why":null,"missed":0,
- "rows":[0,12,9, 1,4,7, 1,0,3, ...],"unknown":[0,2, 3600,1, ...]}}
+{"type":"deltaTable","root":"NQ","sub":12,"session":{"from":1790618400,"coveredFrom":1790618400,"why":null,"missed":0,"big":true,
+ "rows":[0,12,9,5, 1,4,7,3, 1,0,3,2, ...],"unknown":[0,2,5, 3600,1,1, ...]}}
 ```
 
 `from` the session's 18:00 start and `coveredFrom` from when every trade is in (bar-time seconds), `why` null, `"start"` or
-`"feed"`, `missed` whole seconds. `rows`: for each second with buy or sell volume, `dt` (seconds since the row before; the first
-since `from`), buy, sell. `unknown`: for each second with unknown volume, `dt` (the same way, in its own list) and the volume. So a
-full session is only the seconds that traded, delta coded: a busy NQ session at every second of 23 hours is about 0.64 MB (the
-harness's case; the fake bridge's full session at 15 trades a second, 0.51 MB). `session` is null when the instrument has no table
+`"feed"`, `missed` whole seconds. `big` true: each row ends with the second's largest single trade. `rows`: for each second with
+buy or sell volume, `dt` (seconds since the row before; the first since `from`), buy, sell, largest trade. `unknown`: for each
+second with unknown volume, `dt` (the same way, in its own list), the volume and the largest trade (the same number as in `rows`
+for a second in both). A largest trade of 0 is not known (a second read back from an older file). So a full session is only the
+seconds that traded, delta coded: a busy NQ session at every second of 23 hours is about 0.89 MB (the harness's case; the fake
+bridge's full session at 15 trades a second, about 0.66 MB). A page reads a table without `big` (rows of 3, unknowns of 2) with no
+largest trade known. `session` is null when the instrument has no table
 (no trade this session since ChartBridge started): the page then counts as with an older ChartBridge.
 
 **The seam** (the `profile` message's): the table is copied under the book's lock together with the held trades, in the moment
@@ -871,10 +879,12 @@ page uses them on range bars, where a second's volume cannot be placed in a bar 
 
 **The page** (live/live.js, live/bar-builder.js `TableReplay`): with the table, the delta is built from it and the trades after
 it, the same on every load: time bars (15 s, 1 m, 5 m and up) take the table a second at a time (`CumulativeDelta.addSecond`:
-the cumulative moves once a second, so a bar's high and low are known to the second, and the bar's largest single trade stays
-unknown); range bars take the window's sided trades in the bars they made, and the rest of the table (the session before the
+the cumulative moves once a second, so a bar's high and low are known to the second; the bar's largest print is the largest of its
+seconds' largest trades, or "-" in the Data Box when one of its seconds has none known, an older file's); range bars take the window's sided trades in the bars they made, and the rest of the table (the session before the
 window, and the window's part from NinjaTrader's answer, which has no side) a second at a time in the bar the builder holds once
-that second's trades are in (before the window: in one bar no chart bar shows, whose value the next bars carry on from). The
+that second's trades are in (before the window: in one bar no chart bar shows, whose value the next bars carry on from), with
+that second's largest trade only when it is larger than every sided trade of that second the window holds (it is then the
+rest's own; else the bar's largest print is not known). The
 pane says "since 18:00 ET", "since HH:MM ET (ChartBridge started)" or "(data connection down at 18:00)", and ", missed N s"
 with ChartBridge's missed seconds. An older ChartBridge (no `deltaTable` in `features`): as before (live/COMPAT.json's
 minChartBridge is unchanged).

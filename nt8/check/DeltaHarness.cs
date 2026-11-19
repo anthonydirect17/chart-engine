@@ -31,7 +31,7 @@ public static partial class WindowHarness
     {
         foreach (SidedTrade x in trades) lock (book.Sync) book.OnTrade(x.T, x.P, x.V, EtSec(x.T), listeningUtc, feedUpUtc, 0, DateTime.MinValue, true, 0, x.S, x.S == 0 ? 0 : 3);
     }
-    // second (since startEt) -> { buy, sell, unknown }
+    // second (since startEt) -> { buy, sell, unknown, largest trade }
     static SortedDictionary<long, long[]> DeltaTruth(IEnumerable<SidedTrade> trades, double startEt)
     {
         SortedDictionary<long, long[]> d = new SortedDictionary<long, long[]>();
@@ -41,23 +41,24 @@ public static partial class WindowHarness
     static void AddSec(SortedDictionary<long, long[]> d, double et, double startEt, int s, long v)
     {
         long k = DeltaTable.SecondOf(et) - (long)startEt;
-        long[] a; if (!d.TryGetValue(k, out a)) { a = new long[3]; d[k] = a; }
+        long[] a; if (!d.TryGetValue(k, out a)) { a = new long[4]; d[k] = a; }
         a[s == 1 ? 0 : s == -1 ? 1 : 2] += v;
+        if (v > a[3]) a[3] = v;
     }
     static SortedDictionary<long, long[]> OfTable(DeltaTable t)
     {
         SortedDictionary<long, long[]> d = new SortedDictionary<long, long[]>();
-        for (int i = t.Hi >= 0 ? t.Lo : 0; i <= t.Hi; i++) { int b, s, u; t.Get(i, out b, out s, out u); if (b + s + u > 0) d[i] = new long[] { b, s, u }; }
+        for (int i = t.Hi >= 0 ? t.Lo : 0; i <= t.Hi; i++) { int b, s, u, g; t.Get(i, out b, out s, out u, out g); if (b + s + u > 0) d[i] = new long[] { b, s, u, g }; }
         return d;
     }
     static string DiffSec(SortedDictionary<long, long[]> a, SortedDictionary<long, long[]> b)
     {
         foreach (KeyValuePair<long, long[]> kv in a)
         {
-            long[] o; if (!b.TryGetValue(kv.Key, out o)) o = new long[3];
-            if (o[0] != kv.Value[0] || o[1] != kv.Value[1] || o[2] != kv.Value[2]) return "second " + kv.Key + ": " + string.Join("/", kv.Value) + " against " + string.Join("/", o);
+            long[] o; if (!b.TryGetValue(kv.Key, out o)) o = new long[4];
+            if (o[0] != kv.Value[0] || o[1] != kv.Value[1] || o[2] != kv.Value[2] || o[3] != kv.Value[3]) return "second " + kv.Key + ": " + string.Join("/", kv.Value) + " against " + string.Join("/", o);
         }
-        foreach (KeyValuePair<long, long[]> kv in b) if (!a.ContainsKey(kv.Key) && kv.Value.Any(x => x != 0)) return "second " + kv.Key + " missing";
+        foreach (KeyValuePair<long, long[]> kv in b) if (!a.ContainsKey(kv.Key) && kv.Value.Take(3).Any(x => x != 0)) return "second " + kv.Key + " missing";
         return null;
     }
     // A "deltaTable" message decoded: second -> volumes, and its fields.
@@ -68,9 +69,10 @@ public static partial class WindowHarness
         int w = json.IndexOf("\"why\":") + 6; why = json.Substring(w, 4) == "null" ? null : json.Substring(w + 1, json.IndexOf('"', w + 1) - w - 1);
         long[] rows = Ints(json, "rows"), unk = Ints(json, "unknown");
         long sec = 0;
-        for (int i = 0; i + 2 < rows.Length; i += 3) { sec += rows[i]; long[] a; if (!d.TryGetValue(sec, out a)) { a = new long[3]; d[sec] = a; } a[0] += rows[i + 1]; a[1] += rows[i + 2]; }
+        int rs = json.Contains("\"big\":true") ? 4 : 3, us = rs - 1;   // with each second's largest trade: rows of 4, unknowns of 3
+        for (int i = 0; i + rs - 1 < rows.Length; i += rs) { sec += rows[i]; long[] a; if (!d.TryGetValue(sec, out a)) { a = new long[4]; d[sec] = a; } a[0] += rows[i + 1]; a[1] += rows[i + 2]; if (rs == 4 && rows[i + 3] > a[3]) a[3] = rows[i + 3]; }
         sec = 0;
-        for (int i = 0; i + 1 < unk.Length; i += 2) { sec += unk[i]; long[] a; if (!d.TryGetValue(sec, out a)) { a = new long[3]; d[sec] = a; } a[2] += unk[i + 1]; }
+        for (int i = 0; i + us - 1 < unk.Length; i += us) { sec += unk[i]; long[] a; if (!d.TryGetValue(sec, out a)) { a = new long[4]; d[sec] = a; } a[2] += unk[i + 1]; if (us == 3 && unk[i + 2] > a[3]) a[3] = unk[i + 2]; }
         return d;
     }
     static long[] Ints(string json, string key)
@@ -129,7 +131,11 @@ public static partial class WindowHarness
         string json = snap.Json("MNQ", "9", less);
         double f, c, m; string why;
         SortedDictionary<long, long[]> sentRows = DecodeDelta(json, out f, out c, out why, out m);
-        string d2 = DiffSec(sentRows, DeltaTruth(tape.Take(tape.Count - 400), d.StartEt));
+        // the largest trade of a second is kept as the table has it (the page's live ticks after it can only match or beat it): checked
+        // against every trade, the volumes against the trades before the held ones
+        SortedDictionary<long, long[]> wantMsg = DeltaTruth(tape.Take(tape.Count - 400), d.StartEt), allBig = DeltaTruth(tape, d.StartEt);
+        foreach (KeyValuePair<long, long[]> kv in wantMsg) kv.Value[3] = allBig[kv.Key][3];
+        string d2 = DiffSec(sentRows, wantMsg);
         Check(d2 == null && f == d.StartEt && c == d.StartEt && why == null && m == 0 && json.StartsWith("{\"type\":\"deltaTable\",\"root\":\"MNQ\",\"sub\":9,"),
             "delta message: the table less the trades the page is about to get live equals every trade before them" + (d2 != null ? " (" + d2 + ")" : ""));
         // A full session at every second (82,800 seconds, a busy NQ day's sizes): its size and the time to copy and write it.
@@ -180,14 +186,15 @@ public static partial class WindowHarness
             "delta table: a feed drop misses 30 s to the next trade; 16:59:30 to 18:00:30 misses 60 s (the break is closed); Christmas Eve 13:10 to 13:20 misses 5 minutes (CME halts at 13:15)");
 
         // The file: read back, and joined to a later run of the same session.
-        DeltaTable saved = DeltaTable.Parse(d.Header() + "0 5 3 0\n100 2 0 1\n100 1 1 0\nm 12.5\n7 9 9", d.StartEt);
+        DeltaTable saved = DeltaTable.Parse(d.Header() + "0 5 3 0 4\n100 2 0 1 2\n100 1 1 0 1\n50 1 0 0\nm 12.5\n7 9 9", d.StartEt);
         DeltaTable other = DeltaTable.Parse(d.Header() + "0 5 3 0\n", d.StartEt + 86400);
-        Check(saved != null && other == null && saved.Missed == 12.5 && saved.Hi == 100 && saved.BuyVol == 8 && saved.SellVol == 4 && saved.UnknownVol == 1,
-            "delta file: lines add up (a second written again by a late trade), a cut last line is left out, missed seconds are kept; another session's file is not read");
+        int g0, g100, g50, xb, xs, xu; saved.Get(0, out xb, out xs, out xu, out g0); saved.Get(100, out xb, out xs, out xu, out g100); saved.Get(50, out xb, out xs, out xu, out g50);
+        Check(saved != null && other == null && saved.Missed == 12.5 && saved.Hi == 100 && saved.BuyVol == 9 && saved.SellVol == 4 && saved.UnknownVol == 1 && g0 == 4 && g100 == 2 && g50 == 0,
+            "delta file: lines add up (a second written again by a late trade; its largest trade the larger), a cut last line is left out, missed seconds are kept; a line of an older file (four fields) reads with its largest trade not known (0); another session's file is not read");
         DeltaTable run = new DeltaTable { StartEt = d.StartEt, CoveredFromEt = d.StartEt + 1000, Why = "start" };
-        run.Put(1000, 4, 0, 0);
+        run.Put(1000, 4, 0, 0, 4);
         double gap = run.Join(saved);
-        Check(Math.Abs(gap - 899) < 0.01 && run.CoveredFromEt == d.StartEt && run.Why == null && Math.Abs(run.Missed - 911.5) < 0.01 && run.BuyVol == 12,
+        Check(Math.Abs(gap - 899) < 0.01 && run.CoveredFromEt == d.StartEt && run.Why == null && Math.Abs(run.Missed - 911.5) < 0.01 && run.BuyVol == 13,
             "delta file: a restart's run joins the saved seconds, keeps the session's start, and counts the seconds between (899 s) missed");
     }
 

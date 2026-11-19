@@ -1685,6 +1685,9 @@ namespace NinjaTrader.NinjaScript.AddOns
         public double Missed;                         // seconds of open market not seen
         public double DownSinceEt = -1;               // a feed drop while open, not yet ended by a trade
         public readonly int[][] B = new int[Seconds / Block][], S = new int[Seconds / Block][], U = new int[Seconds / Block][];
+        // G (Anthony 2026-11-19, "Yes, add it"): each second's largest single trade, any side, so the Data Box's largest print shows on
+        // bars built from the table; 0 where it is not known (a second read back from a file saved before it was kept)
+        public readonly int[][] G = new int[Seconds / Block][];
         public int Lo = int.MaxValue, Hi = -1;        // the first and last second with a trade
         public long Trades, Volume, BuyVol, SellVol, UnknownVol, LateTrades, Outside;
         // the file (SaveDeltas): seconds up to SavedThrough are written; a later trade for one of them is kept in Late until written
@@ -1702,25 +1705,28 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (sec < 0 || sec >= Seconds || volume <= 0 || volume > int.MaxValue) { Outside++; return; }
             if (DownSinceEt >= 0) { double gap = ChartBridgeServer.OpenSeconds(DownSinceEt, et); Missed += gap; MissedUnsaved += gap; DownSinceEt = -1; }
             int i = (int)sec;
-            Put(i, side == 1 ? (int)volume : 0, side == -1 ? (int)volume : 0, side != 1 && side != -1 ? (int)volume : 0);
+            Put(i, side == 1 ? (int)volume : 0, side == -1 ? (int)volume : 0, side != 1 && side != -1 ? (int)volume : 0, (int)volume);
             Trades++;
-            if (i <= SavedThrough) { LateTrades++; if (Late.Count < LateMax) Late.Add(new[] { i, side == 1 ? (int)volume : 0, side == -1 ? (int)volume : 0, side != 1 && side != -1 ? (int)volume : 0 }); else LateLost++; }
+            if (i <= SavedThrough) { LateTrades++; if (Late.Count < LateMax) Late.Add(new[] { i, side == 1 ? (int)volume : 0, side == -1 ? (int)volume : 0, side != 1 && side != -1 ? (int)volume : 0, (int)volume }); else LateLost++; }
         }
-        // Volumes into second i (a live trade, or a restored file's line).
-        public void Put(int i, int buy, int sell, int unknown)
+        // Volumes into second i (a live trade, or a restored file's line); big: a trade's volume, or a saved second's largest trade (0
+        // not known: kept as it is, a larger known one wins).
+        public void Put(int i, int buy, int sell, int unknown, int big)
         {
             int b = i / Block, k = i % Block;
-            if (B[b] == null) { B[b] = new int[Block]; S[b] = new int[Block]; U[b] = new int[Block]; }
+            if (B[b] == null) { B[b] = new int[Block]; S[b] = new int[Block]; U[b] = new int[Block]; G[b] = new int[Block]; }
             B[b][k] += buy; S[b][k] += sell; U[b][k] += unknown;
+            if (big > G[b][k]) G[b][k] = big;
             BuyVol += buy; SellVol += sell; UnknownVol += unknown; Volume += buy + sell + unknown;
             if (i < Lo) Lo = i;
             if (i > Hi) Hi = i;
         }
-        public void Get(int i, out int buy, out int sell, out int unknown)
+        public void Get(int i, out int buy, out int sell, out int unknown) { int g; Get(i, out buy, out sell, out unknown, out g); }
+        public void Get(int i, out int buy, out int sell, out int unknown, out int big)
         {
             int b = i / Block, k = i % Block;
-            if (i < 0 || i >= Seconds || B[b] == null) { buy = sell = unknown = 0; return; }
-            buy = B[b][k]; sell = S[b][k]; unknown = U[b][k];
+            if (i < 0 || i >= Seconds || B[b] == null) { buy = sell = unknown = big = 0; return; }
+            buy = B[b][k]; sell = S[b][k]; unknown = U[b][k]; big = G[b][k];
         }
 
         // Under the book's lock: a copy of the seconds with trades (three ints a second, at most about 1 MB: well under a millisecond),
@@ -1729,11 +1735,11 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             DeltaSnap s = new DeltaSnap { Start = Start, End = End, StartEt = StartEt, CoveredFromEt = CoveredFromEt, Why = Why, Missed = Missed, Lo = Hi >= 0 ? Lo : 0 };
             int n = Hi >= 0 ? Hi - Lo + 1 : 0;
-            s.Buy = new int[n]; s.Sell = new int[n]; s.Unknown = new int[n];
+            s.Buy = new int[n]; s.Sell = new int[n]; s.Unknown = new int[n]; s.Big = new int[n];
             for (int i = 0; i < n;)
             {
                 int sec = Lo + i, b = sec / Block, k = sec % Block, m = Math.Min(n - i, Block - k);
-                if (B[b] != null) { Array.Copy(B[b], k, s.Buy, i, m); Array.Copy(S[b], k, s.Sell, i, m); Array.Copy(U[b], k, s.Unknown, i, m); }
+                if (B[b] != null) { Array.Copy(B[b], k, s.Buy, i, m); Array.Copy(S[b], k, s.Sell, i, m); Array.Copy(U[b], k, s.Unknown, i, m); Array.Copy(G[b], k, s.Big, i, m); }
                 i += m;
             }
             return s;
@@ -1741,7 +1747,8 @@ namespace NinjaTrader.NinjaScript.AddOns
 
         // The file: a header, then additive lines (a second can be written again by a late trade), then missed seconds.
         //   deltatable 1 <startEt> <coveredFromEt> <why or ->
-        //   <second> <buy> <sell> <unknown>        (the second since startEt)
+        //   <second> <buy> <sell> <unknown> <largest trade>   (the second since startEt; files saved before the largest trade was
+        //                                                    kept have four fields: that second's largest trade is not known)
         //   m <seconds>
         public string Header() { return "deltatable 1 " + CbJson.Num3(StartEt) + " " + CbJson.Num3(CoveredFromEt) + " " + (Why ?? "-") + "\n"; }
         // A saved file read back (null when it is not one, or for another session than startEt).
@@ -1759,12 +1766,15 @@ namespace NinjaTrader.NinjaScript.AddOns
             {
                 string[] f = lines[i].Trim().Split(' ');
                 if (f.Length == 2 && f[0] == "m") { double m; if (double.TryParse(f[1], NumberStyles.Float, CultureInfo.InvariantCulture, out m) && m > 0) d.Missed += m; continue; }
-                if (f.Length != 4) continue;   // a line cut by a power cut is left out (its seconds count as missed: they are after the last whole one)
-                int sec, b, s, u;
+                // four fields: a file saved before the largest trade was kept; five: with it. Anything else (a line cut by a power cut) is
+                // left out: its seconds count as missed (they are after the last whole one)
+                if (f.Length != 4 && f.Length != 5) continue;
+                int sec, b, s, u, g = 0;
                 if (!int.TryParse(f[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out sec) || sec < 0 || sec >= Seconds) continue;
                 if (!int.TryParse(f[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out b) || !int.TryParse(f[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out s) ||
                     !int.TryParse(f[3], NumberStyles.Integer, CultureInfo.InvariantCulture, out u) || b < 0 || s < 0 || u < 0) continue;
-                d.Put(sec, b, s, u);
+                if (f.Length == 5 && (!int.TryParse(f[4], NumberStyles.Integer, CultureInfo.InvariantCulture, out g) || g < 0)) continue;
+                d.Put(sec, b, s, u, g);
             }
             d.RestoredMissed = d.Missed;
             return d;
@@ -1776,7 +1786,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         public double Join(DeltaTable saved)
         {
             double runFrom = CoveredFromEt;
-            for (int i = saved.Hi >= 0 ? saved.Lo : 0; i <= saved.Hi; i++) { int b, s, u; saved.Get(i, out b, out s, out u); if (b + s + u > 0) Put(i, b, s, u); }
+            for (int i = saved.Hi >= 0 ? saved.Lo : 0; i <= saved.Hi; i++) { int b, s, u, g; saved.Get(i, out b, out s, out u, out g); if (b + s + u > 0) Put(i, b, s, u, g); }
             double savedEnd = saved.Hi >= 0 ? StartEt + saved.Hi + 1 : saved.CoveredFromEt;
             double gap = runFrom > savedEnd ? ChartBridgeServer.OpenSeconds(savedEnd, runFrom) : 0;
             CoveredFromEt = Math.Min(CoveredFromEt, saved.CoveredFromEt); Why = saved.Why;
@@ -1790,15 +1800,17 @@ namespace NinjaTrader.NinjaScript.AddOns
     public class DeltaSnap
     {
         public DateTime Start, End; public double StartEt, CoveredFromEt, Missed; public string Why;
-        public int Lo; public int[] Buy, Sell, Unknown;
+        public int Lo; public int[] Buy, Sell, Unknown, Big;
 
-        // The message: rows [dt, buy, sell, ...] for each second with buy or sell volume, unknown [dt, volume, ...] for each second with
-        // unknown volume, dt the seconds since the row before (the first since `from`), so a full session of NQ is well under a MB.
+        // The message: rows [dt, buy, sell, big, ...] for each second with buy or sell volume, unknown [dt, volume, big, ...] for each
+        // second with unknown volume, dt the seconds since the row before (the first since `from`), big the second's largest single
+        // trade, any side (0: not known, a second read back from an older file), the same in both lists; "big": true says the rows
+        // carry it. A full session of NQ is well under a MB.
         // `less`: the held trades released after it (the page counts them as live ticks), taken off their seconds.
         public string Json(string root, string sub, List<SeamTick> less)
         {
             int n = Buy != null ? Buy.Length : 0;
-            int[] b = (int[])(Buy ?? new int[0]).Clone(), s = (int[])(Sell ?? new int[0]).Clone(), u = (int[])(Unknown ?? new int[0]).Clone();
+            int[] b = (int[])(Buy ?? new int[0]).Clone(), s = (int[])(Sell ?? new int[0]).Clone(), u = (int[])(Unknown ?? new int[0]).Clone(), g = Big ?? new int[n];
             if (less != null)
                 foreach (SeamTick h in less)
                 {
@@ -1815,7 +1827,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             o.Append(",\"coveredFrom\":"); CbJson.AppendNum3(o, CoveredFromEt);
             o.Append(",\"why\":").Append(Why != null ? CbJson.Str(Why) : "null");
             o.Append(",\"missed\":"); CbJson.AppendLong(o, (long)Math.Round(Missed));
-            o.Append(",\"rows\":[");
+            o.Append(",\"big\":true,\"rows\":[");
             long prev = 0; bool first = true;
             for (int i = 0; i < n; i++)
             {
@@ -1823,7 +1835,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 long sec = Lo + i;
                 if (!first) o.Append(',');
                 first = false;
-                CbJson.AppendLong(o, sec - prev); o.Append(','); CbJson.AppendLong(o, b[i]); o.Append(','); CbJson.AppendLong(o, s[i]);
+                CbJson.AppendLong(o, sec - prev); o.Append(','); CbJson.AppendLong(o, b[i]); o.Append(','); CbJson.AppendLong(o, s[i]); o.Append(','); CbJson.AppendLong(o, g[i]);
                 prev = sec;
             }
             o.Append("],\"unknown\":[");
@@ -1834,7 +1846,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 long sec = Lo + i;
                 if (!first) o.Append(',');
                 first = false;
-                CbJson.AppendLong(o, sec - prev); o.Append(','); CbJson.AppendLong(o, u[i]);
+                CbJson.AppendLong(o, sec - prev); o.Append(','); CbJson.AppendLong(o, u[i]); o.Append(','); CbJson.AppendLong(o, g[i]);
                 prev = sec;
             }
             return o.Append("]}}").ToString();
@@ -4960,14 +4972,14 @@ namespace NinjaTrader.NinjaScript.AddOns
                             if (header) text.Append(d.Header());
                             for (int i = Math.Max(d.SavedThrough + 1, d.Hi >= 0 ? d.Lo : 0); i <= upTo; i++)
                             {
-                                int b, sl, u; d.Get(i, out b, out sl, out u);
+                                int b, sl, u, g; d.Get(i, out b, out sl, out u, out g);
                                 if (b + sl + u == 0) continue;
                                 text.Append(i.ToString(CultureInfo.InvariantCulture)).Append(' ').Append(b.ToString(CultureInfo.InvariantCulture)).Append(' ')
-                                    .Append(sl.ToString(CultureInfo.InvariantCulture)).Append(' ').Append(u.ToString(CultureInfo.InvariantCulture)).Append('\n');
+                                    .Append(sl.ToString(CultureInfo.InvariantCulture)).Append(' ').Append(u.ToString(CultureInfo.InvariantCulture)).Append(' ').Append(g.ToString(CultureInfo.InvariantCulture)).Append('\n');
                             }
                             lateTaken = d.Late.Count;
                             foreach (int[] x in d.Late) text.Append(x[0].ToString(CultureInfo.InvariantCulture)).Append(' ').Append(x[1].ToString(CultureInfo.InvariantCulture)).Append(' ')
-                                .Append(x[2].ToString(CultureInfo.InvariantCulture)).Append(' ').Append(x[3].ToString(CultureInfo.InvariantCulture)).Append('\n');
+                                .Append(x[2].ToString(CultureInfo.InvariantCulture)).Append(' ').Append(x[3].ToString(CultureInfo.InvariantCulture)).Append(' ').Append(x[4].ToString(CultureInfo.InvariantCulture)).Append('\n');
                             missed = d.MissedUnsaved;
                             if (missed > 0) text.Append("m ").Append(CbJson.Num3(missed)).Append('\n');
                         }

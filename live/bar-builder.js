@@ -377,28 +377,32 @@ class RangeReplay {
  * The delta table (ChartBridge 0.6.25, nt8/PROTOCOL.md "The delta table"): the session's buy, sell and unknown volume per second
  * of New York wall time, from 18:00 ET (or from ChartBridge's first trade when it started later), exactly up to the trades the
  * page gets after it (its `at`: the store's length when it came). decodeDeltaTable reads the message's session ({ from,
- * coveredFrom, why, missed, rows: [dt, buy, sell, ...], unknown: [dt, volume, ...] }, dt from `from` and then from the row
- * before) into columns sorted by second: { from, coveredFrom, why, missed, n, sec, buy, sell, unk }; null when it is not one.
+ * coveredFrom, why, missed, big, rows: [dt, buy, sell, big, ...], unknown: [dt, volume, big, ...] }, dt from `from` and then from
+ * the row before; with `big` true each row ends with the second's largest single trade, any side, 0 when not known (a second
+ * ChartBridge read back from a file saved before it kept it); a table without `big` has rows of 3 and unknowns of 2 and no
+ * largest trade) into columns sorted by second: { from, coveredFrom, why, missed, n, sec, buy, sell, unk, big }; null when it is
+ * not one.
  */
 function decodeDeltaTable(ses) {
   if (!ses || typeof ses !== 'object' || !Array.isArray(ses.rows) || !Array.isArray(ses.unknown)) return null;
   const from = +ses.from, cov = +ses.coveredFrom;
   if (!isFinite(from) || !isFinite(cov)) return null;
-  const R = ses.rows, Un = ses.unknown, nr = Math.floor(R.length / 3), nu = Math.floor(Un.length / 2);
+  const G = ses.big === true, RS = G ? 4 : 3, US = G ? 3 : 2;
+  const R = ses.rows, Un = ses.unknown, nr = Math.floor(R.length / RS), nu = Math.floor(Un.length / US);
   // the two lists are each in time order: merged in one pass into columns (a second in both is one row)
-  const sec = new Float64Array(nr + nu), buy = new Float64Array(nr + nu), sell = new Float64Array(nr + nu), unk = new Float64Array(nr + nu);
+  const sec = new Float64Array(nr + nu), buy = new Float64Array(nr + nu), sell = new Float64Array(nr + nu), unk = new Float64Array(nr + nu), big = new Float64Array(nr + nu);
   let i = 0, j = 0, n = 0, tr = from + (nr ? +R[0] : 0), tu = from + (nu ? +Un[0] : 0);
   while (i < nr || j < nu) {
     const t = j >= nu || (i < nr && tr <= tu) ? tr : tu;
     if (n && sec[n - 1] === t) n--;                      // the same second again (never sent so; kept whole if it were)
-    else { sec[n] = t; buy[n] = 0; sell[n] = 0; unk[n] = 0; }
-    if (i < nr && tr === t) { buy[n] += +R[3 * i + 1] || 0; sell[n] += +R[3 * i + 2] || 0; i++; if (i < nr) tr += +R[3 * i]; }
-    if (j < nu && tu === t) { unk[n] += +Un[2 * j + 1] || 0; j++; if (j < nu) tu += +Un[2 * j]; }
+    else { sec[n] = t; buy[n] = 0; sell[n] = 0; unk[n] = 0; big[n] = 0; }
+    if (i < nr && tr === t) { buy[n] += +R[RS * i + 1] || 0; sell[n] += +R[RS * i + 2] || 0; if (G) big[n] = Math.max(big[n], +R[RS * i + 3] || 0); i++; if (i < nr) tr += +R[RS * i]; }
+    if (j < nu && tu === t) { unk[n] += +Un[US * j + 1] || 0; if (G) big[n] = Math.max(big[n], +Un[US * j + 2] || 0); j++; if (j < nu) tu += +Un[US * j]; }
     n++;
     if (!(isFinite(tr) && isFinite(tu))) return null;
   }
   return { from, coveredFrom: cov, why: typeof ses.why === 'string' ? ses.why : null, missed: +ses.missed > 0 ? +ses.missed : 0, n,
-    sec: sec.subarray(0, n), buy: buy.subarray(0, n), sell: sell.subarray(0, n), unk: unk.subarray(0, n) };
+    sec: sec.subarray(0, n), buy: buy.subarray(0, n), sell: sell.subarray(0, n), unk: unk.subarray(0, n), big: big.subarray(0, n) };
 }
 /*
  * TableReplay: a cumulative delta (ChartEngine.CumulativeDelta `cd`) from the delta table `T` and the store's trades after it
@@ -417,7 +421,9 @@ class TableReplay {
   constructor(store, T, cd, builder) {
     this.st = store; this.T = T; this.cd = cd; this.bd = builder || null; this.k = 0; this.i = 0;
     this.at = Math.max(0, Math.min(store.length, T.at | 0));
-    if (this.bd) { this.rb = Float64Array.from(T.buy); this.rs = Float64Array.from(T.sell); this.ru = Float64Array.from(T.unk); this.r = 0; }
+    // big: a second's largest trade (0 not known); rm: the largest sided trade the store holds of that second (range bars), so the
+    // residual keeps the largest trade only when it is not one of those (it is then the residual's own: a larger trade is in it)
+    if (this.bd) { this.rb = Float64Array.from(T.buy); this.rs = Float64Array.from(T.sell); this.ru = Float64Array.from(T.unk); this.rm = new Float64Array(T.n); this.r = 0; }
     else this.i = this.at;
   }
   /* The residual, a part at a time (step): the table less the store's sided trades before `at`, each off its own second. */
@@ -432,6 +438,7 @@ class TableReplay {
       if (j < 0) continue;                                 // not in the table (another session)
       const v = st.volume(i), sd = codeSide(c);
       if (sd === 1) this.rb[j] -= v; else if (sd === -1) this.rs[j] -= v; else this.ru[j] -= v;
+      if (v > this.rm[j]) this.rm[j] = v;
     }
     this.r = end;
     return end >= this.at;
@@ -443,7 +450,8 @@ class TableReplay {
       if (!(b + s + u > 0)) continue;
       const last = bars.length ? bars[bars.length - 1].t : -Infinity;
       if (this.pre === undefined) this.pre = Math.max(T.sec[k], T.coveredFrom);
-      this.cd.addSecond(T.sec[k], b, s, u, last >= T.from ? last : this.pre);
+      const g = T.big ? T.big[k] : 0;
+      this.cd.addSecond(T.sec[k], b, s, u, last >= T.from ? last : this.pre, g > this.rm[k] ? g : 0);
     }
   }
   step(n) {
@@ -451,7 +459,7 @@ class TableReplay {
     if (!this.bd) {
       let k = 0;
       // the first second can start inside (ChartBridge's start): its trades are from coveredFrom on, so it counts from there
-      for (; k < n && this.k < T.n; k++, this.k++) cd.addSecond(Math.max(T.sec[this.k], T.coveredFrom), T.buy[this.k], T.sell[this.k], T.unk[this.k]);
+      for (; k < n && this.k < T.n; k++, this.k++) cd.addSecond(Math.max(T.sec[this.k], T.coveredFrom), T.buy[this.k], T.sell[this.k], T.unk[this.k], undefined, T.big ? T.big[this.k] : 0);
       if (this.k < T.n) return false;
       this.i = st.feedSides(cd, this.i, null, this.i + Math.max(1, n - k));
       return this.i >= st.length;

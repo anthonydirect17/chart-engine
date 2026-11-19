@@ -4240,10 +4240,11 @@ class CumulativeDelta {
   /**
    * One second of trades from ChartBridge's delta table (0.6.25, nt8/PROTOCOL.md "The delta table"): its buy, sell and unknown
    * volume, in the price bar starting at barT (as add). The cumulative moves once, by buy minus sell, so inside a bar its high
-   * and low are known to the second (the table has no order inside a second); the bar's largest single trade stays unknown
-   * (big is not changed). Returns true when it was counted. Left out as add leaves a trade out.
+   * and low are known to the second (the table has no order inside a second). big: the second's largest single trade (the
+   * Data Box's largest print); 0 or none when not known, which marks the bar `bigMissing` (its largest print is then not
+   * known: a second of it may have held a larger one). Returns true when it was counted. Left out as add leaves a trade out.
    */
-  addSecond(t, buy, sell, unknown, barT) {
+  addSecond(t, buy, sell, unknown, barT, big) {
     const b = +buy || 0, s = +sell || 0, u = +unknown || 0;
     if (typeof t !== 'number' || !isFinite(t) || !(b >= 0 && s >= 0 && u >= 0) || !(b + s + u > 0 && b + s + u < Infinity)) { this.skipped++; return false; }
     const bar = this._barFor(t, barT);
@@ -4256,6 +4257,7 @@ class CumulativeDelta {
     if (c > bar.h) bar.h = c;
     if (c < bar.l) bar.l = c;
     bar.c = c; bar.n++; ses.trades++; this.trades++;
+    if (big > 0 && big < Infinity) { if (big > bar.big) bar.big = big; } else bar.bigMissing = true;
     this._ver++;
     return true;
   }

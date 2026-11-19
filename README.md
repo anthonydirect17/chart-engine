@@ -858,8 +858,9 @@ auto, tick })` and `new ChartEngine.DeltaDivergence({ settings })`, fed by the p
 Cumulative delta (1.7.0): `new ChartEngine.CumulativeDelta({ sessionStart, seconds, coveredFrom })` counts trades
 (`add(t, v, side, barT, method)`, side 1 buy, -1 sell, 0 or none unknown) into one candle per price bar of the
 running buys minus sells, from 0 at each 18:00 ET session, from `coveredFrom` on (the start of the page's
-window of trades with measured sides). `addSecond(t, buy, sell, unknown, barT)` counts one second of ChartBridge 0.6.25's delta
-table at once (the cumulative moves once by buy minus sell; the bar's largest trade stays unknown). `setDelta(delta | null)` hands one to the chart, drawn in a pane below the plot while the `delta` layer is on;
+window of trades with measured sides). `addSecond(t, buy, sell, unknown, barT, big)` counts one second of ChartBridge 0.6.25's delta
+table at once (the cumulative moves once by buy minus sell; `big` the second's largest trade, the bar's `big` the largest of them,
+`bigMissing` when one was not known). `setDelta(delta | null)` hands one to the chart, drawn in a pane below the plot while the `delta` layer is on;
 `setDeltaView({ mode: 'cum' | 'bar', ratio, note, reason, missed, start })` (`start`: say "since 18:00 ET" also for a session counted from its start), `deltaPane()`, `deltaToY(v)` and
 `on('paneResize', { ratio, height, done })` for the divider.
 

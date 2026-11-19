@@ -5,7 +5,8 @@
 // out here from the fake's tape (every NQ trade from 18:00 ET with its side), and every load must show it:
 //   1m, then range, 15s and 5m (timeframe switches); MNQ and back (a ticker switch); a reload; the chart torn down and mounted
 //   again on the window's shared feed (live/feed.js), as the workspace's layout or laptop-tab switch does; a table pushed after
-//   ready (ChartBridge reading the session's saved table back). Each is labelled "since 18:00 ET".
+//   ready (ChartBridge reading the session's saved table back). Each is labelled "since 18:00 ET". The Data Box's largest print on
+//   a bar built from the table is the bar's largest trade; from an older saved file (no largest trade kept) it shows "-".
 // Then: ChartBridge started after 18:00 ("since HH:MM ET (ChartBridge started)", the count from then); the seconds ChartBridge
 // missed ("missed 8 s"); an older ChartBridge (no deltaTable in hello): the page counts from its opening as before, and its
 // subscribe asks for no table. Screenshots in test/out (SHOTS=dir), labelled as sample data.
@@ -110,6 +111,15 @@ try {
   check(d.built && d.c === truth.net && d.by === 'table', '1m: the cumulative delta is the whole session\'s from 18:00 ET (' + truth.n.toLocaleString() + ' sample trades, net ' + truth.net + '; the page shows ' + d.c + ')');
   check(/since 18:00 ET/.test(d.title) && !/page opened/.test(d.title), '1m: labelled "since 18:00 ET": ' + d.title);
   check((await p.evaluate(() => window.__subs.every(m => m.deltaTable === true))), 'every subscribe asks for the delta table (hello lists deltaTable)');
+  // the Data Box's largest print on a bar built from the table (Anthony 2026-11-19: "Yes, add it"): the bar's largest single trade
+  const bigNow = async (p0, rootSym) => {
+    const info = await p0.evaluate(() => { const b = window.liveMount.barInfo(); return b ? { t: b.t, big: b.delta ? b.delta.big : null } : null; });
+    const k = await (await fetch(`http://localhost:${b.port}/test/tape?root=${rootSym}&from=${info.t}`, { method: 'POST' })).json();
+    let want = 0; for (let i = 0; i < k.n; i++) if (k.t[i] < info.t + 60 && k.v[i] > want) want = k.v[i];
+    return { got: info.big, want };
+  };
+  let bg = await bigNow(p, 'NQ');
+  check(bg.got > 0 && bg.got === bg.want, '1m: the Data Box\'s largest print on a bar built from the table is that minute\'s largest trade (' + bg.got + ' against ' + bg.want + ')');
   await shot(p, 'delta-held-1m.png', 'Cum Delta from ChartBridge\'s delta table, since 18:00 ET.');
   for (const tf of ['range', 's15', 'm5', 'm1']) {
     await p.evaluate(v => window.liveMount.setView({ tf: v }), tf);
@@ -154,6 +164,18 @@ try {
   d = await settled(p, truth.net);
   check(d.c === truth.net && /missed 8 s/.test(d.title), 'a table pushed after ready (saved table read back) builds the same count, and the seconds ChartBridge missed show: ' + d.title);
   await shot(p, 'delta-held-missed.png', 'A pushed table that says ChartBridge missed 8 s.');
+  // a table read back from a file saved before ChartBridge kept the largest trade: the same count, the largest print '-'
+  await post(b.port, '/test/delta-old-file');
+  await post(b.port, '/test/delta-push');
+  await p.waitForTimeout(800);
+  d = await settled(p, truth.net);
+  const oldBig = await p.evaluate(() => { const b = window.liveMount.barInfo(); return b && b.delta ? b.delta.big : null; });
+  check(d.c === truth.net && oldBig === 0, 'a table from an older saved file (no largest trade): the same count, and the Data Box\'s largest print shows "-" (' + oldBig + ')');
+  await post(b.port, '/test/delta-old-file?on=0');
+  await post(b.port, '/test/delta-push');
+  await p.waitForTimeout(800);
+  bg = await bigNow(p, 'NQ');
+  check(bg.got === bg.want, 'and with the largest trade again, it shows (' + bg.got + ')');
   // live again: the count goes on from the table
   await post(b.port, '/test/delta-missed?s=0');
   await post(b.port, '/test/pause?on=0');
@@ -175,10 +197,11 @@ try {
   await post(b2.port, '/test/pause');
   await p2.waitForTimeout(300);
   const k2 = await (await fetch(`http://localhost:${b2.port}/test/tape?root=NQ&from=0`, { method: 'POST' })).json();
-  const startedAt = await p2.evaluate(() => window.liveMount.data().dtab && window.liveMount.data().dtab.coveredFrom);
-  const t2 = await tapeNet(b2.port, 'NQ', startedAt);
   await p2.evaluate(() => window.liveMount.setView({ tf: 'm5' }));
   await waitLive(p2);
+  // this load's table (the first load may have come before the fake's first live trade: then it had none, as ChartBridge)
+  const startedAt = await p2.waitForFunction(() => { const T = window.liveMount.data().dtab; return T ? T.coveredFrom : null; }, null, { timeout: 20000 }).then(h => h.jsonValue());
+  const t2 = await tapeNet(b2.port, 'NQ', startedAt);
   d = await settled(p2, t2.net);
   check(startedAt > t2.s0 && d.c === t2.net && /since \d\d:\d\d(:\d\d(\.\d+)?)? ET \(ChartBridge started\)/.test(d.title), 'ChartBridge started after 18:00: the count from its start, labelled: ' + d.title + ' (net ' + t2.net + ', ' + k2.n + ' sample trades in the tape)');
   await shot(p2, 'delta-held-started.png', 'ChartBridge started mid-session: "since HH:MM ET (ChartBridge started)".');
