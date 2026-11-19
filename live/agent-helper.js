@@ -270,13 +270,29 @@ function flat(a) { return offStep(a) === 'off'; }
  * phase, until }. action: 'shadow' (send agentMode shadow first), 'flatten' (already in Shadow), or 'off' (he is flat now).
  * His account must be known: never a default.
  */
-function flatOffStart(a, now, hand) {
+function flatOffStart(a, now, hand, fo) {
+  if (fo) return foStart(a, now);
   const r = flatOffStart1(a, now);
   /* hand: this page sends no Flatten (no order connection of its own, and a ChartBridge with no agentFlattenOff): the same Shadow
      first, then the job waits for him to be flattened by hand */
   if (hand && r.job && r.job.phase !== 'off') { r.job.hand = true; if (r.job.phase === 'flatten') { r.job.until = now + HAND_WAIT_MS; r.action = 'hand'; } }
   return r;
 }
+/* plan step 3.2, the R12 delta X2: the job of one agentFlattenOff (fo). ChartBridge puts him in Shadow and flattens what he owns
+   itself, so his account and instrument are words only here, never a target: the job is made even when the page cannot say them.
+   It waits to SEE him in Shadow (SHADOW_WAIT_MS at most) before it says so; then the same wait for flat as the hand path (out of
+   Shadow ends it, B1r), FLAT_WAIT_MS at most; Off only in Shadow and flat. A refusal of the command ends it (live/agent.js onReject). */
+function foStart(a, now) {
+  const x = a || {}, r = flatOffStart1(x, now), j = r.job || {};
+  const job = { agent: str(x.agent), account: str(j.account || x.account), root: str(j.root), phase: 'shadow', fo: true, until: now + SHADOW_WAIT_MS };
+  if (Array.isArray(j.seats)) job.seats = j.seats;
+  return { job, action: 'flatoff' };
+}
+/** Where to flatten him, in words, for a line ("SIM-A MNQ", or his account alone, or "what he holds"). */
+const whereWords = j => { const w = jobWhere(j).trim(); return w || 'what he holds'; };
+const modeWord = m => (m === 'auto' ? 'Auto' : m === 'copilot' ? 'Copilot' : m === 'shadow' ? 'Shadow' : 'mode not known');
+const FO_SENT = 'Flatten and turn off sent: waiting for ChartBridge to put him in Shadow...';
+const FO_WAIT = 'In Shadow: ChartBridge flattens what he owns; he turns off once flat...';
 function flatOffStart1(a, now) {
   const x = a || {}, p = x.position || {};
   if (flat(x)) return { job: { agent: str(x.agent), account: str(x.account), root: str(p.root), phase: 'off', until: 0 }, action: 'off' };
@@ -304,8 +320,20 @@ function flatOffStep(job, a, now, sent) {
   const j = job, x = a || {};
   if (!j) return { action: '', job: null, line: '' };
   if (!a) {                                     // no word from ChartBridge (the connection dropped): never read as flat
-    if (now > j.until) return { action: 'giveup', job: null, line: 'ChartBridge did not answer: ' + (j.phase === 'shadow' ? 'nothing was flattened and he stays on' : 'he may still hold ' + jobWhere(j) + ' and stays on') + '. Check NinjaTrader, then press Off.' };
+    if (now > j.until) return { action: 'giveup', job: null, line: 'ChartBridge did not answer: ' + (j.fo ? 'whether he was flattened is not known, and he stays on' : j.phase === 'shadow' ? 'nothing was flattened and he stays on' : 'he may still hold ' + jobWhere(j) + ' and stays on') + '. Check NinjaTrader, then press Off.' };
     return { action: '', job: j, line: 'Waiting for ChartBridge (the connection dropped): nothing is read as flat meanwhile...' };
+  }
+  if (j.fo) {                                   // the R12 delta X2: one agentFlattenOff; Shadow seen before it is said, and before Off
+    if (j.phase === 'shadow') {
+      if (x.mode === 'shadow') return flat(x) ? { action: 'off', job: Object.assign({}, j, { phase: 'off' }), line: 'In Shadow and flat: turning him off...' }
+        : { action: '', job: Object.assign({}, j, { phase: 'flatten', until: now + FLAT_WAIT_MS }), line: FO_WAIT };
+      if (now > j.until) return { action: 'giveup', job: null, line: 'ChartBridge did not put him in Shadow within ' + SHADOW_WAIT_MS / 1000 + ' s of Flatten and turn off: he stays on (' + modeWord(x.mode) + '). Flatten ' + whereWords(j) + ' in NinjaTrader, then press Off.' };
+      return { action: '', job: j, line: FO_SENT };
+    }
+    if (x.mode !== 'shadow') return { action: 'giveup', job: null, line: 'He left Shadow (now ' + (x.mode || 'not known') + ') before he was flat: he stays on. Flatten ' + whereWords(j) + ', then press Off.' };
+    if (flat(x)) return { action: 'off', job: Object.assign({}, j, { phase: 'off' }), line: 'Flat: turning him off...' };
+    if (now > j.until) return { action: 'giveup', job: null, line: 'Not flat ' + FLAT_WAIT_MS / 1000 + ' s after Flatten and turn off: he stays on, in Shadow. Flatten ' + whereWords(j) + ' in NinjaTrader, then press Off.' };
+    return { action: '', job: j, line: FO_WAIT };
   }
   if (j.phase === 'shadow' && j.hand) {   // a hand flatten: Shadow first, then the wait for him to be flattened by hand
     if (x.mode === 'shadow') return flat(x) ? { action: 'off', job: Object.assign({}, j, { phase: 'off' }), line: 'In Shadow and flat: turning him off...' }
@@ -330,6 +358,63 @@ function flatOffStep(job, a, now, sent) {
     return { action: '', job: j, line: 'Flatten sent for ' + jobWhere(j) + ' (he is in Shadow): turning him off once flat...' };
   }
   return { action: '', job: j, line: 'Turning him off...' };
+}
+
+/* ---------------- the traders being turned off, shared by the windows of this origin (plan step 3.2, the R12 delta X4)
+   Legion's Armed leaves out a lane whose trader a desk is turning off (B1r). A desk in another window (a second Legion, the
+   chart page, the pop-out) must count too, or its Armed could send Auto during this window's wait. Each window keeps one browser
+   entry per trader it is turning off (TURN_KEY, its own window token, the id: { until }), written again each second while it
+   lasts and read as gone TURN_TTL_MS after the last write (a window closed mid-wait), and says the same on a BroadcastChannel.
+   Storage or a channel that cannot be used is skipped: the list is then this window's own and what it can still hear, and
+   nothing throws. */
+const TURN_KEY = 'live-agent-turning-v1:';
+const TURN_TTL_MS = 10000;
+const TURN_ID = /^[a-z][a-z0-9]{0,11}$/;
+/**
+ * env { storage: () => localStorage or null, channel: () => a BroadcastChannel or null, now, token }. -> { set(ids): this window's
+ * traders being turned off now (each written again, the ones gone removed), list(): every trader any window of this origin is
+ * turning off now }.
+ */
+function createTurnShare(env) {
+  const e = env || {}, now = typeof e.now === 'function' ? e.now : () => Date.now();
+  const token = typeof e.token === 'string' && /^[a-z0-9]{1,16}$/.test(e.token) ? e.token : Math.random().toString(36).slice(2, 10) || 'w';
+  const mine = new Set(), heard = new Map();          // heard: 'token:id' -> until, from other windows' channel words
+  const store = () => { try { return typeof e.storage === 'function' ? e.storage() || null : null; } catch (x) { return null; } };
+  let chan = null;
+  try { chan = typeof e.channel === 'function' ? e.channel() || null : null; } catch (x) { chan = null; }
+  if (chan) {
+    try {
+      chan.onmessage = ev => {
+        const d = ev && ev.data;
+        if (!d || typeof d.w !== 'string' || d.w === token || typeof d.agent !== 'string' || !TURN_ID.test(d.agent) || !isNum(d.until)) return;
+        if (d.until > now()) heard.set(d.w + ':' + d.agent, d.until); else heard.delete(d.w + ':' + d.agent);
+      };
+    } catch (x) { chan = null; }
+  }
+  const say = (agent, until) => { if (chan) { try { chan.postMessage({ w: token, agent, until }); } catch (x) { /* closed */ } } };
+  function set(ids) {
+    const want = new Set((Array.isArray(ids) ? ids : []).filter(x => typeof x === 'string' && TURN_ID.test(x))), t = now(), s = store();
+    for (const id of want) { const until = t + TURN_TTL_MS; try { if (s) s.setItem(TURN_KEY + token + ':' + id, JSON.stringify({ until })); } catch (x) { /* blocked */ } say(id, until); }
+    for (const id of mine) if (!want.has(id)) { try { if (s) s.removeItem(TURN_KEY + token + ':' + id); } catch (x) { /* blocked */ } say(id, 0); }
+    mine.clear(); for (const id of want) mine.add(id);
+  }
+  function list() {
+    const t = now(), out = new Set(mine), old = [];
+    for (const [k, until] of heard) { if (until > t) out.add(k.slice(k.indexOf(':') + 1)); else heard.delete(k); }
+    const s = store();
+    try {
+      if (s) for (let i = 0; i < s.length; i++) {
+        const k = s.key(i);
+        if (typeof k !== 'string' || k.indexOf(TURN_KEY) !== 0) continue;
+        const id = k.slice(k.lastIndexOf(':') + 1);
+        let v = null; try { v = JSON.parse(s.getItem(k)); } catch (x) { v = null; }
+        if (TURN_ID.test(id) && v && isNum(v.until) && v.until > t) out.add(id); else old.push(k);
+      }
+      for (const k of old) s.removeItem(k);             // a closed window's entries, once they are past their time
+    } catch (x) { /* storage cannot be read: this window's own and what the channel said */ }
+    return [...out];
+  }
+  return { set, list, token };
 }
 
 /* ---------------- Assign hero (the heroes-on-duty board, SPEC CE-1) */
@@ -462,5 +547,5 @@ function createClient(env) {
   };
 }
 
-return { VERSION, PORT, BASE, POLL_MS, TIMEOUT_MS, MISS_GRACE_MS, pollStep, SLOW_TEXT, FLAT_WAIT_MS, SHADOW_WAIT_MS, HAND_WAIT_MS, handLine, ASSIGN_WAIT_MS, slotFree, startBegin, startStep, onGate, TIERS, TYPE_NAME, tierOf, tierChip, tierFit, proving, PROVING_OF, heroOptions, preselect, freeSlot, assignStart, assignStep, usd, spendText, stateText, pickerRows, pickerNote, nonHero, modeBlock, accountBlock, offStep, offQuestion, flat, flatOffStart, flatOffStep, seatsHeld, seatsUnclear, jobWhere, names, settingsBody, createClient };
+return { VERSION, PORT, BASE, POLL_MS, TIMEOUT_MS, MISS_GRACE_MS, pollStep, SLOW_TEXT, FLAT_WAIT_MS, SHADOW_WAIT_MS, HAND_WAIT_MS, handLine, ASSIGN_WAIT_MS, slotFree, startBegin, startStep, onGate, TIERS, TYPE_NAME, tierOf, tierChip, tierFit, proving, PROVING_OF, heroOptions, preselect, freeSlot, assignStart, assignStep, usd, spendText, stateText, pickerRows, pickerNote, nonHero, modeBlock, accountBlock, offStep, offQuestion, flat, flatOffStart, flatOffStep, FO_SENT, FO_WAIT, modeWord, TURN_KEY, TURN_TTL_MS, createTurnShare, seatsHeld, seatsUnclear, jobWhere, names, settingsBody, createClient };
 });

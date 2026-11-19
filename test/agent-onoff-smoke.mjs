@@ -16,11 +16,12 @@
 //     LIVE account stay closed;
 //   - every helper call carries the PIN unlock; a PC with no helper says so and offers no On.
 //   - plan step 3.2: on Legion's Praetorian. A ChartBridge that knows agentFlattenOff (0.6.25, the default here) gets that one
-//     command; with --older (ChartBridge 0.6.24, the R12 review's B1) Legion has no Flatten of its own: Shadow first, the line
+//     command; the R12 delta X2: a refused command ends the job with ChartBridge's words, Shadow is said only once ChartBridge says
+//     it, and Off goes only in Shadow and flat; with --older (ChartBridge 0.6.24, the R12 review's B1) Legion has no Flatten of its own: Shadow first, the line
 //     says to flatten him in NinjaTrader or on the chart page's ticket, and Off goes once he is flat (here flattened in
 //     NinjaTrader's place by the fake's own order); nothing of the page's is a flatten or an order.
 //   npm run smoke:onoff      (both: the default, then --older; CHROMIUM_PATH=/path/to/chrome; ONOFF_SMOKE_PORT; SHOTS=dir)
-// Screenshots: agent-onoff-off, agent-onoff-slow, agent-onoff-on, agent-onoff-ask, agent-onoff-notflat (.png in test/out).
+// Screenshots: agent-onoff-off, agent-onoff-slow, agent-onoff-on, agent-onoff-ask, agent-onoff-refused, agent-onoff-notflat (.png in test/out).
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -204,41 +205,69 @@ try {
   check(!(await visible('#agView [data-k="hAsk"]')) && (await agentNow()).connected && helper.calls.filter(c => c.route === 'POST /off').length === 1 && (await sentAll()).filter(m => m.type === 'agentFlattenOff').length === flattensBefore,
     '"Keep him on": nothing sent, he stays on and in his trade');
   if (!OLDER) {
-  console.log('Flatten and turn off, not flat in 30 s: Shadow first, he stays on, and the line says so');
   const flattens = async () => (await sentAll()).filter(m => m.type === 'agentFlattenOff');   // plan step 3.2: one ChartBridge command
-  await page.evaluate(() => { window.__dropFlatten = true; });                         // ChartBridge never gets this Flatten
-  await page.click('#agView [data-onoff="off"]');
-  await until(() => visible('#agView [data-k="hAsk"]'), 'asked again');
-  await page.click('#agView [data-act="hFlatOff"]');
+  const offs = () => helper.calls.filter(c => c.route === 'POST /off').length;
+  const why = () => text('#agView [data-k="hWhy"]');
+  const press = async () => { await page.click('#agView [data-onoff="off"]'); await until(() => visible('#agView [data-k="hAsk"]'), 'asked again'); await page.click('#agView [data-act="hFlatOff"]'); };
+
+  console.log('the R12 delta X2: ChartBridge refuses Flatten and turn off: the job ends, the line says so, nothing else is sent');
+  await control('agent-refuse-flatoff', { agent: 'demo' });   // ChartBridge's action rate words, by default
   const modesBefore = (await sentAll()).filter(m => m.type === 'agentMode').length;
+  await press();
   await until(async () => (await flattens()).length === flattensBefore + 1, 'the one command goes');
   const fl1 = (await flattens()).pop();
   check(fl1.agent === 'demo' && Object.keys(fl1).filter(k => !k.startsWith('__')).sort().join(',') === 'agent,cid,type' && (await sentAll()).filter(m => m.type === 'agentMode').length === modesBefore,
     'one agentFlattenOff {type, cid, agent demo}, no Shadow or Flatten of the page\'s own (ChartBridge does both): ' + JSON.stringify(fl1));
-  check(/^Flatten sent for SIM-AG1 MNQ \(he is in Shadow\): turning him off once flat\.\.\.$/.test(await text('#agView [data-k="hWhy"]')) && await disabled('#agView [data-onoff="off"]'), 'the line while it waits: ' + await text('#agView [data-k="hWhy"]'));
+  const REFUSED = 'Refused by ChartBridge: too many order actions (more than 10 a second). Nothing was flattened; he stays on (Copilot).';
+  await until(async () => (await why()) === REFUSED, 'the refusal ends the job');
+  check((await why()) === REFUSED && !(await disabled('#agView [data-onoff="off"]')) && (await agentNow()).mode === 'copilot', 'refused: the line says so, in his mode, and Off can be pressed again: ' + await why());
+  await page.screenshot({ path: path.join(SHOTS, 'agent-onoff-refused.png'), clip: { x: 0, y: 0, width: 760, height: 900 } });
+  await sleep(3000);
+  check((await why()) === REFUSED && offs() === 1 && (await agentNow()).connected && /Long 1 MNQ/.test(await text('.ag-strip [data-k="sPos"]')) && (await flattens()).length === flattensBefore + 1,
+    'refused: 3 s later no Off, he stays on in his trade, nothing more was sent, and the line stays');
+
+  console.log('the R12 delta X2: ChartBridge never puts him in Shadow: never said, no Off, he stays on');
+  await page.evaluate(() => { window.__dropFlatten = true; });                         // ChartBridge never gets this command
+  await press();
+  await until(async () => (await flattens()).length === flattensBefore + 2, 'the command goes (and is lost)');
+  const FO_SENT = 'Flatten and turn off sent: waiting for ChartBridge to put him in Shadow...';
+  check((await why()) === FO_SENT && (await agentNow()).mode === 'copilot' && await disabled('#agView [data-onoff="off"]'), 'while he is still in Copilot the line never says Shadow: ' + await why());
+  await sleep(2500);
+  check(offs() === 1 && (await agentNow()).connected && (await why()) === FO_SENT && (await agentNow()).mode === 'copilot', 'still in Copilot: the same line, no Off (Shadow comes first; flat in Copilot is test/agent-helper.test.js)');
+  await until(async () => /^ChartBridge did not put him in Shadow within 10 s/.test(await why()), 'the give-up after 10 s', 15000);
+  check((await why()) === 'ChartBridge did not put him in Shadow within 10 s of Flatten and turn off: he stays on (Copilot). Flatten SIM-AG1 MNQ in NinjaTrader, then press Off.' && offs() === 1 && (await agentNow()).connected,
+    'not in Shadow in 10 s: no Off, he stays on, and his mode is said: ' + await why());
+
+  console.log('Flatten and turn off, in Shadow but not flat in 30 s: he stays on, in Shadow, and the line says so');
+  await page.evaluate(() => { window.__dropFlatten = false; });
+  await control('agent-flatoff-nofill', { on: 1 });                                     // ChartBridge's flatten does not fill
+  await press();
+  await until(async () => (await agentNow()).mode === 'shadow', 'ChartBridge put him in Shadow');
+  const FO_WAIT = 'In Shadow: ChartBridge flattens what he owns; he turns off once flat...';
+  await until(async () => (await why()) === FO_WAIT, 'Shadow is said once ChartBridge says it');
+  check((await why()) === FO_WAIT && await disabled('#agView [data-onoff="off"]'), 'the line while it waits: ' + await why());
   await sleep(12000);
-  check(/^Flatten sent for SIM-AG1 MNQ/.test(await text('#agView [data-k="hWhy"]')), 'still said after 12 s (it does not fade): ' + await text('#agView [data-k="hWhy"]'));
-  await until(async () => /^Not flat 30 s after the Flatten/.test(await text('#agView [data-k="hWhy"]')), 'the give-up after 30 s', 30000);
-  check((await text('#agView [data-k="hWhy"]')) === 'Not flat 30 s after the Flatten for SIM-AG1 MNQ: he stays on, in Shadow. Flatten in NinjaTrader, then press Off.' && helper.calls.filter(c => c.route === 'POST /off').length === 1 && (await agentNow()).connected,
-    'not flat in 30 s: no Off, he stays on, in Shadow: ' + await text('#agView [data-k="hWhy"]'));
+  check((await why()) === FO_WAIT, 'still said after 12 s (it does not fade): ' + await why());
+  await until(async () => /^Not flat 30 s after Flatten and turn off/.test(await why()), 'the give-up after 30 s', 30000);
+  check((await why()) === 'Not flat 30 s after Flatten and turn off: he stays on, in Shadow. Flatten SIM-AG1 MNQ in NinjaTrader, then press Off.' && offs() === 1 && (await agentNow()).connected,
+    'not flat in 30 s: no Off, he stays on, in Shadow: ' + await why());
   await sleep(10000);
-  check(/^Not flat 30 s after the Flatten/.test(await text('#agView [data-k="hWhy"]')) && !(await disabled('#agView [data-onoff="off"]')), 'the give-up line stays (10 s later), and Off can be pressed again');
+  check(/^Not flat 30 s after Flatten and turn off/.test(await why()) && !(await disabled('#agView [data-onoff="off"]')), 'the give-up line stays (10 s later), and Off can be pressed again');
   await page.screenshot({ path: path.join(SHOTS, 'agent-onoff-notflat.png'), clip: { x: 0, y: 0, width: 760, height: 900 } });
 
   console.log('Flatten and turn off');
-  await page.evaluate(() => { window.__dropFlatten = false; });
-  await page.click('#agView [data-onoff="off"]');
-  await until(() => visible('#agView [data-k="hAsk"]'), 'asked again');
-  await page.click('#agView [data-act="hFlatOff"]');
-  await until(async () => (await flattens()).filter(m => !m.__dropped).length === 1, 'the command reaches ChartBridge');
+  await control('agent-flatoff-nofill', { on: 0 });
+  const before = (await flattens()).length;
+  await press();
+  await until(async () => (await flattens()).length === before + 1, 'the command reaches ChartBridge');
   const fl = (await flattens()).pop();
-  check(fl.agent === 'demo' && Object.keys(fl).filter(k => !k.startsWith('__')).sort().join(',') === 'agent,cid,type', 'agentFlattenOff for demo: ChartBridge puts him in Shadow and flattens what he owns: ' + JSON.stringify(fl));
-  const offAt = await until(() => helper.calls.filter(c => c.route === 'POST /off').length === 2 && helper.calls.filter(c => c.route === 'POST /off')[1].at, 'Off once he is flat');
-  check(/Flat/.test(await text('.ag-strip [data-k="sPos"]')) && !(await agentNow()).position, 'he is flat');
+  check(fl.agent === 'demo' && !fl.__dropped && Object.keys(fl).filter(k => !k.startsWith('__')).sort().join(',') === 'agent,cid,type', 'agentFlattenOff for demo: ChartBridge puts him in Shadow and flattens what he owns: ' + JSON.stringify(fl));
+  const offAt = await until(() => offs() === 2 && helper.calls.filter(c => c.route === 'POST /off')[1].at, 'Off once he is flat');
+  check(/Flat/.test(await text('.ag-strip [data-k="sPos"]')) && !(await agentNow()).position && (await agentNow()).mode === 'shadow', 'he is flat, in Shadow');
   await until(async () => !(await agentNow()).connected, 'the helper ended him');
-  check((await flattens()).length === flattensBefore + 2, 'one flatten for each press');
+  check((await flattens()).length === flattensBefore + 4, 'one command for each press');
   check(offAt >= fl.__at, 'Off went after ChartBridge\'s flatten filled');
-  await until(async () => (await text('#agView [data-k="hWhy"]')) === 'Flat. Off: his program ends, no more model calls.', 'the line says flat, then off');
+  await until(async () => (await why()) === 'Flat. Off: his program ends, no more model calls.', 'the line says flat, then off');
   check(!(await sentAll()).some(m => m.type === 'order' && m.account === 'SIM-AG1'), 'the page built no order for him');
   } else {
   console.log('ChartBridge 0.6.24 (no agentFlattenOff): Shadow first, flattened by hand, Off once flat');

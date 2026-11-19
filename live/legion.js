@@ -112,6 +112,13 @@ function stopPlan(version, connected, signedIn) {
   return { kind: '', ok: false, why: 'This ChartBridge (' + (version || 'version not known') + ') has no Stop all: stop each trader in NinjaTrader.', note: '' };
 }
 
+/** The question for this plan (the R12 delta, nit): on an older ChartBridge the ledger's caveat is IN the question, where a phone
+ *  shows it whole (the caption beside the button is cut short there). */
+function questionFor(p) {
+  if (!p || p.kind !== 'killAll') return QUESTION;
+  return QUESTION + ' This ChartBridge finds them by its own prop rule only: an account The Desk\'s ledger types eval or funded that NinjaTrader lists as Sim is NOT stopped: stop such a trader with its own kill switch on Cohorts.';
+}
+
 /** The one message a press sends, with exactly its keys. */
 function stopMsg(kind, cid) {
   if (typeof cid !== 'string' || !cid) return null;
@@ -153,7 +160,7 @@ function stopClick(askedAt, now, real) {
 }
 
 return Object.freeze({ TABS, TAB_IDS, OLD_TABS, COHORT_SUBS, roman, tabFrom, tabSearch, KILL_MIN, STOPALL_MIN, CONFIRM_MS, ARM_MS, ANSWER_WAIT_MS, QUESTION,
-  atLeast, stopPlan, stopMsg, stopMaySend, stopAnswer, stopClick });
+  questionFor, atLeast, stopPlan, stopMsg, stopMaySend, stopAnswer, stopClick });
 });
 
 /* ================================================================================================ the page (browser only) */
@@ -193,11 +200,13 @@ function renderHead() {
   }
   if (btn) {
     btn.disabled = !p.ok && !S.ask;
-    const tip = p.ok ? C.QUESTION : p.why;
+    const tip = p.ok ? C.questionFor(p) : p.why;
     if (btn.title !== tip) btn.title = tip;
     btn.setAttribute('aria-expanded', String(!!S.ask));
   }
   if (ask) ask.hidden = !S.ask;
+  const q = $('lxStopQ'), qt = C.questionFor(p);
+  if (q && q.textContent !== qt) q.textContent = qt;
   /* the R12 delta, S-a: the floating line carries Stop all's answers only; the standing word (an older ChartBridge, not connected)
      sits in the header's fixed caption beside the button */
   const words = S.said, standing = !p.ok ? p.why : p.note, cap = $('lxStopNote');
@@ -359,7 +368,12 @@ function start() {
   /* the header's own link: listen, and post only what stopMaySend passes (the two Stop all messages, exactly their keys) */
   link = AF ? Object.freeze({ post: m => C.stopMaySend(m) === true && AF.post(m) === true }) : null;
   if (AF) AF.listen({ message: m => { onHeadMessage(m); for (const fn of HOOKS.message) { try { fn(m); } catch (e) { /* its own guard */ } } },
-    closed: () => { S.connected = false; S.signedIn = false; if (S.ask) endAsk(); renderHead(); } });
+    closed: () => {
+      S.connected = false; S.signedIn = false; if (S.ask) endAsk();
+      /* the R12 delta, nit: a Stop all sent and not answered is said at once when the connection drops (never left to the timer) */
+      if (S.pending) { S.pending = ''; clearTimeout(S.waitTimer); say('Stop all was sent and ChartBridge\'s answer never came (the connection dropped): check the traders on Cohorts, or in NinjaTrader, now.', true); }
+      renderHead();
+    } });
   if (window.LegionTabs && typeof window.LegionTabs.mount === 'function') guard('the moved tabs', () => window.LegionTabs.mount({ AF, hub, store, PREFIX, PIN, realClick, hooks: HOOKS, mounted: S.mounted, guard, noteLine }));
   const want = C.tabFrom(location.search);
   showTab(want.tab, want.sub, false);

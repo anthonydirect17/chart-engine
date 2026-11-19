@@ -199,6 +199,7 @@ export class OrderDeskV3 extends OrderDesk {
     super(o);
     this.sw = Object.fromEntries(SWITCHES.map(k => [k, !(o.switches && o.switches[k] === false)]));   // Anthony 2026-10-07: on by default
     this.graceMs = o.graceMs === undefined ? 10000 : o.graceMs;
+    this.refuseFlatOff = new Map(); this.flatOffNoFill = false;   // plan step 3.2, the R12 delta X2: test controls only
     this.personalName = typeof o.personal === 'string' ? o.personal : '';   // 1.51.0 (ChartBridge 0.6.16, made up): the one personal account
     this.botConfigRoot = o.botRoot || 'MNQ';   // config.txt botRoot
     this.botRoot = this.botConfigRoot;          // the root in force: botRoot, or its micro or mini set from the page (bot-rails.txt)
@@ -1460,13 +1461,18 @@ Object.assign(OrderDeskV3.prototype, {
   check_agentKillAllProp() { return null; },
   do_agentKillAllProp() { this.broadcastV3({ type: 'status', level: 'warn', text: 'Kill all (prop accounts): no agent is on prop accounts: nothing was done (the fake bridge knows no prop account)' }); },
   /* plan step 3.2: Shadow, its unfilled entries cancelled, its Copilot proposals expired, then its own flatten (as ChartBridge) */
-  check_agentFlattenOff() { return null; },
+  /* the R12 delta X2: a refusal set by the test control /test/agent-refuse-flatoff (once), as ChartBridge's action rate refuses */
+  check_agentFlattenOff(m) {
+    const why = this.refuseFlatOff.get(m.agent);
+    if (why) { this.refuseFlatOff.delete(m.agent); return why; }
+    return null;
+  },
   do_agentFlattenOff(m) {
     const a = this.agents.get(m.agent), was = a.mode;
     a.mode = 'shadow';
     this.agentCancelEntries(a, 'expired', 'Flatten and turn off');
     this.agentExpireProposals(a, 'not answered', 'Flatten and turn off');
-    this.agentFlatten(a, 'Flatten and turn off');
+    if (!this.flatOffNoFill) this.agentFlatten(a, 'Flatten and turn off');   // /test/agent-flatoff-nofill: Shadow, and no fill
     this.broadcastV3({ type: 'status', level: 'warn', text: 'Agent ' + a.id + ': Flatten and turn off: mode shadow' + (was !== 'shadow' ? ' (was ' + was + ')' : '') });
     this.agentToAgent(a, this.agentWelcome(a));
     this.agentNotify(a);

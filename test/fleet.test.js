@@ -2012,5 +2012,11 @@ test('the R12 delta of plan step 3.2, B1r: a lane whose trader a desk is turning
   assert.strictEqual(F.lanes(both, groups, accounts, V, cards)[0].armable, true, 'no list: as before');
   const src = fs.readFileSync(path.join(__dirname, '..', 'live', 'fleet.js'), 'utf8');
   assert.match(src, /C\.lanes\(agentList\(\), S\.groups, S\.accounts, S\.version, S\.roster\.cards,\n\s+window\.AgentDesk && typeof window\.AgentDesk\.turningOff === 'function' \? window\.AgentDesk\.turningOff\(\) : \[\]\)/, 'FleetView reads the desks\' list');
-  assert.match(fs.readFileSync(path.join(__dirname, '..', 'live', 'agent.js'), 'utf8'), /window\.AgentDesk = \{ create, VERSION, turningOff: \(\) => \[\.\.\.new Set\(TURNING\.values\(\)\)\] \};/, 'every desk of the window reports its job');
+  const ag = fs.readFileSync(path.join(__dirname, '..', 'live', 'agent.js'), 'utf8');
+  assert.match(ag, /window\.AgentDesk = \{ create, VERSION, turningOff \};/, 'every desk reports its job');
+  /* the R12 delta X4 and its nit: each desk is read when asked (no copy made at a render), its job and the Off it sent until that
+     answers ok; and the windows of this origin share the list (test/agent-helper.test.js runs createTurnShare) */
+  assert.match(ag, /TURNING\.set\(api0, \(\) => \[H\.job && H\.job\.agent, H\.hold\]\);/);
+  assert.match(ag, /function turningOff\(\) \{\n\s+const ids = new Set\(localTurning\(\)\);\n\s+if \(SHARE\) \{ try \{ for \(const id of SHARE\.list\(\)\) ids\.add\(id\); \} catch \(e\) \{/);
+  assert.ok(!/syncTurning/.test(ag), 'no copy kept by renderPanel');
 });

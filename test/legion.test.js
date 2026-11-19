@@ -130,6 +130,23 @@ test('the header: the five tabs, Stop all automation outside every tab panel (so
   assert.ok(html.includes(L.QUESTION.replace(/'/g, '\'')), 'the question in the page is LegionCore\'s');
 });
 
+test('the R12 delta, nits: on an older ChartBridge the ledger caveat is in the question itself; a drop answers a pending Stop all at once', () => {
+  assert.equal(L.questionFor(L.stopPlan('0.6.25', true, true)), L.QUESTION, '0.6.25: the question as it is');
+  for (const v of ['0.6.17', '0.6.24']) {
+    const q = L.questionFor(L.stopPlan(v, true, true));
+    assert.ok(q.startsWith(L.QUESTION + ' '), v);
+    assert.match(q, /by its own prop rule only: an account The Desk's ledger types eval or funded that NinjaTrader lists as Sim is NOT stopped/, v);
+  }
+  assert.equal(L.questionFor(L.stopPlan('0.6.16', true, true)), L.QUESTION, 'nothing can be sent: no question opens anyway');
+  const js = read('live', 'legion.js');
+  assert.match(js, /const q = \$\('lxStopQ'\), qt = C\.questionFor\(p\);\n\s+if \(q && q\.textContent !== qt\) q\.textContent = qt;/, 'the page writes it into the question');
+  assert.match(js, /const tip = p\.ok \? C\.questionFor\(p\) : p\.why;/);
+  /* the closed handler: the pending press is answered at once, marked bad, never left to the 5 s timer */
+  const closed = js.slice(js.indexOf('closed: () => {'), js.indexOf('} });', js.indexOf('closed: () => {')));
+  assert.match(closed, /if \(S\.pending\) \{ S\.pending = ''; clearTimeout\(S\.waitTimer\); say\('Stop all was sent and ChartBridge\\'s answer never came \(the connection dropped\): check the traders on Cohorts, or in NinjaTrader, now\.', true\); \}/);
+  assert.ok(closed.indexOf('S.pending') < closed.indexOf('renderHead()'));
+});
+
 test('Castra, Ludus and Go live: labelled not built yet, with no sample numbers', () => {
   const html = read('live', 'legion.html');
   for (const t of ['castra', 'ludus', 'golive']) {

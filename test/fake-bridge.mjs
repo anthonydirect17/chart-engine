@@ -165,7 +165,10 @@
 //   /test/agent-mode?agent=&mode=auto (another page changed its mode),
 //   /test/agent-unlist?account=&on=1 (NinjaTrader no longer lists it), /test/agent-flat-hours?agent=&on=1 (the flat hours now),
 //   /test/agent-market-shut?on=1|0|auto (the market shut, open, or by its fixed hours), /test/agent-lose-trade?agent=&restart=1
-//   (its trade record gone while the account holds the position: the lost-trade error every 60 s until flat).
+//   (its trade record gone while the account holds the position: the lost-trade error every 60 s until flat),
+//   /test/agent-refuse-flatoff?agent=&reason= (plan step 3.2, the R12 delta X2: its next agentFlattenOff is refused with these
+//   words; by default ChartBridge's action rate), /test/agent-flatoff-nofill?on=1 (agentFlattenOff puts him in Shadow, and his
+//   flatten does not fill: he stays in his trade).
 //   Sample data and made-up names only.
 //   GET /bot-library (lane C4, docs/BOT_LIBRARY.md): with --v3 and the bot switch on, the made-up example
 //   test/fixtures/bot-library.json, or the file --bot-library=path names; --no-bot-library answers 404 (no file on this PC).
@@ -1032,6 +1035,10 @@ function agentControl(p, q, req, res) {
   if (p === '/test/agents') return json(200, { agents: [...desk.agents.values()].map(x => Object.assign(desk.agentMsg(x), { proposals: [...x.proposals.values()], plans: x.plans, notes: x.notes.length })), log: desk.log.filter(l => l.file.startsWith('agent-')), diag: desk.agentsDiag() });
   if (!a) return json(404, { error: 'no agent ' + id });
   if (p === '/test/agent-secret' && req.method === 'POST') return json(200, { secret: AGENT_SECRETS[id] });
+  /* plan step 3.2, the R12 delta X2: ChartBridge refuses his next agentFlattenOff (as its action rate would), or puts him in Shadow
+     and his flatten does not fill */
+  if (p === '/test/agent-refuse-flatoff') { desk.refuseFlatOff.set(id, q.get('reason') || 'too many order actions (more than 10 a second)'); return json(200, { refuse: id }); }
+  if (p === '/test/agent-flatoff-nofill') { desk.flatOffNoFill = q.get('on') !== '0'; return json(200, { noFill: desk.flatOffNoFill }); }
   const hello = () => { if (!a.connected) { desk.agentConnect(id, null); desk.agentMessage(id, { type: 'agentHello', name: q.get('name') || 'Demo Agent', build: q.get('build') || 'sample-build-1' }); } };
   if (p === '/test/agent-connect') { if (q.get('on') === '0') desk.agentDrop(id, 'no heartbeat for 5 s'); else hello(); return json(200, desk.agentMsg(a)); }
   hello();

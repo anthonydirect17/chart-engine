@@ -287,3 +287,98 @@ test('the R12 delta of plan step 3.2, B1r: in the hand wait, he leaves Shadow (A
   r = AH.flatOffStep(st.job, Object.assign({}, inShadow, { mode: undefined }), T + 5000, false);
   assert.match(r.line, /^He left Shadow \(now not known\)/);
 });
+
+test('the R12 delta of plan step 3.2, X2: one agentFlattenOff: Shadow said only once seen, Shadow before Off, out of Shadow the wait ends', () => {
+  const T = 4000000, pos = { root: 'MNQ', qty: 1, avgPrice: 25400 };
+  const inAuto = { agent: 'demo', account: 'SIM-AG1', mode: 'auto', position: pos }, inShadow = Object.assign({}, inAuto, { mode: 'shadow' });
+  const st = AH.flatOffStart(inAuto, T, false, true);
+  assert.deepEqual(st, { job: { agent: 'demo', account: 'SIM-AG1', root: 'MNQ', phase: 'shadow', fo: true, until: T + AH.SHADOW_WAIT_MS }, action: 'flatoff' });
+  /* still in Auto: never "he is in Shadow"; flat for a moment while still in Auto: no Off */
+  let r = AH.flatOffStep(st.job, inAuto, T + 500, true);
+  assert.deepEqual([r.action, r.line], ['', 'Flatten and turn off sent: waiting for ChartBridge to put him in Shadow...']);
+  assert.equal(r.line, AH.FO_SENT);
+  r = AH.flatOffStep(st.job, Object.assign({}, inAuto, { position: null }), T + 600, true);
+  assert.deepEqual([r.action, r.job.phase], ['', 'shadow'], 'flat but still in Auto: no Off');
+  /* not in Shadow in time: he stays on, in the mode ChartBridge says */
+  r = AH.flatOffStep(st.job, inAuto, T + AH.SHADOW_WAIT_MS + 1, true);
+  assert.deepEqual([r.action, r.job], ['giveup', null]);
+  assert.equal(r.line, 'ChartBridge did not put him in Shadow within 10 s of Flatten and turn off: he stays on (Auto). Flatten SIM-AG1 MNQ in NinjaTrader, then press Off.');
+  /* in Shadow: ChartBridge flattens; Off once flat, in Shadow */
+  r = AH.flatOffStep(st.job, inShadow, T + 1000, true);
+  assert.deepEqual([r.action, r.job.phase, r.job.until, r.line], ['', 'flatten', T + 1000 + AH.FLAT_WAIT_MS, AH.FO_WAIT]);
+  assert.ok(/^In Shadow: /.test(AH.FO_WAIT));
+  const j = r.job;
+  assert.equal(AH.flatOffStep(j, inShadow, T + 2000, true).action, '', 'not flat yet: wait');
+  assert.deepEqual(AH.flatOffStep(j, Object.assign({}, inShadow, { position: null }), T + 3000, true).action, 'off');
+  /* B1r for this job too: out of Shadow before flat (or flat in Auto) the wait ends, no Off */
+  for (const x of [Object.assign({}, inShadow, { mode: 'auto' }), Object.assign({}, inShadow, { mode: 'auto', position: null }), Object.assign({}, inShadow, { mode: 'copilot', position: null })]) {
+    r = AH.flatOffStep(j, x, T + 4000, true);
+    assert.deepEqual([r.action, r.job], ['giveup', null], JSON.stringify(x));
+    assert.match(r.line, /^He left Shadow \(now (auto|copilot)\) before he was flat: he stays on\. Flatten SIM-AG1 MNQ, then press Off\.$/);
+  }
+  r = AH.flatOffStep(j, inShadow, j.until + 1, true);
+  assert.deepEqual([r.action, r.line], ['giveup', 'Not flat 30 s after Flatten and turn off: he stays on, in Shadow. Flatten SIM-AG1 MNQ in NinjaTrader, then press Off.']);
+  /* no word from ChartBridge: never read as flat; at the end, never "nothing was flattened" (ChartBridge may have) */
+  assert.equal(AH.flatOffStep(j, null, T + 2000, true).action, '');
+  assert.equal(AH.flatOffStep(st.job, null, st.job.until + 1, true).line, 'ChartBridge did not answer: whether he was flattened is not known, and he stays on. Check NinjaTrader, then press Off.');
+  /* already in Shadow when pressed: the wait for flat at the first step; a job is made even when the page cannot say where he holds */
+  r = AH.flatOffStep(AH.flatOffStart(inShadow, T, false, true).job, inShadow, T + 100, true);
+  assert.deepEqual([r.action, r.job.phase], ['', 'flatten']);
+  const unclear = AH.flatOffStart(Object.assign({}, inAuto, { account: null, seats: [{ account: 'PROP-1' }] }), T, false, true);
+  assert.deepEqual([unclear.action, unclear.job.fo, unclear.job.phase], ['flatoff', true, 'shadow'], 'ChartBridge flattens what he owns: the page need not say where');
+  assert.match(AH.flatOffStep(unclear.job, Object.assign({}, inAuto, { account: null, seats: [{ account: 'PROP-1' }] }), unclear.job.until + 1, true).line, /Flatten what he holds in NinjaTrader, then press Off\.$/);
+  assert.equal(AH.modeWord('copilot'), 'Copilot'); assert.equal(AH.modeWord(undefined), 'mode not known');
+});
+
+test('the R12 delta of plan step 3.2, X2: the desk keeps the command\'s cid, and a refusal ends the job with ChartBridge\'s words', () => {
+  const js = read('live', 'agent.js');
+  assert.match(js, /const c = sendAgent\(fm, 'flatoff'\);/);
+  assert.match(js, /H\.job = Object\.assign\(AH\.flatOffStart\(a, Date\.now\(\), false, true\)\.job, \{ cid: c \}\);/);
+  assert.match(js, /S\.pending\.set\(c, \{ kind, agent: typeof m\.agent === 'string' \? m\.agent : '' \}\);/);
+  assert.match(js, /return c;\s+\/\/ its cid/);
+  assert.match(js, /else if \(x\.kind === 'flatoff'\) \{[\s\S]{0,400}if \(H\.job && H\.job\.cid === m\.cid\) \{ H\.job = null; clearTimeout\(flatTimer\); \}[\s\S]{0,200}'Refused by ChartBridge: ' \+ String\(m\.reason \|\| 'no reason given'\)\.replace\(\/\\\.\+\$\/, ''\) \+ '\. Nothing was flattened; he stays on \(' \+ AH\.modeWord\(a && a\.mode\) \+ '\)\.';/);
+  assert.ok(!/Flatten and turn off sent: ChartBridge puts him in Shadow and flattens what he owns/.test(js), 'the old words that said Shadow before ChartBridge did are gone');
+});
+
+test('the R12 delta of plan step 3.2, X4: the traders being turned off are shared by every window of this origin, and storage that fails never throws', () => {
+  let t = 5000000;
+  const now = () => t;
+  /* a made-up browser: one localStorage for the origin, and a BroadcastChannel bus between the windows */
+  const mem = () => { const m = new Map(); return { get length() { return m.size; }, key: i => [...m.keys()][i] ?? null, getItem: k => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: k => m.delete(k), m }; };
+  const bus = () => { const ends = []; return () => { const c = { onmessage: null, postMessage: d => { for (const o of ends) if (o !== c && o.onmessage) o.onmessage({ data: JSON.parse(JSON.stringify(d)) }); } }; ends.push(c); return c; }; };
+  const ls = mem(), chan = bus();
+  const A = AH.createTurnShare({ storage: () => ls, channel: chan, now, token: 'wa' }), B = AH.createTurnShare({ storage: () => ls, channel: chan, now, token: 'wb' });
+  assert.deepEqual([A.list(), B.list()], [[], []]);
+  A.set(['legion1']);
+  assert.deepEqual([A.list(), B.list()], [['legion1'], ['legion1']], 'window B sees what window A is turning off');
+  assert.ok([...ls.m.keys()].every(k => k.startsWith(AH.TURN_KEY)), 'its own key: ' + [...ls.m.keys()]);
+  B.set(['legion1', 'legion2']);
+  A.set([]);
+  assert.deepEqual([A.list().sort(), B.list().sort()], [['legion1', 'legion2'], ['legion1', 'legion2']], 'A ends its job: B\'s own entry for legion1 stays');
+  B.set([]);
+  assert.deepEqual([A.list(), B.list()], [[], []], 'both ended');
+  /* a window closed mid-wait: its entry goes TURN_TTL_MS after its last write, and is cleaned away */
+  A.set(['legion1']);
+  t += AH.TURN_TTL_MS - 1;
+  assert.deepEqual(B.list(), ['legion1']);
+  t += 2;
+  assert.deepEqual(B.list(), [], 'not written again in time: gone');
+  assert.equal(ls.m.size, 0, 'and its entry removed');
+  /* storage that cannot be used: no throw; this window's own, and what the channel said */
+  const bad = { get length() { throw new Error('denied'); }, key() { throw new Error('denied'); }, getItem() { throw new Error('denied'); }, setItem() { throw new Error('denied'); }, removeItem() { throw new Error('denied'); } };
+  const chan2 = bus();
+  const C = AH.createTurnShare({ storage: () => bad, channel: chan2, now, token: 'wc' }), D = AH.createTurnShare({ storage: () => { throw new Error('SecurityError'); }, channel: chan2, now, token: 'wd' });
+  assert.doesNotThrow(() => C.set(['legion1']));
+  assert.deepEqual([C.list(), D.list()], [['legion1'], ['legion1']], 'storage blocked: the channel still carries it');
+  const E = AH.createTurnShare({ storage: () => null, channel: () => { throw new Error('no channel'); }, now, token: 'we' });
+  assert.doesNotThrow(() => E.set(['legion3']));
+  assert.deepEqual(E.list(), ['legion3'], 'neither: this window\'s own only');
+  assert.deepEqual(AH.createTurnShare().list(), [], 'nothing given: an empty list, no throw');
+  /* odd entries are never read as a trader */
+  ls.setItem(AH.TURN_KEY + 'wx:Not-An-Id', JSON.stringify({ until: t + 5000 })); ls.setItem(AH.TURN_KEY + 'wx:legion9', 'not json');
+  assert.deepEqual(B.list(), []);
+  /* a channel word for a past time takes the trader off */
+  const F2 = AH.createTurnShare({ storage: () => null, channel: chan2, now, token: 'wf' });
+  C.set([]);
+  assert.deepEqual(F2.list(), [], 'C said it ended');
+});
