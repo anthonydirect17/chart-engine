@@ -247,6 +247,11 @@ reads "not enough data yet". New files: `live/legion-castra-core.js`, `legion-ca
   the account holds a position, and whenever Auto cannot be told (the traders not heard yet, a trader that cannot be read,
   an account of the tray under Auto). A move that timed out is read again at once and never called unmoved. Under it the
   Agents strip and the Drone sky.
+- **Kill all at the top of Cohorts** (Anthony 2026-11-19: "Yes, Kill all at the top"): the lanes' head (Armed, Kill all and
+  their questions) comes first, where the tab opens, then the cohort model and the Drone sky, then the lanes. No question
+  can be covered by Legion's floating alert lines: the head and Stop all's question stack above them, the lines keep to the
+  room below the head (a phone's long alert never slips under it), and every other question on the page makes them step
+  aside while it is open (`CHART_STYLE.md`).
 - **The Ludus** (plan step 3.4): Pipeline (stations I to VII from the loop's board), Board (the line of 30 and every build,
   best first, each leading with profit per $1, pass rate, days to pass and payout per funded account beside its sample,
   each half of the line with its own; with no board the builds come from The Desk's ledger and the page says why),
@@ -371,7 +376,7 @@ the size. Fixed in `nt8/ChartBridgeGroups.cs`, `live/groups.js`, `live/accounts.
   ChartBridge version range now reach 0.6.25 (`test/lifecycle.test.js`, `nt8-bars`, `history-gap`, `multi-account`,
   `nt8-agents`, `nt8-source`, `nt8-record`: 0.6.25 changes none of the files it pins), and `nt8/check/BarsHarness.cs` S2
   names 0.6.25.
-- `npm test` (Linux): 1,292 tests, 1,291 pass, 1 skipped (Windows only). `npm run test:markup`: 173 pass.
+- `npm test` (Linux): 1,293 tests, 1,292 pass, 1 skipped (Windows only). `npm run test:markup`: 173 pass.
   `npm run check:orders` (Mono): 5,170 checks pass; `npm run check:nt8` compiles. The PowerShell tests
   (`test/pc-updater.tests.ps1`) run on the Windows job only.
 
