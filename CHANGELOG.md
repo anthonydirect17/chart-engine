@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased (plan step 3.5, the ChartBridge half): the go-live guards for ChartBridge 0.6.25
+
+No version bump: the release that ships ChartBridge 0.6.25 raises `Version` in `nt8/ChartBridge.cs` and `live/COMPAT.json`
+`minChartBridge` together (`test/lifecycle.test.js` and `test/account-types.test.js` pin both). ChartBridge only
+(`ChartBridgeGroups.cs`, `ChartBridgeAgents.cs`); the page is unchanged. Law 9.2 and 9.3 (Anthony 2026-11-17, items 78,
+111, 113 and 114). Bot-Lab's half (the GO and half size, the account type, the alarms, the funded scaling step in the
+runner's size check) is Bot-Lab's plan step 3.5 build. `nt8/PROTOCOL.md`, "One direction per firm, one PC per firm and
+the GO size"; the cutover card's text with its rollback: `docs/CUTOVER_chartbridge_0_6_25_golive.md`.
+
+- **The firms:** each prop account's firm and each firm's trading PC, read once a minute from The Desk's
+  `GET /api/legion/cohorts` (`prop_accounts`, The Desk's plan step 3.1), strictly; never from NinjaTrader's provider name.
+- **One direction per firm:** every prop account of a firm on this PC, grouped or not, one way, with NQ, MNQ, ES and MES
+  as one market. A new entry against the firm's open direction is refused and logged, from every source; nothing is
+  closed or cancelled, an exit of the account's own position always goes, and the personal account is never bound.
+- **One PC per firm:** a trader's pick, Auto, its restore after a restart and every new entry on a prop account need its
+  prop seats to be of one firm and that firm to run on this PC (`config.txt` `pc`, else the computer name).
+- **Not known:** a trader's or the bot's new entry on a prop account waits for a firm read in the last 10 minutes;
+  Anthony's own ticket and the copier go, and are checked whenever the firm is known.
+- **The GO size is the file's:** a roster file whose GO size is not its playbook's is not served, so it cannot be picked
+  or armed.
+- **`groups` gains `firmGuard`:** each firm, its PC, whether that is this PC, its accounts and its direction.
+- Tests: `check/AgentHarness.cs` `GoLive35`; the older agent parts run with a made-up firm per account on this PC; two
+  exact `groups` message checks in `check/GroupsHarness.cs` allow `firmGuard`.
+
 ## Unreleased (2026-11-18): release 2: the shared CME calendar and New York clock copies, Good Friday 2026 follows CME
 
 No version bump: release 2's numbers are set when it is cut. Three parts, each merged whole into `claude/release2`:
