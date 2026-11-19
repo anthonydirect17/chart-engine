@@ -206,8 +206,8 @@ test('Castra reads and never writes; Cohorts writes The Desk\'s cohort model onl
 test('no dash, no sample numbers on screen outside the labelled fixtures, no purple', () => {
   for (const f of ['legion-castra-core.js', 'legion-castra.js', 'legion-cohorts.js', 'legion-castra.css']) {
     const src = read('live', f);
-    assert.doesNotMatch(src, /[–—]/, f + ': no em or en dash');
+    assert.doesNotMatch(src, /[\u2013\u2014]/, f + ': no em or en dash');
     assert.doesNotMatch(src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, ''), /purple|violet|magenta/i, f + ': no purple');
   }
-  assert.doesNotMatch(read('test', 'fixtures', 'castra-sample.js'), /[–—]/);
+  assert.doesNotMatch(read('test', 'fixtures', 'castra-sample.js'), /[\u2013\u2014]/);
 });
