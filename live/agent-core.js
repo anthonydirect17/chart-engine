@@ -1344,8 +1344,9 @@ function copilotRouter(doc) {
  * Anthony 2026-11-11: the Agent tab and the Bot tab as one tab, Praetorian, "focused on the personal (not prop business)
  * accounts"; "They already have all the rules and safety's built in". The two desks are mounted as they are; this is the one
  * thing neither had: a gate on the connection they are handed (live/workspace.js praetorianLink), so that from Praetorian
- * nothing reaches a prop account. It hears ChartBridge's own `accounts`, `agent` and `bot` messages and answers, for each
- * message a desk would post, '' (it may go) or why not. It passes:
+ * nothing reaches a prop account. It hears ChartBridge's own `accounts`, `agent` and `bot` messages, and `hello` (the version)
+ * and `groups` (a group trader's home; laneRule, whether ChartBridge has read The Desk's account types: prAutoWhy), and answers,
+ * for each message a desk would post, '' (it may go) or why not. It passes:
  *   - a kill switch turned ON (agentKill or botKill with on: true): it only stops a trader, so it is never held back; and a
  *     trader's or the bot's Shadow (agentMode or botMode to exactly 'shadow'), a stop too (the review of 102, F2; 03:30);
  *   - the two acknowledgements (agentSeen, botSeen): they change nothing;

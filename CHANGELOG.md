@@ -5,7 +5,7 @@
 No version bump: the release that ships ChartBridge 0.6.25 raises `Version` in `nt8/ChartBridge.cs`
 (`test/lifecycle.test.js` pins it). `live/COMPAT.json` `minChartBridge` stays 0.6.2 for this step: the page needs nothing
 new from these guards (raised only if another part of the release needs it). ChartBridge only
-(`ChartBridgeGroups.cs`, `ChartBridgeAgents.cs`); the page is unchanged. Law 9.2 and 9.3 (Anthony 2026-11-17, items 78,
+(`ChartBridgeGroups.cs`, `ChartBridgeAgents.cs`), and on the page Praetorian's rule for Auto on a Sim account (below). Law 9.2 and 9.3 (Anthony 2026-11-17, items 78,
 111, 113 and 114). Bot-Lab's half (the GO and half size, the account type, the alarms, the funded scaling step in the
 runner's size check) is Bot-Lab's plan step 3.5 build. `nt8/PROTOCOL.md`, "One direction per firm, one PC per firm and
 the GO size"; the cutover card's text with its rollback: `docs/CUTOVER_chartbridge_0_6_25_golive.md`.
@@ -32,6 +32,13 @@ the GO size"; the cutover card's text with its rollback: `docs/CUTOVER_chartbrid
   a status line saying what was and was not done, not a bare reject.
 - Tests: `check/AgentHarness.cs` `GoLive35`; the older agent parts run with a made-up firm per account on this PC; two
   exact `groups` message checks in `check/GroupsHarness.cs` allow `firmGuard`.
+- **Praetorian, Auto on a Sim account (the page; Anthony 2026-11-19):** an account The Desk's ledger types eval or funded
+  needs ChartBridge 0.6.25 or later for Auto, whatever NinjaTrader calls it. Below 0.6.25 every Sim account waits (no older
+  ChartBridge says the whole ledger), and the line says that updating to 0.6.25 lets a true Sim account test. On 0.6.25 a
+  Sim account waits until ChartBridge has read The Desk's account types (the groups message's `laneRule`: `state` on with an
+  `outside` list), since before that read it takes a Sim-listed prop account for plain Sim. After that true Sim accounts
+  test in Auto freely. Copilot is not held, nor the stops, Shadow, the personal account or None (`AgentCore.prAutoWhy`,
+  `ledgerReadWhy`; `test/praetorian.test.js`, `test/praetorian-smoke.mjs`).
 
 ## Unreleased (2026-11-18): release 2: the shared CME calendar and New York clock copies, Good Friday 2026 follows CME
 
