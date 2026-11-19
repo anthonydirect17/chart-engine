@@ -1,4 +1,4 @@
-# ChartBridge protocol (v1 market data and fills, v2 orders, v3 accounts, strategies, copier and bot, 0.5.0 agents, 0.5.1 accounts, 0.5.8 prop groups, 0.6.0 group trading, 0.6.1 a group's Type and default hero, 0.6.3 the audit fixes, 0.6.4 the no-trade-record alarm and Merge on an off follower, 0.6.8 the minute book, 0.6.10 the account lifecycle and the NQ tick file, 0.6.11 the bar trail and the narrower 1 second request, 0.6.12 the bar trail follow-ups, 0.6.13 the tick day's morning catch-up and the raw deleted once packed, 0.6.14 the tick day check's rule: short and holes, 0.6.15 the 1 second pull retired: the NQ tick file is the one source, 0.6.16 prop accounts: one Auto restore after a restart (Auto ends at 17:00 ET since 0.6.18), 0.6.17 Kill all for the prop accounts, 0.6.18 entry rules per trader: market entry and no target, 0.6.19 the day's profit stop: a dollar mark per account, 0.6.20 the roster served, 0.6.21 the pick and the day's profit side, 0.6.22 the lanes run themselves, the day's loss stop and the voice calls, 0.6.23 a hand move is the move, the next build the delta table)
+# ChartBridge protocol (v1 market data and fills, v2 orders, v3 accounts, strategies, copier and bot, 0.5.0 agents, 0.5.1 accounts, 0.5.8 prop groups, 0.6.0 group trading, 0.6.1 a group's Type and default hero, 0.6.3 the audit fixes, 0.6.4 the no-trade-record alarm and Merge on an off follower, 0.6.8 the minute book, 0.6.10 the account lifecycle and the NQ tick file, 0.6.11 the bar trail and the narrower 1 second request, 0.6.12 the bar trail follow-ups, 0.6.13 the tick day's morning catch-up and the raw deleted once packed, 0.6.14 the tick day check's rule: short and holes, 0.6.15 the 1 second pull retired: the NQ tick file is the one source, 0.6.16 prop accounts: one Auto restore after a restart (Auto ends at 17:00 ET since 0.6.18), 0.6.17 Kill all for the prop accounts, 0.6.18 entry rules per trader: market entry and no target, 0.6.19 the day's profit stop: a dollar mark per account, 0.6.20 the roster served, 0.6.21 the pick and the day's profit side, 0.6.22 the lanes run themselves, the day's loss stop and the voice calls, 0.6.23 a hand move is the move, 0.6.24 release 1 (the personal bot, Cut half), 0.6.25 the go-live guards, Stop all and Flatten and turn off, the delta table and the floor fix)
 
 ChartBridge is a NinjaTrader 8 add-on. It serves the live chart page at `http://localhost:8765/` and
 talks to it over one WebSocket at `ws://localhost:8765/ws`. Everything stays on the local machine.
@@ -199,7 +199,7 @@ Bars are stamped with their **start** time. NinjaTrader stamps bars at their clo
 
 | type | fields | when |
 |---|---|---|
-| `hello` | `version`, `now` (UTC ms), `instruments`: `[{root, name, tick, pointValue, settlement, settlementDate}]` (0.3.7: `settlement` the prior session's settlement for that contract, null when ChartBridge has no dated value for it; `settlementDate` the trading date it settles, `yyyy-MM-dd`), `accounts`: `[name]`, `trading` (0.3.0 and later: the `trading` object below, always with `enabled` false until the page signs in), `features` (0.3.5: `["liveFirst", "profile"]`, see Served window and session table; 0.3.7 adds `"settlement"`, `"htf"`, `"weekProfile"`; the next build after 0.6.24 adds `"deltaTable"`, see The delta table), `pcClock` (0.5.6: this PC's clock against a time server, see Delay readout) | on connect |
+| `hello` | `version`, `now` (UTC ms), `instruments`: `[{root, name, tick, pointValue, settlement, settlementDate}]` (0.3.7: `settlement` the prior session's settlement for that contract, null when ChartBridge has no dated value for it; `settlementDate` the trading date it settles, `yyyy-MM-dd`), `accounts`: `[name]`, `trading` (0.3.0 and later: the `trading` object below, always with `enabled` false until the page signs in), `features` (0.3.5: `["liveFirst", "profile"]`, see Served window and session table; 0.3.7 adds `"settlement"`, `"htf"`, `"weekProfile"`; 0.6.25 adds `"deltaTable"`, see The delta table), `pcClock` (0.5.6: this PC's clock against a time server, see Delay readout) | on connect |
 | `history` | `root`, `name`, `barSeconds` (60), `sub` (0.3.3), `bars`: `[[t,o,h,l,c,v], ...]`, `done` (bool) | after `subscribe`, chunked. Since 0.3.3 the history is split: the chunks before the last minute (the last of them now says `done` false), then the last (forming) minute in its own message with `done` true, rebuilt from trades when it can be (see Backfill and live below) |
 | `ticks` | `root`, `sub` (0.3.3), `ticks`: `[[t,p,v], ...]`, since 0.3.4 `[[t,p,v,s,sm], ...]` (side and method, see Trade side; the first three keep their places); 0.3.7 sends `[t,p,v]` again; since 0.3.8 a trade with a known Time and Sales category is `[t,p,v,null,null,q]` (see Time and Sales category), `done` (bool) | after `history`, the current session's trades, chunked |
 | `ready` | `root`, `sub` (0.3.3), `filled` (0.6.8, minute and hour loads only: how many of the history's bars came from ChartBridge's minute book, 0 when none; see The minute book below), `minuteTimedOut`, `minuteFailed`, `standIn`, `tailTimedOut`, `historyFrom` (0.6.8, see The minute book) | history and tick backfill complete; live ticks follow (since 0.3.3 only those not already in the backfill; see Backfill and live below) |
@@ -220,7 +220,7 @@ Bars are stamped with their **start** time. NinjaTrader stamps bars at their clo
 
 | type | fields |
 |---|---|
-| `subscribe` | `root` (`MNQ`, `NQ`, `MES`, `ES`), `days` (1m history, default 5), `tickHours` (tick backfill cap, default 8), `sub` (0.3.3, optional: a whole number of up to 15 digits, echoed as a plain number without leading zeros on that load's `history`, `ticks` and `ready`; without it ChartBridge numbers the page's subscribes 1, 2, 3, ...), `liveFirst` (sent by chart 1.8.0; ChartBridge 0.3.5 gives every subscribe with `tickHours` above 0 the served window, with or without it), `profile` (0.3.5: send the `profile` message), `deltaTable` (the next build after 0.6.24: send the `deltaTable` message, and the served window's live trades with their sides) |
+| `subscribe` | `root` (`MNQ`, `NQ`, `MES`, `ES`), `days` (1m history, default 5), `tickHours` (tick backfill cap, default 8), `sub` (0.3.3, optional: a whole number of up to 15 digits, echoed as a plain number without leading zeros on that load's `history`, `ticks` and `ready`; without it ChartBridge numbers the page's subscribes 1, 2, 3, ...), `liveFirst` (sent by chart 1.8.0; ChartBridge 0.3.5 gives every subscribe with `tickHours` above 0 the served window, with or without it), `profile` (0.3.5: send the `profile` message), `deltaTable` (0.6.25: send the `deltaTable` message, and the served window's live trades with their sides) |
 | `ping` | `c` (page clock, echoed back in a `pong` with the server clock `s`) |
 | `htf` | `root`, `tf` (`4h`, `1D` or `1W`), `id` (optional) (0.3.7, strict: see below) |
 | `weekProfile` | `root`, `id` (optional) (0.3.7, strict: see below) |
@@ -807,7 +807,7 @@ and `backfillTotalMs` (the backfills' times added up). `windows` lists the last 
 `atUtcMs`, `fromCache`, `askedByCount` (the counts asked, "shared" for a load that waited on another's request), `trades`,
 `from`, `timeToLiveMs`, `error`.
 
-## The delta table (the next build after 0.6.24; Anthony 2026-11-19)
+## The delta table (0.6.25; Anthony 2026-11-19)
 
 Anthony, 2026-11-19: "When I switch between chart timeframes or tickers, my Cum Delta resets. That should not be: once the data is
 in there, it should be there." Until this build the page counted only trades whose side it saw live (the served window's trades
@@ -4057,8 +4057,8 @@ The page's Legion tab sends this message (chart 1.45.0, `live/fleet.js`: asked f
 ### Stop all automation and Flatten and turn off (plan step 3.2: Legion, the next ChartBridge)
 
 Legion's own page (`live/legion.html`, served from the www folder behind the same PIN) has **Stop all automation** in its header
-on every tab (law 9.3; the lock of 2026-11-15, item 90; Anthony 2026-11-17, item 113). This branch does not bump ChartBridge's
-version: the release that carries these two messages names the number, and the pages ask for it as `0.6.25`
+on every tab (law 9.3; the lock of 2026-11-15, item 90; Anthony 2026-11-17, item 113). ChartBridge 0.6.25
+(chart 1.58.0) carries these two messages, and the pages ask for it as `0.6.25`
 (`LegionCore.STOPALL_MIN`, `AgentCore.FLATOFF_MIN`); with an older ChartBridge Legion sends `agentKillAllProp` and the desks
 keep their own three steps, as before. Both are guarded as every agent page message (a signed-in v3 page from an allowed
 origin, trading on, the agent channel on).
@@ -4140,11 +4140,11 @@ Anthony 2026-11-13: "If I make a move, that's the move". Built in `ChartBridgeGr
 
 Checked in `check/AgentHarness.cs` (`PropAccounts`, the lane rule part, "0.6.23 hand") and `check/GroupsHarness.cs`.
 
-### The floor's highest close kept (unreleased, the floor fix)
+### The floor's highest close kept (0.6.25, the floor fix)
 
 Anthony's ruling (2026-11-18): ChartBridge showed a Lucid 50K account's floor at $48,000 where the firm showed $48,151.
 A join with no highest close started the highs at the larger of the account size and the balance, and leaving a group,
-a deleted group and Hide forgot them. Built in `ChartBridgeGroups.cs`; no version bump yet.
+a deleted group and Hide forgot them. Built in `ChartBridgeGroups.cs`; released in ChartBridge 0.6.25.
 
 - **Every prop account's end-of-day high is kept at every close**, in a group or not. Prop is ChartBridge's own rule
   (`ChartBridgeBranches.IsProp`: a personal account is picked, and this is not it, not Sim, not Backtest or Playback). In
@@ -4208,7 +4208,7 @@ Built in `ChartBridgeGroups.cs` (the rule) and `ChartBridgeAccounts.cs` (the res
   The answer is `{"accounts":[{...}, ...]}`, one flat object per account: `account`, `kind` (`eval`, `funded` or
   `null`), `outcome` (`null`, `blown` or `promoted`), `archived`, `hasRules`, and the rules a join carries (`size`,
   `dailyLoss`, `drawdown`, `drawdownType`, `lockAt`, `target`, `consistency`, `maxMinis`, `maxMicros`, `typeId`);
-  unreleased (the floor fix): `highClose`, The Desk's highest close for the account (a number, or null; absent from an
+  0.6.25 (the floor fix): `highClose`, The Desk's highest close for the account (a number, or null; absent from an
   older Desk), which the join carries (below). An answer that does not read moves nothing; that is said once in the Output window until it reads again.
 - **Join.** An account joins a lane only when all of these hold: its kind is `eval` or `funded`, it has no outcome and is
   not archived, The Desk knows its rules; NinjaTrader lists it and it is connected; it is prop by ChartBridge's own rule (a
@@ -4283,7 +4283,7 @@ lists them word for word).
 
 Checked in `check/AgentHarness.cs` (`Voice`) and `test/nt8-record.test.js`.
 
-### One direction per firm, one PC per firm and the GO size (plan step 3.5, the next ChartBridge, 0.6.25)
+### One direction per firm, one PC per firm and the GO size (plan step 3.5, ChartBridge 0.6.25)
 
 Law 9.2 and 9.3 (Anthony 2026-11-17, items 78, 111, 113 and 114; Bot-Lab `notes/BUILD_PLAN_2026-11-16_the_move.md` row 3.5).
 Built in `ChartBridgeGroups.cs` (the firms, `EntryCheck`) and `ChartBridgeAgents.cs` (the pick, Auto, its restore, the roster
@@ -4544,7 +4544,7 @@ Anthony's decisions of 2026-10-14 (items 4 and 5, with G1, G2, G3 and F-ALL) and
   (`accounts`) and to each agent (`accountState`). A number ChartBridge cannot give is null with the reason; it is never
   estimated. Bots are not in scope.
 - **G2 (b)**: when an account is put into a group, the page asks once for its "highest close so far" (from the firm's
-  dashboard; optional, prefilled with the larger of the account size and its balance now, and, unreleased (the floor fix),
+  dashboard; optional, prefilled with the larger of the account size and its balance now, and, from 0.6.25 (the floor fix),
   of the end-of-day high ChartBridge keeps for it); ChartBridge starts both trailing highs from it.
 
 **Files** (next to `config.txt`; written whole through a temp file, off NinjaTrader's thread; Anthony never edits them).
@@ -4577,7 +4577,7 @@ each session's first reading (`dayStartBalance`, the close before it) only when 
 window (review of #48: a ChartBridge started at midday never takes a midday balance for a close). `dayStartAt` is the UTC ms of
 that reading. `peakIntraday`, the highest equity seen, raised by the
 1 s accounts check. The highs are kept for an account in a group: joining sets both (G2); leaving, a deleted group or Hide
-clears them for an account that is not prop. Unreleased (the floor fix, below): a prop account keeps both highs and its
+clears them for an account that is not prop. From 0.6.25 (the floor fix, below): a prop account keeps both highs and its
 missed-close marks through all of those, and the break starts its end-of-day high at a close when it has none, in a group or not. `dayStartBalance`, the balance at the first reading of each session (`session`, `yyyy-MM-dd`, ChartBridge's
 18:00 ET session date, as `agentState.session`). Written at most every 5 s while something changed, and at the stop. A file
 that cannot be read is not rewritten that run: the trailing floors are null with that reason (a static floor still works) and

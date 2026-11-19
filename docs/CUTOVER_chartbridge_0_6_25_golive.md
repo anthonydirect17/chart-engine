@@ -13,6 +13,16 @@ step that installs or edits a file is shown to Anthony first and done on his "ok
 **Anthony's word:** ChartBridge 0.6.25 is installed by Anthony while flat (the plan's row 3.5). **Do it only when Anthony
 says go for this card, and only while he is flat in every account.**
 
+## Before this card: the page goes first (chart 1.58.0, by itself)
+
+The release is chart 1.58.0 with ChartBridge 0.6.25 (CHANGELOG, "Installing: the page first, ChartBridge by hand").
+`live/COMPAT.json` `minChartBridge` stays 0.6.2, so the PC updater installs page 1.58.0 at its overnight check beside the
+ChartBridge each PC runs (0.6.23, or 0.6.24 where release 1's ChartBridge went in). Until this card is done on a PC, the page
+there holds back, with its own words, every part that needs the newer ChartBridge: Go live and Auto on a prop account,
+Praetorian's Auto on a Sim account, Stop all automation (Kill all, prop accounts, goes instead, said so), Flatten and turn
+off (Shadow, then a flatten by hand), Cut half and the bot's rails (0.6.24); the delta table and the kept highs come with
+0.6.25. The Desk's hotkey change (`cutHalf`, release 1's note) goes in before the page.
+
 ## First (before this card)
 
 1. **The Desk:** plan step 3.1 (<DESK_COMMIT>) is installed by the SERVER session, so The Desk answers
@@ -44,9 +54,10 @@ chart-engine main **<MAIN_COMMIT>** (<RELEASE_PR>) carries ChartBridge 0.6.25 wi
 
 ## Steps (each trading PC)
 
-1. Anthony is flat in every account, and no trader is in Auto on a prop account.
+1. Anthony is flat in every account, and no trader is in Auto on a prop account. The page on this PC is 1.58.0 or later.
 2. Install as the release's card says (`update-pc.ps1 -InstallChartBridge` from the clone, then **F5 in the NinjaScript
-   Editor while flat**). Note the kept folder's name the install prints (the date and time only).
+   Editor while flat**). Note the kept folder's name the install prints (the date and time only). On a PC that ran 0.6.23
+   this also brings release 1's ChartBridge (0.6.24): the personal bot does not trade until every rail is set on the Bot tab.
 3. Check, and report each:
    - the Output window shows ChartBridge 0.6.25 and no `firms: The Desk's account ledger (firms and their PCs) could not
      be read` line after the first minute (a line once, then `read again`, is fine);
@@ -55,26 +66,28 @@ chart-engine main **<MAIN_COMMIT>** (<RELEASE_PR>) carries ChartBridge 0.6.25 wi
    - Legion's Go live and Cohorts: a trader on this PC's firm can be picked and armed; one on a firm set to another PC is
      refused with "runs on <PC>, not on this PC" (try only in Shadow, never arm a live account for the test).
 
-## If something is wrong after F5: put 0.6.24 back (the rollback)
+## If something is wrong after F5: put the earlier ChartBridge back (the rollback)
 
 1. Anthony is flat in every account. Turn every trader to Shadow first.
 2. Show Anthony, then run (from the clone): `powershell -NoProfile -ExecutionPolicy Bypass -File <clone>\nt8\update-pc.ps1
-   rollback-chartbridge -Flat`. It shows the version it goes back to (0.6.24) and checks every kept file's sha256 first;
+   rollback-chartbridge -Flat`. It shows the version it goes back to (the one this install replaced: 0.6.23 or 0.6.24) and
+   checks every kept file's sha256 first;
    it changes nothing when a check fails, and says why.
 3. **F5 in the NinjaScript Editor while flat.**
 4. **After a rollback the go-live guards are gone** (no one direction per firm, no one PC per firm, no GO size check in
    ChartBridge): **no trader goes to Auto on a prop account** until 0.6.25 is back. Bot-Lab's runner still refuses a GO
-   whose size is not the file's. This is not only an instruction: the coordinator adds a guard on the page before the
-   release (planned, not built on this branch, since Legion changes in parallel): **Legion's Go live and Auto on a prop
-   account require ChartBridge 0.6.25 or later** (a `GOLIVE_MIN` in Legion, as `STOPALL_MIN` is for Stop all), so with
-   0.6.24 back the page greys Go live and Auto for prop accounts and says why. Praetorian holds Auto on a Sim account the
+   whose size is not the file's. This is not only an instruction: the page holds it too (built, chart 1.58.0): **Legion's
+   Go live and Auto on a prop account require ChartBridge 0.6.25 or later** (`GOLIVE_MIN` in `agent-core.js`, `fleet.js` and
+   `legion.js`, as `STOPALL_MIN` is for Stop all), so with an older ChartBridge back the page greys Go live and Auto for prop
+   accounts and says why. Praetorian holds Auto on a Sim account the
    same way (Anthony 2026-11-19: an account the ledger types eval or funded, whatever NinjaTrader calls it; below 0.6.25 the
    page cannot read the whole ledger, so every Sim account waits for 0.6.25 there, said with the version). On 0.6.25 it
    also waits until ChartBridge has read The Desk's account types (its `laneRule` in the groups message), since until that
    read ChartBridge takes a Sim-listed prop account for plain Sim.
 5. **Page installs after a rollback:** these guards need nothing new on the page, so `live/COMPAT.json` `minChartBridge`
-   stays 0.6.2 for step 3.5 (it is raised only if another part of the release needs it). With 0.6.24 back, the PC updater
-   keeps installing new pages as before; only the planned `GOLIVE_MIN` guard above changes what the page offers.
+   stays 0.6.2 in chart 1.58.0 (no part of the release needs it raised). With an older ChartBridge back, the PC updater
+   keeps installing new pages as before; the page's version gates above (and Stop all's and Flatten and turn off's fall
+   backs) change what it offers.
 6. Report what went wrong (the Output window's lines, no account names) and stop.
 
 ## Report
@@ -83,12 +96,13 @@ chart-engine main **<MAIN_COMMIT>** (<RELEASE_PR>) carries ChartBridge 0.6.25 wi
 
 ## For the release (not for the PCs)
 
-- The release that ships this raises `Version` in `nt8/ChartBridge.cs` to 0.6.25, with a CHANGELOG heading for ChartBridge
-  0.6.25 (`test/lifecycle.test.js` pins the Version). `live/COMPAT.json` `minChartBridge` **stays 0.6.2 for step 3.5**:
-  the page needs nothing new from these guards (`test/account-types.test.js` pins 0.6.2). It is raised only if another
-  part of the release needs it, and then with its own CHANGELOG line.
-- The planned page guard: Legion's Go live and Auto on a prop account require ChartBridge 0.6.25 or later (`GOLIVE_MIN`,
-  pinned to the release's Version as `STOPALL_MIN` is), added by the coordinator with Legion's work.
+- Done in chart 1.58.0: `Version` in `nt8/ChartBridge.cs` is 0.6.25, under the CHANGELOG heading "ChartBridge 0.6.25 and
+  chart 1.58.0" (`test/lifecycle.test.js` pins the Version). `live/COMPAT.json` `minChartBridge` **stays 0.6.2**: the page
+  needs nothing new from these guards (`test/account-types.test.js` pins 0.6.2), and no other part of the release needs it
+  raised: Stop all and Flatten and turn off fall back below 0.6.25 (the plan of step 3.2 to raise it was not followed, so the
+  page goes first; CHANGELOG, Installing).
+- The page guard, built: Legion's Go live and Auto on a prop account require ChartBridge 0.6.25 or later (`GOLIVE_MIN`,
+  pinned with `STOPALL_MIN` and `FLATOFF_MIN` to one version by `test/nt8-agents.test.js`).
 - **The firms are read into memory only** (R12 review nit 4, left as it is): after a ChartBridge restart no trader takes a
   new entry on a prop account, goes to Auto there or gets Auto back until the first read of The Desk's firms (within
   about a minute; the one Auto restore waits for it). Anthony's own ticket and the copier are not held by it.

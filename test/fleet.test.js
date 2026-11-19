@@ -1668,7 +1668,7 @@ test('the Traders fold (builder 4\'s Legion trader desk): closed by default, mou
   assert.match(R.part('desk').innerHTML, /The trader desk shows here/, 'a desk that throws is no desk');
   // the page hands the desk its own feed (AF), never Legion's link: the desk puts Legion's gate round it itself (builder 4)
   const ws = read('live', 'legion-tabs.js');   // plan step 3.2: mounted on Legion
-  assert.match(ws, /traderDesk: el => \(window\.LegionDesk && typeof window\.LegionDesk\.mount === 'function' && el\n\s+\? window\.LegionDesk\.mount\(el, \{ v3: AF, feed: hub,/);
+  assert.match(ws, /traderDesk: el => \(window\.LegionDesk && typeof window\.LegionDesk\.mount === 'function' && el\n\s+\? \(?(?:legionDesk = )?window\.LegionDesk\.mount\(el, \{ v3: AF, feed: hub,/);   // plan step 3.3 keeps the desk it mounts (legionDesk, the Drone sky's glances); still AF and hub
 });
 
 test('a trader\'s accounts are its account and every seat it has; a shape the page cannot read is "cannot tell" (builder 4\'s note on answers B4-2)', () => {
