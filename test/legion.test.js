@@ -161,7 +161,7 @@ test('ChartBridge: the two messages, their keys, never refused for the rate, and
   const cs = read('nt8', 'ChartBridgeAgents.cs');
   assert.match(cs, /\{ "agentStopAll", new\[\] \{ "type", "cid" \} \}/);
   assert.match(cs, /\{ "agentFlattenOff", new\[\] \{ "type", "cid", "agent" \} \}/);
-  const disp = cs.indexOf('if (type == "agentStopAll") { why = PageStopAll();'), rate = cs.indexOf('if (!RateOk(client.Actions))');
+  const disp = cs.indexOf('if (type == "agentStopAll") { why = PageStopAll(cid);'), rate = cs.indexOf('if (type != "agentFlattenOff" && !RateOk(client.Actions))');
   assert.ok(disp > 0 && rate > disp, 'handled before the action rate, as Kill all');
   const scope = /internal static bool StopScope\(string name\)\s*\{([\s\S]*?)\n        \}/.exec(cs)[1];
   assert.match(scope, /if \(ChartBridgeBranches\.PersonalNamed && ChartBridgeBranches\.IsPersonal\(name\)\) return false;/);

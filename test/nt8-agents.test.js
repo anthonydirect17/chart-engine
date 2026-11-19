@@ -315,13 +315,14 @@ test('0.6.17 Kill all for the prop accounts: only agents whose every account is 
   assert.match(scope, /Account listed = FindAccount\(name\);\s*return listed == null \|\| !\(ChartBridgeBot\.IsSim\(listed\) \|\| ChartBridgeAccounts\.IsSim\(listed\)\);/, 'not listed: in scope');
   assert.match(acode, /List<Order> others = may\.Where\(o => o != j\.Close && \(j\.Owned \? \(!j\.OwnOnly \|\| IsMine\(o\)\) : \(IsMine\(o\) && !\(IsReStop\(o\) && \(p1 != 0 \|\| p2 != 0\)\)\)\)\)\.ToList\(\);/, 'own orders only when the job says so; every other flatten as before');
   assert.strictEqual((acode.match(/, false, true\);/g) || []).length, 5, 'only Kill all (and Stop all automation through it), the day\'s profit stop (0.6.19), the day\'s loss stop (0.6.22), and plan step 3.2\'s Stop all on a mixed trader\'s prop seats and Flatten and turn off ask for own orders only');
-  assert.match(acode, /if \(type == "agentKillAllProp"\) \{ why = PageKillAllProp\(\);[^\n]*\n\s*if \(type == "agentStopAll"\) \{ why = PageStopAll\(\);[^\n]*\n\s*if \(!RateOk\(client\.Actions\)\)/, 'Kill all (and plan step 3.2\'s Stop all automation) are handled before the action rate gate');
+  assert.match(acode, /if \(type == "agentKillAllProp"\) \{ why = PageKillAllProp\(cid\);[^\n]*\n\s*if \(type == "agentStopAll"\) \{ why = PageStopAll\(cid\);[^\n]*\n\s*if \(type != "agentFlattenOff" && !RateOk\(client\.Actions\)\)/, 'Kill all (and plan step 3.2\'s Stop all automation) are handled before the action rate gate; Flatten and turn off is never refused for the rate (plan step 3.5, the Legion review)');
+  assert.equal((acode.match(/ChartBridgeV3\.SendToV3Traders\(PressStatus\(text, cid\)\);/g) || []).length, 2, 'Stop all and Kill all echo the press\'s cid (plan step 3.5, the Legion review)');
   for (const s of ['kill all F2: the hand order is not cancelled and still works', 'kill all F1 A: the account is not listed', 'kill all F1 B: and a plan is refused, nothing placed', 'kill all F1 C: a group with a member NinjaTrader no longer lists', 'kill all N1:', 'kill all N2: sent right after, it is carried out'])
     assert.ok(read(path.join('check', 'AgentHarness.cs')).includes(s), s);
   assert.match(killIn, /DropAutoIntent\(label\);/);
   assert.ok(!/\.Submit\s*\(|\.CreateOrder\s*\(|PlaceOrder|PlaceAgentEntry/.test(one + killIn), 'no order call of its own: the close is the agent\'s flatten job, as at the flat time');
   assert.equal((acode.match(/KillProp\(\)/g) || []).length, 2, 'defined once, called once');
-  assert.match(acode, /if \(type == "agentKillAllProp"\) \{ why = PageKillAllProp\(\);/);
+  assert.match(acode, /if \(type == "agentKillAllProp"\) \{ why = PageKillAllProp\(cid\);/);
   const h = read(path.join('check', 'AgentHarness.cs'));
   for (const s of ['kill all, no personal account picked: refused', 'kill all: the personal account and a prop account the agent does not trade: no order, no cancel', 'kill all: an agent on a Sim account is not touched', 'kill all: an agent on the personal account: not killed, not flattened, still in Auto', 'kill all: released: Auto stays off until it is set on the page'])
     assert.ok(h.includes(s), s);

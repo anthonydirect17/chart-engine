@@ -27,6 +27,9 @@ the GO size"; the cutover card's text with its rollback: `docs/CUTOVER_chartbrid
   stage, risk_dollars, the stage's playbook) written twice or with an escape refuses the roster file (nit 1); The Desk's
   answer is checked as whole JSON first (nit 2); the advisory plan check 10b writes no Output line (a trader's refusal is
   in its own log; nit 3).
+- **From the Legion review (ChartBridge side of step 3.2's commands):** Stop all's and Kill all's status lines carry the
+  press's `cid`; `agentFlattenOff` is never refused for the action rate; a failure of Flatten and turn off after Shadow is
+  a status line saying what was and was not done, not a bare reject.
 - Tests: `check/AgentHarness.cs` `GoLive35`; the older agent parts run with a made-up firm per account on this PC; two
   exact `groups` message checks in `check/GroupsHarness.cs` allow `firmGuard`.
 

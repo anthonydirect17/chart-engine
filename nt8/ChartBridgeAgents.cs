@@ -1040,7 +1040,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // personal account is never touched): it loses its prop seats for the session instead (StopKey) and its own flatten starts
         // there. The bot, the copier and every manual order are never touched. With no personal account picked it still acts on the
         // ledger's accounts; with neither a pick nor the ledger nothing is known to be prop and it is refused. One status line answers.
-        private static string PageStopAll()
+        private static string PageStopAll(string cid)
         {
             bool ledger = ChartBridgeGroups.LedgerKnown;
             if (!ChartBridgeBranches.PersonalNamed && !ledger) return "Stop all automation acts on prop accounts, and no personal account is picked (the Accounts tab) and The Desk's account ledger has not been read, so no account is known to be prop: nothing was done. Stop each trader on Legion's Cohorts or in NinjaTrader";
@@ -1062,7 +1062,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                           ". Your personal account, the bot and the copier are not touched; only the traders' own orders were cancelled: an order placed by hand stays and can still fill" +
                           ". On the account and contract a trader holds, its position is closed whole, a contract added by hand included";
             ChartBridgeServer.Log("agent " + text);
-            ChartBridgeV3.SendToV3Traders("{\"type\":\"status\",\"level\":\"warn\",\"text\":" + CbJson.Str(text) + "}");
+            ChartBridgeV3.SendToV3Traders(PressStatus(text, cid));   // plan step 3.5 (the Legion review): the press's cid echoed, so a page matches its own press
             return null;
         }
 
@@ -1073,7 +1073,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // None, or a group with a member that is not prop is never touched; the bot, the copier, the order ticket and every
         // manual order are never touched. With no personal account picked nothing is prop: refused, nothing done. The older
         // agentKill (one agent, no flatten) is unchanged.
-        private static string PageKillAllProp()
+        private static string PageKillAllProp(string cid)
         {
             if (!ChartBridgeBranches.PersonalNamed) return "Kill all acts on prop accounts only, and no personal account is picked (the Accounts tab), so no account is prop: nothing was done";
             List<string> did = new List<string>(), left = new List<string>(), mixed = new List<string>(), failed = new List<string>();
@@ -1097,8 +1097,15 @@ namespace NinjaTrader.NinjaScript.AddOns
                           // F7, Anthony 2026-11-11: "When the bot is trading the account, its the bots account for that day. I would never touch it."
                           ". On the account and contract a trader holds, its position is closed whole, a contract added by hand included (an account a bot trades is the bot's for the day)";
             ChartBridgeServer.Log("agent " + text);
-            ChartBridgeV3.SendToV3Traders("{\"type\":\"status\",\"level\":\"warn\",\"text\":" + CbJson.Str(text) + "}");
+            ChartBridgeV3.SendToV3Traders(PressStatus(text, cid));   // plan step 3.5 (the Legion review): the press's cid echoed, so a page matches its own press
             return null;
+        }
+
+        // The status line that answers a press (Stop all, Kill all): the same text as before, with the press's cid after it when it sent
+        // one (plan step 3.5, the Legion review), so a page matches its own press; a page that matches the opening words is unchanged.
+        internal static string PressStatus(string text, string cid)
+        {
+            return "{\"type\":\"status\",\"level\":\"warn\",\"text\":" + CbJson.Str(text) + (cid != null ? ",\"cid\":" + CbJson.Str(cid) : "") + "}";
         }
 
         public static void OnPageMessage(ChartBridgeClient client, string type, string text)
@@ -1119,9 +1126,10 @@ namespace NinjaTrader.NinjaScript.AddOns
                 if (odd != null) { PageReject(client, cid, id, "unknown key \"" + odd + "\" in " + type); return; }
                 if (d.ContainsKey("cid") && cid == null) { PageReject(client, cid, id, "cid must be a plain string"); return; }
                 // the review's N2: Kill all is never refused for the action rate (it was, as the 11th action inside a second)
-                if (type == "agentKillAllProp") { why = PageKillAllProp(); if (why != null) PageReject(client, cid, id, why); return; }   // 0.6.17
-                if (type == "agentStopAll") { why = PageStopAll(); if (why != null) PageReject(client, cid, id, why); return; }   // plan step 3.2: never refused for the rate either
-                if (!RateOk(client.Actions)) { PageReject(client, cid, id, "too many order actions (more than " + MaxActionsPerSecond + " a second)"); return; }
+                if (type == "agentKillAllProp") { why = PageKillAllProp(cid); if (why != null) PageReject(client, cid, id, why); return; }   // 0.6.17
+                if (type == "agentStopAll") { why = PageStopAll(cid); if (why != null) PageReject(client, cid, id, why); return; }   // plan step 3.2: never refused for the rate either
+                // plan step 3.5 (the Legion review): Flatten and turn off is a stop, never refused for the action rate (as Kill all and Stop all)
+                if (type != "agentFlattenOff" && !RateOk(client.Actions)) { PageReject(client, cid, id, "too many order actions (more than " + MaxActionsPerSecond + " a second)"); return; }
                 if (type == "agentStandDownClear") { why = PageClear(d); if (why != null) PageReject(client, cid, id, why); return; }   // 0.6.2
                 ChartBridgeAgent a = Get(ChartBridgeAgent.S(d, "agent") ?? "");
                 if (a == null) { PageReject(client, cid, id, "there is no agent " + (ChartBridgeAgent.S(d, "agent") ?? "(none)") + " (agents in config.txt)"); return; }
@@ -5098,6 +5106,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         // The harness only (nt8/check): makes this agent's flatten throw inside Kill all, to show the kill switch is already on (N1).
         // Always null in NinjaTrader.
         internal static string FlattenFaultForCheck;
+        internal static string FlattenOffFaultForCheck;   // plan step 3.5: the harness makes Flatten and turn off fail after Shadow, before its flatten
         internal string KillProp()
         {
             lock (PlaceGate)
@@ -5224,17 +5233,36 @@ namespace NinjaTrader.NinjaScript.AddOns
                     connected = client != null;
                     if (connected) offAsked = true;
                 }
-                foreach (Proposal p in expired) { ToPages(ProposalJson(p)); ToAgent(AnswerJson(p.P.Id, "not answered", "Flatten and turn off")); }
-                DropAutoIntent("Flatten and turn off");
-                int n = CancelUnfilled("Flatten and turn off");
-                int roots = 0;
+                // plan step 3.5 (the Legion review): once the mode is Shadow, a failure is answered with a status line saying so and
+                // what was and was not done, never a bare "ChartBridge error" reject (the page's words then stay true)
+                int n = -1, roots = 0;
+                bool flatTried = false;
                 string flatErr = null;
                 try
                 {
-                    if (FlattenFaultForCheck == Id) throw new InvalidOperationException("a fault made by the harness");
-                    roots = StartFlatten("Flatten and turn off", false, null, false, true);
+                    foreach (Proposal p in expired) { ToPages(ProposalJson(p)); ToAgent(AnswerJson(p.P.Id, "not answered", "Flatten and turn off")); }
+                    DropAutoIntent("Flatten and turn off");
+                    n = CancelUnfilled("Flatten and turn off");
+                    if (FlattenOffFaultForCheck == Id) throw new InvalidOperationException("a fault made by the harness");
+                    flatTried = true;
+                    try
+                    {
+                        if (FlattenFaultForCheck == Id) throw new InvalidOperationException("a fault made by the harness");
+                        roots = StartFlatten("Flatten and turn off", false, null, false, true);
+                    }
+                    catch (Exception ex) { flatErr = ex.Message; }
                 }
-                catch (Exception ex) { flatErr = ex.Message; }
+                catch (Exception ex)
+                {
+                    string w = "Agent " + Id + ": Flatten and turn off: mode shadow" + (old != "shadow" ? " (was " + old + ")" : "") + ", then ChartBridge failed (" + ex.Message + "): " +
+                               (n < 0 ? "its unfilled entries may NOT be cancelled" : n + " unfilled entr" + (n == 1 ? "y" : "ies") + " cancelled") + "; " +
+                               (flatTried ? (roots > 0 ? "flattening what it owns" : "its flatten may NOT have started") : "its flatten was NOT started") + " on " + AccountWords() + ": check NinjaTrader and act there now";
+                    try { Log("agent " + Id + ": " + w); AgentLog(w); } catch (Exception) { }
+                    ToPages(StatusJson("error", w));
+                    try { ChartBridgeOrders.AgentAlarm(w); } catch (Exception) { }
+                    try { Notify(); } catch (Exception) { }
+                    return null;
+                }
                 string flatWords = flatErr != null ? "its flatten could NOT be started (" + flatErr + "): act in NinjaTrader now" :
                                    roots > 0 ? "flattening what it owns" : "nothing of its own to flatten";
                 string say = "Agent " + Id + ": Flatten and turn off: mode shadow" + (old != "shadow" ? " (was " + old + ")" : "") + "; " + n + " unfilled entr" + (n == 1 ? "y" : "ies") +

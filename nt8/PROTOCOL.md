@@ -4281,6 +4281,12 @@ Bot-Lab's `specrunner/` (its plan step 3.5 build); nothing here sizes a trader's
   prop account takes no new entry and cannot go to Auto there; Anthony's own trading and the copier are as before, except
   that a new entry against a firm's direction is refused once the firm is known.
 
+- **From the Legion review (step 3.2's commands, ChartBridge side):** the status line that answers `agentStopAll` and
+  `agentKillAllProp` carries the press's `cid` after its text (the same opening words), so a page matches its own press;
+  `agentFlattenOff` is never refused for the action rate (as Stop all and Kill all); and when Flatten and turn off fails
+  after the trader is in Shadow, the pages get a status line (`error`) saying it is in Shadow and what was and was not
+  cancelled or flattened, never a bare `ChartBridge error` reject.
+
 Checked in `check/AgentHarness.cs` (`GoLive35`); the older parts run with a made-up firm per account on this PC.
 
 ### The pick, and the day's profit side in accountState (0.6.21)

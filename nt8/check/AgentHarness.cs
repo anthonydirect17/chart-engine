@@ -7403,6 +7403,57 @@ public static class AgentHarness
             ChartBridgeRoster.FolderSetting = "";
         });
 
+        Part("Legion review: Stop all and Kill all echo the press's cid on their status line", () =>
+        {
+            PropStart("PROP-1", true);
+            DefaultFirms();
+            Mode("manrae", "shadow");
+            int s0 = N(page);
+            P("{\"type\":\"agentStopAll\",\"cid\":\"sa-echo\"}");
+            string st = Last(page, "status");
+            Check(N(page) > s0 && st.StartsWith("{\"type\":\"status\",\"level\":\"warn\",\"text\":\"Stop all automation: ") && st.EndsWith(",\"cid\":\"sa-echo\"}"), "cid: Stop all's status line keeps its opening words and carries the press's cid: " + st);
+            P("{\"type\":\"agentKill\",\"cid\":\"k\",\"agent\":\"manrae\",\"on\":false}");
+            P("{\"type\":\"agentKillAllProp\",\"cid\":\"ka-echo\"}");
+            st = Last(page, "status");
+            Check(st.StartsWith("{\"type\":\"status\",\"level\":\"warn\",\"text\":\"Kill all (prop accounts): ") && st.EndsWith(",\"cid\":\"ka-echo\"}"), "cid: Kill all's status line too: " + st);
+            P("{\"type\":\"agentKill\",\"cid\":\"k\",\"agent\":\"manrae\",\"on\":false}");
+            P("{\"type\":\"agentStopAll\"}");
+            st = Last(page, "status");
+            Check(st.StartsWith("{\"type\":\"status\",\"level\":\"warn\",\"text\":\"Stop all automation: ") && !st.Contains("\"cid\""), "cid: a press with no cid gets the line as before: " + st);
+            P("{\"type\":\"agentKill\",\"cid\":\"k\",\"agent\":\"manrae\",\"on\":false}");
+        });
+        Part("Legion review: Flatten and turn off is never refused for the action rate", () =>
+        {
+            PropStart("PROP-1", true);
+            DefaultFirms();
+            lock (pc.Actions) pc.Actions.Clear();
+            for (int i = 0; i < 12; i++) OnClient(pc, "{\"type\":\"agentMode\",\"cid\":\"r" + i + "\",\"agent\":\"manrae\",\"mode\":\"shadow\"}");   // no clock step: one second
+            Check(PageReject().Contains("too many order actions"), "rate: the 11th action inside a second is refused (the page's rate): " + PageReject());
+            int s0 = N(page);
+            OnClient(pc, "{\"type\":\"agentFlattenOff\",\"cid\":\"fo-rate\",\"agent\":\"manrae\"}");   // the same second, the queue full
+            Check(!PageReject().Contains("\"cid\":\"fo-rate\"") && Any(page, s0, "Agent manrae: Flatten and turn off: mode shadow"), "rate: Flatten and turn off still goes: " + PageReject());
+            Restart();
+        });
+        Part("Legion review: Flatten and turn off failing after Shadow says so in a status line, never a bare reject", () =>
+        {
+            PropStart("PROP-1", true);
+            DefaultFirms();
+            Mode("manrae", "auto");
+            Order e = PlacedOn(prop1, Good(NewId()));
+            Fill(e, 1, 24999);
+            Check(e != null && PosOf(prop1, mnq) == 1, "fail: (manrae long 1 MNQ on PROP-1 in Auto)");
+            ChartBridgeAgent.FlattenOffFaultForCheck = "manrae";
+            int s0 = N(page);
+            try { P("{\"type\":\"agentFlattenOff\",\"cid\":\"fo-fail\",\"agent\":\"manrae\"}"); }
+            finally { ChartBridgeAgent.FlattenOffFaultForCheck = null; }
+            Check(!PageReject().Contains("\"cid\":\"fo-fail\"") && ModeNow() == "shadow" &&
+                  Any(page, s0, "Agent manrae: Flatten and turn off: mode shadow (was auto), then ChartBridge failed (a fault made by the harness): 0 unfilled entries cancelled; its flatten was NOT started on PROP-1: check NinjaTrader and act there now") &&
+                  Last(page, "status").Contains("\"level\":\"error\""),
+                  "fail: in Shadow, and the status line says what was and was not done (no ChartBridge error reject): " + Last(page, "status") + " " + PageReject());
+            Check(PosOf(prop1, mnq) == 1, "fail: (its position as it was: the flatten did not start)");
+            Restart();
+            Settle(prop1);
+        });
         Part("firms: the groups message's firmGuard", () =>
         {
             PropStart("PROP-2", true);
