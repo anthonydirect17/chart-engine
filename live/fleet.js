@@ -1253,6 +1253,9 @@ function create(o) {
   function killAll() {
     const st = killState();
     endAsk();
+    /* N1 (the R12 review): a stop ends any claim that waits, so no Auto follows it (the claimer is the page's one: o.claimCancel) */
+    if (S.claiming) { S.claimSeq++; S.claiming = false; armSay('Claim cancelled by Kill all: nothing was armed.', false); }
+    if (typeof o.claimCancel === 'function') { try { o.claimCancel(); } catch (x) { /* its own */ } }
     if (!st.ok) { hint(st.why, true, true); render(); return; }
     const id = cid();
     S.sent++;

@@ -88,37 +88,86 @@ const groups = g => ({ type: 'groups', list: [], error: null, firmGuard: g });
 const tick = () => new Promise(r => setImmediate(r));
 const one = [{ name: 'Trader One', seats: ['EVAL-B'] }];
 
-test('the claim: a firm already this PC\'s in ChartBridge\'s own reading claims nothing and asks The Desk nothing', async () => {
-  const d = desk(), { c } = claimer(d);
+test('the claim: The Desk already says this PC and ChartBridge shows "here": the Auto goes at once, The Desk read and not written', async () => {
+  const d = desk({ firmPc: 'PC-ONE' }), { c } = claimer(d);
   c.hear(groups(guard()));
   assert.deepEqual(await c.claim(one), { ok: true, why: '', claimed: [], words: '' });
-  assert.deepEqual(d.calls, []);
+  assert.deepEqual(d.calls, [['GET', '/api/legion/cohorts']], 'The Desk is read before every Auto (the R12 review, B1), and not written');
   assert.deepEqual(await c.claim([{ name: 'Sim Trader', seats: ['Sim101'] }]), { ok: true, why: '', claimed: [], words: '' }, 'a seat with no firm: ChartBridge judges it as before');
 });
 
-test('the claim: The Desk is told this PC (as ChartBridge names it), the arm waits until ChartBridge here shows the firm "here", then goes', async () => {
-  const d = desk({ firmPc: 'PC-ONE' }), { c } = claimer(d);
+test('B1 (the R12 review): ChartBridge still says "here" but The Desk has the firm on another PC: it is claimed, and nothing goes until the claim is done', async () => {
+  const d = desk({ firmPc: 'PC-TWO' }), { c, T } = claimer(d);
+  c.hear(groups(guard()));                                             // this PC is PC-ONE; its reading is a minute old and says here
+  let done = null;
+  c.claim(one).then(r => { done = r; });
+  await tick(); await tick();
+  assert.deepEqual(d.calls, [['GET', '/api/legion/cohorts'], ['PUT', '/api/legion/firm-pc', { version: 7, firm: 'Firm A', pc: 'PC-ONE' }]], 'claimed whatever ChartBridge says');
+  assert.equal(done, null, 'the stale "here" does not let the Auto go');
+  T.run(K.TAKEOVER_MS - 1); c.hear(groups(guard())); await tick();
+  assert.equal(done, null, 'a takeover waits for the other PC\'s next read');
+  T.run(1); await tick();
+  assert.equal(done.ok, true);
+  assert.deepEqual(done.claimed, ['Firm A']);
+});
+
+test('B1: The Desk not reached: nothing goes, even when ChartBridge says "here"', async () => {
+  const d = desk({ failGet: { status: null, words: 'The Desk did not answer /api/legion/cohorts in 15 s.' } }), { c } = claimer(d);
+  c.hear(groups(guard()));
+  const r = await c.claim(one);
+  assert.equal(r.ok, false);
+  assert.match(r.why, /^The Desk could not be read \(The Desk did not answer \/api\/legion\/cohorts in 15 s\.\), so this page cannot tell which PC the firm trades from: nothing was armed; the trader stays in Shadow\.$/);
+});
+
+test('D2: a takeover from another PC holds the Auto until 75 s after the write, said with the time it goes; cancellable', async () => {
+  const d = desk({ firmPc: 'PC-ONE' }), { c, T } = claimer(d);
+  T.now = Date.UTC(2001, 0, 2, 14, 0, 0);
   c.hear(groups(guard({ pc: 'PC-TWO', firms: [{ firm: 'Firm A', pc: 'PC-ONE', here: false, accounts: ['EVAL-B'] }] })));
   const said = [];
   let done = null;
   c.claim(one, t => said.push(t)).then(r => { done = r; });
   await tick(); await tick();
   assert.deepEqual(d.calls, [['GET', '/api/legion/cohorts'], ['PUT', '/api/legion/firm-pc', { version: 7, firm: 'Firm A', pc: 'PC-TWO' }]]);
-  assert.match(said[0], /^Claiming Firm A for this PC \(PC-TWO\)\.\.\. waiting for ChartBridge here to read it from The Desk \(once a minute, 90 s at most\)\. Nothing is armed until it does\.$/);
-  assert.equal(done, null, 'nothing goes while ChartBridge still reads the old PC');
-  assert.deepEqual(c.state().firms, ['Firm A']);
-  c.hear(groups(guard({ pc: 'PC-TWO', firms: [{ firm: 'Firm A', pc: 'PC-ONE', here: false, accounts: ['EVAL-B'] }] })));
+  const at = new Date(T.now + K.TAKEOVER_MS), hh = [at.getHours(), at.getMinutes(), at.getSeconds()].map(x => String(x).padStart(2, '0')).join(':');
+  assert.equal(said[0], 'Taking Firm A over from PC-ONE: its bots there stop taking new entries within about a minute (that PC reads The Desk once a minute); Auto goes at ' + hh + ', once ChartBridge here has read it too. Nothing is armed until then.');
+  T.run(5000);
+  c.hear(groups(guard({ pc: 'PC-TWO', firms: [{ firm: 'Firm A', pc: 'PC-TWO', here: true, accounts: ['EVAL-B'] }] })));
+  await tick();
+  assert.equal(done, null, 'ChartBridge here has read it after 5 s: the Auto still waits for the other PC');
+  T.run(K.TAKEOVER_MS - 5000 - 1); await tick();
+  assert.equal(done, null);
+  T.run(1); await tick();
+  assert.equal(done.ok, true);
+  assert.match(done.words, /^Firm A now trades from PC-TWO \(this PC\); Firm A was PC-ONE: its traders there keep their mode, and their new entries on it are refused from that PC's next read of The Desk \(within a minute\); nothing there is closed or cancelled\.$/);
+  assert.ok(K.CLAIM_WAIT_MS > K.TAKEOVER_MS + 30000, 'the wait covers the hold');
+  // cancelled during the hold: nothing goes
+  const d2 = desk({ firmPc: 'PC-ONE' }), x = claimer(d2);
+  x.c.hear(groups(guard({ pc: 'PC-TWO', firms: [{ firm: 'Firm A', pc: 'PC-TWO', here: true, accounts: ['EVAL-B'] }] })));
+  const late = x.c.claim(one);
+  await tick(); await tick();
+  x.c.cancel();
+  assert.equal((await late).cancelled, true);
+});
+
+test('the claim: a first claim (no other PC had the firm) goes as soon as ChartBridge here shows "here"', async () => {
+  const d = desk({ firmPc: null }), { c } = claimer(d);
+  c.hear(groups(guard({ pc: 'PC-TWO', firms: [{ firm: 'Firm A', pc: null, here: false, accounts: ['EVAL-B'] }] })));
+  const said = [];
+  let done = null;
+  c.claim(one, t => said.push(t)).then(r => { done = r; });
+  await tick(); await tick();
+  assert.match(said[0], /^Claiming Firm A for this PC \(PC-TWO\)\.\.\. waiting for ChartBridge here to read it from The Desk \(once a minute, 120 s at most\)\. Nothing is armed until it does\.$/);
+  c.hear(groups(guard({ pc: 'PC-TWO', firms: [{ firm: 'Firm A', pc: null, here: false, accounts: ['EVAL-B'] }] })));
   await tick();
   assert.equal(done, null, 'a groups message with the old table: still waiting');
   c.hear(groups(guard({ pc: 'PC-TWO', firms: [{ firm: 'Firm A', pc: 'PC-TWO', here: true, accounts: ['EVAL-B'] }] })));
   await tick();
   assert.equal(done.ok, true);
-  assert.deepEqual(done.claimed, ['Firm A']);
-  assert.match(done.words, /^Firm A now trades from PC-TWO \(this PC\); Firm A was PC-ONE: its traders there keep their mode, and their new entries on it are refused from that PC's next read of The Desk \(within a minute\); nothing there is closed or cancelled\.$/);
+  assert.equal(done.words, 'Firm A now trades from PC-TWO (this PC).');
   assert.equal(c.state().busy, false);
 });
 
-test('the claim: past 90 s with no "here" nothing is armed and it says so; The Desk already set is not written twice', async () => {
+test('the claim: past 120 s with no "here" nothing is armed and it says so; The Desk already set is not written twice', async () => {
   const d = desk({ firmPc: 'PC-TWO' }), { c, T } = claimer(d);
   c.hear(groups(guard({ pc: 'PC-TWO', firms: [{ firm: 'Firm A', pc: null, here: false, accounts: ['EVAL-B'] }] })));
   let done = null;
@@ -129,7 +178,36 @@ test('the claim: past 90 s with no "here" nothing is armed and it says so; The D
   assert.equal(done, null);
   T.run(1); await tick();
   assert.equal(done.ok, false);
-  assert.match(done.why, /^ChartBridge on this PC did not show Firm A as this PC's within 90 s, so nothing was armed: the trader stays in Shadow\. The Desk has Firm A on PC-TWO now; arm again in a minute\.$/);
+  assert.match(done.why, /^ChartBridge on this PC did not show Firm A as this PC's within 120 s, so nothing was armed: the trader stays in Shadow\. The Desk has Firm A on PC-TWO now; arm again in a minute\.$/);
+});
+
+test('N3: a write The Desk did not answer in time says this PC may not have claimed the firm', async () => {
+  const d = desk({ putAnswers: [{ status: null, words: 'The Desk did not answer /api/legion/firm-pc in 15 s.' }] }), { c } = claimer(d);
+  c.hear(groups(guard({ pc: 'PC-TWO', firms: [{ firm: 'Firm A', pc: 'PC-ONE', here: false, accounts: ['EVAL-B'] }] })));
+  const r = await c.claim(one);
+  assert.equal(r.why, 'The Desk did not answer in time, so this PC may not have claimed Firm A: nothing was armed; the trader stays in Shadow.');
+});
+
+test('D3: Castra\'s Today counts every account in its total, hidden finished ones too; only the rows leave them out', () => {
+  const fin = K.finishedOf({ finished_accounts: [{ account: 'EVAL-D', reason: 'blown' }, { account: 'EVAL-E', reason: 'archived' }] });
+  const t = K.todayView([row('EVAL-B', { today: 35 }), row('EVAL-D', { today: -20, position: 'Flat' }), row('EVAL-E', { today: null, position: 'Not connected' })], fin);
+  assert.deepEqual([t.sum, t.known, t.accounts, t.rows.map(r => r.name), t.hidden, t.hiddenCounted], [15, 2, 3, ['EVAL-B'], 2, 1]);
+  assert.match(read('live', 'legion-castra.js'), /' The total includes ' \+ K\.plural\(t\.hiddenCounted, 'hidden finished account'\)/);
+});
+
+test('N2: the claim\'s code and words name made-up firms and PCs only', () => {
+  const core = read('live', 'legion-castra-core.js');
+  const part = core.slice(core.indexOf('/* ---------------------------------------------------------------- the firms\' PCs as this PC sees them'), core.indexOf('return Object.freeze({ ROUTES'));
+  assert.ok(part.length > 1000);
+  assert.doesNotMatch(part, /Lucid|\bWORK\b|\bHOME\b/);
+  const log = read('CHANGELOG.md'), entry = log.slice(log.indexOf('## chart 1.60.0'), log.indexOf('## chart 1.59.0'));
+  assert.doesNotMatch(entry, /Lucid|\bWORK\b|\bHOME\b/);
+});
+
+test('N1: Kill all, a trader\'s kill switch and Stop all automation end a claim that waits', () => {
+  assert.match(read('live', 'agent.js'), /if \(k === 'kill'\) \{\n[^\n]*\n\s+if \(claiming\) \{ endClaim\(\);[^\n]*\n\s+else if \(typeof o\.claimCancel === 'function'\)/);
+  assert.match(read('live', 'legion.js'), /function send\(\) \{\n[^\n]*\n\s+endAsk\(\);\n[^\n]*\n\s+try \{ if \(window\.LegionTabs && typeof window\.LegionTabs\.cancelClaim === 'function'\) window\.LegionTabs\.cancelClaim\(\); \}/);
+  assert.match(read('live', 'legion-tabs.js'), /window\.LegionTabs\.cancelClaim = \(\) => \{ if \(claimer\) claimer\.cancel\(\); \};/);
 });
 
 test('the claim fails closed, in plain words: The Desk refuses or is not reached, two firms, no firm table, no PC name; a stale version is read again once', async () => {
@@ -144,7 +222,7 @@ test('the claim fails closed, in plain words: The Desk refuses or is not reached
   {
     const d = desk({ failGet: { status: null, words: 'The Desk did not answer /api/legion/cohorts in 15 s.' } }), { c } = claimer(d);
     c.hear(groups(away));
-    assert.match((await c.claim(one)).why, /^The Desk could not be read \(The Desk did not answer \/api\/legion\/cohorts in 15 s\.\), so this PC could not claim the firm: nothing was armed/);
+    assert.match((await c.claim(one)).why, /^The Desk could not be read \(The Desk did not answer \/api\/legion\/cohorts in 15 s\.\), so this page cannot tell which PC the firm trades from: nothing was armed/);
   }
   {
     const d = desk({ putAnswers: [{ status: 409, body: { detail: 'stale', version: 9 } }] }), { c } = claimer(d);

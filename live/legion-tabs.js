@@ -226,6 +226,7 @@ function mount(env) {
   });
   window.LegionTabs.state = () => ({ claim: claimer ? claimer.state() : null, cohorts: fleet ? fleet.state() : null, praetorian: praetorian ? praetorian.state() : null, colosseum: league ? league.state() : null, ludus: ludus ? ludus.state() : null, castra: castra ? castra.state() : null, cohortModel: cohortModel ? cohortModel.state() : null });
   window.LegionTabs.parts = { fleet, praetorian, league, ludus, castra, cohortModel };
+  window.LegionTabs.cancelClaim = () => { if (claimer) claimer.cancel(); };   // N1: Stop all automation (live/legion.js) ends a claim that waits
   /* read hooks for the smokes, as the chart page's window.workspace had them (nothing here sends) */
   const lanes = new Map();
   window.legion = {

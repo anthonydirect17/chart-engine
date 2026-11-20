@@ -1706,6 +1706,9 @@ function create(o) {
     if (!act) return;
     const k = act.dataset.act;
     if (k === 'kill') {
+      /* N1 (the R12 review): the kill switch ends any claim that waits on this page, so no Auto follows it */
+      if (claiming) { endClaim(); modeWhy('Claim cancelled by the kill switch: nothing was armed.'); }
+      else if (typeof o.claimCancel === 'function') { try { o.claimCancel(); } catch (x) { /* its own */ } }
       // instant on, always; release with a second click within 4 s (it lets the agent trade again). A click within 1 s of a
       // kill-on is the same press (a double click): nothing more is sent, and it never arms the release either
       if (AC.killOnRepeat(S.killOnAt, Date.now())) return;

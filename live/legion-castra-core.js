@@ -458,6 +458,18 @@ function withoutFinished(rows, finished) {
   return { rows: list.filter(a => hidden.indexOf(a) < 0), hidden: hidden.map(a => str(a.name, 64)) };
 }
 
+/**
+ * Castra's Today with finished accounts hidden (the coordinator's D3): the total counts EVERY prop account ChartBridge lists, a
+ * hidden one too (its money is real), and only the rows leave the hidden ones out. -> todayLive's shape over every account, with
+ * rows of the shown ones, hidden (how many rows were left out) and hiddenCounted (how many of those are in the total).
+ */
+function todayView(accounts, finished) {
+  const all = todayLive(accounts), shown = withoutFinished(accounts, finished);
+  const gone = new Set(shown.hidden.map(lc));
+  const hiddenCounted = (Array.isArray(accounts) ? accounts : []).filter(a => isObj(a) && gone.has(lc(a.name)) && isNum(a.today)).length;
+  return Object.assign({}, all, { rows: todayLive(shown.rows).rows, hidden: shown.hidden.length, hiddenCounted });
+}
+
 /* ---------------------------------------------------------------- the firms' PCs as this PC sees them (one PC per firm, law 9.2) */
 const foldFirm = f => str(f).replace(/\s+/g, ' ').trim().toLowerCase();
 /** ChartBridge 0.6.25's groups.firmGuard, read: { state, why, pc, firms: Map(folded firm -> { firm, pc, here, accounts }) } or null. */
@@ -618,50 +630,64 @@ function needsYou(o) {
 /* ---------------------------------------------------------------- Arm claims the firm's PC (Anthony 2026-11-19) */
 /*
  * "why not just have a simple ARM button like we do on our regular charts": Anthony trades from one PC at a time, so pressing Arm
- * (Auto) on Legion for a trader on a firm's prop accounts makes THIS PC that firm's PC first: The Desk's PUT /api/legion/firm-pc
- * {version, firm, pc} with this PC's name as its ChartBridge names itself (groups.firmGuard.pc, ChartBridge 0.6.25), and only then
- * the Auto. ChartBridge reads The Desk's firms once a minute (ChartBridgeGroups.cs FirmPoll), and until it has read the new PC it
- * refuses that trader's Auto ("runs on HOME, not on this PC"), so the page waits until this PC's ChartBridge shows the firm as
- * "here": true in groups.firmGuard before it sends the Auto, at most CLAIM_WAIT_MS; past that nothing is sent and the trader stays
- * in Shadow. A failed claim (The Desk not reached, a refusal, a PC name ChartBridge does not know) sends nothing and says why.
- * The PC that loses the firm refuses its traders' new entries for it from its own next read (a minute at most); nothing there is
- * closed or cancelled. Only a trader's Auto claims: Anthony's own ticket, the copier, Shadow and the personal bot never do.
- * It needs ChartBridge 0.6.25 (the version that sends firmGuard): with no firmGuard heard it claims nothing and sends nothing.
+ * (Auto) on Legion for a trader on a firm's prop accounts makes THIS PC that firm's PC first, and only then sends the Auto.
+ * THE DESK DECIDES (the R12 review, B1): before every Auto the page reads The Desk (GET /api/legion/cohorts); every firm the traders
+ * trade whose PC on The Desk is not this PC's name is claimed (PUT /api/legion/firm-pc {version, firm, pc}, pc as this PC's
+ * ChartBridge names itself: groups.firmGuard.pc), whatever ChartBridge's own reading says, because that reading is up to a minute
+ * old (ChartBridgeGroups.cs FirmPoll reads The Desk once a minute): it may still say "here" for a firm another PC has just claimed.
+ * The Auto goes at once only when The Desk already says this PC AND this PC's ChartBridge shows the firm "here": true with its
+ * state on. After a claim it goes once ChartBridge shows "here", at most CLAIM_WAIT_MS. The Desk not reached: nothing is sent.
+ * A TAKEOVER (the firm was another PC's on The Desk): the other PC refuses its traders' new entries only from its own next read of
+ * The Desk, so the Auto here waits until TAKEOVER_MS after the write as well (the coordinator's D2), said with the time it goes.
+ * A failed claim (The Desk refuses or does not answer, a PC name ChartBridge does not know, a trader on two firms) sends nothing and
+ * says why. A claim cancelled after its write leaves the firm on this PC on The Desk (D4). Only a trader's Auto claims: Anthony's
+ * own ticket, the copier, Shadow and the personal bot never do. It needs ChartBridge 0.6.25 (the version that sends firmGuard): with
+ * no firmGuard heard it claims nothing and sends nothing.
  */
-const CLAIM_WAIT_MS = 90000;    // ChartBridge reads once a minute (60 s), its read may take 10 s, the groups message follows within seconds
+const TAKEOVER_MS = 75000;      // a takeover: the other PC's next read (60 s, plus its 10 s request), and a few seconds more
+const CLAIM_WAIT_MS = 120000;   // covers a takeover's hold; a first claim goes as soon as ChartBridge here shows the firm
 const PC_RE = /^[A-Za-z0-9][A-Za-z0-9 _.-]{0,63}$/;   // The Desk's PC_NAME (thedesk/legion_cohorts.py)
 const NO_GUARD = 'ChartBridge on this PC has not sent its firm table yet (firmGuard, ChartBridge 0.6.25 or later), so this page cannot tell which PC each firm trades from';
-/** The firm of each seat in ChartBridge's reading (guardOf) and in The Desk's answer (prop_accounts): Map(lower-case seat -> firm). */
+/** The firm of each seat in ChartBridge's reading (guardOf) and in The Desk's answer (prop_accounts): Map(lower-case seat -> firm).
+ *  The Desk's row wins: it is the newer word. */
 function seatFirms(guard, ans) {
   const out = new Map();
   if (guard) for (const f of guard.firms.values()) for (const a of f.accounts) out.set(lc(a), f.firm);
-  for (const r of isObj(ans) && Array.isArray(ans.prop_accounts) ? ans.prop_accounts : []) if (isObj(r) && typeof r.account === 'string' && typeof r.firm === 'string' && r.firm && !out.has(lc(r.account))) out.set(lc(r.account), str(r.firm, 60));
+  for (const r of isObj(ans) && Array.isArray(ans.prop_accounts) ? ans.prop_accounts : []) if (isObj(r) && typeof r.account === 'string' && typeof r.firm === 'string' && r.firm) out.set(lc(r.account), str(r.firm, 60));
   return out;
 }
 /**
- * What one Arm needs, from what is known: traders [{ name, seats: [account] }]. -> { firms: [firm] the traders trade (one each),
- * claim: [firm] not yet this PC's in ChartBridge's reading, why: '' or why nothing may be sent }.
+ * The firms one Arm's traders trade: traders [{ name, seats: [account] }]. -> { firms: [firm] (one per trader at most), why: '' or
+ * why nothing may be sent (no firm table from ChartBridge, a trader on two firms) }.
  */
 function claimNeed(traders, guard, ans) {
-  if (!guard) return { firms: [], claim: [], why: NO_GUARD + '. Nothing was armed.' };
+  if (!guard) return { firms: [], why: NO_GUARD + '. Nothing was armed.' };
   const of = seatFirms(guard, ans), firms = [];
   for (const t of Array.isArray(traders) ? traders : []) {
     const fs = [...new Set((t.seats || []).map(a => of.get(lc(a))).filter(Boolean).map(foldFirm))];
-    if (fs.length > 1) return { firms: [], claim: [], why: str(t.name, 60) + '\'s prop accounts are of more than one firm (' + fs.map(k => [...of.values()].find(v => foldFirm(v) === k)).join(', ') + '): a trader trades one firm. Nothing was armed.' };
+    if (fs.length > 1) return { firms: [], why: str(t.name, 60) + '\'s prop accounts are of more than one firm (' + fs.map(k => [...of.values()].find(v => foldFirm(v) === k)).join(', ') + '): a trader trades one firm. Nothing was armed.' };
     if (fs.length && !firms.some(x => foldFirm(x) === fs[0])) firms.push([...of.values()].find(v => foldFirm(v) === fs[0]));
   }
-  const claim = firms.filter(f => { const g = guard.firms.get(foldFirm(f)); return !(guard.state === 'on' && g && g.here); });
-  return { firms, claim, why: '' };
+  return { firms, why: '' };
 }
-/** The words while it waits: "Claiming Lucid for this PC (WORK)...". */
+/** The Desk's PC for a firm (its firms[] row), or null. */
+function deskPcOf(ans, firm) {
+  const row = (isObj(ans) && Array.isArray(ans.firms) ? ans.firms : []).find(f => isObj(f) && foldFirm(f.firm) === foldFirm(firm));
+  return row && typeof row.pc === 'string' && row.pc ? row.pc : null;
+}
+/** hh:mm:ss on this PC's clock. */
+const clockOf = ms => { const d = new Date(ms); return [d.getHours(), d.getMinutes(), d.getSeconds()].map(x => String(x).padStart(2, '0')).join(':'); };
+/** The words while it waits: "Claiming Firm A for this PC (PC-TWO)...". */
 const claimingWords = (firms, pc) => 'Claiming ' + firms.join(' and ') + ' for this PC (' + pc + ')... waiting for ChartBridge here to read it from The Desk (once a minute, ' + Math.round(CLAIM_WAIT_MS / 1000) + ' s at most). Nothing is armed until it does.';
+/** The words of a takeover: "Taking Firm A over from PC-ONE: ...; Auto goes at 09:41:07". from: [[firm, pc]]. */
+const takeoverWords = (from, at) => 'Taking ' + from.map(x => x[0] + ' over from ' + x[1]).join(' and ') + ': its bots there stop taking new entries within about a minute (that PC reads The Desk once a minute); Auto goes at ' + clockOf(at) + ', once ChartBridge here has read it too. Nothing is armed until then.';
 /**
- * The claimer: one per page. o: { desk: deskClient, now, setTimeout, clearTimeout, waitMs }.
+ * The claimer: one per page. o: { desk: deskClient, now, setTimeout, clearTimeout, waitMs, takeoverMs }.
  *   hear(m)    every ChartBridge message (it keeps the last groups.firmGuard); lost() when the connection drops
- *   claim(traders, say) -> Promise<{ ok, why, words, claimed }>: ok true when every firm the traders trade is this PC's in
- *              ChartBridge's own reading (claimed: the firms it had to claim); say(text) is called with the waiting words
+ *   claim(traders, say) -> Promise<{ ok, why, words, claimed }>: ok true when The Desk has every firm the traders trade on this PC
+ *              and this PC's ChartBridge shows each "here" (claimed: the firms it wrote); say(text) is called with the waiting words
  *   cancel()   ends a claim that waits: nothing is armed (what The Desk was told stays: the firm is this PC's there)
- *   state()    { busy, firms, words, guard }
+ *   state()    { busy, firms, waiting, guard }
  */
 function createClaimer(o) {
   const opt = o || {};
@@ -669,12 +695,15 @@ function createClaimer(o) {
   const later = typeof opt.setTimeout === 'function' ? opt.setTimeout : (f, ms) => setTimeout(f, ms);
   const stop = typeof opt.clearTimeout === 'function' ? opt.clearTimeout : t => clearTimeout(t);
   const WAIT = isNum(opt.waitMs) && opt.waitMs > 0 ? opt.waitMs : CLAIM_WAIT_MS;
+  const HOLD = isNum(opt.takeoverMs) && opt.takeoverMs >= 0 ? opt.takeoverMs : TAKEOVER_MS;
   const S = { guard: null, raw: null, pending: null };
-  const settle = r => { const p = S.pending; if (!p) return; S.pending = null; stop(p.timer); p.done(r); };
+  const settle = r => { const p = S.pending; if (!p) return; S.pending = null; stop(p.timer); stop(p.hold); p.done(r); };
+  const allHere = firms => !!S.guard && S.guard.state === 'on' && firms.every(f => { const g = S.guard.firms.get(foldFirm(f)); return g && g.here; });
   const check = () => {
     const p = S.pending;
-    if (!p || !p.waiting || !S.guard || S.guard.state !== 'on') return;
-    if (p.firms.every(f => { const g = S.guard.firms.get(foldFirm(f)); return g && g.here; })) settle({ ok: true, why: '', claimed: p.firms.slice(), words: p.words });
+    if (!p || !p.waiting || !allHere(p.firms)) return;
+    if (now() >= p.until) { settle({ ok: true, why: '', claimed: p.claimed.slice(), words: p.words }); return; }
+    if (!p.hold) p.hold = later(() => { p.hold = 0; check(); }, p.until - now());   // a takeover: ChartBridge here has read it; the hold runs out first
   };
   function hear(m) {
     if (!isObj(m)) return;
@@ -692,52 +721,55 @@ function createClaimer(o) {
     }
   }
   function claim(traders, say) {
-    if (S.pending) return Promise.resolve({ ok: false, why: 'Still claiming ' + S.pending.firms.join(', ') + ' for this PC: wait for it, or cancel it. Nothing else was armed.', claimed: [] });
+    if (S.pending) return Promise.resolve({ ok: false, why: 'Still claiming ' + (S.pending.firms.join(', ') || 'a firm') + ' for this PC: wait for it, or cancel it. Nothing else was armed.', claimed: [] });
     const tell = typeof say === 'function' ? say : () => {};
-    const guard = S.guard, desk = opt.desk;
-    const first = claimNeed(traders, guard, null);
+    const desk = opt.desk;
+    const first = claimNeed(traders, S.guard, null);
     if (first.why) return Promise.resolve({ ok: false, why: first.why, claimed: [] });
-    /* every firm the seats have in ChartBridge's own fresh reading is this PC's already: nothing to claim (a seat it gives no firm,
-       Sim or one with no account type, is ChartBridge's to judge as before) */
-    if (guard.state === 'on' && !first.claim.length) return Promise.resolve({ ok: true, why: '', claimed: [], words: '' });
-    const p = { firms: [], words: '', waiting: false, timer: 0, done: null };
+    const p = { firms: [], claimed: [], words: '', waiting: false, until: 0, timer: 0, hold: 0, done: null };
     const result = new Promise(res => { p.done = res; });
     S.pending = p;
     (async () => {
       let ans;
+      /* The Desk is read before every Auto (B1): ChartBridge's "here" may be a minute old */
       try { if (!desk) throw { words: 'This page has no address for The Desk.' }; ans = await desk.get(ROUTES.cohorts); }
-      catch (e) { settle({ ok: false, why: 'The Desk could not be read (' + (e && e.words ? e.words : 'no answer') + '), so this PC could not claim the firm: nothing was armed; the trader stays in Shadow.', claimed: [] }); return; }
+      catch (e) { settle({ ok: false, why: 'The Desk could not be read (' + (e && e.words ? e.words : 'no answer') + '), so this page cannot tell which PC the firm trades from: nothing was armed; the trader stays in Shadow.', claimed: [] }); return; }
       if (S.pending !== p) return;
       const need = claimNeed(traders, S.guard, ans);
       if (need.why) { settle({ ok: false, why: need.why, claimed: [] }); return; }
-      if (!need.claim.length) {
+      if (!need.firms.length) {
+        /* no seat has a firm, on The Desk or in ChartBridge's reading (Sim, or no account type): ChartBridge judges it as before */
         if (S.guard && S.guard.state === 'on') { settle({ ok: true, why: '', claimed: [], words: '' }); return; }
         settle({ ok: false, why: 'ChartBridge cannot check one PC per firm now (' + (S.guard ? S.guard.why : NO_GUARD) + '): nothing was armed.', claimed: [] }); return;
       }
+      p.firms = need.firms.slice();
       const pc = S.guard ? S.guard.pc : null;
-      if (!pc) { settle({ ok: false, why: 'ChartBridge on this PC does not know its own name (config.txt pc, else the Windows computer name), so this PC cannot claim ' + need.claim.join(', ') + ': nothing was armed.', claimed: [] }); return; }
+      if (!pc) { settle({ ok: false, why: 'ChartBridge on this PC does not know its own name (config.txt pc, else the Windows computer name), so this page cannot tell whether ' + need.firms.join(', ') + ' trades from this PC: nothing was armed.', claimed: [] }); return; }
       if (!PC_RE.test(pc)) { settle({ ok: false, why: 'This PC\'s name as ChartBridge gives it (' + pc + ') is not one The Desk takes (letters, digits, space, _ . -, 64 at most): set config.txt pc. Nothing was armed.', claimed: [] }); return; }
-      p.firms = need.claim.slice();
-      const was = [];
+      const todo = need.firms.filter(f => { const d = deskPcOf(ans, f); return !(d && d.toLowerCase() === pc.toLowerCase()); });
+      const from = todo.map(f => [f, deskPcOf(ans, f)]).filter(x => x[1]);
+      /* The Desk already says this PC for every firm and ChartBridge here shows each "here": the Auto goes at once */
+      if (!todo.length && allHere(need.firms)) { settle({ ok: true, why: '', claimed: [], words: '' }); return; }
       try {
-        for (const firm of need.claim) {
-          const row = (Array.isArray(ans.firms) ? ans.firms : []).find(f => isObj(f) && foldFirm(f.firm) === foldFirm(firm));
-          const before = row && typeof row.pc === 'string' && row.pc ? row.pc : null;
-          if (before && before.toLowerCase() === pc.toLowerCase()) continue;    // The Desk has it already: only ChartBridge's read is waited for
-          if (before) was.push(firm + ' was ' + before);
+        for (const firm of todo) {
           ans = await write(desk, ans, firm, pc);
           if (S.pending !== p) return;
+          p.claimed.push(firm);
         }
       } catch (e) {
         const detail = e && e.body && typeof e.body.detail === 'string' ? e.body.detail.slice(0, 300) : '';
-        settle({ ok: false, why: (e && e.status === null ? 'The Desk did not answer' : e && e.status ? 'The Desk refused it' + (detail ? ': ' + detail : ' (' + e.status + ')') : 'The claim failed') + ', so this PC did not claim ' + need.claim.join(', ') + ': nothing was armed; the trader stays in Shadow.', claimed: [] });
+        const left = todo.filter(f => p.claimed.indexOf(f) < 0).join(', ');
+        settle({ ok: false, why: (e && e.status === null ? 'The Desk did not answer in time, so this PC may not have claimed ' + left
+          : (e && e.status ? 'The Desk refused it' + (detail ? ': ' + detail : ' (' + e.status + ')') : 'The claim failed') + ', so this PC did not claim ' + left) + ': nothing was armed; the trader stays in Shadow.', claimed: [] });
         return;
       }
       if (S.pending !== p) return;
-      p.words = need.claim.join(' and ') + ' now ' + (need.claim.length === 1 ? 'trades' : 'trade') + ' from ' + pc + ' (this PC)' + (was.length ? '; ' + was.join(', ') + ': its traders there keep their mode, and their new entries on it are refused from that PC\'s next read of The Desk (within a minute); nothing there is closed or cancelled' : '') + '.';
+      const at = now();
+      p.until = from.length ? at + HOLD : 0;                     // D2: a takeover waits for the other PC's next read too
+      p.words = need.firms.join(' and ') + ' now ' + (need.firms.length === 1 ? 'trades' : 'trade') + ' from ' + pc + ' (this PC)' + (from.length ? '; ' + from.map(x => x[0] + ' was ' + x[1]).join(', ') + ': its traders there keep their mode, and their new entries on it are refused from that PC\'s next read of The Desk (within a minute); nothing there is closed or cancelled' : '') + '.';
       p.waiting = true;
-      tell(claimingWords(need.claim, pc));
-      p.timer = later(() => { if (S.pending === p) settle({ ok: false, why: 'ChartBridge on this PC did not show ' + need.claim.join(' and ') + ' as this PC\'s within ' + Math.round(WAIT / 1000) + ' s, so nothing was armed: the trader stays in Shadow. The Desk has ' + need.claim.join(' and ') + ' on ' + pc + ' now; arm again in a minute.', claimed: [] }); }, WAIT);
+      tell(from.length ? takeoverWords(from, p.until) : claimingWords(need.firms, pc));
+      p.timer = later(() => { if (S.pending === p) settle({ ok: false, why: 'ChartBridge on this PC did not show ' + need.firms.join(' and ') + ' as this PC\'s within ' + Math.round(WAIT / 1000) + ' s, so nothing was armed: the trader stays in Shadow. The Desk has ' + need.firms.join(' and ') + ' on ' + pc + ' now; arm again in a minute.', claimed: [] }); }, WAIT);
       check();
     })().catch(e => settle({ ok: false, why: 'The claim failed (' + str(e && e.message, 200) + '): nothing was armed.', claimed: [] }));
     return result;
@@ -749,5 +781,5 @@ return Object.freeze({ ROUTES, FLEET_PATH, RN, NOT_BUILT, NOT_ENOUGH, SIM_LABEL,
   simStage, alarmOf, ALARM_NOT_KNOWN, readStatus, realCells, cardAccountWords, cardAccountLog, moneyView, goesInView, runningNow, todayLive, lastNight, centurionView, fleetIndex,
   VETO_VERSION, ARM_MS, CONFIRM_MS, RUN_ID_RE, NAME_RE, IN_SAMPLE, VETO_UNKNOWN, VETO_UNREACHABLE, NO_WEEK, NO_CHANGE, NO_APPLIED, ALLOW_REFUSED, VETO_Q,
   undoQuestion, nyTime, weekOf, appliedOf, askClick, actionFor, sentOk, sentWords, refusedWords, chipOf, pickWords, cohortsView, directionWords, dropRefusal, moveWords, needsYou,
-  FINISHED_WORDS, finishedOf, holdsSomething, hiddenMark, hiddenWords, withoutFinished, foldFirm, guardOf, firmLine, CLAIM_WAIT_MS, NO_GUARD, seatFirms, claimNeed, claimingWords, createClaimer });
+  FINISHED_WORDS, finishedOf, holdsSomething, hiddenMark, hiddenWords, withoutFinished, todayView, foldFirm, guardOf, firmLine, CLAIM_WAIT_MS, TAKEOVER_MS, NO_GUARD, seatFirms, claimNeed, deskPcOf, claimingWords, takeoverWords, createClaimer });
 });

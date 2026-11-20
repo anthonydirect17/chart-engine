@@ -6,7 +6,9 @@
 //    whose firm runs on another PC sends nothing to ChartBridge, writes The Desk's firm-pc once with this PC's name as ChartBridge
 //    gives it (groups.firmGuard.pc), says "Claiming Firm A for this PC...", and sends the Auto only once ChartBridge's next groups
 //    message shows the firm "here": true. The Desk refusing, and no "here" within the wait, send nothing and say why. Shadow
-//    cancels a claim that waits. The firm already this PC's: the Auto goes at once, The Desk is not asked. The Bot desk never claims.
+//    cancels a claim that waits, and so does the trader's Kill switch. A takeover from another PC holds the Auto until the hold after
+//    the write (75 s on Legion, 1.5 s on this page), said with the time it goes. The firm already this PC's on The Desk with
+//    ChartBridge showing "here": the Auto goes at once, The Desk read and not written (the R12 review, B1). The Bot desk never claims.
 // 2. Finished prop accounts are hidden: Legion's page (live/legion.html) against the fake bridge, with The Desk's answer marking a
 //    tray account blown: the Cohorts tab leaves it out and says "1 finished prop account hidden", Castra's Needs you no longer
 //    lists it as "in no cohort" and says the same line.
@@ -61,7 +63,7 @@ ${js}
     return resp(404, {});
   };
   const K = window.LegionCastraCore;
-  window.claimer = K.createClaimer({ desk: K.deskClient({ fetch: deskFetch, deskBase: () => 'http://localhost:8800' }), waitMs: 2500 });
+  window.claimer = K.createClaimer({ desk: K.deskClient({ fetch: deskFetch, deskBase: () => 'http://localhost:8800' }), waitMs: 2500, takeoverMs: 1500 });
   AF.listen({ message: m => window.claimer.hear(m), closed: () => window.claimer.lost() });
   const mem = new Map(), storage = { getItem: k => (mem.has(k) ? mem.get(k) : null), setItem: (k, v) => mem.set(k, String(v)), removeItem: k => mem.delete(k) };
   window.legion = window.LegionDesk.mount(document.getElementById('lgd'), { v3: AF, storage, shown: true, side: 'agent',
@@ -105,21 +107,34 @@ try {
   const d1 = await desk();
   check(d1[0] === 'GET /api/legion/cohorts' && d1[1] === 'PUT /api/legion/firm-pc {"version":3,"firm":"Firm A","pc":"PC-TWO"}' && d1.length === 2,
     'The Desk is told once: this PC as ChartBridge names it (firmGuard.pc), with the version it read: ' + JSON.stringify(d1));
-  check(/^Claiming Firm A for this PC \(PC-TWO\)\.\.\. waiting for ChartBridge here to read it/.test(await why()), 'the desk says it is claiming: ' + await why());
+  check(/^Taking Firm A over from PC-ONE: its bots there stop taking new entries within about a minute \(that PC reads The Desk once a minute\); Auto goes at \d\d:\d\d:\d\d, once ChartBridge here has read it too\. Nothing is armed until then\.$/.test(await why()), 'the desk says it is taking the firm over, with the time the Auto goes: ' + await why());
   check(await autoText() === 'Claiming...', 'the Auto button reads Claiming...');
   await page.screenshot({ path: path.join(SHOTS, 'legion-claim-waiting.png') });
   await feed(groups(guard('PC-ONE', false))); await sleep(200);
   check((await posted()).length === 0, 'ChartBridge still reads the old table (its once-a-minute read has not come): still nothing sent');
-  await feed(groups(guard('PC-TWO', true))); await sleep(300);
-  check(JSON.stringify(await posted()) === JSON.stringify(['agentMode:demo:auto']), 'ChartBridge shows Firm A "here": the Auto goes, once: ' + JSON.stringify(await posted()));
+  await feed(groups(guard('PC-TWO', true))); await sleep(100);
+  check((await posted()).length === 0, 'ChartBridge here shows Firm A "here", but the takeover\'s hold has not run out: still nothing sent');
+  await sleep(1600);
+  check(JSON.stringify(await posted()) === JSON.stringify(['agentMode:demo:auto']), 'the hold runs out with Firm A "here": the Auto goes, once: ' + JSON.stringify(await posted()));
   check(/^Firm A now trades from PC-TWO \(this PC\); Firm A was PC-ONE: .*refused from that PC's next read of The Desk \(within a minute\); nothing there is closed or cancelled\. Auto sent\.$/.test(await why()), 'and says where the firm trades now: ' + await why());
   await feed(agent({ mode: 'auto' })); await sleep(200);
   await page.screenshot({ path: path.join(SHOTS, 'legion-claim-armed.png') });
 
-  /* the firm already this PC's: Auto goes at once, The Desk is not asked */
+  /* the firm already this PC's on The Desk and "here": the Auto goes at once, The Desk read and not written (B1) */
   await feed(agent()); await sleep(200); await clear();
   await pressAuto();
-  check(JSON.stringify(await posted()) === JSON.stringify(['agentMode:demo:auto']) && (await desk()).length === 0, 'the firm already this PC\'s: the Auto goes at once, The Desk not asked: ' + JSON.stringify([await posted(), await desk()]));
+  check(JSON.stringify(await posted()) === JSON.stringify(['agentMode:demo:auto']) && JSON.stringify(await desk()) === JSON.stringify(['GET /api/legion/cohorts']), 'the firm already this PC\'s: the Auto goes at once, The Desk read and not written: ' + JSON.stringify([await posted(), await desk()]));
+  /* B1: ChartBridge still says "here" but The Desk has moved the firm to PC-ONE: it is claimed again, nothing goes at once */
+  await feed(agent()); await sleep(200); await clear();
+  await page.evaluate(() => { window.deskState.pc = 'PC-ONE'; });
+  await pressAuto();
+  check((await posted()).length === 0 && (await desk()).some(x => /^PUT \/api\/legion\/firm-pc .*"pc":"PC-TWO"/.test(x)), 'B1: a stale "here" never lets the Auto go: The Desk is told again first: ' + JSON.stringify([await posted(), await desk()]));
+  /* N1: the trader's Kill switch ends the claim that waits */
+  await page.click(L + ' [data-act="kill"]'); await sleep(300);
+  check(!(await page.evaluate(() => window.claimer.state().busy)) && /^Claim cancelled by the kill switch: nothing was armed\.$/.test(await why()), 'N1: the Kill switch cancels the claim: ' + await why());
+  await sleep(1700);
+  check(!(await posted()).includes('agentMode:demo:auto'), 'and no Auto follows: ' + JSON.stringify(await posted()));
+  await feed(agent()); await sleep(6200);
 
   /* The Desk refuses: nothing goes */
   await feed(groups(guard('PC-ONE', false))); await feed(agent()); await sleep(200); await clear();
@@ -129,7 +144,7 @@ try {
     'The Desk refuses: nothing goes, said plainly: ' + await why());
   await page.screenshot({ path: path.join(SHOTS, 'legion-claim-refused.png') });
 
-  /* no "here" within the wait (2.5 s on this page, 90 s on Legion): nothing goes */
+  /* no "here" within the wait (2.5 s on this page, 120 s on Legion): nothing goes */
   await page.evaluate(() => { window.deskMode = 'ok'; }); await sleep(6200); await clear();
   await pressAuto();
   await sleep(3000);

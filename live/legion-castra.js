@@ -123,15 +123,15 @@ function mount(el, opts) {
   }
   function today(lv, finished) {
     if (!lv) return card('V', 'Today, live only', note('ChartBridge is not connected: not read.', 'cx-dim'));
-    const shown = K.withoutFinished(lv.accounts, finished);              // Anthony 2026-11-19: finished accounts are not shown (display only)
-    const t = K.todayLive(shown.rows);
+    /* finished accounts: their rows are hidden, their money still counts in the total (the coordinator's D3; display only) */
+    const t = K.todayView(lv.accounts, finished);
     let body;
     if (!t.accounts) body = note('No prop account is listed by ChartBridge now (not enough data yet).', 'cx-dim');
     else {
       body = '<p class="cx-big"><span class="cx-num ' + tone(t.sum) + '">' + (t.sum === null ? 'not reported' : (t.sum >= 0 ? '+' : '-') + L.usd(Math.abs(t.sum))) + '</span> <span class="cx-dim">today, ' + t.known + ' of ' + K.plural(t.accounts, 'prop account') + ' reporting</span></p>';
-      body += table('cx-today', ['Account', 'Type', 'Today', 'Room to the floor', 'Position'], t.rows.map(a => ({ cells: [cell(a.name, 'cx-lead'), cell(a.stage), cell(a.today === null ? 'not reported' : (a.today >= 0 ? '+' : '-') + L.usd(Math.abs(a.today)) + (a.done ? ' (at the day stop)' : ''), 'cx-num ' + tone(a.today)), cell(a.room === null ? 'not reported' : L.usd(a.room), 'cx-num'), cell(a.position)] })));
+      body += t.rows.length ? table('cx-today', ['Account', 'Type', 'Today', 'Room to the floor', 'Position'], t.rows.map(a => ({ cells: [cell(a.name, 'cx-lead'), cell(a.stage), cell(a.today === null ? 'not reported' : (a.today >= 0 ? '+' : '-') + L.usd(Math.abs(a.today)) + (a.done ? ' (at the day stop)' : ''), 'cx-num ' + tone(a.today)), cell(a.room === null ? 'not reported' : L.usd(a.room), 'cx-num'), cell(a.position)] }))) : '';
     }
-    return card('V', 'Today, live only', body + (shown.hidden.length ? note(K.hiddenWords(shown.hidden.length) + ' Not counted in this total.', 'cx-dim cx-hidden') : '') + note('Live only: what ChartBridge reports now, realized plus open. Nothing simulated is added to it.', 'cx-dim'));
+    return card('V', 'Today, live only', body + (t.hidden ? note(K.hiddenWords(t.hidden) + (t.hiddenCounted ? ' The total includes ' + K.plural(t.hiddenCounted, 'hidden finished account') + '.' : ''), 'cx-dim cx-hidden') : '') + note('Live only: what ChartBridge reports now, realized plus open. Nothing simulated is added to it.', 'cx-dim'));
   }
 
   /* II. Needs you: the one place */

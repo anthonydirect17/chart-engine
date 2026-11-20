@@ -2138,3 +2138,19 @@ test('finished accounts are left out of the prop accounts table and the Unassign
   const none = page(t); none.fv.showTab(true); none.ready('0.6.25');
   assert.ok(none.part('accounts').innerHTML.includes('EVAL-B') && !/finished prop account/.test(none.part('accounts').innerHTML), 'no list handed in: everything shows');
 });
+
+test('N1 (the R12 review): Kill all ends a claim that waits; the claim\'s late answer arms nothing', async t => {
+  const cancels = [];
+  let settle = null;
+  const over = { claim: () => new Promise(r => { settle = r; }), claimCancel: () => cancels.push(1) };
+  const P = await lanePage(t, [evalTrader(), fundTrader()], [], over);
+  P.click('arm'); P.T += 700; P.click('armyes'); await P.tick();
+  assert.equal(P.fv.state().claiming, true);
+  P.click('ask'); P.T += 700; P.click('yes');
+  assert.deepEqual(cancels, [1], 'Kill all cancels the claim');
+  assert.equal(P.fv.state().claiming, false);
+  assert.deepEqual(P.posts.map(m => m.type), ['agentStopAll'], 'only Kill all went');
+  settle({ ok: true, why: '', claimed: [], words: '' });
+  await P.tick(); await P.tick();
+  assert.deepEqual(P.posts.map(m => m.type), ['agentStopAll'], 'and no Auto follows it');
+});
