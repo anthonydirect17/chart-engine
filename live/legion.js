@@ -306,6 +306,8 @@ function openAsk() {
 function send() {
   const p = plan(), id = cid(), m = C.stopMsg(p.kind, id);
   endAsk();
+  /* N1 (the R12 review): Stop all ends any claim that waits (Arm claims the firm's PC, live/legion-tabs.js), so no Auto follows it */
+  try { if (window.LegionTabs && typeof window.LegionTabs.cancelClaim === 'function') window.LegionTabs.cancelClaim(); } catch (e) { /* its own */ }
   if (!p.ok || !m) { say(p.why || 'Nothing was sent.', true); return; }
   if (!link || !link.post(m)) { say('Not sent: the connection to ChartBridge is not open. Stop each trader in NinjaTrader.', true); return; }
   S.pending = id;

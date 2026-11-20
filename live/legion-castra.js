@@ -21,7 +21,9 @@
  *
  *   const v = LegionCastra.mount(el, { deskBase, fetch, live, go, realClick });
  *     deskBase()  The Desk's address (AccountsPage.deskBase); fetch: window.fetch
- *     live()      { traders, accounts } from FleetView.state() (FleetCore.traders and FleetCore.propAccounts), or null
+ *     live()      { traders, accounts, heard, firmGuard } from FleetView.state() (FleetCore.traders and FleetCore.propAccounts; firmGuard:
+ *                 the groups message's, ChartBridge 0.6.25), or null. Finished prop accounts (The Desk's finished_accounts) are left out of
+ *                 Needs you and Today, with a line that says how many (Anthony 2026-11-19, display only)
  *     go(tab)     opens another Legion tab (Needs you's links)
  *     realClick(e)  OrderTicket.realClick (legion-tabs.js hands Legion's own); none: Yes is never taken, as in Legion's header
  *   v.show(on); v.state(); v.destroy()
@@ -119,16 +121,17 @@ function mount(el, opts) {
     else body = table('cx-run', ['Trader', 'Build', 'Mode', 'Accounts', 'Status', 'Today'], r.running.map(t => ({ cells: [cell(t.name, 'cx-lead'), cell(t.build || 'not stated', t.build ? '' : 'cx-dim'), cell(t.mode), cell(t.accounts), cell(t.status), cell(t.today === null ? 'not reported' : (t.today >= 0 ? '+' : '-') + L.usd(Math.abs(t.today)) + (t.trades === null ? '' : ' on ' + K.plural(t.trades, 'trade')), 'cx-num ' + tone(t.today))] })));
     return card('IV', 'Running now', body + (r.cannotTell && (r.total || r.running.length) ? note(r.cannotTell, 'cx-bad') : '') + note('Live, from ChartBridge on this PC. Your personal account and the chart\'s Bot tab are not Legion\'s.', 'cx-dim'));
   }
-  function today(lv) {
+  function today(lv, finished) {
     if (!lv) return card('V', 'Today, live only', note('ChartBridge is not connected: not read.', 'cx-dim'));
-    const t = K.todayLive(lv.accounts);
+    /* finished accounts: their rows are hidden, their money still counts in the total (the coordinator's D3; display only) */
+    const t = K.todayView(lv.accounts, finished);
     let body;
     if (!t.accounts) body = note('No prop account is listed by ChartBridge now (not enough data yet).', 'cx-dim');
     else {
       body = '<p class="cx-big"><span class="cx-num ' + tone(t.sum) + '">' + (t.sum === null ? 'not reported' : (t.sum >= 0 ? '+' : '-') + L.usd(Math.abs(t.sum))) + '</span> <span class="cx-dim">today, ' + t.known + ' of ' + K.plural(t.accounts, 'prop account') + ' reporting</span></p>';
-      body += table('cx-today', ['Account', 'Type', 'Today', 'Room to the floor', 'Position'], t.rows.map(a => ({ cells: [cell(a.name, 'cx-lead'), cell(a.stage), cell(a.today === null ? 'not reported' : (a.today >= 0 ? '+' : '-') + L.usd(Math.abs(a.today)) + (a.done ? ' (at the day stop)' : ''), 'cx-num ' + tone(a.today)), cell(a.room === null ? 'not reported' : L.usd(a.room), 'cx-num'), cell(a.position)] })));
+      body += t.rows.length ? table('cx-today', ['Account', 'Type', 'Today', 'Room to the floor', 'Position'], t.rows.map(a => ({ cells: [cell(a.name, 'cx-lead'), cell(a.stage), cell(a.today === null ? 'not reported' : (a.today >= 0 ? '+' : '-') + L.usd(Math.abs(a.today)) + (a.done ? ' (at the day stop)' : ''), 'cx-num ' + tone(a.today)), cell(a.room === null ? 'not reported' : L.usd(a.room), 'cx-num'), cell(a.position)] }))) : '';
     }
-    return card('V', 'Today, live only', body + note('Live only: what ChartBridge reports now, realized plus open. Nothing simulated is added to it.', 'cx-dim'));
+    return card('V', 'Today, live only', body + (t.hidden ? note(K.hiddenWords(t.hidden) + (t.hiddenCounted ? ' The total includes ' + K.plural(t.hiddenCounted, 'hidden finished account') + '.' : ''), 'cx-dim cx-hidden') : '') + note('Live only: what ChartBridge reports now, realized plus open. Nothing simulated is added to it.', 'cx-dim'));
   }
 
   /* II. Needs you: the one place */
@@ -137,6 +140,7 @@ function mount(el, opts) {
     if (nv.items.length) {
       body = '<ul class="cx-needs">' + nv.items.map(i => '<li><span class="cx-kind">' + esc(i.kind) + '</span> ' + esc(i.words) + ' ' + (i.where && i.where !== 'castra' ? go(i.where, 'Open ' + i.where) : '') + '</li>').join('') + '</ul>';
     } else body = nv.cannotTell.length ? '' : '<p class="cx-ok"><b>Nothing needs you</b> in what this page can read.</p>';
+    if (nv.hidden) body += note(K.hiddenWords(nv.hidden), 'cx-dim cx-hidden');
     if (nv.cannotTell.length) body += note('Cannot tell: ' + [nv.failed.length ? nv.failed.join(', ') + ' could not be read' : '', nv.pending.length ? nv.pending.join(', ') + ' is not read yet' : ''].filter(Boolean).join('; ') + ', so what they would add is not shown here.', 'cx-bad');
     body += note('Not wired here yet: the drift alarm and the posts into The Desk\'s Alerts (step 3.5, ' + K.NOT_BUILT + '). Nothing on this list acts by itself.', 'cx-dim');
     return card('II', 'Needs you', body, nv.items.length ? 'cx-needsyou' : '');
@@ -254,12 +258,13 @@ function mount(el, opts) {
     if (!S.shown) return;
     try {
       const lv = live();
-      const cv = status('cohorts') === 'ok' ? K.cohortsView(S.reads.cohorts.ans, lv ? lv.accounts : [], lv ? lv.traders : [], !!(lv && lv.heard)) : null;
+      const cv = status('cohorts') === 'ok' ? K.cohortsView(S.reads.cohorts.ans, lv ? lv.accounts : [], lv ? lv.traders : [], !!(lv && lv.heard), lv ? lv.firmGuard : null) : null;
+      const finished = K.finishedOf(status('cohorts') === 'ok' ? S.reads.cohorts.ans : null);
       const mv = status('money') === 'ok' ? K.moneyView(S.reads.money.ans) : null;
       const reads = {}; for (const n of NAMES) { const rs = K.readStatus(S.reads[n]); reads[n] = rs.stale ? 'fail' : rs.state; }
       const nv = K.needsYou({ money: mv, cohorts: cv, traders: lv ? lv.traders : [], reads });
       const gv = status('roster') === 'ok' ? K.goesInView(S.reads.roster.ans, status('cohorts') === 'ok' ? S.reads.cohorts.ans : null) : null;
-      const html = '<div class="cx cx-body">' + money(mv) + needs(nv) + goes(gv) + '<div class="cx-two">' + running(lv) + today(lv) + '</div>' + '<div class="cx-two">' + night() + centurion() + '</div>'
+      const html = '<div class="cx cx-body">' + money(mv) + needs(nv) + goes(gv) + '<div class="cx-two">' + running(lv) + today(lv, finished) + '</div>' + '<div class="cx-two">' + night() + centurion() + '</div>'
         + '<p class="cx-foot"><button type="button" class="lx-btn" data-cx-again>Read again</button> <span class="cx-dim">Read ' + (S.readAt ? new Date(S.readAt).toLocaleTimeString('en-US', { hour12: false }) : 'not yet') + ', then every minute while this tab is open.</span></p></div>';
       if (html !== S.last) { S.last = html; el.innerHTML = html; }
     } catch (e) { el.innerHTML = '<div class="lx-card lx-todo"><p>Castra could not draw: ' + esc(e && e.message) + '. The other tabs work; reload this window.</p></div>'; S.last = ''; }

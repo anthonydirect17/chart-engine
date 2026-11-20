@@ -55,6 +55,21 @@ function mount(env) {
   const quoteSubs = new Set(), watchQuote = () => () => {}, quoteOf = () => null;
   const host = { watchQuote, quoteOf, quoteSubs, fitPanel, note, now: etNowSec };
 
+  /* ---------------- Arm claims the firm's PC (Anthony 2026-11-19): one claimer for the page (LegionCastraCore.createClaimer). It hears
+     ChartBridge's groups (firmGuard) on the window's v3 connection, listen only, and writes only The Desk's PUT /api/legion/firm-pc;
+     Armed (FleetView) and the trader desk's Auto ask it before they send. Without it they send as before. */
+  const deskBase = () => window.AccountsPage.deskBase((u, o) => fetch(u, o));
+  let claimer = null, cohortModel = null;
+  guard('the firm claim', () => {
+    const K = window.LegionCastraCore;
+    if (!K || typeof K.createClaimer !== 'function' || !AF || !window.AccountsPage) return;
+    claimer = K.createClaimer({ desk: K.deskClient({ fetch: (u, o) => fetch(u, o), deskBase }) });
+    AF.listen({ message: m => claimer.hear(m), closed: () => claimer.lost() });
+  });
+  const claimOpts = claimer ? { claim: (traders, say) => claimer.claim(traders, say), claimCancel: () => claimer.cancel() } : {};
+  /* the finished prop accounts (The Desk's finished_accounts, read by the cohort model): FleetView leaves them out of its lists */
+  const finishedNow = () => (cohortModel && typeof cohortModel.finished === 'function' ? cohortModel.finished() : new Map());
+
   /* ---------------- Cohorts: the chart page's Legion tab */
   let fleet = null, legionDesk = null;
   guard('the cohorts', () => {
@@ -73,7 +88,7 @@ function mount(env) {
     const lanes = new Map();
     $('flView').innerHTML = '';
     /* the cohort model and the Drone sky sit under the lanes' head, not above it (Anthony 2026-11-19: "Yes, Kill all at the top") */
-    fleet = window.FleetView.create({ view: $('flView'), tab: null, v3: legionLink, realClick, headers, underHead: $('chView'),
+    fleet = window.FleetView.create({ view: $('flView'), tab: null, v3: legionLink, realClick, headers, underHead: $('chView'), finished: finishedNow, claim: claimOpts.claim, claimCancel: claimOpts.claimCancel,
       helperStatus: legionHelperStatus,
       liveChart: el => (window.ChartLive && hub ? window.ChartLive.mount(el, { feed: hub, paneId: 'legion', storagePrefix: PREFIX, toolbar: false, compact: true, view: { root: 'MNQ', tf: 'm1' } }) : null),
       accountRows: (el, key, filter) => {
@@ -95,7 +110,7 @@ function mount(env) {
         return { panel: ma, refused: feed.refused, feed, destroy: () => { if (panels.get(key) === ma) { panels.delete(key); lanes.delete(key); ma.destroy(); } } };
       },
       traderDesk: el => (window.LegionDesk && typeof window.LegionDesk.mount === 'function' && el
-        ? (legionDesk = window.LegionDesk.mount(el, { v3: AF, feed: hub, headers, storage: store, storagePrefix: PREFIX }))
+        ? (legionDesk = window.LegionDesk.mount(el, { v3: AF, feed: hub, headers, storage: store, storagePrefix: PREFIX, claim: claimOpts.claim, claimCancel: claimOpts.claimCancel }))
         : null),
       onTab: () => {} });
     mounted.cohorts = true;
@@ -136,14 +151,13 @@ function mount(env) {
   /* ---------------- Castra and the cohort model (plan step 3.3): read only but for the cohort model's drag and drop (PUT to The Desk, never to
      ChartBridge). Both read The Desk through the one address (AccountsPage.deskBase); what only this PC knows (the traders, the prop accounts'
      room to the floor and day) is read from FleetView's own state, once a second at most: never a second reader. */
-  const deskBase = () => window.AccountsPage.deskBase((u, o) => fetch(u, o));
   let liveAt = 0, liveCache = null;
   const fleetLive = () => {
     if (!fleet) return null;
     const t = Date.now();
     if (t - liveAt < 800) return liveCache;
     liveAt = t;
-    try { const s = fleet.state(); liveCache = s.connected ? { traders: s.traders, accounts: s.accounts, heard: !!(s.arm && s.arm.state !== 'unknown') } : null;    /* heard: the traders are known (ChartBridge's replay after sign-in is done); with accounts but no traders every cohort would read not in Auto */ } catch (e) { liveCache = null; }
+    try { const s = fleet.state(); liveCache = s.connected ? { traders: s.traders, accounts: s.accounts, heard: !!(s.arm && s.arm.state !== 'unknown'), firmGuard: s.firmGuard || null } : null;    /* heard: the traders are known (ChartBridge's replay after sign-in is done); with accounts but no traders every cohort would read not in Auto */ } catch (e) { liveCache = null; }
     return liveCache;
   };
   const openTab = id => { const b = document.querySelector('[data-lx-tab="' + id + '"]'); if (b) b.click(); };
@@ -154,7 +168,6 @@ function mount(env) {
     castra = window.LegionCastra.mount($('cxView'), { fetch: (u, o) => fetch(u, o), deskBase, live: fleetLive, go: openTab, realClick });
     mounted.castra = !!castra;
   });
-  let cohortModel = null;
   guard('the cohort model', () => {
     if (!window.LegionCohorts || !$('chView')) return;
     /* the Drone sky's providers: the Agent desks' glances (Praetorian's and the trader desk's), the league's day (read by the view), and no price
@@ -211,8 +224,9 @@ function mount(env) {
       else league.showTab(true);
     });
   });
-  window.LegionTabs.state = () => ({ cohorts: fleet ? fleet.state() : null, praetorian: praetorian ? praetorian.state() : null, colosseum: league ? league.state() : null, ludus: ludus ? ludus.state() : null, castra: castra ? castra.state() : null, cohortModel: cohortModel ? cohortModel.state() : null });
+  window.LegionTabs.state = () => ({ claim: claimer ? claimer.state() : null, cohorts: fleet ? fleet.state() : null, praetorian: praetorian ? praetorian.state() : null, colosseum: league ? league.state() : null, ludus: ludus ? ludus.state() : null, castra: castra ? castra.state() : null, cohortModel: cohortModel ? cohortModel.state() : null });
   window.LegionTabs.parts = { fleet, praetorian, league, ludus, castra, cohortModel };
+  window.LegionTabs.cancelClaim = () => { if (claimer) claimer.cancel(); };   // N1: Stop all automation (live/legion.js) ends a claim that waits
   /* read hooks for the smokes, as the chart page's window.workspace had them (nothing here sends) */
   const lanes = new Map();
   window.legion = {

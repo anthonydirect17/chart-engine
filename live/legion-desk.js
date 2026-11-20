@@ -13,7 +13,8 @@
  *                   and a proposal is acknowledged (agentSeen, botSeen) only while its card is really on screen;
  *   - keyPrefix     (a F-B8) its own names for what it keeps in this browser, so a reload never mixes the two copies.
  *
- *   const d = LegionDesk.mount(el, { v3, feed, headers, storage, storagePrefix, side, shown });   (no flatten: the R12 delta)
+ *   const d = LegionDesk.mount(el, { v3, feed, headers, storage, storagePrefix, side, shown, claim, claimCancel });   (no flatten: the R12 delta)
+ *   claim, claimCancel: Arm claims the firm's PC (chart 1.60.0): handed to the agent side only, never the bot side.
  *   d.show(on)   the fold (or Legion's tab) opened or closed: call it every time; it starts closed unless shown: true;
  *   d.side('agent' | 'bot'); d.state(); d.destroy()   (destroy also takes the gate off the feed).
  *
@@ -45,7 +46,10 @@ function mount(el, opts) {
     '<section class="bt-view lgd-bot" aria-label="Legion\'s bot desk" hidden></section>';
   const agEl = el.querySelector('.lgd-agent'), btEl = el.querySelector('.lgd-bot');
   const common = { embedded: true, keyPrefix: KEY_PREFIX, keys: false, v3: link, headers: o.headers, feed: o.feed, storage: o.storage, storagePrefix: o.storagePrefix };
-  const agent = window.AgentDesk ? window.AgentDesk.create(Object.assign({}, common, { els: { view: agEl } })) : null;
+  /* Anthony 2026-11-19 (Arm claims the firm's PC): the agent side's Auto claims the trader's firm for this PC first (o.claim, from
+     live/legion-tabs.js); the bot side never claims (the bot trades your personal account only, law 9.3) */
+  const claims = typeof o.claim === 'function' ? { claim: o.claim, claimCancel: o.claimCancel } : {};
+  const agent = window.AgentDesk ? window.AgentDesk.create(Object.assign({}, common, claims, { els: { view: agEl } })) : null;
   const bot = window.BotDesk ? window.BotDesk.create(Object.assign({}, common, { floating: false, els: { view: btEl } })) : null;
   let current = SIDES.includes(o.side) ? o.side : 'agent', open = o.shown === true;
   /* each desk is shown only while the desk is open AND its side is the one picked */

@@ -1073,13 +1073,22 @@ function create(o) {
   const parkUnderHead = () => { if (underHead && view && view.contains(underHead) && view.parentNode) view.parentNode.insertBefore(underHead, view); };
   const S = { shown: false, built: false, version: '', connected: false, signedIn: false, accounts: null, groups: null, agents: new Map(), firstAgentAt: null, signInAt: null, replayDone: false, settleTimer: 0,
     ask: 0, askTimer: 0, hint: '', hintBad: false, hintState: false, answer: '', answerBad: false, cidSeq: 0, pending: '', pendingAt: 0, waitTimer: 0, sent: 0,
-    armAsk: 0, armTimer: 0, armSaid: '', armBad: false, modeSent: new Map(), pickSent: new Map(),
+    armAsk: 0, armTimer: 0, armSaid: '', armBad: false, modeSent: new Map(), pickSent: new Map(), claiming: false, claimSeq: 0,
     helper: null, helperTimer: 0, helperSeq: 0, sub: 'setup', filter: 'all', find: '', famShut: new Set(), laneHelp: new Set(), laneAccts: new Set(), laneAdd: new Set(), acctSaid: new Set(), removeAsk: '', unSaid: null, unAsk: '', lanePanels: {}, desk: null, deskOpen: false, deskSent: null,
     roster: { state: 'idle', text: '', cards: null, seq: 0, asked: 0, at: 0, version: '' }, rosterDirty: true, rosterTimer: 0, open: new Set(), drawn: {}, draws: { head: 0, roster: 0, traders: 0, accounts: 0, lanes: 0, 'lane-eval': 0, 'lane-funded': 0, 'lane-unassigned': 0, tiles: 0, bytrader: 0 },
     fills: new Map(), pane: null, overlay: null, rows: null };
   const el = {};
   const agentList = () => [...S.agents.values()];
   const cid = () => 'fl' + (++S.cidSeq).toString(36) + Math.random().toString(36).slice(2, 6);
+  /* Anthony 2026-11-19 ("i really dont want to see the old dead prop accounts either"): o.finished() is The Desk's finished prop
+     accounts (Map of lower-case name -> { reason }, from Legion's cohort model; none: nothing is hidden). Display only: an account
+     left out of the lists here still counts in every check (Armed, Kill all, the lanes), and one ChartBridge says holds a position
+     is never left out */
+  const finishedNow = () => { try { const m = typeof o.finished === 'function' ? o.finished() : null; return m instanceof Map ? m : new Map(); } catch (e) { return new Map(); } };
+  const hideFinished = (name, held) => !held && finishedNow().has(String(name || '').toLowerCase());
+  /* Anthony 2026-11-19 (Arm claims the firm's PC): o.claim(traders, say) -> Promise<{ ok, why, words }> runs before Armed's Auto
+     goes (live/legion-castra-core.js createClaimer); none handed in: Armed sends as before */
+  const claimHook = typeof o.claim === 'function' ? o.claim : null;
   const killState = () => C.killAllState(S.version, S.accounts, S.signedIn, S.connected);
   const laneList = () => C.lanes(agentList(), S.groups, S.accounts, S.version, S.roster.cards,
     window.AgentDesk && typeof window.AgentDesk.turningOff === 'function' ? window.AgentDesk.turningOff() : []);   // the R12 delta, B1r
@@ -1126,7 +1135,7 @@ function create(o) {
       if (S.pane && window.LeagueOverlay && typeof window.LeagueOverlay.attach === 'function') S.overlay = window.LeagueOverlay.attach(S.pane, el.chart, marksNow, () => 'MNQ', false);
     }
     if (!S.rows && typeof o.accountRows === 'function' && el.acctrows) {
-      try { S.rows = o.accountRows(el.acctrows, 'legion-live', a => !!a && typeof a.name === 'string' && C.propRows(S.accounts).has(a.name.toLowerCase())); } catch (e) { S.rows = null; }
+      try { S.rows = o.accountRows(el.acctrows, 'legion-live', a => !!a && typeof a.name === 'string' && C.propRows(S.accounts).has(a.name.toLowerCase()) && !hideFinished(a.name, !!heldText(a.name))); } catch (e) { S.rows = null; }
     }
   }
   function unmountLive() {
@@ -1168,6 +1177,7 @@ function create(o) {
     S.connected = false; S.signedIn = false; S.agents.clear(); S.firstAgentAt = null; S.signInAt = null; S.replayDone = false; S.accounts = null; S.groups = null;
     clearTimeout(S.settleTimer); S.settleTimer = 0;
     endArmAsk(); S.modeSent.clear(); S.pickSent.clear(); S.armSaid = ''; S.armBad = false;
+    if (S.claiming) { S.claimSeq++; S.claiming = false; S.armSaid = C.clock(new Date(now())) + '  The connection dropped while claiming the firm: nothing was armed.'; S.armBad = true; }
     if (S.pending) answered('Kill all was sent and ChartBridge\'s answer never came (the connection dropped): look in NinjaTrader now', true);
     hint('', false); endAsk();
     if (S.shown) render();
@@ -1196,7 +1206,8 @@ function create(o) {
      own `agent` messages each time. On: one agentMode auto for each ready lane not yet in Auto, after the question and a
      real click on Yes. Off: one agentMode shadow for every lane trader not in Shadow, at one click or key, no question
      (the safe direction is never held up). Everything is checked again at the moment it is sent. */
-  function arm(on) {
+  function arm(on, claimed, claimWords) {
+    if (S.claiming) { S.claimSeq++; S.claiming = false; if (claimHook && typeof o.claimCancel === 'function') try { o.claimCancel(); } catch (e) { /* its own */ } }
     const ls = laneList(), st = armNow(ls);
     endArmAsk();
     if (on && !st.can) { armSay(st.why, true); render(); return; }
@@ -1204,11 +1215,26 @@ function create(o) {
     const msgs = C.armMsgs(ls, on, agentList(), cid, outside(ls));
     if (!msgs.length && !C.modeRulesLoaded()) { armSay('Armed cannot switch ' + (on ? 'on' : 'off') + ' from here: the page is incomplete (agent-core.js is not loaded). Use Kill all, or NinjaTrader.', true); render(); return; }
     if (!msgs.length) { armSay(on ? 'Every ready lane is already in Auto' : 'No lane\'s trader is in Auto or Copilot: nothing to switch off', false); render(); return; }
+    if (on && claimHook && !claimed) {
+      /* the firm's PC first (Anthony 2026-11-19): the claim, then everything is checked again and sent; a failed claim sends nothing */
+      const seq = ++S.claimSeq;
+      const traders = msgs.map(m => { const l = ls.find(x => x.id === m.agent); return { name: l ? l.title : m.agent, seats: l ? l.seats.slice() : [] }; });
+      S.claiming = true; armSay('Claiming the firm for this PC: asking The Desk...', false); render();
+      Promise.resolve().then(() => claimHook(traders, t => { if (S.claimSeq === seq) { armSay(t, false); if (S.shown) render(); } }))
+        .then(r => r, e => ({ ok: false, why: 'The claim failed (' + String(e && e.message ? e.message : e).slice(0, 200) + '): nothing was armed.' }))
+        .then(r => {
+          if (S.claimSeq !== seq) return;                    // cancelled, or Armed was pressed again meanwhile
+          S.claiming = false;
+          if (!r || r.ok !== true) { armSay((r && r.why) || 'The claim failed: nothing was armed.', true); render(); return; }
+          arm(true, true, r.words || '');
+        });
+      return;
+    }
     let sent = 0;
     for (const m of msgs) { if (V3 && V3.post(m) === true) { sent++; remember(S.modeSent, m.cid, { agent: m.agent, mode: m.mode }); } }
     S.sent += sent;
     if (sent < msgs.length) armSay((on ? 'Auto' : 'Shadow') + ' could NOT be sent for ' + (msgs.length - sent) + ' of ' + msgs.length + ': ChartBridge is not connected.' + (on ? '' : ' Use Kill all, or NinjaTrader'), true);
-    else armSay((on ? 'Sent Auto for ' : 'Sent Shadow for ') + msgs.map(m => m.agent).join(', ') + ': the switch shows what ChartBridge says next', false);
+    else armSay((claimWords ? claimWords + ' ' : '') + (on ? 'Sent Auto for ' : 'Sent Shadow for ') + msgs.map(m => m.agent).join(', ') + ': the switch shows what ChartBridge says next', false);
     render();
   }
   function pick(agent, file) {
@@ -1227,6 +1253,9 @@ function create(o) {
   function killAll() {
     const st = killState();
     endAsk();
+    /* N1 (the R12 review): a stop ends any claim that waits, so no Auto follows it (the claimer is the page's one: o.claimCancel) */
+    if (S.claiming) { S.claimSeq++; S.claiming = false; armSay('Claim cancelled by Kill all: nothing was armed.', false); }
+    if (typeof o.claimCancel === 'function') { try { o.claimCancel(); } catch (x) { /* its own */ } }
     if (!st.ok) { hint(st.why, true, true); render(); return; }
     const id = cid();
     S.sent++;
@@ -1344,8 +1373,11 @@ function create(o) {
       <td>${esc(a.position)}${a.traders.length ? `<span class="fl-mut">${esc(a.traders.join(', '))}</span>` : '<span class="fl-mut">no trader on it</span>'}</td>
     </tr>`;
   }
-  function accountsHtml(accts) {
-    return `<h3 class="fl-h">Prop accounts</h3>
+  /* the finished accounts left out of this tab's lists (display only), and the line that says so */
+  function hiddenNow() { const f = finishedNow(); if (!f.size) return []; return C.propAccounts(S.accounts, S.groups, agentList()).filter(a => hideFinished(a.name, a.position !== 'Flat' && a.position !== 'Not connected')).map(a => a.name); }
+  const hiddenLine = n => (n > 0 ? `<p class="fl-note fl-hidden" data-hidden="${n}">${n} finished prop account${n === 1 ? '' : 's'} hidden (blown, promoted or archived on The Desk: Fleet keeps ${n === 1 ? 'it' : 'them'}).</p>` : '');
+  function accountsHtml(accts, hiddenN) {
+    return `<h3 class="fl-h">Prop accounts</h3>${hiddenLine(hiddenN || 0)}
       ${accts.length ? `<div class="fl-scroll"><table class="fl-table"><thead><tr><th>Account</th><th>Progress</th><th>Cushion to floor</th><th>Today</th><th>Day stop</th><th>Status</th></tr></thead>
           <tbody>${accts.map(accountHtml).join('')}</tbody></table></div>`
         : `<p class="fl-empty">${!S.connected ? 'ChartBridge is not connected.' : S.accounts && S.accounts.personalNamed === true ? 'No prop account is connected.' : 'No personal account is picked yet, so no account is prop. Pick it once on the Accounts tab: an account\'s settings, This is my personal account.'}</p>`}
@@ -1493,8 +1525,9 @@ function create(o) {
       if ((st.state === 'off' && !st.can) || st.state === 'unknown') { el.arm.setAttribute('aria-disabled', 'true'); el.arm.setAttribute('title', st.why); }
       else { el.arm.removeAttribute('aria-disabled'); el.arm.setAttribute('title', st.state === 'off' ? 'Switch on: every ready lane goes to Auto. It asks first.' : 'Switch off: every lane\'s trader goes to Shadow, at this one click. It closes no position: Kill all does.'); }
     }
+    if (S.claiming && el.arm) { setText(el.arm, 'Armed: claiming the firm...'); el.arm.setAttribute('data-state', 'claiming'); el.arm.setAttribute('title', 'Waiting for ChartBridge on this PC to read the firm\'s new PC from The Desk. Click to cancel: nothing is armed.'); }
     setHidden(el.arm, asking); setHidden(el.armno, !asking); setHidden(el.armyes, !asking); setHidden(el.armask, !asking);
-    if (asking) setText(el.armask, 'Arm? ' + C.armWords(ls) + ' Yes, or Cancel, beside this.');
+    if (asking) setText(el.armask, 'Arm? ' + C.armWords(ls) + (claimHook ? ' Each lane\'s firm becomes this PC\'s first (The Desk is told; another PC that ran it then refuses its traders\' new entries there, closing nothing).' : '') + ' Yes, or Cancel, beside this.');
     setText(el.armsaid, S.armSaid || (st.state === 'partly' ? st.reasons.join('. ') + '. A click switches ' + (st.outside.length ? 'every lane and ' + st.outside.join(', ') : 'every lane') + ' off.' : (st.state === 'off' && !st.can) || st.state === 'unknown' ? st.why : ''));
     if (el.armsaid) el.armsaid.classList.toggle('bad', S.armBad && !!S.armSaid);
   }
@@ -1572,7 +1605,9 @@ function create(o) {
       .map(p => (p.qty > 0 ? 'long ' : 'short ') + Math.abs(p.qty) + ' ' + String(p.root || p.name || '').slice(0, 12)).join(', ');
   }
   function unassignedHtml(ls) {
-    const u = C.unassigned(S.groups, S.version);
+    const u0 = C.unassigned(S.groups, S.version);
+    const gone = u0.rows.filter(r => hideFinished(r.account, !!heldText(r.account)));
+    const u = gone.length ? Object.assign({}, u0, { rows: u0.rows.filter(r => gone.indexOf(r) < 0), text: u0.text + ' (' + gone.length + ' finished hidden)' }) : u0;
     const row = r => {
       const l = ls.find(x => x.stage === r.kind), lane = r.kind === 'eval' ? 'the eval lane' : 'the funded lane';
       /* Anthony 2026-11-13 (21:35Z): Move from his group only when flat; the position as ChartBridge sends it (a working order
@@ -1649,7 +1684,7 @@ function create(o) {
     /* 1.54.0 (D): "Other connections" left Legion: the traders on no lane show on the Colosseum's watch box (those in Shadow)
        and on Praetorian; one in Auto on a prop account is named in the line under the title, and Kill all still stops it */
     /* the old Prop accounts table only where the page cannot hand the Accounts tab's own rows (accounts.js not served) */
-    try { section('accounts', S.rows ? '' : accountsHtml(C.propAccounts(S.accounts, S.groups, agentList()))); } catch (e) { section('accounts', '<p class="fl-empty fl-warn">The prop accounts could not be drawn.</p>'); }
+    try { section('accounts', S.rows ? hiddenLine(hiddenNow().length) : accountsHtml(C.propAccounts(S.accounts, S.groups, agentList()).filter(a => !hideFinished(a.name, a.position !== 'Flat' && a.position !== 'Not connected')), hiddenNow().length)); } catch (e) { section('accounts', '<p class="fl-empty fl-warn">The prop accounts could not be drawn.</p>'); }
     if (S.sub === 'live') {
       try { section('tiles', tilesHtml(C.liveTiles(ls, S.accounts))); } catch (e) { section('tiles', '<p class="fl-empty fl-warn">The tiles could not be drawn.</p>'); }
       try { section('bytrader', byTraderHtml(C.traderDays(ls, agentList(), S.accounts))); } catch (e) { section('bytrader', '<p class="fl-empty fl-warn">The traders could not be drawn.</p>'); }
@@ -1723,6 +1758,7 @@ function create(o) {
     }
     if (what === 'arm') {
       if (S.armAsk) return;
+      if (S.claiming) { S.claimSeq++; S.claiming = false; if (typeof o.claimCancel === 'function') try { o.claimCancel(); } catch (x) { /* its own */ } armSay('Claim cancelled: nothing was armed. The Desk keeps the firm on this PC if it was already told.', false); render(); return; }
       const ls = laneList(), st = armNow(ls);
       if (st.state === 'unknown') { armSay(st.why, true); render(); return; }
       if (st.state !== 'off') { arm(false); return; }      // on or partly: one click switches every lane off, no question
@@ -1818,6 +1854,7 @@ function create(o) {
     state: () => ({ lanes: laneList(), arm: Object.assign({ asking: S.armAsk > 0, said: S.armSaid, bad: S.armBad }, armNow(laneList())),
       shown: S.shown, sub: S.sub, fills: S.fills.size, live: { chart: !!S.pane, rows: !!S.rows }, version: S.version, connected: S.connected, signedIn: S.signedIn, asking: S.ask > 0, hint: S.hint, answer: S.answer, answerBad: S.answerBad, pending: !!S.pending, sent: S.sent, draws: Object.assign({}, S.draws),
       traders: C.traders(agentList(), S.accounts, S.version), accounts: C.propAccounts(S.accounts, S.groups, agentList()),
+      firmGuard: S.groups && S.groups.firmGuard && typeof S.groups.firmGuard === 'object' ? S.groups.firmGuard : null, claiming: S.claiming, hidden: hiddenNow(),
       roster: { state: S.roster.state, text: S.roster.text, asked: S.roster.asked, bots: S.roster.cards ? S.roster.cards.bots.map(c => c.name) : [], lineups: S.roster.cards ? S.roster.cards.lineups.map(c => c.name) : [], notShown: S.roster.cards ? S.roster.cards.notShown.length : 0 } }),
     reloadRoster: loadRoster,
     destroy: () => { parkUnderHead(); dropLanePanels(); dropDesk(); unmountLive(); clearTimeout(S.helperTimer); S.helperSeq++; S.roster.seq++; clearTimeout(S.settleTimer); clearTimeout(S.rosterTimer); clearTimeout(S.waitTimer); unlisten(); endAsk(); endArmAsk(); if (DOC) DOC.removeEventListener('keydown', onKey, true); if (view) { view.removeEventListener('click', onClick); view.removeEventListener('change', onChange); view.removeEventListener('input', onInput); view.removeEventListener('keydown', onKey); } },

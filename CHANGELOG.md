@@ -63,6 +63,49 @@
   `test/pc-updater.test.js`: the allowed git subcommands, the box job's name, useHttpPath read before the one ask, the
   token only after a 404 or 401 and then through the Actions API, one place that asks for it and one that sends it.
 
+## chart 1.60.0 (2026-11-19): finished prop accounts hidden on Legion; Arm claims the firm's PC (page only, no F5)
+
+In plain words: Legion stops showing the old dead prop accounts, and pressing Arm (Auto) for a trader on a firm's prop
+accounts makes this PC that firm's PC first, so Anthony never sets a firm's PC by hand. ChartBridge is unchanged (0.6.25 is
+installed by hand); `live/COMPAT.json` `minChartBridge` stays 0.6.2. The Desk's half is TheDesk's branch of the same name
+(`finished_accounts` on `GET /api/legion/cohorts`).
+
+- **Finished accounts hidden** (Anthony 2026-11-19: "i really dont want to see the old dead prop accounts either"): The
+  Desk's cohorts answer marks each account it lists that is finished (`finished_accounts`: its card blown or promoted on
+  Fleet, or the account archived as gone). The Cohorts tab leaves them out of the cohorts' chips and "In no cohort", Castra
+  leaves them out of Needs you ("N prop accounts in no cohort") and Today's rows (its total still counts them, and says
+  "The total includes N hidden finished accounts" when it does), and Fleet's lists on
+  Legion (the prop accounts table, Unassigned, Legion Live's rows) leave them out; each place says "N finished prop accounts
+  hidden" (the names in the Cohorts line's tooltip). **Display only:** every check still counts them (a cohort in Auto, a
+  drag's refusals, Armed, Kill all), The Desk still lists them in `prop_accounts` for ChartBridge's go-live guards, and one
+  that ChartBridge says holds a position is never hidden (it shows, marked). With no list from The Desk (an older Desk)
+  nothing is hidden.
+- **Arm claims the firm's PC** (Anthony's design, 2026-11-19): Armed (the lanes) and the trader desk's Auto on Legion first
+  ask the page's claimer (`LegionCastraCore.createClaimer`). **The Desk decides** (the R12 review, B1): before every Auto
+  the page reads The Desk's cohorts (`GET /api/legion/cohorts`), because ChartBridge's own reading (`groups.firmGuard`,
+  0.6.25) can be a minute old and still say "here" for a firm another PC has just claimed. Every firm whose PC on The Desk
+  is not this PC's name is claimed, whatever ChartBridge says: `PUT /api/legion/firm-pc` `{version, firm, pc}` with this
+  PC's name as ChartBridge gives it (`firmGuard.pc`; a stale version is read again once), "Claiming Firm A for this PC
+  (PC-TWO)...", and the Auto goes once this PC's ChartBridge shows the firm `"here": true`. The Auto goes at once only when
+  The Desk already says this PC and ChartBridge shows `"here": true` with its state on. **A takeover** (the firm was another
+  PC's on The Desk) also waits until 75 s after the write, for that PC's next read, with the time it goes: "Taking Firm A
+  over from PC-ONE: its bots there stop taking new entries within about a minute ...; Auto goes at 09:41:07". A claim waits
+  120 s at most; past that, or when The Desk is not reached or refuses, or ChartBridge does not know this PC's name, nothing
+  is armed and the trader stays in Shadow, said in plain words (a write The Desk did not answer in time: "this PC may not
+  have claimed Firm A"). Shadow (the desk), a press on Armed, Kill all, a trader's kill switch and Stop all automation cancel
+  a claim that waits. A claim cancelled after its write leaves the firm on this PC on The Desk. A trader whose prop accounts
+  are of two firms claims nothing. Only a trader's Auto claims: Armed off, Shadow, Copilot, Praetorian (your personal
+  account), the Bot desk, the ticket and the copier never do.
+- **The other PC:** the Cohorts tab says where each firm's bots trade from, from this PC ("its bots trade from PC-ONE (this
+  PC)", or "its bots now trade from PC-ONE: new entries here (PC-TWO) by its traders are refused. Nothing here is closed
+  or cancelled."), and during the minute before ChartBridge's next read it says so. Castra's Needs you names a trader in Auto
+  here on a firm that now trades from another PC.
+- **Gated on ChartBridge 0.6.25:** the claim needs `firmGuard`, which only 0.6.25 sends; with no firmGuard heard it claims
+  nothing and sends nothing. Below 0.6.25 Auto on a prop account is refused before the claim anyway (`GOLIVE_MIN`).
+- Tests: `test/legion-claim.test.js` (finished marks, firm lines, Needs you, the claimer with a stand-in Desk and clock,
+  the wiring), `test/fleet.test.js` (Armed with a claim, cancelled, failed, a dropped connection; the hidden rows), and the
+  smoke `npm run smoke:legion-claim` (the trader desk's claim end to end; the hidden line on Cohorts and Castra).
+
 ## chart 1.59.0 (2026-11-19): Centurion's veto and undo on Castra (page only, no F5)
 
 In plain words: Castra's card VII, Centurion's week, gains a Veto on each change of the week's Saturday report and an Undo
