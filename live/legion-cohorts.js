@@ -12,6 +12,9 @@
  *     account holds a position (or this page cannot tell). The Desk's own refusals (stage, firm, type, a stale version) come back
  *     in plain words too. Every chip also has a "Move to" list, for a phone and for the keyboard.
  *   - A link to Fleet (The Desk's Prop screen).
+ *   - chart 1.60.0 (Anthony 2026-11-19): finished prop accounts (The Desk's finished_accounts) are left out of the chips and the tray,
+ *     display only, with one line that says how many; each firm's line says where its bots trade from, said from this PC (the groups
+ *     message's firmGuard, ChartBridge 0.6.25), and that Arm claims a firm for this PC.
  *   - The Agents strip and the Drone sky: the page's own AgentsSky (live/agents-sky.js), mounted the first time the tab is shown.
  *     Its day is the league's (GET /api/chart-league, read here every 30 s while the tab is shown), its agents the Agent desks'.
  *
@@ -42,7 +45,7 @@ function mount(el, opts) {
     press: 0, sky: null, skyWhy: '', league: { day: null, problem: '', at: 0, timer: 0, busy: false } };
 
   const live = () => { try { return (typeof o.live === 'function' && o.live()) || null; } catch (e) { return null; } };
-  const view = () => (S.ans ? K.cohortsView(S.ans, live() ? live().accounts : [], live() ? live().traders : [], !!(live() && live().heard)) : null);
+  const view = () => { const lv = live(); return S.ans ? K.cohortsView(S.ans, lv ? lv.accounts : [], lv ? lv.traders : [], !!(lv && lv.heard), lv ? lv.firmGuard : null) : null; };
 
   function readCohorts() {
     const g = ++S.gen;
@@ -58,7 +61,7 @@ function mount(el, opts) {
     const no = K.dropRefusal(v, account, toId);
     if (no) { say(no, true); return; }
     if (v && v.ok) {
-      const from = v.cohorts.find(c => c.chips.some(k => k.account.toLowerCase() === account.toLowerCase()));
+      const from = v.cohorts.find(c => (c.all || c.chips).some(k => k.account.toLowerCase() === account.toLowerCase()));
       if ((from ? from.id : null) === toId) { say(account + ' is already there: nothing to change.', false); return; }
     }
     if (S.busy || !v || !v.ok) return;
@@ -87,6 +90,7 @@ function mount(el, opts) {
       '<span class="ch-chip-line">' + (k.today === null ? '<span class="cx-dim">today not reported</span>' : 'today <span class="cx-num ' + tone(k.today) + '">' + esc(signedUsd(k.today)) + '</span>') +
       (k.listed && k.position ? ' <span class="cx-dim">' + esc(k.position) + '</span>' : '') + '</span>' +
       (k.problem ? '<span class="ch-chip-line cx-bad-t">' + esc(k.problem) + '</span>' : '') +
+      (k.finished ? '<span class="ch-chip-line cx-bad-t">Marked ' + esc(K.FINISHED_WORDS[k.finished] || k.finished) + ' on The Desk, yet ChartBridge says it holds ' + esc(k.position) + ': shown until it is flat.</span>' : '') +
       '<select class="ch-move" data-ch-move="' + esc(k.account) + '" aria-label="Move ' + esc(k.account) + '">' + opts + '</select></li>';
   }
   function cohortCard(c, i, v) {
@@ -96,7 +100,8 @@ function mount(el, opts) {
       '<h2><span class="lx-rn">' + esc(K.RN[i] || String(i + 1)) + '</span>' + esc(c.name) + ' <span class="ch-tag">' + esc(c.stage) + '</span>' + (c.auto ? ' <span class="ch-auto">In Auto</span>' : '') + '</h2>' +
       '<dl class="cx-kv"><dt>Firm</dt><dd>' + esc(c.firm || (c.firms.length ? c.firms.join(', ') : 'none yet (no account in it)')) + '</dd><dt>Trades on</dt><dd>' + pcWords + '</dd>' +
       '<dt>Roster pick</dt><dd class="' + (c.pick.bad ? 'cx-bad-t' : '') + '">' + esc(c.pick.text) + '</dd><dt>Direction</dt><dd class="cx-dim">' + esc(K.directionWords().replace(/^Direction today: /, '')) + '</dd></dl>' +
-      (c.chips.length ? '<ul class="ch-chips">' + c.chips.map(k => chip(k, c.id, v)).join('') + '</ul>' : '<p class="cx-dim ch-empty">No account yet: drag one here.</p>') +
+      (c.chips.length ? '<ul class="ch-chips">' + c.chips.map(k => chip(k, c.id, v)).join('') + '</ul>' : c.hidden ? '' : '<p class="cx-dim ch-empty">No account yet: drag one here.</p>') +
+      (c.hidden ? note(K.hiddenWords(c.hidden), 'cx-dim ch-hidden') : '') +
       c.problems.map(p => note(p, 'cx-bad')).join('') + '</section>';
   }
   function drawBody() {
@@ -107,13 +112,16 @@ function mount(el, opts) {
     let html = '<p class="ch-said' + (S.bad ? ' cx-bad' : '') + '" role="status" aria-live="polite"' + (S.said ? '' : ' hidden') + '>' + esc(S.said) + '</p>';
     html += '<section class="lx-card cx-card ch-head"><h2>The cohorts</h2>' +
       '<p>Prop account groups with the roster build each trades. Drag an account chip onto a cohort, or use its "Move to" list. ' + (S.fleetHref ? '<a class="lx-btn lx-link" href="' + esc(S.fleetHref) + '" target="_blank" rel="noopener">Fleet</a> ' : '') + '<span class="cx-dim">Fleet is The Desk\'s one place for every prop account\'s book.</span></p>' +
-      (v.firms.length ? '<dl class="cx-kv">' + v.firms.map(f => '<dt>' + esc(f.firm) + '</dt><dd>' + (f.pc ? 'its cohorts run on ' + esc(f.pc) : 'no PC set') + ', ' + K.plural(f.cohorts, 'cohort') + '. <span class="cx-dim">' + esc(K.directionWords()) + '</span></dd>').join('') + '</dl>' : note('The ledger names no firm yet (not enough data yet).', 'cx-dim')) +
+      (v.firms.length ? '<dl class="cx-kv ch-firms">' + v.firms.map(f => '<dt>' + esc(f.firm) + '</dt><dd' + (f.away ? ' class="cx-bad-t" data-ch-away="1"' : '') + '>' + esc(f.line) + ' ' + esc(K.plural(f.cohorts, 'cohort')) + '. <span class="cx-dim">' + esc(K.directionWords()) + '</span></dd>').join('') + '</dl>' : note('The ledger names no firm yet (not enough data yet).', 'cx-dim')) +
+      note('Arm (Auto) on a trader claims its firm for this PC' + (v.thisPc ? ' (' + v.thisPc + ')' : '') + ' first: The Desk is told, and the Auto goes once ChartBridge here has read it (it reads once a minute). Another PC that ran the firm then refuses its traders\' new entries there; nothing is closed or cancelled.', 'cx-dim') +
       v.problems.map(p => note(p, 'cx-bad')).join('') +
       note('Refused while a cohort is in Auto or the account holds a position; The Desk refuses a wrong stage, firm or type and says why. The cohort\'s pick is set in The Desk and is not changed on this tab yet. Version ' + v.version + ', read ' + (S.readAt ? new Date(S.readAt).toLocaleTimeString('en-US', { hour12: false }) : 'not yet') + '.', 'cx-dim') + '</section>';
     html += v.cohorts.length ? '<div class="ch-grid">' + v.cohorts.map((c, i) => cohortCard(c, i, v)).join('') + '</div>' : note('No cohort yet (not enough data yet): The Desk holds none.', 'cx-dim');
     const dropT = S.drag ? (K.dropRefusal(v, S.drag, null) ? ' ch-drop-no' : ' ch-drop-ok') : '';
     html += '<section class="lx-card cx-card ch-tray' + dropT + '" data-ch-drop="" aria-label="Prop accounts in no cohort"><h2>In no cohort</h2>' +
       (v.tray.length ? '<ul class="ch-chips">' + v.tray.map(k => chip(k, null, v)).join('') + '</ul>' : '<p class="cx-dim ch-empty">Every prop account The Desk lists is in a cohort. Drop one here to take it out.</p>') + '</section>';
+    const nHidden = v.hidden.length;
+    if (nHidden) html += '<p class="cx-note cx-dim ch-hidden" data-ch-hidden="' + nHidden + '" title="' + esc(v.hidden.map(x => x.account + ': ' + (K.FINISHED_WORDS[x.reason] || x.reason) + (x.cohort ? ', in ' + x.cohort : '')).join('; ')) + '">' + esc(K.hiddenWords(nHidden)) + '</p>';
     return html;
   }
   function render() {
@@ -197,7 +205,9 @@ function mount(el, opts) {
     return S.shown;
   }
   return { show, state: () => ({ shown: S.shown, state: S.state, version: S.ans && typeof S.ans.version === 'number' ? S.ans.version : null, said: S.said, saidBad: S.bad, busy: S.busy, sky: !!S.sky, skyWhy: S.skyWhy,
-      cohorts: view() && view().ok ? view().cohorts.map(c => ({ id: c.id, name: c.name, accounts: c.chips.map(k => k.account), auto: c.auto })) : [], tray: view() && view().ok ? view().tray.map(k => k.account) : [] }),
+      cohorts: view() && view().ok ? view().cohorts.map(c => ({ id: c.id, name: c.name, accounts: c.chips.map(k => k.account), auto: c.auto })) : [], tray: view() && view().ok ? view().tray.map(k => k.account) : [],
+      hidden: view() && view().ok ? view().hidden.map(x => x.account) : [] }),
+    finished: () => K.finishedOf(S.ans),
     move, readAgain: readCohorts, destroy() { clearInterval(S.timer); clearInterval(S.tick); clearTimeout(S.league.timer); S.gen++;
       body.removeEventListener('pointerdown', onDown); document.removeEventListener('pointerup', onUp, true); body.removeEventListener('dragstart', onDragStart); body.removeEventListener('dragover', onDragOver); body.removeEventListener('drop', onDrop); body.removeEventListener('dragend', onDragEnd); body.removeEventListener('change', onChange);
       if (S.sky && typeof S.sky.destroy === 'function') try { S.sky.destroy(); } catch (e) { /* gone */ } } };

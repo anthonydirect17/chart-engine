@@ -927,9 +927,9 @@ test('the Armed switch: offered only when Kill all is, "not known" until heard, 
   assert.deepStrictEqual(F.pickChoices(null), []);
 });
 
-async function lanePage(t, list, more) {
+async function lanePage(t, list, more, over) {
   timers(t);
-  const P = page(t); P.fv.showTab(true);
+  const P = page(t, over); P.fv.showTab(true);
   P.feed({ type: 'hello', version: '0.6.25' }); P.feed({ type: 'trading', enabled: true }); P.feed(accounts); P.feed(groups);
   for (const a of list) P.feed(a);
   P.replayDone();
@@ -2070,4 +2070,71 @@ test('the R12 delta of plan step 3.2, B1r: a lane whose trader a desk is turning
   assert.strictEqual(F.lanes(both, groups, accounts, V, cards, freed)[0].armable, true, 'with the hold gone, Armed is not blocked by it');
   const stays = ['legion1']; Object.defineProperty(stays, 'held', { value: ['legion1'] });
   assert.strictEqual(F.lanes(both, groups, accounts, V, cards, stays)[0].armable, false, 'while the hold stays, the lane is out of Armed');
+});
+
+/* chart 1.60.0 (Anthony 2026-11-19): Arm claims the firm's PC (o.claim, LegionCastraCore.createClaimer), and finished prop accounts
+   (o.finished, The Desk's finished_accounts) are left out of the tab's lists, display only */
+test('Armed with a claim: the Auto waits for the claim, goes after it (checked again), and goes nowhere when it fails or is cancelled', async t => {
+  const calls = [], cancels = [];
+  let settle = null;
+  const over = { claim: (traders, say) => { calls.push(traders); say('Claiming Firm A for this PC (PC-TWO)... made up'); return new Promise(r => { settle = r; }); }, claimCancel: () => cancels.push(1) };
+  const P = await lanePage(t, [evalTrader(), fundTrader()], [], over);
+  const yes = async () => { P.click('arm'); P.T += 700; P.click('armyes'); await P.tick(); };
+  await yes();
+  assert.deepEqual(P.posts, [], 'nothing is sent while the firm is claimed');
+  assert.equal(JSON.stringify(calls), JSON.stringify([[{ name: 'Eval lane', seats: ['EVAL-A', 'EVAL-B'] }]]), 'the lanes going to Auto, with their seats');
+  assert.match(P.part('armsaid').textContent, /Claiming Firm A for this PC \(PC-TWO\)\.\.\. made up$/);
+  assert.equal(P.part('arm').textContent, 'Armed: claiming the firm...');
+  assert.equal(P.fv.state().claiming, true);
+  settle({ ok: true, why: '', claimed: ['Firm A'], words: 'Firm A now trades from PC-TWO (this PC).' });
+  await P.tick(); await P.tick();
+  assert.equal(P.posts.length, 1);
+  assert.deepEqual([P.posts[0].type, P.posts[0].agent, P.posts[0].mode, P.posts[0].pick], ['agentMode', 'legion1', 'auto', 'germ.json']);
+  assert.match(P.part('armsaid').textContent, /Firm A now trades from PC-TWO \(this PC\)\. Sent Auto for legion1/);
+  // a failed claim: nothing sent, said plainly
+  P.posts.length = 0;
+  await yes();
+  settle({ ok: false, why: 'The Desk refused it: made up, so this PC did not claim Firm A: nothing was armed; the trader stays in Shadow.' });
+  await P.tick(); await P.tick();
+  assert.deepEqual(P.posts, []);
+  assert.match(P.part('armsaid').textContent, /The Desk refused it: made up/);
+  assert.ok(P.part('armsaid').cls.has('bad'));
+  // cancelled by a press on the switch: the late answer sends nothing
+  await yes();
+  P.click('arm');
+  assert.deepEqual(cancels, [1]);
+  assert.match(P.part('armsaid').textContent, /Claim cancelled: nothing was armed/);
+  settle({ ok: true, why: '', claimed: [], words: '' });
+  await P.tick(); await P.tick();
+  assert.deepEqual(P.posts, [], 'a claim that ends after a cancel arms nothing');
+  // a dropped connection while claiming
+  await yes();
+  P.subs.closed();
+  settle({ ok: true, why: '', claimed: [], words: '' });
+  await P.tick(); await P.tick();
+  assert.deepEqual(P.posts, []);
+});
+
+test('Armed off never waits for a claim; with no claim handed in Armed sends at once as before', async t => {
+  const calls = [];
+  const P = await lanePage(t, [evalTrader({ mode: 'auto' }), fundTrader()], [], { claim: tr => { calls.push(tr); return new Promise(() => {}); } });
+  P.click('arm');
+  assert.deepEqual([calls, P.posts.map(m => m.mode)], [[], ['shadow']], 'off: Shadow at once, no claim');
+});
+
+test('finished accounts are left out of the prop accounts table and the Unassigned row, said in one line; one holding a position stays', t => {
+  const finished = new Map([['eval-b', { reason: 'blown' }], ['eval-a', { reason: 'blown' }], ['loose-1', { reason: 'archived' }]]);
+  const P = page(t, { finished: () => finished }); P.fv.showTab(true); P.ready('0.6.25');
+  const html = P.part('accounts').innerHTML;
+  assert.ok(!html.includes('>EVAL-B<') && !html.includes('>LOOSE-1<'), 'flat or not connected and finished: hidden');
+  assert.ok(html.includes('EVAL-A'), 'EVAL-A holds 4 MNQ: never hidden');
+  assert.match(html, /2 finished prop accounts hidden \(blown, promoted or archived on The Desk: Fleet keeps them\)/);
+  assert.deepEqual(P.fv.state().hidden.sort(), ['EVAL-B', 'LOOSE-1']);
+  assert.equal(P.fv.state().accounts.length, F.propAccounts(accounts, groups, []).length, 'the state (what every check reads) still has every account');
+  P.feed(Object.assign({}, groups, { laneRule: { state: 'on', why: null, handOut: [], outside: [{ account: 'LOOSE-1', kind: 'eval', group: null, copier: null, byHand: false }, { account: 'NEW-9', kind: 'eval', group: null, copier: null, byHand: false }] } }));
+  const un = P.part('lane-unassigned').innerHTML;
+  assert.ok(!un.includes('data-acct="LOOSE-1"') && un.includes('data-acct="NEW-9"'), 'Unassigned: the finished one left out');
+  assert.match(un, /2 accounts outside the lanes \(1 finished hidden\)/);
+  const none = page(t); none.fv.showTab(true); none.ready('0.6.25');
+  assert.ok(none.part('accounts').innerHTML.includes('EVAL-B') && !/finished prop account/.test(none.part('accounts').innerHTML), 'no list handed in: everything shows');
 });

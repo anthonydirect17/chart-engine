@@ -4,11 +4,12 @@
  * draw it. It reuses LudusCore (live/ludus-core.js) for the routes it shares (the roster, the ledger), the words for a failed
  * read (failWords), the number words (perDollar, pct, usd, sessionsText, sampleText), the board's reader and the zone switch.
  *
- * WHAT IT READS (The Desk, TheDesk PR 112, docs/API.md "Legion"; Castra and Cohorts read only, and Cohorts writes only the
- * cohort model's drag and drop):
+ * WHAT IT READS (The Desk, TheDesk PR 112, docs/API.md "Legion"; Castra and Cohorts read only, Cohorts writes only the cohort
+ * model's drag and drop, and the claimer writes only a firm's PC before an Auto):
  *   the roster    GET /api/legion/roster      the roster files (LudusCore.ROUTES.roster)
  *   the cohorts   GET /api/legion/cohorts     the prop account groups, each cohort's pick, firm and PC, every prop account
- *   the move      PUT /api/legion/cohorts/members {version, account, cohort|null}   the one write: drag and drop
+ *   the move      PUT /api/legion/cohorts/members {version, account, cohort|null}   drag and drop
+ *   the firm's PC PUT /api/legion/firm-pc {version, firm, pc}   Arm claims the firm's PC (chart 1.60.0, createClaimer), only before an Auto
  *   the money     GET /api/legion/money       real profit per $1 per roster build beside the Prop Sim's own (law 9.2)
  *   Centurion     GET /api/legion/centurion   the weekly report, the week's veto window and the applied log (contract v1, 2026-11-19)
  *   the veto      POST /api/legion/centurion/veto {run_id, name}   one change of this week's Saturday report turned off
@@ -39,6 +40,7 @@ const ROUTES = Object.freeze({
   ledger: L.ROUTES.ledger,
   cohorts: '/api/legion/cohorts',
   members: '/api/legion/cohorts/members',
+  firmPc: '/api/legion/firm-pc',
   money: '/api/legion/money',
   centurion: '/api/legion/centurion',
   centurionVeto: '/api/legion/centurion/veto',
@@ -419,29 +421,121 @@ function pickWords(p) {
   const why = { changed: 'its roster file changed since it was picked: pick again', missing: 'its roster file is not served now', not_served: 'its roster file is not served now' }[st] || 'its state is not known';
   return { text: name + ' (' + str(p.file, 60) + '): ' + (str(p.why, 200) || why), state: st || 'unknown', bad: true };
 }
+/* ---------------------------------------------------------------- finished prop accounts (Anthony 2026-11-19), display only */
+/*
+ * "i really dont want to see the old dead prop accounts either": The Desk's cohorts answer marks each account it lists that is
+ * finished (finished_accounts, TheDesk: its linked card blown or promoted on Fleet, or the account archived as gone). The page
+ * leaves those out of what it SHOWS (the Cohorts tab's chips and its tray, Needs you, Today, Fleet's lists on Legion) and says
+ * how many it left out. Nothing else changes: The Desk still lists them in prop_accounts and the cohorts (ChartBridge 0.6.25's
+ * go-live guards read that list), and every check on this page (a cohort in Auto, a position) still counts them. With no list
+ * from The Desk (an older Desk) nothing is hidden. One that ChartBridge says holds a position is never hidden: it shows, marked.
+ */
+const FINISHED_WORDS = Object.freeze({ blown: 'blown', promoted: 'promoted', archived: 'archived (gone)' });
+/** The Desk's list as Map(lower-case account -> { account, reason, at }); empty when the answer has none (then nothing is hidden). */
+function finishedOf(ans) {
+  const out = new Map();
+  for (const f of isObj(ans) && Array.isArray(ans.finished_accounts) ? ans.finished_accounts.slice(0, 500) : []) {
+    if (!isObj(f) || typeof f.account !== 'string' || !f.account || !Object.prototype.hasOwnProperty.call(FINISHED_WORDS, f.reason)) continue;
+    out.set(lc(f.account), { account: str(f.account, 64), reason: f.reason, at: isNum(f.at_ms) ? f.at_ms : null });
+  }
+  return out;
+}
+/** ChartBridge's position words say it holds something ('Flat', 'Not connected' and '' (not listed) do not). */
+const holdsSomething = position => typeof position === 'string' && position !== '' && position !== 'Flat' && position !== 'Not connected';
+/** The mark that hides this account from the page: finished on The Desk and not holding a position ChartBridge reports, else null. */
+function hiddenMark(finished, account, position) {
+  const f = finished instanceof Map ? finished.get(lc(account)) : null;
+  return f && !holdsSomething(position) ? f : null;
+}
+/** The line that says how many were left out ('' for none): "3 finished prop accounts hidden (blown, promoted or archived on The Desk: Fleet keeps them)". */
+function hiddenWords(n) {
+  return n > 0 ? plural(n, 'finished prop account') + ' hidden (blown, promoted or archived on The Desk: Fleet keeps ' + (n === 1 ? 'it' : 'them') + ').' : '';
+}
+/** Rows of FleetCore.propAccounts (Today, Fleet's table) without the hidden ones. -> { rows, hidden: [names] } */
+function withoutFinished(rows, finished) {
+  const list = Array.isArray(rows) ? rows.filter(isObj) : [];
+  const hidden = list.filter(a => hiddenMark(finished, a.name, str(a.position)));
+  return { rows: list.filter(a => hidden.indexOf(a) < 0), hidden: hidden.map(a => str(a.name, 64)) };
+}
+
+/* ---------------------------------------------------------------- the firms' PCs as this PC sees them (one PC per firm, law 9.2) */
+const foldFirm = f => str(f).replace(/\s+/g, ' ').trim().toLowerCase();
+/** ChartBridge 0.6.25's groups.firmGuard, read: { state, why, pc, firms: Map(folded firm -> { firm, pc, here, accounts }) } or null. */
+function guardOf(g) {
+  if (!isObj(g) || (g.state !== 'on' && g.state !== 'error') || !Array.isArray(g.firms)) return null;
+  const firms = new Map();
+  for (const f of g.firms.slice(0, 100)) {
+    if (!isObj(f) || typeof f.firm !== 'string' || !foldFirm(f.firm)) continue;
+    firms.set(foldFirm(f.firm), { firm: str(f.firm, 60), pc: typeof f.pc === 'string' && f.pc ? str(f.pc, 64) : null, here: f.here === true,
+      accounts: Array.isArray(f.accounts) ? f.accounts.filter(x => typeof x === 'string').slice(0, 500) : [] });
+  }
+  return { state: g.state, why: str(g.why, 300), pc: typeof g.pc === 'string' && g.pc ? str(g.pc, 64) : null, firms };
+}
+/**
+ * One firm's line on Legion: where its bots trade from, said from this PC. deskPc: The Desk's PC for the firm; guard: guardOf(...)
+ * (this PC's ChartBridge) or null. -> { text, away } (away: its traders' new entries are refused on this PC).
+ */
+function firmLine(firm, deskPc, guard) {
+  const here = guard && guard.pc ? guard.pc : null, gf = guard ? guard.firms.get(foldFirm(firm)) || null : null;
+  if (!deskPc) return { text: 'no PC set: its traders\' new entries are refused on every PC. Arm on a PC claims it for that PC.', away: !!here };
+  if (!here) return { text: 'its bots trade from ' + deskPc + '.', away: false };
+  if (deskPc.toLowerCase() === here.toLowerCase()) {
+    const lag = gf && !gf.here ? ' ChartBridge here still reads ' + (gf.pc ? gf.pc : 'no PC') + ' for it until its next read of The Desk (once a minute).' : '';
+    return { text: 'its bots trade from ' + deskPc + ' (this PC).' + lag, away: false };
+  }
+  const lag = gf && gf.here ? ' ChartBridge here still reads this PC until its next read of The Desk (once a minute).' : '';
+  return { text: 'its bots now trade from ' + deskPc + ': new entries here (' + here + ') by its traders are refused. Nothing here is closed or cancelled.' + lag, away: true };
+}
+
 /**
  * The model for the Cohorts page. ans: GET /api/legion/cohorts. accounts: FleetCore.propAccounts rows. traders: FleetCore.traders rows.
- * -> { ok, problem, version, cohorts: [{ id, name, stage, firm, pc, pick, chips, problems, auto, openPositions }], tray, firms, problems }
+ * firmGuard: the groups message's firmGuard (ChartBridge 0.6.25) or null.
+ * -> { ok, problem, version, cohorts: [{ id, name, stage, firm, pc, pick, chips, problems, auto, openPositions, hidden }], tray, firms, problems, hidden, away }
  * auto: a trader in Auto holds one of the cohort's accounts (what only this PC knows); openPositions: its accounts that hold a position.
+ * Both count every account, a finished one too; chips and tray are what is SHOWN (finished ones left out, listed in hidden).
+ * away: firms whose bots trade from another PC (or none) while a trader here is in Auto on their accounts: [{ firm, pc, traders }].
  */
-function cohortsView(ans, accounts, traders, heard) {
-  if (!isObj(ans) || !Array.isArray(ans.cohorts) || !isNum(ans.version)) return { ok: false, problem: 'The cohorts\' answer is not one this page knows.', cohorts: [], tray: [], firms: [], problems: [] };
+function cohortsView(ans, accounts, traders, heard, firmGuard) {
+  if (!isObj(ans) || !Array.isArray(ans.cohorts) || !isNum(ans.version)) return { ok: false, problem: 'The cohorts\' answer is not one this page knows.', cohorts: [], tray: [], firms: [], problems: [], hidden: [], away: [] };
   const idx = fleetIndex(accounts);
+  const fin = finishedOf(ans), guard = guardOf(firmGuard);
   const autos = (Array.isArray(traders) ? traders : []).filter(t => isObj(t) && t.mode === 'auto' && t.tone !== 'off' && t.tone !== 'killed' && t.tone !== 'standDown');
   const cannotTell = (Array.isArray(traders) ? traders : []).some(t => isObj(t) && t.cannotTell);
   const inAuto = name => autos.some(t => Array.isArray(t.accounts) && t.accounts.some(n => lc(n) === lc(name)));
+  const hidden = [];
+  const mark = (k, where) => {
+    const f = fin.get(lc(k.account)) || null;
+    k.finished = f ? f.reason : '';
+    if (f && !holdsSomething(k.position)) { hidden.push({ account: k.account, reason: f.reason, at: f.at, cohort: where }); return false; }
+    return true;
+  };
   const cohorts = ans.cohorts.filter(isObj).slice(0, 100).map(c => {
-    const chips = (Array.isArray(c.accounts) ? c.accounts : []).filter(isObj).slice(0, 100).map(a => Object.assign(chipOf(a, idx), { inAuto: inAuto(a.account) }));
-    return { id: str(c.id, 40), name: str(c.name, 40), stage: str(c.stage, 10), firm: str(c.firm, 40), firms: Array.isArray(c.firms) ? c.firms.filter(x => typeof x === 'string') : [], pc: str(c.pc, 64),
-      pick: pickWords(c.pick), chips, problems: Array.isArray(c.problems) ? c.problems.filter(x => typeof x === 'string').slice(0, 10) : [],
-      auto: chips.some(k => k.inAuto), openPositions: chips.filter(k => k.listed && !flat(k.position) && k.position !== 'Not connected').map(k => k.account) };
+    const all = (Array.isArray(c.accounts) ? c.accounts : []).filter(isObj).slice(0, 100).map(a => Object.assign(chipOf(a, idx), { inAuto: inAuto(a.account) }));
+    const name = str(c.name, 40);
+    const chips = all.filter(k => mark(k, name));
+    return { id: str(c.id, 40), name, stage: str(c.stage, 10), firm: str(c.firm, 40), firms: Array.isArray(c.firms) ? c.firms.filter(x => typeof x === 'string') : [], pc: str(c.pc, 64),
+      pick: pickWords(c.pick), chips, all, hidden: all.length - chips.length, problems: Array.isArray(c.problems) ? c.problems.filter(x => typeof x === 'string').slice(0, 10) : [],
+      auto: all.some(k => k.inAuto), openPositions: all.filter(k => k.listed && !flat(k.position) && k.position !== 'Not connected').map(k => k.account) };
   });
-  const inCohort = new Set(cohorts.flatMap(c => c.chips.map(k => lc(k.account))));
-  const tray = (Array.isArray(ans.prop_accounts) ? ans.prop_accounts : []).filter(a => isObj(a) && !a.cohort && !inCohort.has(lc(a.account))).slice(0, 100)
+  const inCohort = new Set(ans.cohorts.filter(isObj).flatMap(c => (Array.isArray(c.accounts) ? c.accounts : []).filter(isObj).map(a => lc(a.account))));
+  const trayAll = (Array.isArray(ans.prop_accounts) ? ans.prop_accounts : []).filter(a => isObj(a) && !a.cohort && !inCohort.has(lc(a.account))).slice(0, 100)
     .map(a => Object.assign(chipOf({ account: a.account, firm: a.firm, stage: a.stage, type: null, problem: null }, idx), { inAuto: inAuto(a.account) }));
-  return { ok: true, problem: null, version: ans.version, heard: heard === true, cannotTell, cohorts, tray,
-    firms: (Array.isArray(ans.firms) ? ans.firms : []).filter(isObj).map(f => ({ firm: str(f.firm, 40), pc: str(f.pc, 64), cohorts: Array.isArray(f.cohorts) ? f.cohorts.length : 0 })),
-    problems: Array.isArray(ans.problems) ? ans.problems.filter(x => typeof x === 'string').slice(0, 10) : [], note: str(ans.note, 400) };
+  const tray = trayAll.filter(k => mark(k, ''));
+  const firms = (Array.isArray(ans.firms) ? ans.firms : []).filter(isObj).map(f => {
+    const firm = str(f.firm, 40), pc = str(f.pc, 64), line = firmLine(firm, pc, guard);
+    return { firm, pc, cohorts: Array.isArray(f.cohorts) ? f.cohorts.length : 0, line: line.text, away: line.away };
+  });
+  const away = [];
+  if (guard) for (const f of firms) {
+    if (!f.away) continue;
+    const gf = guard.firms.get(foldFirm(f.firm));
+    const accts = new Set((gf ? gf.accounts : []).map(lc));
+    const who = autos.filter(t => Array.isArray(t.accounts) && t.accounts.some(n => accts.has(lc(n)))).map(t => str(t.name, 60) || str(t.id, 64));
+    if (who.length) away.push({ firm: f.firm, pc: f.pc, traders: who });
+  }
+  return { ok: true, problem: null, version: ans.version, heard: heard === true, cannotTell, cohorts, tray, trayAll, firms, thisPc: guard ? guard.pc : null,
+    problems: Array.isArray(ans.problems) ? ans.problems.filter(x => typeof x === 'string').slice(0, 10) : [], note: str(ans.note, 400),
+    hidden, finishedKnown: Array.isArray(ans.finished_accounts), away };
 }
 /** The firm's direction today: The Desk does not give it yet (the direction check is step 3.5), so it says so. */
 const directionWords = () => 'Direction today: ' + NOT_BUILT + ' (the one-direction check is step 3.5; The Desk gives no direction yet).';
@@ -454,8 +548,9 @@ const directionWords = () => 'Direction today: ' + NOT_BUILT + ' (the one-direct
 function dropRefusal(view, account, toId) {
   if (!view || !view.ok) return 'The cohorts are not read yet.';
   const all = view.cohorts;
-  const from = all.find(c => c.chips.some(k => lc(k.account) === lc(account))) || null;
-  const chip = from ? from.chips.find(k => lc(k.account) === lc(account)) : view.tray.find(k => lc(k.account) === lc(account));
+  const every = c => c.all || c.chips;                       // a hidden (finished) account is still checked: shown or not
+  const from = all.find(c => every(c).some(k => lc(k.account) === lc(account))) || null;
+  const chip = from ? every(from).find(k => lc(k.account) === lc(account)) : (view.trayAll || view.tray).find(k => lc(k.account) === lc(account));
   if (!chip) return account + ' is not one of the prop accounts The Desk lists.';
   const to = toId === null ? null : all.find(c => c.id === toId) || null;
   if (toId !== null && !to) return 'That cohort is not there any more: the page reads the cohorts again.';
@@ -508,6 +603,8 @@ function needsYou(o) {
     }
     for (const p of c.problems) out.push({ kind: 'cohort', words: p, where: 'cohorts' });
     if (c.tray.length) out.push({ kind: 'accounts', words: plural(c.tray.length, 'prop account') + ' in no cohort (' + c.tray.slice(0, 5).map(k => k.account).join(', ') + (c.tray.length > 5 ? ', ...' : '') + '): no bot trades them.', where: 'cohorts' });
+    /* one PC per firm (Anthony 2026-11-19, Arm claims the firm's PC): a trader in Auto HERE on a firm whose bots trade from another PC */
+    for (const a of Array.isArray(c.away) ? c.away : []) out.push({ kind: 'firm', words: a.firm + (a.pc ? '\'s bots now trade from ' + a.pc : ' has no trading PC set') + ': new entries here by ' + a.traders.join(', ') + ' are refused (still in Auto; nothing is closed or cancelled). Arm ' + (a.traders.length === 1 ? 'it' : 'them') + ' again here to take ' + a.firm + ' back to this PC, or switch to Shadow.', where: 'cohorts' });
   }
   for (const t of Array.isArray(o && o.traders) ? o.traders : []) {
     if (!isObj(t) || (t.kind !== 'prop' && t.kind !== 'propsim' && t.kind !== 'unlisted' && t.kind !== 'mixed')) continue;
@@ -515,11 +612,142 @@ function needsYou(o) {
   }
   const names = Object.keys(o && o.reads ? o.reads : {});
   const failed = names.filter(k => o.reads[k] === 'fail'), pending = names.filter(k => o.reads[k] !== 'ok' && o.reads[k] !== 'fail');
-  return { items: out, cannotTell: names.filter(k => o.reads[k] !== 'ok'), failed, pending };
+  return { items: out, cannotTell: names.filter(k => o.reads[k] !== 'ok'), failed, pending, hidden: c && Array.isArray(c.hidden) ? c.hidden.length : 0 };
+}
+
+/* ---------------------------------------------------------------- Arm claims the firm's PC (Anthony 2026-11-19) */
+/*
+ * "why not just have a simple ARM button like we do on our regular charts": Anthony trades from one PC at a time, so pressing Arm
+ * (Auto) on Legion for a trader on a firm's prop accounts makes THIS PC that firm's PC first: The Desk's PUT /api/legion/firm-pc
+ * {version, firm, pc} with this PC's name as its ChartBridge names itself (groups.firmGuard.pc, ChartBridge 0.6.25), and only then
+ * the Auto. ChartBridge reads The Desk's firms once a minute (ChartBridgeGroups.cs FirmPoll), and until it has read the new PC it
+ * refuses that trader's Auto ("runs on HOME, not on this PC"), so the page waits until this PC's ChartBridge shows the firm as
+ * "here": true in groups.firmGuard before it sends the Auto, at most CLAIM_WAIT_MS; past that nothing is sent and the trader stays
+ * in Shadow. A failed claim (The Desk not reached, a refusal, a PC name ChartBridge does not know) sends nothing and says why.
+ * The PC that loses the firm refuses its traders' new entries for it from its own next read (a minute at most); nothing there is
+ * closed or cancelled. Only a trader's Auto claims: Anthony's own ticket, the copier, Shadow and the personal bot never do.
+ * It needs ChartBridge 0.6.25 (the version that sends firmGuard): with no firmGuard heard it claims nothing and sends nothing.
+ */
+const CLAIM_WAIT_MS = 90000;    // ChartBridge reads once a minute (60 s), its read may take 10 s, the groups message follows within seconds
+const PC_RE = /^[A-Za-z0-9][A-Za-z0-9 _.-]{0,63}$/;   // The Desk's PC_NAME (thedesk/legion_cohorts.py)
+const NO_GUARD = 'ChartBridge on this PC has not sent its firm table yet (firmGuard, ChartBridge 0.6.25 or later), so this page cannot tell which PC each firm trades from';
+/** The firm of each seat in ChartBridge's reading (guardOf) and in The Desk's answer (prop_accounts): Map(lower-case seat -> firm). */
+function seatFirms(guard, ans) {
+  const out = new Map();
+  if (guard) for (const f of guard.firms.values()) for (const a of f.accounts) out.set(lc(a), f.firm);
+  for (const r of isObj(ans) && Array.isArray(ans.prop_accounts) ? ans.prop_accounts : []) if (isObj(r) && typeof r.account === 'string' && typeof r.firm === 'string' && r.firm && !out.has(lc(r.account))) out.set(lc(r.account), str(r.firm, 60));
+  return out;
+}
+/**
+ * What one Arm needs, from what is known: traders [{ name, seats: [account] }]. -> { firms: [firm] the traders trade (one each),
+ * claim: [firm] not yet this PC's in ChartBridge's reading, why: '' or why nothing may be sent }.
+ */
+function claimNeed(traders, guard, ans) {
+  if (!guard) return { firms: [], claim: [], why: NO_GUARD + '. Nothing was armed.' };
+  const of = seatFirms(guard, ans), firms = [];
+  for (const t of Array.isArray(traders) ? traders : []) {
+    const fs = [...new Set((t.seats || []).map(a => of.get(lc(a))).filter(Boolean).map(foldFirm))];
+    if (fs.length > 1) return { firms: [], claim: [], why: str(t.name, 60) + '\'s prop accounts are of more than one firm (' + fs.map(k => [...of.values()].find(v => foldFirm(v) === k)).join(', ') + '): a trader trades one firm. Nothing was armed.' };
+    if (fs.length && !firms.some(x => foldFirm(x) === fs[0])) firms.push([...of.values()].find(v => foldFirm(v) === fs[0]));
+  }
+  const claim = firms.filter(f => { const g = guard.firms.get(foldFirm(f)); return !(guard.state === 'on' && g && g.here); });
+  return { firms, claim, why: '' };
+}
+/** The words while it waits: "Claiming Lucid for this PC (WORK)...". */
+const claimingWords = (firms, pc) => 'Claiming ' + firms.join(' and ') + ' for this PC (' + pc + ')... waiting for ChartBridge here to read it from The Desk (once a minute, ' + Math.round(CLAIM_WAIT_MS / 1000) + ' s at most). Nothing is armed until it does.';
+/**
+ * The claimer: one per page. o: { desk: deskClient, now, setTimeout, clearTimeout, waitMs }.
+ *   hear(m)    every ChartBridge message (it keeps the last groups.firmGuard); lost() when the connection drops
+ *   claim(traders, say) -> Promise<{ ok, why, words, claimed }>: ok true when every firm the traders trade is this PC's in
+ *              ChartBridge's own reading (claimed: the firms it had to claim); say(text) is called with the waiting words
+ *   cancel()   ends a claim that waits: nothing is armed (what The Desk was told stays: the firm is this PC's there)
+ *   state()    { busy, firms, words, guard }
+ */
+function createClaimer(o) {
+  const opt = o || {};
+  const now = typeof opt.now === 'function' ? opt.now : () => Date.now();
+  const later = typeof opt.setTimeout === 'function' ? opt.setTimeout : (f, ms) => setTimeout(f, ms);
+  const stop = typeof opt.clearTimeout === 'function' ? opt.clearTimeout : t => clearTimeout(t);
+  const WAIT = isNum(opt.waitMs) && opt.waitMs > 0 ? opt.waitMs : CLAIM_WAIT_MS;
+  const S = { guard: null, raw: null, pending: null };
+  const settle = r => { const p = S.pending; if (!p) return; S.pending = null; stop(p.timer); p.done(r); };
+  const check = () => {
+    const p = S.pending;
+    if (!p || !p.waiting || !S.guard || S.guard.state !== 'on') return;
+    if (p.firms.every(f => { const g = S.guard.firms.get(foldFirm(f)); return g && g.here; })) settle({ ok: true, why: '', claimed: p.firms.slice(), words: p.words });
+  };
+  function hear(m) {
+    if (!isObj(m)) return;
+    if (m.type === 'groups') { S.raw = isObj(m.firmGuard) ? m.firmGuard : null; S.guard = guardOf(S.raw); check(); }
+  }
+  function lost() { S.guard = null; S.raw = null; settle({ ok: false, why: 'The connection to ChartBridge dropped while claiming: nothing was armed.', claimed: [] }); }
+  function cancel() { settle({ ok: false, cancelled: true, why: 'Claim cancelled: nothing was armed (The Desk keeps what it was told).', claimed: [] }); }
+  async function write(desk, ans, firm, pc) {
+    const body = v => ({ version: v, firm, pc });
+    try { return await desk.put(ROUTES.firmPc, body(ans.version)); }
+    catch (e) {
+      if (!(e && e.status === 409)) throw e;
+      const again = await desk.get(ROUTES.cohorts);                        // another write came first: read again, once
+      return desk.put(ROUTES.firmPc, body(again.version));
+    }
+  }
+  function claim(traders, say) {
+    if (S.pending) return Promise.resolve({ ok: false, why: 'Still claiming ' + S.pending.firms.join(', ') + ' for this PC: wait for it, or cancel it. Nothing else was armed.', claimed: [] });
+    const tell = typeof say === 'function' ? say : () => {};
+    const guard = S.guard, desk = opt.desk;
+    const first = claimNeed(traders, guard, null);
+    if (first.why) return Promise.resolve({ ok: false, why: first.why, claimed: [] });
+    /* every firm the seats have in ChartBridge's own fresh reading is this PC's already: nothing to claim (a seat it gives no firm,
+       Sim or one with no account type, is ChartBridge's to judge as before) */
+    if (guard.state === 'on' && !first.claim.length) return Promise.resolve({ ok: true, why: '', claimed: [], words: '' });
+    const p = { firms: [], words: '', waiting: false, timer: 0, done: null };
+    const result = new Promise(res => { p.done = res; });
+    S.pending = p;
+    (async () => {
+      let ans;
+      try { if (!desk) throw { words: 'This page has no address for The Desk.' }; ans = await desk.get(ROUTES.cohorts); }
+      catch (e) { settle({ ok: false, why: 'The Desk could not be read (' + (e && e.words ? e.words : 'no answer') + '), so this PC could not claim the firm: nothing was armed; the trader stays in Shadow.', claimed: [] }); return; }
+      if (S.pending !== p) return;
+      const need = claimNeed(traders, S.guard, ans);
+      if (need.why) { settle({ ok: false, why: need.why, claimed: [] }); return; }
+      if (!need.claim.length) {
+        if (S.guard && S.guard.state === 'on') { settle({ ok: true, why: '', claimed: [], words: '' }); return; }
+        settle({ ok: false, why: 'ChartBridge cannot check one PC per firm now (' + (S.guard ? S.guard.why : NO_GUARD) + '): nothing was armed.', claimed: [] }); return;
+      }
+      const pc = S.guard ? S.guard.pc : null;
+      if (!pc) { settle({ ok: false, why: 'ChartBridge on this PC does not know its own name (config.txt pc, else the Windows computer name), so this PC cannot claim ' + need.claim.join(', ') + ': nothing was armed.', claimed: [] }); return; }
+      if (!PC_RE.test(pc)) { settle({ ok: false, why: 'This PC\'s name as ChartBridge gives it (' + pc + ') is not one The Desk takes (letters, digits, space, _ . -, 64 at most): set config.txt pc. Nothing was armed.', claimed: [] }); return; }
+      p.firms = need.claim.slice();
+      const was = [];
+      try {
+        for (const firm of need.claim) {
+          const row = (Array.isArray(ans.firms) ? ans.firms : []).find(f => isObj(f) && foldFirm(f.firm) === foldFirm(firm));
+          const before = row && typeof row.pc === 'string' && row.pc ? row.pc : null;
+          if (before && before.toLowerCase() === pc.toLowerCase()) continue;    // The Desk has it already: only ChartBridge's read is waited for
+          if (before) was.push(firm + ' was ' + before);
+          ans = await write(desk, ans, firm, pc);
+          if (S.pending !== p) return;
+        }
+      } catch (e) {
+        const detail = e && e.body && typeof e.body.detail === 'string' ? e.body.detail.slice(0, 300) : '';
+        settle({ ok: false, why: (e && e.status === null ? 'The Desk did not answer' : e && e.status ? 'The Desk refused it' + (detail ? ': ' + detail : ' (' + e.status + ')') : 'The claim failed') + ', so this PC did not claim ' + need.claim.join(', ') + ': nothing was armed; the trader stays in Shadow.', claimed: [] });
+        return;
+      }
+      if (S.pending !== p) return;
+      p.words = need.claim.join(' and ') + ' now ' + (need.claim.length === 1 ? 'trades' : 'trade') + ' from ' + pc + ' (this PC)' + (was.length ? '; ' + was.join(', ') + ': its traders there keep their mode, and their new entries on it are refused from that PC\'s next read of The Desk (within a minute); nothing there is closed or cancelled' : '') + '.';
+      p.waiting = true;
+      tell(claimingWords(need.claim, pc));
+      p.timer = later(() => { if (S.pending === p) settle({ ok: false, why: 'ChartBridge on this PC did not show ' + need.claim.join(' and ') + ' as this PC\'s within ' + Math.round(WAIT / 1000) + ' s, so nothing was armed: the trader stays in Shadow. The Desk has ' + need.claim.join(' and ') + ' on ' + pc + ' now; arm again in a minute.', claimed: [] }); }, WAIT);
+      check();
+    })().catch(e => settle({ ok: false, why: 'The claim failed (' + str(e && e.message, 200) + '): nothing was armed.', claimed: [] }));
+    return result;
+  }
+  return { hear, lost, cancel, claim, state: () => ({ busy: !!S.pending, firms: S.pending ? S.pending.firms.slice() : [], waiting: !!(S.pending && S.pending.waiting), guard: S.raw, at: now() }) };
 }
 
 return Object.freeze({ ROUTES, FLEET_PATH, RN, NOT_BUILT, NOT_ENOUGH, SIM_LABEL, deskClient, esc, table, cell, raw, card, note, tone, plural,
   simStage, alarmOf, ALARM_NOT_KNOWN, readStatus, realCells, cardAccountWords, cardAccountLog, moneyView, goesInView, runningNow, todayLive, lastNight, centurionView, fleetIndex,
   VETO_VERSION, ARM_MS, CONFIRM_MS, RUN_ID_RE, NAME_RE, IN_SAMPLE, VETO_UNKNOWN, VETO_UNREACHABLE, NO_WEEK, NO_CHANGE, NO_APPLIED, ALLOW_REFUSED, VETO_Q,
-  undoQuestion, nyTime, weekOf, appliedOf, askClick, actionFor, sentOk, sentWords, refusedWords, chipOf, pickWords, cohortsView, directionWords, dropRefusal, moveWords, needsYou });
+  undoQuestion, nyTime, weekOf, appliedOf, askClick, actionFor, sentOk, sentWords, refusedWords, chipOf, pickWords, cohortsView, directionWords, dropRefusal, moveWords, needsYou,
+  FINISHED_WORDS, finishedOf, holdsSomething, hiddenMark, hiddenWords, withoutFinished, foldFirm, guardOf, firmLine, CLAIM_WAIT_MS, NO_GUARD, seatFirms, claimNeed, claimingWords, createClaimer });
 });

@@ -326,6 +326,12 @@ function create(o) {
      account, a group, an account the page cannot tell) and what to hold back; the pop-out window's connection has neither,
      and there nothing changes */
   const refusal = m => (V3 && typeof V3.why === 'function' ? V3.why(m) || '' : '');
+  /* Anthony 2026-11-19 (Arm claims the firm's PC): on Legion's trader desk o.claim(traders, say) -> Promise<{ ok, why, words }> runs
+     before a trader's Auto goes (live/legion-castra-core.js createClaimer): this PC becomes the firm's PC on The Desk, and the Auto
+     goes once ChartBridge here shows it. A failed claim sends nothing. Praetorian (your personal account) and the Bot desk never claim */
+  const claimHook = typeof o.claim === 'function' ? o.claim : null;
+  let claimSeq = 0, claiming = null;                         // { agent, words, seq } while a claim waits
+  const endClaim = () => { if (!claiming) return; claimSeq++; claiming = null; if (typeof o.claimCancel === 'function') { try { o.claimCancel(); } catch (e) { /* its own */ } } };
   const heldWhy = id => (V3 && typeof V3.traderWhy === 'function' ? V3.traderWhy(id) || '' : '');
   /* 1.52.0 (answers B4-2, item 5): a trader with no home (its accounts fit neither Praetorian nor Legion): held back like any
      other, but Change account stays offered with None only; the gate lets None go only while ChartBridge says he is flat */
@@ -341,6 +347,7 @@ function create(o) {
   const tabName = gated && V3 && typeof V3.name === 'string' && V3.name ? V3.name : 'Praetorian';
   const cid = () => 'ag' + (++S.cidSeq).toString(36) + Math.random().toString(36).slice(2, 6);
   function lost() {
+    if (claiming) { claimSeq++; claiming = null; }             // the claimer says so itself (its lost); nothing is armed
     S.signedIn = false; S.trading = null; S.orders.clear(); ledger.clear(); unclaimed.clear(); riskKeys.clear();
     agents.clear(); feed.clear();
     for (const p of props.clear()) { const x = cards.get(keyOf(p.agent, p.id)); if (x) removeCard(x); }
@@ -873,11 +880,12 @@ function create(o) {
       attr(btn, 'aria-pressed', String(a.mode === m));
       put(btn, 'disabled', !x.ok || !S.signedIn);
       attr(btn, 'title', x.ok ? (m === 'auto' ? 'ChartBridge places ' + AC.agentName(a) + '\'s plans on ' + accWord + (acc.mark ? ' (' + acc.mark + ')' : '') + ' by itself, inside its rules' : m === 'copilot' ? 'Each plan is a proposal for ' + accWord + ': you accept or reject it' : 'Plans are shown and logged; nothing is placed') : x.why);
-      put(btn, 'textContent', m === 'auto' && S.autoConfirm > now ? 'Confirm' : AC.MODE_NAME[m]);
+      put(btn, 'textContent', m === 'auto' && claiming && claiming.agent === a.agent ? 'Claiming...' : m === 'auto' && S.autoConfirm > now ? 'Confirm' : AC.MODE_NAME[m]);
     }
     const ma = q('[data-k="modeAcct"]'); put(ma, 'textContent', acc.label + (acc.mark ? ' · ' + acc.mark : ''));
     const why = q('[data-k="modeWhy"]');
-    if (!why.dataset.refused) { put(why, 'hidden', !(S.autoConfirm > now)); put(why, 'textContent', S.autoConfirm > now ? 'Click Confirm within 4 s: Auto on ' + accWord + (acc.mark === 'LIVE' ? ', a LIVE account.' : '.') : ''); tog(why, 'live', acc.mark === 'LIVE'); }
+    if (claiming && claiming.agent === a.agent && !why.dataset.refused) { put(why, 'hidden', false); put(why, 'textContent', claiming.words); tog(why, 'live', false); }
+    else if (!why.dataset.refused) { put(why, 'hidden', !(S.autoConfirm > now)); put(why, 'textContent', S.autoConfirm > now ? 'Click Confirm within 4 s: Auto on ' + accWord + (acc.mark === 'LIVE' ? ', a LIVE account.' : '.') : ''); tog(why, 'live', acc.mark === 'LIVE'); }
     const kill = q('[data-k="kill"]');
     put(kill, 'textContent', a.killed ? (S.killConfirm > now ? 'Release: click again' : 'Kill switch on · Release') : 'Kill switch');
     tog(kill, 'on', !!a.killed); put(kill, 'disabled', !S.signedIn || (!!a.killed && !!held)); attr(kill, 'aria-pressed', String(!!a.killed));   // 1.51.0: on always; the release held back
@@ -1658,6 +1666,10 @@ function create(o) {
     if (!a) return;
     if (mode && !mode.disabled) {
       const m = mode.dataset.mode;
+      if (claiming && claiming.agent === a.agent) {
+        if (m === 'auto') { modeWhy('Still claiming the firm for this PC: wait for it, or press Shadow to cancel.'); return; }
+        endClaim(); modeWhy('Claim cancelled: nothing was armed.'); renderPanel(); if (a.mode === m) return;
+      }
       if (a.mode === m) return;
       if (m === 'auto') {
         // a second click within 4 s confirms; one under 400 ms after the first is the same double-click and is ignored
@@ -1666,6 +1678,27 @@ function create(o) {
         if (step === 'arm') { S.autoConfirm = Date.now() + AC.CONFIRM_MS; S.autoAt = Date.now(); renderPanel(); tick(); setTimeout(renderPanel, AC.CONFIRM_MS + 100); return; }
       }
       S.autoConfirm = 0;
+      if (m === 'auto' && claimHook && !praetorian) {
+        if (claiming) { modeWhy('Still claiming the firm for ' + claiming.agent + ': wait for it, or press its Shadow to cancel.'); return; }
+        const probe = AC.modeMsg(a.agent, 'auto'), no = probe ? refusal(Object.assign({ type: probe.type, cid: 'claim' }, probe)) : 'Not sent: no message.';
+        if (no) { notice({ kind: 'refused', level: 'amber', text: no }); modeWhy(no); return; }   // the gate first: a refused Auto claims nothing
+        const id = a.agent, seq = ++claimSeq;
+        claiming = { agent: id, words: 'Claiming the firm for this PC: asking The Desk...', seq };
+        renderPanel();
+        Promise.resolve().then(() => claimHook([{ name: AC.agentName(a), seats: AC.gateAccounts(a) || [] }], t => { if (claiming && claiming.seq === seq) { claiming.words = String(t || ''); renderPanel(); } }))
+          .then(r => r, e => ({ ok: false, why: 'The claim failed (' + String(e && e.message ? e.message : e).slice(0, 200) + '): nothing was armed.' }))
+          .then(r => {
+            if (!claiming || claiming.seq !== seq) return;          // cancelled meanwhile
+            claiming = null;
+            if (!r || r.ok !== true) { const w = (r && r.why) || 'The claim failed: nothing was armed.'; notice({ kind: 'refused', level: 'amber', text: w }); modeWhy(w); renderPanel(); return; }
+            const now = agents.get(id);
+            if (!now || now.mode === 'auto') { renderPanel(); return; }
+            const c = sendAgent(AC.modeMsg(id, 'auto'), 'mode');   // checked again by the gate as it goes
+            if (c && r.words) modeWhy(r.words + ' Auto sent.');
+            renderPanel();
+          });
+        return;
+      }
       sendAgent(AC.modeMsg(a.agent, m), 'mode');
       renderPanel();
       return;
