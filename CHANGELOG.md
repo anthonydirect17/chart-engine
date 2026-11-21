@@ -1,5 +1,74 @@
 # Changelog
 
+## Unreleased (2026-11-08): going private, step B: the Windows gate moves to HOMESERVER's runner (unit-windows), Linux on pull requests only
+
+CI files, tests and docs only (no page change, no version bump, as step A; the Markup Studio gains a test seam only). Anthony decided (2026-11-04) to make chart-engine
+private, with its Windows CI on HOMESERVER's self-hosted runner (SERVER_RULES.md rule 6.1). Step A (#81) taught the PC
+updater to accept the box job; this is step B, the workflow itself.
+
+- **`.github/workflows/test.yml`:** the matrix job `unit` (ubuntu-latest and windows-latest) is gone. `unit-windows`,
+  the gate, runs on `[self-hosted, Windows, homeserver]` on pushes to `main` and on pull requests into `main` that are
+  not drafts, with a 180 minute job limit (the box's queue never cuts a run off, Anthony 2026-11-05) and 45 minutes per
+  step: Node 24 (the box's cached Node), `npm test` with no install of any kind, the cached Python 3.12.10 checked
+  complete as Bot-Lab's box job does, then numpy into the job's own folder (`RUNNER_TEMP\pylib`, on `PYTHONPATH`) and the
+  Markup Studio tests. `unit-linux` runs on GitHub's ubuntu runners for pull requests only (not when a draft is marked
+  ready: that commit's Linux run is done), now with no npm install either (`npm test` needs no package; playwright is
+  for the smoke runs on a PC). On `main` only `unit-windows` runs, the one check the PC updater reads. Triggers add
+  `ready_for_review`, so marking a draft ready starts the box job. Cancelling is per job: a new push to a pull request
+  cancels that pull request's older `unit-linux` only; `unit-windows` has no concurrency group at all, so no push ever
+  cancels it, running or queued, on a pull request or on `main` (rule 6.8: only the box's guard stops a box job; GitHub
+  would cancel a job still waiting in a group when a newer one joins). Its checkout has `persist-credentials: false`, so
+  no token is left in the workspace on the shared box. `permissions: contents: read`.
+- **`requirements-box-ci.txt`** (new, rule 8.7): numpy 2.5.4, the box's version, the one `cp312-win_amd64` wheel with
+  its sha256 (downloaded from PyPI and hashed, and checked against the hash PyPI lists; the header says how). The box
+  job installs it with `--require-hashes --only-binary :all: --target`, so pip stops rather than build from source.
+- **`test/ci-workflow.test.js`** (new, no dependencies, plain text reading), over every `.github/workflows/*.yml` and
+  `*.yaml`. It fails if any job runs on a GitHub-hosted Windows or macOS image (`runs-on` or a matrix list), if
+  `unit-windows` in `test.yml` is missing or not on exactly `[self-hosted, Windows, homeserver]`, or if a job calls a
+  reusable workflow from another repo (its runners cannot be read). A job counts as self-hosted unless every label of
+  its `runs-on`, written on one line or as a block list, is a GitHub image name (`ubuntu-latest`, `ubuntu-24.04`,
+  `windows-2022`, `macos-14` and the like); an expression (`${{ ... }}`) or a runner group counts as self-hosted. A
+  self-hosted job fails on: `npm install`, `npm i`, `npm exec`, `npx`, uv (`add`, `sync`, `pip install`,
+  `tool install`, `run`), `uvx` or pipx anywhere on a line; yarn, pnpm or corepack run as a command (at a line's start,
+  after `run:`, or after `;`, `&`, `|`, `(`, `{`, a backtick, `then`, `do` or `else`, so `npm run check-no-yarn` is
+  fine); `npm ci` without `--ignore-scripts`; a pip install (`pip`, `pip3`, `py -m pip`, `python -m pip`) without
+  `--require-hashes` and `--only-binary :all:`; a checkout without `persist-credentials: false`; and any `concurrency:`
+  in the job. A file with a self-hosted job may have no workflow-level `concurrency:` at all (rule 6.8); a Linux-only
+  workflow may. A `#` starts a comment only at a line's start or after a space, outside quotes, so `echo "x #y" && pip
+  install numpy` is still read. A line of `requirements-box-ci.txt` without `--hash=sha256:` fails too. Its self-test
+  has a made-up workflow for every case it must catch and for those it must let through.
+- **Test servers on port 0** (rule 6.5: a test server binds 127.0.0.1 on port 0, and the box job now brings the tests
+  under it). The unit tests that started `test/fake-bridge.mjs` or `test/fake-desk.mjs` on a random fixed port
+  (`fake-bridge`, `fake-bot`, `fake-v3`, `live-first`, `trade-sides` and `account-types`) now start them on port 0 and
+  learn the port: the bridge through the new helper `test/fake-bridge-start.js`, which starts it with port `0` and
+  reads the port from its ready line ("fake ChartBridge on http://localhost:<port>/live/ ..."), and the fake Desk through
+  `desk.port`. The fakes behave as before: `fake-bridge.mjs` still defaults to 8765 (`npm run bridge` and the smoke runs
+  by hand are unchanged) and, given 0, takes the port the system picked for its own origin, Host check and PIN pages;
+  `startDesk(port)` still listens where it is told. The two PIN restart tests now restart on a new port (port 0 again):
+  the unlock token is not tied to a port, so they test the same thing. **`test/test-ports.test.js`** (new) reads every
+  `test/*.test.js` and each test/ helper they load or start, and fails on a `.listen(` on a port other than 0 (a number,
+  or a variable other than those two fakes' own), on an address other than `127.0.0.1`, on `fake-bridge.mjs` started
+  other than through `fake-bridge-start.js` with `'0'`, on `startDesk(` in a test with a port other than 0, or on a port
+  picked with `Math.random`; it also checks itself against made-up code. The markup tests already bind port 0.
+- **Markup tests read nothing outside the repo** (rule 6.5). Two tests reached the Studio's HOME defaults for the
+  already-seen files (`E:\SchwabDesk_bulk\tickbench\runs\...`, probed with a folder check and opened if there): the
+  `ms.main` calls in `test_markup_symbol.py` and `test_markup_trades.py` now give `--seen=` a file in their temp folder,
+  and `default_seen` takes a `base` (default `SEEN_BASE`, the same HOME folder as before, so Anthony's use is
+  unchanged) that the test gives as a temp folder. `test_markup_work.py` gives `--bot=` a missing file in its temp
+  folder instead of `/no/such.py`, and the `ms.main` calls that stop before serving pass `--port=0`.
+  **`test/test_markup_paths.py`** (new, runs with the markup tests) starts every `test_markup*.py` once more in its own
+  process under **`test/markup_path_audit.py`**, which records each path opened, listed, globbed, made, moved, removed
+  or checked (Python's audit events plus `os.stat`, `os.lstat` and the `os.path` checks) and fails on any outside the
+  repo, the temp folder, Python's own folders and the system's (a Windows drive path is outside on any system).
+- **Docs:** the README's "Going private" step B and the updater paragraph now name `unit-windows` as today's workflow;
+  the comments and help text in `nt8/update-pc.ps1` and the test messages in `test/pc-updater.test.js` and
+  `test/pc-updater.tests.ps1` that called the matrix job "today's" now say "before step B" (text only, no code change;
+  the updater keeps accepting either set).
+- **Order:** the pull request stays a draft (Linux only) while the repo is public, since a public repo never gets a box
+  runner. Anthony makes the repo private; the HOMESERVER coordinator registers the runner once the repo page reads
+  Private; then the pull request is marked ready, `unit-windows` runs on the box, and it merges on an independent
+  APPROVE plus green CI. The PC token steps in the README stay as they are.
+
 ## Unreleased (2026-11-04): getting ready to go private: the PC updater accepts the box job and reads a chart-engine token; placeholders
 
 `nt8/update-pc.ps1` and docs only (no page change, no version bump, as the 2026-10-23 updater entries). Anthony decided

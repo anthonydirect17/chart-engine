@@ -1,30 +1,98 @@
 name: test
 # A push to a branch with a pull request already runs as pull_request, so a push runs only on main (the per-PC
 # updater reads the checks of main's commits). This halves the Actions minutes a pull request uses.
+# Going private, step B (Anthony 2026-11-04; SERVER_RULES.md rule 6.1): the Windows job is the gate and runs on
+# HOMESERVER's self-hosted runner as unit-windows, on pull requests into main that are not drafts and on pushes to
+# main; never a GitHub-hosted Windows or macOS image (test/ci-workflow.test.js checks). The Linux job runs on GitHub
+# on pull requests only, so on main unit-windows is the one check (nt8/update-pc.ps1 waits for exactly that name).
+# The box pauses jobs 09:00 to 16:15 New York on weekdays: a Windows job queued then is waiting, not broken.
 on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+# Cancelling is per job, never for the whole run: a new push to a pull request cancels that pull request's older Linux
+# job only. unit-windows is never cancelled by a push, on a pull request or on main (SERVER_RULES.md rule 6.8: only the
+# box's guard stops a running box job), and it has no concurrency group at all, because GitHub cancels a job still
+# waiting in a group when a newer one joins it, and a queued box job is left alone too.
+permissions:
+  contents: read
 jobs:
-  unit:
-    # Linux and Windows (Anthony trades on Windows; the merge rule wants both green)
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+  # Linux runs on every pull request push (draft or not), never on push to main. Not when a draft is marked ready:
+  # that commit's Linux job already ran as the draft, so only Windows is new.
+  unit-linux:
+    if: github.event_name == 'pull_request' && github.event.action != 'ready_for_review'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    concurrency:
+      group: unit-linux-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      # The repo keeps no package-lock.json (by rule), so `npm ci` cannot run; install the one dev dependency
-      # without writing a lock file. No browsers are downloaded: `npm test` needs none.
-      - run: npm install --no-package-lock --no-audit --no-fund
+      # No install: the repo keeps no package-lock.json (by rule) and `npm test` (node --test test/*.test.js) needs no
+      # package. The one dev dependency, playwright, is for the smoke runs on a PC only.
       - run: npm test
-      # Markup Studio's server is Python (stdlib + numpy): its unit tests, on both systems
+      # Markup Studio's server is Python (stdlib + numpy): its unit tests
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
       - run: python -m pip install --disable-pip-version-check numpy
       - run: python -m unittest discover -s test -p "test_markup*.py"
+
+  # The gate, on HOMESERVER's self-hosted runner (SERVER_RULES.md rule 6.1): pull requests into main that are not
+  # drafts, and every push to main. On a draft pull request this job shows as SKIPPED (not passed). The box runs one
+  # job at a time across the repos, at below-normal priority, and holds jobs 09:00 to 16:15 New York on weekdays
+  # (they queue; do not cancel or re-run them). Nothing is installed from npm here (rule 8.7): `npm test` needs no
+  # package. Python packages only from the hashed requirements-box-ci.txt, binary wheels only.
+  unit-windows:
+    if: github.event_name == 'push' || (github.base_ref == 'main' && github.event.pull_request.draft == false)
+    runs-on: [self-hosted, Windows, homeserver]
+    # 180: the job-started hook waits for the box's runner lock inside the job, and that queue never cuts a run
+    # off (Anthony, 2026-11-05: "Waiting in line should never cut a run off for running. Its just a queue").
+    # Each step below keeps its own limit, so a hung step is still stopped.
+    timeout-minutes: 180
+    steps:
+      # No token left in the workspace's git config on the shared box.
+      - uses: actions/checkout@v4
+        timeout-minutes: 45
+        with:
+          persist-credentials: false
+      # Node 24, the box's cached Node (as The Desk's box job uses). No cache: there is no lock file.
+      - uses: actions/setup-node@v4
+        timeout-minutes: 45
+        with:
+          node-version: 24
+      # No npm install of any kind: the tests need no package.
+      - name: unit tests
+        timeout-minutes: 45
+        run: npm test
+      # setup-python treats a tool cache entry without its x64.complete marker as a miss and would install the newest
+      # 3.12.x instead, which breaks the box (HOMESERVER coordinator, 2026-10-29).
+      - name: the cached Python is complete
+        timeout-minutes: 45
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "$env:RUNNER_TOOL_CACHE\Python\3.12.10\x64.complete")) { 'The tool cache has no complete Python 3.12.10: stop and tell the HOMESERVER coordinator.'; exit 1 }
+      # '3.12' only: the runner's tool cache holds the box's 3.12.10. Never check-latest and never a newer 3.12.x pin
+      # (its installer would break the box).
+      - uses: actions/setup-python@v5
+        timeout-minutes: 45
+        with:
+          python-version: '3.12'
+      # Never install into the runner's cached Python (it persists between jobs; HOMESERVER coordinator, 2026-10-29).
+      # numpy goes into this job's own folder, found through PYTHONPATH, from the hashed file, binary wheels only
+      # (rule 8.7: pip stops rather than build from source).
+      - name: numpy in this job's own folder
+        timeout-minutes: 45
+        shell: pwsh
+        run: |
+          $lib = Join-Path $env:RUNNER_TEMP 'pylib'
+          python -m pip install --disable-pip-version-check --require-hashes --only-binary :all: --target $lib -r requirements-box-ci.txt
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          "PYTHONPATH=$lib" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: markup tests
+        timeout-minutes: 45
+        run: python -m unittest discover -s test -p "test_markup*.py"

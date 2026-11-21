@@ -192,10 +192,9 @@ test('account types: the wiring (the page reads and writes only the spec\'s rout
 
 test('the fake Desk answers the spec\'s account-type routes (GET list, chart-accounts with accountType, PUT, archived, ?all=1)', async () => {
   const { startDesk } = await import('./fake-desk.mjs');
-  const port = 18000 + Math.floor(Math.random() * 2000);
-  const desk = await startDesk(port, { types: [row(), row({ id: 'old', archived: true })], accounts: [{ account: 'SIM-A', account_type: 'lucid-50k-flex' }] });
+  const desk = await startDesk(0, { types: [row(), row({ id: 'old', archived: true })], accounts: [{ account: 'SIM-A', account_type: 'lucid-50k-flex' }] });
   try {
-    const base = 'http://127.0.0.1:' + port;
+    const base = 'http://127.0.0.1:' + desk.port;   // port 0 (rule 6.5): the one the system picked
     const j = await (await fetch(base + '/api/account-types')).json();
     assert.equal(j.v, 1); assert.deepEqual(j.types.map(t => t.id), ['lucid-50k-flex']); assert.ok(typeof j.asOf === 'string');
     assert.equal((await (await fetch(base + '/api/account-types?all=1')).json()).types.length, 2);

@@ -150,7 +150,8 @@ class Queue(TBase):
         # the command line stops with the message
         with self.assertRaises(SystemExit) as cm:
             ms.main(['--source=npz', '--data=' + self.data, '--marks=' + self.marks, '--bot=' + BOT, '--trade-queue=' + self.csv,
-                     '--trade-variant=TM', '--trade-seed=5', '--no-browser', '--port=0'])
+                     '--trade-variant=TM', '--trade-seed=5', '--no-browser', '--port=0',
+                     '--seen=' + os.path.join(self.marks, 'no-seen.csv')])   # never the default files outside the repo
         self.assertIn('the Trades tab cannot start', str(cm.exception))
         self.assertIn('seed', str(cm.exception))
 

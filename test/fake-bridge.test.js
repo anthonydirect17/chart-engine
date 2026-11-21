@@ -7,7 +7,7 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const http = require('node:http');
 const crypto = require('node:crypto');
-const { spawn } = require('node:child_process');
+const { startFakeBridge } = require('./fake-bridge-start.js');
 
 const INSTR = { MNQ: { name: 'MNQ 12-26', tick: 0.25, pointValue: 2 }, ES: { name: 'ES 12-26', tick: 0.25, pointValue: 50 } };
 const KNOWN = ['Sim101', 'DEMO-EVAL', 'DEMO-OTHER', 'Playback101', 'Backtest'];
@@ -493,15 +493,11 @@ function pinPost(port, p, body, o) {
 const TEST_PIN = '5820';                                  // made-up PINs, tests only
 const unlockFor = async (port, pin) => (await pinPost(port, '/pin/unlock', { pin: pin || TEST_PIN })).json.token;
 
-async function startBridge(port, flags) {
-  const child = spawn(process.execPath, [path.join(__dirname, 'fake-bridge.mjs'), String(port)].concat(flags), { stdio: ['ignore', 'pipe', 'inherit'] });
-  await new Promise(r => child.stdout.once('data', r));
-  return child;
-}
+// On 127.0.0.1 port 0 (rule 6.5): { child, port }, the port read from the bridge's ready line.
+const startBridge = flags => startFakeBridge(flags);
 
 test('server: /session is same-origin only, the token is checked, and only ChartBridge\'s own page may trade', async () => {
-  const port = 18700 + Math.floor(Math.random() * 200);
-  const child = await startBridge(port, ['--trading', '--trade-accounts=Sim101,DEMO-EVAL', '--max-qty=MNQ:5', '--allow-origins=https://desk.example', '--test-pin=' + TEST_PIN]);
+  const { child, port } = await startBridge(['--trading', '--trade-accounts=Sim101,DEMO-EVAL', '--max-qty=MNQ:5', '--allow-origins=https://desk.example', '--test-pin=' + TEST_PIN]);
   try {
     const pg = await get(port, '/live/');
     assert.equal(pg.headers['x-frame-options'], 'DENY');
@@ -564,8 +560,7 @@ function wsStatus(port, origin, unlock) {
 }
 
 test('server (ChartBridge 0.3.1 rule): a browser WebSocket only from ChartBridge\'s own page or allowOrigins', async () => {
-  const port = 18600 + Math.floor(Math.random() * 90);
-  const child = await startBridge(port, ['--allow-origins=https://desk.example,http://100.64.0.10:8800', '--test-pin=' + TEST_PIN]);
+  const { child, port } = await startBridge(['--allow-origins=https://desk.example,http://100.64.0.10:8800', '--test-pin=' + TEST_PIN]);
   try {
     const unlock = await unlockFor(port);
     assert.equal(await wsStatus(port, 'http://localhost:' + port), 403, '0.3.2: the own page without the unlock');
@@ -582,8 +577,7 @@ test('server (ChartBridge 0.3.1 rule): a browser WebSocket only from ChartBridge
 });
 
 test('server: trading off by default', async () => {
-  const port = 18900 + Math.floor(Math.random() * 90);
-  const child = await startBridge(port, ['--test-pin=' + TEST_PIN]);
+  const { child, port } = await startBridge(['--test-pin=' + TEST_PIN]);
   try {
     const a = await wsConnect(port, 'http://localhost:' + port, await unlockFor(port));
     const hello = await a.next('hello');
@@ -607,8 +601,7 @@ test('PIN parse: one flat object, the named keys once, 4 ASCII digit strings; an
 });
 
 test('server (0.3.2 PIN): set once, unlock, 20 wrong PINs never block the right one, change needs the current PIN', async () => {
-  const port = 19100 + Math.floor(Math.random() * 90);
-  const child = await startBridge(port, []);
+  const { child, port } = await startBridge([]);
   try {
     assert.deepEqual((await pinPost(port, '/pin/status', {})).json, { set: false, unlocked: false });
     assert.deepEqual(JSON.parse((await get(port, '/diag')).body).pin, { set: false });
@@ -652,8 +645,7 @@ test('server (0.3.2 PIN): set once, unlock, 20 wrong PINs never block the right 
 test('server (0.3.2 PIN): a restarted bridge with the same pin file keeps an open page unlocked; deleting the file ends it', async () => {
   const fs = require('node:fs'), os = require('node:os');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cb-pin-')), file = path.join(dir, 'pin.txt');
-  const port = 19200 + Math.floor(Math.random() * 90);
-  let child = await startBridge(port, ['--pin-file=' + file, '--test-pin=' + TEST_PIN, '--trading', '--trade-accounts=Sim101']);
+  let { child, port } = await startBridge(['--pin-file=' + file, '--test-pin=' + TEST_PIN, '--trading', '--trade-accounts=Sim101']);
   let token;
   try {
     token = await unlockFor(port);
@@ -663,7 +655,7 @@ test('server (0.3.2 PIN): a restarted bridge with the same pin file keeps an ope
     const before = JSON.parse((await get(port, '/session', null, token)).body).token;
     child.kill();
     await new Promise(r => setTimeout(r, 300));
-    child = await startBridge(port, ['--pin-file=' + file, '--trading', '--trade-accounts=Sim101']);   // the restart: same folder, new process
+    ({ child, port } = await startBridge(['--pin-file=' + file, '--trading', '--trade-accounts=Sim101']));   // the restart: same folder, new process (port 0: a new port, and the token is not tied to one)
     const s = await get(port, '/session', null, token);
     assert.equal(s.status, 200, 'the token from before the restart signs in');
     assert.notEqual(JSON.parse(s.body).token, before, 'a new order sign-in token after the restart');
@@ -682,8 +674,7 @@ test('server (0.3.2 PIN): a restarted bridge with the same pin file keeps an ope
 });
 
 test('server (0.3.2 PIN): allowOrigins pages and local programs keep 0.3.1 rules; no token in /test/received (1.22.0: no relay tickets)', async () => {
-  const port = 19300 + Math.floor(Math.random() * 90);
-  const child = await startBridge(port, ['--allow-origins=https://desk.example', '--test-pin=' + TEST_PIN, '--test-controls']);
+  const { child, port } = await startBridge(['--allow-origins=https://desk.example', '--test-pin=' + TEST_PIN, '--test-controls']);
   try {
     assert.equal(await wsStatus(port, 'https://desk.example'), 101, 'The Desk (allowOrigins), no PIN');
     assert.equal(await wsStatus(port, undefined), 101, 'a local program (no Origin), no PIN');
@@ -697,8 +688,7 @@ test('server (0.3.2 PIN): allowOrigins pages and local programs keep 0.3.1 rules
 test('server (0.3.2 PIN, review B1): a pin file that exists but cannot be read is never "no PIN"', async () => {
   const fs = require('node:fs'), os = require('node:os');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cb-pin-b1-')), file = path.join(dir, 'pin.txt');
-  const port = 19500 + Math.floor(Math.random() * 90);
-  let child = await startBridge(port, ['--pin-file=' + file, '--test-pin=' + TEST_PIN]);
+  let { child, port } = await startBridge(['--pin-file=' + file, '--test-pin=' + TEST_PIN]);
   try {
     const token = await unlockFor(port);
     const good = fs.readFileSync(file, 'utf8'), torn = good.slice(0, good.length - 40);
@@ -718,7 +708,7 @@ test('server (0.3.2 PIN, review B1): a pin file that exists but cannot be read i
     fs.rmdirSync(file); fs.writeFileSync(file, torn);
     // a restarted bridge with a damaged file has no good copy: 503 everywhere, the file kept, and it recovers when readable
     child.kill(); await new Promise(r => setTimeout(r, 300));
-    child = await startBridge(port, ['--pin-file=' + file]);
+    ({ child, port } = await startBridge(['--pin-file=' + file]));
     const s503 = await status();
     assert.equal(s503.status, 503); assert.match(s503.json.reason, /pin\.txt/);
     for (const [p, b] of [['/pin/set', { pin: '0000' }], ['/pin/unlock', { pin: TEST_PIN }]]) assert.equal((await pinPost(port, p, b)).status, 503, p);
@@ -733,8 +723,7 @@ test('server (0.3.2 PIN, review B1): a pin file that exists but cannot be read i
 });
 
 test('fake bridge --data-037 (ChartBridge 0.3.7 data side): settlement, strict htf and weekProfile requests, htfBar', async () => {
-  const port = 18900 + Math.floor(Math.random() * 90);
-  const child = await startBridge(port, ['--data-037', '--test-controls', '--test-pin=' + TEST_PIN]);
+  const { child, port } = await startBridge(['--data-037', '--test-controls', '--test-pin=' + TEST_PIN]);
   try {
     const ws = await wsConnect(port, 'http://localhost:' + port, await unlockFor(port));
     const hello = await ws.next('hello');

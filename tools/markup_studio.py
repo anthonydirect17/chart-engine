@@ -2370,12 +2370,16 @@ def player(target, stop):
         time.sleep(0.04)
 
 
-def default_seen(symbol='NQ'):
+# tickbench's runs on HOME, where the default already-seen files are (Anthony's real use; tests give their own base)
+SEEN_BASE = r'E:\SchwabDesk_bulk\tickbench\runs'
+
+
+def default_seen(symbol='NQ', base=None):
     """The research's already-seen NQ events (they match by date, level type and reclaim time, not price): NQ only. Another
-    symbol has none by default (--seen gives them)."""
+    symbol has none by default (--seen gives them). `base` is tickbench's runs folder (SEEN_BASE unless given)."""
     if symbol != 'NQ':
         return []
-    base = r'E:\SchwabDesk_bulk\tickbench\runs'
+    base = SEEN_BASE if base is None else base
     out = [os.path.join(base, 'sweep_blind', 'KEY.csv')]
     prints = os.path.join(base, 'eventstudy_r1', 'prints')
     if os.path.isdir(prints):

@@ -323,7 +323,7 @@ Test 'CI (going private): the HOMESERVER job unit-windows green is success, with
     Assert ($r.state -eq 'success' -and $r.detail -eq 'green: unit-windows') "$($r.state): $($r.detail)"
   }
   $r = Resolve-CiState @((Job 'unit (ubuntu-latest)'), (Job 'unit (windows-latest)')) @()
-  Assert ($r.state -eq 'success' -and $r.detail -eq 'green: unit (ubuntu-latest), unit (windows-latest)') "today's pair: $($r.detail)"
+  Assert ($r.state -eq 'success' -and $r.detail -eq 'green: unit (ubuntu-latest), unit (windows-latest)') "the pair from before step B: $($r.detail)"
   $script:FakeCi = 'box'
   try { Assert ((Get-CiState 'owner/chart-engine' 'abc').state -eq 'success') 'the box job green through the stubbed API' } finally { $script:FakeCi = 'success' }
 }
@@ -337,12 +337,12 @@ Test 'CI (going private): the box job failed, skipped or queued is not success; 
   $r = Resolve-CiState @((Job 'unit-windows'), (Job 'unit-linux' 'failure')) @()
   Assert ($r.state -eq 'failure') "another check that failed still fails: $($r.detail)"
   $r = Resolve-CiState @((Job 'unit-windows' 'skipped'), (Job 'unit (ubuntu-latest)'), (Job 'unit (windows-latest)')) @()
-  Assert ($r.state -eq 'success') "either set: today's pair green is enough: $($r.detail)"
+  Assert ($r.state -eq 'success') "either set: the pair from before step B green is enough: $($r.detail)"
   $r = Resolve-CiState @(Job 'unit-linux' 'skipped') @()
   Assert ($r.state -eq 'pending' -and $r.detail -eq "no 'unit (ubuntu-latest)' and 'unit (windows-latest)' (or 'unit-windows') result yet") "neither: $($r.detail)"
   Assert ($r.detail -like "no '* result yet") 'the 24 hour note (Invoke-Pass) reads it'
   $r = Resolve-CiState @(Job 'unit (ubuntu-latest)') @()
-  Assert ($r.state -eq 'pending' -and $r.detail -eq "no 'unit (windows-latest)' (or 'unit-windows') result yet") "half of today's pair: $($r.detail)"
+  Assert ($r.state -eq 'pending' -and $r.detail -eq "no 'unit (windows-latest)' (or 'unit-windows') result yet") "half of the pair from before step B: $($r.detail)"
   $r = Resolve-CiState @((Job 'unit (ubuntu-latest)' 'skipped')) @()
   Assert ($r.state -eq 'pending') "a skipped Linux job with nothing else is waiting, not failure: $($r.detail)"
 }

@@ -10,8 +10,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const http = require('node:http');
 const crypto = require('node:crypto');
-const { spawn } = require('node:child_process');
-const net = require('node:net');
+const { startFakeBridge } = require('./fake-bridge-start.js');
 const BB = require('../live/bar-builder.js');
 
 const et = (h, m, s) => Date.UTC(2026, 8, 29, h, m, 0) / 1000 + (s || 0);
@@ -109,24 +108,10 @@ function wsConnect(port) {
     req.end();
   });
 }
-async function startBridge(port, flags) {
-  const child = spawn(process.execPath, [path.join(__dirname, 'fake-bridge.mjs'), String(port)].concat(flags), { stdio: ['ignore', 'pipe', 'inherit'] });
-  await new Promise(r => child.stdout.once('data', r));
-  return child;
-}
-
-// A port nobody is listening on, from the OS (fake-bridge.test.js picks random ports in 18700 to 19499).
-function freePort() {
-  return new Promise((resolve, reject) => {
-    const srv = net.createServer();
-    srv.once('error', reject);
-    srv.listen(0, '127.0.0.1', () => { const p = srv.address().port; srv.close(() => resolve(p)); });
-  });
-}
+// The bridge on 127.0.0.1 port 0 (rule 6.5): the port it was given is read from its ready line.
 
 async function load(flags) {
-  const port = await freePort();
-  const child = await startBridge(port, flags);
+  const { child, port } = await startFakeBridge(flags);
   try {
     const ws = await wsConnect(port);
     ws.send({ type: 'subscribe', root: 'MNQ', days: 1, tickHours: 2 });
