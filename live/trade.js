@@ -45,6 +45,8 @@
  *                        OrderStrategies.toWire gives it), or null for the bracket; used only while `switches.strategies`
  *   merged(m)            1.16.0 (optional): ChartBridge's `merge` result arrived (the host shows it)
  *   alert(text)          1.34.0 (optional): a banner that stays until dismissed (a group entry refused while groups.txt cannot be read)
+ *   everyHolding()       1.61.0 (optional): { orders, positions } of every account ChartBridge lists (the window's v3 connection),
+ *                        for Flatten all, which keeps only the accounts checked for trading; null or absent: this connection's own
  *   unserved()           1.34.0 (optional): Map account -> [contract names] it holds or works in that ChartBridge does not serve
  *                        (ChartBridge 0.6.6's accounts entries), said as "not covered" by Flatten all
  *   destroyed()          the host went away
@@ -842,7 +844,7 @@ function create(env) {
     if (!r) return;
     const on = open() && TR.enabled, sentAgain = [], missed = [];
     for (const f of r.list) {
-      const ok = on && (f.kind === 'here' ? TR.account === f.account && root() === f.root : f.kind === 'all' || TR.accounts.includes(f.account));   // 1.61.0: Flatten all goes again for any account it covered
+      const ok = on && (f.kind === 'here' ? TR.account === f.account && root() === f.root : TR.accounts.includes(f.account));   // Flatten all's (1.61.0: every trade account) only while still checked for trading
       if (ok) { sendFlatten(f.account, f.root, true, f.kind); sentAgain.push(f); } else missed.push(f);
     }
     if (sentAgain.length) flash('Flatten sent again for ' + retryWhere(sentAgain) + '.', 'warn');
@@ -958,15 +960,20 @@ function create(env) {
    * Flatten all (1.11.0, the hotkey and the top bar's button; Anthony 2026-10-01: "Flatten is never blocked"). 1.61.0 (Anthony
    * 2026-11-20: "flatten all is all we need - this should apply to any account being traded on my charts - we do not need a flatten
    * every account option"): one flatten (sendFlatten, as the Flatten button) per account and instrument with a position or a working
-   * order, on EVERY account the charts trade: each trade account ChartBridge lists for this page (its `trading` accounts, the ones
-   * the ticket's picker offers) and any account this connection shows holding something, whatever the ticket shows (one account, a
-   * group or None) and whatever instrument is shown. Until 1.61.0 it covered the ticket's account only (a group's members, less the
+   * order, on EVERY account the charts trade: each account checked for trading now (ChartBridge's `trading` accounts, TR.accounts,
+   * the ones the ticket's picker offers) and no other, whatever the ticket shows (one account, a group or None) and whatever
+   * instrument is shown. Its holdings come from the window's v3 connection when it is up (env.everyHolding(): every listed account,
+   * so an account checked after sign-in counts with what it already held), else from this connection, either way filtered to
+   * TR.accounts: an account unchecked and handed to an agent, the bot or a Legion trader is never touched (the R12 review, F1 and F2;
+   * this connection never forgets an unchecked account's orders and positions, and ChartBridge's Flatten does not read the checkmark).
+   * On a checked account it closes everything, whoever placed it, a bot's, an agent's or a Legion trader's included (Anthony
+   * 2026-11-21, on the review: "Yes, close it"). Until 1.61.0 it covered the ticket's account only (a group's members, less the
    * ones ChartBridge leaves out) and sent nothing on None, and Flatten every account (1.34.0, removed) covered every account
    * ChartBridge lists. Accounts that are not trade accounts (Legion's traders' and the copier's, unless checked for trading) are left
    * to Legion's own Flatten. Needs trading on and the connection; never Armed, never the picker. Within ChartBridge's 10 order
    * actions a second: what fits now goes at once, the rest as soon as it allows (paced like B/E). Once pressed it finishes, like
-   * Cancel all: a later flatten still goes while connected and trading is on (ChartBridge checks each, an exit); otherwise the note
-   * says which were not sent. A press while a run is under way sends nothing.
+   * Cancel all: a later flatten goes while connected, trading is on and its account is still checked for trading; otherwise the run
+   * stops and the note says which were not sent. A press while a run is under way sends nothing.
    */
   let faRun = null;                                                // { queue: [{ a, r }], sent: [{ a, r }], missed }
   const faName = (run, x) => x.a + ' ' + x.r;
@@ -982,14 +989,16 @@ function create(env) {
     return [...out].sort();
   }
   const missedWords = list => (list.length ? ' Not covered (not served by ChartBridge): ' + list.join(', ') + '.' : '');
-  /* 1.61.0: what a press of Flatten all covers now: { accounts (every trade account, and any other this connection shows holding
-     something; by name), items ([{ a, r }] to flatten, by account), missed (what it cannot reach) } */
+  /* 1.61.0: what a press of Flatten all covers now: { accounts (every account checked for trading, by name), items ([{ a, r }] to
+     flatten, by account), missed (what it cannot reach) }. Holdings: the v3 connection's (env.everyHolding) with this connection's,
+     only on those accounts */
   function allScan() {
-    const orders = [...TR.orders.values()], positions = TR.positions, accts = new Set();
-    for (const a of TR.accounts) if (typeof a === 'string' && a) accts.add(a);
-    for (const o of orders) if (o && OT.isWorking(o) && typeof o.account === 'string' && o.account) accts.add(o.account);
-    for (const [k, p] of positions) { const i = k.lastIndexOf('|'); if (i > 0 && p && +p.qty) accts.add(k.slice(0, i)); }
-    const accounts = [...accts].sort(), items = [];
+    const accounts = [...new Set(TR.accounts.filter(a => typeof a === 'string' && a))].sort(), mine = a => accounts.includes(a);
+    const ext = typeof env.everyHolding === 'function' ? env.everyHolding() : null;
+    const orders = [...TR.orders.values()].concat(ext && Array.isArray(ext.orders) ? ext.orders : []).filter(o => o && mine(o.account));
+    const positions = new Map([...TR.positions].filter(([k]) => mine(k.slice(0, k.lastIndexOf('|')))));
+    if (ext && ext.positions && typeof ext.positions.forEach === 'function') ext.positions.forEach((p, k) => { if (typeof k !== 'string' || !mine(k.slice(0, k.lastIndexOf('|')))) return; const was = positions.get(k); if (!(was && +was.qty) && p && +p.qty) positions.set(k, p); });
+    const items = [];
     for (const a of accounts) for (const r of OT.flattenAllRoots(orders, positions, a, served, ROOTS)) items.push({ a, r });
     return { accounts, items, missed: notCovered(orders, positions, accounts) };
   }
@@ -1022,7 +1031,8 @@ function create(env) {
     const t = now(), recent = actionTimes.filter(x => x > t - CANCEL_GAP).length;
     const room = OT.paceChunks(r.queue, recent, BE_LIMIT)[0].length;
     if (room) {
-      const why = FRAMED || !TR.enabled ? 'trading went off' : !open() ? 'the connection to ChartBridge dropped' : '';
+      const gone = r.queue.find(x => !TR.accounts.includes(x.a));   // the R12 review, F3: unchecked meanwhile, so no longer the charts' to flatten
+      const why = FRAMED || !TR.enabled ? 'trading went off' : !open() ? 'the connection to ChartBridge dropped' : gone ? gone.a + ' is no longer checked for trading' : '';
       if (why) {                                                   // a note that stays until dismissed, as for a Flatten not sent
         faRun = null;
         flattenMiss = 'Flatten all: ' + (r.sent.length ? r.sent.map(x => faName(r, x)).join(', ') + ' sent; ' : '') + r.queue.map(x => faName(r, x)).join(', ') + ' not sent: ' + why + '. Those positions may still be open. Flatten again.';

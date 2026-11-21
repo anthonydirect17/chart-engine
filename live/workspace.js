@@ -829,6 +829,9 @@ const core = TC.create({
   agentOwner: (account, root) => (agentDesk ? agentDesk.ownerOf(account, root) : ''),
   /* 1.33.0 (ChartBridge 0.6.5): the groups on the window's v3 connection, for the ticket's picker; a group entry's confirm */
   groups: () => (AF && AF.S.groups && !AF.S.groupsError ? AF.S.groups : []),
+  /* 1.61.0 (the R12 review, F2): Flatten all reads every listed account's orders and positions on the v3 connection (an account checked
+     after sign-in already holding something counts); TradeCore keeps only the accounts checked for trading */
+  everyHolding: () => (AF && AF.S.v3 && AF.S.signedIn ? { orders: [...AF.S.orders.values()], positions: AF.S.positions } : null),
   alert: text => alertOnce(text),                      // 1.34.0: a group entry refused while groups.txt cannot be read
   /* the review: contracts ChartBridge does not serve that an account holds or works (ChartBridge 0.6.6's accounts entries) */
   unserved: () => (AF && AF.S.v3 ? new Map(AF.S.accounts.filter(x => x && Array.isArray(x.unserved) && x.unserved.length).map(x => [x.name, x.unserved.filter(n => typeof n === 'string')])) : null),
@@ -3704,7 +3707,7 @@ window.workspace = { get layout() { return layout; }, panels: () => panels.map(p
   /* 1.36.0: the Agents strip (read only) */
   agentsStrip: () => { const v = stripViews()[0]; return v ? v.strip.state() : null; },
   quoteLast: r => { const x = quoteOf(r); return x ? x.last : null; },
-  /* 1.34.0: how many risk alerts sounded in this window (test/flatten-every-smoke.mjs) */
+  /* 1.34.0: how many risk alerts sounded in this window (test/flatten-all-smoke.mjs) */
   riskSounds: () => riskSounds };
 
 /* 1.16.0: the Bot tab, the bot strip and the bot's pop-ups (live/bot.js), on the window's v3 connection (AF); everything bot

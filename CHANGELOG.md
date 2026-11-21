@@ -98,14 +98,19 @@ older Desk nothing is hidden.
   has its own flatten button for those traders"). Before: Flatten all (the top bar and the hotkey) flattened the ticket's
   account only (a group's members, less the copier's, the bot's and an agent's), and sent nothing with the ticket on None;
   Flatten every account (1.34.0) flattened every account ChartBridge lists, one confirm. Now: Flatten all flattens every
-  instrument with a position or a working order on every trade account ChartBridge lists for this page (the accounts the
-  ticket's picker offers, `trading.accounts`), and any other account the order connection shows holding something, whatever
-  the ticket shows, None included, at one click with no confirm, as before. Accounts that are not checked for trading
-  (Legion's traders' prop accounts, normally) are not touched: Legion's own Flatten covers them, unchanged. Flatten all still
+  instrument with a position or a working order on every account checked for trading now (ChartBridge's `trading.accounts`,
+  the accounts the ticket's picker offers) and on no other, whatever the ticket shows, None included, at one click with no
+  confirm, as before. What each holds is read from the window's v3 connection when it is up (so an account checked after
+  sign-in counts with what it already held) together with the order connection's, both kept to those accounts. An account
+  that is not checked for trading, or was unchecked during the session and handed to an agent, the bot or a Legion trader,
+  is never touched, even though the order connection still remembers what it held (ChartBridge's Flatten does not read the
+  checkmark): Legion's own Flatten covers those, unchanged. On an account that is checked for trading it closes everything,
+  whoever placed it, a bot's, an agent's or a Legion trader's position and orders included (Anthony's ruling of 2026-11-21 on
+  the review: "Yes, close it"). Flatten all still
   never waits for Armed (Anthony 2026-10-01: "Flatten is never blocked"); it needs trading on and the connection only, and no
-  longer the picker. It is paced within ChartBridge's 10 order actions a second as before, a run under way finishes even if an
-  account stops being a trade account, a flatten refused for the rate goes again once, and what ChartBridge does not serve is
-  named, never sent. The top bar's Flatten every account button, its confirm and their styles are gone.
+  longer the picker. It is paced within ChartBridge's 10 order actions a second as before; a run under way stops, and says what was not
+  sent, as soon as one of its accounts is no longer checked for trading; a flatten refused for the rate goes again once while
+  its account is still checked; and what ChartBridge does not serve is named, never sent. The top bar's Flatten every account button, its confirm and their styles are gone.
 - **Tab icons** ("I would like our charts and legion to both have their own unique icons so I can tell them apart"): the
   chart page shows three gold candles on black and Legion a gold eagle standard on black, each an inline SVG favicon (nothing
   loaded), drawn on a 16 px grid so they stay sharp in a tab; The Desk keeps its two gold bars.

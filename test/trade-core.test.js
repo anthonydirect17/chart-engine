@@ -24,6 +24,7 @@ function rig(opts) {
     changed: () => { R.renders++; }, armed: () => {}, applied: () => {}, lost: () => {}, syncAccounts: () => {},
     batch: () => {}, unsent: () => { R.unsent++; }, armBlocked: () => R.armedBlocked, destroyed: () => false, now: () => clock,
     framed: !!o.framed,
+    everyHolding: () => (R.every || null),       // 1.61.0: the window's v3 connection's orders and positions (every listed account)
     unserved: () => (R.unserved || null),        // 1.34.0 (the review): ChartBridge 0.6.6's accounts entries' unserved contracts
   };
   const core = TC.create(env);
@@ -147,7 +148,7 @@ test('Flatten all paced within ChartBridge\'s 10 a second, and a run finishes wh
   assert.equal(R.core.busy().flattenAll, false);
 });
 
-test('1.61.0 Flatten all (Anthony 2026-11-20): every account the charts trade, whatever the ticket shows (None too), Armed off, paced; a run is not held to the accounts', () => {
+test('1.61.0 Flatten all (Anthony 2026-11-20): every account the charts trade, whatever the ticket shows (None too), Armed off, paced; a run stops for an account unchecked meanwhile', () => {
   const R = rig({ wanted: '' });                   // the ticket on None
   R.on();                                          // trade accounts Sim101 and EVAL-1
   assert.equal(R.core.TR.account, '', 'None');
@@ -165,12 +166,12 @@ test('1.61.0 Flatten all (Anthony 2026-11-20): every account the charts trade, w
   R.core.pickAccount('Sim101');
   R.core.flattenAll();
   assert.deepEqual(R.flattens(), ['EVAL-1 NQ', 'EVAL-1 ES', 'Sim101 MNQ', 'Sim101 MES'], 'the ticket on Sim101: EVAL-1 is flattened too');
-  // a refusal for the rate: sent again once, for any account the press covered
+  // a refusal for the rate: sent again once, while its account is still checked for trading
   R.advance(5000); R.sent.length = 0;
   R.core.flattenAll(); R.rate(); R.rate();
   R.advance(1100);
   assert.deepEqual(R.flattens().slice(4), ['Sim101 MES', 'Sim101 MNQ'], 'the newest two go again');
-  // an account that left the trade accounts mid run: the run still finishes (an exit; ChartBridge checks each)
+  // an account unchecked mid run: the run stops there and says so (the R12 review, F3)
   R.advance(5000); R.sent.length = 0;
   const pos = new Map();
   for (let i = 0; i < 14; i++) { const a = 'ACC-' + String(i).padStart(2, '0'); pos.set(a, 1); }
@@ -183,9 +184,10 @@ test('1.61.0 Flatten all (Anthony 2026-11-20): every account the charts trade, w
   assert.equal(R.core.busy().flattenAll, true);
   R.core.applyTrading({ enabled: true, accounts: ['ACC-00'], maxQty: {} });
   R.advance(1200);
-  assert.equal(R.flattens().length, 14, 'the rest within the next second, though they are no longer trade accounts');
+  assert.equal(R.flattens().length, 10, 'nothing more: ACC-10 to ACC-13 are no longer checked for trading');
   assert.equal(R.core.busy().flattenAll, false);
-  assert.equal(R.unsent, 0, 'nothing left unsent');
+  assert.equal(R.unsent, 1);
+  assert.match(R.notes.pop(), /^error: Flatten all: .* sent; ACC-10 MNQ, ACC-11 MNQ, ACC-12 MNQ, ACC-13 MNQ not sent: ACC-10 is no longer checked for trading\./);
   // nothing anywhere: says so, sends nothing; trading off or not connected: nothing, Armed or not
   R.advance(5000); R.sent.length = 0;
   for (const a of pos.keys()) R.pos(a, 'MNQ', 0);
@@ -210,6 +212,26 @@ test('1.61.0 Flatten all leaves alone the accounts that are not trade accounts (
   R.core.flattenAll();
   assert.deepEqual(R.flattens(), ['Sim101 MNQ']);
   for (const k of ['flattenEvery', 'everyItems', 'everyScan']) assert.equal(R.core[k], undefined, k + ' is gone');
+});
+
+test('1.61.0 (the R12 review, F1 and F2): Flatten all only touches accounts checked for trading now, read from the v3 connection too', () => {
+  const R = rig();
+  R.on();                                          // Sim101 and EVAL-1 checked
+  R.pos('Sim101', 'MNQ', 1); R.pos('EVAL-1', 'NQ', -1);
+  R.core.message({ type: 'order', id: 'w2', account: 'EVAL-1', root: 'ES', name: 'ES 12-26', side: 'buy', kind: 'limit', qty: 1, price: 90, state: 'working', filled: 0, role: 'entry' });
+  // EVAL-1 unchecked and handed to an agent: this connection still remembers its position and order, Flatten all leaves them alone
+  R.core.applyTrading({ enabled: true, accounts: ['Sim101'], maxQty: { MNQ: 5, '*': 2 } });
+  assert.ok(R.core.TR.positions.get('EVAL-1|NQ').qty, 'the v2 page never forgets it');
+  R.core.flattenAll();
+  assert.deepEqual(R.flattens(), ['Sim101 MNQ'], 'EVAL-1 (unchecked) is not flattened, its order not cancelled');
+  // EVAL-2 checked after sign-in, already long: only the v3 connection knows its position; it is flattened
+  R.advance(5000); R.sent.length = 0;
+  R.every = { orders: [{ id: 'o5', account: 'EVAL-2', root: 'MES', state: 'working', side: 'sell', kind: 'stop', qty: 1 }, { id: 'o6', account: 'EVAL-1', root: 'MNQ', state: 'working', side: 'sell', kind: 'stop', qty: 1 }],
+    positions: new Map([['EVAL-2|NQ', { qty: 2, avgPrice: 100 }], ['EVAL-1|NQ', { qty: -1, avgPrice: 100 }], ['AGENT-1|ES', { qty: 1, avgPrice: 100 }]]) };
+  R.core.applyTrading({ enabled: true, accounts: ['Sim101', 'EVAL-2'], maxQty: { MNQ: 5, '*': 2 } });
+  assert.deepEqual(R.core.allScan().accounts, ['EVAL-2', 'Sim101']);
+  R.core.flattenAll();
+  assert.deepEqual(R.flattens().sort(), ['EVAL-2 MES', 'EVAL-2 NQ', 'Sim101 MNQ'], 'EVAL-2 from the v3 connection; EVAL-1 and AGENT-1 (unchecked) left alone');
 });
 
 test('1.34.0 (the review), kept: Flatten all names what it cannot reach (not served by ChartBridge) on the accounts it covers', () => {
