@@ -63,6 +63,56 @@
   `test/pc-updater.test.js`: the allowed git subcommands, the box job's name, useHttpPath read before the one ask, the
   token only after a 404 or 401 and then through the Actions API, one place that asks for it and one that sends it.
 
+## chart 1.62.0 (2026-11-21): the planner, its core on the page path: the plan layer, the plan card, one window sends (page only, no F5)
+
+In plain words: Anthony plans a trade on any chart and the page places it for him, by the same rules as his own trading ("planner
+follows the same rules as the open discretionary trading when it comes to placing trades"; the page path, agreed 2026-11-21, every
+decision "Take all (Recommended)"). He draws it (the drawing ring's new Plan tool), sets it on the plan card, Submits it to The
+Desk, and Arms it; from then on one window on this PC sends its entry and watches it. ChartBridge is unchanged; `live/COMPAT.json`
+`minChartBridge` stays 0.6.2. The Desk's half (the plan log: the reused call chain, its endpoints) is TheDesk's branch of the same
+update; with an older Desk the planner says it has no plan log and hides.
+
+- **The plan layer** (`src/chart-engine.js`, CHART_STYLE.md "Plans"): `setPlans(list)` draws a plan's entry, stop and target 1 over
+  a box from where it was drawn to the plot's right edge, the reward shaded in the profit color and the risk in the loss color,
+  labels at the box's left ("Plan #12 LONG LMT 2  armed", "SL -16t $32", "TP +32t $64  2.0R") and outlined axis tags. Before Arm
+  each line drags on the tick (the entry carries the stop and target; neither crosses the entry); after Arm the lines are locked
+  and a press says so. Apart from the drawings (never saved with them) and the orders (the engine sends nothing for a plan).
+- **On every chart of the instrument, in every window** (decision 1 A): any timeframe; a plan drawn in one window shows and drags
+  in the others (BroadcastChannel `chartbridge-planner-v1` and `live-planner-v1`). The drawings keep their Shared drawings switch.
+- **The plan card** (the mini ticket's pattern, the bottom left of the chart): Long or Short, the entry type (a limit at the line;
+  market on touch: an MIT at the line on the limit side, a stop-market on the stop side; or a touch, then a 1 minute close back
+  over the line, then a market order), Qty, the expiry (1 to 30 minutes from Arm, 30 unless set), the account (the ticket's to
+  start; one account, never a group), the grade (A+, A, B; A+ unless set), Submit, Arm, Cancel and Planner off.
+- **Submit** works at any hour; **Arm** needs CME open (the 17:00 break, the weekend, holidays and early closes refuse it) and The
+  Desk's answer says when the plan expires (its clock). Arm turns the ticket's Armed off in every window (the light lock); Flatten,
+  Flatten all and Cut half are never blocked; re-arming the ticket is allowed and recorded.
+- **One window sends** (decision 11 A): the window holding the Web Lock `chartbridge-planner` (queued; the next window takes over
+  when it closes) sends the entry through TradeCore's new `sendPlanOrder` on its own connection: one `order` built from the plan
+  alone (cid `pl<uid>-e`, the plan's account, qty and bracket, ticks from the fill: from the line for a resting entry, from the last
+  price for the confirmation's market order), after writing the local send journal (`live-planner-sent-v1`). `ready()` is
+  byte for byte 1.61.0's and every manual action still calls it (test/planner-trade.test.js).
+- **Watches**: the touch, the minute's close back (the touch's own minute may confirm; a close at the line does not), the stop
+  traded through by one tick before the fill (the plan ends, its entry cancelled), the expiry (its entry cancelled). Every fact
+  (sent, placed, refused, touched, confirmed, filled, closed, expired, stop_through, missed, and the overrides: armed_on,
+  manual_order, flatten, flatten_all, cut_half, moved_outside, cancelled_outside, position_outside) is recorded at The Desk,
+  queued in this browser while The Desk does not answer (`live-planner-queue-v1`).
+- **Resume**: after a reload, a crash or a ChartBridge restart the leader reconciles each open plan once ChartBridge's snapshot is
+  whole: an armed plan whose line was touched meanwhile is missed (never taken late), one past its expiry expired; an entry sent
+  is found by its cid (after a restart by account, root, side, kind, price and qty) and watched, or its fill recorded; not found:
+  "sent, outcome not known: check NinjaTrader", an alarm, and it is never sent again.
+- **Planner off** (the plan card's switch, this browser, `live-planner-off-v1`): nothing is drawn, submitted, armed or sent; an
+  armed plan waits (it still expires or ends at its stop) and a confirmation that confirms meanwhile is refused; a working entry
+  stays (Cancel it on the card, or Flatten). The Plan tool turns it on again only on a second click within 5 s.
+- **The Desk's plan log** (TheDesk `claude/planner-desk`): Submit sends exactly its fields (uid, pc, account, root, contract, side,
+  entry_type `limit`, `market_on_touch` or `touch_confirm`, entry, stop, target, qty, tick, expiry_min, grade); the answers'
+  `plan` object is taken as The Desk says it; a write refused with 409 "not live" (a Desk that is not the live one) reads as no
+  plan log, and the planner hides.
+- **Fills** are tied to the plan with BotCore's ledger (reused), and a press on a plan's working entry while unarmed says "Plan #N's
+  order: Cancel it on the plan card, or Flatten".
+- Tests: test/plan-layer.test.js, test/planner-core.test.js, test/planner-trade.test.js, test/planner-page.test.js; smokes
+  test/plan-layer-smoke.mjs, test/planner-smoke.mjs, test/planner-windows-smoke.mjs, test/planner-resume-smoke.mjs (the fake
+  Desk's plan log; the fake bridge's `--pc` and `--fold-trades`).
+
 ## chart 1.61.0 (2026-11-20): Anthony's fixes: the Bot tab centred, finished accounts gone from the Account page, Shared drawings, Flatten all for every account the charts trade, tab icons (page only, no F5)
 
 In plain words: five fixes from Anthony's list of 2026-11-20. ChartBridge is unchanged; `live/COMPAT.json` `minChartBridge` stays

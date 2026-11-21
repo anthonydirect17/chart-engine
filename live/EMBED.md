@@ -230,6 +230,10 @@ The workspace (and, until 1.22.0, the single chart page) uses no prefix:
 | `live-drawings-v1-<ROOT>` | drawings per instrument on pane `main` | pane `main` |
 | `live-drawings-v1-<paneId>-<ROOT>` | drawings per instrument on any other pane | that pane |
 | `live-drawings-shared-v1` | `{ <paneId>: true }` a chart's Shared drawings switch on (1.61.0; off unless set) | one entry per `paneId` |
+| `live-planner-v1` | `{ drafts: { <uid>: plan }, plans: { <uid>: plan } }` the planner's plans drawn and those The Desk gave (1.62.0; the workspace only) | every window of this browser |
+| `live-planner-sent-v1` | `{ <uid>: { entry: { cid, at } } }` the planner's send journal, written before an entry is sent (1.62.0) | every window of this browser |
+| `live-planner-queue-v1` | `{ items, lost }` the planner's facts waiting for The Desk (1.62.0) | every window of this browser |
+| `live-planner-off-v1` | `true`: Planner off in this browser (1.62.0) | every window of this browser |
 | `live-colors-v1` | candle and background colors (Colors panel), saved one color at a time (and the VWAP before 1.9.0) | all charts with this prefix |
 | `live-indicator-colors-v1` | `{ vwap, prior, overnight, value, close, ibHigh, ibLow, vpPoc }` the indicator colors set in their gears (1.9.0; the VWAP of `live-colors-v1` is read while this key is missing) | all charts with this prefix |
 | `live-color-presets-v1` | `{ chart: [{ id, name, colors }], indicator: [...] }` the named presets (1.9.0), unless `presetStore` is passed | all charts with this prefix |
@@ -242,6 +246,11 @@ Choices shared by all charts with one prefix (instrument, bars and the rest in t
 chart mounts and written one field at a time when changed, so two panes never undo each other while they run;
 after a reload both start from the last change either made. Indicators and drawings are kept per pane, so two
 panes on one instrument each keep their own lines.
+
+The plan layer (1.62.0, the planner): `chart.setPlans(list)` draws planned trades (an entry, a stop and target 1 over a box), apart
+from the drawings and the orders; `chart.on('planMove' | 'planSelect' | 'planPressOff' | 'planCreate', fn)` tells the host what was
+done with them (`setTool('plan')` arms the Plan tool). A mounted chart draws none unless its host sets them: only the workspace does
+(live/planner.js); an embedded chart keeps none of the planner's keys above.
 
 Shared drawings (1.61.0, Anthony 2026-11-20, a switch per chart): `sharedDrawings()` says whether this chart's switch is on and
 `setSharedDrawings(on)` sets it (kept in `live-drawings-shared-v1`; off by default, so nothing changes until it is turned on). Every
