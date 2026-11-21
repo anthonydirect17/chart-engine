@@ -105,7 +105,7 @@ test('the page: installed, served by ChartBridge from its www folder, loading on
   const to = www.map(f => f.to);
   for (const f of ['legion.html', 'legion.js', 'legion-tabs.js', 'legion.css']) assert.ok(www.some(x => x.from === 'live/' + f && x.to === f), f + ' is installed');
   const html = read('live', 'legion.html');
-  for (const m of html.matchAll(/<(?:script|link)[^>]+(?:src|href)="([^"]+)"/g)) assert.ok(to.includes(m[1].replace(/^\.\.\//, '')), m[1] + ' is installed');
+  for (const m of html.matchAll(/<(?:script|link)[^>]+(?:src|href)="([^"]+)"/g)) if (!/^data:image\/svg\+xml;base64,/.test(m[1])) assert.ok(to.includes(m[1].replace(/^\.\.\//, '')), m[1] + ' is installed');   // 1.61.0: the tab icon is inline (test/favicons.test.js)
   assert.doesNotMatch(html, /https?:\/\/(?!localhost)/, 'nothing from the internet');
   assert.match(html, /<title>Legion · Imperium<\/title>/);
   assert.match(html, /<script src="pin\.js"><\/script>/, 'behind the same PIN as the chart page');

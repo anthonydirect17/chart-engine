@@ -668,7 +668,7 @@ function syncStats() {
   // up: a note or the update notice is never squeezed for it); else "125 ms real", the split in the tooltip. With the clock
   // warning shown and the line still cut, the frame rate gives way, then the local delay's p95, then the local delay (each
   // instrument's is in the tooltip): the warning is never cut. 1.34.0: the same order whenever the line is cut, warning or not
-  // (Flatten every account took its room in the top bar at 1366 wide: the line is never cut mid number).
+  // (the line is never cut mid number).
   const fpsEl = $('wsFps'), localEl = $('wsLocal').parentElement, stat = $('wsStat');
   const show = (el, on) => { el.hidden = !on; if (el.previousElementSibling) el.previousElementSibling.hidden = !on; };
   show(fpsEl, true); show(localEl, true);
@@ -829,7 +829,8 @@ const core = TC.create({
   agentOwner: (account, root) => (agentDesk ? agentDesk.ownerOf(account, root) : ''),
   /* 1.33.0 (ChartBridge 0.6.5): the groups on the window's v3 connection, for the ticket's picker; a group entry's confirm */
   groups: () => (AF && AF.S.groups && !AF.S.groupsError ? AF.S.groups : []),
-  /* 1.34.0: Flatten every account reads every listed account's orders and positions (the v3 connection), not only the trade accounts */
+  /* 1.61.0 (the R12 review, F2): Flatten all reads every listed account's orders and positions on the v3 connection (an account checked
+     after sign-in already holding something counts); TradeCore keeps only the accounts checked for trading */
   everyHolding: () => (AF && AF.S.v3 && AF.S.signedIn ? { orders: [...AF.S.orders.values()], positions: AF.S.positions } : null),
   alert: text => alertOnce(text),                      // 1.34.0: a group entry refused while groups.txt cannot be read
   /* the review: contracts ChartBridge does not serve that an account holds or works (ChartBridge 0.6.6's accounts entries) */
@@ -1005,50 +1006,20 @@ function syncTitle() {
   if (document.title !== t) document.title = t;
 }
 function renderFlat() {
-  const b = $('wsFlat'), a = ticketAccount(), on = core.TR.enabled && !!a;   // None: off, pick an account (as every ticket action)
+  /* 1.61.0 (Anthony 2026-11-20: "flatten all is all we need - this should apply to any account being traded on my charts"): every
+     account the charts trade (TradeCore.flattenAll), whatever the ticket shows, None included; it needs trading on only */
+  const b = $('wsFlat'), on = core.TR.enabled;
   b.disabled = !on;
-  const t = on ? 'Flatten all on ' + a + ': every instrument with a position or a working order, cancel its orders and close its position at market. Works with Armed off.'
+  const n = core.TR.accounts.length;
+  const t = on ? 'Flatten all: every account the charts trade (' + n + ' trade account' + (n === 1 ? '' : 's') + ' in ChartBridge), whatever the ticket shows: cancel every working order and close every position at market. Works with Armed off. Legion\'s traders: Legion\'s own Flatten.'
     : 'Flatten all: ' + (core.TR.reason || 'not connected to ChartBridge yet');
   if (b.title !== t) b.title = t;
-  /* 1.34.0: Flatten every account needs trading on only (no account picked: it covers every account) */
-  const e = $('wsFlatEvery'), te = core.TR.enabled ? 'Flatten every account: cancel every working order and close every position at market on every account ChartBridge lists, the copier\'s, the bot\'s and the agents\' included, whatever the ticket shows. One confirm; works with Armed off.'
-    : 'Flatten every account: ' + (core.TR.reason || 'not connected to ChartBridge yet');
-  e.disabled = !core.TR.enabled;
-  if (e.title !== te) e.title = te;
 }
 $('wsFlat').addEventListener('click', e => {
   e.currentTarget.blur();
   if (e.detail === 0) { note('Order buttons work by click only, not by keyboard.', true); return; }
   core.flattenAll();
 });
-/* 1.34.0 Flatten every account (Anthony 2026-10-20, approved): its own button beside Flatten all, one confirm, then a flatten for every
-   account ChartBridge lists with a position or a working order (the copier's, the bot's and the agents' accounts included), whatever
-   the ticket shows; with Armed off too. Paced within ChartBridge's 10 order actions a second (TradeCore.flattenEvery). */
-$('wsFlatEvery').addEventListener('click', e => {
-  e.currentTarget.blur();
-  if (e.detail === 0) { note('Order buttons work by click only, not by keyboard.', true); return; }
-  askFlattenEvery();
-});
-function askFlattenEvery() {
-  const scan = core.everyScan(), items = scan.items;
-  if (!items.length) { core.flattenEvery(); return; }      // says there is nothing to flatten, sends nothing
-  const byAcct = new Map();
-  for (const x of items) { if (!byAcct.has(x.a)) byAcct.set(x.a, []); byAcct.get(x.a).push(x.r); }
-  const n = byAcct.size, d = $('wsDialog');
-  const rows = [...byAcct].map(([a, rs]) => `<li><b>${esc(a)}</b> ${esc(rs.join(', '))}</li>`).join('');
-  d.innerHTML = `<form class="ws-dlg ws-fe" method="dialog" aria-label="Flatten every account">
-    <h2>Flatten every account?</h2>
-    <p>Cancels every working order and closes every position at market on ${n} account${n === 1 ? '' : 's'}, ${scan.v3 ? 'the copier\'s, the bot\'s and the agents\' included' : 'trade accounts only (no v3 connection)'}, whatever the ticket shows. Works with Armed off.</p>
-    <ul class="fe-list">${rows}</ul>${scan.missed.length ? `<p class="fe-missed">Not covered (not served by ChartBridge): ${esc(scan.missed.join(', '))}</p>` : ''}
-    <div class="ws-dlg-btns"><span class="sg-fill"></span><button type="button" class="ws-btn" data-act="cancel">Cancel</button><button type="button" class="ws-btn ws-flat" id="feGo" title="Flatten every account (a click only, as every order button)">Flatten every account</button></div>
-  </form>`;
-  showDialog(d, () => false);
-  d.querySelector('#feGo').addEventListener('click', e => {
-    if (e.detail === 0) { note('Flatten every account goes by a click on its button only, not by keyboard.', true); return; }
-    d.close(); core.flattenEvery();
-  });
-  d.querySelector('[data-act="cancel"]').focus();
-}
 
 /* A chart's click, drag or cancel (ChartLive.mount's `trade`): in the ticket's window straight to TradeCore, else
    forwarded to it. Either way only for the ticket's instrument. */
@@ -2314,6 +2285,14 @@ function addView(p) {
   return v;
 }
 
+/* 1.61.0 (Anthony 2026-11-20, shared drawings): the charts that count for a chart's "Shared drawings": every chart of every saved layout
+   (each window's own, read fresh) and this window's, so a chart closed for good never brings its lines back */
+function drawingPanes() {
+  const ids = new Set();
+  try { for (const l of Object.values(W.readStore(store).layouts)) for (const q of l.panels) if (q.type === 'chart') ids.add(q.id); } catch (e) { /* this window's only */ }
+  for (const o of chartViews()) ids.add(o.panel.id);
+  return [...ids];
+}
 /* A chart: a read-only ChartLive.mount on the window's shared feed, with the panel's own instrument, bars and range size
    (saved in the layout, never in the single chart page's settings), and no toolbar of its own. */
 function mountChart(v) {
@@ -2323,6 +2302,7 @@ function mountChart(v) {
   headChart(v);
   const pane = window.ChartLive.mount(v.body, {
     feed: hub, paneId: p.id, storagePrefix: PREFIX, toolbar: false, compact: true, trade: tradeHost,
+    drawingPanes,                                         // 1.61.0: the charts whose drawings a chart with Shared drawings on shows
     view: { root: p.root, tf: p.tf, range: p.tf === 'range' ? p.range : undefined },
     onView: nv => viewChanged(v, nv),
     onColors: () => { for (const o of chartViews()) if (o !== v) o.pane.refreshColors(); },
@@ -3167,6 +3147,9 @@ function openMore(v, anchor) {
     const g = $('wsMore').querySelector('[data-do="ghost"]');
     g.hidden = !(botDesk && botDesk.ghostOffered());
     if (!g.hidden) g.textContent = 'Bot trades (faint): ' + (botDesk.ghostOn(v.panel.id) ? 'on' : 'off');
+    /* 1.61.0 (Anthony 2026-11-20): this chart's Shared drawings switch, off by default */
+    const sd = $('wsMore').querySelector('[data-do="shared"]'), on = !!(v.pane && v.pane.sharedDrawings && v.pane.sharedDrawings());
+    sd.textContent = 'Shared drawings: ' + (on ? 'on' : 'off');
     openPop($('wsMore'), anchor);
   });
 }
@@ -3175,6 +3158,11 @@ $('wsMore').addEventListener('click', e => {
   if (!b || !v || !v.pane) return;
   if (b.dataset.do === 'reset') v.pane.chart.reset();
   else if (b.dataset.do === 'ghost' && botDesk) botDesk.setGhost(v.panel.id, !botDesk.ghostOn(v.panel.id));
+  else if (b.dataset.do === 'shared' && v.pane.setSharedDrawings) {
+    const on = !v.pane.sharedDrawings();
+    v.pane.setSharedDrawings(on);
+    note('Shared drawings ' + (on ? 'on' : 'off') + ': ' + v.panel.root + ' ' + W.tfLabel(v.panel.tf, v.panel.range) + (on ? ' shows every ' + v.panel.root + ' chart\'s lines.' : ' shows its own lines only.'), false, 5000);
+  }
   closePops();
 });
 
@@ -3216,7 +3204,7 @@ $('wsRing').addEventListener('click', e => {
   if (!b || !r || !views.has(r.v.panel.id)) { closeRing(); return; }
   const c = r.v.pane.chart, what = b.dataset.ring, name = r.v.panel.root + ' ' + W.tfLabel(r.v.panel.tf, r.v.panel.range);
   closeRing();
-  if (what === 'clear') { c.clearDrawings(); note('Drawings cleared on ' + name + '.', false); return; }
+  if (what === 'clear') { c.clearDrawings(); note('Drawings cleared on ' + name + '.' + (r.v.pane.sharedDrawings && r.v.pane.sharedDrawings() ? ' The other charts\' lines stay.' : ''), false); return; }
   for (const o of chartViews()) if (o !== r.v && o.pane.chart.getTool()) o.pane.chart.setTool(null);   // one armed tool at a time
   c.setTool(what);
   note(RING_NAMES[what] + ' on ' + name + '. Escape cancels.', false, 6000);
@@ -3719,7 +3707,7 @@ window.workspace = { get layout() { return layout; }, panels: () => panels.map(p
   /* 1.36.0: the Agents strip (read only) */
   agentsStrip: () => { const v = stripViews()[0]; return v ? v.strip.state() : null; },
   quoteLast: r => { const x = quoteOf(r); return x ? x.last : null; },
-  /* 1.34.0: how many risk alerts sounded in this window (test/flatten-every-smoke.mjs) */
+  /* 1.34.0: how many risk alerts sounded in this window (test/flatten-all-smoke.mjs) */
   riskSounds: () => riskSounds };
 
 /* 1.16.0: the Bot tab, the bot strip and the bot's pop-ups (live/bot.js), on the window's v3 connection (AF); everything bot

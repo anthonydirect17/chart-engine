@@ -49,6 +49,10 @@
  *   live-scale-lock-v1  { <paneId>: true } a chart's price scale locked (1.14.0, review D2); unlocked unless set
  *   live-fit-orders-v1  { <paneId>: false } a chart's "Fit stop and target" switched off (Unreleased, Anthony 2026-11-02); on
  *                       unless set, so a layout saved before it fits as it always did
+ *   live-drawings-shared-v1  { <paneId>: true } a chart's "Shared drawings" switch on (1.61.0, Anthony 2026-11-20); off unless set.
+ *                       On, the chart also shows every other chart's drawings of its instrument (sharedView below); off, only its own.
+ *                       The drawings themselves stay where they always were, live-drawings-v1-<ROOT> (pane main) and
+ *                       live-drawings-v1-<paneId>-<ROOT>, one list per chart (live/EMBED.md)
  *   live-color-presets-v1  { chart: [{ id, name, colors: { up, down, bg }, ind }], indicator: [{ id, name, colors }] }
  *                       the named presets (1.9.0), through presetStore below so a store shared by every PC can replace
  *                       it; a chart preset's optional `ind` is the id of the indicator preset it brings with it
@@ -267,7 +271,7 @@ const KEYS = { settings: 'live-settings-v2', range: 'live-range-v2', indicators:
   paneHeights: 'live-pane-heights-v1', indicatorColors: 'live-indicator-colors-v1', presets: 'live-color-presets-v1', colors: 'live-colors-v1',
   bracketPresets: 'live-bracket-presets-v1', bracketSel: 'live-bracket-sel-v1', bracketUnit: 'live-bracket-unit-v1', qty: 'live-qty-v1',
   hotkeys: 'live-hotkeys-v1', signals: 'live-signals-v1', floors: 'live-tape-floors-v1', scaleLock: 'live-scale-lock-v1', paneRoom: 'live-pane-room-v1',
-  fitOrders: 'live-fit-orders-v1' };
+  fitOrders: 'live-fit-orders-v1', drawShare: 'live-drawings-shared-v1' };
 /*
  * The chart signals' settings (G1c), by the NinjaScript files' own names, each kept inside the file's [Range]:
  * AbsorptionTradeCombo per instrument and chart type (Anthony: Range 40 and 1 minute first, every other type the same
@@ -544,6 +548,59 @@ function searchIndicators(q) {
   });
 }
 
+/* ---------------- 1.61.0 (Anthony 2026-11-20: "I would like the lines that I draw to have the OPTION to be shared across charts, maybe an
+   option on each chart to have drawings on / off"): shared drawings, per chart. Each chart keeps its own drawings under its own key, as
+   always; a chart whose "Shared drawings" switch is on also shows the drawings every other chart of the same instrument keeps (same
+   storage prefix, this browser). A line drawn there is its own; a line of another chart moved or deleted there is changed where it is
+   kept, so every chart that shows it follows; "Clear this chart" clears only its own. Off (the default), a chart shows its own only. */
+const DRAWINGS_PREFIX = 'live-drawings-v1-';
+/** The key a pane keeps its drawings of a root under (the main pane keeps the standalone page's old key). */
+const drawingsKey = (paneId, root) => DRAWINGS_PREFIX + (paneId === MAIN_PANE ? '' : paneId + '-') + root;
+/** The pane a drawings key belongs to for this root (MAIN_PANE for live-drawings-v1-<ROOT>), or null when the key is not one of root's. */
+function drawingPaneOf(key, root) {
+  if (typeof key !== 'string' || !ROOTS.includes(root) || !key.startsWith(DRAWINGS_PREFIX)) return null;
+  const rest = key.slice(DRAWINGS_PREFIX.length);
+  if (rest === root) return MAIN_PANE;
+  return rest.length > root.length + 1 && rest.endsWith('-' + root) ? rest.slice(0, -root.length - 1) : null;
+}
+/** A saved drawings list as the engine takes it: objects with a string id (anything else is dropped; never throws). */
+const cleanDrawings = v => (isList(v) ? v.filter(d => d && typeof d === 'object' && !isList(d) && typeof d.id === 'string' && d.id) : []);
+/**
+ * What a chart shows: its own drawings, then (shared on) every other chart's of the same root, each id once (its own first).
+ * others: [[key, list]] in a fixed order. -> { shown, foreign: Map(id -> key) } (foreign: the lines shown here that another chart keeps).
+ */
+function sharedView(own, others) {
+  const shown = cleanDrawings(own), seen = new Set(shown.map(d => d.id)), foreign = new Map();
+  for (const [key, list] of others || []) for (const d of cleanDrawings(list)) {
+    if (seen.has(d.id)) continue;
+    seen.add(d.id); foreign.set(d.id, key); shown.push(d);
+  }
+  return { shown, foreign };
+}
+/**
+ * After an edit on a chart that shows shared drawings: what each key keeps now. list: what the chart shows after the edit; foreign:
+ * sharedView's map as shown before it; now: Map(key -> that key's list read fresh); cleared: "Clear this chart" (only its own lines go).
+ * A foreign line moved here is changed in its own key, one deleted here (the Delete key) is removed there; a line drawn here is this
+ * chart's own. -> { own, writes: Map(key -> new list) for each key that changed, reshow: the foreign lines to show again (a clear) }
+ */
+function splitShared(list, foreign, now, cleared) {
+  const shownList = cleanDrawings(list), byId = new Map(shownList.map(d => [d.id, d])), fmap = foreign instanceof Map ? foreign : new Map();
+  const own = cleared ? [] : shownList.filter(d => !fmap.has(d.id));
+  const writes = new Map();
+  if (!cleared) for (const [key, raw] of now instanceof Map ? now : new Map()) {
+    const was = cleanDrawings(raw), next = [];
+    let changed = false;
+    for (const d of was) {
+      if (fmap.get(d.id) !== key) { next.push(d); continue; }        // not shown here from this key: kept as it is
+      const nd = byId.get(d.id);
+      if (!nd) { changed = true; continue; }                          // deleted here
+      if (JSON.stringify(nd) !== JSON.stringify(d)) changed = true;   // moved here
+      next.push(nd);
+    }
+    if (changed) writes.set(key, next);
+  }
+  return { own, writes, reshow: cleared && fmap.size > 0 };
+}
 function create(storage) {
   const raw = {
     get(k) { try { const s = storage && storage.getItem(k); return s === null || s === undefined ? null : JSON.parse(s); } catch (e) { return null; } },
@@ -748,6 +805,14 @@ function create(storage) {
       const all = Object.assign(Object.create(null), obj(KEYS.fitOrders));
       if (on) delete all[paneId]; else all[paneId] = false;
       return raw.set(KEYS.fitOrders, all);
+    },
+    /** Whether a chart pane's "Shared drawings" switch is on (1.61.0): off unless switched on, kept per chart as the scale lock. */
+    sharedDrawings(paneId) { return paneOk(paneId) && obj(KEYS.drawShare)[paneId] === true; },
+    setSharedDrawings(paneId, on) {
+      if (!paneOk(paneId)) return false;
+      const all = Object.assign(Object.create(null), obj(KEYS.drawShare));
+      if (on) all[paneId] = true; else delete all[paneId];
+      return raw.set(KEYS.drawShare, all);
     },
     /** A chart pane's own room right of price, set by dragging its gap (1.39.2), or null: Settings' room applies. */
     paneRoom(paneId) { const v = paneOk(paneId) ? obj(KEYS.paneRoom)[paneId] : null; return roomOk(v) ? v : null; },
@@ -1042,7 +1107,8 @@ function debounce(fn, ms) {
 }
 
 api = { LOAD_WAIT_S, staleSeconds, isRthEt, globexOpen, STALE_RTH_S, STALE_ETH_S, pageClock, CLOCK_SLACK_MS, CLOCK_EVERY_MS, CLOCK_WARN_MS, REAL_WARN_MS, REAL_BAD_MS, pcClockOf, fmtDelay, feedSplit, feedText, feedShort, feedLevel, clockWarn, clockNote, ABS_SPEC, DIV_SPEC, cleanSpec, chartType, cleanLargeFloors, NOCHIP, IND_COLOR_LATER, create, debounce, orderAccount, resetDay, ticketReset, cleanBracketSel, BRACKET_SELS, localPresetStore, cleanPresets, presetName, cleanColors, INDICATOR_COLORS, IND_COLOR_KEYS, PRESET_GROUPS, presetSame, presetGround, PRESET_MAX, PRESET_NAME_MAX, parseRange, clampRange, cleanIndicators, cleanIndicatorOptions, indicatorOptionAllowed, INDICATOR_OPTIONS, MA_LENS, studiesOf, PANE_HEIGHTS, cleanPane, defaultPane, paneFromV1, Pane, searchIndicators, KEYS, OLD, ROOTS, TFS, GLIDES, RANGE_MODES, GRIDS, ROOMS, DEFAULT_ROOM, ROOMS_WS, DEFAULT_ROOM_WS, ROOM_MIN, ROOM_MAX, roomOk, HISTORY_DAYS, DEFAULT_DAYS, daysFor, ATR_MIN, ATR_MAX, DEFAULT_ATR, cleanAtr,
-  DEFAULT_RANGE, INDICATORS, COMING, CATEGORIES, RECENT_MAX, PIN_MAX: 10, LEVEL_LINES, migrateIb, DEFAULT_INDICATORS, NEW_PANE_INDICATORS, MAIN_PANE, RANGE_MIN, RANGE_MAX };
+  DEFAULT_RANGE, INDICATORS, COMING, CATEGORIES, RECENT_MAX, PIN_MAX: 10, LEVEL_LINES, migrateIb, DEFAULT_INDICATORS, NEW_PANE_INDICATORS, MAIN_PANE, RANGE_MIN, RANGE_MAX,
+  drawingsKey, drawingPaneOf, cleanDrawings, sharedView, splitShared };
 return api;
 });
 
@@ -1075,6 +1141,9 @@ const GLIDE = { smooth: { candle: 55, fit: 120, follow: 110 }, fast: { candle: 2
 const PAGE_CLOCK = window.ChartLivePageClock || (window.ChartLivePageClock = LP.pageClock({ perfNow: () => performance.now(), wallNow: () => Date.now(), origin: performance.timeOrigin }).start());
 const EMBED_PREFIX = 'embed:';            // storage prefix when a host passes none (live/EMBED.md)
 let mountCount = 0;
+/* 1.61.0: the charts of this window, told when one of them changed a drawings key (another window hears it as a storage event):
+   { prefix, pane, fn(key) } each */
+const drawingsBus = new Set();
 /* The "/" key opens the Indicators menu of the chart under the mouse (1.6.0): each mounted chart notes when the pointer
    is over it. */
 let hoverRoot = null;
@@ -1332,7 +1401,7 @@ function mount(container, options) {
   const saveRange = (root, n) => { if (!VIEW) prefs.setRange(root, n); };
   const viewChanged = () => { if (onView) { try { onView({ root: S.root, tf: S.tf, range: ranges[S.root] }); } catch (e) { setTimeout(() => { throw e; }); } } };
   /* Drawings are kept per pane and instrument; the main pane keeps the key the standalone page always used. */
-  const drawingsKey = root => 'live-drawings-v1-' + (PANE === LP.MAIN_PANE ? '' : PANE + '-') + root;
+  const drawingsKey = root => LP.drawingsKey(PANE, root);
   const store = {                                  // single-value keys (fill account, drawings), try/catch inside
     get(k, d) { const v = prefs.raw.get(k); return v === null ? d : v; },
     set(k, v) { prefs.raw.set(k, v); },
@@ -1455,7 +1524,7 @@ function mount(container, options) {
       chart.setBars([], { barSeconds: TF[S.tf].sec });
       chart.setLevels([]);
     }
-    chart.setDrawings(store.get(drawingsKey(root), []));
+    showDrawings(root);
     applyMarkers();
     if (HOST) renderHost();
   }
@@ -2881,7 +2950,69 @@ function mount(container, options) {
     legendAt = e;                                         // the bar under the crosshair (else the newest), for the Data Box
     if (barSubs.size) barChanged();
   });
-  chart.on('drawings', list => store.set(drawingsKey(D.root), list));
+  /* ---------------- 1.61.0 shared drawings (Anthony 2026-11-20, "Per-chart switch"): this chart's "Shared drawings" switch, off by
+     default. Off: it shows and keeps its own drawings only, as before. On: it also shows every other chart's drawings of its
+     instrument (LivePrefs.sharedView, this browser's storage with this chart's prefix; no server); a line drawn here is its own, a
+     line of another chart moved or deleted here is changed where that chart keeps it (LivePrefs.splitShared), and "Clear this chart"
+     clears its own only. A host may name the charts that count (opt.drawingPanes(): pane ids, the workspace's saved layouts), so the
+     lines of a chart closed long ago never come back; without it, every chart this prefix keeps drawings for. */
+  const DR = { shared: prefs.sharedDrawings(PANE), foreign: new Map(), clearing: false };
+  function otherDrawingKeys(root) {
+    const keys = new Set();
+    let panes = null;
+    if (typeof opt.drawingPanes === 'function') { try { panes = opt.drawingPanes(); } catch (e) { panes = null; } }
+    if (Array.isArray(panes)) { for (const id of panes) if (typeof id === 'string' && id && id !== PANE) keys.add(LP.drawingsKey(id, root)); }
+    else {
+      try {
+        const ls = window.localStorage;
+        for (let i = 0; i < ls.length; i++) {
+          const k = ls.key(i);
+          if (!k || !k.startsWith(PREFIX)) continue;
+          const id = LP.drawingPaneOf(k.slice(PREFIX.length), root);
+          if (id !== null && id !== PANE) keys.add(k.slice(PREFIX.length));
+        }
+      } catch (e) { /* storage blocked: its own only */ }
+    }
+    return [...keys].sort();
+  }
+  function showDrawings(root) {
+    const own = store.get(drawingsKey(root), []);
+    const v = LP.sharedView(own, DR.shared ? otherDrawingKeys(root).map(k => [k, store.get(k, [])]) : []);
+    DR.foreign = v.foreign;
+    chart.setDrawings(v.shown);
+  }
+  function drawingsChanged(key) { for (const l of drawingsBus) if (l.prefix === PREFIX && l.pane !== PANE) { try { l.fn(key); } catch (e) { setTimeout(() => { throw e; }); } } }
+  chart.on('drawings', list => {
+    const key = drawingsKey(D.root);
+    if (!DR.foreign.size) { store.set(key, list); drawingsChanged(key); return; }
+    const now = new Map([...new Set(DR.foreign.values())].map(k => [k, store.get(k, [])]));
+    const r = LP.splitShared(list, DR.foreign, now, DR.clearing);
+    store.set(key, r.own); drawingsChanged(key);
+    for (const [k, l] of r.writes) { store.set(k, l); drawingsChanged(k); }
+    if (r.reshow) later(() => { if (!destroyed) showDrawings(D.root); }, 0);   // a clear keeps the other charts' lines shown (a move keeps its selection)
+  });
+  /* "Clear this chart" (the ring's, the toolbar's): this chart's own drawings only, whatever is shown */
+  const clearAll = chart.clearDrawings;
+  chart.clearDrawings = function () { DR.clearing = true; try { return clearAll.apply(chart, arguments); } finally { DR.clearing = false; } };
+  const onDrawingsKey = key => {
+    if (destroyed) return;
+    if (key === drawingsKey(D.root) || (DR.shared && LP.drawingPaneOf(key, D.root) !== null)) showDrawings(D.root);
+  };
+  const busEntry = { prefix: PREFIX, pane: PANE, fn: onDrawingsKey };
+  drawingsBus.add(busEntry);
+  cleanups.push(() => drawingsBus.delete(busEntry));
+  listen(window, 'storage', e => {
+    if (!e.key || !e.key.startsWith(PREFIX)) return;
+    const k = e.key.slice(PREFIX.length);
+    if (k === LP.KEYS.drawShare) { const on = prefs.sharedDrawings(PANE); if (on !== DR.shared) { DR.shared = on; showDrawings(D.root); } return; }
+    if (k.startsWith('live-drawings-v1-')) onDrawingsKey(k);
+  });
+  function setSharedDrawings(on) {
+    if (destroyed) return;
+    DR.shared = !!on;
+    prefs.setSharedDrawings(PANE, DR.shared);
+    showDrawings(D.root);
+  }
 
   /* ---------------- the Data Box (1.16.0, Anthony: the workspace's panel): what a host shows of the bar under the crosshair,
      else the newest. Nothing is worked out unless a host listens (onBar); then once per change of the legend (after a draw
@@ -4052,6 +4183,8 @@ function mount(container, options) {
   colorsLive = true;
   return { destroy, chart, element: rootEl, paneId: PANE, setIndicatorOption, indicatorOptions: id => Object.assign({}, Object.prototype.hasOwnProperty.call(S.options, id) ? S.options[id] : {}),
     setView, view: () => ({ root: S.root, tf: S.tf, range: ranges[S.root] }), refreshSettings, refreshColors, setTrade,
+    /** 1.61.0: this chart's "Shared drawings" switch (off by default): on, it also shows the drawings of every other chart of its instrument */
+    sharedDrawings: () => DR.shared, setSharedDrawings,
     indicators: $('indWrap'), chips: $('indChips'), colors: themePanel.element,
     /** For a host that shows one status line for all its charts: this chart's delays (medians, ms) and frame rate. */
     stats: () => ({ root: D.root, feed: median(delays.feed), local: median(delays.local), localP95: pct95(delays.local), chart: chart.stats(),

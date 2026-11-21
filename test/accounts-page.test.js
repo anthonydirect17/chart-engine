@@ -513,3 +513,37 @@ test('1.35.0 review: the floors from The Desk, one row per account (the newer ke
     'a refusal after the wait forgets its own minimum, never a newer one sent since');
   assert.match(src, /firmPrune\(\);/, 'a minimum set under other rules is forgotten when the accounts come');
 });
+
+test('1.61.0 (Anthony 2026-11-20): finished prop accounts leave every list of the Account page, Hidden too; never one holding something', () => {
+  const K = require('../live/legion-castra-core.js');
+  /* The Desk's list on GET /api/chart-accounts, read by Legion's own reader (chart 1.60.0) */
+  const finished = K.finishedOf({ accounts: [], finished_accounts: [
+    { account: 'EVAL-B', reason: 'blown', at_ms: 1 }, { account: 'EVAL-P', reason: 'promoted', at_ms: 2 }, { account: 'OLD-1', reason: 'archived', at_ms: 3 },
+    { account: 'EVAL-H', reason: 'blown', at_ms: 4 }, { account: 'EVAL-W', reason: 'promoted', at_ms: 5 }, { account: 'FOL-1', reason: 'blown', at_ms: 6 }] });
+  const st = {
+    accounts: [{ name: 'EVAL-A', positions: [] }, { name: 'EVAL-P', positions: [] }, { name: 'EVAL-H', positions: [{ root: 'MNQ', qty: 1 }] }, { name: 'EVAL-W', positions: [] }],
+    archived: [{ name: 'EVAL-B', at: 1 }, { name: 'SIM-X', at: 2 }],
+    notListed: [{ name: 'OLD-1', trade: false, lastConnected: null }],
+    groups: [{ id: 'g1', name: 'Lucid', members: ['EVAL-A', 'GONE-M'] }],
+    copier: { followers: [{ account: 'FOL-1', on: false }] },
+    positions: new Map(), orders: new Map([['o1', { id: 'o1', account: 'EVAL-W', root: 'MNQ', state: 'working' }]]),
+  };
+  const out = AC.finishedOut(finished, st, K.hiddenMark);
+  assert.deepEqual([...out].sort(), ['EVAL-B', 'EVAL-P', 'FOL-1', 'OLD-1'], 'listed, hidden, not listed and a follower: each left out');
+  assert.ok(!out.has('EVAL-H'), 'ChartBridge shows EVAL-H holding a position: never left out');
+  assert.ok(!out.has('EVAL-W'), 'nor EVAL-W with a working order');
+  assert.ok(!out.has('SIM-X') && !out.has('EVAL-A'), 'an account The Desk does not mark finished stays (a hidden one keeps its Show)');
+  // no list (an older Desk), or Legion's core not loaded: nothing is left out
+  assert.equal(AC.finishedOut(new Map(), st, K.hiddenMark).size, 0);
+  assert.equal(AC.finishedOut(finished, st, null).size, 0);
+  assert.equal(AC.finishedOut(K.finishedOf({ accounts: [] }), st, K.hiddenMark).size, 0);
+  // the page: Legion's reader on The Desk's answer, the rows, the not-listed rows and Hidden all filtered, no Show for a finished one
+  const src = read('live/accounts.js');
+  assert.match(src, /\.then\(j => \{ S\.desk = AC\.cleanDesk\(j\); S\.finished = finishedOf\(j\);/);
+  assert.match(src, /const fin = AC\.finishedOut\(S\.finished, S, LCC \? LCC\.hiddenMark : null\), kept = a => !fin\.has\(a\.name\);/);
+  assert.match(src, /const accounts = \(ROWS \? S\.accounts\.filter\(passes\) : S\.accounts\)\.filter\(kept\)/);
+  assert.match(src, /AC\.notListedRows\(S\.accounts, [^\n]*\)\.filter\(r => !fin\.has\(r\.name\)\)/);
+  assert.match(src, /\(S\.archived\.some\(kept\) \? '<h3 class="apg-h">Hidden<\/h3>[^\n]*S\.archived\.filter\(kept\)\.map\(/);
+  const html = read('live/index.html');
+  assert.ok(html.indexOf('<script src="ludus-core.js"></script>') < html.indexOf('<script src="legion-castra-core.js"></script>') && html.indexOf('<script src="legion-castra-core.js"></script>') < html.indexOf('<script src="accounts.js"></script>'), 'Legion\'s cores on the chart page, before the Account page');
+});

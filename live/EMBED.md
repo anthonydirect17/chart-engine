@@ -229,6 +229,7 @@ The workspace (and, until 1.22.0, the single chart page) uses no prefix:
 | `live-account-v1` | the account picked, whose fills are marked (1.6.0; the 1.5 `live-fill-account-v1` is read once when it is missing, its "All accounts" meaning none picked) | all charts with this prefix |
 | `live-drawings-v1-<ROOT>` | drawings per instrument on pane `main` | pane `main` |
 | `live-drawings-v1-<paneId>-<ROOT>` | drawings per instrument on any other pane | that pane |
+| `live-drawings-shared-v1` | `{ <paneId>: true }` a chart's Shared drawings switch on (1.61.0; off unless set) | one entry per `paneId` |
 | `live-colors-v1` | candle and background colors (Colors panel), saved one color at a time (and the VWAP before 1.9.0) | all charts with this prefix |
 | `live-indicator-colors-v1` | `{ vwap, prior, overnight, value, close, ibHigh, ibLow, vpPoc }` the indicator colors set in their gears (1.9.0; the VWAP of `live-colors-v1` is read while this key is missing) | all charts with this prefix |
 | `live-color-presets-v1` | `{ chart: [{ id, name, colors }], indicator: [...] }` the named presets (1.9.0), unless `presetStore` is passed | all charts with this prefix |
@@ -241,3 +242,11 @@ Choices shared by all charts with one prefix (instrument, bars and the rest in t
 chart mounts and written one field at a time when changed, so two panes never undo each other while they run;
 after a reload both start from the last change either made. Indicators and drawings are kept per pane, so two
 panes on one instrument each keep their own lines.
+
+Shared drawings (1.61.0, Anthony 2026-11-20, a switch per chart): `sharedDrawings()` says whether this chart's switch is on and
+`setSharedDrawings(on)` sets it (kept in `live-drawings-shared-v1`; off by default, so nothing changes until it is turned on). Every
+chart still keeps its own drawings under its own key. With the switch on, a chart also shows the drawings every other chart with the
+same prefix keeps for its instrument (this browser's storage: no server); a line drawn there is its own, a line of another chart moved
+or deleted there is changed where that chart keeps it, and "Clear this chart" (`chart.clearDrawings()`) clears its own only. An
+optional `drawingPanes()` option returns the pane ids that count (the workspace: every chart of every saved layout); without it, every
+pane this prefix keeps drawings for. The workspace offers the switch in each chart's menu.
