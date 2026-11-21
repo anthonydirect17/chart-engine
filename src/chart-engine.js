@@ -128,6 +128,58 @@ function openPnl(qty, avgPrice, last, pointValue) {
   const dollars = pointValue > 0 ? (last - avgPrice) * qty * pointValue : null;
   return { points, dollars };
 }
+/* ---------------------------------------------------------------- the plan layer (1.62.0, the planner) */
+/* A planned trade drawn on the chart (Anthony 2026-11-21, the planner): its entry, stop and target 1 as three lines over a box
+   from where it was drawn to the plot's right edge, the reward shaded in the profit color and the risk in the loss color. It is
+   apart from the drawings (never saved with them) and from the orders (it sends nothing: the host owns what a plan does). The
+   host sets the list (setPlans) and hears a drag (planMove), a click (planSelect), a press on a locked plan (planPressOff) and
+   a click with the Plan tool armed (planCreate). */
+const PLAN_STATES = ['draft', 'submitted', 'armed', 'working', 'filled', 'ended'];
+/** A plan as the engine keeps it, or null: { id, side 'long' | 'short', entry, stop, target (null: none), state, editable,
+    label, note, t0 (the box's left edge, a bar time; null: the plot's last 220 px), qty, selected }. */
+function cleanPlan(x) {
+  if (!x || !(typeof x.id === 'string' || typeof x.id === 'number') || String(x.id) === '') return null;
+  const num = v => (typeof v === 'number' && isFinite(v) ? v : null);
+  const text = (v, n) => (typeof v === 'string' ? v.slice(0, n) : '');
+  const entry = num(x.entry);
+  if (entry === null) return null;
+  return { id: String(x.id), side: x.side === 'short' ? 'short' : 'long', entry, stop: num(x.stop), target: num(x.target),
+    state: PLAN_STATES.includes(x.state) ? x.state : 'draft', editable: x.editable === true, label: text(x.label, 48), note: text(x.note, 64),
+    t0: num(x.t0), qty: Number.isInteger(x.qty) && x.qty > 0 ? x.qty : null, selected: x.selected === true };
+}
+/** Risk and reward in whole ticks and the reward to risk ratio: { riskTicks, rewardTicks, rr }, null where not known (a stop or
+    target on the wrong side of the entry counts as none). */
+function planGeometry(p, tick) {
+  const t = tick > 0 ? tick : 0.25, dir = p && p.side === 'short' ? -1 : 1;
+  const risk = p && typeof p.stop === 'number' ? Math.round((p.entry - p.stop) * dir / t) : null;
+  const reward = p && typeof p.target === 'number' ? Math.round((p.target - p.entry) * dir / t) : null;
+  const rk = risk !== null && risk > 0 ? risk : null, rw = reward !== null && reward > 0 ? reward : null;
+  return { riskTicks: rk, rewardTicks: rw, rr: rk && rw ? Math.round(rw / rk * 100) / 100 : null };
+}
+/** A plan's line dragged to `price`: its new { entry, stop, target }. The entry carries the stop and target with it (their
+    distances kept); the stop and the target stay at least one tick on their own side of the entry. Prices on the tick. */
+function planDragTo(p, which, price, tick) {
+  const t = tick > 0 ? tick : 0.25, dir = p.side === 'short' ? -1 : 1, at = roundTo(price, t);
+  const out = { entry: p.entry, stop: p.stop, target: p.target };
+  if (which === 'entry') {
+    const d = at - p.entry;
+    out.entry = at;
+    if (out.stop !== null) out.stop = roundTo(p.stop + d, t);
+    if (out.target !== null) out.target = roundTo(p.target + d, t);
+  } else if (which === 'stop') out.stop = dir > 0 ? Math.min(at, roundTo(p.entry - t, t)) : Math.max(at, roundTo(p.entry + t, t));
+  else if (which === 'target') out.target = dir > 0 ? Math.max(at, roundTo(p.entry + t, t)) : Math.min(at, roundTo(p.entry - t, t));
+  return out;
+}
+/** The labels of a plan's three lines: { entry, stop, target } (stop and target '' when it has none). pv: the point value
+    (dollars shown only with it and the plan's qty). */
+function planLabels(p, tick, pv) {
+  const g = planGeometry(p, tick), usd = ticks => (pv > 0 && p.qty ? ' $' + fmtPrice(Math.round(ticks * tick * pv * p.qty), 0) : '');
+  const entry = (p.label || 'Plan') + (p.note ? '  ' + p.note : '');
+  const stop = p.stop === null ? '' : 'SL ' + (g.riskTicks !== null ? '-' + g.riskTicks + 't' + usd(g.riskTicks) : 'wrong side');
+  const target = p.target === null ? '' : 'TP ' + (g.rewardTicks !== null ? '+' + g.rewardTicks + 't' + usd(g.rewardTicks) : 'wrong side') + (g.rr !== null ? '  ' + g.rr.toFixed(1) + 'R' : '');
+  return { entry, stop, target };
+}
+
 /* ---------------------------------------------------------------- fill marks (1.3.1) */
 /**
  * Fills merged for drawing: one mark per bar, side and price (to the tick), with the summed qty, so a
@@ -1420,6 +1472,11 @@ function create(container, options) {
   }
   const levelOn = L => !!o.layers[L.layer || 'levels'];
   let drawings = [], tool = null, selectedId = null, dd = null, draft = null;
+  /* 1.62.0: the plan layer (the planner): the host's plans, a plan line pressed or dragged (pd: { id, which, y0, orig, cur,
+     moved, editable }), the prices of a drag released until the host sets its plans again, and where the lines were drawn (for
+     the hit test and planHandles()) */
+  let plans = [], pd = null, planDrawn = [];
+  const planPending = new Map();
   /* 1.15.0: the corner readout (the page's text, drawn at the plot's bottom right, cornerPlace) and the order label under
      the mouse (a host's compact labels show the full one on hover) */
   let cornerText = '', cornerShort = '', cornerAt = null, labelHover = null;
@@ -1438,7 +1495,7 @@ function create(container, options) {
   let labelFirst = null, prevOd = null;                    // prevOd: the pressed order's { id, off } as the last frame drew it (1.39.1)
   const lineTop = y => clamp(y - ORDER_LH / 2, 0, Math.max(0, plotH - ORDER_LH));   // the top of a label drawn at its line
   const pendingMoves = new Map();          // order id -> price asked for, until the next setOrders
-  const listeners = { bubble: [], legend: [], live: [], drawings: [], tool: [], orderMove: [], orderCancel: [], orderPlace: [], orderPlanAdd: [], orderPressOff: [], error: [], paneResize: [], scaleLock: [], fitOrders: [], drawn: [], room: [] };
+  const listeners = { bubble: [], legend: [], live: [], drawings: [], tool: [], orderMove: [], orderCancel: [], orderPlace: [], orderPlanAdd: [], orderPressOff: [], error: [], paneResize: [], scaleLock: [], fitOrders: [], drawn: [], room: [], planMove: [], planSelect: [], planPressOff: [], planCreate: [] };
   const emit = (ev, arg) => { for (const fn of listeners[ev]) { try { fn(arg); } catch (e) { setTimeout(() => { throw e; }); } } };
 
   const AXIS_W = o.axisWidth, TIME_H = o.timeAxisHeight;
@@ -1538,6 +1595,19 @@ function create(container, options) {
         const onEdge = (inY && (Math.abs(p.x - r.x0) <= 5 || Math.abs(p.x - r.x1) <= 5)) || (inX && (Math.abs(p.y - r.y0) <= 5 || Math.abs(p.y - r.y1) <= 5));
         if (onEdge || (d.id === selectedId && inX && inY)) return { d, part: 'body' };
       }
+    }
+    return null;
+  }
+  /* 1.62.0: a plan's prices as drawn now (its drag, or a drag released and waiting for the host, else its own) and its box's
+     left edge: its t0's bar, kept at least 60 px from the plot's right edge; with no t0 the plot's last 220 px */
+  const planNow = p => (pd && pd.id === p.id ? Object.assign({}, p, pd.cur) : planPending.has(p.id) ? Object.assign({}, p, planPending.get(p.id)) : p);
+  const planX0 = p => clamp(p.t0 !== null && bars.length ? xOf(idxOfTime(p.t0)) : plotW - 220, 0, Math.max(0, plotW - 60));
+  /* the plan line under the pointer: { id, which, editable } (the last drawn wins; a line within 5 px, inside its box) */
+  function hitPlan(p) {
+    for (let k = planDrawn.length - 1; k >= 0; k--) {
+      const d = planDrawn[k];
+      if (p.x < d.x0 - 4 || p.x > plotW) continue;
+      for (const L of d.lines) if (Math.abs(p.y - L.y) <= 5) return { id: d.id, which: L.which, editable: d.editable };
     }
     return null;
   }
@@ -1676,6 +1746,8 @@ function create(container, options) {
     // 1.14.0 (Anthony, "zoom to brackets"): working orders, the position's stop and target and the planned stop and
     // target lines are always on screen, eased in with the axis re-fit like any other change of the range
     if (o.fitOrders && orders.length) for (let k = 0; k < orders.length; k++) { const p = fitPrice(orders[k]); if (p > mx) mx = p; if (p < mn) mn = p; }
+    /* 1.62.0: a plan's entry, stop and target too (the same switch) */
+    if (o.fitOrders && plans.length) for (const pl of plans) for (const p of [pl.entry, pl.stop, pl.target]) if (p !== null) { if (p > mx) mx = p; if (p < mn) mn = p; }
     return fitRange(mn, mx, null, plotH, o.tick, o.layers.volume, o.fitTop, fitBubbles(from, to, n));
   }
   /* 1.16.0 (Anthony): the bubbles in view (only those: a search to the first, then the bars' span), with their radius as
@@ -2532,6 +2604,21 @@ function create(container, options) {
       }
     }
 
+    /* 1.62.0: the plans' boxes, behind the candles as a zone: the reward (entry to target 1) in the profit color and the risk
+       (entry to stop) in the loss color, at 10% (16% for the plan selected, 6% for one only drawn, not submitted) */
+    if (plans.length) {
+      for (const p0 of plans) {
+        const p = planNow(p0), x0 = crisp(planX0(p), 1), ye = yOf(p.entry);
+        const a = p.selected ? 0.16 : p.state === 'draft' ? 0.06 : 0.10;
+        const shade = (price, col) => {
+          if (price === null) return;
+          const y = yOf(price), top = Math.max(0, Math.min(y, ye)), bot = Math.min(plotH, Math.max(y, ye));
+          if (bot > top) { ctx.fillStyle = rgba(col, a); ctx.fillRect(x0, top, plotW - x0, bot - top); }
+        };
+        shade(p.target, T.profit); shade(p.stop, T.loss);
+      }
+    }
+
     // volume + candles in device pixels, one path per color
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     const sp = V.spacing * dpr, wickW = Math.max(1, Math.round(dpr));
@@ -2681,6 +2768,49 @@ function create(container, options) {
           const r = zoneRect(d); ctx.lineWidth = 1.5;
           handle(r.x0, r.y0); handle(r.x1, r.y0); handle(r.x0, r.y1); handle(r.x1, r.y1);
         }
+      }
+    }
+
+    /* 1.62.0: the plans' lines over their boxes: the entry in its side's color (solid; dashed 6/4 while only drawn), the stop in
+       the loss color and target 1 in the profit color (dashed 4/3), each with a label at the box's left edge ("Plan #12 LONG LMT
+       2", "SL -16t $40", "TP +32t $80  2.0R") and, while the plan can still be edited (before Arm), a handle to drag. A plan
+       armed or working draws at full strength, one submitted at 90%, one only drawn at 80%. Its tags on the price axis are
+       outlined, dashed. Hit areas: each line within 5 px, inside its box. */
+    planDrawn = [];
+    const planTags = [];
+    if (plans.length) {
+      ctx.font = '500 10px ' + T.fontMono; ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
+      for (const p0 of plans) {
+        const p = planNow(p0), x0 = planX0(p), lab = planLabels(p, o.tick, hostPV || o.pointValue);
+        const alpha = p.state === 'draft' ? 0.8 : p.state === 'submitted' ? 0.9 : 1;
+        const sideCol = p.side === 'short' ? T.short : T.long, lw = Math.max(1, Math.round(dpr));
+        const lines = [['entry', p.entry, sideCol, p.state === 'draft' ? [6, 4] : null, lab.entry], ['stop', p.stop, T.loss, [4, 3], lab.stop], ['target', p.target, T.profit, [4, 3], lab.target]];
+        const drawn = { id: p.id, x0, editable: p.editable, lines: [] };
+        for (const [which, price, col, dash, text] of lines) {
+          if (price === null) continue;
+          const y = yOf(price), hot = (pd && pd.id === p.id && pd.which === which) || p.selected;
+          if (y < -2 || y > plotH + 2) continue;
+          const ring = ringOf(col);
+          ctx.globalAlpha = alpha; ctx.setLineDash(dash || []);
+          if (ring) { ctx.strokeStyle = ring; ctx.lineWidth = (lw + 2) / dpr; ctx.beginPath(); ctx.moveTo(x0, crisp(y, lw)); ctx.lineTo(plotW, crisp(y, lw)); ctx.stroke(); }
+          ctx.strokeStyle = col; ctx.lineWidth = (hot || which === 'entry' ? lw * 1.5 : lw) / dpr;
+          ctx.beginPath(); ctx.moveTo(x0, crisp(y, lw)); ctx.lineTo(plotW, crisp(y, lw)); ctx.stroke(); ctx.setLineDash([]);
+          let tx = x0 + 6;
+          if (p.editable) {                                          // a handle: the drawings' square, on the line at the box's left
+            ctx.fillStyle = T.bg; ctx.strokeStyle = col; ctx.lineWidth = 1.5;
+            ctx.fillRect(x0 + 2.5, y - 3.5, 7, 7); ctx.strokeRect(x0 + 2.5, y - 3.5, 7, 7); tx = x0 + 15;
+          }
+          if (text) {
+            const w = ctx.measureText(text).width + 8, ty = clamp(y - 8 - 7, 0, Math.max(0, plotH - 14));
+            roundRect(tx, ty, w, 14, 3); ctx.fillStyle = rgba(T.bg, 0.92); ctx.fill();
+            ctx.strokeStyle = col; ctx.lineWidth = 1; ctx.setLineDash(which === 'entry' && p.state !== 'draft' ? [] : [2, 2]); ctx.stroke(); ctx.setLineDash([]);
+            inkText(text, tx + 4, ty + 7.5, which === 'entry' ? sideCol : col);
+          }
+          ctx.globalAlpha = 1;
+          drawn.lines.push({ which, y, price });
+          planTags.push({ price, style: { fill: T.bg, fg: col, border: col, dash: [2, 3] } });
+        }
+        planDrawn.push(drawn);
       }
     }
 
@@ -3002,7 +3132,7 @@ function create(container, options) {
     if (deltaOn() && rsiOn()) { ctx.moveTo(0, crisp(dTop + dH, 1)); ctx.lineTo(W, crisp(dTop + dH, 1)); ctx.moveTo(0, crisp(rTop, 1)); ctx.lineTo(W, crisp(rTop, 1)); }   // 1.34.0: between the delta and the RSI
     ctx.stroke();
 
-    const tagSrc = levelsShown.filter(levelOn).concat(drawings.filter(d => d.type === 'hline').map(d => ({ price: d.price, color: d.color || T.drawing })), orderTags);
+    const tagSrc = levelsShown.filter(levelOn).concat(drawings.filter(d => d.type === 'hline').map(d => ({ price: d.price, color: d.color || T.drawing })), orderTags, planTags);   // 1.62.0: the plans' tags
     const tags = tagSrc.filter(L => L.price >= V.lo && L.price <= V.hi).map(L => ({ L, y: yOf(L.price) })).sort((a, b) => a.y - b.y);
     if (n >= 0) {
       // Keep level tags clear of the last price tag (32 px tall): tags priced at or above the last price
@@ -3109,8 +3239,10 @@ function create(container, options) {
   function setCursor(z, p) {
     if (od) { cv.style.cursor = 'ns-resize'; return; }
     if (dd && dd.mode !== 'draft') { cv.style.cursor = 'grabbing'; return; }
+    if (pd && pd.editable) { cv.style.cursor = 'ns-resize'; return; }   // 1.62.0: a plan's line dragged
     if (!drag && !tool && !draft && p && orderEditing) { const h = hitOrder(p); if (h) { cv.style.cursor = h.part === 'x' || h.part === 'add' ? 'pointer' : 'ns-resize'; return; } }
     if (tool || draft) { cv.style.cursor = 'crosshair'; return; }
+    if (!drag && p && z === 'plot' && plans.length) { const h = hitPlan(p); if (h) { cv.style.cursor = h.editable ? 'ns-resize' : 'pointer'; return; } }   // 1.62.0
     if (!drag && p && z === 'plot' && drawings.length) { const h = hitDrawing(p); if (h) { cv.style.cursor = h.part === 'body' ? 'move' : 'pointer'; return; } }
     if (drag && drag.zone === 'room') { cv.style.cursor = 'col-resize'; return; }   // 1.37.0
     if (!drag && p && !shiftHeld && inGap(p)) { cv.style.cursor = 'col-resize'; return; }
@@ -3141,7 +3273,7 @@ function create(container, options) {
     if (pointers.size === 2) {
       const [a, b] = [...pointers.values()];
       pinch = { d0: Math.hypot(a.x - b.x, a.y - b.y) || 1, logS0: V.logS, i: indexAt((a.x + b.x) / 2) };
-      drag = null; dd = null; draft = null; od = null; xDown = null; addDown = null; V.follow = false; return;
+      drag = null; dd = null; draft = null; od = null; xDown = null; addDown = null; pd = null; V.follow = false; return;
     }
     shiftHeld = !!e.shiftKey;
     const primary = e.button === 0 || e.button === undefined;
@@ -3168,6 +3300,22 @@ function create(container, options) {
     if (primary && !orderEditing && !toolOn && orders.length) {
       const oh = hitOrder(p, true);
       if (oh) emit('orderPressOff', { id: oh.id });
+    }
+    /* 1.62.0: the Plan tool armed: a click on the plot asks the host for a plan at that price (on the tick), then the tool is off */
+    if (zoneOf(p) === 'plot' && primary && toolOn && tool === 'plan' && !draft) {
+      emit('planCreate', { price: roundTo(priceAt(p.y), o.tick), t: timeOfIdx(indexAt(p.x)) });
+      setToolInternal(null); return;
+    }
+    /* 1.62.0: a plan's line (after the orders, before the drawings): pressed to drag it while it can be edited; a locked plan's
+       line is told once per press (planPressOff) and pans as before; a click on either selects it (planSelect, on release) */
+    if (zoneOf(p) === 'plot' && primary && !toolOn && !e.shiftKey && !e.ctrlKey && plans.length) {
+      const hp = hitPlan(p), pl = hp ? plans.find(x => x.id === hp.id) : null;
+      if (pl && hp.editable) {
+        const now0 = planNow(pl), orig = { entry: now0.entry, stop: now0.stop, target: now0.target };
+        pd = { id: pl.id, which: hp.which, y0: p.y, orig, cur: Object.assign({}, orig), moved: false, editable: true };
+        setCursor('plot', p); dirty = true; return;
+      }
+      if (pl) { emit('planPressOff', { id: pl.id, which: hp.which }); pd = { id: pl.id, which: hp.which, y0: p.y, x0: p.x, orig: null, cur: {}, moved: false, editable: false, pan: true }; }
     }
     if (zoneOf(p) === 'plot' && primary && toolOn) {
       if (draft) { const pb = priceAt(p.y); draft.b = { t: timeOfIdx(indexAt(p.x)), p: draft.type === 'zone' ? roundTo(pb, o.tick) : pb }; finishDraft(); return; }
@@ -3216,6 +3364,15 @@ function create(container, options) {
     // 1.15.0 (orders review): a press that moves past the click slop is a drag whatever a drawing tool is doing, and a
     // moved press never counts as an order click
     if (drag && !drag.moved && Math.abs(p.x - drag.x0) + Math.abs(p.y - drag.y0) > 2) drag.moved = true;
+    if (pd && pd.editable) {
+      const pl = plans.find(x => x.id === pd.id);
+      if (!pl) { pd = null; return; }
+      const from = pd.which === 'entry' ? pd.orig.entry : pd.which === 'stop' ? pd.orig.stop : pd.orig.target;
+      pd.cur = planDragTo(Object.assign({}, pl, pd.orig), pd.which, from + (priceAt(p.y) - priceAt(pd.y0)), o.tick);
+      if (Math.abs(p.y - pd.y0) > 2) pd.moved = true;
+      hover = p; setCursor('plot', p); dirty = true; return;
+    }
+    if (pd && !pd.editable && Math.abs(p.y - pd.y0) + Math.abs(p.x - pd.x0) > 2) pd.moved = true;   // a locked plan's line: the press pans
     if (od) {
       od.price = roundTo(od.price0 + (priceAt(p.y) - priceAt(od.y0)), o.tick);
       if (Math.abs(p.y - od.y0) > 2) od.moved = true;
@@ -3291,6 +3448,17 @@ function create(container, options) {
       if (h && h.part === 'x' && h.id === id && orderEditing) emit('orderCancel', { id });
       dirty = true; return;
     }
+    if (pd && pd.editable) {
+      /* 1.62.0: a plan's drag, released inside the plot with its line on screen and moved: the host hears the new prices (the
+         lines stay there until it sets its plans again); a click selects the plan; anywhere else it goes back */
+      const d = pd, p = local(e); pd = null;
+      const inPlot = p.x >= 0 && p.x < plotW && p.y >= 0 && p.y < plotH;
+      const changed = d.moved && (d.cur.entry !== d.orig.entry || d.cur.stop !== d.orig.stop || d.cur.target !== d.orig.target);
+      if (!cancelled && inPlot && changed) { planPending.set(d.id, d.cur); emit('planMove', { id: d.id, which: d.which, entry: d.cur.entry, stop: d.cur.stop, target: d.cur.target }); }
+      else if (!cancelled && !d.moved) emit('planSelect', { id: d.id });
+      setCursor(zoneOf(p), p); dirty = true; return;
+    }
+    if (pd) { const d = pd; pd = null; if (!cancelled && !d.moved) emit('planSelect', { id: d.id }); }   // a locked plan: a click selects it; the press panned
     if (od) {
       // A move is sent only for a release inside the plot at a price on screen. Released anywhere else (the
       // toolbar, the axes, off the chart), the drag is cancelled: the line goes back and nothing is sent.
@@ -3346,6 +3514,7 @@ function create(container, options) {
     const vis = plotW / V.spacing;
     if (e.key === 'Shift') { if (!shiftHeld) { shiftHeld = true; dirty = true; } return; }
     if (e.key === 'Escape' && (od || xDown !== null || addDown)) { od = null; xDown = null; addDown = null; setCursor('plot'); e.preventDefault(); dirty = true; return; }   // revert the drag
+    if (e.key === 'Escape' && pd) { pd = null; setCursor('plot'); e.preventDefault(); dirty = true; return; }   // 1.62.0: a plan's drag goes back
     if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
       const dist = vis * 0.2 * (e.key === 'ArrowLeft' ? -1 : 1);
       V.follow = false; V.kin = { v: dist / o.motion.friction };
@@ -3641,10 +3810,21 @@ function create(container, options) {
     /** The fill markers as set (1.6.0, for reading). */
     getMarkers() { return markers.map(m => Object.assign({}, m)); },
     /** Drawing tool: 'hline', 'trend' or null. */
-    setTool(t) { setToolInternal(t === 'hline' || t === 'trend' || t === 'zone' ? t : null); },
+    setTool(t) { setToolInternal(t === 'hline' || t === 'trend' || t === 'zone' || t === 'plan' ? t : null); },   // 1.62.0: 'plan', the planner's tool
     getTool() { return tool; },
     setDrawings(list) { drawings = (list || []).filter(d => d && (d.type === 'hline' || d.type === 'trend' || d.type === 'zone')).map(cloneDrawing); selectedId = null; draft = null; dirty = true; },
     getDrawings() { return drawings.map(cloneDrawing); },
+    /** 1.62.0, the plan layer: the plans to draw (cleanPlan's shape); a drag released waits on its prices until this is called
+        again; a plan pressed and gone ends its drag. Never saved with the drawings. */
+    setPlans(list) {
+      plans = (Array.isArray(list) ? list : []).map(cleanPlan).filter(Boolean).slice(0, 50);
+      planPending.clear();
+      if (pd && !plans.some(x => x.id === pd.id && (x.editable || !pd.editable))) pd = null;
+      dirty = true;
+    },
+    getPlans() { return plans.map(x => Object.assign({}, x)); },
+    /** 1.62.0 (for tests): every plan line drawn last frame, { id, which, price, x0 (the box's left), y, editable } */
+    planHandles() { return planDrawn.flatMap(d => d.lines.map(L => ({ id: d.id, which: L.which, price: L.price, x0: d.x0, y: L.y, editable: d.editable }))); },
     deleteSelected() { if (!selectedId) return false; drawings = drawings.filter(d => d.id !== selectedId); selectedId = null; drawingsChanged(); dirty = true; return true; },
     clearDrawings() { drawings = []; selectedId = null; draft = null; drawingsChanged(); dirty = true; },
     setBarSeconds(sec) { o.barSeconds = sec; dirty = true; },
@@ -4635,7 +4815,7 @@ return {
     V1_GROUND, groundOf, HOUSE_CHROME,
     obarDims, fadedContrast, OBAR_DIM: { alpha: DIM, house: HOUSE_DIMS },
     aggregate, foldLast, addSessionVwap, sessionLevels, levelLines, initialBalance, ibLines, overnightRange, onLines, rthDay, closedDay, cmeClosed, cmeSessionDay, cmeClosures, cmeShortSessions, nyseHolidays, nyseEarlyCloses, rthClose,
-    orderLabel, orderLabelShort, positionShort, partsRisk, htfStart, htfEnd, HTF_SECONDS, cornerPlace, openPnl, fmtMoney, fmtSigned, groupFills, stackFillLabels, profileRects,
+    orderLabel, orderLabelShort, positionShort, cleanPlan, planGeometry, planDragTo, planLabels, PLAN_STATES, partsRisk, htfStart, htfEnd, HTF_SECONDS, cornerPlace, openPnl, fmtMoney, fmtSigned, groupFills, stackFillLabels, profileRects,
     roomBars, ROOM_MIN, ROOM_MAX, LINE_SOFT, LABEL_SOFT, fitRange, fmtRemain, barRemain, atr, smaAt, emaAt, bandsAt, rsiAt, smaSeries, emaSeries, bollinger, rsiSeries, pctFrom, bubbleRadius, BUBBLE_R_MIN, BUBBLE_R_MAX, rthVwap, rthVwapUpdate, vwapAt, PD_POC_DASH,
   },
   VolumeProfile, CumulativeDelta,
