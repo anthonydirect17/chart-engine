@@ -9,7 +9,10 @@
 //                                   the last price; default none)
 //   --max-bracket-ticks=300         maxBracketTicks = 300 (0.3.7: a bracket stop or target at most this many ticks; default none)
 //   --test-controls                 POST /test/price?root=MNQ&p=25400.25 sets the price and holds the random walk;
-//                                   /test/hold, /test/state, /test/status (broadcast a status line), /test/risk-alert (a riskAlert, 0.6.6), /test/elsewhere
+//                                   /test/hold, /test/state, /test/status (broadcast a status line), /test/risk-alert (a riskAlert, 0.6.6), /test/elsewhere,
+//                                   /test/forget-cids (chart 1.62.0: a ChartBridge restart: the orders stay working, their cids forgotten, every connection drops),
+//                                   /test/renumber?seq=N (chart 1.62.0: a NinjaTrader restart: every order a new id RN<n>, cids forgotten; the next new order NT<N+1>;
+//                                   ?oside=&okind=&oqty=&op= an unrelated order made before any page reads the snapshot), /test/move?id=&p= (moved by hand)
 //   --allow-frames                  drop X-Frame-Options and frame-ancestors (only to test the page's own frame check)
 //   --allow-origins=https://desk.example,http://host:8800   allowOrigins: other web pages that may open the
 //                                   read-only WebSocket (ChartBridge 0.3.1 rule; never trade)
@@ -46,6 +49,9 @@
 //                                   every 10 s (a busy market), instead of one trade every 120 ms
 //   --desk-url=http://127.0.0.1:8837  /diag's desk.deskUrl (config.txt deskUrl; default http://localhost:8800): The Desk's
 //                                   address, the page's one source for it (chart 1.16.0)
+//   --fold-trades                   every live trade folds into the minute history a later subscribe gets (chart 1.62.0, the
+//                                   planner's resume smoke: a touch while no window watched is in the history)
+//   --pc=TESTPC                     /diag's bars.pc (ChartBridge 0.6.10's PC name; none unless set), the planner's PC (chart 1.62.0)
 //   --serve-root=DIR                serve the page files from another checkout (to compare versions)
 //   --clock-offset=-45000           run the exchange clock this many seconds off the PC's (a chosen time of day); with --v3 the desk's
 //                                   clock (fills, execs, proposals, the agents' hours) follows it too
@@ -785,6 +791,15 @@ function trade(r, p) {
   if (V3 && desk.bot.conn) send(desk.bot.conn, msg);  // the bot reads every live trade
   if (V3) for (const a of desk.agents.values()) if (a.conn && a.helloed) send(a.conn, msg);   // and every agent
   desk.tick(r, p);                        // the matching engine sees every trade
+  if (FOLD_TRADES) foldTrade(r, msg.t, p, msg.v);   // chart 1.62.0: --fold-trades, the minute history follows the trades
+}
+/* chart 1.62.0 (--fold-trades, the planner's resume smoke): each live trade folds into the minute history the next subscribe gets,
+   as ChartBridge's own history holds the minutes that traded (sample data; off unless set, so other smokes see the walk as before) */
+const FOLD_TRADES = process.argv.includes('--fold-trades');
+function foldTrade(r, t, p, v) {
+  const bars = data[r], m = Math.floor(t / 60) * 60, b = bars[bars.length - 1];
+  if (b && b.t === m) { b.h = Math.max(b.h, p); b.l = Math.min(b.l, p); b.c = p; b.v += v; }
+  else if (!b || m > b.t) bars.push({ t: m, o: p, h: p, l: p, c: p, v });
 }
 /* --scene=signals: the scripted MNQ tape (see the header), replayed once from the first page that is live on MNQ. */
 const scene = { started: false, sent: 0, total: 0, done: false, t0: 0 };
@@ -881,6 +896,24 @@ const server = http.createServer((req, res) => {
       for (const c of clients) send(c, { type: 'settlement', root: r, p: settlement[r], date: settlementDate[r] });
     }
     else if (p === '/test/drop') { for (const c of clients) c.sock.destroy(); }
+    /* chart 1.62.0 (the planner's resume smoke): a ChartBridge restart as NinjaTrader sees it: every order stays working, but
+       ChartBridge forgot each order's cid (its maps are new), and every page's connection drops */
+    /* chart 1.62.0 (the delta review): a NinjaTrader restart or recompile as ChartBridge sees it: every order stays working but gets
+       a new id (ChartBridge's counter starts again), its cid forgotten, every page's connection drops. ?seq=N: the next order
+       ChartBridge makes is NT<N+1> (so an unrelated order can take an id a page knew before) */
+    else if (p === '/test/renumber') {
+      const map = new Map(), next = new Map();
+      for (const [id, o] of desk.orders) { const nid = 'RN' + (map.size + 1); map.set(id, nid); o.id = nid; delete o.cid; next.set(nid, o); }
+      for (const o of next.values()) { if (o.parent && map.has(o.parent)) o.parent = map.get(o.parent); if (o.leaderEntry && map.has(o.leaderEntry)) o.leaderEntry = map.get(o.leaderEntry); }
+      desk.orders.clear(); for (const [id, o] of next) desk.orders.set(id, o);
+      if (q.get('seq') !== null) desk.seq = +q.get('seq');
+      /* ?oside=&okind=&oqty=&op=&oaccount=: an unrelated order made at once, before any page reads the new snapshot */
+      if (q.get('oside')) desk.placeElsewhere({ account: q.get('oaccount') || 'Sim101', root: r, side: q.get('oside'), kind: q.get('okind') || 'limit', qty: +(q.get('oqty') || 1), price: +q.get('op') });
+      for (const c of clients) c.sock.destroy();
+    }
+    /* chart 1.62.0 (the second delta review): an order moved by hand in NinjaTrader (its cid kept), told to every page */
+    else if (p === '/test/move') { const o = desk.orders.get(q.get('id')); if (o) { o.price = +q.get('p'); desk.emitOrder(o); desk.matchOne(o, desk.last[o.root], true); } }
+    else if (p === '/test/forget-cids') { for (const o of desk.orders.values()) delete o.cid; for (const c of clients) c.sock.destroy(); }
     else if (p === '/test/received') { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(received)); }
     else if (p === '/test/features') liveFirstOn = LIVE_FIRST && q.get('liveFirst') !== '0';
     else if (p === '/test/delta-push') { for (const c of clients) if (c.ready && c.delta && tapes[c.root]) send(c, deltaTableMsg(c.root, tapes[c.root].n)); }   // 0.6.25
@@ -940,6 +973,7 @@ const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
     return res.end(JSON.stringify({ version: 'fake-0.2.0', clockOffsetMs: 0, fillEventsDelivered: 0, fillsFoundByPolling: 0, lastPollUtcMs: Date.now(), clients: clients.size,
       desk: { postFills: false, deskUrl: flagValue('desk-url') || 'http://localhost:8800', waiting: 0, lastSendFailed: false, lastError: '' },
+      ...(flagValue('pc') ? { bars: { enabled: false, state: 'off', pc: flagValue('pc'), pcFrom: 'config.txt' } } : {}),   // chart 1.62.0: --pc=NAME, /diag's bars.pc (ChartBridge 0.6.10)
       network: { loopbackOnly: true, allowOrigins: ['http://localhost:' + PORT].concat(config.allowOrigins), refusedNotThisPc: refused.notThisPc, refusedOrigin: refused.origin },
       pin: { set: pin.isSet() },
       accounts: ACCOUNTS.map(name => ({ name, connection: 'Connected', executions: fillsSample().filter(f => f.account === name).length, orders: 0, positions: 0, fillEvents: 0, orderEvents: 0, positionEvents: 0 })),

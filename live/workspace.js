@@ -527,7 +527,9 @@ if (typeof document !== 'undefined' && typeof window !== 'undefined' && window.C
   const load = f => new Promise(res => { const sc = document.createElement('script'); sc.src = new URL(f, me ? me.src : location.href).href; sc.onload = sc.onerror = res; document.head.appendChild(sc); });
   // 1.16.0: the Account page (accounts.js and its styles) is optional: a window without it works as before
   if (!document.querySelector('link[href$="accounts.css"]')) { const l = document.createElement('link'); l.rel = 'stylesheet'; l.href = new URL('accounts.css', me ? me.src : location.href).href; document.head.appendChild(l); }
-  Promise.all([['TradeCore', 'trade.js'], ['TicketLink', 'ticket-link.js'], ['AccountsPage', 'accounts.js']].filter(([g]) => !window[g]).map(([, f]) => load(f))).then(() => { if (ok()) page(); else stop(); });
+  /* 1.62.0: the planner (planner-core.js, then planner.js) is optional too: a window without it trades as before */
+  const planner = () => (window.PlannerCore ? Promise.resolve() : load('planner-core.js')).then(() => (window.PlannerPage ? null : load('planner.js')));
+  Promise.all([['TradeCore', 'trade.js'], ['TicketLink', 'ticket-link.js'], ['AccountsPage', 'accounts.js']].filter(([g]) => !window[g]).map(([, f]) => load(f)).concat([planner()])).then(() => { if (ok()) page(); else stop(); });
 })(() => {
 'use strict';
 const W = window.WorkspaceCore, LP = window.LivePrefs, OT = window.OrderTicket, PIN = window.ChartBridgePin || null;
@@ -792,10 +794,11 @@ function syncV3() {
   if (k === v3Key) return;
   v3Key = k; core.setSwitches(sw); deskCheck();
 }
+let planner = null;                                   // 1.62.0: the planner (live/planner.js), mounted in its start guard
 const core = TC.create({
   LP, prefs, pin: PIN, framed: FRAMED, framedReason: 'This page is inside another page (a frame), so it cannot trade. Open ' + location.href + ' directly in its own window.',
   fetch: (u, o) => fetch(u, o),
-  send: obj => { tws.send(JSON.stringify(obj)); if (TC.ORDER_ACTIONS.includes(obj.type)) sentCount++; },   // the one order path
+  send: obj => { tws.send(JSON.stringify(obj)); if (TC.ORDER_ACTIONS.includes(obj.type)) sentCount++; if (planner) planner.sentManual(obj); },   // the one order path; 1.62.0: a manual order on a plan's pair is recorded (an override)
   open: () => !!tws && tws.readyState === 1, sock: () => tws,
   root: () => ticketRoot(),
   lastPrice: () => ticketPrice(ticketRoot()),
@@ -805,7 +808,7 @@ const core = TC.create({
   wantedAccount: () => { const h = holder(); return holds() ? readTicket().account || accountPick() : h && h.account ? h.account : accountPick(); },
   tick: tickOf, served: r => !Object.keys(instruments).length || !!instruments[r], fmt: p => fmtPx(p),
   flash: tnote, later: tlater, destroyed: () => false,
-  changed: () => renderOrders(), armed: on => ticketArmedUi(on),
+  changed: () => renderOrders(), armed: on => { ticketArmedUi(on); if (planner) planner.ticketArmed(on); },   // 1.62.0: the ticket armed again while a plan is open: recorded
   applied: (pick, cameOn) => { syncBars(); if (holds() && core.TR.enabled && (cameOn || pick.missed)) ticketAccountNote(pick); /* None too: it says pick an account */ deskCheck(); renderOrders(); },
   lost: () => {}, syncAccounts: () => syncBars(),
   batch: () => { if (TK.bar) TK.bar.renderBatch(); }, unsent: renderUnsent, positionChanged: () => {},
@@ -819,7 +822,7 @@ const core = TC.create({
     return true;
   },
   dropNoStop: () => dropNoStop(),
-  flattened: r => flattenedHere(r),
+  flattened: r => { flattenedHere(r); if (planner) planner.flattened(r); },   // 1.62.0: a Flatten or Flatten all on a plan's pair: recorded
   /* 1.16.0 (protocol v3): the active Order Strategy goes with each entry while `strategies` is on (OrderStrategies.toWire,
      The Desk's form to ChartBridge's); the switches come from the window's v3 connection (syncV3) */
   strategy: () => { const st = activeStrategy(); return st ? { name: st.name, wire: OS.toWire(st) } : null; },
@@ -837,6 +840,8 @@ const core = TC.create({
   unserved: () => (AF && AF.S.v3 ? new Map(AF.S.accounts.filter(x => x && Array.isArray(x.unserved) && x.unserved.length).map(x => [x.name, x.unserved.filter(n => typeof n === 'string')])) : null),
   confirmGroup: (m, onSend, onCancel) => { if (forwarding || !holds()) return false; askGroup(m, onSend, onCancel); return true; },
 });
+/* 1.62.0: Cut half on a plan's pair is recorded as an override (every way it is pressed calls core.cutHalf) */
+{ const cut0 = core.cutHalf; core.cutHalf = (...a) => { if (planner) planner.override('cut_half', { account: ticketAccount(), root: ticketRoot() }); return cut0(...a); }; }
 /* 1.33.0: the group entry's one confirm (Anthony 2026-10-19): each account's size and dollar risk, or why it sits out; Send sends
    them all (ChartBridge refuses the whole entry if any size changed since). A dialog of the page, as the rules dialog. */
 function askGroup(m, onSend, onCancel) {
@@ -883,7 +888,7 @@ function tconnect() {
     tws = sock;
     sock.onopen = () => { if (sock === tws) tTries = 0; };
     sock.onmessage = ev => { if (sock !== tws) return; let m; try { m = JSON.parse(ev.data); } catch (e) { return; } tmessage(m); };
-    sock.onclose = () => { if (sock !== tws) return; tws = null; if (core.TR.armed) armOffWhy = 'drop'; core.lost('Not connected to ChartBridge.'); tretry(); };
+    sock.onclose = () => { if (sock !== tws) return; tws = null; if (core.TR.armed) armOffWhy = 'drop'; core.lost('Not connected to ChartBridge.'); if (planner) planner.message({ type: 'dropped' }); tretry(); };   // 1.62.0: links forgotten at once
     sock.onerror = () => { /* onclose follows */ };
   }, tretry);
 }
@@ -898,6 +903,7 @@ function tmessage(m) {
       instruments = {};
       for (const i of m.instruments || []) instruments[i.root] = i;
       core.hello(m);
+      if (planner) planner.message(m);                   // 1.62.0: a new generation of order ids: the planner forgets every older link at once
       if (AF) AF.start(bridgeFeatures);                  // 1.16.0: the window's v3 connection (only when ChartBridge speaks v3)
       for (const v of views.values()) if (v.quotes && v.quotes.sync) v.quotes.sync();   // the quote-only markets hello lists
       renderOrders();
@@ -907,9 +913,9 @@ function tmessage(m) {
       /* plan step 3.2: Legion is its own page (legion.html); its link is offered with a ChartBridge that speaks v3 */
       if ($('wsLegion')) $('wsLegion').hidden = !(Array.isArray(m.features) && m.features.includes('v3'));
       return;
-    case 'execs': tfills.clear(); for (const f of m.list || []) if (f && f.id) tfills.set(f.account + '|' + f.id, f); renderOrders(); return;
+    case 'execs': tfills.clear(); for (const f of m.list || []) if (f && f.id) tfills.set(f.account + '|' + f.id, f); renderOrders(); if (planner) planner.message(m); return;
     case 'pcClock': pcClock = pcClockOf(m); syncStats(); return;   // 1.24.0: a new check of this PC's clock (every 5 minutes)
-    case 'exec': if (m.id) { tfills.set(m.account + '|' + m.id, m); renderOrders(); } return;
+    case 'exec': if (m.id) { tfills.set(m.account + '|' + m.id, m); renderOrders(); if (planner) planner.message(m); } return;
     // errors stay until dismissed; a warning (a mistyped maxTicksAway or maxBracketTicks in config.txt, 0.3.7) too, in amber
     /* 2026-10-21 (Anthony): groups.txt that cannot be read is a banner with a sound, never a dialog (GROUPS_ALARM) */
     case 'status': if (m.level === 'error') { if (alertOnce(m.text) && W.GROUPS_ALARM.test(m.text || '')) riskSound(); } else if (m.level === 'warn' && m.text) alertOnce(m.text, true); else if (m.text) note('ChartBridge: ' + m.text, false); return;
@@ -926,6 +932,7 @@ function tmessage(m) {
     fwdCids.delete(m.cid);
   }
   core.message(m);
+  if (planner) planner.message(m);                       // 1.62.0: the planner's orders, refusals and positions (it never throws here)
 }
 /* ChartBridge's error about orders stays until dismissed (the newest three), as on the single chart page */
 const alerts = [];
@@ -1110,7 +1117,7 @@ function pressOffText(root) {
   return 'Armed is off: arm to move or cancel orders.';
 }
 const tradeHost = {
-  pressOff: root => pressOffText(root),
+  pressOff: (root, id) => (planner && id && planner.pressOff(id)) || pressOffText(root),   // 1.62.0: a plan's order says so
   mini: o => mountMini(o),                                      // release 1 (1.6c): the mini ticket indicator on a chart
   /* 1.16.0: an entry-type modifier held on the click (orderTypes on) turns the chart's limit or stop into that entry type,
      on the same side of the market (OrderStrategies.kindFor); Shift+click alone places what it always has */
@@ -3173,7 +3180,7 @@ $('wsMore').addEventListener('click', e => {
    press is kept from the browser over the charts (no Windows auto-scroll). The ring is fixed, never scrolls, stays inside
    the chart (moved in from an edge), and gives the focus back to the page so the hotkeys work at once. */
 const RING_R = 40, RING_BTN = 32, RING_HALF = RING_R + RING_BTN / 2 + 2;
-const RING_NAMES = { trend: 'Trend line: click two points or drag', hline: 'Price line: click a price', zone: 'Zone: click two corners or drag' };
+const RING_NAMES = { trend: 'Trend line: click two points or drag', hline: 'Price line: click a price', zone: 'Zone: click two corners or drag', plan: 'Plan: click the entry price' };   // 1.62.0: plan
 let ring = null;                                         // { v } while the ring is open
 const chartOf = el => { const p = el && el.closest ? el.closest('.ws-panel.chart') : null, v = p ? views.get(p.dataset.id) : null; return v && v.pane ? v : null; };
 function plotRect(v) {
@@ -3204,6 +3211,7 @@ $('wsRing').addEventListener('click', e => {
   if (!b || !r || !views.has(r.v.panel.id)) { closeRing(); return; }
   const c = r.v.pane.chart, what = b.dataset.ring, name = r.v.panel.root + ' ' + W.tfLabel(r.v.panel.tf, r.v.panel.range);
   closeRing();
+  if (what === 'plan') { for (const o of chartViews()) if (o.pane.chart.getTool()) o.pane.chart.setTool(null); if (planner) planner.armTool({ root: r.v.panel.root, chart: c }); else note('The planner did not start in this window: reload it to plan.', true); return; }   // 1.62.0
   if (what === 'clear') { c.clearDrawings(); note('Drawings cleared on ' + name + '.' + (r.v.pane.sharedDrawings && r.v.pane.sharedDrawings() ? ' The other charts\' lines stay.' : ''), false); return; }
   for (const o of chartViews()) if (o !== r.v && o.pane.chart.getTool()) o.pane.chart.setTool(null);   // one armed tool at a time
   c.setTool(what);
@@ -3707,6 +3715,8 @@ window.workspace = { get layout() { return layout; }, panels: () => panels.map(p
   /* 1.36.0: the Agents strip (read only) */
   agentsStrip: () => { const v = stripViews()[0]; return v ? v.strip.state() : null; },
   quoteLast: r => { const x = quoteOf(r); return x ? x.last : null; },
+  /* 1.62.0: the planner (test/planner-smoke.mjs) */
+  planner: () => (planner ? planner.state() : null),
   /* 1.34.0: how many risk alerts sounded in this window (test/flatten-all-smoke.mjs) */
   riskSounds: () => riskSounds };
 
@@ -3819,7 +3829,27 @@ const start = () => {
   const tab = new URLSearchParams(location.search).get('tab');
   if (botDesk && tab === 'bot') startGuard('Bot tab', () => botDesk.showTab(true));
   startGuard('Chart button', syncChartTab);
+  startGuard('Planner', startPlanner);                   // 1.62.0: inside its guard, after the charts and the ticket
 };
+/* 1.62.0 (Anthony 2026-11-21, the planner on the page path): live/planner.js, mounted after the charts and the ticket, inside the
+   start guard: a failure in it never stops the charts or the ticket. Its plans show on every chart of their instrument; its
+   entries go on this window's order connection through TradeCore's sendPlanOrder, from one window per PC (the leader). */
+function startPlanner() {
+  if (FRAMED || !window.PlannerPage || !window.PlannerCore || !window.AccountsPage) return;   // R12: never in a framed window (it cannot trade)
+  const PC = window.PlannerCore;
+  planner = window.PlannerPage.mount({
+    PC, U, core, hub, storage: store, locks, channel: TL.browserChannel(PC.CHANNEL),
+    deskBase: () => window.AccountsPage.deskBase((u, o) => fetch(u, o)), fetch: (u, o) => fetch(u, o),
+    pcName: () => fetch('/diag', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).then(j => (j && j.bars && typeof j.bars.pc === 'string' ? j.bars.pc : '')),
+    charts: () => chartViews().filter(v => v.pane && v.pane.chart).map(v => ({ id: v.panel.id, root: v.panel.root, chart: v.pane.chart, stage: v.body.querySelector('.stage') })),
+    tickOf, pointValue: r => (instruments[r] || {}).pointValue || 0, contract: r => (instruments[r] && typeof instruments[r].name === 'string' ? instruments[r].name : ''),
+    ticketAccount, ticketRoot, holdsTicket: () => holds(), members: a => (core.isGroup(a) ? core.groupMembers(a) : [a]),   // a group's members (its Flatten ends their plans)
+    bracket: r => core.brackets[r] || null, qty: r => core.qtys[r] || 1,
+    accounts: () => core.TR.accounts.slice(), maxQty: r => OT.maxQtyFor(core.TR, r), maxBracketTicks: () => core.TR.maxBracketTicks, orderTypes: () => core.switchOn('orderTypes'),
+    execs: () => [...tfills.values()],
+    note: (t, l) => note(t, !!l, l === 'error' ? 12000 : 6000), alarm: t => alertLoud('Planner: ' + t),
+  });
+}
 /* A window that opens (or reloads) with the ticket in its layout takes it when no other window has it (Anthony
    2026-10-01), Armed off. The same `ifAvailable` lock as any take: two windows opening at once give one holder, and a
    window that finds another holding it never asks, it shows "Ticket is in the other window". */

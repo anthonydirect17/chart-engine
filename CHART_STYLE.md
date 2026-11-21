@@ -569,6 +569,23 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   selected or being drawn) with a crisp 1 device pixel edge at 85%, above the grid and the profile, behind the volume bars,
   levels and candles; its four corners get the drawings' handles when selected. A corner resizes it, an edge moves it (the
   inside only once it is selected, so a pan over a big zone stays a pan); Delete removes it; saved with the chart's drawings.
+- **Plans (1.62.0, the planner; Anthony 2026-11-21):** a planned trade drawn on the chart, apart from the drawings (never saved
+  with them) and from the orders (the engine sends nothing for it). Three lines over a box from where the plan was drawn (its
+  `t0`; with none the plot's last 220 px, the box's left kept at least 160 px from the right edge, room for its labels) to the plot's right edge: the
+  entry in its side's color (1.5 px; solid once submitted, dashed 6/4 while only drawn), the stop in the loss color and target 1
+  in the profit color (1 px, dashed 4/3; 1.5 px while dragged or the plan is selected). The box between the entry and target 1
+  in the profit color and between the entry and the stop in the loss color, at 10% (16% selected, 6% only drawn), behind the
+  candles like a zone. Each line's label at the box's left edge, 10 px mono on the ground at 92% with a border in the line's
+  color (dashed for the stop and target, and for an entry only drawn): "Plan #12 LONG LMT 2  armed" (the host's words),
+  "SL -16t $32", "TP +32t $64  2.0R" (ticks from the entry, dollars with the plan's qty and the point value, reward to risk). With orders or a position on the chart a label ends 130 px short of the plot's right edge (the order labels' gutter), moved
+  left of the box's edge only as far as that needs.
+  A plan armed or working draws at full strength, one submitted at 90%, one only drawn at 80%. Its axis tags are outlined, dashed
+  2/3, in the line's color. While the plan can still be edited (before Arm) each line has the drawings' 7 px square handle at
+  the box's left; a drag moves that line alone (the stop and target stay a tick on their own side of the entry) and the entry
+  carries the stop and target with it, on the tick; Escape takes a drag back; a click selects the plan. A locked plan's line
+  never moves: a press is told to the host once (it says why) and pans as before. The Plan tool: a click on the plot asks the
+  host for a plan at that price. Hit areas: each line within 5 px, inside its box; the orders' come first while order editing
+  is on, then the plans', then the drawings'. Fit stop and target keeps the plans' lines on screen too.
 - **Day labels (1.15.0, a host's charts):** a session's day label closer than 70 px to the last one drawn keeps its divider
   and leaves out its text (4h and 1h bars no longer print days over each other).
 

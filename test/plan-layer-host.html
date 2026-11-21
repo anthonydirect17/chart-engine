@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plan layer (test page)</title>
+<!-- A test page (chart 1.62.0): the engine alone with made-up bars (sample data, not market data), for the plan layer's smoke
+     (test/plan-layer-smoke.mjs). window.chart is the engine; window.heard lists what the plan layer told the host. -->
+<style>
+  :root { color-scheme: dark; }
+  html, body { height: 100%; margin: 0; background: #050506; }
+  #chart { position: absolute; inset: 0; }
+</style>
+</head>
+<body>
+  <div id="chart" tabindex="0"></div>
+  <script src="../src/chart-engine.js"></script>
+  <script>
+    (() => {
+      const CE = window.ChartEngine;
+      /* made-up 1 minute bars around 25,000 (seeded, the same every load) */
+      let seed = 7; const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+      const bars = []; let p = 25000, t = Date.UTC(2026, 10, 20, 9, 30) / 1000;
+      for (let i = 0; i < 160; i++) {
+        const o = p, c = Math.round((p + (rnd() - 0.5) * 12) * 4) / 4, h = Math.max(o, c) + Math.round(rnd() * 8) / 4, l = Math.min(o, c) - Math.round(rnd() * 8) / 4;
+        bars.push({ t, o, h, l, c, v: 100 + Math.round(rnd() * 400) }); p = c; t += 60;
+      }
+      const chart = CE.create(document.getElementById('chart'), { barSeconds: 60, tick: 0.25, precision: 2, pointValue: 2, grid: false });
+      chart.setBars(bars);
+      window.chart = chart; window.bars = bars; window.heard = [];
+      for (const ev of ['planMove', 'planSelect', 'planPressOff', 'planCreate']) chart.on(ev, e => window.heard.push(Object.assign({ ev }, e)));
+    })();
+  </script>
+</body>
+</html>

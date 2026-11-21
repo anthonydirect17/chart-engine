@@ -68,12 +68,55 @@ function check(which, d, oldDesk) {
   return '';
 }
 
+/* chart 1.62.0: the plan log's checks and its <plan> object, as TheDesk's thedesk/plans.py (validate_plan, state_of, plan_view) */
+const PLAN_FIELDS = ['uid', 'pc', 'account', 'root', 'contract', 'side', 'entry_type', 'entry', 'stop', 'target', 'qty', 'tick', 'expiry_min', 'grade', 'setup_name', 'why'];
+function planCheck(d, submit) {
+  if (!d || typeof d !== 'object') return 'send a JSON object';
+  if (submit) {
+    const unknown = Object.keys(d).filter(k => !PLAN_FIELDS.includes(k));
+    if (unknown.length) return 'unknown field(s): ' + unknown.sort().join(', ');
+    if (typeof d.uid !== 'string' || !/^[A-Za-z0-9_-]{6,64}$/.test(d.uid)) return 'uid must be 6 to 64 letters, digits, - or _';
+    if (typeof d.pc !== 'string' || !d.pc) return 'pc is required';
+    if (typeof d.contract !== 'string' || !new RegExp('^' + d.root + ' \\d\\d-\\d\\d$').test(d.contract)) return 'contract must be the ' + d.root + ' contract as NinjaTrader names it';
+    if (d.tick !== undefined && d.tick !== null && d.tick !== 0.25) return 'tick must be 0.25 for ' + d.root;
+  }
+  if (!['MNQ', 'NQ', 'MES', 'ES'].includes(d.root)) return 'root must be one of MNQ, NQ, MES, ES';
+  if (!['long', 'short'].includes(d.side)) return 'side must be long or short';
+  if (!['limit', 'market_on_touch', 'touch_confirm'].includes(d.entry_type)) return 'entry_type must be one of limit, market_on_touch, touch_confirm';
+  for (const k of ['entry', 'stop', 'target']) if (typeof d[k] !== 'number' || Math.abs(d[k] / 0.25 - Math.round(d[k] / 0.25)) > 1e-9) return k + ' must be on the tick grid';
+  const sg = d.side === 'long' ? 1 : -1;
+  if (!((d.entry - d.stop) * sg > 0)) return 'a ' + d.side + '\'s stop must be ' + (sg > 0 ? 'below' : 'above') + ' its entry';
+  if (!((d.target - d.entry) * sg > 0)) return 'a ' + d.side + '\'s target must be ' + (sg > 0 ? 'above' : 'below') + ' its entry';
+  if (!Number.isInteger(d.qty) || d.qty < 1) return 'qty must be a whole number';
+  if (d.expiry_min !== undefined && d.expiry_min !== null && !(Number.isInteger(d.expiry_min) && d.expiry_min >= 1 && d.expiry_min <= 30)) return 'expiry_min must be 1 to 30';
+  if (d.grade !== undefined && d.grade !== null && !['A+', 'A', 'B'].includes(d.grade)) return 'grade must be one of A+, A, B';
+  if (typeof d.account !== 'string' || !d.account) return 'account is required';
+  return '';
+}
+const planValues = d => ({ account: d.account, side: d.side, entry_type: d.entry_type, entry: d.entry, stop: d.stop, target: d.target, qty: d.qty,
+  expiry_min: d.expiry_min === undefined || d.expiry_min === null ? 30 : d.expiry_min, grade: d.grade || 'A+', setup_name: d.setup_name || null, why: d.why || null });
+function planView(v) {
+  const evs = v.events, fi = evs.findIndex(e => e.kind === 'filled');
+  const ENDS = ['cancel', 'expired', 'stop_through', 'missed', 'refused', 'closed', 'ended'], PROGRESS = ['armed', 'touched', 'confirmed', 'sent', 'placed', 'filled'];
+  const end = fi >= 0 ? evs.slice(fi + 1).find(e => e.kind === 'closed' || e.kind === 'ended') : evs.find(e => ENDS.includes(e.kind));
+  let status = 'submitted';
+  for (const e of evs) { const k = e.kind === 'arm' ? 'armed' : e.kind; if (PROGRESS.includes(k) && PROGRESS.indexOf(k) >= PROGRESS.indexOf(status)) status = k; }
+  const arm = evs.find(e => e.kind === 'arm'), sent = evs.find(e => e.kind === 'sent');
+  const exec = []; for (const e of evs) if (e.kind === 'filled') for (const x of e.detail.exec_ids || []) if (!exec.includes(x)) exec.push(x);
+  const flags = []; for (const e of evs) for (const f of e.detail.desk_flags || []) if (!flags.includes(f)) flags.push(f);
+  return Object.assign({ seq: v.seq, uid: v.uid, logged_at_ms: v.logged_at_ms, pc: v.pc, root: v.root, contract: v.contract, tick: v.tick }, v.values, {
+    submitted: v.submitted, status: end ? end.kind : status, live: !end, ended: end ? { kind: end.kind, seq: end.seq, at_ms: end.logged_at_ms } : null,
+    armed_at_ms: arm ? arm.logged_at_ms : null, expires_at_ms: arm ? arm.detail.expires_at_ms : null, entry_cid: sent ? sent.detail.cid || null : null,
+    nt_order_id: (evs.find(e => (e.kind === 'placed' || e.kind === 'filled') && e.detail.nt_order_id) || { detail: {} }).detail.nt_order_id || null,
+    fill_exec_ids: exec, flags, events: evs.map(e => Object.assign({}, e)), row_hash: 'sample' });
+}
+
 export async function startDesk(port, seed) {
   const docs = Object.assign(emptyDocs(), JSON.parse(JSON.stringify(seed || {})));
   const types = JSON.parse(JSON.stringify((seed && seed.types) || [])), accounts = JSON.parse(JSON.stringify((seed && seed.accounts) || []));
   const floors = (seed && seed.floors) || null, league = (seed && seed.league) || null;
   delete docs.types; delete docs.accounts; delete docs.floors; delete docs.league;
-  const desk = { docs, types, accounts, floors, league, tags: [], log: [], down: false, refuseTags: null, bump(which) { docs[which].rev++; }, close: () => new Promise(r => server.close(r)),
+  const desk = { docs, types, accounts, floors, league, tags: [], log: [], down: false, refuseTags: null, plans: [], chain: 0, planFlags: [], noPlans: false, notLive: false, closed: false, expiryMs: 0, bump(which) { docs[which].rev++; }, close: () => new Promise(r => server.close(r)),
     editType(id, change) { const t = types.find(x => x.id === id); Object.assign(t, change, { version: t.version + 1, status: 'not_checked', updated_at: new Date().toISOString() }); } };
   const typeLink = id => { const t = types.find(x => x.id === id); return t ? { id: t.id, firm: t.firm, name: t.name, version: t.version, status: t.status } : null; };
   const server = http.createServer((req, res) => {
@@ -85,6 +128,105 @@ export async function startDesk(port, seed) {
     if (req.method === 'OPTIONS') { if (!cors['Access-Control-Allow-Origin']) { res.writeHead(403); res.end(); return; } res.writeHead(204, cors); res.end(); return; }
     const [urlPath, query] = req.url.split('?');
     /* chart 1.34.0: the Trade tags panel's records (TheDesk POST and GET /api/trade-tags): stored once by id, never changed */
+    /* chart 1.62.0: the planner's plan log as TheDesk's claude/planner-desk answers it (thedesk/plans.py, api/plans_routes.py;
+       docs/API.md "Plans"): POST /api/plans (Submit: exactly its fields, any other a 400; idempotent on uid, the same uid with other
+       values a 409), /{seq}/edit (status submitted only), /{seq}/arm ({uid?, detail?}; expires_at_ms on this clock, Arm + expiry_min
+       or desk.expiryMs; a 409 once armed or ended, or while desk.closed), /{seq}/cancel ({uid?, reason?, detail?}; refused once
+       filled or ended), /{seq}/events ({uid, kind, detail?}: recorded, never refused for state; `filled` needs exec_ids; a second
+       sent of the entry flagged in detail.desk_flags and desk.planFlags); answers { plan, duplicate } (Arm adds expires_at_ms);
+       GET /api/plans?live=1&pc= { live, now_ms, plans }, GET /api/plans/{seq} { plan, links }. desk.noPlans: an older Desk (404);
+       desk.notLive: a Desk that is not the live one (every write a 409). CORS here allows any localhost port (a test page's); The
+       Desk allows its two 8765 origins only. Sample data only. */
+    if (/^\/api\/plans(\/|$)/.test(urlPath)) {
+      if (desk.noPlans) return send(404, { detail: 'Not Found' });
+      const pm = /^\/api\/plans(?:\/(\d+)(?:\/(arm|cancel|edit|events))?)?$/.exec(urlPath);
+      if (!pm) return send(404, { detail: 'Not Found' });
+      const seq = pm[1] ? +pm[1] : null, act = pm[2] || null, P = seq ? desk.plans.find(x => x.seq === seq) : null;
+      const view = v => planView(v);
+      if (req.method === 'GET') {
+        desk.log.push({ method: 'GET', which: 'plans', url: req.url });
+        if (seq) return P ? send(200, { plan: view(P), links: {} }) : send(404, { detail: 'no plan #' + seq });
+        const q = new URLSearchParams(query || '');
+        return send(200, { live: true, now_ms: Date.now(), plans: desk.plans.slice().reverse().map(view).filter(v => (q.get('pc') === null || v.pc === q.get('pc')) && (q.get('live') !== '1' || v.live)) });
+      }
+      if (req.method !== 'POST') return send(405, { detail: 'Method not allowed' });
+      let body = '';
+      req.on('data', c => { body += c; });
+      req.on('end', () => {
+        let d; try { d = body ? JSON.parse(body) : {}; } catch (e) { return send(400, { detail: 'send JSON with Content-Type: application/json' }); }
+        desk.log.push({ method: 'POST', which: 'plans', url: urlPath, body: d });
+        if (desk.notLive) return send(409, { detail: 'This Desk is not the live Desk (THEDESK_LIVE is not set), so A+ calls are not logged or exported here.' });
+        const uidOk = u => typeof u === 'string' && /^[A-Za-z0-9_-]{6,64}$/.test(u);
+        const ev = (v, kind, detail, uid) => { v.events.push({ seq: ++desk.chain, uid: uid || 'desk-' + desk.chain, kind, logged_at_ms: Date.now(), detail: detail || {} }); };
+        const dupOf = (v, uid, kind) => { const e = uid ? v.events.find(x => x.uid === uid) : null; if (!e) return null; return e.kind === kind ? 'dup' : 'clash'; };
+        if (!seq) {
+          const why = planCheck(d, true);
+          if (why) return send(400, { detail: why });
+          const was = desk.plans.find(v => v.uid === d.uid);
+          const vals = planValues(d);
+          if (was) return JSON.stringify(was.values) === JSON.stringify(vals) && was.pc === d.pc ? send(200, { plan: view(was), duplicate: true }) : send(409, { detail: 'uid ' + d.uid + ' is already plan #' + was.seq + ' with other values' });
+          const v = { seq: ++desk.chain, uid: d.uid, pc: d.pc, root: d.root, contract: d.contract, tick: 0.25, logged_at_ms: Date.now(), values: vals, submitted: vals, events: [] };
+          desk.plans.push(v); return send(200, { plan: view(v), duplicate: false });
+        }
+        if (!P) return send(404, { detail: 'no plan #' + seq });
+        const st = view(P);
+        if (act === 'events') {
+          const FACTS = ['sent', 'placed', 'refused', 'touched', 'confirmed', 'filled', 'closed', 'expired', 'stop_through', 'missed', 'override', 'owner', 'ended'];
+          if (Object.keys(d).some(k => !['uid', 'kind', 'detail'].includes(k)) || !uidOk(d.uid)) return send(400, { detail: 'send {"uid": ..., "kind": ..., "detail": {...}}' });
+          if (!FACTS.includes(d.kind)) return send(400, { detail: 'kind must be one of ' + FACTS.join(', ') });
+          const det = Object.assign({}, d.detail || {});
+          if (Object.keys(det).some(k => k.startsWith('desk_'))) return send(400, { detail: 'detail keys starting with desk_ are The Desk\'s own' });
+          if (d.kind === 'filled' && !(Array.isArray(det.exec_ids) && det.exec_ids.length >= 1 && det.exec_ids.length <= 50 && det.exec_ids.every(x => typeof x === 'string' && x))) return send(400, { detail: 'a filled event\'s detail needs exec_ids' });
+          const dup = dupOf(P, d.uid, d.kind);
+          if (dup === 'dup') return send(200, { plan: view(P), duplicate: true });
+          if (dup === 'clash') return send(409, { detail: 'uid ' + d.uid + ' is already another event' });
+          const flags = [];
+          if (d.kind === 'sent' && (det.leg || 'entry') === 'entry') {
+            if (P.events.some(e => e.kind === 'sent' && (e.detail.leg || 'entry') === 'entry')) flags.push('second_sent_entry');
+            if (st.armed_at_ms === null) flags.push('sent_before_arm');
+            else if (st.expires_at_ms !== null && (Number.isInteger(det.at_ms) ? det.at_ms : Date.now()) > st.expires_at_ms) flags.push('sent_after_expiry');   // The Desk judges it on detail.at_ms
+          }
+          if (['sent', 'placed', 'filled'].includes(d.kind) && st.ended) flags.push(d.kind + '_after_end');
+          if (flags.length) { det.desk_flags = flags; desk.planFlags.push({ seq, flags }); }
+          ev(P, d.kind, det, d.uid);
+          return send(200, { plan: view(P), duplicate: false });
+        }
+        if (d.uid !== undefined && d.uid !== null && !uidOk(d.uid)) return send(400, { detail: 'uid must be 6 to 64 letters, digits, - or _' });
+        const dup = dupOf(P, d.uid, act === 'arm' ? 'arm' : act);
+        if (dup === 'dup') return send(200, Object.assign({ plan: view(P), duplicate: true }, act === 'arm' ? { expires_at_ms: view(P).expires_at_ms } : {}));
+        if (dup === 'clash') return send(409, { detail: 'uid ' + d.uid + ' is already another event' });
+        if (act === 'arm') {
+          if (Object.keys(d).some(k => !['uid', 'detail'].includes(k))) return send(400, { detail: 'send {"uid": ..., "detail": {...}} (both optional)' });
+          if (st.ended) return send(409, { detail: 'plan #' + seq + ' already ended (' + st.ended.kind + '): not armed' });
+          if (st.armed_at_ms !== null) return send(409, { detail: 'plan #' + seq + ' is already armed (it expires at ' + st.expires_at_ms + ')' });
+          if (desk.closed) return send(409, { detail: 'CME is closed (the 17:00 to 18:00 break): not armed' });
+          const exp = Date.now() + (desk.expiryMs || P.values.expiry_min * 60000);
+          ev(P, 'arm', Object.assign({ expires_at_ms: exp, expiry_min: P.values.expiry_min }, d.detail && typeof d.detail === 'object' ? { client: d.detail } : {}), d.uid);
+          return send(200, { plan: view(P), duplicate: false, expires_at_ms: exp });
+        }
+        if (act === 'cancel') {
+          if (Object.keys(d).some(k => !['uid', 'reason', 'detail'].includes(k))) return send(400, { detail: 'send {"uid": ..., "reason": ..., "detail": {...}} (all optional)' });
+          if (st.fill_exec_ids.length) return send(409, { detail: 'plan #' + seq + ' is filled: its position is closed with Flatten on the chart, not Cancel' });
+          if (st.ended) return send(409, { detail: 'plan #' + seq + ' already ended (' + st.ended.kind + '): nothing to cancel' });
+          ev(P, 'cancel', d.reason ? { reason: d.reason } : {}, d.uid);
+          return send(200, { plan: view(P), duplicate: false });
+        }
+        if (act === 'edit') {
+          const EDITABLE = ['account', 'side', 'entry_type', 'entry', 'stop', 'target', 'qty', 'expiry_min', 'grade', 'setup_name', 'why'];
+          const bad = Object.keys(d).filter(k => k !== 'uid' && !EDITABLE.includes(k));
+          if (bad.length) return send(400, { detail: 'unknown or fixed field(s): ' + bad.join(', ') });
+          if (st.status !== 'submitted' || st.armed_at_ms !== null) return send(409, { detail: 'plan #' + seq + ' is ' + st.status + ': edit it before Arm, or Cancel it and submit a new one' });
+          const next = Object.assign({}, P.values, d); delete next.uid;
+          const why = planCheck(Object.assign({ root: P.root }, next), false);
+          if (why) return send(400, { detail: why });
+          P.values = planValues(next);
+          ev(P, 'edit', { values: P.values }, d.uid);
+          return send(200, { plan: view(P), duplicate: false });
+        }
+        return send(404, { detail: 'Not Found' });
+      });
+      return;
+    }
     if (urlPath === '/api/trade-tags' && req.method === 'POST') {
       let body = '';
       req.on('data', c => { body += c; });

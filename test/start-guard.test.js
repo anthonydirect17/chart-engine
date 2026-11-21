@@ -44,6 +44,7 @@ function run(broken, tab) {
     'const startAgent = () => { part("startAgent")(); agentDesk = mk("agent"); };\n' +
     'const startLeague = () => { part("startLeague")(); leagueView = mk("league"); };\n' +
     'const startFleet = () => { part("startFleet")(); fleetView = mk("fleet"); };\n' +
+    'const startPlanner = () => { part("startPlanner")(); };\n' +   // 1.62.0: the planner, last
     START + '\nstart();\nreturn START_FAILED;')(...names.map(n => env[n]), part, desk);
   return { ran, notes, errors, buttons, failed };
 }
@@ -51,17 +52,17 @@ function run(broken, tab) {
 test('the start order: the layout, the ticket\'s connection and the ticket first; then each part in its own guard', () => {
   const r = run([]);
   assert.deepStrictEqual(r.ran.slice(0, 3), ['openLayout', 'tconnect', 'autoTake'], 'the charts and the ticket first');
-  assert.deepStrictEqual(r.ran.slice(3), ['startBot', 'bot.layoutChanged', 'bot.chartsChanged', 'startAgent', 'agent.layoutChanged', 'syncChartTab'],
-    'then the Bot tab and the Agent desk, each told the layout the charts opened on, then the Chart button');
+  assert.deepStrictEqual(r.ran.slice(3), ['startBot', 'bot.layoutChanged', 'bot.chartsChanged', 'startAgent', 'agent.layoutChanged', 'syncChartTab', 'startPlanner'],
+    'then the Bot tab and the Agent desk, each told the layout the charts opened on, then the Chart button, then the planner (1.62.0)');
   assert.strictEqual(r.notes.length, 0, 'nothing said when every part starts');
   assert.strictEqual(r.failed.size, 0);
 });
 
 test('one part that throws: the charts, the ticket and every other part still start; it is named once (the Bot tab\'s button hidden)', () => {
-  for (const [part, name, btn] of [['startBot', 'Bot tab', 'wsBotTab'], ['startAgent', 'Agent desk', null]]) {
+  for (const [part, name, btn] of [['startBot', 'Bot tab', 'wsBotTab'], ['startAgent', 'Agent desk', null], ['startPlanner', 'Planner', null]]) {
     const r = run([part]);
     assert.deepStrictEqual(r.ran.slice(0, 3), ['openLayout', 'tconnect', 'autoTake'], part + ': the charts and the ticket started');
-    for (const other of ['startBot', 'startAgent', 'syncChartTab']) assert.ok(r.ran.includes(other), part + ' broken: ' + other + ' still ran');
+    for (const other of ['startBot', 'startAgent', 'syncChartTab', 'startPlanner']) assert.ok(r.ran.includes(other), part + ' broken: ' + other + ' still ran');
     assert.deepStrictEqual([...r.failed.keys()], [name], part + ': only its part failed');
     assert.strictEqual(r.notes.length, 1, part + ': said once');
     assert.match(r.notes[0].t, new RegExp('^The ' + name + ' did not start: the charts and the ticket work; reload this window to try it again\\.$'));
@@ -72,12 +73,12 @@ test('one part that throws: the charts, the ticket and every other part still st
 });
 
 test('every part throws: the charts and the ticket still start, and the rest of start runs to its end', () => {
-  const r = run(['startBot', 'startAgent', 'syncChartTab']);
+  const r = run(['startBot', 'startAgent', 'syncChartTab', 'startPlanner']);
   assert.deepStrictEqual(r.ran.slice(0, 3), ['openLayout', 'tconnect', 'autoTake']);
-  assert.ok(r.ran.includes('syncChartTab'), 'start ran to its end');
-  assert.strictEqual(r.failed.size, 3);
-  assert.strictEqual(r.notes.length, 3, 'each failed part said once');
-  assert.strictEqual(r.notes[2].t, 'The Bot tab, Agent desk and Chart button did not start: the charts and the ticket work; reload this window to try it again.', 'the last note names every part that failed');
+  assert.ok(r.ran.includes('syncChartTab') && r.ran.includes('startPlanner'), 'start ran to its end');
+  assert.strictEqual(r.failed.size, 4);
+  assert.strictEqual(r.notes.length, 4, 'each failed part said once');
+  assert.strictEqual(r.notes[3].t, 'The Bot tab, Agent desk, Chart button and Planner did not start: the charts and the ticket work; reload this window to try it again.', 'the last note names every part that failed');
 });
 
 test('a part that starts but throws when told the layout, or the Bot tab opened from the address, leaves the others', () => {
@@ -90,7 +91,7 @@ test('a part that starts but throws when told the layout, or the Bot tab opened 
 });
 
 test('the guard in the source: every part start, the hello and a layout change go through it; the moved tabs forward to Legion before start', () => {
-  for (const f of ['startBot', 'startAgent']) {
+  for (const f of ['startBot', 'startAgent', 'startPlanner']) {
     const calls = [...ws.matchAll(new RegExp('\\b' + f + '\\b(?!\\s*\\(\\)\\s*\\{)', 'g'))].map(m => ws.slice(ws.lastIndexOf('\n', m.index) + 1, ws.indexOf('\n', m.index)));
     const uses = calls.filter(l => !/^function /.test(l));
     assert.ok(uses.length >= 1, f + ' is called');
