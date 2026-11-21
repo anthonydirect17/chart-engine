@@ -577,7 +577,8 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   in the profit color and between the entry and the stop in the loss color, at 10% (16% selected, 6% only drawn), behind the
   candles like a zone. Each line's label at the box's left edge, 10 px mono on the ground at 92% with a border in the line's
   color (dashed for the stop and target, and for an entry only drawn): "Plan #12 LONG LMT 2  armed" (the host's words),
-  "SL -16t $32", "TP +32t $64  2.0R" (ticks from the entry, dollars with the plan's qty and the point value, reward to risk).
+  "SL -16t $32", "TP +32t $64  2.0R" (ticks from the entry, dollars with the plan's qty and the point value, reward to risk). With orders or a position on the chart a label ends 130 px short of the plot's right edge (the order labels' gutter), moved
+  left of the box's edge only as far as that needs.
   A plan armed or working draws at full strength, one submitted at 90%, one only drawn at 80%. Its axis tags are outlined, dashed
   2/3, in the line's color. While the plan can still be edited (before Arm) each line has the drawings' 7 px square handle at
   the box's left; a drag moves that line alone (the stop and target stay a tick on their own side of the entry) and the entry

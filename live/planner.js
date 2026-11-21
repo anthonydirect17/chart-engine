@@ -22,7 +22,7 @@
  * env { PC, U, core, hub, storage, channel (a TicketLink-style channel or null), locks, deskBase(), fetch, pcName() (a promise),
  *       charts() [{ id, root, chart, stage }], tickOf(root), pointValue(root), contract(root), ticketAccount(), ticketRoot(),
  *       holdsTicket(), bracket(root) { stop, target }, qty(root), accounts(), maxQty(root), maxBracketTicks(), orderTypes(),
- *       execs() [fills], note(text, level), ledger(mark) (BotCore.botFillLedger), now() }
+ *       execs() [fills], note(text, level), alarm(text), now() }
  */
 (function (root) {
 'use strict';
@@ -35,21 +35,21 @@ function mount(env) {
     ok: null, why: 'Asking The Desk for its plan log...', pc: '', desk: PC.deskApi({ base: env.deskBase, fetch: env.fetch }),
     sel: '', offAsk: 0, card: null, cardAt: null, lines: new Map(), plans: new Map(), drafts: new Map(), lead: new Map(),
     hooked: new WeakSet(), drawnKey: new Map(), timers: [], destroyed: false, deskDown: false, notes: [],
+    orderUid: new Map(), claimed: new Set(), lockSeen: new Set(),   // an order's plan (by its page id), exec ids claimed, plans seen armed
   };
   const journal = PC.createJournal(store, now), queue = PC.createQueue(store, now);
-  const ledger = typeof env.ledger === 'function' ? env.ledger(o => !!o && !!PC.uidOfCid(o.cid) && S.plans.has(PC.uidOfCid(o.cid))) : null;
   const say = (text, level) => { S.notes.push(text); if (S.notes.length > 40) S.notes.shift(); if (S.card) cardNote(text, level); else env.note(text, level); };
 
   /* ---------------- the plans every window shows (PlannerCore.createShared) */
   const shared = PC.createShared({ storage: store, channel: env.channel, onMessage: m => {
     if (m.t === 'changed' || m.t === 'stamped') { pull(); if (m.t === 'stamped') refresh(); }
-    if (m.t === 'armOff' && env.holdsTicket() && core.TR.armed) { core.setArmed(false); env.note('Armed turned off: a plan was armed (the planner\'s light lock). Flatten, Flatten all and Cut half still work.', 'warn'); }
+    if (m.t === 'armOff') lightLock();
   } });
   function pull() {
     const s = shared.read();
     S.drafts = new Map(Object.entries(s.drafts));
     S.plans = new Map(Object.entries(s.plans).filter(([, p]) => !S.pc || p.pc === S.pc));
-    draw(); renderCard();
+    lockOnSight(); draw(); renderCard();
   }
   const planList = () => [...S.plans.values()].map(p => Object.assign({}, p, PC.phaseOf({ events: p.events })));
   const getPlan = uid => { const p = S.plans.get(uid); return p ? Object.assign({}, p, PC.phaseOf({ events: p.events })) : null; };
@@ -86,6 +86,8 @@ function mount(env) {
     return S.desk.list(S.pc).then(r => {
       if (r.none) { S.ok = false; S.why = 'The Desk has no plan log (an older Desk): the planner is off.'; draw(); renderCard(); return; }
       if (!r.ok) { S.deskDown = true; if (S.ok === null) S.why = 'The Desk did not answer: the planner waits for it.'; return; }
+      /* R12 finding 11: The Desk says its plan log is not live here (not the live Desk): the planner is off until it says live */
+      if (r.body && r.body.live === false) { if (S.ok !== false) off409(); return; }
       S.ok = true; S.deskDown = false; S.why = '';
       const got = new Map();
       for (const v of (r.body && Array.isArray(r.body.plans) ? r.body.plans : [])) { const p = PC.fromDesk(v); if (p && p.pc === S.pc) got.set(p.uid, p); }
@@ -106,12 +108,23 @@ function mount(env) {
   function line(rootName) {
     let L = S.lines.get(rootName);
     if (L) return L;
-    L = { root: rootName, last: null, at: 0, bars: [], sock: null, ready: false };
+    L = { root: rootName, last: null, at: 0, lastU: 0, lastUAt: 0, firstU: 0, ticks: [], bars: [], sock: null, ready: false };
     S.lines.set(rootName, L);
     try { L.sock = env.hub.open(rootName); } catch (e) { return L; }
     L.sock.onmessage = ev => {
       const m = ev.message; if (!m || m.root !== rootName) return;
-      if (m.type === 'tick' && isFinite(+m.p)) { L.last = +m.p; L.at = now(); onTrade(rootName, +m.p, isFinite(+m.u) && +m.u > 0 ? +m.u : now()); }
+      if (m.type === 'tick' && isFinite(+m.p)) {
+        /* R12 finding 2: a trade's own time (u) only; one older than the newest seen is a replay and is dropped, so the last price
+           and the watches never go back in time (the same trade again changes nothing) */
+        const u = +m.u;
+        if (!(u > 0) || u < L.lastU) return;
+        L.lastU = u; L.lastUAt = now(); L.last = +m.p; L.at = now();
+        if (!L.firstU) L.firstU = u;
+        /* the last 5 minutes of trades: a plan armed meanwhile is watched from its Arm, trade by trade (resume) */
+        L.ticks.push({ u, p: +m.p });
+        if (L.ticks.length > 4000 || (L.ticks.length > 64 && L.ticks[0].u < u - 300000)) L.ticks.splice(0, Math.max(1, L.ticks.findIndex(t => t.u >= u - 300000)));
+        onTrade(rootName, +m.p, u);
+      }
       else if (m.type === 'ready') L.ready = true;                 // the history is whole: a resume may read it
       else if (m.type === 'history' && Array.isArray(m.bars)) {
         const off = (U.zoneSeconds(now() / 1000) - now() / 1000) * 1000;   // New York wall time to UTC
@@ -199,7 +212,7 @@ function mount(env) {
     const d = S.drafts.get(S.sel), p = d ? null : getPlan(S.sel), it = d || p;
     if (!it || !S.cardAt || !S.cardAt.isConnected) { if (S.card) { S.card.remove(); S.card = null; } return; }
     const phase = d ? 'draft' : p.phase, open = phase === 'draft' || phase === 'submitted', off = PC.offIn(store);
-    const key = JSON.stringify([it, phase, off, env.accounts()]);
+    const key = JSON.stringify([it, phase, off, env.accounts(), !!(p && phase === 'ended' && sentOf(p) && entryOrderOf(p))]);   // a cancel under way shows
     if (S.card && S.card.parentElement === S.cardAt && S.card.dataset.key === key && !force) return;
     const keepNote = S.card ? S.card.querySelector('[data-pl="note"]').textContent : '';
     if (!S.card) { S.card = document.createElement('section'); S.card.className = 'obar tk-bar mini-tk pl-card'; S.card.setAttribute('aria-label', 'Plan'); S.card.addEventListener('click', onCard); S.card.addEventListener('change', onCardChange); }
@@ -211,7 +224,8 @@ function mount(env) {
     const dis = open && !off ? '' : ' disabled';
     const title = (p ? 'Plan #' + p.seq : 'New plan') + ' · ' + it.root;
     const words = phase === 'draft' ? 'Drawn, not submitted' : phase === 'submitted' ? 'Submitted: Arm sends it' : phase === 'armed' ? 'Armed' + (p.expiresAt ? ': ends ' + new Date(p.expiresAt).toLocaleTimeString() : '')
-      : phase === 'working' ? 'Working at ChartBridge' : phase === 'filled' ? 'Filled: its stop and target are in ChartBridge. Flatten closes it.' : 'Ended: ' + (PC.WHY_WORDS[p.why] || p.why);
+      : phase === 'working' ? 'Working at ChartBridge' : phase === 'filled' ? 'Filled: its stop and target are in ChartBridge. Flatten closes it.'
+      : sentOf(p) && entryOrderOf(p) ? 'Cancelling: its entry is being taken off at ChartBridge' : 'Ended: ' + (PC.WHY_WORDS[p.why] || p.why);
     S.card.innerHTML = `<div class="tk-row mt-head"><span class="mt-root">PLAN</span><span class="pl-title" data-pl="title">${esc(title)}</span><span class="mt-fill"></span><button type="button" class="mt-ic" data-pl="close" data-keep aria-label="Close the plan card" title="Close the card (the plan stays)">&#x2715;</button></div>
       <div class="tk-row pl-row"><span class="seg sans pl-side" role="group" aria-label="Side">${['long', 'short'].map(s => `<button type="button" data-pl="side" data-v="${s}" aria-pressed="${it.side === s}"${dis}>${s === 'long' ? 'Long' : 'Short'}</button>`).join('')}</span>
         <select class="acct-sel pl-type" data-pl="type" aria-label="Entry type"${dis}>${PC.ENTRY_TYPES.map(t => `<option value="${t}"${t === it.entryType ? ' selected' : ''}>${esc(PC.ENTRY_WORDS[t])}</option>`).join('')}</select></div>
@@ -283,109 +297,186 @@ function mount(env) {
     if (closedWhy) { cardNote(closedWhy, 'warn'); return; }
     const why = PC.validate(p, ctxOf(p.root)) || (core.readyPlan(p) ? 'not armed: ' + core.readyPlan(p) : '');
     if (why) { cardNote('Not armed: ' + why.replace(/^not armed: /, ''), 'warn'); return; }
-    const ent = PC.entryFor(p, lastOf(p.root), env.orderTypes());
+    const last = lastOf(p.root), ent = PC.entryFor(p, last, env.orderTypes());
     if (ent.refuse) { cardNote(ent.refuse, 'warn'); return; }
+    /* R12 finding 5: the entry is fixed here, at Arm, and kept with the arm fact; the leader sends exactly this */
+    const armUid = PC.newUid();
     cardNote('Arming at The Desk...', '');
-    S.desk.arm(p.seq, PC.newUid()).then(r => {
-      if (r.notLive) { off409(); cardNote('Not armed: ' + S.why, 'error'); return; }
-      if (!r.ok) { cardNote(r.status === 0 ? 'The Desk did not answer: not armed.' : 'Not armed: ' + r.why + '.', 'error'); return; }
+    const armed = (r, how) => {
       const got = takePlan(r);
-      if (!got || got.phase !== 'armed') { cardNote('The Desk\'s answer did not show the plan armed: not armed here.', 'error'); refresh(); return; }
-      const exp = got.expiresAt;
-      /* the light lock: the ticket's Armed goes off (here, and in the ticket's window) */
-      if (env.holdsTicket() && core.TR.armed) core.setArmed(false);
-      shared.tell({ t: 'armOff' }); shared.tell({ t: 'stamped', uid }); pull();
-      cardNote('Plan #' + p.seq + ' armed' + (exp ? ' until ' + new Date(exp).toLocaleTimeString() : '') + '. The ticket\'s Armed is off; Flatten still works.', '');
+      if (!got || got.phase !== 'armed' || !got.entryKind) { cardNote('The Desk\'s answer did not show the plan armed: not armed here.', 'error'); refresh(); return; }
+      lightLock(); shared.tell({ t: 'armOff' }); shared.tell({ t: 'stamped', uid }); pull();
+      cardNote('Plan #' + p.seq + ' armed' + (got.expiresAt ? ' until ' + new Date(got.expiresAt).toLocaleTimeString() : '') + (how || '') + '. The ticket\'s Armed is off; Flatten still works.', '');
       lead();
+    };
+    S.desk.arm(p.seq, armUid, PC.armDetail(ent, last)).then(r => {
+      if (r.notLive) { off409(); cardNote('Not armed: ' + S.why, 'error'); return; }
+      if (r.ok) { armed(r); return; }
+      if (r.status !== 0) { cardNote('Not armed: ' + r.why + '.', 'error'); return; }
+      /* R12 finding 3: no answer: read the plan back before saying anything (the Arm may have been stamped) */
+      cardNote('The Desk did not answer the Arm: reading the plan back...', 'warn');
+      S.desk.get(p.seq).then(g => {
+        const back = g.ok && g.body ? PC.fromDesk(g.body.plan) : null;
+        if (back && back.phase === 'armed') { armed(g, ' (read back after The Desk did not answer)'); return; }
+        if (back) { takePlan(g); pull(); cardNote('The Desk did not answer: not armed.', 'error'); return; }
+        cardNote('The Desk did not answer the Arm or the read back: it may be armed. The card shows it as The Desk says once it answers.', 'error'); refresh();
+      });
     });
   }
   function cancel(uid) {
     if (S.drafts.has(uid)) { shared.change(s => { delete s.drafts[uid]; }); S.sel = ''; pull(); return; }
     const p = getPlan(uid); if (!p || p.phase === 'filled' || p.phase === 'ended') return;
-    /* the working entry goes at once, from this window (any window may cancel by id); The Desk stamps the cancel */
-    const o = workingOf(p);
+    /* the working entry goes at once, from this window (any window may cancel by id); the leader keeps at it until ChartBridge
+       says it is gone (R12 finding 1) */
+    const o = entryOrderOf(p), wasSent = sentOf(p);
     if (o) { const r = core.cancelPlanOrder(o.id, p); if (!r.sent) cardNote('The entry\'s cancel was not sent: ' + r.why + ' Cancel it in NinjaTrader, or Flatten.', 'error'); }
+    const said = () => (wasSent && entryOrderOf(p) ? 'Cancelling plan #' + p.seq + ': its entry is being taken off at ChartBridge.' : 'Plan #' + p.seq + ' cancelled.');
     S.desk.cancel(p.seq, PC.newUid(), 'Cancel on the plan card').then(r => {
-      if (r.ok) { takePlan(r); shared.change(s => { const q = s.plans[uid]; if (q) q.endedAt = now(); }); shared.tell({ t: 'stamped', uid }); pull(); cardNote('Plan #' + p.seq + ' cancelled.', ''); return; }
-      if (r.status === 0) { fact(uid, 'cancel', { reason: 'Cancel on the plan card (The Desk did not answer at first)' }); cardNote('Plan #' + p.seq + ' cancelled here; The Desk did not answer, it is told when it does.', 'warn'); return; }
+      if (r.ok) { takePlan(r); shared.change(s => { const q = s.plans[uid]; if (q) q.endedAt = now(); }); shared.tell({ t: 'stamped', uid }); pull(); cardNote(said(), ''); return; }
+      if (r.status === 0) { fact(uid, 'cancel', { reason: 'Cancel on the plan card (The Desk did not answer at first)' }); cardNote(said() + ' The Desk did not answer; it is told when it does.', 'warn'); return; }
       cardNote('The Desk refused the cancel: ' + r.why + '.', 'error');
     });
   }
-  const workingOf = p => [...core.TR.orders.values()].find(o => o && o.cid === PC.entryCid(p.uid) && (o.state === 'working' || o.state === 'partFilled' || o.state === 'accepted')) || null;
+  const isWorking = o => !!o && (o.state === 'working' || o.state === 'partFilled' || o.state === 'accepted');
+  /* was the plan's entry sent (this browser's journal, or The Desk's sent fact)? { cid, at } or null */
+  const sentOf = p => journal.sentOf(p.uid) || (() => { const e = (p.events || []).find(x => x.kind === 'sent' && (!x.detail || (x.detail.leg || 'entry') === 'entry')); return e ? { cid: (e.detail && e.detail.cid) || PC.entryCid(p.uid), at: e.detail && isFinite(+e.detail.at_ms) ? +e.detail.at_ms : e.at || 0 } : null; })();
+  /* R12 finding 1: the plan's working entry: by the id the leader follows, by its cid, or (after a ChartBridge restart, the cid
+     gone) by its account, root, side, kind fixed at Arm, price and qty, never an order another plan follows */
+  function entryOrderOf(p) {
+    const ws = [...core.TR.orders.values()].filter(isWorking), st = S.lead.get(p.uid);
+    let o = (st && st.orderId && ws.find(x => x.id === st.orderId)) || ws.find(x => x.cid === PC.entryCid(p.uid));
+    if (!o && sentOf(p)) {
+      const kinds = p.entryKind === 'market_on_confirm' ? ['market'] : p.entryKind ? [p.entryKind] : [];
+      o = ws.find(x => !(S.orderUid.has(x.id) && S.orderUid.get(x.id) !== p.uid) && !(x.cid && x.cid !== PC.entryCid(p.uid)) && x.account === p.account && x.root === p.root &&
+        x.side === (p.side === 'short' ? 'sell' : 'buy') && kinds.includes(x.kind) && (x.kind === 'market' || Math.abs(+x.price - p.entry) < 1e-9) && +x.qty === p.qty &&
+        (x.role === 'entry' || x.role === 'other' || !x.role)) || null;
+    }
+    if (o) { S.orderUid.set(o.id, p.uid); if (st) st.orderId = o.id; }
+    return o || null;
+  }
+  /* R12 finding 2 and 6: the newest trade's own time per instrument, run on from it: the clock a minute's close is judged on */
+  const tradeNow = r => { const L = S.lines.get(r); return L && L.lastU > 0 ? L.lastU + Math.max(0, now() - L.lastUAt) : now(); };
+  /* R12 finding 3: the light lock whenever a plan is first seen armed in this window (whichever window pressed Arm) */
+  function lightLock() { if (env.holdsTicket() && core.TR.armed) { core.setArmed(false); env.note('Armed turned off: a plan is armed (the planner\'s light lock). Flatten, Flatten all and Cut half still work.', 'warn'); } }
+  function lockOnSight() {
+    for (const p of planList()) {
+      if (!['armed', 'working'].includes(p.phase) || S.lockSeen.has(p.uid)) continue;
+      S.lockSeen.add(p.uid); lightLock();
+    }
+  }
 
-  /* ---------------- the leader: sends, watches, resumes (only the window holding the lock) */
+  /* ---------------- the leader: sends, watches, resumes, finishes cancels (only the window holding the lock) */
   const leader = PC.createLeader({ locks: env.locks, onLead: () => { for (const st of S.lead.values()) st.resumed = false; lead(); } });
-  const LS = uid => { let st = S.lead.get(uid); if (!st) S.lead.set(uid, st = { resumed: false, watch: null, orderId: '', placed: false, filled: false, cancelling: false, lastPrice: null, lastState: '' }); return st; };
+  const LS = uid => { let st = S.lead.get(uid); if (!st) S.lead.set(uid, st = { resumed: false, watch: null, orderId: '', placed: false, filled: false, lastPrice: null, posSeen: false, resumedFilled: false, ntOrder: '', cancelAt: 0, cancelTries: 0, cancelDone: false }); return st; };
   let snapWas = false;
   function lead() {
     /* ChartBridge's whole snapshot again after a drop or a restart: every open plan is reconciled again (never sent again) */
     const snap = !!core.TR.snapReady;
-    if (snap && !snapWas) for (const st of S.lead.values()) st.resumed = false;
+    if (snap && !snapWas) for (const st of S.lead.values()) { st.resumed = false; st.cancelDone = false; }
     snapWas = snap;
     if (!leader.isLeader() || !S.pc || S.ok !== true) return;
     for (const p of planList()) {
-      if (!['armed', 'working', 'filled'].includes(p.phase)) { S.lead.delete(p.uid); continue; }
+      if (p.phase === 'ended') { finishCancel(p); continue; }
+      if (!['armed', 'working', 'filled'].includes(p.phase)) continue;
       const st = LS(p.uid);
       /* a resume waits for ChartBridge's whole snapshot, and for an armed plan with nothing sent, the minutes since Arm too */
-      if (!st.resumed) { if (!core.TR.snapReady || !core.TR.enabled || (p.phase === 'armed' && !journal.sentOf(p.uid) && !line(p.root).ready)) continue; resume(p, st); continue; }
+      if (!st.resumed) { if (!core.TR.snapReady || !core.TR.enabled || (p.phase === 'armed' && !sentOf(p) && !line(p.root).ready)) continue; resume(p, st); continue; }
       step(p, st);
     }
+  }
+  /* R12 finding 1: a plan that ended with its entry sent and not filled: its entry is cancelled until ChartBridge says it is gone */
+  function finishCancel(p) {
+    const st = LS(p.uid);
+    if (st.cancelDone || st.filled || !sentOf(p) || (p.events || []).some(e => e.kind === 'filled') || !core.TR.snapReady) return;
+    const o = entryOrderOf(p);
+    if (!o) { if (now() - (sentOf(p).at || 0) > 30000) st.cancelDone = true; return; }   // gone (a fresh send may not show yet)
+    if (now() - st.cancelAt < 2000) return;
+    st.cancelAt = now(); st.cancelTries++;
+    const r = core.cancelPlanOrder(o.id, p);
+    if (st.cancelTries === 5) alarm('Plan #' + p.seq + ' ended, but its entry ' + o.id + ' is still working after 5 cancels' + (r.sent ? '' : ' (' + r.why + ')') + ': cancel it in NinjaTrader, or Flatten.');
   }
   function resume(p, st) {
     st.resumed = true; st.watch = null; st.unknown = false;
     const L = line(p.root);
-    const r = PC.reconcile(p, { now: now(), tick: p.tick || env.tickOf(p.root), journal: journal.sentOf(p.uid), orders: [...core.TR.orders.values()], execs: env.execs(), bars: L.bars });
+    /* armed while this window saw the trades (after its first live trade): the trades since Arm only, fed to the watch one by one
+       (a minute bar would count the trades before Arm in its minute). Armed before that: the minutes since Arm that began before
+       its first live trade too (the careful side: a touch there is counted), then the trades */
+    const bars = L.firstU && isFinite(p.armedAt) && p.armedAt >= L.firstU ? [] : L.firstU ? L.bars.filter(b => b.t < L.firstU) : L.bars;   // armed while this window watched: its trades only
+    const r = PC.reconcile(p, { now: now(), tick: p.tick || env.tickOf(p.root), journal: journal.sentOf(p.uid), orders: [...core.TR.orders.values()], execs: env.execs(), bars });
     if (r.act === 'expired' || r.act === 'stop_through' || r.act === 'missed') { fact(p.uid, r.act, { why: r.why, on: 'resume' }); say('Plan #' + p.seq + ': ' + r.why + '.', 'warn'); return; }
-    if (r.act === 'resume_working') { st.orderId = r.id; st.placed = true; watchFor(p, st, true); return; }
-    if (r.act === 'cancel_expired') { st.orderId = r.id; core.cancelPlanOrder(r.id, p); fact(p.uid, 'expired', { late_ms: r.lateMs, on: 'resume', id: r.id }); say('Plan #' + p.seq + ' had expired while no window watched it: its entry is cancelled now.', 'warn'); return; }
-    if (r.act === 'filled') { if (p.phase !== 'filled') fact(p.uid, 'filled', { exec_ids: r.execs, nt_order_id: r.order, price: r.price, qty: r.qty, on: 'resume' }); st.filled = true; return; }
+    if (r.act === 'resume_working') { st.orderId = r.id; S.orderUid.set(r.id, p.uid); st.placed = true; watchFor(p, st, true); return; }
+    if (r.act === 'cancel_expired') { st.orderId = r.id; S.orderUid.set(r.id, p.uid); core.cancelPlanOrder(r.id, p); st.cancelAt = now(); fact(p.uid, 'expired', { late_ms: r.lateMs, on: 'resume', id: r.id }); say('Plan #' + p.seq + ' had expired while no window watched it: its entry is cancelled now.', 'warn'); return; }
+    if (r.act === 'filled') { if (p.phase !== 'filled') { for (const id of r.execs) S.claimed.add(id); fact(p.uid, 'filled', { exec_ids: r.execs, nt_order_id: r.order, price: r.price, qty: r.qty, on: 'resume' }); } st.filled = true; st.resumedFilled = true; return; }
+    if (r.act === 'none' && p.phase === 'filled') { st.filled = true; st.resumedFilled = true; return; }
     if (r.act === 'unknown') { if (!p.events.some(e => e.kind === 'owner' && e.detail && e.detail.what === 'unknown')) fact(p.uid, 'owner', { what: 'unknown', why: r.why }); alarm('Plan #' + p.seq + ': ' + r.why); st.unknown = true; return; }
-    if (r.act === 'resume') watchFor(p, st, false);
+    if (r.act === 'resume') {
+      watchFor(p, st, false);
+      for (const t of L.ticks) if (isFinite(p.armedAt) && t.u >= p.armedAt) { for (const f of st.watch.trade(t.p, t.u)) act(getPlan(p.uid) || p, st, f); if (st.watch.state().done) break; }
+    }
   }
   function alarm(text) { say(text, 'error'); if (typeof env.alarm === 'function') env.alarm(text); }
   function watchFor(p, st, sent) {
-    st.watch = PC.createWatch(p, { tick: p.tick || env.tickOf(p.root), expiresAt: p.expiresAt, sent, touched: (p.events.find(e => e.kind === 'touched') || {}).detail ? Math.floor(p.events.find(e => e.kind === 'touched').at / 60000) : null });
+    const t = p.events.find(e => e.kind === 'touched');
+    st.watch = PC.createWatch(p, { tick: p.tick || env.tickOf(p.root), expiresAt: p.expiresAt, sent, touched: t && isFinite(+t.at) ? Math.floor(+t.at / 60000) : null });
     line(p.root);
   }
   function step(p, st) {
     if (st.unknown) return;
     if (p.phase === 'filled') { closedYet(p, st); return; }
-    if (!st.watch) watchFor(p, st, !!journal.sentOf(p.uid));
-    const sent = journal.sentOf(p.uid);
-    if (p.phase === 'armed' && !sent && p.entryType !== 'touch_confirm') send(p, st, null);
-    for (const f of st.watch.time(now())) act(p, st, f);
+    if (p.phase === 'working') linkFills(p, st);
+    if (!st.watch) watchFor(p, st, !!sentOf(p));
+    /* R12 finding 1: expiry, a minute's close and the stop traded through are looked at BEFORE anything is sent */
+    for (const f of st.watch.time(tradeNow(p.root))) act(p, st, f);
+    const q = getPlan(p.uid);
+    if (!q || q.phase !== 'armed' || sentOf(q) || q.entryType === 'touch_confirm') return;
+    const last = lastOf(q.root), tick = q.tick || env.tickOf(q.root);
+    if (last !== null && PC.throughStop(q, last, tick)) { act(q, st, { kind: 'stop_through', at: now(), price: last }); return; }
+    send(q, st, false);
   }
-  function send(p, st, kindNow) {
-    /* Planner off (this browser): no entry is sent; an armed plan waits (it still expires or ends at its stop), a confirmation
-       that confirms meanwhile is refused, never taken late */
+  /* the entry fixed at Arm, sent once (the journal first). confirm: the confirmation's market order */
+  function send(p, st, confirm) {
+    const tick = p.tick || env.tickOf(p.root), last = lastOf(p.root);
+    const refuse = why => { fact(p.uid, 'refused', { why, by: 'page' }); say('Plan #' + p.seq + ' not sent: ' + why + ' The plan ends.', 'warn'); };
+    /* Planner off (this browser): no entry is sent; an armed plan waits (it still expires, ends at its stop, or is missed if its
+       line is touched meanwhile); a confirmation that confirms meanwhile ends refused, never taken late */
     if (PC.offIn(store)) {
-      if (kindNow) { fact(p.uid, 'refused', { why: 'Planner off', by: 'page' }); say('Plan #' + p.seq + ' confirmed while the planner is off: not sent.', 'warn'); }
+      if (confirm) refuse('the planner is off in this browser.');
       else if (st.lastWhy !== 'off') { st.lastWhy = 'off'; say('Plan #' + p.seq + ' waits: the planner is off in this browser.', 'warn'); }
       return;
     }
-    const tick = p.tick || env.tickOf(p.root), last = lastOf(p.root);
-    const ent = kindNow ? { kind: kindNow, price: null } : PC.entryFor(p, last, env.orderTypes());
-    if (ent.refuse) { fact(p.uid, 'refused', { why: ent.refuse, by: 'page' }); say('Plan #' + p.seq + ' not sent: ' + ent.refuse, 'warn'); return; }
-    const b = PC.bracketFor(p, ent.kind, last, tick, env.maxBracketTicks());
-    if (b.refuse) { fact(p.uid, 'refused', { why: b.refuse, by: 'page' }); say('Plan #' + p.seq + ' not sent: ' + b.refuse, 'warn'); return; }
+    const kind = confirm ? 'market' : p.entryKind;
+    if (!kind || kind === 'market_on_confirm' && !confirm) { refuse('its entry was not fixed at Arm.'); return; }
+    const price = kind === 'market' ? null : p.entry;
+    const b = PC.bracketFor(p, kind, last, tick, env.maxBracketTicks());
+    if (b.refuse) { refuse(b.refuse); return; }
     const why = core.readyPlan(p);
-    if (why) { if (st.lastWhy !== why) { st.lastWhy = why; say('Plan #' + p.seq + ' waits: ' + why, 'warn'); } return; }
+    if (why) {
+      /* R12 finding 8: a confirmation that cannot be sent now ends refused; a resting entry waits (a touch meanwhile: missed) */
+      if (confirm) { refuse(why); return; }
+      if (st.lastWhy !== why) { st.lastWhy = why; say('Plan #' + p.seq + ' waits: ' + why, 'warn'); }
+      return;
+    }
     const cid = PC.entryCid(p.uid);
     if (!journal.mark(p.uid, cid)) { st.unknown = true; alarm('Plan #' + p.seq + ': its entry could not be written to this browser\'s send journal (or it was sent already): not sent.'); return; }
-    const r = core.sendPlanOrder({ uid: p.uid, account: p.account, root: p.root, side: p.side, kind: ent.kind, qty: p.qty, price: ent.price === null ? undefined : ent.price, bracket: b }, 'entry');
+    const r = core.sendPlanOrder({ uid: p.uid, account: p.account, root: p.root, side: p.side, kind, qty: p.qty, price: price === null ? undefined : price, bracket: b }, 'entry');
     if (!r.sent) { fact(p.uid, 'refused', { why: r.why, by: 'page' }); say('Plan #' + p.seq + ' not sent: ' + r.why, 'error'); return; }
     if (st.watch) st.watch.sent();
-    fact(p.uid, 'sent', { leg: 'entry', cid, kind: ent.kind, price: ent.price, qty: p.qty, bracket_ticks: b, last });
-    say('Plan #' + p.seq + ': ' + (p.side === 'short' ? 'SELL ' : 'BUY ') + ent.kind.toUpperCase() + ' ' + p.qty + ' ' + p.root + (ent.price !== null ? ' at ' + ent.price : '') + ' sent with ' + b.stop + ' / ' + b.target + ' ticks, on ' + p.account + '.', '');
+    fact(p.uid, 'sent', { leg: 'entry', cid, kind, price, qty: p.qty, bracket_ticks: b, last, at_ms: Date.now() });
+    say('Plan #' + p.seq + ': ' + (p.side === 'short' ? 'SELL ' : 'BUY ') + kind.toUpperCase() + ' ' + p.qty + ' ' + p.root + (price !== null ? ' at ' + price : '') + ' sent with ' + b.stop + ' / ' + b.target + ' ticks, on ' + p.account + '.', '');
   }
   function act(p, st, f) {
-    if (f.kind === 'touched') { fact(p.uid, 'touched', { price: f.price }); return; }
-    if (f.kind === 'confirmed') { fact(p.uid, 'confirmed', { close: f.close, minute_ms: f.minute }); if (!journal.sentOf(p.uid)) send(p, st, 'market'); return; }
+    if (f.kind === 'touched') {
+      if (p.entryType === 'touch_confirm') { fact(p.uid, 'touched', { price: f.price }); return; }
+      /* R12 finding 5: a resting entry not sent yet whose line was touched (the planner off, or not ready): missed, never late */
+      if (!sentOf(p) && getPlan(p.uid) && getPlan(p.uid).phase === 'armed') { fact(p.uid, 'missed', { why: 'the line was touched before its entry could be sent', price: f.price }); say('Plan #' + p.seq + ' missed: its line was touched before its entry could be sent. It is not taken late.', 'warn'); }
+      return;
+    }
+    if (f.kind === 'confirmed') { fact(p.uid, 'confirmed', { close: f.close, minute_ms: f.minute }); if (!sentOf(p)) send(getPlan(p.uid) || p, st, true); return; }
     if (f.kind === 'stop_through' || f.kind === 'expired') {
-      const o = workingOf(p);
-      if (o) { const r = core.cancelPlanOrder(o.id, p); if (!r.sent) alarm('Plan #' + p.seq + ' ' + f.kind.replace('_', '-') + ', but its entry\'s cancel was not sent: ' + r.why + ' Cancel it in NinjaTrader.'); }
+      const o = entryOrderOf(p);
+      if (o) { const r = core.cancelPlanOrder(o.id, p); st.cancelAt = now(); if (!r.sent) alarm('Plan #' + p.seq + ' ' + f.kind.replace('_', '-') + ', but its entry\'s cancel was not sent: ' + r.why + ' It is tried again; cancel it in NinjaTrader if it stays.'); }
       fact(p.uid, f.kind, { price: f.price, id: o ? o.id : '' });
-      say('Plan #' + p.seq + ' ' + (f.kind === 'expired' ? 'expired' : 'ended: price went through the stop') + (o ? ': its entry is cancelled.' : '.'), 'warn');
+      say('Plan #' + p.seq + ' ' + (f.kind === 'expired' ? 'expired' : 'ended: price went through the stop') + (o ? ': its entry is being cancelled.' : '.'), 'warn');
     }
   }
   function onTrade(r, price, ms) {
@@ -394,32 +485,62 @@ function mount(env) {
       if (p.root !== r || !['armed', 'working'].includes(p.phase)) continue;
       const st = S.lead.get(p.uid);
       if (!st || !st.resumed || !st.watch || st.unknown) continue;
-      for (const f of st.watch.trade(price, ms)) act(p, st, f);
+      for (const f of st.watch.trade(price, ms)) act(getPlan(p.uid) || p, st, f);
     }
   }
+  /* R12 finding 9: closed only once the position was seen open after the fill (or the plan was filled before this session), then flat */
   function closedYet(p, st) {
     const pos = core.TR.positions.get(p.account + '|' + p.root);
-    if (core.TR.snapReady && (!pos || !pos.qty) && !p.events.some(e => e.kind === 'closed')) fact(p.uid, 'closed', {});
+    if (pos && pos.qty) { st.posSeen = true; return; }
+    if (core.TR.snapReady && (st.posSeen || st.resumedFilled) && !p.events.some(e => e.kind === 'closed')) fact(p.uid, 'closed', {});
+  }
+  /* R12 finding 10: the entry's fills, linked by NinjaTrader's order id: the first fill on the plan's account, root and side after
+     the send (once ChartBridge shows the entry filling) names the order, and every fill of that order is the entry's. The plan is
+     filled when they cover its qty, or when the entry is no longer working and some filled. BotCore's ledger is left as it is. */
+  function linkFills(p, st) {
+    if (st.filled || (p.events || []).some(e => e.kind === 'filled')) { st.filled = true; return; }
+    const s0 = sentOf(p); if (!s0) return;
+    const side = p.side === 'short' ? 'sell' : 'buy', all = env.execs();
+    const o = st.orderId ? core.TR.orders.get(st.orderId) : null;
+    if (!st.ntOrder) {
+      if (!(st.entryFilled > 0)) return;                               // ChartBridge has not shown the entry filling yet
+      const first = all.filter(f => f && f.account === p.account && f.root === p.root && f.side === side && !S.claimed.has(f.id) && +f.u >= (s0.at || 0) - 2000 && f.order)
+        .sort((a, b) => +a.u - +b.u)[0];
+      if (!first) return;
+      st.ntOrder = first.order;
+    }
+    const mine = all.filter(f => f && f.order === st.ntOrder && f.account === p.account && f.root === p.root);
+    const got = mine.reduce((a, f) => a + (+f.qty || 0), 0);
+    if (!(got >= p.qty || (got > 0 && !isWorking(o)))) return;
+    st.filled = true;
+    for (const f of mine) S.claimed.add(f.id);
+    const px = mine.reduce((a, f) => a + (+f.p || 0) * (+f.qty || 0), 0) / got;
+    fact(p.uid, 'filled', { exec_ids: mine.map(f => f.id).slice(0, 50), nt_order_id: st.ntOrder, price: Math.round(px / (p.tick || 0.25)) * (p.tick || 0.25), qty: got });
+    if (p.phase === 'ended') alarm('Plan #' + p.seq + '\'s entry filled after the plan ended: ' + got + ' ' + p.root + ' are open on ' + p.account + ' with its stop and target. Flatten if you do not want it.');
+    say('Plan #' + p.seq + ' filled: ' + got + ' ' + p.root + ' at ' + px + ' on ' + p.account + '.', '');
   }
 
   /* ---------------- ChartBridge's messages (this window's order connection) */
   function message(m) {
     if (!m || !m.type) return;
-    if (m.type === 'order' && typeof m.cid === 'string' && PC.uidOfCid(m.cid)) {
-      const uid = PC.uidOfCid(m.cid), p = getPlan(uid);
-      if (!p) return;
-      const owes = ledger ? ledger.order(m) : false;
-      if (!leader.isLeader()) return;
-      if (owes) claim(env.execs());                          // a fill that came before its order message is claimed now
+    if (m.type === 'order') {
+      /* the plan's entry by its cid, or by the id the leader follows (after a restart its cid is gone) */
+      const uid = (typeof m.cid === 'string' && PC.uidOfCid(m.cid)) || S.orderUid.get(m.id) || '';
+      const p = uid ? getPlan(uid) : null;
+      if (!p || !leader.isLeader()) return;
+      S.orderUid.set(m.id, uid);
       const st = LS(uid);
-      if (!st.placed && (m.state === 'working' || m.state === 'accepted' || m.state === 'partFilled' || m.state === 'filled')) { st.placed = true; st.orderId = m.id; fact(uid, 'placed', { id: m.id, state: m.state }); }
+      st.orderId = m.id;
+      if (+m.filled > 0) st.entryFilled = +m.filled;
+      if (!st.placed && (m.state === 'working' || m.state === 'accepted' || m.state === 'partFilled' || m.state === 'filled')) { st.placed = true; fact(uid, 'placed', { id: m.id, state: m.state }); }
       if (st.lastPrice !== null && m.price !== null && m.price !== st.lastPrice && (m.state === 'working' || m.state === 'accepted')) fact(uid, 'override', { what: 'moved_outside', account: p.account, root: p.root, id: m.id, from: st.lastPrice, to: m.price });
       if (m.price !== null && m.price !== undefined) st.lastPrice = m.price;
-      if (m.state === 'rejected') { fact(uid, 'refused', { why: m.text || 'NinjaTrader rejected it', by: 'ninjatrader' }); say('Plan #' + p.seq + ': NinjaTrader rejected its entry: ' + (m.text || '') , 'error'); }
+      if (m.state === 'rejected') { fact(uid, 'refused', { why: m.text || 'NinjaTrader rejected it', by: 'ninjatrader' }); say('Plan #' + p.seq + ': NinjaTrader rejected its entry: ' + (m.text || ''), 'error'); }
       if (m.state === 'cancelled' && !(+m.filled > 0) && ['armed', 'working'].includes(p.phase)) {
-        const ours = p.events.some(e => ['cancel', 'expired', 'stop_through'].includes(e.kind));
+        const ours = p.events.some(e => ['cancel', 'expired', 'stop_through', 'ended'].includes(e.kind));
         if (!ours) { fact(uid, 'override', { what: 'cancelled_outside', account: p.account, root: p.root, id: m.id }); fact(uid, 'ended', { why: 'its entry was cancelled outside the planner' }); }
       }
+      if (st.entryFilled > 0) linkFills(getPlan(uid) || p, st);
       return;
     }
     if (m.type === 'reject' && typeof m.cid === 'string' && PC.uidOfCid(m.cid)) {
@@ -427,26 +548,15 @@ function mount(env) {
       if (p && leader.isLeader()) { fact(uid, 'refused', { why: m.reason || '', by: 'chartbridge' }); say('Plan #' + p.seq + ' refused by ChartBridge: ' + (m.reason || '') + ' The plan ends; it is not tried again.', 'error'); }
       return;
     }
-    if ((m.type === 'exec' || m.type === 'execs') && ledger && leader.isLeader()) { claim(m.type === 'exec' ? [m] : m.list || []); return; }
-    if (m.type === 'position' && leader.isLeader()) {
-      for (const p of planList()) if (p.account === m.account && p.root === m.root && p.phase === 'armed' && +m.qty && !journal.sentOf(p.uid)) fact(p.uid, 'override', { what: 'position_outside', account: m.account, root: m.root, qty: +m.qty });
+    if ((m.type === 'exec' || m.type === 'execs') && leader.isLeader()) {
+      for (const p of planList()) if (['working', 'armed'].includes(p.phase) || (p.phase === 'ended' && sentOf(p))) { const st = LS(p.uid); if (st.entryFilled > 0 || st.ntOrder) linkFills(p, st); }
+      return;
     }
-  }
-  /* the plans' fills (BotCore's ledger: a fill is claimed against the contracts its plan's own entry is seen to fill) */
-  const claimedIds = new Set();
-  function claim(list) {
-    if (!ledger) return;
-    {
-      for (const f of list) {
-        if (!f || claimedIds.has(f.id)) continue;
-        if (!ledger.claim(f)) continue;
-        claimedIds.add(f.id);
-        const pid = ledger.orderOf(f.id), o = core.TR.orders.get(pid) || {}, uid = PC.uidOfCid(o.cid || '') || [...S.lead.entries()].find(([, st]) => st.orderId === pid)?.[0];
-        const p = uid ? getPlan(uid) : null;
-        if (!p) continue;
-        const st = LS(uid); st.fills = (st.fills || []).concat([f]);
-        const got = st.fills.reduce((a, x) => a + (+x.qty || 0), 0);
-        if (got >= p.qty && !st.filled) { st.filled = true; fact(uid, 'filled', { exec_ids: st.fills.map(x => x.id), nt_order_id: f.order || '', price: f.p, qty: got }); say('Plan #' + p.seq + ' filled: ' + got + ' ' + p.root + ' at ' + f.p + ' on ' + p.account + '.', ''); }
+    if (m.type === 'position' && leader.isLeader()) {
+      for (const p of planList()) {
+        if (p.account !== m.account || p.root !== m.root) continue;
+        if (p.phase === 'filled' && +m.qty) LS(p.uid).posSeen = true;
+        if (p.phase === 'armed' && +m.qty && !sentOf(p)) fact(p.uid, 'override', { what: 'position_outside', account: m.account, root: m.root, qty: +m.qty });
       }
     }
   }
@@ -455,7 +565,22 @@ function mount(env) {
   function override(what, on, extra) {
     for (const x of PC.overridesFor(what, on, planList(), extra)) { const p = [...S.plans.values()].find(q => q.seq === x.seq); if (p) fact(p.uid, 'override', x.detail); }
   }
-  function flattened(r) { if (r) override('flatten', { account: env.ticketAccount(), root: r }); else override('flatten_all', null); }
+  /* Anthony 2026-11-21 ("Flatten ends it"): Flatten on a pair ends every armed or working plan there (Flatten all: every plan of
+     this PC), so nothing enters afterwards by itself; recorded as an override; a working entry is cancelled (the leader keeps at
+     it until ChartBridge says it is gone). A filled plan's position is closed by the Flatten itself (recorded, then closed). */
+  function flattened(r) {
+    const acct = env.ticketAccount(), what = r ? 'flatten' : 'flatten_all';
+    for (const p of planList()) {
+      if (r && !(p.account === acct && p.root === r)) continue;
+      if (!['armed', 'working', 'filled'].includes(p.phase)) continue;
+      fact(p.uid, 'override', { what, account: r ? acct : p.account, root: r || p.root });
+      if (p.phase === 'filled') continue;
+      const o = entryOrderOf(p);
+      if (o) core.cancelPlanOrder(o.id, p);
+      fact(p.uid, 'ended', { why: (r ? 'Flatten' : 'Flatten all') + ' ends the plan', by: 'page' });
+      say('Plan #' + p.seq + ' ended by ' + (r ? 'Flatten' : 'Flatten all') + (o ? ': its entry is being cancelled.' : '.'), 'warn');
+    }
+  }
   function ticketArmed(on) { if (on) override('armed_on', { account: env.ticketAccount(), root: env.ticketRoot() }); }
   function sentManual(msg) {
     if (!msg || msg.type !== 'order' || (typeof msg.cid === 'string' && PC.uidOfCid(msg.cid))) return;
@@ -494,7 +619,7 @@ function mount(env) {
     message: m => guard(() => message(m)), flattened: r => guard(() => flattened(r)), override: (w, on) => guard(() => override(w, on)),
     ticketArmed: on => guard(() => ticketArmed(on)), sentManual: msg => guard(() => sentManual(msg)), pressOff: id => { try { return pressOff(id); } catch (e) { return ''; } },
     armTool, available,
-    state: () => ({ lines: [...S.lines.values()].map(L => ({ root: L.root, ready: L.ready, bars: L.bars.length, last: L.last, tail: L.bars.slice(-3) })), ok: S.ok, why: S.why, pc: S.pc, leader: leader.isLeader(), sel: S.sel, drafts: [...S.drafts.values()], plans: planList(), journal: journal.all(), queue: queue.items(), lost: queue.lost(), notes: S.notes.slice(), card: !!S.card }),
+    state: () => ({ lines: [...S.lines.values()].map(L => ({ root: L.root, ready: L.ready, bars: L.bars.length, last: L.last, firstU: L.firstU, lastU: L.lastU, tail: L.bars.slice(-3) })), ok: S.ok, why: S.why, pc: S.pc, leader: leader.isLeader(), sel: S.sel, drafts: [...S.drafts.values()], plans: planList(), journal: journal.all(), queue: queue.items(), lost: queue.lost(), notes: S.notes.slice(), card: !!S.card }),
     destroy() { S.destroyed = true; for (const t of S.timers) clearInterval(t); leader.close(); shared.close(); if (S.card) S.card.remove(); for (const L of S.lines.values()) { try { L.sock.onmessage = L.sock.onclose = null; L.sock.close(); } catch (e) { /* closed */ } } },
   };
 }

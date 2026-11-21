@@ -133,20 +133,28 @@ function submitBody(d, pc) {
  */
 function entryFor(d, last, orderTypes) {
   if (!isNum(last) || !(last > 0)) return { refuse: 'No recent ' + d.root + ' price: not armed.' };
-  if (d.tick > 0 && throughStop(d, last, d.tick)) return { refuse: 'The last price ' + last + ' is already through the stop: not armed.' };
-  if (d.entryType === 'touch_confirm') return { kind: null, price: null };
   const buy = d.side !== 'short', limitSide = buy ? d.entry <= last : d.entry >= last;
+  /* lineAbove: where the line sits against the price at Arm, kept with the plan: a touch is price coming to it from that side */
+  const lineAbove = d.entry > last;
+  /* Anthony 2026-11-21 ("Refuse at Arm"): a touch, then a close back is a pullback entry only: a long's line at or under the price,
+     a short's at or over it (said before anything else about the price) */
+  if (d.entryType === 'touch_confirm' && !limitSide) return { refuse: 'Touch, then a 1 minute close back is a pullback entry: a ' + (buy ? 'long\'s line must be at or under' : 'short\'s line must be at or over') + ' the price (last ' + last + '). Not armed. Use Market on touch for a breakout.' };
+  if (d.tick > 0 && throughStop(d, last, d.tick)) return { refuse: 'The last price ' + last + ' is already through the stop: not armed.' };
+  if (d.entryType === 'touch_confirm') return { kind: null, price: null, lineAbove };
   if (d.entryType === 'limit') {
     if (!limitSide) return { refuse: 'A ' + (buy ? 'buy' : 'sell') + ' limit at ' + d.entry + ' is through the market (last ' + last + ') and would fill at once: not armed. Use Market on touch for that side.' };
-    return { kind: 'limit', price: d.entry };
+    return { kind: 'limit', price: d.entry, lineAbove };
   }
   if (Math.abs(d.entry - last) < 1e-9) return { refuse: 'The line is at the last price: a touch entry would trigger at once. Not armed.' };
   if (limitSide) {
     if (orderTypes === false) return { refuse: 'Market on touch on this side is an MIT order, and MIT is off in ChartBridge (orderTypes = off in config.txt): not armed.' };
-    return { kind: 'mit', price: d.entry };
+    return { kind: 'mit', price: d.entry, lineAbove };
   }
-  return { kind: 'stop', price: d.entry };
+  return { kind: 'stop', price: d.entry, lineAbove };
 }
+/** The entry fixed at Arm, kept in the arm fact's client detail (`{ entry_kind, entry_price, line_above, last }`): the leader sends
+ *  exactly this, never works it out again at send time. */
+const armDetail = (ent, last) => ({ entry_kind: ent.kind === null ? 'market_on_confirm' : ent.kind, entry_price: ent.price, line_above: !!ent.lineAbove, last });
 /**
  * The bracket sent with the entry (decision 3 A): ticks from the fill, measured from the line for an order resting at the line
  * (limit, MIT, stop-market), from the last price at send for the confirmation's market order. { stop, target } or { refuse }.
@@ -162,8 +170,12 @@ function bracketFor(d, kind, last, tick, maxBracketTicks) {
 }
 /** Is a trade at `price` through the stop (at least one tick beyond it, decision 13 A)? */
 const throughStop = (d, price, tick) => (d.side === 'short' ? price >= d.stop + tick - 1e-9 : price <= d.stop - tick + 1e-9);
-/** Is a trade at `price` a touch of the line (at it or beyond, from the side price came from)? */
-const touches = (d, price) => (d.side === 'short' ? price >= d.entry - 1e-9 : price <= d.entry + 1e-9);
+/** Is a trade at `price` a touch of the line, at it or beyond, from the side price was on at Arm (d.lineAbove: the line over the
+ *  price then; with none, the limit side: a long's line under the price, a short's over it)? */
+const touches = (d, price) => {
+  const above = typeof d.lineAbove === 'boolean' ? d.lineAbove : d.side === 'short';
+  return above ? price >= d.entry - 1e-9 : price <= d.entry + 1e-9;
+};
 /** Is a minute's close back on his side (long: above the line; equal does not count)? */
 const closesBack = (d, close) => (d.side === 'short' ? close < d.entry - 1e-9 : close > d.entry + 1e-9);
 
@@ -173,7 +185,8 @@ const closesBack = (d, close) => (d.side === 'short' ? close < d.entry - 1e-9 : 
  * touched (a touch already seen, its minute) }. trade(price, ms) and time(ms) return the facts they found, in order:
  *   { kind: 'stop_through', at, price }    a trade a tick beyond the stop: the plan ends (the working entry is cancelled)
  *   { kind: 'expired', at }                 the clock passed expiresAt: the plan ends
- *   { kind: 'touched', at, price }          a confirmation plan's line was touched (recorded)
+ *   { kind: 'touched', at, price }          the line was touched while nothing was sent (a confirmation then waits for its close;
+ *                                           any other type not yet sent is missed: never sent late, decision 10 A)
  *   { kind: 'confirmed', at, close, minute } a minute closed back on his side at or after the touch's minute: send the market entry
  * After an ending fact or a confirmation the watch is done (nothing more). A minute's close is its last trade; it is final once a
  * trade of a later minute comes, or CONFIRM_LAG_MS after the boundary (time()). Minutes are New York's (whole UTC minutes).
@@ -199,7 +212,8 @@ function createWatch(plan, opts) {
       if (S.done) return out;
       if (throughStop(plan, price, tick)) { S.done = true; out.push({ kind: 'stop_through', at: ms, price }); return out; }
       S.min = m; S.close = price;
-      if (confirm && !S.sent && S.touchMin === null && touches(plan, price)) { S.touchMin = m; out.push({ kind: 'touched', at: ms, price }); }
+      /* every type while nothing is sent: a confirmation waits for its close; a resting entry not sent yet (delayed) is missed */
+      if (!S.sent && S.touchMin === null && touches(plan, price)) { S.touchMin = m; out.push({ kind: 'touched', at: ms, price }); }
       return out;
     },
     time(ms) {
@@ -246,7 +260,8 @@ function fromDesk(v) {
   const events = (Array.isArray(v.events) ? v.events : []).filter(e => e && EVENT_KINDS.includes(e.kind))
     .map(e => ({ kind: e.kind, at: num(e.logged_at_ms), detail: e.detail && typeof e.detail === 'object' ? e.detail : {}, uid: typeof e.uid === 'string' ? e.uid : '' }));
   const ph = phaseOf({ events });
-  return { seq: v.seq, uid: v.uid, root: v.root, side: v.side === 'short' ? 'short' : 'long', entry: num(v.entry), stop: num(v.stop), target: num(v.target),
+  const armEv = events.find(e => e.kind === 'arm'), cl = armEv && armEv.detail ? (armEv.detail.client && typeof armEv.detail.client === 'object' ? armEv.detail.client : armEv.detail) : {};
+  return { entryKind: typeof cl.entry_kind === 'string' ? cl.entry_kind : null, lineAbove: typeof cl.line_above === 'boolean' ? cl.line_above : null, seq: v.seq, uid: v.uid, root: v.root, side: v.side === 'short' ? 'short' : 'long', entry: num(v.entry), stop: num(v.stop), target: num(v.target),
     qty: Number.isInteger(v.qty) ? v.qty : 1, account: str(v.account, 64), grade: GRADES.includes(v.grade) ? v.grade : GRADE_DEFAULT,
     entryType: ENTRY_TYPES.includes(v.entry_type) ? v.entry_type : 'limit', expiryMin: Number.isInteger(v.expiry_min) ? v.expiry_min : EXPIRY_DEFAULT,
     tick: num(v.tick), contract: str(v.contract, 32), pc: str(v.pc, 64), phase: ph.phase, why: ph.why, status: str(v.status, 20),
@@ -284,19 +299,24 @@ function reconcile(p, ctx) {
   const sentDesk = (p.events || []).find(e => e.kind === 'sent');
   const sent = c.journal || (sentDesk ? { cid: (sentDesk.detail || {}).cid || entryCid(p.uid), at: sentDesk.at } : null);
   if (p.phase === 'submitted' || p.phase === 'ended' || p.phase === 'filled') return { act: 'none' };
+  const working0 = o => o && (o.state === 'working' || o.state === 'partFilled' || o.state === 'accepted');
+  /* an order with the plan's cid is its entry, whatever this browser's journal or The Desk says (a journal lost with a crash) */
+  const byCid = (Array.isArray(c.orders) ? c.orders : []).find(x => x && x.cid === entryCid(p.uid) && working0(x));
+  if (!sent && byCid) return isNum(p.expiresAt) && now >= p.expiresAt && !(+byCid.filled > 0) ? { act: 'cancel_expired', id: byCid.id, lateMs: now - p.expiresAt } : { act: 'resume_working', id: byCid.id };
   if (!sent) {
     if (p.phase === 'working') return { act: 'unknown', why: 'The Desk says its entry was placed, but nothing says how: check NinjaTrader.' };
     if (isNum(p.expiresAt) && now >= p.expiresAt) return { act: 'expired', why: 'expired while no window watched it' };
     const bars = (Array.isArray(c.bars) ? c.bars : []).filter(b => b && isNum(b.t) && (!isNum(p.armedAt) || b.t + 60000 > p.armedAt));
     if (bars.some(b => throughStop(p, p.side === 'short' ? b.h : b.l, tick))) return { act: 'stop_through', why: 'price went through the stop while no window watched it' };
-    if (bars.some(b => touches(p, p.side === 'short' ? b.h : b.l))) return { act: 'missed', why: 'the line was touched while no window watched it: not taken late' };
+    const above = typeof p.lineAbove === 'boolean' ? p.lineAbove : p.side === 'short';   // the side the line was on at Arm
+    if (bars.some(b => touches(p, above ? b.h : b.l))) return { act: 'missed', why: 'the line was touched while no window watched it: not taken late' };
     return { act: 'resume' };
   }
   const orders = Array.isArray(c.orders) ? c.orders : [];
   const side = orderSide(p.side), working = o => o && (o.state === 'working' || o.state === 'partFilled' || o.state === 'accepted');
   let o = orders.find(x => x && x.cid === sent.cid && working(x));
   if (!o) {   // after a ChartBridge restart the cid is gone: the same account, root, side, kind, price and qty
-    const kinds = p.entryType === 'limit' ? ['limit'] : p.entryType === 'market_on_touch' ? ['mit', 'stop'] : ['market'];
+    const kinds = p.entryKind && p.entryKind !== 'market_on_confirm' ? [p.entryKind] : p.entryType === 'limit' ? ['limit'] : p.entryType === 'market_on_touch' ? ['mit', 'stop'] : ['market'];
     o = orders.find(x => working(x) && x.account === p.account && x.root === p.root && x.side === side && kinds.includes(x.kind) && (x.kind === 'market' || Math.abs(+x.price - p.entry) < 1e-9) && +x.qty === p.qty && (x.role === 'entry' || x.role === 'other' || !x.role));
   }
   if (o) {
@@ -412,7 +432,7 @@ function deskApi(env) {
     get: seq => call('GET', '/api/plans/' + seq),
     submit: body => call('POST', '/api/plans', body),
     edit: (seq, body) => call('POST', '/api/plans/' + seq + '/edit', body),
-    arm: (seq, uid) => call('POST', '/api/plans/' + seq + '/arm', { uid }),
+    arm: (seq, uid, detail) => call('POST', '/api/plans/' + seq + '/arm', detail ? { uid, detail } : { uid }),   // detail: the entry fixed at Arm (armDetail)
     cancel: (seq, uid, reason) => call('POST', '/api/plans/' + seq + '/cancel', reason ? { uid, reason } : { uid }),
     event: item => call('POST', '/api/plans/' + item.seq + '/events', { uid: item.uid, kind: item.kind, detail: item.detail }),
   };
@@ -487,6 +507,6 @@ function overridesFor(what, on, plans, extra) {
 return { LOCK, CHANNEL, STORE_KEY, JOURNAL_KEY, QUEUE_KEY, OFF_KEY, ROOTS, SIDES, ENTRY_TYPES, ENTRY_WORDS, ENTRY_SHORT, GRADES, GRADE_DEFAULT,
   DESK_UID_RX, EXPIRY_MIN, EXPIRY_MAX, EXPIRY_DEFAULT, CONFIRM_LAG_MS, EVENT_KINDS, END_KINDS, OVERRIDES, WHY_WORDS,
   newUid, entryCid, uidOfCid, cleanDraft, validate, bracketTicks, submitBody, entryFor, bracketFor, throughStop, touches, closesBack,
-  createWatch, armClosedWhy, phaseOf, expiresOf, fromDesk, viewOf, reconcile, createJournal, createQueue, deskApi, createLeader, cleanStore, createShared,
+  createWatch, armDetail, armClosedWhy, phaseOf, expiresOf, fromDesk, viewOf, reconcile, createJournal, createQueue, deskApi, createLeader, cleanStore, createShared,
   offIn, setOff, overridesFor, onGrid, roundTo };
 });

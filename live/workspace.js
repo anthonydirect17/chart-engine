@@ -3834,7 +3834,7 @@ const start = () => {
    start guard: a failure in it never stops the charts or the ticket. Its plans show on every chart of their instrument; its
    entries go on this window's order connection through TradeCore's sendPlanOrder, from one window per PC (the leader). */
 function startPlanner() {
-  if (!window.PlannerPage || !window.PlannerCore || !window.AccountsPage) return;
+  if (FRAMED || !window.PlannerPage || !window.PlannerCore || !window.AccountsPage) return;   // R12: never in a framed window (it cannot trade)
   const PC = window.PlannerCore;
   planner = window.PlannerPage.mount({
     PC, U, core, hub, storage: store, locks, channel: TL.browserChannel(PC.CHANNEL),
@@ -3847,7 +3847,6 @@ function startPlanner() {
     accounts: () => core.TR.accounts.slice(), maxQty: r => OT.maxQtyFor(core.TR, r), maxBracketTicks: () => core.TR.maxBracketTicks, orderTypes: () => core.switchOn('orderTypes'),
     execs: () => [...tfills.values()],
     note: (t, l) => note(t, !!l, l === 'error' ? 12000 : 6000), alarm: t => alertLoud('Planner: ' + t),
-    ledger: window.BotCore ? mark => window.BotCore.botFillLedger(mark) : null,
   });
 }
 /* A window that opens (or reloads) with the ticket in its layout takes it when no other window has it (Anthony

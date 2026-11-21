@@ -184,7 +184,7 @@ export async function startDesk(port, seed) {
           if (d.kind === 'sent' && (det.leg || 'entry') === 'entry') {
             if (P.events.some(e => e.kind === 'sent' && (e.detail.leg || 'entry') === 'entry')) flags.push('second_sent_entry');
             if (st.armed_at_ms === null) flags.push('sent_before_arm');
-            else if (st.expires_at_ms !== null && Date.now() > st.expires_at_ms) flags.push('sent_after_expiry');
+            else if (st.expires_at_ms !== null && (Number.isInteger(det.at_ms) ? det.at_ms : Date.now()) > st.expires_at_ms) flags.push('sent_after_expiry');   // The Desk judges it on detail.at_ms
           }
           if (['sent', 'placed', 'filled'].includes(d.kind) && st.ended) flags.push(d.kind + '_after_end');
           if (flags.length) { det.desk_flags = flags; desk.planFlags.push({ seq, flags }); }
@@ -201,7 +201,7 @@ export async function startDesk(port, seed) {
           if (st.armed_at_ms !== null) return send(409, { detail: 'plan #' + seq + ' is already armed (it expires at ' + st.expires_at_ms + ')' });
           if (desk.closed) return send(409, { detail: 'CME is closed (the 17:00 to 18:00 break): not armed' });
           const exp = Date.now() + (desk.expiryMs || P.values.expiry_min * 60000);
-          ev(P, 'arm', { expires_at_ms: exp, expiry_min: P.values.expiry_min }, d.uid);
+          ev(P, 'arm', Object.assign({ expires_at_ms: exp, expiry_min: P.values.expiry_min }, d.detail && typeof d.detail === 'object' ? { client: d.detail } : {}), d.uid);
           return send(200, { plan: view(P), duplicate: false, expires_at_ms: exp });
         }
         if (act === 'cancel') {

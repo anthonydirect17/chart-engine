@@ -13,7 +13,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
 import { startDesk } from './fake-desk.mjs';
-import { checker, startBridge, spyContext, openPage, livePage, st, card, drawAt, orders, wait } from './planner-smoke-lib.mjs';
+import { checker, startBridge, spyContext, openPage, livePage, st, card, drawAt, orders, wait, selectPlan } from './planner-smoke-lib.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = +(process.env.PLANNER_RESUME_SMOKE_PORT || 8885), DP = PORT + 40;
@@ -55,11 +55,31 @@ try {
   check((await orders(p)).length === 0, 'after the reload nothing is sent again');
   check(!v1.events.some(e => e.kind === 'owner'), 'the working entry was found (no alarm)');
 
-  /* ---- ChartBridge restarts and the entry is gone: outcome not known, an alarm, never sent again */
+  /* ---- ChartBridge restarts and NinjaTrader keeps the entry (its cid forgotten): found by its account, root, side, kind, price
+     and qty, never sent again; the card's Cancel takes it off by its id (the R12 review, finding 1) */
+  await control('forget-cids');
+  await until(() => p.evaluate(() => document.getElementById('wsConn').classList.contains('live') && window.workspace.ticket().snapReady), 'connected again', 30000);
+  await wait(2500);
+  check((await orders(p)).length === 0, 'after the restart nothing is sent again');
+  check(!v1.events.some(e => e.kind === 'owner'), 'the entry was found by its attributes (no alarm)');
+  await p.evaluate(() => { window.__sent.length = 0; });
+  await selectPlan(p, v1.uid, until);
+  await p.click(card('cancel'));
+  await until(() => kinds(v1).includes('cancel'), 'The Desk stamped the cancel');
+  const cx = await until(() => p.evaluate(() => { const c = window.__sent.filter(m => m.type === 'cancel'); return c.length ? c : null; }), 'the entry\'s cancel, by its id');
+  check(cx && cx.every(m => typeof m.id === 'string' && m.id), 'its entry cancelled by its id (no cid after the restart): ' + JSON.stringify(cx));
+  await until(() => p.$eval(card('phase'), e => /^Ended: cancelled/.test(e.textContent)), 'the card says cancelled once the entry is gone', 8000);
+
+  /* ---- a second plan, then ChartBridge restarts and its entry is gone: outcome not known, an alarm, never sent again */
+  await setPrice(25000);
+  const v1b = await planOn(p, 24985);
+  await until(() => kinds(v1b).includes('placed'), 'placed');
+  await p.evaluate(() => { window.__sent.length = 0; });
+
   bridge.kill(); await wait(800);
   bridge = await startBridge(root, PORT, DP, pinFile, ['--fold-trades']);
   await until(() => p.evaluate(() => document.getElementById('wsConn').classList.contains('live') && window.workspace.ticket().snapReady), 'connected again', 30000);
-  check(await until(() => v1.events.some(e => e.kind === 'owner' && e.detail.what === 'unknown'), 'sent, outcome not known: recorded', 10000), 'after the restart the entry is not found: sent, outcome not known, recorded');
+  check(await until(() => v1b.events.some(e => e.kind === 'owner' && e.detail.what === 'unknown'), 'sent, outcome not known: recorded', 10000), 'after the restart the entry is not found: sent, outcome not known, recorded');
   await until(() => p.$eval('#wsAlertText', e => /Planner: Plan #\d+: Sent, outcome not known: check NinjaTrader/.test(e.textContent)), 'the alarm on the page');
   await wait(1500);
   check((await orders(p)).length === 0, 'never sent again');

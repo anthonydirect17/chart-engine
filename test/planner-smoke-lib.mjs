@@ -57,3 +57,11 @@ export async function drawAt(pg, price, until) {
   await pg.mouse.click(box.x + box.w * 0.72, box.y + y);
 }
 export const orders = pg => pg.evaluate(() => window.__sent.filter(m => m.type === 'order'));
+/** select a plan by a click on its entry line on chart c1 (its card opens there) */
+export async function selectPlan(pg, uid, until) {
+  const h = await until(() => pg.evaluate(id => window.workspace.chart('c1').planHandles().find(x => x.id === id && x.which === 'entry') || null, uid), 'plan ' + uid + ' drawn');
+  if (!h) return;
+  const box = await pg.$eval('.ws-panel[data-id="c1"] canvas.ce-canvas', c => { const r = c.getBoundingClientRect(); return { x: r.x, y: r.y }; });
+  await pg.mouse.click(box.x + h.x0 + 40, box.y + h.y);
+  await until(() => pg.$('.pl-card [data-pl="cancel"]'), 'its card');
+}

@@ -135,6 +135,7 @@ function openPnl(qty, avgPrice, last, pointValue) {
    host sets the list (setPlans) and hears a drag (planMove), a click (planSelect), a press on a locked plan (planPressOff) and
    a click with the Plan tool armed (planCreate). */
 const PLAN_STATES = ['draft', 'submitted', 'armed', 'working', 'filled', 'ended'];
+const PLAN_GUTTER = 130;                  // px kept clear for the order labels at the plot's right edge (the R12 review)
 /** A plan as the engine keeps it, or null: { id, side 'long' | 'short', entry, stop, target (null: none), state, editable,
     label, note, t0 (the box's left edge, a bar time; null: the plot's last 220 px), qty, selected }. */
 function cleanPlan(x) {
@@ -2803,6 +2804,9 @@ function create(container, options) {
           }
           if (text) {
             const w = ctx.measureText(text).width + 8, ty = clamp(y - 8 - 7, 0, Math.max(0, plotH - 14));
+            /* the R12 review: on a narrow chart a plan's label would run under the order labels in the right gutter: it ends
+               PLAN_GUTTER px short of the plot's right edge, moved left of the box's edge only as far as that needs */
+            if ((orders.length || position) && tx + w > plotW - PLAN_GUTTER) tx = Math.max(0, plotW - PLAN_GUTTER - w);
             roundRect(tx, ty, w, 14, 3); ctx.fillStyle = rgba(T.bg, 0.92); ctx.fill();
             ctx.strokeStyle = col; ctx.lineWidth = 1; ctx.setLineDash(which === 'entry' && p.state !== 'draft' ? [] : [2, 2]); ctx.stroke(); ctx.setLineDash([]);
             inkText(text, tx + 4, ty + 7.5, which === 'entry' ? sideCol : col);

@@ -48,17 +48,21 @@ test('submitBody: exactly The Desk\'s Submit fields (TheDesk thedesk/plans.py SU
 });
 
 test('entryFor (decision 2 A): by where the line sits against the last price at Arm', () => {
-  assert.deepEqual(PC.entryFor(draft(), 25002, true), { kind: 'limit', price: 25000 }, 'a buy limit under the market');
+  assert.deepEqual(PC.entryFor(draft(), 25002, true), { kind: 'limit', price: 25000, lineAbove: false }, 'a buy limit under the market');
   assert.match(PC.entryFor(draft(), 24998, true).refuse, /would fill at once/, 'a buy limit over the market: refused at Arm');
-  assert.deepEqual(PC.entryFor(draft({ entryType: 'market_on_touch' }), 25002, true), { kind: 'mit', price: 25000 }, 'touch on the limit side: an MIT at the line');
-  assert.deepEqual(PC.entryFor(draft({ entryType: 'market_on_touch' }), 24998, true), { kind: 'stop', price: 25000 }, 'touch on the stop side: a stop-market at the line');
+  assert.deepEqual(PC.entryFor(draft({ entryType: 'market_on_touch' }), 25002, true), { kind: 'mit', price: 25000, lineAbove: false }, 'touch on the limit side: an MIT at the line');
+  assert.deepEqual(PC.entryFor(draft({ entryType: 'market_on_touch', stop: 24990 }), 24998, true), { kind: 'stop', price: 25000, lineAbove: true }, 'touch on the stop side: a stop-market at the line');
   assert.match(PC.entryFor(draft({ entryType: 'market_on_touch' }), 25002, false).refuse, /MIT is off/);
   assert.match(PC.entryFor(draft({ entryType: 'market_on_touch' }), 25000, true).refuse, /at the last price/);
-  assert.deepEqual(PC.entryFor(draft({ entryType: 'touch_confirm' }), 25002, true), { kind: null, price: null }, 'a confirmation sends nothing at Arm');
-  assert.deepEqual(PC.entryFor(draft({ side: 'short', stop: 25004, target: 24992 }), 24998, true), { kind: 'limit', price: 25000 }, 'a sell limit over the market');
+  assert.deepEqual(PC.entryFor(draft({ entryType: 'touch_confirm' }), 25002, true), { kind: null, price: null, lineAbove: false }, 'a confirmation sends nothing at Arm');
+  assert.match(PC.entryFor(draft({ entryType: 'touch_confirm', stop: 24990 }), 24998, true).refuse, /pullback entry: a long's line must be at or under the price/, 'Anthony 2026-11-21: a long confirmation with its line over the price is refused at Arm');
+  assert.match(PC.entryFor(draft({ entryType: 'touch_confirm', side: 'short', stop: 25004, target: 24992 }), 25001, true).refuse, /short's line must be at or over/, 'a short with its line under the price too');
+  assert.deepEqual(PC.armDetail({ kind: 'stop', price: 25000, lineAbove: true }, 24998), { entry_kind: 'stop', entry_price: 25000, line_above: true, last: 24998 }, 'the entry fixed at Arm');
+  assert.deepEqual(PC.armDetail({ kind: null, price: null, lineAbove: false }, 25002).entry_kind, 'market_on_confirm');
+  assert.deepEqual(PC.entryFor(draft({ side: 'short', stop: 25004, target: 24992 }), 24998, true), { kind: 'limit', price: 25000, lineAbove: true }, 'a sell limit over the market');
   assert.match(PC.entryFor(draft(), null, true).refuse, /No recent MNQ price/);
   assert.match(PC.entryFor(draft({ entryType: 'market_on_touch' }), 24995.75, true).refuse, /already through the stop/, 'a last price through the stop: not armed');
-  assert.match(PC.entryFor(draft({ entryType: 'touch_confirm' }), 24995.75, true).refuse, /already through the stop/);
+  assert.match(PC.entryFor(draft({ entryType: 'touch_confirm' }), 24995.75, true).refuse, /pullback entry/, 'a confirmation under its line and its stop: the pullback rule says it first');
 });
 
 test('bracketFor (decision 3 A): ticks from the line for a resting entry, from the last price at send for the confirmation\'s market', () => {
@@ -89,6 +93,16 @@ test('a confirmation watch: the touch, then a 1 minute close back over the line;
   assert.deepEqual(s.trade(25000.5, ms(14, 5, 1)).map(e => e.kind), ['touched']);
   assert.deepEqual(s.trade(24999.5, ms(14, 6, 2)).map(e => e.kind), [], 'the touch minute closed above the line: no');
   assert.deepEqual(s.trade(24999, ms(14, 7, 0)).map(e => e.kind), ['confirmed'], 'the next minute closed under it');
+});
+
+test('a touch is from the side the line was on at Arm; every type reports it while nothing is sent (a delayed entry is then missed)', () => {
+  const up = PC.createWatch(draft({ entryType: 'market_on_touch', stop: 24990, lineAbove: true }), { tick: 0.25, expiresAt: ms(14, 30) });
+  assert.deepEqual(up.trade(24998, ms(14, 1, 1)), [], 'a long stop-side line over the price: a trade under it is no touch');
+  assert.deepEqual(up.trade(25000, ms(14, 1, 2)).map(e => e.kind), ['touched'], 'price came up to it');
+  const lim = PC.createWatch(draft(), { tick: 0.25, expiresAt: ms(14, 30) });
+  assert.deepEqual(lim.trade(25000, ms(14, 1, 1)).map(e => e.kind), ['touched'], 'a limit not sent yet reports its touch');
+  const sent = PC.createWatch(draft(), { tick: 0.25, expiresAt: ms(14, 30), sent: true });
+  assert.deepEqual(sent.trade(25000, ms(14, 1, 1)), [], 'once sent, a touch is the order\'s business');
 });
 
 test('stop-through (decision 13 A): one tick beyond the stop, before the fill, ends the plan; at the stop does not', () => {
@@ -152,6 +166,13 @@ test('reconcile: armed with nothing sent: expired, stop-through, missed (never t
   assert.equal(PC.reconcile(P, { now: ms(14, 10), bars: [{ t: ms(14, 3), h: 25004, l: 24999.75, c: 25002 }] }).act, 'missed');
   assert.equal(PC.reconcile(P, { now: ms(14, 10), bars: [{ t: ms(13, 58), h: 25004, l: 24990, c: 25002 }, { t: ms(14, 3), h: 25004, l: 25001, c: 25002 }] }).act, 'resume', 'a bar before Arm does not count');
   assert.equal(PC.reconcile(Object.assign({}, P, { phase: 'submitted' }), { now: ms(14, 10) }).act, 'none');
+  /* an order with the plan's cid is its entry even with no journal and no sent fact (a journal lost with a crash) */
+  const o = { id: 'o7', cid: PC.entryCid(UID), account: 'Sim101', root: 'MNQ', side: 'buy', kind: 'limit', price: 25000, qty: 2, filled: 0, state: 'working' };
+  assert.deepEqual(PC.reconcile(Object.assign({}, P, { entryType: 'limit' }), { now: ms(14, 10), bars: [], orders: [o] }), { act: 'resume_working', id: 'o7' });
+  /* a market-on-touch long armed with its line over the price: price under the line is no touch (never missed at once) */
+  const up = Object.assign({}, P, { entryType: 'market_on_touch', entry: 25010, stop: 25000, lineAbove: true });
+  assert.equal(PC.reconcile(up, { now: ms(14, 10), bars: [{ t: ms(14, 3), h: 25008, l: 25001, c: 25005 }] }).act, 'resume');
+  assert.equal(PC.reconcile(up, { now: ms(14, 10), bars: [{ t: ms(14, 3), h: 25010, l: 25001, c: 25005 }] }).act, 'missed');
 });
 
 test('reconcile: sent: found by cid, or after a ChartBridge restart by account, root, side, kind, price, qty; filled from the execs; else unknown, never sent again', () => {

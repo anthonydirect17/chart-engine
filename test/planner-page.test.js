@@ -14,7 +14,7 @@ test('loaded before the workspace (its rules first), installed, and optional (a 
   for (const f of ['planner-core.js', 'planner.js']) assert.ok(www.some(x => x.from === 'live/' + f && x.to === f), f + ' installed');
   const ws = read('live/workspace.js');
   assert.match(ws, /startGuard\('Planner', startPlanner\);/);
-  assert.match(ws, /if \(!window\.PlannerPage \|\| !window\.PlannerCore \|\| !window\.AccountsPage\) return;/);
+  assert.match(ws, /if \(FRAMED \|\| !window\.PlannerPage \|\| !window\.PlannerCore \|\| !window\.AccountsPage\) return;/, 'never in a framed window, and optional');
   assert.doesNotMatch(ws.slice(ws.indexOf('const ok = () =>'), ws.indexOf('const ok = () =>') + 200), /Planner/, 'the page starts without it');
 });
 

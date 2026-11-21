@@ -186,6 +186,43 @@ try {
   await p.click(tk('flattenBtn'));
   await wait(800);
 
+  /* ---- Anthony 2026-11-21 ("Flatten ends it"): Flatten on the pair ends a working plan, cancels its entry, recorded */
+  await setPrice(25000);
+  await drawAt(p, 24985);
+  await until(async () => (await st(p)).drafts.length === 1, 'a plan to flatten');
+  const nF = plans().length;
+  await p.click(card('submit'));
+  await until(() => plans().length === nF + 1, 'submitted');
+  const vF = desk.plans[nF];
+  await until(async () => (await st(p)).plans.some(x => x.seq === vF.seq && x.phase === 'submitted'), 'submitted on the page');
+  await p.click(card('arm'));
+  await until(() => kinds(vF).includes('placed'), 'its entry placed');
+  check(vF.events.find(e => e.kind === 'arm').detail.client.entry_kind === 'limit', 'the entry kind is fixed at Arm (the arm fact carries it)');
+  await p.evaluate(() => { window.__sent.length = 0; });
+  await p.click(tk('flattenBtn'));
+  await until(() => kinds(vF).includes('ended'), 'Flatten ended the plan');
+  check(vF.events.some(e => e.kind === 'override' && e.detail.what === 'flatten') && vF.events.some(e => e.kind === 'ended'), 'Flatten: an override, and the plan ends (nothing enters afterwards)');
+  await until(() => p.evaluate(() => !window.workspace.planner().plans.some(x => x.phase === 'working')), 'no plan left working');
+  await setPrice(24984);
+  await wait(800);
+  check(!kinds(vF).includes('filled'), 'its entry never filled after the Flatten');
+
+  /* ---- Anthony 2026-11-21 ("Refuse at Arm"): touch, then confirm is a pullback entry: a long with its line over the price is refused */
+  await setPrice(25000);
+  await drawAt(p, 25006);
+  await until(async () => (await st(p)).drafts.length === 1, 'a plan over the price');
+  if ((await st(p)).drafts[0].side === 'short') { await p.click(`.pl-card [data-pl="side"][data-v="long"]`); await wait(200); }
+  await p.selectOption(card('type'), 'touch_confirm'); await wait(200);
+  await p.click(card('submit'));
+  const vR = await until(() => { const v = desk.plans[desk.plans.length - 1]; return v && v.values.entry === 25006 && v.values.entry_type === 'touch_confirm' ? v : null; }, 'submitted');
+  await until(async () => (await st(p)).plans.some(x => x.seq === vR.seq && x.phase === 'submitted'), 'submitted on the page');
+  await p.click(card('arm'));
+  const why7 = await until(() => p.$eval(card('note'), e => (/pullback entry/.test(e.textContent) ? e.textContent : null)), 'the card says why');
+  check(!!why7, 'refused at Arm with a clear note: ' + why7);
+  check(!kinds(vR).includes('arm'), 'refused at Arm: The Desk never stamped it');
+  await p.click(card('cancel'));
+  await until(() => kinds(vR).includes('cancel'), 'cancelled');
+
   /* ---- Planner off */
   await p.check(card('off'));
   await drawAt(p, 24990);
@@ -222,3 +259,4 @@ try {
 }
 if (errors.length) { console.error('FAIL (' + errors.length + ' of ' + checks + ')\n' + errors.join('\n')); process.exit(1); }
 console.log('planner smoke: ok (' + checks + ' checks)');
+

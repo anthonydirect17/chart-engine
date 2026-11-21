@@ -9,7 +9,8 @@
 //                                   the last price; default none)
 //   --max-bracket-ticks=300         maxBracketTicks = 300 (0.3.7: a bracket stop or target at most this many ticks; default none)
 //   --test-controls                 POST /test/price?root=MNQ&p=25400.25 sets the price and holds the random walk;
-//                                   /test/hold, /test/state, /test/status (broadcast a status line), /test/risk-alert (a riskAlert, 0.6.6), /test/elsewhere
+//                                   /test/hold, /test/state, /test/status (broadcast a status line), /test/risk-alert (a riskAlert, 0.6.6), /test/elsewhere,
+//                                   /test/forget-cids (chart 1.62.0: a ChartBridge restart: the orders stay working, their cids forgotten, every connection drops)
 //   --allow-frames                  drop X-Frame-Options and frame-ancestors (only to test the page's own frame check)
 //   --allow-origins=https://desk.example,http://host:8800   allowOrigins: other web pages that may open the
 //                                   read-only WebSocket (ChartBridge 0.3.1 rule; never trade)
@@ -893,6 +894,9 @@ const server = http.createServer((req, res) => {
       for (const c of clients) send(c, { type: 'settlement', root: r, p: settlement[r], date: settlementDate[r] });
     }
     else if (p === '/test/drop') { for (const c of clients) c.sock.destroy(); }
+    /* chart 1.62.0 (the planner's resume smoke): a ChartBridge restart as NinjaTrader sees it: every order stays working, but
+       ChartBridge forgot each order's cid (its maps are new), and every page's connection drops */
+    else if (p === '/test/forget-cids') { for (const o of desk.orders.values()) delete o.cid; for (const c of clients) c.sock.destroy(); }
     else if (p === '/test/received') { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(received)); }
     else if (p === '/test/features') liveFirstOn = LIVE_FIRST && q.get('liveFirst') !== '0';
     else if (p === '/test/delta-push') { for (const c of clients) if (c.ready && c.delta && tapes[c.root]) send(c, deltaTableMsg(c.root, tapes[c.root].n)); }   // 0.6.25

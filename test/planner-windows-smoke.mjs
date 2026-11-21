@@ -41,8 +41,11 @@ try {
   await b.click(card('submit'));
   await until(() => desk.plans.length === 1, 'submitted');
   await until(async () => (await st(b)).plans.some(x => x.phase === 'submitted'), 'submitted on the page');
+  await a.click('[data-tk-id="armBtn"]'); await wait(200);
+  check(await a.evaluate(() => window.workspace.ticket().armed) === true, 'the ticket (in the first window) armed by hand');
   await b.click(card('arm'));
   await until(async () => (await orders(a)).length === 1, 'the leader sent it');
+  check(await until(() => a.evaluate(() => window.workspace.ticket().armed === false), 'the light lock in the ticket\'s window'), 'Arm pressed in the other window: the ticket\'s window sees the plan armed and its Armed goes off (R12 finding 3)');
   await wait(800);
   check((await orders(a)).length === 1 && (await orders(b)).length === 0, 'one order, from the leader only');
   await until(() => kinds(desk.plans[0]).includes('placed'), 'placed');
