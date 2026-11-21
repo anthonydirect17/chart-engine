@@ -11,7 +11,8 @@
 //   --test-controls                 POST /test/price?root=MNQ&p=25400.25 sets the price and holds the random walk;
 //                                   /test/hold, /test/state, /test/status (broadcast a status line), /test/risk-alert (a riskAlert, 0.6.6), /test/elsewhere,
 //                                   /test/forget-cids (chart 1.62.0: a ChartBridge restart: the orders stay working, their cids forgotten, every connection drops),
-//                                   /test/renumber?seq=N (chart 1.62.0: a NinjaTrader restart: every order a new id RN<n>, cids forgotten; the next new order NT<N+1>)
+//                                   /test/renumber?seq=N (chart 1.62.0: a NinjaTrader restart: every order a new id RN<n>, cids forgotten; the next new order NT<N+1>;
+//                                   ?oside=&okind=&oqty=&op= an unrelated order made before any page reads the snapshot), /test/move?id=&p= (moved by hand)
 //   --allow-frames                  drop X-Frame-Options and frame-ancestors (only to test the page's own frame check)
 //   --allow-origins=https://desk.example,http://host:8800   allowOrigins: other web pages that may open the
 //                                   read-only WebSocket (ChartBridge 0.3.1 rule; never trade)
@@ -906,8 +907,12 @@ const server = http.createServer((req, res) => {
       for (const o of next.values()) { if (o.parent && map.has(o.parent)) o.parent = map.get(o.parent); if (o.leaderEntry && map.has(o.leaderEntry)) o.leaderEntry = map.get(o.leaderEntry); }
       desk.orders.clear(); for (const [id, o] of next) desk.orders.set(id, o);
       if (q.get('seq') !== null) desk.seq = +q.get('seq');
+      /* ?oside=&okind=&oqty=&op=&oaccount=: an unrelated order made at once, before any page reads the new snapshot */
+      if (q.get('oside')) desk.placeElsewhere({ account: q.get('oaccount') || 'Sim101', root: r, side: q.get('oside'), kind: q.get('okind') || 'limit', qty: +(q.get('oqty') || 1), price: +q.get('op') });
       for (const c of clients) c.sock.destroy();
     }
+    /* chart 1.62.0 (the second delta review): an order moved by hand in NinjaTrader (its cid kept), told to every page */
+    else if (p === '/test/move') { const o = desk.orders.get(q.get('id')); if (o) { o.price = +q.get('p'); desk.emitOrder(o); desk.matchOne(o, desk.last[o.root], true); } }
     else if (p === '/test/forget-cids') { for (const o of desk.orders.values()) delete o.cid; for (const c of clients) c.sock.destroy(); }
     else if (p === '/test/received') { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(received)); }
     else if (p === '/test/features') liveFirstOn = LIVE_FIRST && q.get('liveFirst') !== '0';

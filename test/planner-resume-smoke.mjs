@@ -78,9 +78,9 @@ try {
   await until(() => kinds(v4).includes('placed'), 'placed');
   const oldId = v4.events.find(e => e.kind === 'placed').detail.id;
   await p.evaluate(() => { window.__sent.length = 0; });
-  await control('renumber', { seq: String(+oldId.replace(/\D/g, '') - 1) });
+  /* the unrelated order is made before any page reads the new snapshot: the page's old link to oldId is stale when it does */
+  await control('renumber', { seq: String(+oldId.replace(/\D/g, '') - 1), oside: 'sell', okind: 'limit', oqty: '1', op: '25050', oaccount: 'Sim101' });
   await until(() => p.evaluate(() => document.getElementById('wsConn').classList.contains('live') && window.workspace.ticket().snapReady), 'connected again', 30000);
-  await control('elsewhere', { account: 'Sim101', root: 'MNQ', side: 'sell', kind: 'limit', qty: 1, p: 25050 });
   const st0 = await control('state', { root: 'MNQ' });
   const other = st0.orders.find(o => o.id === oldId), mine = st0.orders.find(o => o.account === 'Sim101' && o.side === 'buy' && o.price === 24982);
   check(!!other && other.price === 25050 && !!mine && mine.id !== oldId, 'an unrelated order took the plan\'s old id ' + oldId + '; the entry is now ' + (mine && mine.id));

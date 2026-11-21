@@ -223,6 +223,41 @@ try {
   await p.click(card('cancel'));
   await until(() => kinds(vR).includes('cancel'), 'cancelled');
 
+  /* ---- the second delta review: an entry moved by hand (its cid kept; decision 4 A) is still the plan's own: expiry, Cancel and
+     Flatten each cancel it, whatever its price now */
+  const movedPlan = async (price, to) => {
+    await setPrice(25000);
+    await drawAt(p, price);
+    await until(async () => (await st(p)).drafts.length === 1, 'a plan at ' + price);
+    const n = plans().length;
+    await p.click(card('submit'));
+    await until(() => plans().length === n + 1, 'submitted');
+    const v = desk.plans[n];
+    await p.click(card('arm'));
+    await until(() => kinds(v).includes('placed'), 'placed');
+    const id = v.events.find(e => e.kind === 'placed').detail.id;
+    await control('move', { id, p: to });
+    await until(() => v.events.some(e => e.kind === 'override' && e.detail.what === 'moved_outside'), 'the move by hand recorded (moved_outside)');
+    await p.evaluate(() => { window.__sent.length = 0; });
+    return { v, id };
+  };
+  const working = async id => (await control('state', { root: 'MNQ' })).orders.some(o => o.id === id);
+  desk.expiryMs = 5000;
+  const m1 = await movedPlan(24984, 24975);
+  await until(() => kinds(m1.v).includes('expired'), 'the moved plan expired', 12000);
+  check(await until(async () => !(await working(m1.id)), 'the moved entry cancelled at expiry', 8000), 'expiry cancels the entry moved by hand (' + m1.id + ')');
+  desk.expiryMs = 0;
+  const m2 = await movedPlan(24983, 24974);
+  await p.click(card('cancel'));
+  await until(() => kinds(m2.v).includes('cancel'), 'cancelled at The Desk');
+  check(await until(async () => !(await working(m2.id)), 'the moved entry cancelled by Cancel', 8000), 'Cancel on the card cancels the entry moved by hand (' + m2.id + ')');
+  check(await p.evaluate(id => window.__sent.some(m => m.type === 'cancel' && m.id === id), m2.id), 'by its id');
+  const m3 = await movedPlan(24982, 24973);
+  await p.click(tk('flattenBtn'));
+  await until(() => kinds(m3.v).includes('ended'), 'Flatten ended the moved plan');
+  check(await until(async () => !(await working(m3.id)), 'the moved entry gone after Flatten', 8000), 'Flatten ends the plan and its entry moved by hand is gone (' + m3.id + ')');
+  check(desk.planFlags.length === 0, 'The Desk flagged nothing');
+
   /* ---- Planner off */
   await p.check(card('off'));
   await drawAt(p, 24990);
