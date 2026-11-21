@@ -329,7 +329,7 @@ function mount(env) {
     /* the working entry goes at once, from this window (any window may cancel by id); the leader keeps at it until ChartBridge
        says it is gone (R12 finding 1) */
     const o = entryOrderOf(p), wasSent = sentOf(p);
-    if (o) { const r = core.cancelPlanOrder(o.id, p); if (!r.sent) cardNote('The entry\'s cancel was not sent: ' + r.why + ' Cancel it in NinjaTrader, or Flatten.', 'error'); }
+    if (o) { const r = cancelEntry(p, o); if (!r.sent) cardNote('The entry\'s cancel was not sent: ' + r.why + ' Cancel it in NinjaTrader, or Flatten.', 'error'); }
     const said = () => (wasSent && entryOrderOf(p) ? 'Cancelling plan #' + p.seq + ': its entry is being taken off at ChartBridge.' : 'Plan #' + p.seq + ' cancelled.');
     S.desk.cancel(p.seq, PC.newUid(), 'Cancel on the plan card').then(r => {
       if (r.ok) { takePlan(r); shared.change(s => { const q = s.plans[uid]; if (q) q.endedAt = now(); }); shared.tell({ t: 'stamped', uid }); pull(); cardNote(said(), ''); return; }
@@ -340,19 +340,38 @@ function mount(env) {
   const isWorking = o => !!o && (o.state === 'working' || o.state === 'partFilled' || o.state === 'accepted');
   /* was the plan's entry sent (this browser's journal, or The Desk's sent fact)? { cid, at } or null */
   const sentOf = p => journal.sentOf(p.uid) || (() => { const e = (p.events || []).find(x => x.kind === 'sent' && (!x.detail || (x.detail.leg || 'entry') === 'entry')); return e ? { cid: (e.detail && e.detail.cid) || PC.entryCid(p.uid), at: e.detail && isFinite(+e.detail.at_ms) ? +e.detail.at_ms : e.at || 0 } : null; })();
-  /* R12 finding 1: the plan's working entry: by the id the leader follows, by its cid, or (after a ChartBridge restart, the cid
-     gone) by its account, root, side, kind fixed at Arm, price and qty, never an order another plan follows */
+  /* the delta review, finding 1: an order is the plan's entry only if it IS that order: its account, root, side, the kind fixed at
+     Arm, its price and its qty, and no other cid. ChartBridge's ids start again after a NinjaTrader restart, so an id alone is
+     never trusted (an unrelated order can take an old id) */
+  const entryKinds = p => (p.entryKind === 'market_on_confirm' ? ['market'] : p.entryKind ? [p.entryKind] : []);
+  const matchesEntry = (o, p) => !!o && o.account === p.account && o.root === p.root && o.side === (p.side === 'short' ? 'sell' : 'buy') &&
+    entryKinds(p).includes(o.kind) && (o.kind === 'market' || Math.abs(+o.price - p.entry) < 1e-9) && +o.qty === p.qty && !(o.cid && o.cid !== PC.entryCid(p.uid));
+  /* the plan's working entry: by the id the leader linked it by (since ChartBridge's last whole snapshot) or by its cid, and only
+     when it still matches the entry. A new id is linked by relink() alone (resume), never here. */
   function entryOrderOf(p) {
     const ws = [...core.TR.orders.values()].filter(isWorking), st = S.lead.get(p.uid);
-    let o = (st && st.orderId && ws.find(x => x.id === st.orderId)) || ws.find(x => x.cid === PC.entryCid(p.uid));
-    if (!o && sentOf(p)) {
-      const kinds = p.entryKind === 'market_on_confirm' ? ['market'] : p.entryKind ? [p.entryKind] : [];
-      o = ws.find(x => !(S.orderUid.has(x.id) && S.orderUid.get(x.id) !== p.uid) && !(x.cid && x.cid !== PC.entryCid(p.uid)) && x.account === p.account && x.root === p.root &&
-        x.side === (p.side === 'short' ? 'sell' : 'buy') && kinds.includes(x.kind) && (x.kind === 'market' || Math.abs(+x.price - p.entry) < 1e-9) && +x.qty === p.qty &&
-        (x.role === 'entry' || x.role === 'other' || !x.role)) || null;
-    }
-    if (o) { S.orderUid.set(o.id, p.uid); if (st) st.orderId = o.id; }
-    return o || null;
+    const o = (st && st.orderId && ws.find(x => x.id === st.orderId)) || ws.find(x => x.cid === PC.entryCid(p.uid)) || null;
+    if (!o || !matchesEntry(o, p)) return null;
+    S.orderUid.set(o.id, p.uid); if (st) st.orderId = o.id;
+    return o;
+  }
+  /* after ChartBridge's whole snapshot: the entry found again by its cid, or (the cids gone after a restart) by the attribute match,
+     never an order another plan has or an order with another cid; the one place a new id is linked */
+  function relink(p, st, id) {
+    st.relinked = true;
+    const ws = [...core.TR.orders.values()].filter(isWorking);
+    const o = (id && ws.find(x => x.id === id)) || ws.find(x => x.cid === PC.entryCid(p.uid)) ||
+      ws.find(x => matchesEntry(x, p) && !(S.orderUid.has(x.id) && S.orderUid.get(x.id) !== p.uid) && (x.role === 'entry' || x.role === 'other' || !x.role)) || null;
+    if (!o || !matchesEntry(o, p)) return null;
+    S.orderUid.set(o.id, p.uid); st.orderId = o.id;
+    return o;
+  }
+  /* every cancel of a plan's entry goes through here: the order is read again by its id and must still be the plan's entry; an
+     order that fails the check is never cancelled (said, as an alarm) */
+  function cancelEntry(p, o) {
+    const now0 = o ? core.TR.orders.get(o.id) : null;
+    if (!now0 || !matchesEntry(now0, p)) { if (o) alarm('Plan #' + p.seq + ': order ' + o.id + ' no longer matches its entry: not cancelled. Check NinjaTrader.'); return { sent: false, why: 'not the plan\'s entry' }; }
+    return core.cancelPlanOrder(now0.id, p);
   }
   /* R12 finding 2 and 6: the newest trade's own time per instrument, run on from it: the clock a minute's close is judged on */
   const tradeNow = r => { const L = S.lines.get(r); return L && L.lastU > 0 ? L.lastU + Math.max(0, now() - L.lastUAt) : now(); };
@@ -372,7 +391,9 @@ function mount(env) {
   function lead() {
     /* ChartBridge's whole snapshot again after a drop or a restart: every open plan is reconciled again (never sent again) */
     const snap = !!core.TR.snapReady;
-    if (snap && !snapWas) for (const st of S.lead.values()) { st.resumed = false; st.cancelDone = false; }
+    /* the delta review, finding 1: ChartBridge's ids are not kept across its whole snapshot (a reconnect, a NinjaTrader restart:
+       its counter starts again): every id link is forgotten and found again by resume (relink) only */
+    if (snap && !snapWas) { S.orderUid.clear(); for (const st of S.lead.values()) { st.resumed = false; st.cancelDone = false; st.orderId = ''; st.relinked = false; } }
     snapWas = snap;
     if (!leader.isLeader() || !S.pc || S.ok !== true) return;
     for (const p of planList()) {
@@ -388,11 +409,11 @@ function mount(env) {
   function finishCancel(p) {
     const st = LS(p.uid);
     if (st.cancelDone || st.filled || !sentOf(p) || (p.events || []).some(e => e.kind === 'filled') || !core.TR.snapReady) return;
-    const o = entryOrderOf(p);
+    const o = st.relinked ? entryOrderOf(p) : relink(p, st);           // after a new snapshot: found again once, then by its id
     if (!o) { if (now() - (sentOf(p).at || 0) > 30000) st.cancelDone = true; return; }   // gone (a fresh send may not show yet)
     if (now() - st.cancelAt < 2000) return;
     st.cancelAt = now(); st.cancelTries++;
-    const r = core.cancelPlanOrder(o.id, p);
+    const r = cancelEntry(p, o);
     if (st.cancelTries === 5) alarm('Plan #' + p.seq + ' ended, but its entry ' + o.id + ' is still working after 5 cancels' + (r.sent ? '' : ' (' + r.why + ')') + ': cancel it in NinjaTrader, or Flatten.');
   }
   function resume(p, st) {
@@ -403,15 +424,23 @@ function mount(env) {
        its first live trade too (the careful side: a touch there is counted), then the trades */
     const bars = L.firstU && isFinite(p.armedAt) && p.armedAt >= L.firstU ? [] : L.firstU ? L.bars.filter(b => b.t < L.firstU) : L.bars;   // armed while this window watched: its trades only
     const r = PC.reconcile(p, { now: now(), tick: p.tick || env.tickOf(p.root), journal: journal.sentOf(p.uid), orders: [...core.TR.orders.values()], execs: env.execs(), bars });
-    if (r.act === 'expired' || r.act === 'stop_through' || r.act === 'missed') { fact(p.uid, r.act, { why: r.why, on: 'resume' }); say('Plan #' + p.seq + ': ' + r.why + '.', 'warn'); return; }
-    if (r.act === 'resume_working') { st.orderId = r.id; S.orderUid.set(r.id, p.uid); st.placed = true; watchFor(p, st, true); return; }
-    if (r.act === 'cancel_expired') { st.orderId = r.id; S.orderUid.set(r.id, p.uid); core.cancelPlanOrder(r.id, p); st.cancelAt = now(); fact(p.uid, 'expired', { late_ms: r.lateMs, on: 'resume', id: r.id }); say('Plan #' + p.seq + ' had expired while no window watched it: its entry is cancelled now.', 'warn'); return; }
+    if (r.act === 'expired' || r.act === 'stop_through' || r.act === 'missed') {
+      /* the delta review, finding 4: a minute bar of the Arm minute holds the trades just before Arm too: said */
+      const armMin = isFinite(p.armedAt) ? Math.floor(p.armedAt / 60000) * 60000 : null;
+      const maybe = r.act !== 'expired' && armMin !== null && bars.some(b => b.t === armMin) ? ' (it may be a touch from just before Arm: the minute\'s bar cannot tell)' : '';
+      fact(p.uid, r.act, { why: r.why + maybe, on: 'resume' }); say('Plan #' + p.seq + ': ' + r.why + maybe + '.', 'warn'); return;
+    }
+    if (r.act === 'resume_working') { if (!relink(p, st, r.id)) { st.unknown = true; alarm('Plan #' + p.seq + ': its entry could not be told apart from another order: check NinjaTrader. It is never sent again.'); return; } st.placed = true; watchFor(p, st, true); return; }
+    if (r.act === 'cancel_expired') { const o = relink(p, st, r.id); if (o) cancelEntry(p, o); st.cancelAt = now(); fact(p.uid, 'expired', { late_ms: r.lateMs, on: 'resume', id: r.id }); say('Plan #' + p.seq + ' had expired while no window watched it: its entry is cancelled now.', 'warn'); return; }
     if (r.act === 'filled') { if (p.phase !== 'filled') { for (const id of r.execs) S.claimed.add(id); fact(p.uid, 'filled', { exec_ids: r.execs, nt_order_id: r.order, price: r.price, qty: r.qty, on: 'resume' }); } st.filled = true; st.resumedFilled = true; return; }
     if (r.act === 'none' && p.phase === 'filled') { st.filled = true; st.resumedFilled = true; return; }
     if (r.act === 'unknown') { if (!p.events.some(e => e.kind === 'owner' && e.detail && e.detail.what === 'unknown')) fact(p.uid, 'owner', { what: 'unknown', why: r.why }); alarm('Plan #' + p.seq + ': ' + r.why); st.unknown = true; return; }
     if (r.act === 'resume') {
       watchFor(p, st, false);
       for (const t of L.ticks) if (isFinite(p.armedAt) && t.u >= p.armedAt) { for (const f of st.watch.trade(t.p, t.u)) act(getPlan(p.uid) || p, st, f); if (st.watch.state().done) break; }
+      /* the delta review, finding 3: nothing touched since Arm: sent in this same step (not a step later, when a trade could touch it) */
+      const q = getPlan(p.uid);
+      if (q && q.phase === 'armed') step(q, st);
     }
   }
   function alarm(text) { say(text, 'error'); if (typeof env.alarm === 'function') env.alarm(text); }
@@ -474,7 +503,7 @@ function mount(env) {
     if (f.kind === 'confirmed') { fact(p.uid, 'confirmed', { close: f.close, minute_ms: f.minute }); if (!sentOf(p)) send(getPlan(p.uid) || p, st, true); return; }
     if (f.kind === 'stop_through' || f.kind === 'expired') {
       const o = entryOrderOf(p);
-      if (o) { const r = core.cancelPlanOrder(o.id, p); st.cancelAt = now(); if (!r.sent) alarm('Plan #' + p.seq + ' ' + f.kind.replace('_', '-') + ', but its entry\'s cancel was not sent: ' + r.why + ' It is tried again; cancel it in NinjaTrader if it stays.'); }
+      if (o) { const r = cancelEntry(p, o); st.cancelAt = now(); if (!r.sent) alarm('Plan #' + p.seq + ' ' + f.kind.replace('_', '-') + ', but its entry\'s cancel was not sent: ' + r.why + ' It is tried again; cancel it in NinjaTrader if it stays.'); }
       fact(p.uid, f.kind, { price: f.price, id: o ? o.id : '' });
       say('Plan #' + p.seq + ' ' + (f.kind === 'expired' ? 'expired' : 'ended: price went through the stop') + (o ? ': its entry is being cancelled.' : '.'), 'warn');
     }
@@ -504,14 +533,22 @@ function mount(env) {
     const o = st.orderId ? core.TR.orders.get(st.orderId) : null;
     if (!st.ntOrder) {
       if (!(st.entryFilled > 0)) return;                               // ChartBridge has not shown the entry filling yet
-      const first = all.filter(f => f && f.account === p.account && f.root === p.root && f.side === side && !S.claimed.has(f.id) && +f.u >= (s0.at || 0) - 2000 && f.order)
+      /* the delta review, finding 4: only a fill that could be this entry's names its NinjaTrader order: a limit at its price or
+         better, a stop or MIT, or the confirmation's market order, near the price it was sent at; never more than the plan's qty */
+      const tick = p.tick || 0.25, buy = side === 'buy', near = (px, at) => isFinite(+at) && Math.abs(px - +at) <= 20 * tick;
+      const sentEv = (p.events || []).find(e => e.kind === 'sent'), lastAt = sentEv && sentEv.detail ? sentEv.detail.last : null;
+      const fits = f => (p.entryKind === 'limit' ? (buy ? +f.p <= p.entry + 1e-9 : +f.p >= p.entry - 1e-9) : p.entryKind === 'market_on_confirm' ? near(+f.p, lastAt === null || lastAt === undefined ? p.entry : lastAt) : near(+f.p, p.entry)) && +f.qty <= p.qty;
+      const first = all.filter(f => f && f.account === p.account && f.root === p.root && f.side === side && !S.claimed.has(f.id) && +f.u >= (s0.at || 0) - 2000 && f.order && fits(f))
         .sort((a, b) => +a.u - +b.u)[0];
       if (!first) return;
       st.ntOrder = first.order;
     }
     const mine = all.filter(f => f && f.order === st.ntOrder && f.account === p.account && f.root === p.root);
     const got = mine.reduce((a, f) => a + (+f.qty || 0), 0);
-    if (!(got >= p.qty || (got > 0 && !isWorking(o)))) return;
+    /* filled once the fills cover its qty, or the order reports how much it filled in its final state (filled, or cancelled with
+       part filled) and the fills cover that */
+    const final = (st.entryState === 'filled' || st.entryState === 'cancelled' || st.entryState === 'rejected') && st.entryFilled > 0 && got >= st.entryFilled;
+    if (!(got >= p.qty || final)) return;
     st.filled = true;
     for (const f of mine) S.claimed.add(f.id);
     const px = mine.reduce((a, f) => a + (+f.p || 0) * (+f.qty || 0), 0) / got;
@@ -525,12 +562,16 @@ function mount(env) {
     if (!m || !m.type) return;
     if (m.type === 'order') {
       /* the plan's entry by its cid, or by the id the leader follows (after a restart its cid is gone) */
-      const uid = (typeof m.cid === 'string' && PC.uidOfCid(m.cid)) || S.orderUid.get(m.id) || '';
+      const byCid = typeof m.cid === 'string' ? PC.uidOfCid(m.cid) : '';
+      const uid = byCid || S.orderUid.get(m.id) || '';
       const p = uid ? getPlan(uid) : null;
       if (!p || !leader.isLeader()) return;
+      /* the delta review, finding 1: an order known by id only (no cid) is the plan's only while it matches the entry; else the link
+         goes and the message is not the plan's */
+      if (!byCid && !matchesEntry(m, p)) { S.orderUid.delete(m.id); const st0 = S.lead.get(uid); if (st0 && st0.orderId === m.id) st0.orderId = ''; return; }
       S.orderUid.set(m.id, uid);
       const st = LS(uid);
-      st.orderId = m.id;
+      st.orderId = m.id; st.entryState = m.state;
       if (+m.filled > 0) st.entryFilled = +m.filled;
       if (!st.placed && (m.state === 'working' || m.state === 'accepted' || m.state === 'partFilled' || m.state === 'filled')) { st.placed = true; fact(uid, 'placed', { id: m.id, state: m.state }); }
       if (st.lastPrice !== null && m.price !== null && m.price !== st.lastPrice && (m.state === 'working' || m.state === 'accepted')) fact(uid, 'override', { what: 'moved_outside', account: p.account, root: p.root, id: m.id, from: st.lastPrice, to: m.price });
@@ -570,13 +611,15 @@ function mount(env) {
      it until ChartBridge says it is gone). A filled plan's position is closed by the Flatten itself (recorded, then closed). */
   function flattened(r) {
     const acct = env.ticketAccount(), what = r ? 'flatten' : 'flatten_all';
+    /* the delta review, finding 4: a group in the ticket: its Flatten ends the plans of every member account */
+    const accts = typeof env.members === 'function' ? env.members(acct) : [acct];
     for (const p of planList()) {
-      if (r && !(p.account === acct && p.root === r)) continue;
+      if (r && !(accts.includes(p.account) && p.root === r)) continue;
       if (!['armed', 'working', 'filled'].includes(p.phase)) continue;
-      fact(p.uid, 'override', { what, account: r ? acct : p.account, root: r || p.root });
+      fact(p.uid, 'override', { what, account: p.account, root: r || p.root, ticket: r ? acct : '' });
       if (p.phase === 'filled') continue;
       const o = entryOrderOf(p);
-      if (o) core.cancelPlanOrder(o.id, p);
+      if (o) cancelEntry(p, o);
       fact(p.uid, 'ended', { why: (r ? 'Flatten' : 'Flatten all') + ' ends the plan', by: 'page' });
       say('Plan #' + p.seq + ' ended by ' + (r ? 'Flatten' : 'Flatten all') + (o ? ': its entry is being cancelled.' : '.'), 'warn');
     }

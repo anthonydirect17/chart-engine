@@ -50,6 +50,7 @@ test('submitBody: exactly The Desk\'s Submit fields (TheDesk thedesk/plans.py SU
 test('entryFor (decision 2 A): by where the line sits against the last price at Arm', () => {
   assert.deepEqual(PC.entryFor(draft(), 25002, true), { kind: 'limit', price: 25000, lineAbove: false }, 'a buy limit under the market');
   assert.match(PC.entryFor(draft(), 24998, true).refuse, /would fill at once/, 'a buy limit over the market: refused at Arm');
+  assert.match(PC.entryFor(draft(), 25000, true).refuse, /at the last price \(25000\): the next trade would touch it/, 'a limit at the last price: refused at Arm (the delta review)');
   assert.deepEqual(PC.entryFor(draft({ entryType: 'market_on_touch' }), 25002, true), { kind: 'mit', price: 25000, lineAbove: false }, 'touch on the limit side: an MIT at the line');
   assert.deepEqual(PC.entryFor(draft({ entryType: 'market_on_touch', stop: 24990 }), 24998, true), { kind: 'stop', price: 25000, lineAbove: true }, 'touch on the stop side: a stop-market at the line');
   assert.match(PC.entryFor(draft({ entryType: 'market_on_touch' }), 25002, false).refuse, /MIT is off/);

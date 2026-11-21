@@ -70,6 +70,35 @@ try {
   check(cx && cx.every(m => typeof m.id === 'string' && m.id), 'its entry cancelled by its id (no cid after the restart): ' + JSON.stringify(cx));
   await until(() => p.$eval(card('phase'), e => /^Ended: cancelled/.test(e.textContent)), 'the card says cancelled once the entry is gone', 8000);
 
+  /* ---- the delta review: NinjaTrader restarts and every order gets a new id (ChartBridge's counter starts again); an unrelated
+     order then takes the plan's OLD id. The plan's entry is found again by its attributes only; the unrelated order is never
+     touched; the card's Cancel names the plan's own (renumbered) order */
+  await setPrice(25000);
+  const v4 = await planOn(p, 24982);
+  await until(() => kinds(v4).includes('placed'), 'placed');
+  const oldId = v4.events.find(e => e.kind === 'placed').detail.id;
+  await p.evaluate(() => { window.__sent.length = 0; });
+  await control('renumber', { seq: String(+oldId.replace(/\D/g, '') - 1) });
+  await until(() => p.evaluate(() => document.getElementById('wsConn').classList.contains('live') && window.workspace.ticket().snapReady), 'connected again', 30000);
+  await control('elsewhere', { account: 'Sim101', root: 'MNQ', side: 'sell', kind: 'limit', qty: 1, p: 25050 });
+  const st0 = await control('state', { root: 'MNQ' });
+  const other = st0.orders.find(o => o.id === oldId), mine = st0.orders.find(o => o.account === 'Sim101' && o.side === 'buy' && o.price === 24982);
+  check(!!other && other.price === 25050 && !!mine && mine.id !== oldId, 'an unrelated order took the plan\'s old id ' + oldId + '; the entry is now ' + (mine && mine.id));
+  await wait(2500);
+  check((await orders(p)).length === 0, 'after the renumbering nothing is sent again');
+  check(!(await p.evaluate(() => window.__sent.some(m => m.type === 'cancel'))), 'nothing was cancelled by the old id');
+  await p.evaluate(() => { window.__sent.length = 0; });
+  await selectPlan(p, v4.uid, until);
+  await p.click(card('cancel'));
+  await until(() => kinds(v4).includes('cancel'), 'The Desk stamped the cancel');
+  const cx4 = await until(() => p.evaluate(() => { const c = window.__sent.filter(m => m.type === 'cancel'); return c.length ? c : null; }), 'the entry\'s cancel');
+  await wait(2500);
+  const all4 = await p.evaluate(() => window.__sent.filter(m => m.type === 'cancel').map(m => m.id));
+  check(cx4 && all4.every(id => id === mine.id), 'every cancel names the plan\'s own renumbered order ' + mine.id + ', never ' + oldId + ': ' + JSON.stringify(all4));
+  const st1 = await control('state', { root: 'MNQ' });
+  check(st1.orders.some(o => o.id === oldId && o.price === 25050) && !st1.orders.some(o => o.id === mine.id), 'the unrelated order is still working; the plan\'s entry is gone');
+  await control('elsewhere', { account: 'Sim101', root: 'MNQ', side: 'buy', kind: 'limit', qty: 1, p: 25050 }).catch(() => {});   // takes the unrelated sell off (crossing the market)
+
   /* ---- a second plan, then ChartBridge restarts and its entry is gone: outcome not known, an alarm, never sent again */
   await setPrice(25000);
   const v1b = await planOn(p, 24985);

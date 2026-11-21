@@ -3842,7 +3842,7 @@ function startPlanner() {
     pcName: () => fetch('/diag', { cache: 'no-store' }).then(r => (r.ok ? r.json() : null)).then(j => (j && j.bars && typeof j.bars.pc === 'string' ? j.bars.pc : '')),
     charts: () => chartViews().filter(v => v.pane && v.pane.chart).map(v => ({ id: v.panel.id, root: v.panel.root, chart: v.pane.chart, stage: v.body.querySelector('.stage') })),
     tickOf, pointValue: r => (instruments[r] || {}).pointValue || 0, contract: r => (instruments[r] && typeof instruments[r].name === 'string' ? instruments[r].name : ''),
-    ticketAccount, ticketRoot, holdsTicket: () => holds(),
+    ticketAccount, ticketRoot, holdsTicket: () => holds(), members: a => (core.isGroup(a) ? core.groupMembers(a) : [a]),   // a group's members (its Flatten ends their plans)
     bracket: r => core.brackets[r] || null, qty: r => core.qtys[r] || 1,
     accounts: () => core.TR.accounts.slice(), maxQty: r => OT.maxQtyFor(core.TR, r), maxBracketTicks: () => core.TR.maxBracketTicks, orderTypes: () => core.switchOn('orderTypes'),
     execs: () => [...tfills.values()],

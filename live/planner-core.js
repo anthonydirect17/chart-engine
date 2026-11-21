@@ -142,6 +142,8 @@ function entryFor(d, last, orderTypes) {
   if (d.tick > 0 && throughStop(d, last, d.tick)) return { refuse: 'The last price ' + last + ' is already through the stop: not armed.' };
   if (d.entryType === 'touch_confirm') return { kind: null, price: null, lineAbove };
   if (d.entryType === 'limit') {
+    /* the delta review: a limit at the last price would be touched by the very next trade: refused at Arm */
+    if (Math.abs(d.entry - last) < 1e-9) return { refuse: 'The line is at the last price (' + last + '): the next trade would touch it. Not armed. Move it, or use Market on touch.' };
     if (!limitSide) return { refuse: 'A ' + (buy ? 'buy' : 'sell') + ' limit at ' + d.entry + ' is through the market (last ' + last + ') and would fill at once: not armed. Use Market on touch for that side.' };
     return { kind: 'limit', price: d.entry, lineAbove };
   }

@@ -109,6 +109,16 @@ update; with an older Desk the planner says it has no plan log and hides.
   plan log, and the planner hides.
 - **Fills** are tied to the plan with BotCore's ledger (reused), and a press on a plan's working entry while unarmed says "Plan #N's
   order: Cancel it on the plan card, or Flatten".
+- **Its own entry only** (the reviews of #118): an order is a plan's entry only while its account, root, side, the kind fixed at
+  Arm, its price and qty match and it carries no other cid. ChartBridge's order ids start again after a NinjaTrader restart, so
+  every id link is forgotten when ChartBridge's snapshot comes back and found again by the plan's resume only (its cid, else
+  those attributes); every cancel reads the order again and never cancels one that fails the check.
+- **Known limits:** a Flatten pressed on another page (Legion, the Account page) or in NinjaTrader does not end a plan (only the
+  chart page's Flatten, Flatten all and Cut half are seen); its entry is cancelled by NinjaTrader all the same, and the plan
+  ends when its expiry or its stop comes. The clocks are three: The Desk's (Arm, the expiry), this PC's (the page) and the
+  exchange's (each trade's own time, on which a minute's close is judged); a PC clock off by seconds moves an expiry by as much.
+  After a reload, a plan armed before this window watched its instrument is judged on the minute bars since Arm: a touch in the
+  Arm minute may be one from just before Arm (said in its note), and the plan is missed: the careful side.
 - Tests: test/plan-layer.test.js, test/planner-core.test.js, test/planner-trade.test.js, test/planner-page.test.js; smokes
   test/plan-layer-smoke.mjs, test/planner-smoke.mjs, test/planner-windows-smoke.mjs, test/planner-resume-smoke.mjs (the fake
   Desk's plan log; the fake bridge's `--pc` and `--fold-trades`).
