@@ -888,7 +888,7 @@ function tconnect() {
     tws = sock;
     sock.onopen = () => { if (sock === tws) tTries = 0; };
     sock.onmessage = ev => { if (sock !== tws) return; let m; try { m = JSON.parse(ev.data); } catch (e) { return; } tmessage(m); };
-    sock.onclose = () => { if (sock !== tws) return; tws = null; if (core.TR.armed) armOffWhy = 'drop'; core.lost('Not connected to ChartBridge.'); tretry(); };
+    sock.onclose = () => { if (sock !== tws) return; tws = null; if (core.TR.armed) armOffWhy = 'drop'; core.lost('Not connected to ChartBridge.'); if (planner) planner.message({ type: 'dropped' }); tretry(); };   // 1.62.0: links forgotten at once
     sock.onerror = () => { /* onclose follows */ };
   }, tretry);
 }
@@ -903,6 +903,7 @@ function tmessage(m) {
       instruments = {};
       for (const i of m.instruments || []) instruments[i.root] = i;
       core.hello(m);
+      if (planner) planner.message(m);                   // 1.62.0: a new generation of order ids: the planner forgets every older link at once
       if (AF) AF.start(bridgeFeatures);                  // 1.16.0: the window's v3 connection (only when ChartBridge speaks v3)
       for (const v of views.values()) if (v.quotes && v.quotes.sync) v.quotes.sync();   // the quote-only markets hello lists
       renderOrders();

@@ -36,6 +36,7 @@ function mount(env) {
     sel: '', offAsk: 0, card: null, cardAt: null, lines: new Map(), plans: new Map(), drafts: new Map(), lead: new Map(),
     hooked: new WeakSet(), drawnKey: new Map(), timers: [], destroyed: false, deskDown: false, notes: [],
     orderUid: new Map(), claimed: new Set(), lockSeen: new Set(),   // an order's plan (by its page id), exec ids claimed, plans seen armed
+    gen: -1,                                                         // the generation of ChartBridge's order ids the links belong to
   };
   const journal = PC.createJournal(store, now), queue = PC.createQueue(store, now);
   const say = (text, level) => { S.notes.push(text); if (S.notes.length > 40) S.notes.shift(); if (S.card) cardNote(text, level); else env.note(text, level); };
@@ -352,34 +353,51 @@ function mount(env) {
      order linked without a cid (by its id, or the attribute match after a restart) is the plan's only while it matches the entry.
      A link made by the cid stays the plan's own for that order id even when a later message leaves the cid out (until
      ChartBridge's next whole snapshot forgets every link). */
+  /* the delta review of 71444ef: every link (S.orderUid, st.orderId, st.linkCid) belongs to one generation of ChartBridge's order
+     ids, TradeCore's TR.snapGen (+1 on every drop, hello and orders snapshot, before anything acts on it). syncGen() runs first in
+     every function that reads a link, so a link made before a snapshot is forgotten the moment the snapshot arrives, never on the
+     leader's next tick; and a link is trusted only when it carries the current generation (an id reused after a restart is never
+     the plan's by its old link). */
+  const gen = () => core.TR.snapGen || 0;
+  function syncGen() {
+    if (S.gen === gen()) return;
+    S.gen = gen(); S.orderUid.clear();
+    for (const st of S.lead.values()) { st.orderId = ''; st.linkCid = false; st.linkGen = -1; st.relinked = false; }
+  }
+  const linked = st => !!(st && st.orderId && st.linkGen === gen());
+  const linkTo = (st, o, p, cid) => { S.orderUid.set(o.id, p.uid); if (st) { st.orderId = o.id; st.linkCid = !!cid; st.linkGen = gen(); } };
   const isOwn = (o, p) => !!o && o.cid === PC.entryCid(p.uid);
-  const cidLinked = (o, st) => !!(o && st && st.linkCid && st.orderId === o.id && !o.cid);
+  const cidLinked = (o, st) => !!(o && linked(st) && st.linkCid && st.orderId === o.id && !o.cid);
   const isEntry = (o, p, st) => isOwn(o, p) || cidLinked(o, st) || (!!o && matchesEntry(o, p));
   /* the plan's working entry: by its cid, or by the id the leader linked it by (since ChartBridge's last whole snapshot). A new id
      is linked by relink() alone (resume), never here. */
   function entryOrderOf(p) {
+    syncGen();
     const ws = [...core.TR.orders.values()].filter(isWorking), st = S.lead.get(p.uid);
-    const o = ws.find(x => isOwn(x, p)) || (st && st.orderId && ws.find(x => x.id === st.orderId)) || null;
+    const o = ws.find(x => isOwn(x, p)) || (linked(st) && ws.find(x => x.id === st.orderId)) || null;
     if (!o || !isEntry(o, p, st)) return null;
-    S.orderUid.set(o.id, p.uid); if (st) { st.linkCid = isOwn(o, p) || cidLinked(o, st); st.orderId = o.id; }
+    linkTo(st, o, p, isOwn(o, p) || cidLinked(o, st));
     return o;
   }
   /* after ChartBridge's whole snapshot: the entry found again by its cid, or (the cids gone after a restart) by the attribute match,
      never an order another plan has or an order with another cid; the one place a new id is linked */
   function relink(p, st, id) {
+    syncGen();
     st.relinked = true;
     const ws = [...core.TR.orders.values()].filter(isWorking);
     const o = ws.find(x => isOwn(x, p)) || (id && ws.find(x => x.id === id)) ||
       ws.find(x => matchesEntry(x, p) && !(S.orderUid.has(x.id) && S.orderUid.get(x.id) !== p.uid) && (x.role === 'entry' || x.role === 'other' || !x.role)) || null;
     if (!o || !(isOwn(o, p) || matchesEntry(o, p))) return null;
-    S.orderUid.set(o.id, p.uid); st.orderId = o.id; st.linkCid = isOwn(o, p);
+    linkTo(st, o, p, isOwn(o, p));
     return o;
   }
   /* every cancel of a plan's entry goes through here: the order is read again by its id and must still be the plan's entry; an
      order that fails the check is never cancelled (said, as an alarm) */
   function cancelEntry(p, o) {
-    const now0 = o ? core.TR.orders.get(o.id) : null;
-    if (!now0 || !isEntry(now0, p, S.lead.get(p.uid))) { if (o) alarm('Plan #' + p.seq + ': order ' + o.id + ' no longer matches its entry: not cancelled. Check NinjaTrader.'); return { sent: false, why: 'not the plan\'s entry' }; }
+    syncGen();
+    const now0 = o ? core.TR.orders.get(o.id) : null, st = S.lead.get(p.uid);
+    /* its own cid, or the id linked in this generation (and still the entry); never an id linked before the last snapshot */
+    if (!now0 || !(isOwn(now0, p) || (linked(st) && st.orderId === now0.id && isEntry(now0, p, st)))) { if (o) alarm('Plan #' + p.seq + ': order ' + o.id + ' no longer matches its entry: not cancelled. Check NinjaTrader.'); return { sent: false, why: 'not the plan\'s entry' }; }
     return core.cancelPlanOrder(now0.id, p);
   }
   /* R12 finding 2 and 6: the newest trade's own time per instrument, run on from it: the clock a minute's close is judged on */
@@ -396,14 +414,15 @@ function mount(env) {
   /* ---------------- the leader: sends, watches, resumes, finishes cancels (only the window holding the lock) */
   const leader = PC.createLeader({ locks: env.locks, onLead: () => { for (const st of S.lead.values()) st.resumed = false; lead(); } });
   const LS = uid => { let st = S.lead.get(uid); if (!st) S.lead.set(uid, st = { resumed: false, watch: null, orderId: '', placed: false, filled: false, lastPrice: null, posSeen: false, resumedFilled: false, ntOrder: '', cancelAt: 0, cancelTries: 0, cancelDone: false }); return st; };
-  let snapWas = false;
+  let resumeGen = -1;
   function lead() {
     /* ChartBridge's whole snapshot again after a drop or a restart: every open plan is reconciled again (never sent again) */
     const snap = !!core.TR.snapReady;
     /* the delta review, finding 1: ChartBridge's ids are not kept across its whole snapshot (a reconnect, a NinjaTrader restart:
-       its counter starts again): every id link is forgotten and found again by resume (relink) only */
-    if (snap && !snapWas) { S.orderUid.clear(); for (const st of S.lead.values()) { st.resumed = false; st.cancelDone = false; st.orderId = ''; st.linkCid = false; st.relinked = false; } }
-    snapWas = snap;
+       its counter starts again): every id link is forgotten (syncGen, at once) and found again by resume (relink) only, once per
+       generation whole */
+    syncGen();
+    if (snap && resumeGen !== gen()) { resumeGen = gen(); for (const st of S.lead.values()) { st.resumed = false; st.cancelDone = false; } }
     if (!leader.isLeader() || !S.pc || S.ok !== true) return;
     for (const p of planList()) {
       if (p.phase === 'ended') { finishCancel(p); continue; }
@@ -555,7 +574,8 @@ function mount(env) {
     if (st.filled || (p.events || []).some(e => e.kind === 'filled')) { st.filled = true; return; }
     const s0 = sentOf(p); if (!s0) return;
     const side = p.side === 'short' ? 'sell' : 'buy', all = env.execs();
-    const o = st.orderId ? core.TR.orders.get(st.orderId) : null;
+    syncGen();
+    const o = linked(st) ? core.TR.orders.get(st.orderId) : null;
     if (!st.ntOrder) {
       if (!(st.entryFilled > 0)) return;                               // ChartBridge has not shown the entry filling yet
       /* the delta review, finding 4: only a fill that could be this entry's names its NinjaTrader order: a limit at its price or
@@ -585,6 +605,7 @@ function mount(env) {
   /* ---------------- ChartBridge's messages (this window's order connection) */
   function message(m) {
     if (!m || !m.type) return;
+    syncGen();                                                         // an orders snapshot or a hello: every older link goes first
     if (m.type === 'order') {
       /* the plan's entry by its cid, or by the id the leader follows (after a restart its cid is gone) */
       const byCid = typeof m.cid === 'string' ? PC.uidOfCid(m.cid) : '';
@@ -594,10 +615,9 @@ function mount(env) {
       /* the delta review, finding 1: an order known by id only (no cid) is the plan's only while it matches the entry; else the link
          goes and the message is not the plan's */
       if (!byCid && !cidLinked(m, S.lead.get(uid)) && !matchesEntry(m, p)) { S.orderUid.delete(m.id); const st0 = S.lead.get(uid); if (st0 && st0.orderId === m.id) st0.orderId = ''; return; }
-      S.orderUid.set(m.id, uid);
       const st = LS(uid);
-      if (byCid) st.linkCid = true; else if (st.orderId !== m.id) st.linkCid = false;   // a cid link: the plan's own order, whatever its price
-      st.orderId = m.id; st.entryState = m.state;
+      linkTo(st, m, p, byCid || cidLinked(m, st));                     // a cid link: the plan's own order, whatever its price
+      st.entryState = m.state;
       if (+m.filled > 0) st.entryFilled = +m.filled;
       if (!st.placed && (m.state === 'working' || m.state === 'accepted' || m.state === 'partFilled' || m.state === 'filled')) { st.placed = true; fact(uid, 'placed', { id: m.id, state: m.state }); }
       if (st.lastPrice !== null && m.price !== null && m.price !== st.lastPrice && (m.state === 'working' || m.state === 'accepted')) fact(uid, 'override', { what: 'moved_outside', account: p.account, root: p.root, id: m.id, from: st.lastPrice, to: m.price });
@@ -688,6 +708,7 @@ function mount(env) {
     message: m => guard(() => message(m)), flattened: r => guard(() => flattened(r)), override: (w, on) => guard(() => override(w, on)),
     ticketArmed: on => guard(() => ticketArmed(on)), sentManual: msg => guard(() => sentManual(msg)), pressOff: id => { try { return pressOff(id); } catch (e) { return ''; } },
     armTool, available,
+    test: env.test ? { cancel: uid => cancel(uid), lead: () => lead() } : undefined,   // the unit tests only (test/planner-links.test.js)
     state: () => ({ lines: [...S.lines.values()].map(L => ({ root: L.root, ready: L.ready, bars: L.bars.length, last: L.last, firstU: L.firstU, lastU: L.lastU, tail: L.bars.slice(-3) })), ok: S.ok, why: S.why, pc: S.pc, leader: leader.isLeader(), sel: S.sel, drafts: [...S.drafts.values()], plans: planList(), journal: journal.all(), queue: queue.items(), lost: queue.lost(), notes: S.notes.slice(), card: !!S.card }),
     destroy() { S.destroyed = true; for (const t of S.timers) clearInterval(t); leader.close(); shared.close(); if (S.card) S.card.remove(); for (const L of S.lines.values()) { try { L.sock.onmessage = L.sock.onclose = null; L.sock.close(); } catch (e) { /* closed */ } } },
   };

@@ -95,6 +95,10 @@ function create(env) {
     /* ChartBridge 0.5.7 (review of #47): the sign-in snapshot of orders and positions is whole (the orders list says how many
        position messages follow it); false until then, and again after a drop. The ticket's daily reset waits for it. */
     snapReady: false, snapLeft: null,
+    /* 1.62.0 (the delta review of 71444ef): +1 on every drop, hello and orders snapshot, before anything acts on it: ChartBridge's
+       order ids are not kept across one (a NinjaTrader restart starts them again), so a link to an id from an older generation
+       is never trusted (the planner) */
+    snapGen: 0,
     orders: new Map(),                   // id -> latest order message (working ones; finished ones are dropped)
     positions: new Map(),                // 'account|root' -> { qty, avgPrice }
     /* 1.16.0 (protocol v3): ChartBridge's switches (all off unless the window's v3 connection says on: setSwitches), its
@@ -233,6 +237,7 @@ function create(env) {
     env.applied(pick, cameOn);
   }
   function lost(reason) {
+    TR.snapGen++;
     TR.signInStarted = false;
     if (!TR.v2) return;
     batchStop(() => true, 'the connection to ChartBridge dropped');   // before the orders are cleared: count what was still working
@@ -265,6 +270,7 @@ function create(env) {
   }
   /** ChartBridge's `hello`: protocol v2 carries `trading`; sign in. */
   function hello(m) {
+    TR.snapGen++;
     recap();
     /* release 1 (1.6c): Cut half needs ChartBridge's cutHalf (0.6.24); an older one lists no such feature, and its button greys */
     TR.cutHalf = !!(m && Array.isArray(m.features) && m.features.includes('cutHalf'));
@@ -274,7 +280,7 @@ function create(env) {
   function message(m) {
     switch (m && m.type) {
       case 'trading': applyTrading(m); if (!TR.signInStarted) signIn(); return true;
-      case 'orders': TR.orders.clear(); announced.clear(); TR.moving.clear(); for (const o of m.list || []) if (served(o.root)) { TR.orders.set(o.id, o); announced.set(o.id, o); }
+      case 'orders': TR.snapGen++; TR.orders.clear(); announced.clear(); TR.moving.clear(); for (const o of m.list || []) if (served(o.root)) { TR.orders.set(o.id, o); announced.set(o.id, o); }
         TR.snapLeft = Number.isInteger(m.positions) && m.positions >= 0 ? m.positions : null; TR.snapReady = TR.snapLeft === 0;   // no count (before 0.5.7): never whole
         unsentCheck(); env.changed(); return true;
       case 'order': onOrder(m); return true;

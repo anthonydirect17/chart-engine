@@ -117,7 +117,10 @@ update; with an older Desk the planner says it has no plan log and hides.
   attributes); every cancel reads the order again and never cancels one that fails the check. A plan that ends while its
   entry was sent, never filled and cannot be found is never ended quietly: its card says "Cancelling: its entry cannot be
   found" and, after 30 seconds, an alarm asks to cancel it in NinjaTrader or Flatten. A plan filled only after its position
-  was already flat (a Flatten of a part fill) is stamped closed then.
+  was already flat (a Flatten of a part fill) is stamped closed then. Every link to an order id belongs to one generation of ChartBridge's ids
+  (TradeCore's `TR.snapGen`, raised on every drop, hello and orders snapshot before anything acts on it): the planner forgets
+  every older link at once and trusts only links of the current one, so an unrelated order that takes a plan's old id after a
+  restart is never cancelled by an expiry, Cancel or Flatten (`test/planner-links.test.js`).
 - **Known limits:** a Flatten pressed on another page (Legion, the Account page) or in NinjaTrader does not end a plan (only the
   chart page's Flatten, Flatten all and Cut half are seen); its entry is cancelled by NinjaTrader all the same, and the plan
   ends when its expiry or its stop comes. The clocks are three: The Desk's (Arm, the expiry), this PC's (the page) and the

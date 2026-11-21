@@ -27,5 +27,5 @@ test('the planner sends entries only through sendPlanOrder and cancels only thro
 });
 
 test('writing: no em or en dashes in the planner\'s files', () => {
-  for (const f of ['live/planner.js', 'live/planner-core.js', 'test/planner-core.test.js', 'test/planner-trade.test.js', 'test/plan-layer.test.js']) assert.ok(!/[–—]/.test(read(f)), f);
+  for (const f of ['live/planner.js', 'live/planner-core.js', 'test/planner-core.test.js', 'test/planner-trade.test.js', 'test/planner-links.test.js', 'test/plan-layer.test.js']) assert.ok(!/[–—]/.test(read(f)), f);
 });
