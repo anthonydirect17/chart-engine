@@ -308,6 +308,67 @@ function create(env) {
     if (env.pickerAccount() !== TR.account) { env.syncAccounts(); flash('Nothing was sent: the account shown was not the order account. The picker is back on ' + TR.account + '; click again to act on ' + TR.account + '.', 'error'); return false; }
     return true;
   }
+  /*
+   * The planner (chart 1.62.0, Anthony 2026-11-21: "planner follows the same rules as the open discretionary trading when it comes
+   * to placing trades"; the page path, live/planner.js). A plan's entry is sent from the plan alone, never from what the ticket
+   * shows: not its Armed (Arm on the plan turns the ticket's Armed off), its account, Qty, bracket, strategy or picker. ready()
+   * above is unchanged and every manual action still calls it. readyPlan(p) is the plan's own check, '' or why not:
+   *   not framed, trading on, connected, ChartBridge's snapshot whole (a resume must see every working order first), the
+   *   plan's account a trade account ChartBridge lists (one account, never a group), its instrument served, and no AI agent
+   *   owning the pair (ChartBridge's owner lock refuses it anyway; said first, as the ticket does).
+   * sendPlanOrder(p, leg) sends one order message: { type: 'order', cid: 'pl<uid>-e', account, root, side, kind, qty, price,
+   * bracket: { stop, target } }, through send() (the one connection, counted in ChartBridge's 10 a second). The cid is fixed per
+   * plan and leg, and a plan's entry is sent at most once per page load here (its own repeat guard, by the plan's uid); the
+   * page's send journal (PlannerCore.createJournal) is written before the call, so no window ever sends it twice. It never
+   * touches the ticket's last cid or its NO STOP answer. Returns { sent, cid, why }.
+   * cancelPlanOrder(id, p) sends { type: 'cancel', id } for a plan's working entry (a Cancel on the plan card, its expiry or a
+   * stop-through), after the same checks. Flatten, Flatten all and Cut half are the ticket's own and are never blocked.
+   */
+  const PLAN_KINDS = ['limit', 'mit', 'stop', 'market'];
+  const planSent = new Set();                            // plan uids whose entry this page load sent
+  function readyPlan(p) {
+    if (FRAMED) return FRAMED_REASON;
+    if (!TR.enabled) return TR.reason || 'Trading is not enabled.';
+    if (!open()) return 'Not connected to ChartBridge.';
+    if (!TR.snapReady) return 'ChartBridge has not sent its whole list of orders and positions yet.';
+    if (!p || typeof p.account !== 'string' || !p.account || isGroup(p.account)) return 'A plan trades one account, never a group.';
+    if (!TR.accounts.includes(p.account)) return p.account + ' is not a trade account in ChartBridge.';
+    if (!ROOTS.includes(p.root) || !served(p.root)) return 'ChartBridge does not serve ' + p.root + ' here.';
+    const owner = typeof env.agentOwner === 'function' ? env.agentOwner(p.account, p.root) : '';
+    if (owner) return p.account + ' ' + p.root + ' belongs to agent ' + owner + '.';
+    return '';
+  }
+  function sendPlanOrder(p, leg) {
+    const why = readyPlan(p);
+    if (why) return { sent: false, cid: '', why };
+    if (leg !== 'entry' || !p || !/^pu[a-z0-9]{16}$/.test(p.uid || '')) return { sent: false, cid: '', why: 'Not a plan\'s entry.' };
+    const cid = 'pl' + p.uid + '-e';
+    if (planSent.has(p.uid)) return { sent: false, cid, why: 'This plan\'s entry was sent already: never twice.' };
+    if (!PLAN_KINDS.includes(p.kind)) return { sent: false, cid, why: 'Unknown entry kind.' };
+    if (p.kind === 'mit' && !sw('orderTypes')) return { sent: false, cid, why: 'MIT is off in ChartBridge (orderTypes = off in config.txt).' };
+    const side = p.side === 'short' ? 'sell' : p.side === 'long' ? 'buy' : '';
+    if (!side) return { sent: false, cid, why: 'The plan has no side.' };
+    const qty = p.qty, capQ = OT.maxQtyFor(TR, p.root);   // ChartBridge's maxQty for the root, as the ticket reads it
+    if (!Number.isInteger(qty) || qty < 1 || qty > capQ) return { sent: false, cid, why: 'Qty ' + qty + ' is not allowed on ' + p.root + ' (ChartBridge\'s limit ' + capQ + ').' };
+    const b = p.bracket || {};
+    if (!Number.isInteger(b.stop) || b.stop < 1 || !Number.isInteger(b.target) || b.target < 1) return { sent: false, cid, why: 'A plan always goes with its stop and target.' };
+    if (TR.maxBracketTicks > 0 && (b.stop > TR.maxBracketTicks || b.target > TR.maxBracketTicks)) return { sent: false, cid, why: 'The bracket is more than ChartBridge\'s ' + TR.maxBracketTicks + ' ticks.' };
+    const tk = tickOf(p.root);
+    if (p.kind !== 'market' && !(typeof p.price === 'number' && isFinite(p.price) && tk > 0 && Math.abs(p.price / tk - Math.round(p.price / tk)) < 1e-6)) return { sent: false, cid, why: 'The price is not on the tick.' };
+    const msg = { type: 'order', cid, account: p.account, root: p.root, side, kind: p.kind, qty };
+    if (p.kind !== 'market') msg.price = p.price;
+    msg.bracket = { stop: b.stop, target: b.target };
+    planSent.add(p.uid);                                   // before the send: a throw in it never lets a second one go
+    send(msg);
+    return { sent: true, cid, why: '' };
+  }
+  function cancelPlanOrder(id, p) {
+    const why = readyPlan(p);
+    if (why) return { sent: false, why };
+    if (typeof id !== 'string' || !id) return { sent: false, why: 'No order to cancel.' };
+    send({ type: 'cancel', id });
+    return { sent: true, why: '' };
+  }
   /* NO STOP (1.13.0, Anthony): the first order after a page load that would open or add with no stop asks first, in the
      page ("No stop: send anyway?"); after Send, the others of that page load go as before. Flatten, Close, Flatten all,
      B/E and cancels never ask. `again` sends it once Anthony says Send. */
@@ -1502,7 +1563,7 @@ function create(env) {
     TR, brackets, qtys, BK, cap, framed: FRAMED, allowNoStop, noStopAsked: () => !noStopOk,
     planMove, planRemove, planAdd, chartOrders, groupPosition, framedReason: FRAMED_REASON, tradeMode, noteMoving, moveRefusal,
     hello, message, lost, signIn, applyTrading,
-    ready, sendOrder, placeAt, placeChecked, lastCid: () => sentCid, breakEven, cancelAll, flattenHere, flattenAgent, flattenAll, allScan, moveOrder, cancelOrder, setArmed, pickAccount,
+    ready, readyPlan, sendPlanOrder, cancelPlanOrder, sendOrder, placeAt, placeChecked, lastCid: () => sentCid, breakEven, cancelAll, flattenHere, flattenAgent, flattenAll, allScan, moveOrder, cancelOrder, setArmed, pickAccount,
     cutHalf, cutHalfState,
     merge, managedOf, switchOn: sw, setSwitches, v3Lost, cancelFromList,
     working, inCancelAll, batchLine, unsentNote, dismissUnsent,
