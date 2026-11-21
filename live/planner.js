@@ -64,10 +64,24 @@ function mount(env) {
   }
   /* a cancel The Desk did not answer goes again by its own route; every other fact by /events */
   function flush() {
-    queue.flush(item => (item.kind === 'cancel' ? S.desk.cancel(item.seq, item.uid, item.detail && item.detail.reason) : S.desk.event(item)).then(r => {
+    queue.flush(item => (item.kind === 'cancel' ? cancelAgain(item) : S.desk.event(item)).then(r => {
       if (r.notLive) { off409(); return 'later'; }
       return r.ok ? 'ok' : r.status === 0 ? 'later' : r.status === 404 && !S.ok ? 'later' : 'drop';
     }));
+  }
+  /* a queued cancel: its reason, and what the page knew at the press (cancelSeen) as its detail */
+  function cancelAgain(item) {
+    const d = Object.assign({}, item.detail || {}), reason = d.reason;
+    delete d.reason;
+    return S.desk.cancel(item.seq, item.uid, reason, Object.keys(d).length ? d : undefined);
+  }
+  /* 1.63.0 (TheDesk's late cancels, Anthony 2026-11-21 "Within 4 ticks (1 point)"): at a Cancel, the last trade this window knew
+     on the plan's instrument (its price and that trade's own time) and the press's time; only what is known is sent */
+  function cancelSeen(root) {
+    const L = S.lines.get(root), last = lastOf(root), out = { at_ms: now() };
+    if (Number.isFinite(last) && last > 0) out.last = last;
+    if (L && L.lastU > 0) out.last_u = L.lastU;
+    return out;
   }
   /* a write refused because The Desk is not the live one: it keeps no plan log here (as an older Desk) */
   function off409() { S.ok = false; S.why = 'The Desk has no live plan log here (it is not the live Desk): the planner is off.'; S.drawnKey.clear(); draw(); renderCard(); }
@@ -333,9 +347,10 @@ function mount(env) {
     const o = entryOrderOf(p), wasSent = sentOf(p);
     if (o) { const r = cancelEntry(p, o); if (!r.sent) cardNote('The entry\'s cancel was not sent: ' + r.why + ' Cancel it in NinjaTrader, or Flatten.', 'error'); }
     const said = () => (wasSent && entryOrderOf(p) ? 'Cancelling plan #' + p.seq + ': its entry is being taken off at ChartBridge.' : wasSent ? 'Plan #' + p.seq + ' cancelled: its entry is not working here (if NinjaTrader still shows it, cancel it there).' : 'Plan #' + p.seq + ' cancelled.');
-    S.desk.cancel(p.seq, PC.newUid(), 'Cancel on the plan card').then(r => {
+    const seen = cancelSeen(p.root);
+    S.desk.cancel(p.seq, PC.newUid(), 'Cancel on the plan card', seen).then(r => {
       if (r.ok) { takePlan(r); shared.change(s => { const q = s.plans[uid]; if (q) q.endedAt = now(); }); shared.tell({ t: 'stamped', uid }); pull(); cardNote(said(), ''); return; }
-      if (r.status === 0) { fact(uid, 'cancel', { reason: 'Cancel on the plan card (The Desk did not answer at first)' }); cardNote(said() + ' The Desk did not answer; it is told when it does.', 'warn'); return; }
+      if (r.status === 0) { fact(uid, 'cancel', Object.assign({ reason: 'Cancel on the plan card (The Desk did not answer at first)' }, seen)); cardNote(said() + ' The Desk did not answer; it is told when it does.', 'warn'); return; }
       cardNote('The Desk refused the cancel: ' + r.why + '.', 'error');
     });
   }

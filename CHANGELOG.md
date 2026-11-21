@@ -63,6 +63,23 @@
   `test/pc-updater.test.js`: the allowed git subcommands, the box job's name, useHttpPath read before the one ask, the
   token only after a 404 or 401 and then through the Actions API, one place that asks for it and one that sends it.
 
+## chart 1.63.0 (2026-11-21): the planner's records: Cancel tells The Desk the last trade it knew (page only, no F5)
+
+In plain words: when Anthony cancels a plan on its card, The Desk now learns how close price was to his line at that moment, so
+his Stats can count a cancel within 4 ticks of the line as a late cancel (Anthony 2026-11-21, "Within 4 ticks (1 point)") and show
+it apart with its ghost trade. The Desk's side (the Stats Plans tab: ghost trades, late cancels, overrides and R by plans a
+session) is TheDesk's, in the same held update.
+
+- **`live/planner.js` `cancel`:** `POST /api/plans/{seq}/cancel` carries `detail: { at_ms, last, last_u }`: the press's time, the
+  last trade price this window knew on the plan's instrument (the planner's own line of trades, else the chart's last bar close,
+  as the Arm reads it) and that trade's own time; a value not known is left out, never guessed. A cancel queued because The Desk
+  did not answer keeps the same detail beside its reason and sends it when The Desk answers (`cancelAgain`).
+- **`live/planner-core.js` `deskApi.cancel(seq, uid, reason, detail)`:** the detail is sent beside the uid and the reason, and
+  nothing more when none is given. The Desk keeps it as the cancel's `client` (its plan log, unchanged).
+- Nothing else changes: no order, rule or screen of the planner moves. ChartBridge unchanged; `minChartBridge` stays 0.6.2.
+- **Tests:** `test/planner-links.test.js` (Cancel sends the last trade and its time; `deskApi.cancel`'s body with and without a
+  detail).
+
 ## chart 1.62.0 (2026-11-21): the planner, its core on the page path: the plan layer, the plan card, one window sends (page only, no F5)
 
 In plain words: Anthony plans a trade on any chart and the page places it for him, by the same rules as his own trading ("planner
