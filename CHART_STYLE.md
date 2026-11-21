@@ -571,7 +571,7 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   inside only once it is selected, so a pan over a big zone stays a pan); Delete removes it; saved with the chart's drawings.
 - **Plans (1.62.0, the planner; Anthony 2026-11-21):** a planned trade drawn on the chart, apart from the drawings (never saved
   with them) and from the orders (the engine sends nothing for it). Three lines over a box from where the plan was drawn (its
-  `t0`; with none the plot's last 220 px, the box's left kept at least 60 px from the right edge) to the plot's right edge: the
+  `t0`; with none the plot's last 220 px, the box's left kept at least 160 px from the right edge, room for its labels) to the plot's right edge: the
   entry in its side's color (1.5 px; solid once submitted, dashed 6/4 while only drawn), the stop in the loss color and target 1
   in the profit color (1 px, dashed 4/3; 1.5 px while dragged or the plan is selected). The box between the entry and target 1
   in the profit color and between the entry and the stop in the loss color, at 10% (16% selected, 6% only drawn), behind the

@@ -2849,10 +2849,11 @@ function mount(container, options) {
   /* 1.15.0 (Anthony: after a recompile Armed had gone off with the reconnect; a press on his stop did nothing and said
      nothing, and he thought he had lost control): a press on an order's label or tag while this chart is not live for
      orders says why, once per press (the host words it: Armed off, and why it went off). Notes only: nothing is sent. */
-  chart.on('orderPressOff', () => {
+  chart.on('orderPressOff', e => {
     if (!HOST || hostLive || HT.root !== D.root || destroyed) return;
     let text = '';
-    try { text = typeof HOST.pressOff === 'function' ? String(HOST.pressOff(D.root) || '') : ''; } catch (e) { text = ''; }
+    /* 1.62.0: the order pressed (its id) too, so the host can say a plan's order is the planner's */
+    try { text = typeof HOST.pressOff === 'function' ? String(HOST.pressOff(D.root, e && e.id) || '') : ''; } catch (err) { text = ''; }
     flash(text || 'Armed is off: arm to move or cancel orders.', 'warn');
   });
   /** For the host: { root, live, account, orders, position, pointValue, qty }; null clears. */

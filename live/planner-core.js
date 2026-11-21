@@ -128,6 +128,7 @@ function submitBody(d, pc) {
  */
 function entryFor(d, last, orderTypes) {
   if (!isNum(last) || !(last > 0)) return { refuse: 'No recent ' + d.root + ' price: not armed.' };
+  if (d.tick > 0 && throughStop(d, last, d.tick)) return { refuse: 'The last price ' + last + ' is already through the stop: not armed.' };
   if (d.entryType === 'confirm') return { kind: null, price: null };
   const buy = d.side !== 'short', limitSide = buy ? d.entry <= last : d.entry >= last;
   if (d.entryType === 'limit') {

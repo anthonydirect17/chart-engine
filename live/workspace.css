@@ -352,6 +352,7 @@ body.ws-busy[data-edge="nw"], body.ws-busy[data-edge="se"], body.ws-busy[data-ed
 .ws-ring button:hover, .ws-ring button:focus-visible, .ws-ring button[aria-pressed="true"] { background: var(--ws-tint); color: var(--ws-soft); border-color: var(--ws-accent); outline: none; }
 .ws-ring .ring-top { left: 42px; top: 2px; } .ws-ring .ring-bottom { left: 42px; bottom: 2px; }
 .ws-ring .ring-left { left: 2px; top: 42px; } .ws-ring .ring-right { right: 2px; top: 42px; }
+.ws-ring .ring-tr { left: 82px; top: 2px; }   /* 1.62.0: the Plan tool, in the ring's top right corner */
 .ws-ring .ring-dot { position: absolute; left: 55px; top: 55px; width: 6px; height: 6px; border-radius: 50%; background: var(--ws-accent); }
 
 /* ---------------- shared by the Account page and the Quote board (1.15.0): rows as small grids. Wide, one line a row; on a
@@ -685,3 +686,16 @@ body.ws-tight .ws-body > .chart-live { padding: 2px 3px 2px; }
 .ws-panel.tk-short .chart-live .obar.tk-bar { gap: 4px; }
 .ws-panel.tk-short .chart-live .tk-bar .acct-sel, .ws-panel.tk-short .chart-live .tk-bar .oin, .ws-panel.tk-short .chart-live .tk-bar .btn,
 .ws-panel.tk-short .chart-live .tk-bar .obtn, .ws-panel.tk-short .chart-live .tk-bar .arm { min-height: 24px; padding-top: 2px; padding-bottom: 2px; }
+
+/* 1.62.0 (Anthony 2026-11-21): the plan card, in the mini ticket's pattern, at the bottom left of the chart a plan was drawn or
+   clicked on. The mini ticket's look; its buttons are the ticket's. */
+.chart-live .stage > .mini-tk.pl-card { left: 8px; bottom: 34px; top: auto; width: 300px; }
+.chart-live .pl-card .pl-title { font: 500 12px var(--ws-mono); color: var(--ws-text2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chart-live .pl-card .pl-row { gap: 6px; align-items: center; }
+.chart-live .pl-card .pl-type { flex: 1 1 auto; min-width: 0; }
+.chart-live .pl-card .pl-exp { width: 52px; flex: none; }
+.chart-live .pl-card .pl-rr { margin-left: auto; }
+.chart-live .pl-card .pl-phase { color: var(--ws-text); }
+.chart-live .pl-card .pl-off { display: inline-flex; gap: 4px; align-items: center; font: 400 11px var(--ws-sans); color: var(--ws-text2); margin-left: auto; }
+.chart-live .pl-card .seg { flex: none; flex-wrap: nowrap; }
+.chart-live .pl-card .seg button { min-height: 26px; padding: 3px 9px; }

@@ -1599,9 +1599,10 @@ function create(container, options) {
     return null;
   }
   /* 1.62.0: a plan's prices as drawn now (its drag, or a drag released and waiting for the host, else its own) and its box's
-     left edge: its t0's bar, kept at least 60 px from the plot's right edge; with no t0 the plot's last 220 px */
+     left edge: its t0's bar, kept at least 160 px from the plot's right edge (room for its labels); with no t0 the plot's last
+     220 px */
   const planNow = p => (pd && pd.id === p.id ? Object.assign({}, p, pd.cur) : planPending.has(p.id) ? Object.assign({}, p, planPending.get(p.id)) : p);
-  const planX0 = p => clamp(p.t0 !== null && bars.length ? xOf(idxOfTime(p.t0)) : plotW - 220, 0, Math.max(0, plotW - 60));
+  const planX0 = p => clamp(p.t0 !== null && bars.length ? xOf(idxOfTime(p.t0)) : plotW - 220, 0, Math.max(0, plotW - 160));
   /* the plan line under the pointer: { id, which, editable } (the last drawn wins; a line within 5 px, inside its box) */
   function hitPlan(p) {
     for (let k = planDrawn.length - 1; k >= 0; k--) {

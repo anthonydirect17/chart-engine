@@ -46,6 +46,7 @@
 //                                   every 10 s (a busy market), instead of one trade every 120 ms
 //   --desk-url=http://127.0.0.1:8837  /diag's desk.deskUrl (config.txt deskUrl; default http://localhost:8800): The Desk's
 //                                   address, the page's one source for it (chart 1.16.0)
+//   --pc=TESTPC                     /diag's bars.pc (ChartBridge 0.6.10's PC name; none unless set), the planner's PC (chart 1.62.0)
 //   --serve-root=DIR                serve the page files from another checkout (to compare versions)
 //   --clock-offset=-45000           run the exchange clock this many seconds off the PC's (a chosen time of day); with --v3 the desk's
 //                                   clock (fills, execs, proposals, the agents' hours) follows it too
@@ -940,6 +941,7 @@ const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
     return res.end(JSON.stringify({ version: 'fake-0.2.0', clockOffsetMs: 0, fillEventsDelivered: 0, fillsFoundByPolling: 0, lastPollUtcMs: Date.now(), clients: clients.size,
       desk: { postFills: false, deskUrl: flagValue('desk-url') || 'http://localhost:8800', waiting: 0, lastSendFailed: false, lastError: '' },
+      ...(flagValue('pc') ? { bars: { enabled: false, state: 'off', pc: flagValue('pc'), pcFrom: 'config.txt' } } : {}),   // chart 1.62.0: --pc=NAME, /diag's bars.pc (ChartBridge 0.6.10)
       network: { loopbackOnly: true, allowOrigins: ['http://localhost:' + PORT].concat(config.allowOrigins), refusedNotThisPc: refused.notThisPc, refusedOrigin: refused.origin },
       pin: { set: pin.isSet() },
       accounts: ACCOUNTS.map(name => ({ name, connection: 'Connected', executions: fillsSample().filter(f => f.account === name).length, orders: 0, positions: 0, fillEvents: 0, orderEvents: 0, positionEvents: 0 })),

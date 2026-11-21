@@ -55,6 +55,8 @@ test('entryFor (decision 2 A): by where the line sits against the last price at 
   assert.deepEqual(PC.entryFor(draft({ entryType: 'confirm' }), 25002, true), { kind: null, price: null }, 'a confirmation sends nothing at Arm');
   assert.deepEqual(PC.entryFor(draft({ side: 'short', stop: 25004, target: 24992 }), 24998, true), { kind: 'limit', price: 25000 }, 'a sell limit over the market');
   assert.match(PC.entryFor(draft(), null, true).refuse, /No recent MNQ price/);
+  assert.match(PC.entryFor(draft({ entryType: 'touch' }), 24995.75, true).refuse, /already through the stop/, 'a last price through the stop: not armed');
+  assert.match(PC.entryFor(draft({ entryType: 'confirm' }), 24995.75, true).refuse, /already through the stop/);
 });
 
 test('bracketFor (decision 3 A): ticks from the line for a resting entry, from the last price at send for the confirmation\'s market', () => {

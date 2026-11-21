@@ -73,7 +73,7 @@ export async function startDesk(port, seed) {
   const types = JSON.parse(JSON.stringify((seed && seed.types) || [])), accounts = JSON.parse(JSON.stringify((seed && seed.accounts) || []));
   const floors = (seed && seed.floors) || null, league = (seed && seed.league) || null;
   delete docs.types; delete docs.accounts; delete docs.floors; delete docs.league;
-  const desk = { docs, types, accounts, floors, league, tags: [], log: [], down: false, refuseTags: null, bump(which) { docs[which].rev++; }, close: () => new Promise(r => server.close(r)),
+  const desk = { docs, types, accounts, floors, league, tags: [], log: [], down: false, refuseTags: null, plans: [], chain: 0, planFlags: [], noPlans: false, closed: false, expiryMs: 0, bump(which) { docs[which].rev++; }, close: () => new Promise(r => server.close(r)),
     editType(id, change) { const t = types.find(x => x.id === id); Object.assign(t, change, { version: t.version + 1, status: 'not_checked', updated_at: new Date().toISOString() }); } };
   const typeLink = id => { const t = types.find(x => x.id === id); return t ? { id: t.id, firm: t.firm, name: t.name, version: t.version, status: t.status } : null; };
   const server = http.createServer((req, res) => {
@@ -85,6 +85,65 @@ export async function startDesk(port, seed) {
     if (req.method === 'OPTIONS') { if (!cors['Access-Control-Allow-Origin']) { res.writeHead(403); res.end(); return; } res.writeHead(204, cors); res.end(); return; }
     const [urlPath, query] = req.url.split('?');
     /* chart 1.34.0: the Trade tags panel's records (TheDesk POST and GET /api/trade-tags): stored once by id, never changed */
+    /* chart 1.62.0: the planner's plan log, the page side's reading of TheDesk docs/API.md "Plans" (D-c): POST /api/plans (Submit,
+       idempotent on uid), POST /api/plans/{seq}/arm (expires_at_ms on this clock: Arm + expiry_min, or desk.expiryMs; refused while
+       desk.closed, or once armed, cancelled or ended), /cancel (before a fill), /edit (before Arm), /events (facts, idempotent on uid,
+       recorded and never refused; a second sent flagged in desk.planFlags), GET /api/plans?live=1&pc= (the plans not ended, of that
+       PC), GET /api/plans/{seq}. desk.noPlans: an older Desk (404 for all of it). Sample data only. */
+    if (/^\/api\/plans(\/|$)/.test(urlPath)) {
+      if (desk.noPlans) return send(404, { detail: 'Not Found' });
+      const pm = /^\/api\/plans(?:\/(\d+)(?:\/(arm|cancel|edit|events))?)?$/.exec(urlPath);
+      if (!pm) return send(404, { detail: 'Not Found' });
+      const seq = pm[1] ? +pm[1] : null, act = pm[2] || null, P = seq ? desk.plans.find(x => x.seq === seq) : null;
+      const ended = v => v.events.some(e => ['cancel', 'refused', 'expired', 'stop_through', 'missed', 'closed', 'ended'].includes(e.kind));
+      const ev = (v, kind, detail, uid) => { const e = { seq: ++desk.chain, kind, detail: detail || {}, uid: uid || '', logged_at_ms: Date.now() }; v.events.push(e); return e; };
+      if (req.method === 'GET') {
+        desk.log.push({ method: 'GET', which: 'plans', url: req.url });
+        if (seq) return P ? send(200, P) : send(404, { detail: 'no plan ' + seq });
+        const q = new URLSearchParams(query || '');
+        return send(200, { plans: desk.plans.filter(v => (!q.get('pc') || v.plan.pc === q.get('pc')) && (q.get('live') !== '1' || !ended(v))) });
+      }
+      if (req.method !== 'POST') return send(405, { detail: 'Method not allowed' });
+      let body = '';
+      req.on('data', c => { body += c; });
+      req.on('end', () => {
+        let d; try { d = JSON.parse(body); } catch (e) { return send(400, { detail: 'send JSON' }); }
+        desk.log.push({ method: 'POST', which: 'plans', url: urlPath, body: d });
+        if (typeof desk.refusePlans === 'function') { const why = desk.refusePlans(urlPath, d); if (why) return send(409, { detail: why }); }
+        if (!seq) {
+          const was = desk.plans.find(v => v.uid === d.uid);
+          if (was) return send(200, was);
+          if (!d.plan || !['long', 'short'].includes(d.side) || !Array.isArray(d.targets)) return send(400, { detail: 'a plan needs side, entry, stop, targets and plan' });
+          const v = { seq: ++desk.chain, uid: d.uid, root: d.root, side: d.side, entry: d.entry, stop: d.stop, targets: d.targets, size: d.size, account: d.account, grade: d.grade || 'A+', plan: d.plan, logged_at_ms: Date.now(), events: [] };
+          desk.plans.push(v); return send(201, v);
+        }
+        if (!P) return send(404, { detail: 'no plan ' + seq });
+        const armed = P.events.some(e => e.kind === 'arm'), filled = P.events.some(e => e.kind === 'filled');
+        if (act === 'arm') {
+          if (desk.closed) return send(409, { detail: 'CME is closed: not armed' });
+          if (armed || ended(P)) return send(409, { detail: 'plan ' + seq + ' is armed or ended already' });
+          const exp = Date.now() + (desk.expiryMs || (P.plan.expiry_min || 30) * 60000);
+          const e = ev(P, 'arm', { expires_at_ms: exp }, d.uid);
+          return send(200, { seq, expires_at_ms: exp, event_uid: e.uid, armed_at_ms: e.logged_at_ms });
+        }
+        if (act === 'cancel') { if (filled || ended(P)) return send(409, { detail: 'plan ' + seq + ' is filled or ended' }); ev(P, 'cancel', { why: d.why || '' }, d.uid); return send(200, P); }
+        if (act === 'edit') {
+          if (armed || ended(P)) return send(409, { detail: 'plan ' + seq + ' is armed: it cannot be edited' });
+          for (const k of ['entry', 'stop', 'targets', 'side', 'grade', 'account']) if (d[k] !== undefined) P[k] = d[k];
+          if (d.size !== undefined) P.size = d.size;
+          for (const [k, pk] of [['entry_type', 'entry_type'], ['expiry_min', 'expiry_min'], ['qty', 'qty'], ['target1', 'target1']]) if (d[k] !== undefined) P.plan[pk] = d[k];
+          if (d.qty !== undefined) P.size = d.qty;
+          ev(P, 'edit', d, d.uid); return send(200, P);
+        }
+        if (act === 'events') {
+          if (P.events.some(e => e.uid && e.uid === d.uid)) return send(200, { seq, duplicate: true });
+          if (d.kind === 'sent' && P.events.some(e => e.kind === 'sent')) desk.planFlags.push({ seq, flag: 'a second sent' });
+          const e = ev(P, d.kind, d.detail, d.uid); return send(200, { seq: e.seq });
+        }
+        return send(404, { detail: 'Not Found' });
+      });
+      return;
+    }
     if (urlPath === '/api/trade-tags' && req.method === 'POST') {
       let body = '';
       req.on('data', c => { body += c; });
