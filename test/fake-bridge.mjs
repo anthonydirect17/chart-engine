@@ -46,6 +46,8 @@
 //                                   every 10 s (a busy market), instead of one trade every 120 ms
 //   --desk-url=http://127.0.0.1:8837  /diag's desk.deskUrl (config.txt deskUrl; default http://localhost:8800): The Desk's
 //                                   address, the page's one source for it (chart 1.16.0)
+//   --fold-trades                   every live trade folds into the minute history a later subscribe gets (chart 1.62.0, the
+//                                   planner's resume smoke: a touch while no window watched is in the history)
 //   --pc=TESTPC                     /diag's bars.pc (ChartBridge 0.6.10's PC name; none unless set), the planner's PC (chart 1.62.0)
 //   --serve-root=DIR                serve the page files from another checkout (to compare versions)
 //   --clock-offset=-45000           run the exchange clock this many seconds off the PC's (a chosen time of day); with --v3 the desk's
@@ -786,6 +788,15 @@ function trade(r, p) {
   if (V3 && desk.bot.conn) send(desk.bot.conn, msg);  // the bot reads every live trade
   if (V3) for (const a of desk.agents.values()) if (a.conn && a.helloed) send(a.conn, msg);   // and every agent
   desk.tick(r, p);                        // the matching engine sees every trade
+  if (FOLD_TRADES) foldTrade(r, msg.t, p, msg.v);   // chart 1.62.0: --fold-trades, the minute history follows the trades
+}
+/* chart 1.62.0 (--fold-trades, the planner's resume smoke): each live trade folds into the minute history the next subscribe gets,
+   as ChartBridge's own history holds the minutes that traded (sample data; off unless set, so other smokes see the walk as before) */
+const FOLD_TRADES = process.argv.includes('--fold-trades');
+function foldTrade(r, t, p, v) {
+  const bars = data[r], m = Math.floor(t / 60) * 60, b = bars[bars.length - 1];
+  if (b && b.t === m) { b.h = Math.max(b.h, p); b.l = Math.min(b.l, p); b.c = p; b.v += v; }
+  else if (!b || m > b.t) bars.push({ t: m, o: p, h: p, l: p, c: p, v });
 }
 /* --scene=signals: the scripted MNQ tape (see the header), replayed once from the first page that is live on MNQ. */
 const scene = { started: false, sent: 0, total: 0, done: false, t0: 0 };

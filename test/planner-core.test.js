@@ -40,23 +40,25 @@ test('validate: sides of the stop and target, the tick, qty against maxQty, expi
   assert.equal(PC.cleanDraft(draft({ expiryMin: undefined })).expiryMin, 30, '30 minutes unless set (decision 9 A)');
 });
 
-test('submitBody: the call log\'s fields and the plan\'s own, from the plan alone', () => {
-  assert.deepEqual(PC.submitBody(draft({ contract: 'MNQ 12-26' }), 'TESTPC'), { uid: UID, root: 'MNQ', side: 'long', entry: 25000, stop: 24996, targets: [25008], size: 2, account: 'Sim101', grade: 'A+',
-    plan: { uid: UID, pc: 'TESTPC', entry_type: 'limit', expiry_min: 30, qty: 2, target1: 25008, tick: 0.25, contract: 'MNQ 12-26' } });
+test('submitBody: exactly The Desk\'s Submit fields (TheDesk thedesk/plans.py SUBMIT_FIELDS), from the plan alone', () => {
+  assert.deepEqual(PC.submitBody(draft({ contract: 'MNQ 12-26' }), 'TESTPC'), { uid: UID, pc: 'TESTPC', account: 'Sim101', root: 'MNQ', contract: 'MNQ 12-26', side: 'long', entry_type: 'limit',
+    entry: 25000, stop: 24996, target: 25008, qty: 2, expiry_min: 30, grade: 'A+', tick: 0.25 });
+  assert.match(UID, PC.DESK_UID_RX, 'a page uid is one The Desk takes');
+  assert.deepEqual(PC.ENTRY_TYPES, ['limit', 'market_on_touch', 'touch_confirm'], 'The Desk\'s names');
 });
 
 test('entryFor (decision 2 A): by where the line sits against the last price at Arm', () => {
   assert.deepEqual(PC.entryFor(draft(), 25002, true), { kind: 'limit', price: 25000 }, 'a buy limit under the market');
   assert.match(PC.entryFor(draft(), 24998, true).refuse, /would fill at once/, 'a buy limit over the market: refused at Arm');
-  assert.deepEqual(PC.entryFor(draft({ entryType: 'touch' }), 25002, true), { kind: 'mit', price: 25000 }, 'touch on the limit side: an MIT at the line');
-  assert.deepEqual(PC.entryFor(draft({ entryType: 'touch' }), 24998, true), { kind: 'stop', price: 25000 }, 'touch on the stop side: a stop-market at the line');
-  assert.match(PC.entryFor(draft({ entryType: 'touch' }), 25002, false).refuse, /MIT is off/);
-  assert.match(PC.entryFor(draft({ entryType: 'touch' }), 25000, true).refuse, /at the last price/);
-  assert.deepEqual(PC.entryFor(draft({ entryType: 'confirm' }), 25002, true), { kind: null, price: null }, 'a confirmation sends nothing at Arm');
+  assert.deepEqual(PC.entryFor(draft({ entryType: 'market_on_touch' }), 25002, true), { kind: 'mit', price: 25000 }, 'touch on the limit side: an MIT at the line');
+  assert.deepEqual(PC.entryFor(draft({ entryType: 'market_on_touch' }), 24998, true), { kind: 'stop', price: 25000 }, 'touch on the stop side: a stop-market at the line');
+  assert.match(PC.entryFor(draft({ entryType: 'market_on_touch' }), 25002, false).refuse, /MIT is off/);
+  assert.match(PC.entryFor(draft({ entryType: 'market_on_touch' }), 25000, true).refuse, /at the last price/);
+  assert.deepEqual(PC.entryFor(draft({ entryType: 'touch_confirm' }), 25002, true), { kind: null, price: null }, 'a confirmation sends nothing at Arm');
   assert.deepEqual(PC.entryFor(draft({ side: 'short', stop: 25004, target: 24992 }), 24998, true), { kind: 'limit', price: 25000 }, 'a sell limit over the market');
   assert.match(PC.entryFor(draft(), null, true).refuse, /No recent MNQ price/);
-  assert.match(PC.entryFor(draft({ entryType: 'touch' }), 24995.75, true).refuse, /already through the stop/, 'a last price through the stop: not armed');
-  assert.match(PC.entryFor(draft({ entryType: 'confirm' }), 24995.75, true).refuse, /already through the stop/);
+  assert.match(PC.entryFor(draft({ entryType: 'market_on_touch' }), 24995.75, true).refuse, /already through the stop/, 'a last price through the stop: not armed');
+  assert.match(PC.entryFor(draft({ entryType: 'touch_confirm' }), 24995.75, true).refuse, /already through the stop/);
 });
 
 test('bracketFor (decision 3 A): ticks from the line for a resting entry, from the last price at send for the confirmation\'s market', () => {
@@ -69,28 +71,28 @@ test('bracketFor (decision 3 A): ticks from the line for a resting entry, from t
 });
 
 test('a confirmation watch: the touch, then a 1 minute close back over the line; equal does not count; the touch bar may confirm', () => {
-  const w = PC.createWatch(draft({ entryType: 'confirm' }), { tick: 0.25, expiresAt: ms(14, 30) });
+  const w = PC.createWatch(draft({ entryType: 'touch_confirm' }), { tick: 0.25, expiresAt: ms(14, 30) });
   assert.deepEqual(w.trade(25003, ms(14, 1, 5)), []);
   assert.deepEqual(w.trade(25000, ms(14, 1, 20)).map(e => e.kind), ['touched'], 'a trade at the line is a touch');
   assert.deepEqual(w.trade(25001, ms(14, 1, 50)), []);
   assert.deepEqual(w.trade(25002, ms(14, 2, 1)).map(e => [e.kind, e.close, e.minute]), [['confirmed', 25001, ms(14, 1)]], 'the touch minute closed over the line: it confirms');
   assert.deepEqual(w.trade(25001, ms(14, 3)), [], 'done');
   // equal does not count; a later minute that closes over the line confirms
-  const v = PC.createWatch(draft({ entryType: 'confirm' }), { tick: 0.25, expiresAt: ms(14, 30) });
+  const v = PC.createWatch(draft({ entryType: 'touch_confirm' }), { tick: 0.25, expiresAt: ms(14, 30) });
   v.trade(24999.75, ms(14, 1, 10)); v.trade(25000, ms(14, 1, 59));
   assert.deepEqual(v.trade(24999.5, ms(14, 2, 3)), [], 'a close at the line does not confirm');
   v.trade(25000.25, ms(14, 2, 58));
   assert.deepEqual(v.time(ms(14, 3) + 200), [], 'not before 250 ms after the boundary');
   assert.deepEqual(v.time(ms(14, 3) + 250).map(e => e.kind), ['confirmed'], 'checked 250 ms after the minute with no new trade');
   // a short: a close under the line
-  const s = PC.createWatch(draft({ side: 'short', stop: 25004, target: 24992, entryType: 'confirm' }), { tick: 0.25, expiresAt: ms(14, 30) });
+  const s = PC.createWatch(draft({ side: 'short', stop: 25004, target: 24992, entryType: 'touch_confirm' }), { tick: 0.25, expiresAt: ms(14, 30) });
   assert.deepEqual(s.trade(25000.5, ms(14, 5, 1)).map(e => e.kind), ['touched']);
   assert.deepEqual(s.trade(24999.5, ms(14, 6, 2)).map(e => e.kind), [], 'the touch minute closed above the line: no');
   assert.deepEqual(s.trade(24999, ms(14, 7, 0)).map(e => e.kind), ['confirmed'], 'the next minute closed under it');
 });
 
 test('stop-through (decision 13 A): one tick beyond the stop, before the fill, ends the plan; at the stop does not', () => {
-  const w = PC.createWatch(draft({ entryType: 'confirm' }), { tick: 0.25, expiresAt: ms(14, 30) });
+  const w = PC.createWatch(draft({ entryType: 'touch_confirm' }), { tick: 0.25, expiresAt: ms(14, 30) });
   w.trade(24999, ms(14, 1, 1));
   assert.deepEqual(w.trade(24996, ms(14, 1, 2)), [], 'at the stop');
   assert.deepEqual(w.trade(24995.75, ms(14, 1, 3)).map(e => e.kind), ['stop_through']);
@@ -100,7 +102,7 @@ test('stop-through (decision 13 A): one tick beyond the stop, before the fill, e
 });
 
 test('expiry: by the clock or the next trade; the 17:00 break and an early close refuse Arm (decision 9 A)', () => {
-  const w = PC.createWatch(draft({ entryType: 'confirm' }), { tick: 0.25, expiresAt: ms(14, 10) });
+  const w = PC.createWatch(draft({ entryType: 'touch_confirm' }), { tick: 0.25, expiresAt: ms(14, 10) });
   assert.deepEqual(w.time(ms(14, 9, 59)), []);
   assert.deepEqual(w.time(ms(14, 10)).map(e => e.kind), ['expired']);
   const w2 = PC.createWatch(draft(), { tick: 0.25, expiresAt: ms(14, 10), sent: true });
@@ -114,33 +116,37 @@ test('expiry: by the clock or the next trade; the 17:00 break and an early close
   assert.equal(PC.armClosedWhy(et(2026, 11, 22, 18, 30), U.cmeClosed), '', 'Sunday evening: open (overnight plans, Anthony)');
   assert.match(PC.armClosedWhy(null, U.cmeClosed), /cannot tell/);
   // an expiry The Desk cut at the 17:00 close ends the watch there
-  const cut = PC.createWatch(draft({ entryType: 'confirm' }), { tick: 0.25, expiresAt: ms(22, 0) });
+  const cut = PC.createWatch(draft({ entryType: 'touch_confirm' }), { tick: 0.25, expiresAt: ms(22, 0) });
   assert.deepEqual(cut.time(ms(22, 0)).map(e => e.kind), ['expired']);
 });
 
-test('phaseOf and fromDesk: a plan\'s phase from its facts; viewOf what the engine draws', () => {
-  const v = { seq: 12, uid: UID, root: 'MNQ', side: 'long', entry: 25000, stop: 24996, targets: [25008], size: 2, account: 'Sim101', grade: 'A', logged_at_ms: 1,
-    plan: { uid: UID, pc: 'TESTPC', entry_type: 'touch', expiry_min: 10, qty: 2, target1: 25008, tick: 0.25, contract: 'MNQ 12-26' }, events: [] };
+test('phaseOf and fromDesk: The Desk\'s <plan> object in the page\'s shape; the phase as The Desk works it out; viewOf what the engine draws', () => {
+  const v = { seq: 12, uid: UID, logged_at_ms: 1, pc: 'TESTPC', root: 'MNQ', contract: 'MNQ 12-26', tick: 0.25, account: 'Sim101', side: 'long', entry_type: 'market_on_touch',
+    entry: 25000, stop: 24996, target: 25008, qty: 2, expiry_min: 10, grade: 'A', status: 'submitted', live: true, ended: null, armed_at_ms: null, expires_at_ms: null, events: [] };
   const P = PC.fromDesk(v);
-  assert.equal(P.phase, 'submitted'); assert.equal(P.entryType, 'touch'); assert.equal(P.target, 25008);
-  v.events.push({ kind: 'arm', logged_at_ms: 1000, detail: { expires_at_ms: 601000 } });
+  assert.deepEqual([P.phase, P.entryType, P.target, P.qty, P.expiryMin, P.grade, P.pc, P.contract], ['submitted', 'market_on_touch', 25008, 2, 10, 'A', 'TESTPC', 'MNQ 12-26']);
+  v.events.push({ seq: 13, uid: 'a1b2c3', kind: 'arm', logged_at_ms: 1000, detail: { expires_at_ms: 601000 } }); v.armed_at_ms = 1000; v.expires_at_ms = 601000;
   assert.deepEqual([PC.fromDesk(v).phase, PC.fromDesk(v).expiresAt, PC.fromDesk(v).armedAt], ['armed', 601000, 1000]);
-  v.events.push({ kind: 'sent', logged_at_ms: 1100, detail: { cid: PC.entryCid(UID) } });
+  v.events.push({ seq: 14, uid: 'a1b2c4', kind: 'sent', logged_at_ms: 1100, detail: { cid: PC.entryCid(UID), leg: 'entry' } });
   assert.equal(PC.fromDesk(v).phase, 'working');
-  v.events.push({ kind: 'filled', logged_at_ms: 1200, detail: {} });
+  v.events.push({ seq: 15, uid: 'a1b2c5', kind: 'filled', logged_at_ms: 1200, detail: { exec_ids: ['X1'] } });
   assert.equal(PC.fromDesk(v).phase, 'filled');
-  v.events.push({ kind: 'closed', logged_at_ms: 1300, detail: {} });
+  v.events.push({ seq: 16, uid: 'a1b2c6', kind: 'expired', logged_at_ms: 1250, detail: {} });
+  assert.equal(PC.fromDesk(v).phase, 'filled', 'once filled only closed or ended ends it (The Desk\'s rule)');
+  v.events.push({ seq: 17, uid: 'a1b2c7', kind: 'closed', logged_at_ms: 1300, detail: {} });
   assert.deepEqual([PC.fromDesk(v).phase, PC.fromDesk(v).why], ['ended', 'closed']);
   assert.deepEqual(PC.phaseOf({ events: [{ kind: 'arm' }, { kind: 'expired' }] }), { phase: 'ended', why: 'expired' });
-  const view = PC.viewOf(Object.assign(PC.fromDesk(Object.assign({}, v, { events: v.events.slice(0, 1) })), { t0: 5 }), 1000 + 4 * 60000, true);
+  const armed = PC.fromDesk(Object.assign({}, v, { events: v.events.slice(0, 1) }));
+  const view = PC.viewOf(Object.assign(armed, { t0: 5 }), 1000 + 4 * 60000, true);
   assert.deepEqual([view.id, view.state, view.editable, view.label, view.note, view.selected], [UID, 'armed', false, 'Plan #12 LONG TOUCH 2', 'armed · 6m left', true]);
   assert.equal(PC.viewOf(PC.cleanDraft(draft()), 0).state, 'draft');
   assert.equal(PC.viewOf(PC.cleanDraft(draft()), 0).editable, true);
   assert.equal(PC.fromDesk({ seq: 1 }), null);
+  assert.equal(PC.fromDesk(Object.assign({}, v, { uid: 'bad uid' })), null);
 });
 
 test('reconcile: armed with nothing sent: expired, stop-through, missed (never taken late), or resume', () => {
-  const P = { seq: 1, uid: UID, root: 'MNQ', side: 'long', entry: 25000, stop: 24996, target: 25008, qty: 2, account: 'Sim101', entryType: 'confirm', tick: 0.25, phase: 'armed', expiresAt: ms(14, 30), armedAt: ms(14, 0, 30), events: [] };
+  const P = { seq: 1, uid: UID, root: 'MNQ', side: 'long', entry: 25000, stop: 24996, target: 25008, qty: 2, account: 'Sim101', entryType: 'touch_confirm', tick: 0.25, phase: 'armed', expiresAt: ms(14, 30), armedAt: ms(14, 0, 30), events: [] };
   assert.deepEqual(PC.reconcile(P, { now: ms(14, 31), bars: [] }).act, 'expired');
   assert.equal(PC.reconcile(P, { now: ms(14, 10), bars: [{ t: ms(14, 3), h: 25004, l: 24995.75, c: 25000 }] }).act, 'stop_through');
   assert.equal(PC.reconcile(P, { now: ms(14, 10), bars: [{ t: ms(14, 3), h: 25004, l: 24999.75, c: 25002 }] }).act, 'missed');

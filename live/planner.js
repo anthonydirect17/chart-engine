@@ -33,7 +33,7 @@ function mount(env) {
   const U = env.U, core = env.core, store = env.storage, now = typeof env.now === 'function' ? env.now : () => Date.now();
   const S = {
     ok: null, why: 'Asking The Desk for its plan log...', pc: '', desk: PC.deskApi({ base: env.deskBase, fetch: env.fetch }),
-    sel: '', card: null, cardAt: null, lines: new Map(), plans: new Map(), drafts: new Map(), lead: new Map(),
+    sel: '', offAsk: 0, card: null, cardAt: null, lines: new Map(), plans: new Map(), drafts: new Map(), lead: new Map(),
     hooked: new WeakSet(), drawnKey: new Map(), timers: [], destroyed: false, deskDown: false, notes: [],
   };
   const journal = PC.createJournal(store, now), queue = PC.createQueue(store, now);
@@ -61,7 +61,24 @@ function mount(env) {
     shared.change(s => { const q = s.plans[uid]; if (q) q.events = (q.events || []).concat([{ kind, at: now(), detail: detail || {}, uid: item.uid }]); if (q && PC.END_KINDS.includes(kind)) q.endedAt = now(); });
     pull(); flush();
   }
-  function flush() { queue.flush(item => S.desk.event(item).then(r => (r.ok ? 'ok' : r.status === 0 ? 'later' : r.status === 404 && !S.ok ? 'later' : 'drop'))); }
+  /* a cancel The Desk did not answer goes again by its own route; every other fact by /events */
+  function flush() {
+    queue.flush(item => (item.kind === 'cancel' ? S.desk.cancel(item.seq, item.uid, item.detail && item.detail.reason) : S.desk.event(item)).then(r => {
+      if (r.notLive) { off409(); return 'later'; }
+      return r.ok ? 'ok' : r.status === 0 ? 'later' : r.status === 404 && !S.ok ? 'later' : 'drop';
+    }));
+  }
+  /* a write refused because The Desk is not the live one: it keeps no plan log here (as an older Desk) */
+  function off409() { S.ok = false; S.why = 'The Desk has no live plan log here (it is not the live Desk): the planner is off.'; S.drawnKey.clear(); draw(); renderCard(); }
+  /* a plan The Desk answered with (Submit, Arm, Cancel, Edit, the list): kept with the facts of this browser it does not have yet */
+  function mergeDesk(s, p) {
+    const was = s.plans[p.uid];
+    const deskUids = new Set(p.events.map(e => e.uid).filter(Boolean)), kinds = new Set(p.events.map(e => e.kind));
+    const local = was && Array.isArray(was.events) ? was.events.filter(e => e.uid && !deskUids.has(e.uid) && !(e.local && kinds.has(e.kind))) : [];
+    s.plans[p.uid] = Object.assign({}, p, { t0: was ? was.t0 : null, events: p.events.concat(local), endedAt: was ? was.endedAt : null });
+    delete s.drafts[p.uid];
+  }
+  function takePlan(r) { const p = r && r.body ? PC.fromDesk(r.body.plan) : null; if (p) shared.change(s => mergeDesk(s, p)); return p; }
 
   /* ---------------- The Desk's plan log */
   function refresh() {
@@ -73,13 +90,7 @@ function mount(env) {
       const got = new Map();
       for (const v of (r.body && Array.isArray(r.body.plans) ? r.body.plans : [])) { const p = PC.fromDesk(v); if (p && p.pc === S.pc) got.set(p.uid, p); }
       shared.change(s => {
-        for (const [uid, p] of got) {
-          const was = s.plans[uid];
-          const deskUids = new Set(p.events.map(e => e.uid).filter(Boolean)), kinds = new Set(p.events.map(e => e.kind));
-          const local = was && Array.isArray(was.events) ? was.events.filter(e => e.uid && !deskUids.has(e.uid) && !(e.local && kinds.has(e.kind))) : [];
-          s.plans[uid] = Object.assign({}, p, { t0: was ? was.t0 : null, events: p.events.concat(local), endedAt: was ? was.endedAt : null });
-          delete s.drafts[uid];
-        }
+        for (const p of got.values()) mergeDesk(s, p);
         for (const [uid, p] of Object.entries(s.plans)) {   // not in the live list: ended at The Desk (kept a minute to show why), or this PC's only
           if (got.has(uid)) continue;
           const ph = PC.phaseOf({ events: p.events }).phase;
@@ -95,12 +106,13 @@ function mount(env) {
   function line(rootName) {
     let L = S.lines.get(rootName);
     if (L) return L;
-    L = { root: rootName, last: null, at: 0, bars: [], sock: null };
+    L = { root: rootName, last: null, at: 0, bars: [], sock: null, ready: false };
     S.lines.set(rootName, L);
     try { L.sock = env.hub.open(rootName); } catch (e) { return L; }
     L.sock.onmessage = ev => {
       const m = ev.message; if (!m || m.root !== rootName) return;
       if (m.type === 'tick' && isFinite(+m.p)) { L.last = +m.p; L.at = now(); onTrade(rootName, +m.p, isFinite(+m.u) && +m.u > 0 ? +m.u : now()); }
+      else if (m.type === 'ready') L.ready = true;                 // the history is whole: a resume may read it
       else if (m.type === 'history' && Array.isArray(m.bars)) {
         const off = (U.zoneSeconds(now() / 1000) - now() / 1000) * 1000;   // New York wall time to UTC
         for (const b of m.bars) if (Array.isArray(b)) L.bars.push({ t: b[0] * 1000 - off, h: +b[2], l: +b[3], c: +b[4] });
@@ -111,7 +123,7 @@ function mount(env) {
     L.sock.onopen = () => {};
     const sub = () => { try { L.sock.send({ type: 'subscribe', root: rootName, days: 1, tickHours: 0 }); } catch (e) { /* closed */ } };
     const was = L.sock.onmessage;
-    L.sock.onmessage = ev => { if (ev.message && ev.message.type === 'hello') { L.bars = []; sub(); } was(ev); };
+    L.sock.onmessage = ev => { if (ev.message && ev.message.type === 'hello') { L.bars = []; L.ready = false; sub(); } was(ev); };
     L.sock.onclose = () => { if (S.lines.get(rootName) === L) S.lines.delete(rootName); };
     return L;
   }
@@ -165,10 +177,10 @@ function mount(env) {
     if (d) { shared.change(s => { if (s.drafts[e.id]) Object.assign(s.drafts[e.id], { entry: e.entry, stop: e.stop, target: e.target }); }); pull(); return; }
     const p = getPlan(e.id);
     if (!p || p.phase !== 'submitted') { draw(); return; }
-    S.desk.edit(p.seq, { uid: PC.newUid(), entry: e.entry, stop: e.stop, targets: [e.target], target1: e.target }).then(r => {
+    S.desk.edit(p.seq, { uid: PC.newUid(), entry: e.entry, stop: e.stop, target: e.target }).then(r => {
+      if (r.notLive) { off409(); return; }
       if (!r.ok) { say('Not changed: ' + r.why + '.', 'warn'); S.drawnKey.clear(); draw(); return; }
-      shared.change(s => { const q = s.plans[e.id]; if (q) Object.assign(q, { entry: e.entry, stop: e.stop, target: e.target }); });
-      shared.tell({ t: 'stamped', uid: e.id }); pull(); refresh();
+      takePlan(r); shared.tell({ t: 'stamped', uid: e.id }); pull();
     });
   }
 
@@ -219,9 +231,9 @@ function mount(env) {
   function editSubmitted(change) {
     const p = getPlan(S.sel); if (!p || p.phase !== 'submitted') return;
     S.desk.edit(p.seq, Object.assign({ uid: PC.newUid() }, change)).then(r => {
+      if (r.notLive) { off409(); return; }
       if (!r.ok) { say('Not changed: ' + r.why + '.', 'warn'); renderCard(true); return; }
-      shared.change(s => { const q = s.plans[p.uid]; if (q) Object.assign(q, change.entry_type ? { entryType: change.entry_type } : {}, change.expiry_min ? { expiryMin: change.expiry_min } : {}, change.qty ? { qty: change.qty } : {}, change.grade ? { grade: change.grade } : {}, change.account ? { account: change.account } : {}, change.side ? { side: change.side } : {}); });
-      shared.tell({ t: 'stamped', uid: p.uid }); pull(); refresh();
+      takePlan(r); shared.tell({ t: 'stamped', uid: p.uid }); pull();
     });
   }
   /* the other side: the stop and target mirrored about the entry (their distances kept) */
@@ -231,7 +243,7 @@ function mount(env) {
     const what = b.dataset.pl;
     if (what === 'close') { S.sel = ''; renderCard(); S.drawnKey.clear(); draw(); return; }
     if (e.detail === 0 && ['submit', 'arm', 'cancel'].includes(what)) { cardNote('The plan\'s buttons work by click only, not by keyboard.', 'warn'); return; }
-    if (what === 'side') { const it = S.drafts.get(S.sel) || getPlan(S.sel); if (!it || it.side === b.dataset.v) return; const f = flip(it); if (!editDraft(d => Object.assign(d, { side: f.side, stop: f.stop, target: f.target }))) editSubmitted({ side: f.side, stop: f.stop, targets: [f.target], target1: f.target }); return; }
+    if (what === 'side') { const it = S.drafts.get(S.sel) || getPlan(S.sel); if (!it || it.side === b.dataset.v) return; const f = flip(it); if (!editDraft(d => Object.assign(d, { side: f.side, stop: f.stop, target: f.target }))) editSubmitted({ side: f.side, stop: f.stop, target: f.target }); return; }
     if (what === 'grade') { if (!editDraft(d => { d.grade = b.dataset.v; })) editSubmitted({ grade: b.dataset.v }); return; }
     if (what === 'submit') submit(S.sel);
     else if (what === 'arm') arm(S.sel);
@@ -239,7 +251,7 @@ function mount(env) {
   }
   function onCardChange(e) {
     const t = e.target, what = t.dataset.pl;
-    if (what === 'off') { PC.setOff(store, t.checked); shared.tell({ t: 'changed' }); say(t.checked ? 'Planner off in this browser: no new plan is drawn, submitted or armed. Plans already armed still end as they would.' : 'Planner on.', ''); renderCard(true); return; }
+    if (what === 'off') { PC.setOff(store, t.checked); shared.tell({ t: 'changed' }); say(t.checked ? 'Planner off in this browser: no plan is drawn, submitted or armed, and no entry is sent. A working entry stays: Cancel it here, or Flatten.' : 'Planner on.', ''); renderCard(true); return; }
     const val = what === 'qty' ? +t.value : what === 'exp' ? Math.round(+t.value) : t.value;
     if (what === 'exp' && !(val >= PC.EXPIRY_MIN && val <= PC.EXPIRY_MAX)) { cardNote('Expiry must be 1 to 30 minutes.', 'warn'); renderCard(true); return; }
     const map = { type: ['entryType', 'entry_type'], qty: ['qty', 'qty'], exp: ['expiryMin', 'expiry_min'], acct: ['account', 'account'] }[what];
@@ -250,14 +262,16 @@ function mount(env) {
   function submit(uid) {
     const d = S.drafts.get(uid); if (!d) return;
     if (!available()) { say(S.why, 'warn'); return; }
-    const why = PC.validate(d, ctxOf(d.root));
+    const why = PC.validate(d, ctxOf(d.root)) || (d.contract || env.contract(d.root) ? '' : 'ChartBridge has not named the ' + d.root + ' contract yet.');
     if (why) { cardNote('Not submitted: ' + why, 'warn'); return; }
+    if (!d.contract) d.contract = env.contract(d.root);
     cardNote('Submitting to The Desk...', '');
     S.desk.submit(PC.submitBody(d, S.pc)).then(r => {
+      if (r.notLive) { off409(); cardNote('Not submitted: ' + S.why, 'error'); return; }
       if (!r.ok) { cardNote('Not submitted: ' + r.why + '.', 'error'); return; }
-      const p = PC.fromDesk(r.body);
+      const p = r.body ? PC.fromDesk(r.body.plan) : null;
       if (!p) { cardNote('Not submitted: The Desk\'s answer was not a plan.', 'error'); return; }
-      shared.change(s => { s.plans[p.uid] = Object.assign({}, p, { t0: d.t0, events: p.events }); delete s.drafts[uid]; });
+      shared.change(s => { mergeDesk(s, p); s.plans[p.uid].t0 = d.t0; delete s.drafts[uid]; });
       shared.tell({ t: 'stamped', uid }); pull();
       cardNote('Plan #' + p.seq + ' submitted. Arm sends it.', '');
     });
@@ -273,9 +287,11 @@ function mount(env) {
     if (ent.refuse) { cardNote(ent.refuse, 'warn'); return; }
     cardNote('Arming at The Desk...', '');
     S.desk.arm(p.seq, PC.newUid()).then(r => {
+      if (r.notLive) { off409(); cardNote('Not armed: ' + S.why, 'error'); return; }
       if (!r.ok) { cardNote(r.status === 0 ? 'The Desk did not answer: not armed.' : 'Not armed: ' + r.why + '.', 'error'); return; }
-      const exp = r.body && isFinite(+r.body.expires_at_ms) ? +r.body.expires_at_ms : null;
-      shared.change(s => { const q = s.plans[uid]; if (q) { q.events = (q.events || []).concat([{ kind: 'arm', at: now(), detail: { expires_at_ms: exp }, uid: r.body && r.body.event_uid || '' , local: true }]); q.expiresAt = exp; q.armedAt = now(); } });
+      const got = takePlan(r);
+      if (!got || got.phase !== 'armed') { cardNote('The Desk\'s answer did not show the plan armed: not armed here.', 'error'); refresh(); return; }
+      const exp = got.expiresAt;
       /* the light lock: the ticket's Armed goes off (here, and in the ticket's window) */
       if (env.holdsTicket() && core.TR.armed) core.setArmed(false);
       shared.tell({ t: 'armOff' }); shared.tell({ t: 'stamped', uid }); pull();
@@ -289,9 +305,9 @@ function mount(env) {
     /* the working entry goes at once, from this window (any window may cancel by id); The Desk stamps the cancel */
     const o = workingOf(p);
     if (o) { const r = core.cancelPlanOrder(o.id, p); if (!r.sent) cardNote('The entry\'s cancel was not sent: ' + r.why + ' Cancel it in NinjaTrader, or Flatten.', 'error'); }
-    S.desk.cancel(p.seq, PC.newUid(), 'Anthony').then(r => {
-      if (r.ok) { shared.change(s => { const q = s.plans[uid]; if (q) { q.events = (q.events || []).concat([{ kind: 'cancel', at: now(), detail: {}, uid: '', local: true }]); q.endedAt = now(); } }); shared.tell({ t: 'stamped', uid }); pull(); cardNote('Plan #' + p.seq + ' cancelled.', ''); return; }
-      if (r.status === 0) { fact(uid, 'cancel', { by: 'card', why: 'The Desk did not answer the cancel' }); cardNote('Plan #' + p.seq + ' cancelled here; The Desk did not answer, it is told when it does.', 'warn'); return; }
+    S.desk.cancel(p.seq, PC.newUid(), 'Cancel on the plan card').then(r => {
+      if (r.ok) { takePlan(r); shared.change(s => { const q = s.plans[uid]; if (q) q.endedAt = now(); }); shared.tell({ t: 'stamped', uid }); pull(); cardNote('Plan #' + p.seq + ' cancelled.', ''); return; }
+      if (r.status === 0) { fact(uid, 'cancel', { reason: 'Cancel on the plan card (The Desk did not answer at first)' }); cardNote('Plan #' + p.seq + ' cancelled here; The Desk did not answer, it is told when it does.', 'warn'); return; }
       cardNote('The Desk refused the cancel: ' + r.why + '.', 'error');
     });
   }
@@ -300,17 +316,23 @@ function mount(env) {
   /* ---------------- the leader: sends, watches, resumes (only the window holding the lock) */
   const leader = PC.createLeader({ locks: env.locks, onLead: () => { for (const st of S.lead.values()) st.resumed = false; lead(); } });
   const LS = uid => { let st = S.lead.get(uid); if (!st) S.lead.set(uid, st = { resumed: false, watch: null, orderId: '', placed: false, filled: false, cancelling: false, lastPrice: null, lastState: '' }); return st; };
+  let snapWas = false;
   function lead() {
+    /* ChartBridge's whole snapshot again after a drop or a restart: every open plan is reconciled again (never sent again) */
+    const snap = !!core.TR.snapReady;
+    if (snap && !snapWas) for (const st of S.lead.values()) st.resumed = false;
+    snapWas = snap;
     if (!leader.isLeader() || !S.pc || S.ok !== true) return;
     for (const p of planList()) {
       if (!['armed', 'working', 'filled'].includes(p.phase)) { S.lead.delete(p.uid); continue; }
       const st = LS(p.uid);
-      if (!st.resumed) { if (!core.TR.snapReady || !core.TR.enabled) continue; resume(p, st); continue; }
+      /* a resume waits for ChartBridge's whole snapshot, and for an armed plan with nothing sent, the minutes since Arm too */
+      if (!st.resumed) { if (!core.TR.snapReady || !core.TR.enabled || (p.phase === 'armed' && !journal.sentOf(p.uid) && !line(p.root).ready)) continue; resume(p, st); continue; }
       step(p, st);
     }
   }
   function resume(p, st) {
-    st.resumed = true;
+    st.resumed = true; st.watch = null; st.unknown = false;
     const L = line(p.root);
     const r = PC.reconcile(p, { now: now(), tick: p.tick || env.tickOf(p.root), journal: journal.sentOf(p.uid), orders: [...core.TR.orders.values()], execs: env.execs(), bars: L.bars });
     if (r.act === 'expired' || r.act === 'stop_through' || r.act === 'missed') { fact(p.uid, r.act, { why: r.why, on: 'resume' }); say('Plan #' + p.seq + ': ' + r.why + '.', 'warn'); return; }
@@ -330,10 +352,17 @@ function mount(env) {
     if (p.phase === 'filled') { closedYet(p, st); return; }
     if (!st.watch) watchFor(p, st, !!journal.sentOf(p.uid));
     const sent = journal.sentOf(p.uid);
-    if (p.phase === 'armed' && !sent && p.entryType !== 'confirm') send(p, st, null);
+    if (p.phase === 'armed' && !sent && p.entryType !== 'touch_confirm') send(p, st, null);
     for (const f of st.watch.time(now())) act(p, st, f);
   }
   function send(p, st, kindNow) {
+    /* Planner off (this browser): no entry is sent; an armed plan waits (it still expires or ends at its stop), a confirmation
+       that confirms meanwhile is refused, never taken late */
+    if (PC.offIn(store)) {
+      if (kindNow) { fact(p.uid, 'refused', { why: 'Planner off', by: 'page' }); say('Plan #' + p.seq + ' confirmed while the planner is off: not sent.', 'warn'); }
+      else if (st.lastWhy !== 'off') { st.lastWhy = 'off'; say('Plan #' + p.seq + ' waits: the planner is off in this browser.', 'warn'); }
+      return;
+    }
     const tick = p.tick || env.tickOf(p.root), last = lastOf(p.root);
     const ent = kindNow ? { kind: kindNow, price: null } : PC.entryFor(p, last, env.orderTypes());
     if (ent.refuse) { fact(p.uid, 'refused', { why: ent.refuse, by: 'page' }); say('Plan #' + p.seq + ' not sent: ' + ent.refuse, 'warn'); return; }
@@ -346,7 +375,7 @@ function mount(env) {
     const r = core.sendPlanOrder({ uid: p.uid, account: p.account, root: p.root, side: p.side, kind: ent.kind, qty: p.qty, price: ent.price === null ? undefined : ent.price, bracket: b }, 'entry');
     if (!r.sent) { fact(p.uid, 'refused', { why: r.why, by: 'page' }); say('Plan #' + p.seq + ' not sent: ' + r.why, 'error'); return; }
     if (st.watch) st.watch.sent();
-    fact(p.uid, 'sent', { cid, kind: ent.kind, price: ent.price, qty: p.qty, bracket_ticks: b, last });
+    fact(p.uid, 'sent', { leg: 'entry', cid, kind: ent.kind, price: ent.price, qty: p.qty, bracket_ticks: b, last });
     say('Plan #' + p.seq + ': ' + (p.side === 'short' ? 'SELL ' : 'BUY ') + ent.kind.toUpperCase() + ' ' + p.qty + ' ' + p.root + (ent.price !== null ? ' at ' + ent.price : '') + ' sent with ' + b.stop + ' / ' + b.target + ' ticks, on ' + p.account + '.', '');
   }
   function act(p, st, f) {
@@ -440,7 +469,11 @@ function mount(env) {
   function available() { return S.ok === true && !!S.pc; }
   function armTool(c) {
     if (!available()) { env.note(S.why || 'The planner is off.', 'warn'); return false; }
-    if (PC.offIn(store)) { env.note('Planner is off in this browser: switch it on on a plan card (or clear live-planner-off-v1).', 'warn'); PC.setOff(store, false); return false; }
+    /* Planner off is a switch, never undone by a slip: a second click on the Plan tool within 5 s turns it on */
+    if (PC.offIn(store)) {
+      if (now() - S.offAsk < 5000) { PC.setOff(store, false); shared.tell({ t: 'changed' }); env.note('Planner on again in this browser.', ''); }
+      else { S.offAsk = now(); env.note('Planner is off in this browser: nothing is drawn, submitted, armed or sent. Click Plan again within 5 s to turn it on.', 'warn'); return false; }
+    }
     c.chart.setTool('plan');
     env.note('Plan: click the entry price on ' + c.root + '. Escape cancels.', '');
     return true;
@@ -461,7 +494,7 @@ function mount(env) {
     message: m => guard(() => message(m)), flattened: r => guard(() => flattened(r)), override: (w, on) => guard(() => override(w, on)),
     ticketArmed: on => guard(() => ticketArmed(on)), sentManual: msg => guard(() => sentManual(msg)), pressOff: id => { try { return pressOff(id); } catch (e) { return ''; } },
     armTool, available,
-    state: () => ({ ok: S.ok, why: S.why, pc: S.pc, leader: leader.isLeader(), sel: S.sel, drafts: [...S.drafts.values()], plans: planList(), journal: journal.all(), queue: queue.items(), lost: queue.lost(), notes: S.notes.slice(), card: !!S.card }),
+    state: () => ({ lines: [...S.lines.values()].map(L => ({ root: L.root, ready: L.ready, bars: L.bars.length, last: L.last, tail: L.bars.slice(-3) })), ok: S.ok, why: S.why, pc: S.pc, leader: leader.isLeader(), sel: S.sel, drafts: [...S.drafts.values()], plans: planList(), journal: journal.all(), queue: queue.items(), lost: queue.lost(), notes: S.notes.slice(), card: !!S.card }),
     destroy() { S.destroyed = true; for (const t of S.timers) clearInterval(t); leader.close(); shared.close(); if (S.card) S.card.remove(); for (const L of S.lines.values()) { try { L.sock.onmessage = L.sock.onclose = null; L.sock.close(); } catch (e) { /* closed */ } } },
   };
 }

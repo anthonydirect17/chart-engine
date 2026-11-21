@@ -35,9 +35,10 @@ const QUEUE_KEY = 'live-planner-queue-v1';    // the facts waiting for The Desk
 const OFF_KEY = 'live-planner-off-v1';        // true: Planner off in this browser
 const ROOTS = ['MNQ', 'NQ', 'MES', 'ES'];
 const SIDES = ['long', 'short'];
-const ENTRY_TYPES = ['limit', 'touch', 'confirm'];
-const ENTRY_WORDS = { limit: 'Limit at the line', touch: 'Market on touch', confirm: 'Touch, then a 1 minute close back' };
-const ENTRY_SHORT = { limit: 'LMT', touch: 'TOUCH', confirm: 'CONFIRM' };
+/* the entry types as The Desk names them (TheDesk thedesk/plans.py ENTRY_TYPES) */
+const ENTRY_TYPES = ['limit', 'market_on_touch', 'touch_confirm'];
+const ENTRY_WORDS = { limit: 'Limit at the line', market_on_touch: 'Market on touch', touch_confirm: 'Touch, then a 1 minute close back' };
+const ENTRY_SHORT = { limit: 'LMT', market_on_touch: 'TOUCH', touch_confirm: 'CONFIRM' };
 const GRADES = ['A+', 'A', 'B'];
 const GRADE_DEFAULT = 'A+';
 const EXPIRY_MIN = 1, EXPIRY_MAX = 30, EXPIRY_DEFAULT = 30;   // minutes from Arm (decision 9 A; Anthony: "30 mins is fine")
@@ -64,7 +65,8 @@ function newUid(rand) {
   for (let i = 0; i < 16; i++) s += abc[Math.floor(r() * abc.length) % abc.length];
   return s;
 }
-const UID_RX = /^pu[a-z0-9]{16}$/;
+const UID_RX = /^pu[a-z0-9]{16}$/;                      // the page's own (newUid)
+const DESK_UID_RX = /^[A-Za-z0-9_-]{6,64}$/;            // what The Desk takes (6 to 64 of A-Z, a-z, 0-9, - and _)
 /** The entry's cid, fixed per plan and leg: one plan has one entry, so one cid ever. */
 const entryCid = uid => 'pl' + uid + '-e';
 /** The plan uid an order's cid names, or '' (not a plan's). */
@@ -115,10 +117,13 @@ function bracketTicks(d, from, tick) {
   const dir = dirOf(d.side);
   return { stop: Math.round((from - d.stop) * dir / tick), target: Math.round((d.target - from) * dir / tick) };
 }
-/** The Desk's Submit body (POST /api/plans): the call log's fields and the plan's own (`plan`, JSON). pc: this PC's name. */
+/** The Desk's Submit body (POST /api/plans; TheDesk docs/API.md "Plans"): exactly its fields (any other key is refused).
+    pc: this PC's name. `target` is target 1. */
 function submitBody(d, pc) {
-  return { uid: d.uid, root: d.root, side: d.side, entry: d.entry, stop: d.stop, targets: [d.target], size: d.qty, account: d.account, grade: d.grade,
-    plan: { uid: d.uid, pc: pc || '', entry_type: d.entryType, expiry_min: d.expiryMin, qty: d.qty, target1: d.target, tick: d.tick, contract: d.contract || '' } };
+  const b = { uid: d.uid, pc: pc || '', account: d.account, root: d.root, contract: d.contract || '', side: d.side, entry_type: d.entryType,
+    entry: d.entry, stop: d.stop, target: d.target, qty: d.qty, expiry_min: d.expiryMin, grade: d.grade };
+  if (d.tick > 0) b.tick = d.tick;
+  return b;
 }
 
 /**
@@ -129,7 +134,7 @@ function submitBody(d, pc) {
 function entryFor(d, last, orderTypes) {
   if (!isNum(last) || !(last > 0)) return { refuse: 'No recent ' + d.root + ' price: not armed.' };
   if (d.tick > 0 && throughStop(d, last, d.tick)) return { refuse: 'The last price ' + last + ' is already through the stop: not armed.' };
-  if (d.entryType === 'confirm') return { kind: null, price: null };
+  if (d.entryType === 'touch_confirm') return { kind: null, price: null };
   const buy = d.side !== 'short', limitSide = buy ? d.entry <= last : d.entry >= last;
   if (d.entryType === 'limit') {
     if (!limitSide) return { refuse: 'A ' + (buy ? 'buy' : 'sell') + ' limit at ' + d.entry + ' is through the market (last ' + last + ') and would fill at once: not armed. Use Market on touch for that side.' };
@@ -176,7 +181,7 @@ const closesBack = (d, close) => (d.side === 'short' ? close < d.entry - 1e-9 : 
 function createWatch(plan, opts) {
   const o = opts || {}, tick = o.tick > 0 ? o.tick : 0.25;
   const S = { done: false, sent: !!o.sent, touchMin: isNum(o.touched) ? o.touched : null, min: null, close: null };
-  const confirm = plan.entryType === 'confirm';
+  const confirm = plan.entryType === 'touch_confirm';
   const minuteOf = ms => Math.floor(ms / 60000);
   function closeMinute(out, m, close, at) {
     if (S.done || S.sent || !confirm || S.touchMin === null || m < S.touchMin || close === null) return;
@@ -213,12 +218,13 @@ function createWatch(plan, opts) {
 /** A plan The Desk gave, its phase from its facts: 'submitted', 'armed' (nothing sent), 'working' (its entry sent), 'filled',
  *  'ended' (and why: the ending fact's kind). */
 function phaseOf(v) {
-  const ev = v && Array.isArray(v.events) ? v.events : [];
-  const has = k => ev.some(e => e && e.kind === k);
-  const end = ev.find(e => e && END_KINDS.includes(e.kind) && !(e.kind === 'cancel' && has('filled')));
-  if (has('closed') || has('ended')) return { phase: 'ended', why: has('closed') ? 'closed' : 'ended' };
-  if (has('filled')) return { phase: 'filled', why: '' };
+  const ev = v && Array.isArray(v.events) ? v.events.filter(e => e && typeof e.kind === 'string') : [];
+  const has = k => ev.some(e => e.kind === k);
+  /* as The Desk works it out (thedesk/plans.py state_of): once filled only closed or ended ends it, before that any ending fact */
+  const fi = ev.findIndex(e => e.kind === 'filled');
+  const end = fi >= 0 ? ev.slice(fi + 1).find(e => e.kind === 'closed' || e.kind === 'ended') : ev.find(e => END_KINDS.includes(e.kind));
   if (end) return { phase: 'ended', why: end.kind };
+  if (fi >= 0) return { phase: 'filled', why: '' };
   if (has('sent') || has('placed')) return { phase: 'working', why: '' };
   if (has('arm')) return { phase: 'armed', why: '' };
   return { phase: 'submitted', why: '' };
@@ -229,20 +235,22 @@ function expiresOf(v) {
   const a = v && Array.isArray(v.events) ? v.events.find(e => e && e.kind === 'arm') : null;
   return a && a.detail && isNum(a.detail.expires_at_ms) ? a.detail.expires_at_ms : null;
 }
-/** A plan The Desk gave, in the page's shape: { seq, uid, root, side, entry, stop, target, qty, account, grade, entryType, expiryMin,
- *  tick, contract, pc, phase, why, expiresAt, armedAt, events }; null when it is not a plan. */
+/** A plan The Desk gave (its `<plan>` object: seq, uid, pc, root, contract, tick, the current account, side, entry_type, entry,
+ *  stop, target, qty, expiry_min, grade, then status, live, ended, armed_at_ms, expires_at_ms, entry_cid, nt_order_id,
+ *  fill_exec_ids, flags, events [{ seq, uid, kind, logged_at_ms, detail }]), in the page's shape: { seq, uid, root, side, entry,
+ *  stop, target, qty, account, grade, entryType, expiryMin, tick, contract, pc, phase, why, expiresAt, armedAt, events }; null
+ *  when it is not a plan. */
 function fromDesk(v) {
-  if (!v || typeof v !== 'object' || !Number.isInteger(v.seq) || !v.plan || typeof v.plan !== 'object') return null;
-  const p = v.plan, uid = typeof v.uid === 'string' ? v.uid : p.uid;
-  if (!UID_RX.test(uid || '') || !ROOTS.includes(v.root)) return null;
-  const ph = phaseOf(v), arm = (v.events || []).find(e => e && e.kind === 'arm');
-  return { seq: v.seq, uid, root: v.root, side: v.side === 'short' ? 'short' : 'long', entry: +v.entry, stop: +v.stop,
-    target: isNum(p.target1) ? p.target1 : Array.isArray(v.targets) && isNum(+v.targets[0]) ? +v.targets[0] : null,
-    qty: Number.isInteger(p.qty) ? p.qty : +v.size || 1, account: str(v.account, 64), grade: GRADES.includes(v.grade) ? v.grade : GRADE_DEFAULT,
-    entryType: ENTRY_TYPES.includes(p.entry_type) ? p.entry_type : 'limit', expiryMin: Number.isInteger(p.expiry_min) ? p.expiry_min : EXPIRY_DEFAULT,
-    tick: isNum(p.tick) ? p.tick : null, contract: str(p.contract, 32), pc: str(p.pc, 64), phase: ph.phase, why: ph.why,
-    expiresAt: expiresOf(v), armedAt: arm && isNum(arm.logged_at_ms) ? arm.logged_at_ms : null, loggedAt: isNum(v.logged_at_ms) ? v.logged_at_ms : null,
-    events: (Array.isArray(v.events) ? v.events : []).filter(e => e && EVENT_KINDS.includes(e.kind)).map(e => ({ kind: e.kind, at: e.logged_at_ms, detail: e.detail || {}, uid: e.uid || '' })) };
+  if (!v || typeof v !== 'object' || !Number.isInteger(v.seq) || !DESK_UID_RX.test(v.uid || '') || !ROOTS.includes(v.root)) return null;
+  const num = x => (typeof x === 'number' && isFinite(x) ? x : null);
+  const events = (Array.isArray(v.events) ? v.events : []).filter(e => e && EVENT_KINDS.includes(e.kind))
+    .map(e => ({ kind: e.kind, at: num(e.logged_at_ms), detail: e.detail && typeof e.detail === 'object' ? e.detail : {}, uid: typeof e.uid === 'string' ? e.uid : '' }));
+  const ph = phaseOf({ events });
+  return { seq: v.seq, uid: v.uid, root: v.root, side: v.side === 'short' ? 'short' : 'long', entry: num(v.entry), stop: num(v.stop), target: num(v.target),
+    qty: Number.isInteger(v.qty) ? v.qty : 1, account: str(v.account, 64), grade: GRADES.includes(v.grade) ? v.grade : GRADE_DEFAULT,
+    entryType: ENTRY_TYPES.includes(v.entry_type) ? v.entry_type : 'limit', expiryMin: Number.isInteger(v.expiry_min) ? v.expiry_min : EXPIRY_DEFAULT,
+    tick: num(v.tick), contract: str(v.contract, 32), pc: str(v.pc, 64), phase: ph.phase, why: ph.why, status: str(v.status, 20),
+    expiresAt: num(v.expires_at_ms), armedAt: num(v.armed_at_ms), loggedAt: num(v.logged_at_ms), flags: Array.isArray(v.flags) ? v.flags.filter(f => typeof f === 'string') : [], events };
 }
 const WHY_WORDS = { cancel: 'cancelled', refused: 'refused by ChartBridge', expired: 'expired', stop_through: 'price went through the stop', missed: 'missed (not taken late)', closed: 'closed', ended: 'ended' };
 /** What the engine draws for a plan (its cleanPlan shape). A draft (not submitted) has no seq. */
@@ -288,7 +296,7 @@ function reconcile(p, ctx) {
   const side = orderSide(p.side), working = o => o && (o.state === 'working' || o.state === 'partFilled' || o.state === 'accepted');
   let o = orders.find(x => x && x.cid === sent.cid && working(x));
   if (!o) {   // after a ChartBridge restart the cid is gone: the same account, root, side, kind, price and qty
-    const kinds = p.entryType === 'limit' ? ['limit'] : p.entryType === 'touch' ? ['mit', 'stop'] : ['market'];
+    const kinds = p.entryType === 'limit' ? ['limit'] : p.entryType === 'market_on_touch' ? ['mit', 'stop'] : ['market'];
     o = orders.find(x => working(x) && x.account === p.account && x.root === p.root && x.side === side && kinds.includes(x.kind) && (x.kind === 'market' || Math.abs(+x.price - p.entry) < 1e-9) && +x.qty === p.qty && (x.role === 'entry' || x.role === 'other' || !x.role));
   }
   if (o) {
@@ -393,17 +401,19 @@ function createQueue(storage, now, rand) {
  * true when it has no plan log (404 on GET /api/plans: an older Desk).
  */
 function deskApi(env) {
+  /* a write refused because this Desk is not the live one (409, calls.NOT_LIVE): it keeps no plan log here */
+  const notLive = r => r.status === 409 && /not the live Desk|THEDESK_LIVE|not live/i.test(r.why || '');
   const call = (method, path, body) => Promise.resolve().then(() => env.base()).then(url => env.fetch(url + path, Object.assign({ method, mode: 'cors', credentials: 'omit', cache: 'no-store' },
     body ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {})))
     .then(r => r.text().then(t => { let j = null; try { j = t ? JSON.parse(t) : null; } catch (e) { j = null; } return { ok: r.ok, status: r.status, body: j, why: !r.ok ? (j && typeof j.detail === 'string' ? j.detail : 'The Desk answered ' + r.status) : '' }; }),
-      () => ({ ok: false, status: 0, body: null, why: 'The Desk did not answer' }));
+      () => ({ ok: false, status: 0, body: null, why: 'The Desk did not answer' })).then(r => Object.assign(r, { notLive: notLive(r) }));
   return {
     list: pc => call('GET', '/api/plans?' + new URLSearchParams({ live: '1', pc: pc || '' })).then(r => Object.assign(r, { none: r.status === 404 })),
     get: seq => call('GET', '/api/plans/' + seq),
     submit: body => call('POST', '/api/plans', body),
     edit: (seq, body) => call('POST', '/api/plans/' + seq + '/edit', body),
     arm: (seq, uid) => call('POST', '/api/plans/' + seq + '/arm', { uid }),
-    cancel: (seq, uid, why) => call('POST', '/api/plans/' + seq + '/cancel', { uid, why: why || '' }),
+    cancel: (seq, uid, reason) => call('POST', '/api/plans/' + seq + '/cancel', reason ? { uid, reason } : { uid }),
     event: item => call('POST', '/api/plans/' + item.seq + '/events', { uid: item.uid, kind: item.kind, detail: item.detail }),
   };
 }
@@ -475,7 +485,7 @@ function overridesFor(what, on, plans, extra) {
 }
 
 return { LOCK, CHANNEL, STORE_KEY, JOURNAL_KEY, QUEUE_KEY, OFF_KEY, ROOTS, SIDES, ENTRY_TYPES, ENTRY_WORDS, ENTRY_SHORT, GRADES, GRADE_DEFAULT,
-  EXPIRY_MIN, EXPIRY_MAX, EXPIRY_DEFAULT, CONFIRM_LAG_MS, EVENT_KINDS, END_KINDS, OVERRIDES, WHY_WORDS,
+  DESK_UID_RX, EXPIRY_MIN, EXPIRY_MAX, EXPIRY_DEFAULT, CONFIRM_LAG_MS, EVENT_KINDS, END_KINDS, OVERRIDES, WHY_WORDS,
   newUid, entryCid, uidOfCid, cleanDraft, validate, bracketTicks, submitBody, entryFor, bracketFor, throughStop, touches, closesBack,
   createWatch, armClosedWhy, phaseOf, expiresOf, fromDesk, viewOf, reconcile, createJournal, createQueue, deskApi, createLeader, cleanStore, createShared,
   offIn, setOff, overridesFor, onGrid, roundTo };
