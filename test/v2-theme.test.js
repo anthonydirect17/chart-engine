@@ -153,8 +153,8 @@ test('motion: every V2 transition and animation is off with reduced motion, and 
   for (const f of ['live/live.css', 'live/workspace.css', 'live/markup.css', 'live/pin.css']) {
     for (const r of rules(read(f))) if (!/no-preference/.test(r.media)) assert.doesNotMatch(r.body, /animation(?:-name)?\s*:[^;]*\b(v2-[a-z-]+|cb-pin-in)\b|transition\s*:[^;]*(cubic-bezier\(\.22, 1, \.36, 1\)|var\(--(ws|ms|v2)-ease\))/, f + ': ' + r.sel + ' moves with reduced motion');
   }
-  // the order dialogs (the group entry, Flatten every account, Order Strategies) appear at once
-  assert.match(read('live/workspace.css'), /\.ws-dialog\[open\]:not\(:has\(\.ws-gq, \.ws-fe, \.ws-sg\)\) \{ animation: v2-fade-in/);
+  // the order dialogs (the group entry, Order Strategies; 1.61.0 removed Flatten every account's) appear at once
+  assert.match(read('live/workspace.css'), /\.ws-dialog\[open\]:not\(:has\(\.ws-gq, \.ws-sg\)\) \{ animation: v2-fade-in/);
   // the Armed switch's state: no V2 motion added (its knob's 0.12 s of 1.13.0 is the only motion it has)
   for (const r of rules(read('live/live.css'))) if (/\.arm\b/.test(r.sel) && moves(r.body)) assert.equal(r.sel, '.chart-live .arm .knob::after');
 });
@@ -223,7 +223,7 @@ test('danger stays danger (review of #70): no gold hover on a danger button; bot
   // warnings keep their own amber text, apart from the soft gold
   assert.match(ws, /--ws-warn-text: #FFE2B0;/); assert.match(ws, /--ws-soft: #F2E4C2;/);
   // nothing with a button in it moves under the pointer as it opens: dialogs, the PIN card and the Studio's summary only fade
-  assert.match(ws, /\.ws-dialog\[open\]:not\(:has\(\.ws-gq, \.ws-fe, \.ws-sg\)\) \{ animation: v2-fade-in/);
+  assert.match(ws, /\.ws-dialog\[open\]:not\(:has\(\.ws-gq, \.ws-sg\)\) \{ animation: v2-fade-in/);
   assert.match(read('live/pin.css'), /@keyframes cb-pin-in \{ from \{ opacity: 0; \} to \{ opacity: 1; \} \}/);
   assert.match(read('live/markup.css'), /\.ms-summary:not\(\[hidden\]\) \{ animation: v2-fade-in/);
   for (const f of ['live/workspace.css', 'live/pin.css', 'live/markup.css']) assert.doesNotMatch(read(f), /animation: v2-rise/, f);

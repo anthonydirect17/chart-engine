@@ -47,12 +47,12 @@ possible as far as we can go."
   a gold border, panels and cards a gold hairline along the top, the top bar a gold hairline under it.
 - **Motion (V2):** one ease, `cubic-bezier(.22, 1, .36, 1)`. Menus and popovers (Indicators, Colors, the chip popovers, + Add
   panel, Settings, Screens) fade in as they open; a dialog that asks nothing about orders fades in (no movement, so no button is ever hit off its place); the top bar's own
-  buttons (never Flatten all or Flatten every, nor the NO STOP question's buttons) ease their hover and lift 1 px; a tab bar's
+  buttons (never Flatten all, nor the NO STOP question's buttons) ease their hover and lift 1 px; a tab bar's
   gold ink slides to the chosen tab (`ChartMotion.syncInk`); the PIN card fades in once; the Studio's buttons and tabs ease.
   The limits: a live value (prices, the quote board, Time and Sales, position, P&L, order state, the ticket, the chart and its
   order and position lines) shows its true value at once and nothing on or around it moves; every control takes its click
   on the first frame (a menu or a dialog while it is still fading in); Buy, Sell, Flatten, B/E, Arm and Disarm fire on the
-  click with no motion; the order dialogs (the group entry, Flatten every account, Order Strategies) appear at once. Reduced
+  click with no motion; the order dialogs (the group entry, Order Strategies) appear at once. Reduced
   motion (the system's, or the page's Less motion) turns all of it off. `npm run smoke:v2` checks these in a page.
 
 ## The brand: Imperium and Aureus (page 1.44.0)

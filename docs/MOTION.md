@@ -45,7 +45,7 @@ Anthony, 2026-10-24: "smooth everywhere where possible as far as we can go". The
 asked: menus and popovers fade in as they open, a dialog that asks nothing about orders fades in, the top bar's own buttons
 ease their hover and lift 1 px, the PIN card fades in once, the Studio's buttons and tabs ease, and a tab bar's gold ink
 slides to the chosen tab (`ChartMotion.syncInk(bar, { key })`, the `.v2-ink` span in motion.css). R3 holds as written above:
-no motion on the order ticket, the order bar, Armed, Flatten, the order dialogs (the group entry, Flatten every account,
+no motion on the order ticket, the order bar, Armed, Flatten, the order dialogs (the group entry,
 Order Strategies), the tape, the quote board, the account panels, positions, P&L or the chart. Every control takes its click
 on the first frame, while it is still fading or rising in. Each page's V2 rules sit inside
 `@media (prefers-reduced-motion: no-preference)` and under `:root:not(.motion-off)`, so the system's reduced motion or the

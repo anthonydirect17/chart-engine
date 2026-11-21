@@ -79,10 +79,11 @@ test('trade.js: every order path sends for TR.account, and only after ready() ch
   assert.ok(sends.length >= 4, 'found the order sends');
   assert.match(CORE, /const msg = \{ type: 'order', cid: newCid\(\), account: TR\.account,/);
   // Flatten: the click sends for the account and instrument shown (sendFlatten); a resend after a rate refusal only
-  // while those are still shown (review 3 S4), Flatten all's while the account is still a trade account (1.12.0)
+  // while those are still shown (review 3 S4), Flatten all's for any account it covered (1.61.0), another kind's while the account is
+  // still a trade account (1.12.0)
   assert.match(CORE, /sendFlatten\(TR\.account, R, false, other \? 'all' : 'here'\);/);
   assert.match(CORE, /send\(\{ type: 'flatten', account, root: R \}\);/);
-  assert.match(CORE, /const ok = on && \(f\.kind === 'here' \? TR\.account === f\.account && root\(\) === f\.root : f\.kind === 'every' \|\| TR\.accounts\.includes\(f\.account\)\);[^\n]*\n\s+if \(ok\) \{ sendFlatten\(f\.account, f\.root, true, f\.kind\);/);   // 1.34.0: Flatten every account's resend, any account ChartBridge lists
+  assert.match(CORE, /const ok = on && \(f\.kind === 'here' \? TR\.account === f\.account && root\(\) === f\.root : f\.kind === 'all' \|\| TR\.accounts\.includes\(f\.account\)\);[^\n]*\n\s+if \(ok\) \{ sendFlatten\(f\.account, f\.root, true, f\.kind\);/);   // 1.61.0: Flatten all's resend, any account it covered
   // ready(): the picker must show TR.account, else nothing is sent
   const ready = CORE.slice(CORE.indexOf('function ready('), CORE.indexOf('function sendOrder('));
   assert.match(ready, /if \(env\.pickerAccount\(\) !== TR\.account\) \{ env\.syncAccounts\(\); flash\('Nothing was sent[^\n]*return false; \}/);
@@ -95,13 +96,21 @@ test('trade.js: every order path sends for TR.account, and only after ready() ch
   assert.match(CORE, /\$\('flattenBtn'\)\.addEventListener\('click', pointerOnly\(\(\) => core\.flattenHere\(\)\)\);/);
   // 1.13.0 (the F2 review): an open NO STOP question is closed first (dropNoStop sends nothing; an error there never stops the flatten), then ready() as before
   assert.match(CORE, /function flattenHere\(other\) \{\n\s+(try \{ dropNoStop\(\); flattened\(other \|\| root\(\)\); \} catch \(e\) \{ \/\* never in the way of the flatten \*\/ \}\n\s+)if \(!ready\(false\)\) return;/);
-  // Flatten all on the ticket's account; on None it sends nothing, as every ticket action (the coordinator's ruling on #47)
-  assert.match(CORE, /function flattenAll\(\) \{\n\s+(try \{ dropNoStop\(\); flattened\(null\); \} catch \(e\) \{ \/\* never in the way of the flatten \*\/ \}\n\s+)if \(!ready\(false\)\) return;\n\s+const one = !isGroup\(TR\.account\), account = TR\.account;/);   // 1.33.0: a group's Flatten all covers every member
+  // 1.61.0 (Anthony 2026-11-20: "this should apply to any account being traded on my charts"): Flatten all covers every account the
+  // charts trade (allScan: the trade accounts and any account this connection shows holding something), whatever the ticket shows,
+  // None included; it needs trading on and the connection, never Armed and never the picker (so no ready() at all)
+  const fa = CORE.slice(CORE.indexOf('function flattenAll('), CORE.indexOf('function faPump('));
+  assert.match(fa, /^function flattenAll\(\) \{\n\s+try \{ dropNoStop\(\); flattened\(null\); \} catch \(e\) \{ \/\* never in the way of the flatten \*\/ \}\n\s+if \(FRAMED\) \{[^\n]*\n\s+if \(!TR\.enabled\) \{[^\n]*\n\s+if \(!open\(\)\) \{[^\n]*\n/);
+  assert.doesNotMatch(fa, /ready\(|TR\.armed|TR\.account\b|pickerAccount/, 'Flatten all reads neither Armed nor the ticket\'s account');
+  assert.match(fa, /const scan = allScan\(\), items = scan\.items/);
+  const scanFn = CORE.slice(CORE.indexOf('function allScan('), CORE.indexOf('function flattenAll('));
+  assert.match(scanFn, /for \(const a of TR\.accounts\) if \(typeof a === 'string' && a\) accts\.add\(a\);/, 'every trade account');
+  assert.doesNotMatch(CORE, /everyHolding|flattenEvery|everyScan/, 'Flatten every account is gone');
   assert.match(CORE, /if \(!TR\.account\) \{ flash\('No account \(None\)/);
   assert.match(CORE, /function dropNoStop\(\) \{ if \(typeof env\.dropNoStop === 'function'\) env\.dropNoStop\(\); \}/, 'dropNoStop only closes the question');
-  // only Flatten, Flatten all and (release 1, 1.6c, Anthony 2026-11-17: "Cut half works with Armed off") Cut half skip the Armed
-  // check (Anthony 2026-10-01); every other ready() call keeps it
-  assert.deepEqual((CORE.match(/ready\(false\)/g) || []).length, 3);
+  // only Flatten and (release 1, 1.6c, Anthony 2026-11-17: "Cut half works with Armed off") Cut half skip the Armed check through
+  // ready(false) (Anthony 2026-10-01); Flatten all (1.61.0) calls no ready() at all; every other ready() call keeps it
+  assert.deepEqual((CORE.match(/ready\(false\)/g) || []).length, 2);
   assert.match(CORE, /function cutHalf\(\) \{\n\s+if \(!ready\(false\)\) return;\n\s+const R = root\(\), account = TR\.account;/);
   // Cut half sends for TR.account (each member of its group): the signed position shown, which ChartBridge checks
   assert.match(CORE, /const plan = OT\.cutHalfPlan\(targets\(account\), TR\.positions, R\);/);

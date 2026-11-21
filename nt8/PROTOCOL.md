@@ -5103,7 +5103,8 @@ order that reduces by either reading is never checked.
 
 - `riskAlert` shows in the banner the page uses for ChartBridge's errors (red for `dailyLoss`, amber for `held` and `skipped`), with
   a short sound, once per window (both of a window's connections bring it), never a dialog; the Account page's log keeps it too.
-- **Flatten every account** (Anthony, approved 2026-10-20): its own button in the top bar beside Flatten all, one confirm listing each
+- **Flatten every account** (Anthony, approved 2026-10-20; removed in chart 1.61.0, Anthony 2026-11-20: Flatten all now covers every
+  trade account, whatever the ticket shows, and Legion has its own Flatten): its own button in the top bar beside Flatten all, one confirm listing each
   account and what it holds. It sends a `flatten` for every account ChartBridge lists with a position or a working order (the
   copier's leader and followers, the bot's and the agents' accounts included; the window's v3 connection lists them all), whatever
   the ticket shows, with Armed off, paced within the 10 order actions a second as Flatten all (a flatten refused for the rate goes

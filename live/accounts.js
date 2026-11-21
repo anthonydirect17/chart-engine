@@ -399,6 +399,28 @@ function notListedWords(r) {
   if (!out.length) out.push(r.unseen ? 'not connected this session' : 'not listed');
   return out.join(' · ');
 }
+/**
+ * 1.61.0 (Anthony 2026-11-20: "these old blow or passed prop accounts should be completely gone. I dont want to see them there at
+ * all"): the accounts the Account page leaves out of every list (the Accounts tab, Not in NinjaTrader now, Gone and Hidden, so no
+ * Show either). `finished` is The Desk's list of finished accounts (blown or promoted on Fleet, or archived as gone), read by Legion's
+ * own reader (LegionCastraCore.finishedOf, chart 1.60.0) from GET /api/chart-accounts' finished_accounts; `mark` is Legion's own test
+ * (LegionCastraCore.hiddenMark): finished and not holding anything. An account ChartBridge shows holding a position or a working order
+ * (lifecycleBusy) is never left out. Display only: the lifecycle, the totals and every check still see every account. With no list
+ * (an older Desk, or LegionCastraCore not loaded) nothing is left out. st: the feed's state. Returns a Set of account names.
+ */
+function finishedOut(finished, st, mark) {
+  const out = new Set(), S0 = st || {};
+  if (!(finished instanceof Map) || !finished.size || typeof mark !== 'function') return out;
+  const names = new Set();
+  for (const list of [S0.accounts, S0.archived, S0.notListed]) for (const a of Array.isArray(list) ? list : []) if (a && typeof a.name === 'string') names.add(a.name);
+  for (const g of Array.isArray(S0.groups) ? S0.groups : []) for (const m of (g && Array.isArray(g.members) ? g.members : [])) if (typeof m === 'string') names.add(m);
+  for (const f of S0.copier && Array.isArray(S0.copier.followers) ? S0.copier.followers : []) if (f && typeof f.account === 'string') names.add(f.account);
+  for (const name of names) {
+    const a = (S0.accounts || []).find(x => x && x.name === name) || { name, positions: [] };
+    if (mark(finished, name, lifecycleBusy(a, S0) ? 'holds a position or a working order' : 'Flat')) out.add(name);
+  }
+  return out;
+}
 /* ---------------- 1.40.0 (Sunday item A): the accounts ChartBridge lists, told to The Desk (PUT /api/chart-accounts/listed) so a new
    account shows on Prop > Accounts before its first fill. Sim and Playback names are left out; at most 200 names of 1 to 64 characters. */
 const LISTED_MAX = 200;
@@ -670,7 +692,7 @@ function sizeStartWarn(a, rules, startText) {
 return { QUOTE_ONLY, quoteRoots, decimalsOf, fmtNum, fmt32, priceText, changeText, fmtUsd, fmtUsdPlain, AMBER, RED, limitState, limitText,
   tradeDayOf, dayText, roundTrips, netOf, tradesToday, cleanDesk, reviewUrl, FOLLOWER_DEFAULT, leaderSet, accountMark, followerRows, followerMessage,
   accountMark, accountChange, logText, keptChange, orderName, attachedLegs, isWorking, heroOf, floorPlan, FIRM_MIN_KEY, cleanFirmMins, ntFloorFlag, FLOOR_GAP, sizeStartWarn,
-  roomParts, labelRefusal, deskSendLines, OUTCOMES, OUTCOME_WORD, propRow, listedNames, listedPlan, LISTED_MAX, lifecycleStep, lifecycleBusy, flatRetry, FLAT_RETRIES, STEP_WORDS, notListedRows, notListedWords, outcomeBody };
+  roomParts, labelRefusal, deskSendLines, OUTCOMES, OUTCOME_WORD, propRow, listedNames, listedPlan, LISTED_MAX, lifecycleStep, lifecycleBusy, flatRetry, FLAT_RETRIES, STEP_WORDS, notListedRows, notListedWords, outcomeBody, finishedOut };
 });
 
 /* ======================================================================== AccountsPage (browser only) */
@@ -741,6 +763,7 @@ function createFeed(env) {
        lifecycle: name -> { outcome, step, why, tried: Map(step key -> { cid, at, state 'sent' | 'refused' | 'done', why }) } for each
        account The Desk marks Blown or Promoted (the steps ChartBridge is asked once each, their answers) */
     notListed: [], lifecycle: new Map(),
+    finished: new Map(),   // 1.61.0: The Desk's finished accounts (finished_accounts on GET /api/chart-accounts, LegionCastraCore.finishedOf), display only
     diag: null,   // 1.40.0 (C-B, C-C): ChartBridge's /diag, read with The Desk's rows
   };
   let ws = null, tries = 0, timer = 0, seq = 0, started = false, deskTimer = 0, changeQueued = false, stopped = false;
@@ -1017,6 +1040,10 @@ function createFeed(env) {
         return r.json().then(j => j && typeof j.detail === 'string' ? j.detail : '', () => '').then(d => ({ ok: false, error: r.status === 404 ? 'The Desk has no prop account for ' + name + (d ? ' (' + d + ')' : '') : 'The Desk answered ' + r.status + (d ? ': ' + d : '') }));
       }, e => ({ ok: false, error: 'The Desk is not reachable (' + (e && e.message ? e.message : 'no answer') + ')' }));
   }
+  /* 1.61.0: The Desk's finished accounts, read by Legion's own reader (live/legion-castra-core.js, loaded before this page's code);
+     without it, or from an older Desk with no list, none (nothing is left out) */
+  const castra = () => (typeof LegionCastraCore !== 'undefined' ? LegionCastraCore : null);
+  const finishedOf = j => { const K = castra(); try { return K ? K.finishedOf(j) : new Map(); } catch (e) { return new Map(); } };
   /* The Desk's limits (read only): its address as ChartBridge knows it (/diag desk.deskUrl), then GET /api/chart-accounts
      now and every minute while the feed runs. A failure leaves the last rows and says so in the Accounts tab. */
   function readDesk() {
@@ -1024,7 +1051,7 @@ function createFeed(env) {
     if (stopped) return;
     const limits = deskBase(env.fetch).then(url => { S.deskUrl = url; return env.fetch(url + '/api/chart-accounts', { cache: 'no-store', mode: 'cors', credentials: 'omit' }); })
       .then(r => (r.ok ? r.json() : Promise.reject(new Error('The Desk answered ' + r.status))))
-      .then(j => { S.desk = AC.cleanDesk(j); S.deskState = 'ok'; S.deskAt = Date.now(); }, e => { S.deskState = 'The Desk\'s limits could not be read (' + (e && e.message ? e.message : 'not reachable') + ').'; });
+      .then(j => { S.desk = AC.cleanDesk(j); S.finished = finishedOf(j); S.deskState = 'ok'; S.deskAt = Date.now(); }, e => { S.deskState = 'The Desk\'s limits could not be read (' + (e && e.message ? e.message : 'not reachable') + ').'; });
     /* 1.40.0 (C-B, C-C): ChartBridge's own /diag with The Desk's rows each minute: what it sends to The Desk, and what The Desk refused */
     const diag = Promise.resolve().then(() => env.fetch('/diag', { cache: 'no-store' })).then(r => (r.ok ? r.json() : null)).then(j => { S.diag = j && typeof j === 'object' ? j : null; }, () => { /* the last kept */ });
     reportListed();
@@ -1574,7 +1601,11 @@ function mount(v, host) {
       if (b.hidden === show) b.hidden = !show;
     }
     if (P.tab === 'cop' && !sw.copier && !only) { P.tab = 'acc'; for (const t of v.body.querySelectorAll('.ac-tab[data-tab]')) t.setAttribute('aria-selected', String(t.dataset.tab === 'acc')); }
-    const accounts = ROWS ? S.accounts.filter(passes) : S.accounts, active = accounts.filter(a => a.state !== 'gone'), gone = ROWS ? [] : accounts.filter(a => a.state === 'gone');
+    /* 1.61.0 (Anthony 2026-11-20): the finished prop accounts (blown or promoted on Fleet, or archived as gone) are left out of every
+       list on this page, Hidden too (no Show); never one ChartBridge shows holding a position or a working order (AC.finishedOut) */
+    const LCC = typeof LegionCastraCore !== 'undefined' ? LegionCastraCore : null;
+    const fin = AC.finishedOut(S.finished, S, LCC ? LCC.hiddenMark : null), kept = a => !fin.has(a.name);
+    const accounts = (ROWS ? S.accounts.filter(passes) : S.accounts).filter(kept), active = accounts.filter(a => a.state !== 'gone'), gone = ROWS ? [] : accounts.filter(a => a.state === 'gone');
     const instr = r => S.instruments[r] || {};
     const pv = r => +instr(r).pointValue || 0;
     const orders = [...S.orders.values()].filter(AC.isWorking);
@@ -1724,7 +1755,7 @@ function mount(v, host) {
       /* 1.40.0 (audit 8): the accounts NinjaTrader does not list now that ChartBridge still holds (a group member, a copier follower),
          each with what takes it out, and the accounts not connected this session (a Show of one waits here), folded */
       const notListedSection = () => {
-        const rows = AC.notListedRows(accounts, S.groups, sw.copier ? S.copier : null, S.notListed, S.archived);
+        const rows = AC.notListedRows(S.accounts, S.groups, sw.copier ? S.copier : null, S.notListed, S.archived).filter(r => !fin.has(r.name));   // 1.61.0: every listed account, so a finished one is never taken for not listed
         if (!rows.length) return '';
         const held = rows.filter(r => r.group || r.follower), plain = rows.filter(r => !r.group && !r.follower);
         const C = S.copier || {};
@@ -1901,8 +1932,8 @@ function mount(v, host) {
             : `<span role="cell" class="r"><button type="button" class="ac-btn apg-hide" data-act="archive" data-id="${esc(a.name)}" title="Hide ${esc(a.name)}: it leaves every list (the copier, Working orders) until you Show it; its fills and history stay">Hide</button></span>`;
           return row('g|' + a.name + (asking ? '|ask' : ''), c(a.name, 'b') + c(GONE_WHY[a.goneWhy] || a.goneWhy || 'gone', 'warn') + c(a.goneSince ? 'since ' + hms(a.goneSince) + ' ET' : '', 'mut') + c(AC.fmtUsd(a.pnlToday), 'r') + btn, 'apg-gone');
         }).join('') + '</div>' : '') +
-        /* hidden (archived) accounts: Show brings one back, unchecked (ChartBridge 0.5.1) */
-        (S.archived.length ? '<h3 class="apg-h">Hidden</h3><div class="gr apg-g apg-arch-g" role="table" aria-label="Hidden accounts">' + S.archived.map(a =>
+        /* hidden (archived) accounts: Show brings one back, unchecked (ChartBridge 0.5.1); 1.61.0: never a finished one (gone outright) */
+        (S.archived.some(kept) ? '<h3 class="apg-h">Hidden</h3><div class="gr apg-g apg-arch-g" role="table" aria-label="Hidden accounts">' + S.archived.filter(kept).map(a =>
           row('a|' + a.name, c(a.name, 'b mut') + (canShow ? `<span role="cell" class="r"><button type="button" class="ac-btn apg-show" data-act="unarchive" data-id="${esc(a.name)}" title="Show ${esc(a.name)}: back in the lists, unchecked, once NinjaTrader has it connected this session (until then under Not in NinjaTrader now)">Show</button></span>` : ''), 'apg-arch')).join('') + '</div>' : '');
       foot = (grpOn ? (S.groupsError ? S.groupsError + ' ' : 'Room: ChartBridge from each group\'s rules or your own limits, NinjaTrader\'s balance and P&L. Groups are made on the Multi-Account panel. ') : '') +
         (S.deskState === 'ok' ? 'Limits: NinjaTrader where it reports them, else The Desk.' : S.deskState === 'not asked' ? 'Limits: NinjaTrader where it reports them.' : S.deskState) +

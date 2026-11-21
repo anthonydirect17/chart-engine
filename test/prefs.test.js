@@ -701,3 +701,47 @@ test('delta pane: its height is saved per pane (a share of the chart), kept betw
   assert.equal(LP.create(prefixed('desk:')).paneHeight('main', 'delta'), 0.25);
   assert.equal(LP.create(s).paneHeight('main', 'delta'), 0.08, 'the standalone page\'s own height kept');
 });
+
+test('1.61.0 shared drawings (Anthony 2026-11-20, a switch per chart): the keys, what a chart shows, where an edit lands, the switch', () => {
+  // the keys each chart keeps its own drawings under (unchanged), and whose a key is
+  assert.equal(LP.drawingsKey('main', 'MNQ'), 'live-drawings-v1-MNQ');
+  assert.equal(LP.drawingsKey('p1', 'NQ'), 'live-drawings-v1-p1-NQ');
+  assert.equal(LP.drawingPaneOf('live-drawings-v1-MNQ', 'MNQ'), 'main');
+  assert.equal(LP.drawingPaneOf('live-drawings-v1-p1-MNQ', 'MNQ'), 'p1');
+  assert.equal(LP.drawingPaneOf('live-drawings-v1-p1-MNQ', 'NQ'), null, 'MNQ is not NQ');
+  assert.equal(LP.drawingPaneOf('live-drawings-v1-MNQ', 'NQ'), null);
+  assert.equal(LP.drawingPaneOf('live-drawings-shared-v1', 'MNQ'), null, 'the switch key is no drawings key');
+  assert.equal(LP.drawingPaneOf('live-drawings-v1-p1-MNQ', 'XX'), null);
+  // what a chart shows: its own, then the others' (each id once); foreign says whose
+  const A = [{ id: 'a', type: 'hline', price: 100 }], B = [{ id: 'b', type: 'hline', price: 90 }, { id: 'a', type: 'hline', price: 1 }, 7, null];
+  const v = LP.sharedView(A, [['live-drawings-v1-p2-MNQ', B], ['live-drawings-v1-p3-MNQ', 'junk']]);
+  assert.deepEqual(v.shown.map(d => d.id), ['a', 'b']);
+  assert.deepEqual([...v.foreign], [['b', 'live-drawings-v1-p2-MNQ']]);
+  assert.deepEqual(LP.sharedView(A, []).foreign.size, 0, 'switch off: its own only');
+  // an edit: a line drawn here is its own; another chart's moved or deleted here changes where it is kept
+  const K2 = 'live-drawings-v1-p2-MNQ', K3 = 'live-drawings-v1-p3-MNQ';
+  const foreign = new Map([['b', K2], ['c', K3]]);
+  const now = new Map([[K2, [{ id: 'b', type: 'hline', price: 90 }, { id: 'x', type: 'hline', price: 80 }]], [K3, [{ id: 'c', type: 'hline', price: 70 }]]]);
+  let r = LP.splitShared([{ id: 'a', type: 'hline', price: 100 }, { id: 'b', type: 'hline', price: 95 }, { id: 'c', type: 'hline', price: 70 }, { id: 'n', type: 'hline', price: 60 }], foreign, now, false);
+  assert.deepEqual(r.own.map(d => d.id), ['a', 'n'], 'a new line is this chart\'s own');
+  assert.deepEqual([...r.writes], [[K2, [{ id: 'b', type: 'hline', price: 95 }, { id: 'x', type: 'hline', price: 80 }]]], 'b moved: written where it is kept; x (not shown here) kept; K3 unchanged, not written');
+  assert.equal(r.reshow, false);
+  r = LP.splitShared([{ id: 'a', type: 'hline', price: 100 }, { id: 'b', type: 'hline', price: 90 }], foreign, now, false);
+  assert.deepEqual([...r.writes], [[K3, []]], 'c deleted here (Delete): gone from the chart that drew it');
+  // Clear this chart: its own lines only, the others' stay and show again
+  r = LP.splitShared([], foreign, now, true);
+  assert.deepEqual(r.own, []); assert.equal(r.writes.size, 0); assert.equal(r.reshow, true);
+  // the switch, per chart, off unless set
+  const s = mem(), p = LP.create(s);
+  assert.equal(p.sharedDrawings('p1'), false, 'off by default');
+  assert.equal(p.setSharedDrawings('p1', true), true);
+  assert.equal(p.sharedDrawings('p1'), true); assert.equal(p.sharedDrawings('p2'), false);
+  assert.deepEqual(s.dump(LP.KEYS.drawShare), { p1: true });
+  p.setSharedDrawings('p1', false);
+  assert.deepEqual(s.dump(LP.KEYS.drawShare), {});
+  assert.equal(p.setSharedDrawings('__proto__', true), false);
+  // the page: the chart's menu has the switch; Clear this chart keeps the others' lines (a note says so)
+  const html = fs.readFileSync(path.join(__dirname, '..', 'live', 'index.html'), 'utf8'), ws = fs.readFileSync(path.join(__dirname, '..', 'live', 'workspace.js'), 'utf8');
+  assert.match(html, /<div class="ws-pop ws-menu" id="wsMore"[\s\S]*?<button type="button" role="menuitem" data-do="shared"[^>]*>Shared drawings: off<\/button>[\s\S]*?<\/div>/);
+  assert.match(ws, /drawingPanes,/);
+});

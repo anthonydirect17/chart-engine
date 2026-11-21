@@ -438,7 +438,9 @@ try {
     { account: 'SIM-C', firm: 'Lucid', archived: false, accountType: lucid('sample-lucid-25k-daily', 'Flex 25K Daily'), source: {}, outcome: null },
     { account: 'EVAL-A', firm: 'Firm A', archived: false, accountType: null, source: { trailing_drawdown: 'prop' }, outcome: outcome.get('EVAL-A') || null },
     { account: 'SIM-G', firm: 'Lucid', archived: false, accountType: null, source: {}, outcome: null },
-  ] });
+  ],
+  /* 1.61.0: The Desk's finished accounts (TheDesk legion_cohorts.finished_accounts on GET /api/chart-accounts), the ones marked here */
+  finished_accounts: [...outcome].filter(([, v]) => v === 'blown' || v === 'promoted').map(([account, reason]) => ({ account, reason, at_ms: 1763500000000 })) });
   const puts = [];
   const ctx6 = await browser.newContext({ viewport: { width: 1366, height: 768 } });
   await ctx6.addInitScript(seed, [{ Acc: { panels: [{ id: 'ap', type: 'accounts', x: 0, y: 0, w: 12, h: 6 }] } }]);
@@ -496,8 +498,10 @@ try {
   check(leave && leave.group === null, '1.40.0: then out of its group (accountGroup with no group): ' + JSON.stringify(leave));
   const hid = await until(async () => (await v3(LC_PORT)).accounts.archived.some(a => a.name === 'SIM-B') ? true : null, 'SIM-B hidden');
   /* the page re-renders after ChartBridge's accounts message: wait for it (review: checked at once, this was flaky) */
-  const shown = hid && await until(async () => !(await rows(p6, '.apg-acc-g')).some(r => r.k === 'SIM-B') && !!(await p6.$(`${AP} .apg-arch-g [data-k="a|SIM-B"]`)), 'SIM-B out of the rows and under Hidden');
-  check(!!shown, '1.40.0: then hidden: out of the rows, under Hidden');
+  /* 1.61.0 (Anthony 2026-11-20: "these old blow or passed prop accounts should be completely gone"): finished on The Desk, so not
+     under Hidden either, and no Show */
+  const shown = hid && await until(async () => !(await rows(p6, '.apg-acc-g')).some(r => r.k === 'SIM-B') && !(await p6.$(`${AP} .apg-arch-g [data-k="a|SIM-B"]`)) && !(await p6.$(`${AP} button[data-act="unarchive"][data-id="SIM-B"]`)), 'SIM-B out of the rows and not under Hidden');
+  check(!!shown && !/SIM-B/.test(await p6.$eval(AP, e => [...e.querySelectorAll('.apg-acc-g, .apg-nl-g, .apg-gone-g, .apg-arch-g')].map(x => x.textContent).join(' '))), '1.40.0: then hidden; 1.61.0: out of the rows and not under Hidden (no Show): gone from the page');
   // a step ChartBridge would refuse (EVAL-A holds a position): shown, nothing sent
   const a0 = ((await control(LC_PORT, 'received')).types.accountArchive || 0);
   await p6.click(`${AP} button[data-act="drawer"][data-id="EVAL-A"]`);
@@ -505,6 +509,9 @@ try {
   await p6.click(`${AP} button[data-act="outcome-yes"][data-id="EVAL-A"]`);
   const box = await until(() => p6.$eval(`${AP} .apg-life`, e => /EVAL-A \(Promoted on The Desk\): not hidden yet: EVAL-A has a position or working orders/.test(e.textContent) ? e.textContent : null).catch(() => null), 'EVAL-A\'s refusal shown');
   check(!!box && ((await control(LC_PORT, 'received')).types.accountArchive || 0) === a0, '1.40.0: a step ChartBridge would refuse is shown above the rows, nothing sent: ' + box);
+  /* 1.61.0: the safety rule: finished on The Desk (Promoted) but ChartBridge shows EVAL-A holding a position: never left out */
+  await wait(600);
+  check((await rows(p6, '.apg-acc-g')).some(r => r.k === 'EVAL-A'), '1.61.0: EVAL-A, Promoted on The Desk while it holds a position, stays in the rows');
   await p6.screenshot({ path: path.join(out, 'accounts-15-lifecycle-1366.png') });
   /* 1.40.0 (review): a Promoted eval in a group trade stays in its group (a group Close or Flatten still covers it) until it is flat
      with no working orders; the box says it waits; once flat it leaves by itself */
@@ -521,6 +528,8 @@ try {
   await control(LC_PORT, 'elsewhere', { account: 'SIM-A', root: 'MNQ', side: 'sell', kind: 'market', qty: 1 });
   const lateA = await until(async () => ((await control(LC_PORT, 'received')).groupMsgs || []).slice(ga).find(m => m.type === 'accountGroup' && m.account === 'SIM-A'), 'SIM-A leaves Lucid once flat');
   check(lateA && lateA.group === null, '1.40.0: flat again: it leaves its group by itself: ' + JSON.stringify(lateA));
+  const goneA = await until(async () => !(await rows(p6, '.apg-acc-g')).some(r => r.k === 'SIM-A') ? true : null, 'SIM-A off the page once flat');
+  check(!!goneA, '1.61.0: SIM-A, Promoted and flat again: left out of the page');
   // the accounts NinjaTrader no longer lists: a member and a follower that is on
   await control(LC_PORT, 'unlist-account', { name: 'SIM-C' });
   await control(LC_PORT, 'unlist-account', { name: 'SIM-F1' });

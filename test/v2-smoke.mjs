@@ -49,7 +49,7 @@ const movers = (p, sels) => p.evaluate(list => {
   return bad;
 }, sels);
 const LIVE = ['.ws-panel[data-type="ticket"] .chart-live.tk', '[data-tk-id="buyMkt"]', '[data-tk-id="sellMkt"]', '[data-tk-id="armBtn"]', '[data-tk-id="flattenBtn"]',
-  '#wsFlat', '#wsFlatEvery', '.ws-panel[data-type="tape"] .tp-row', '.ws-panel[data-type="quotes"] .gr-row', '.ws-panel[data-type="accounts"] .gr-row',
+  '#wsFlat', '.ws-panel[data-type="tape"] .tp-row', '.ws-panel[data-type="quotes"] .gr-row', '.ws-panel[data-type="accounts"] .gr-row',
   '.ws-panel[data-type="chart"] .ce-canvas', '.ws-panel[data-type="chart"] .chart-live', '#wsNoStopSend', '#wsNoStopCancel'];
 
 const browser = ticketOnSim101(await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {}));

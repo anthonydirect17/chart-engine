@@ -4,6 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Aureus · Imperium</title>
+<!-- 1.61.0 (Anthony 2026-11-20: "our charts and legion to both have their own unique icons so I can tell them apart"): the
+     chart page's tab icon, three gold candles on black, inline (nothing loaded; base64 of docs/icons/chart.svg, test/favicons.test.js checks it); The Desk has two gold bars, Legion an eagle standard -->
+<link rel="icon" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNiAxNiI+PHJlY3QgeD0iLjUiIHk9Ii41IiB3aWR0aD0iMTUiIGhlaWdodD0iMTUiIHJ4PSIzLjUiIGZpbGw9IiMwQTA5MDgiIHN0cm9rZT0iI0M5QTU1QyIvPjxwYXRoIGQ9Ik00LjUgNnY4TTguNSAydjlNMTIuNSA0djgiIHN0cm9rZT0iI0M5QTU1QyIvPjxwYXRoIGQ9Ik0zIDhoM3Y0SDN6TTcgNGgzdjVIN3pNMTEgNmgzdjRoLTN6IiBmaWxsPSIjRTJDNjg3Ii8+PC9zdmc+">
 <!-- IBM Plex from this PC (1.16.0): nothing is loaded from the internet -->
 <link rel="stylesheet" href="fonts/plex.css">
 <!-- 1.17.0: the Agent tab's own fonts (Chakra Petch, JetBrains Mono; 1.23.0 Orbitron for its headers), from this PC too; used inside the Agent tab and (1.38.0) Orbitron in the Agents panel's Drone sky -->
@@ -48,11 +51,11 @@
   <div class="ws-alert nostop-ask ws-ns" id="wsNoStop" role="alertdialog" aria-modal="false" aria-labelledby="wsNoStopTitle" aria-describedby="wsNoStopText" hidden><b id="wsNoStopTitle">No stop: send anyway?</b><span id="wsNoStopText"></span><button type="button" class="ws-btn" id="wsNoStopCancel">Cancel</button><button type="button" class="ws-btn nostop-send" id="wsNoStopSend">Send</button></div>
   <!-- KEYS ON: a key pressed now would fire a hotkey (this window has the focus, no box, menu or dialog has it) -->
   <span class="ws-keys" id="wsKeys" role="status" title="">KEYS OFF</span>
-  <!-- The window's Flatten all (1.12.0, Anthony): every instrument with a position or a working order on the ticket's
-       account, from this window's own connection; Armed or not. -->
+  <!-- The window's Flatten all (1.12.0, Anthony), from this window's own connection, Armed or not. 1.61.0 (Anthony 2026-11-20: "flatten
+       all is all we need - this should apply to any account being traded on my charts"): every instrument with a position or a working
+       order on every account the charts trade (ChartBridge's trade accounts), whatever the ticket shows. Flatten every account
+       (1.34.0) is removed: Legion has its own Flatten for its traders. -->
   <button type="button" class="ws-btn ws-flat" id="wsFlat" title="Flatten all">Flatten all</button>
-  <!-- 1.34.0 (Anthony 2026-10-20): Flatten every account, every account ChartBridge lists whatever the ticket shows, one confirm -->
-  <button type="button" class="ws-btn ws-flat ws-flat-every" id="wsFlatEvery" title="Flatten every account" aria-haspopup="dialog" aria-label="Flatten every account"><span class="fe-long">Flatten every account</span><span class="fe-short" aria-hidden="true">Flatten every</span></button>
   <!-- Colors for every chart (one chart's Colors panel, placed here by workspace.js) -->
   <span class="chart-live ws-lv ws-colors" id="wsColors"></span>
   <!-- the laptop preset's two layout tabs (1.16.0), shown when it is on in this browser -->
@@ -133,6 +136,8 @@
   <button type="button" role="menuitem" data-do="reset">Reset view</button>
   <!-- 1.16.0: the bot's trades, faint, on this chart (off by default; shown when ChartBridge's bot switch is on) -->
   <button type="button" role="menuitem" data-do="ghost" hidden>Bot trades: off</button>
+  <!-- 1.61.0 (Anthony 2026-11-20): this chart also shows the lines drawn on every other chart of its instrument (off by default) -->
+  <button type="button" role="menuitem" data-do="shared" title="On: this chart also shows the lines drawn on every other chart of its instrument. Off: its own lines only.">Shared drawings: off</button>
   <p class="ws-menu-note">Drawing tools: middle-click the chart.</p>
 </div>
 
@@ -258,6 +263,10 @@
 <script src="ticket-link.js"></script>
 <!-- 1.34.0: the windows put back on their screens (Save these screens, Open my screens), before workspace.js -->
 <script src="screens.js"></script>
+<!-- 1.61.0: Legion's pure cores (no DOM, no connection of their own), for the one reader of The Desk's finished accounts
+     (LegionCastraCore.finishedOf and hiddenMark): the Account page leaves those accounts out as Legion does -->
+<script src="ludus-core.js"></script>
+<script src="legion-castra-core.js"></script>
 <!-- the Account page (1.16.0) and the window's one v3 connection to ChartBridge 0.4.0 (createFeed: shared by the Account page, the ticket's 0.4.0 parts and the Bot tab), opened only when ChartBridge speaks v3 -->
 <script src="accounts.js"></script>
 <!-- 1.26.0: the account groups (Settings, and the words the Accounts tab uses), before workspace.js -->

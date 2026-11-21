@@ -592,9 +592,10 @@ try {
     check(a.shown === '' && a.armed === 'false' && a.note === 'On None: pick an account to trade.' && !a.warn && a.stored === null, '1.6.1 first visit (DECISION 2026-10-14e): None, Armed off, the note: ' + JSON.stringify(a));
     await A.click(T('armBtn'));
     check(await A.getAttribute(T('armBtn'), 'aria-checked') === 'false', 'None: Armed does not come on');
-    // review of #47: on None the ticket's Flatten all does nothing (as every ticket action); the sign-in snapshot is whole
+    // 1.61.0 (Anthony 2026-11-20): on None the top bar's Flatten all is on (it covers every account the charts trade, whatever the
+    // ticket shows; before, it did nothing there, as every ticket action); the sign-in snapshot is whole
     const fl = await A.evaluate(() => ({ disabled: document.getElementById('wsFlat').disabled, title: document.getElementById('wsFlat').title, snap: window.workspace.ticket().snapReady }));
-    check(fl.disabled && fl.snap === true, 'None: the ticket\'s Flatten all is off (pick an account); the snapshot is whole (orders list positions count): ' + JSON.stringify(fl));
+    check(!fl.disabled && /every account the charts trade/.test(fl.title) && fl.snap === true, 'None: Flatten all is on (every account the charts trade); the snapshot is whole (orders list positions count): ' + JSON.stringify(fl));
 
     // pick DEMO-EVAL and arm; a reload (with the PIN asked again) comes back on DEMO-EVAL with Armed off
     const box0 = await chartBox(A);

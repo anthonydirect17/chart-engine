@@ -147,7 +147,7 @@ try {
   await clearSent(); await page.click(T('flattenBtn'));
   check(JSON.stringify(await sent()) === JSON.stringify([{ type: 'flatten', account: 'Sim101', root: 'MNQ' }]), 'disarmed Flatten button: the flatten goes');
   await clearSent(); await press(KEYS.flattenAll);
-  check((await sent()).length === 0 && (await statusNow()) === 'Flatten all: no position or working order on Sim101. Nothing was sent.', 'disarmed Flatten all with nothing open: not refused for Armed, nothing to send');
+  check((await sent()).length === 0 && (await statusNow()) === 'Flatten all: no position or working order on any account the charts trade. Nothing was sent.', 'disarmed Flatten all with nothing open: not refused for Armed, nothing to send');
 
   /* ---------------- armed: each hotkey sends exactly what its button sends */
   await page.click(T('armBtn'));
@@ -264,11 +264,11 @@ try {
   const clB = await closeRound('button'), clK = await closeRound('hotkey');
   check(JSON.stringify(clB) === JSON.stringify(clK) && clK.note === 'Flatten sent for Sim101 MNQ: cancel its orders, close the position at market.' && JSON.stringify(clK.msgs) === JSON.stringify([{ type: 'flatten', account: 'Sim101', root: 'MNQ' }]), 'Close hotkey (disarmed) = the Flatten button (armed): ' + JSON.stringify([clB, clK]));
 
-  // Flatten all: one flatten per instrument with a position or a working order on the account, whatever is shown
+  // Flatten all: one flatten per instrument with a position or a working order on every account the charts trade (1.61.0), whatever is shown
   await page.waitForTimeout(450);
   await clearSent();
   await press(KEYS.flattenAll);
-  check((await sent()).length === 0 && (await statusNow()) === 'Flatten all: no position or working order on Sim101. Nothing was sent.', 'Flatten all with nothing open: nothing sent, the note says so');
+  check((await sent()).length === 0 && (await statusNow()) === 'Flatten all: no position or working order on any account the charts trade. Nothing was sent.', 'Flatten all with nothing open: nothing sent, the note says so');
   await page.click(T('buyMkt'));                                                    // MNQ: long 1 and its stop
   await until(async () => (await pos()).startsWith('LONG 1'), 'MNQ long 1');
   await page.selectOption(T('root'), 'ES');
@@ -290,7 +290,7 @@ try {
   m = await sent();
   check(JSON.stringify(m) === JSON.stringify(['MNQ', 'NQ', 'ES'].map(r => ({ type: 'flatten', account: 'Sim101', root: r }))), 'Flatten all (disarmed): one flatten per instrument with a position or an order: ' + JSON.stringify(m) + ' (ES last ' + esLast + ')');
   const faNote = (await statusSeen()).filter(t => /^Flatten all/.test(t));
-  check(JSON.stringify(faNote) === JSON.stringify(['Flatten all sent for Sim101: MNQ, NQ, ES (cancel their orders, close their positions at market).']), 'Flatten all note: ' + JSON.stringify(faNote));
+  check(JSON.stringify(faNote) === JSON.stringify(['Flatten all sent: Sim101 MNQ, Sim101 NQ, Sim101 ES (cancel their orders, close their positions at market).']), 'Flatten all note: ' + JSON.stringify(faNote));
 
   // paced: right after 8 order actions only 2 of ChartBridge's 10 a second are left, so ES goes about a second later
   {
@@ -322,8 +322,8 @@ try {
     check(orders.length === 8 && fl.map(x => x.r).join() === 'MNQ,NQ,ES' && fl[2].at - fl[1].at > 500 && all.every(x => inWin(x, all) <= 10),
       'Flatten all paced within 10 a second: ' + JSON.stringify(all.map(x => x.t + ' ' + (x.r || '') + ' ' + Math.round(x.at - all[0].at))));
     const notes = (await statusSeen()).filter(t => /^Flatten all/.test(t));
-    check(JSON.stringify(notes) === JSON.stringify(['Flatten all sent for Sim101: MNQ, NQ (cancel their orders, close their positions at market). ES as ChartBridge\'s 10 a second allows.',
-      'Flatten all sent for Sim101: MNQ, NQ, ES (cancel their orders, close their positions at market).']), 'paced Flatten all notes: ' + JSON.stringify(notes));
+    check(JSON.stringify(notes) === JSON.stringify(['Flatten all sent: Sim101 MNQ, Sim101 NQ (cancel their orders, close their positions at market). Sim101 ES as ChartBridge\'s 10 a second allows.',
+      'Flatten all sent: Sim101 MNQ, Sim101 NQ, Sim101 ES (cancel their orders, close their positions at market).']), 'paced Flatten all notes: ' + JSON.stringify(notes));
     check(await page.evaluate(() => window.__statusSeen.every(t => !/Refused/.test(t))), 'nothing refused by ChartBridge');
   }
 

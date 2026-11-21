@@ -177,14 +177,9 @@ body.ws-busy[data-edge="nw"], body.ws-busy[data-edge="se"], body.ws-busy[data-ed
 /* 1.34.0: the ticket's room line (display only), one quiet line in the state row */
 .chart-live .tk-state .tk-room { font-size: 11px; }   /* wraps at its own width; color: .dim (text3) */
 .chart-live .tk-state .tk-room:empty { display: none; }
-/* 1.34.0: Flatten every account; under 1440 wide the short label (the whole name in its tooltip), so the top bar keeps its room */
-.ws-flat-every .fe-short { display: none; }
-@media (max-width: 1439px) { .ws-flat-every .fe-long { display: none; } .ws-flat-every .fe-short { display: inline; } .ws-top { gap: 10px; } }   /* and 6 px less between the bar's items (the clock warning keeps its room at 1366) */
-/* 1.34.0: Flatten every account's confirm: each account and what it holds, scrolling inside past a dozen */
-.ws-fe { max-width: 520px; }
-.ws-fe .fe-list { margin: 0; padding: 0 0 0 18px; max-height: 220px; overflow-y: auto; font-family: var(--ws-mono); font-size: 12px; line-height: 1.6; color: var(--ws-muted); }
-.ws-fe .fe-list b { color: var(--ws-text); font-weight: 500; }
-.ws-fe .fe-missed { color: var(--ws-warn); }
+/* under 1440 wide, 6 px less between the top bar's items (the clock warning keeps its room at 1366; 1.34.0, kept when 1.61.0 removed
+   Flatten every account and its confirm) */
+@media (max-width: 1439px) { .ws-top { gap: 10px; } }
 /* ChartBridge's order errors and what was not sent: under the top bar, until dismissed */
 /* 1.34.0 (the review): the banners float over the top of the grid, under the top bar, never pushing the panels down: a banner that
    opened between pointing at an order and dragging it moved every chart by its height (a drag could land on another price) */
@@ -485,9 +480,9 @@ body.ws-tight .ws-body > .chart-live { padding: 2px 3px 2px; }
 .ws-tabs.has-ink .ws-tab[aria-selected="true"] { background: transparent; }
 .ws-dialog::backdrop { background: rgba(0, 0, 0, .55); -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px); }
 /* The feel: only where no live value shows and no order is asked (R3). The top bar's own buttons (Layout, + Add panel,
-   Screens, Settings, the layout tabs; never Flatten all or Flatten every, the NO STOP question's Send and Cancel, nor the Agent
+   Screens, Settings, the layout tabs; never Flatten all, the NO STOP question's Send and Cancel, nor the Agent
    and League tabs, which keep the Agent tab's own rule of no motion) ease their hover and lift 1 px; a popover or menu fades in
-   as it opens; a dialog that asks nothing about orders fades in, never moving under the pointer (the group entry, Flatten every and the Order Strategies
+   as it opens; a dialog that asks nothing about orders fades in, never moving under the pointer (the group entry and the Order Strategies
    appear at once). Every one of them takes its click on the first frame: nothing waits for the motion. */
 @media (prefers-reduced-motion: no-preference) {
   :root:not(.motion-off) .ws-top > .ws-btn:not(.ws-flat):not(.ag-tabbtn):not(.lg-tabbtn), :root:not(.motion-off) .ws-top > .ws-sel, :root:not(.motion-off) .ws-tab,
@@ -496,7 +491,7 @@ body.ws-tight .ws-body > .chart-live { padding: 2px 3px 2px; }
   :root:not(.motion-off) .ws-top > .ws-btn:not(.ws-flat):not(.ag-tabbtn):not(.lg-tabbtn):not(:disabled):hover { translate: 0 -1px; box-shadow: 0 0 16px var(--ws-gold-glow); }
   :root:not(.motion-off) .ws-top > .ws-btn:not(.ws-flat):not(.ag-tabbtn):not(.lg-tabbtn):active { translate: 0 0; scale: .98; }
   :root:not(.motion-off) .ws-pop:not([hidden]) { animation: v2-fade-in .22s var(--ws-ease); }
-  :root:not(.motion-off) .ws-dialog[open]:not(:has(.ws-gq, .ws-fe, .ws-sg)) { animation: v2-fade-in .3s var(--ws-ease); }
+  :root:not(.motion-off) .ws-dialog[open]:not(:has(.ws-gq, .ws-sg)) { animation: v2-fade-in .3s var(--ws-ease); }
 }
 
 /* ---------------- 1.16.0 (ChartBridge 0.4.0): Order Strategies, Merge, entry types and The Desk's shared settings. Shown
