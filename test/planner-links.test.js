@@ -20,7 +20,7 @@ async function rig() {
   let clock = T0;
   const store = new Map(), plStore = new Map();
   const mem = m => ({ getItem: k => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: k => m.delete(k) });
-  const R = { sent: [], alarms: [], notes: [], desk: [] };
+  const R = { sent: [], alarms: [], notes: [], desk: [], bodies: [], socks: [] };
   const core = TC.create({
     LP, prefs: LP.create(mem(store)), fetch: () => Promise.resolve({ ok: true, text: () => Promise.resolve('{"token":"t"}') }),
     send: m => R.sent.push(JSON.parse(JSON.stringify(m))), open: () => true, sock: () => R,
@@ -44,6 +44,7 @@ async function rig() {
   const reply = (status, body) => Promise.resolve({ ok: status < 400, status, text: () => Promise.resolve(JSON.stringify(body)) });
   const fetch = (url, o) => {
     R.desk.push((o.method || 'GET') + ' ' + url.replace(/^https?:\/\/[^/]+/, ''));
+    if (o.body) R.bodies.push({ url: url.replace(/^https?:\/\/[^/]+/, ''), body: JSON.parse(o.body) });
     if (/\/cancel$/.test(url)) { cancelled = true; return reply(200, { plan: plan([{ kind: 'cancel', logged_at_ms: clock, detail: {} }]) }); }
     if (/\/api\/plans\?/.test(url)) return reply(200, { live: true, now_ms: clock, plans: [cancelled ? plan([{ kind: 'cancel', logged_at_ms: clock, detail: {} }]) : plan()] });
     return reply(200, {});
@@ -55,7 +56,7 @@ async function rig() {
     planner = PlannerPage.mount({
       test: true, PC, U: { zoneSeconds: () => 0 }, core, storage: mem(plStore), channel: null, now: () => clock,
       locks: { request: (name, cb) => cb({}) }, fetch, deskBase: () => 'http://desk.example.com', pcName: () => 'PC-A',
-      hub: { open: () => ({}) }, charts: () => [], note: (t, l) => R.notes.push(t), alarm: t => R.alarms.push(t),
+      hub: { open: root => { const sock = { root }; R.socks.push(sock); return sock; } }, charts: () => [], note: (t, l) => R.notes.push(t), alarm: t => R.alarms.push(t),
       tickOf: () => 0.25, contract: () => 'MNQ 12-26', accounts: () => ['Sim101'], ticketAccount: () => 'Sim101', ticketRoot: () => 'MNQ',
       members: a => [a], maxBracketTicks: () => 400, execs: () => [], qty: () => 1, orderTypes: () => true, maxQty: () => 5,
       bracket: () => ({ stop: 40, target: 80 }), holdsTicket: () => false,
@@ -69,7 +70,7 @@ async function rig() {
   planner.test.lead();
   say(own({ cid: undefined }));                                         // a later message without the cid: still the plan's own
   R.sent.length = 0;
-  return { R, core, planner, say, tick: ms => { clock += ms; }, cancels: () => R.sent.filter(m => m.type === 'cancel') };
+  return { R, core, planner, say, tick: ms => { clock += ms; }, now: () => clock, cancels: () => R.sent.filter(m => m.type === 'cancel') };
 }
 
 /* a NinjaTrader restart: ChartBridge's orders snapshot, where an unrelated protective stop now has the plan's old id NT5. Told to
@@ -147,4 +148,29 @@ test('after the snapshot the plan\'s own entry is found again by its cid and can
   x.planner.test.cancel(UID);
   assert.deepEqual(x.cancels(), [{ type: 'cancel', id: 'RN2' }]);
   x.planner.destroy();
+});
+
+/* 1.63.0: The Desk's late cancels (TheDesk Stats, Plans; Anthony 2026-11-21 "Within 4 ticks (1 point)") read the last trade the
+   page knew at the press: Cancel sends it, with that trade's own time and the press's time */
+test('Cancel tells The Desk the last trade this window knew on the plan\'s instrument, and when', async () => {
+  const x = await rig();
+  const sock = x.R.socks.find(s => s.root === 'MNQ');
+  assert.ok(sock && typeof sock.onmessage === 'function', 'the planner follows MNQ\'s trades');
+  sock.onmessage({ message: { type: 'tick', root: 'MNQ', p: 24991.25, u: x.now() - 400 } });
+  x.planner.test.cancel(UID);
+  await new Promise(r => setImmediate(r));
+  const sent = x.R.bodies.filter(b => /\/cancel$/.test(b.url));
+  assert.equal(sent.length, 1);
+  assert.deepEqual(sent[0].body.detail, { at_ms: x.now(), last: 24991.25, last_u: x.now() - 400 });
+  assert.equal(sent[0].body.reason, 'Cancel on the plan card');
+  x.planner.destroy();
+});
+
+test('deskApi.cancel sends the detail beside the uid and the reason, and neither when not given', async () => {
+  const PCx = require('../live/planner-core.js');
+  const bodies = [];
+  const api = PCx.deskApi({ base: () => 'http://desk.example.com', fetch: (url, o) => { bodies.push(JSON.parse(o.body)); return Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve('{}') }); } });
+  await api.cancel(7, 'u'.repeat(8), 'why', { last: 25000, at_ms: 1 });
+  await api.cancel(7, 'v'.repeat(8));
+  assert.deepEqual(bodies, [{ uid: 'u'.repeat(8), reason: 'why', detail: { last: 25000, at_ms: 1 } }, { uid: 'v'.repeat(8) }]);
 });

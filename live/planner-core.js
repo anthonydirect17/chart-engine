@@ -435,7 +435,8 @@ function deskApi(env) {
     submit: body => call('POST', '/api/plans', body),
     edit: (seq, body) => call('POST', '/api/plans/' + seq + '/edit', body),
     arm: (seq, uid, detail) => call('POST', '/api/plans/' + seq + '/arm', detail ? { uid, detail } : { uid }),   // detail: the entry fixed at Arm (armDetail)
-    cancel: (seq, uid, reason) => call('POST', '/api/plans/' + seq + '/cancel', reason ? { uid, reason } : { uid }),
+    /* detail (1.63.0): what the page knew at the press ({ last, last_u, at_ms }), for The Desk's late cancels (TheDesk Stats, Plans) */
+    cancel: (seq, uid, reason, detail) => call('POST', '/api/plans/' + seq + '/cancel', Object.assign({ uid }, reason ? { reason } : {}, detail ? { detail } : {})),
     event: item => call('POST', '/api/plans/' + item.seq + '/events', { uid: item.uid, kind: item.kind, detail: item.detail }),
   };
 }
