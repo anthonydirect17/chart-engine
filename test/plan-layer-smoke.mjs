@@ -86,6 +86,7 @@ const mv3 = ev.find(e => e.ev === 'planMove');
 const was = (await page.evaluate(() => window.chart.getPlans()[0]));
 check(!!mv3 && mv3.which === 'entry' && mv3.entry > was.entry && Math.abs((mv3.entry - was.entry) - (mv3.stop - was.stop)) < 1e-9 && Math.abs((mv3.entry - was.entry) - (mv3.target - was.target)) < 1e-9, 'the entry carries the stop and target with it: ' + JSON.stringify(mv3));
 await page.evaluate(() => window.chart.setPlans(window.chart.getPlans()));
+await page.waitForTimeout(150);                         // a frame drawn from the plans as set (the handles are last frame's)
 
 // a click selects
 h = await handles();
