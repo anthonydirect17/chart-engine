@@ -12,7 +12,10 @@
  *   - the plan card on the chart it was drawn or clicked on: side, entry type, expiry (1 to 30 minutes, 30), qty, account
  *     (the ticket's to start; one account, never a group), grade (A+, A, B; A+), Submit, Arm, Cancel, and Planner off;
  *   - Submit stamps it at The Desk (any hour); Arm stamps `arm` (CME open only; The Desk answers when it expires) and turns the
- *     ticket's Armed off (the light lock: Flatten, Flatten all and Cut half still work); Cancel before the fill.
+ *     ticket's Armed off (the light lock: Flatten, Flatten all and Cut half still work); Cancel before the fill;
+ *   - the planner's opinion (1.64.0, phase 6 part B): after a Submit, the window that submitted asks The Desk once
+ *     (POST /api/plans/{seq}/opinion, with this window's bars, levels and drawn lines) and the card shows what The Desk stamped,
+ *     under the buttons. Information only: Arm is enabled by the phase alone, nothing waits on it, no order code reads it.
  * Behind it: one window on this PC is the leader (PlannerCore.createLeader): it sends the entry through TradeCore's sendPlanOrder
  * (the send journal written first), watches touch, confirmation, stop-through and expiry from the trades, resumes after a reload,
  * and records every fact at The Desk (queued in this browser while The Desk does not answer). Every window may Cancel.
@@ -35,6 +38,7 @@ function mount(env) {
     ok: null, why: 'Asking The Desk for its plan log...', pc: '', desk: PC.deskApi({ base: env.deskBase, fetch: env.fetch }),
     sel: '', offAsk: 0, card: null, cardAt: null, lines: new Map(), plans: new Map(), drafts: new Map(), lead: new Map(),
     hooked: new WeakSet(), drawnKey: new Map(), timers: [], destroyed: false, deskDown: false, notes: [],
+    asks: new Map(),                                                 // 1.64.0: this window's own opinion asks, by plan uid
     orderUid: new Map(), claimed: new Set(), lockSeen: new Set(),   // an order's plan (by its page id), exec ids claimed, plans seen armed
     gen: -1,                                                         // the generation of ChartBridge's order ids the links belong to
   };
@@ -123,7 +127,7 @@ function mount(env) {
   function line(rootName) {
     let L = S.lines.get(rootName);
     if (L) return L;
-    L = { root: rootName, last: null, at: 0, lastU: 0, lastUAt: 0, firstU: 0, ticks: [], bars: [], sock: null, ready: false };
+    L = { root: rootName, last: null, at: 0, lastU: 0, lastUAt: 0, firstU: 0, ticks: [], bars: [], m1: [], sock: null, ready: false };
     S.lines.set(rootName, L);
     try { L.sock = env.hub.open(rootName); } catch (e) { return L; }
     L.sock.onmessage = ev => {
@@ -139,6 +143,7 @@ function mount(env) {
         L.ticks.push({ u, p: +m.p });
         if (L.ticks.length > 4000 || (L.ticks.length > 64 && L.ticks[0].u < u - 300000)) L.ticks.splice(0, Math.max(1, L.ticks.findIndex(t => t.u >= u - 300000)));
         onTrade(rootName, +m.p, u);
+        try { m1Trade(L, +m.p, u, +m.v); } catch (e) { /* the opinion's bars only */ }
       }
       else if (m.type === 'ready') L.ready = true;                 // the history is whole: a resume may read it
       else if (m.type === 'history' && Array.isArray(m.bars)) {
@@ -146,14 +151,27 @@ function mount(env) {
         for (const b of m.bars) if (Array.isArray(b)) L.bars.push({ t: b[0] * 1000 - off, h: +b[2], l: +b[3], c: +b[4] });
         if (L.bars.length > 2000) L.bars.splice(0, L.bars.length - 2000);
         const lb = m.bars[m.bars.length - 1]; if (lb && L.last === null) L.last = +lb[4];
+        try { m1History(L, m.bars, off); } catch (e) { /* the opinion's bars only */ }
       }
     };
     L.sock.onopen = () => {};
     const sub = () => { try { L.sock.send({ type: 'subscribe', root: rootName, days: 1, tickHours: 0 }); } catch (e) { /* closed */ } };
     const was = L.sock.onmessage;
-    L.sock.onmessage = ev => { if (ev.message && ev.message.type === 'hello') { L.bars = []; L.ready = false; sub(); } was(ev); };
+    L.sock.onmessage = ev => { if (ev.message && ev.message.type === 'hello') { L.bars = []; L.m1 = []; L.ready = false; sub(); } was(ev); };
     L.sock.onclose = () => { if (S.lines.get(rootName) === L) S.lines.delete(rootName); };
     return L;
+  }
+  /* 1.64.0: the opinion's own one minute bars (o, h, l, c, v), apart from L.bars and L.ticks (the watches and resume read those
+     only): the history, then grown from the trades; nothing else reads them */
+  function m1History(L, rows, off) {
+    const got = rows.filter(Array.isArray).map(b => ({ t: b[0] * 1000 - off, o: +b[1], h: +b[2], l: +b[3], c: +b[4], v: +b[5] || 0 })), ts = new Set(got.map(b => b.t));
+    L.m1 = L.m1.filter(b => !ts.has(b.t)).concat(got).sort((a, b) => a.t - b.t);   // a minute the history has: the history's
+    if (L.m1.length > 2000) L.m1.splice(0, L.m1.length - 2000);
+  }
+  function m1Trade(L, p, u, v) {
+    const t = Math.floor(u / 60000) * 60000, b = L.m1[L.m1.length - 1], q = v > 0 ? v : 0;
+    if (b && b.t === t) { b.h = Math.max(b.h, p); b.l = Math.min(b.l, p); b.c = p; b.v += q; }
+    else if (!b || t > b.t) { L.m1.push({ t, o: p, h: p, l: p, c: p, v: q }); if (L.m1.length > 2000) L.m1.shift(); }
   }
   const lastOf = r => { const L = S.lines.get(r); if (L && L.last !== null && now() - L.at < 300000) return L.last; for (const c of env.charts()) if (c.root === r) { const b = c.chart.lastBar(); if (b) return b.c; } return null; };
 
@@ -227,7 +245,8 @@ function mount(env) {
     const d = S.drafts.get(S.sel), p = d ? null : getPlan(S.sel), it = d || p;
     if (!it || !S.cardAt || !S.cardAt.isConnected) { if (S.card) { S.card.remove(); S.card = null; } return; }
     const phase = d ? 'draft' : p.phase, open = phase === 'draft' || phase === 'submitted', off = PC.offIn(store);
-    const key = JSON.stringify([it, phase, off, env.accounts(), !!(p && phase === 'ended' && sentOf(p) && entryOrderOf(p)), !!(p && lostSaid(p))]);   // a cancel under way shows
+    const op = p ? PC.opinionView(PC.opinionOf(p), S.asks.get(p.uid), now(), hhmmss) : null;   // 1.64.0: the opinion block, information only
+    const key = JSON.stringify([it, phase, off, env.accounts(), !!(p && phase === 'ended' && sentOf(p) && entryOrderOf(p)), !!(p && lostSaid(p)), op]);   // a cancel under way shows
     if (S.card && S.card.parentElement === S.cardAt && S.card.dataset.key === key && !force) return;
     const keepNote = S.card ? S.card.querySelector('[data-pl="note"]').textContent : '';
     if (!S.card) { S.card = document.createElement('section'); S.card.className = 'obar tk-bar mini-tk pl-card'; S.card.setAttribute('aria-label', 'Plan'); S.card.addEventListener('click', onCard); S.card.addEventListener('change', onCardChange); }
@@ -252,10 +271,53 @@ function mount(env) {
         <span class="oinfo pl-rr" data-pl="rr">${g.riskTicks ? 'SL ' + g.riskTicks + 't' : ''}${g.rewardTicks ? ' · TP ' + g.rewardTicks + 't' : ''}${g.rr ? ' · ' + g.rr.toFixed(1) + 'R' : ''}</span></div>
       <div class="tk-row tk-three pl-btns"><button type="button" class="btn" data-pl="submit"${phase === 'draft' && !off ? '' : ' disabled'} title="Stamp the plan at The Desk (any hour)">Submit</button>
         <button type="button" class="obtn buy pl-arm" data-pl="arm"${phase === 'submitted' && !off ? '' : ' disabled'} title="Arm: The Desk stamps it, the ticket's Armed goes off, and this PC sends the entry">Arm</button>
-        <button type="button" class="btn" data-pl="cancel"${phase === 'filled' || phase === 'ended' ? ' disabled' : ''} title="Cancel the plan before its fill (its working entry is cancelled)">Cancel</button></div>
+        <button type="button" class="btn" data-pl="cancel"${phase === 'filled' || phase === 'ended' ? ' disabled' : ''} title="Cancel the plan before its fill (its working entry is cancelled)">Cancel</button></div>${opinionHtml(op)}
       <div class="tk-state ostate"><span class="oinfo pl-phase" data-pl="phase">${esc(words)}</span><span class="tk-note" data-pl="note" role="status"></span>
         <label class="pl-off"><input type="checkbox" data-pl="off" data-keep${off ? ' checked' : ''}> Planner off</label></div>`;
     if (keepNote) cardNote(keepNote);
+  }
+  /* 1.64.0 (phase 6 part B): the planner's opinion, under the buttons. Only what The Desk returned, escaped; never a control */
+  const hhmmss = ms => { try { return new Date(ms).toLocaleTimeString('en-US', { hourCycle: 'h23', hour: '2-digit', minute: '2-digit', second: '2-digit' }); } catch (e) { return ''; } };
+  function opinionHtml(op) {
+    if (!op) return '';
+    return `<div class="pl-op${op.quiet ? ' quiet' : ''}" data-pl="opinion" role="status" aria-label="The planner's opinion (information only)"><div class="pl-op-head"><span data-pl="op-head">${esc(op.head)}</span>${op.tags.map(t => `<span class="pl-op-tag">${esc(t)}</span>`).join('')}</div>`
+      + (op.reasons.length ? `<ul class="pl-op-reasons">${op.reasons.map(r => `<li>${esc(r)}</li>`).join('')}</ul>` : '')
+      + (op.wrongIf ? `<div class="pl-op-wrong">Wrong if ${esc(op.wrongIf)}</div>` : '')
+      + (op.meta ? `<div class="pl-op-meta" data-pl="op-meta">${esc(op.meta)}</div>` : '') + '</div>';
+  }
+  /* the page's part of the opinion's context: this window's own minute bars of the instrument, the levels on its charts, and the
+     lines Anthony drew there (zone edges too); the regular session so far (from 09:30 New York) for its high and low */
+  function opinionContext(p) {
+    const L = S.lines.get(p.root), levels = [], lines = [];
+    for (const c of env.charts()) {
+      if (c.root !== p.root) continue;
+      try { for (const lv of c.chart.getLevels() || []) levels.push(lv); } catch (e) { /* none */ }
+      try { for (const d of c.chart.getDrawings() || []) { if (d.type === 'hline') lines.push(d.price); else if (d.type === 'zone' && d.a && d.b) lines.push(d.a.p, d.b.p); } } catch (e) { /* none */ }
+    }
+    const t = now(), sod = ((Math.floor(U.zoneSeconds(t / 1000)) % 86400) + 86400) % 86400, OPEN = 34200, END = 57600, NEXT = 64800;
+    const session = sod >= OPEN && sod < NEXT ? { start: t - (sod - OPEN) * 1000, end: t - (sod - OPEN) * 1000 + (END - OPEN) * 1000 } : null;
+    return PC.opinionContext({ m1: L ? L.m1 : [], now: t, entry: p.entry, levels, lines, session });
+  }
+  /* asked once, by the window that submitted, right after The Desk stamped the plan. Nothing waits on it: Arm is as before */
+  function askOpinion(p) {
+    if (!p || !Number.isInteger(p.seq) || S.asks.has(p.uid)) return;
+    const a = { state: 'asking', since: now(), why: '' };
+    S.asks.set(p.uid, a);
+    let ctx;
+    try { ctx = opinionContext(p); } catch (e) { ctx = { bars_1m: [], bars_5m: [], levels: {}, lines: [] }; }
+    renderCard(true);
+    S.desk.opinion(p.seq, PC.newUid(), ctx).then(r => guard(() => {
+      if (S.destroyed) return;
+      const got = r.ok && r.body && r.body.plan ? takePlan(r) : null;
+      if (r.ok && r.body && r.body.status === 'off') a.state = 'off';   // The Desk asks no one: nothing stamped
+      else if (got) { a.state = 'none'; shared.tell({ t: 'stamped', uid: p.uid }); pull(); }
+      else if (r.status === 404 || r.notLive) a.state = 'none';      // a Desk with no opinion (older), or not the live one: no block
+      else if (r.status === 409) { /* an ask of this plan is in flight at The Desk: its stamp comes with the plan log */ }
+      else if (r.status === 0) a.state = 'down';
+      else if (!r.ok) { a.state = 'refused'; a.why = r.why; }
+      else a.state = 'none';
+      renderCard(true);
+    }));
   }
   function editDraft(fn) { const uid = S.sel; if (!S.drafts.has(uid)) return false; shared.change(s => { if (s.drafts[uid]) fn(s.drafts[uid]); }); pull(); return true; }
   function editSubmitted(change) {
@@ -304,6 +366,7 @@ function mount(env) {
       shared.change(s => { mergeDesk(s, p); s.plans[p.uid].t0 = d.t0; delete s.drafts[uid]; });
       shared.tell({ t: 'stamped', uid }); pull();
       cardNote('Plan #' + p.seq + ' submitted. Arm sends it.', '');
+      guard(() => askOpinion(p));                                      // 1.64.0: information only; Arm never waits on it
     });
   }
   function arm(uid) {
@@ -723,8 +786,8 @@ function mount(env) {
     message: m => guard(() => message(m)), flattened: r => guard(() => flattened(r)), override: (w, on) => guard(() => override(w, on)),
     ticketArmed: on => guard(() => ticketArmed(on)), sentManual: msg => guard(() => sentManual(msg)), pressOff: id => { try { return pressOff(id); } catch (e) { return ''; } },
     armTool, available,
-    test: env.test ? { cancel: uid => cancel(uid), lead: () => lead() } : undefined,   // the unit tests only (test/planner-links.test.js)
-    state: () => ({ lines: [...S.lines.values()].map(L => ({ root: L.root, ready: L.ready, bars: L.bars.length, last: L.last, firstU: L.firstU, lastU: L.lastU, tail: L.bars.slice(-3) })), ok: S.ok, why: S.why, pc: S.pc, leader: leader.isLeader(), sel: S.sel, drafts: [...S.drafts.values()], plans: planList(), journal: journal.all(), queue: queue.items(), lost: queue.lost(), notes: S.notes.slice(), card: !!S.card }),
+    test: env.test ? { cancel: uid => cancel(uid), lead: () => lead(), submit: uid => submit(uid) } : undefined,   // the unit tests only (test/planner-links.test.js, planner-opinion.test.js)
+    state: () => ({ lines: [...S.lines.values()].map(L => ({ root: L.root, ready: L.ready, bars: L.bars.length, last: L.last, firstU: L.firstU, lastU: L.lastU, tail: L.bars.slice(-3) })), ok: S.ok, why: S.why, pc: S.pc, leader: leader.isLeader(), sel: S.sel, drafts: [...S.drafts.values()], plans: planList(), journal: journal.all(), queue: queue.items(), lost: queue.lost(), notes: S.notes.slice(), card: !!S.card, asks: Object.fromEntries([...S.asks].map(([k, a]) => [k, Object.assign({}, a)])) }),
     destroy() { S.destroyed = true; for (const t of S.timers) clearInterval(t); leader.close(); shared.close(); if (S.card) S.card.remove(); for (const L of S.lines.values()) { try { L.sock.onmessage = L.sock.onclose = null; L.sock.close(); } catch (e) { /* closed */ } } },
   };
 }
