@@ -78,7 +78,8 @@ settings (the caps, the bars, the timeouts) wait for Anthony's word.
   after the plan's Arm, "on the plan before your edit" when the plan was edited after the values it judged, "late" when stamped
   more than 45 seconds after the Submit. With nothing stamped: "No opinion: no answer in 45 seconds" (the page's own limit),
   "No opinion: the service is off" (The Desk asks no one, nothing stamped), "No opinion: The Desk did not answer", or The Desk's
-  refusal; a Desk without the route (404) shows no block. Every text is escaped and cut; quiet text with a gold hairline, never
+  refusal (any 409 but The Desk's `{status: 'asking'}`, which keeps "Asking Opus..." while an ask is in flight, says it at once);
+  a Desk without the route (404) shows no block. Every text is escaped and cut; quiet text with a gold hairline, never
   green or red.
 - **The no-opinion words** (`OPINION_WORDS`, by The Desk's stamped status): budget, day cap, month cap, the model declined, the
   service is off, busy, failed, cut, capped, too large, no answer in time, could not be reached, "No opinion: the service refused
@@ -87,7 +88,7 @@ settings (the caps, the bars, the timeouts) wait for Anthony's word.
   high, low, close, volume]` (whole minutes before the Submit, oldest first), from the planner's own line of the instrument (its
   history, then grown from the trades, kept in `L.m1` apart from the bars and trades the watches and resume read); the levels on
   its charts by name in letters and `_` only (`prior_high`, `overnight_low`, `ib_high`, ...; a name is never a digit, so never a
-  price or a time), and the regular session's high and low so far (from 09:30 New York) when this window has the whole session;
+  price or a time; a name holding "account", or `pc` / `pc_*`, is left out, as The Desk would refuse the whole ask), and the regular session's high and low so far (from 09:30 New York) when this window has the whole session;
   Anthony's drawn lines and zone edges (up to 40, the nearest to the entry first). Prices as the chart has them; no date, clock
   time, account or PC.
 - **`live/planner-core.js`:** `'opinion'` in `EVENT_KINDS` (`phaseOf` ignores it; it is in `DESK_ONLY_KINDS`, so the page's

@@ -312,7 +312,7 @@ function mount(env) {
       if (r.ok && r.body && r.body.status === 'off') a.state = 'off';   // The Desk asks no one: nothing stamped
       else if (got) { a.state = 'none'; shared.tell({ t: 'stamped', uid: p.uid }); pull(); }
       else if (r.status === 404 || r.notLive) a.state = 'none';      // a Desk with no opinion (older), or not the live one: no block
-      else if (r.status === 409) { /* an ask of this plan is in flight at The Desk: its stamp comes with the plan log */ }
+      else if (r.status === 409 && r.body && r.body.status === 'asking') { /* an ask of this plan is in flight at The Desk: its stamp comes with the plan log */ }
       else if (r.status === 0) a.state = 'down';
       else if (!r.ok) { a.state = 'refused'; a.why = r.why; }
       else a.state = 'none';

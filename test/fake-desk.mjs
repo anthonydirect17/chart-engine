@@ -173,7 +173,7 @@ export async function startDesk(port, seed) {
         /* chart 1.64.0 (phase 6 part B): POST /{seq}/opinion { uid, context: { bars_1m, bars_5m, levels, lines } }, as the contract
            of TheDesk's claude/planner-opinion-desk: desk.opinion null: a Desk without it (404); { off: true }: { status: 'off' },
            nothing stamped; else after delayMs one `opinion` fact stamped by The Desk (its detail: desk.opinion.detail and on_seq)
-           and { plan }; idempotent (a second ask answers the plan as it is), 409 "asking" while one is in flight. Every ask is kept
+           and { plan }; idempotent (a second ask answers the plan as it is), 409 { status: 'asking' } while one is in flight. Every ask is kept
            in desk.opinionAsks. Sample answers only: no model is asked here. */
         if (act === 'opinion') {
           if (Object.keys(d).some(k => !['uid', 'context'].includes(k)) || !uidOk(d.uid) || !d.context || typeof d.context !== 'object') return send(400, { detail: 'send {"uid": ..., "context": {...}}' });
@@ -183,7 +183,7 @@ export async function startDesk(port, seed) {
           if (!O) return send(404, { detail: 'Not Found' });
           if (O.off) return send(200, { status: 'off' });
           if (P.events.some(e => e.kind === 'opinion')) return send(200, { plan: view(P), duplicate: true });
-          if (P.asking) return send(409, { detail: 'asking' });
+          if (P.asking) return send(409, { status: 'asking', detail: 'asking' });
           P.asking = true;
           const onSeq = [P.seq].concat(P.events.filter(e => e.kind === 'edit').map(e => e.seq)).pop();
           setTimeout(() => { P.asking = false; ev(P, 'opinion', Object.assign({ on_seq: onSeq }, JSON.parse(JSON.stringify(O.detail || {})))); send(200, { plan: view(P), duplicate: false }); }, O.delayMs || 0);

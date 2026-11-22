@@ -535,11 +535,12 @@ const OPINION_WORDS = { budget: 'No opinion: budget', 'day cap': 'No opinion: da
   'no answer': 'No opinion: the service did not answer in time', unreachable: 'No opinion: the service could not be reached',
   refused: 'No opinion: the service refused the request', 'bad answer': 'No opinion: the answer could not be read' };
 const okBar = b => b && [b.t, b.o, b.h, b.l, b.c].every(isNum) && b.o > 0 && b.l > 0 && b.h >= Math.max(b.o, b.c, b.l) && b.l <= Math.min(b.o, b.c);
-/** A level's name for the opinion: its key's name, else its own name in a-z and _ only (no digit: never a price or a time), or ''. */
+/** A level's name for the opinion: its key's name, else its own name in a-z and _ only (no digit: never a price or a time), or ''.
+ *  A name The Desk refuses the whole ask for (one holding "account", or pc / pc_*: never an account or a PC) is left out. */
 function opinionLevelName(L) {
   if (L && typeof L.key === 'string' && OPINION_LEVEL_NAMES[L.key]) return OPINION_LEVEL_NAMES[L.key];
   const n = L && typeof L.name === 'string' ? L.name.toLowerCase().replace(/[^a-z]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 32).replace(/_+$/, '') : '';
-  return /^[a-z][a-z_]*$/.test(n) ? n : '';
+  return /^[a-z][a-z_]*$/.test(n) && !/account/.test(n) && !/^pc(_\w*)?$/.test(n) ? n : '';
 }
 /**
  * The page's part of an opinion's context, from what this window has: o { m1 (its one minute bars of the plan's instrument,

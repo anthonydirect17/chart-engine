@@ -218,7 +218,8 @@ test('Submit asks for the opinion once, with the page\'s context; nothing reache
 });
 
 test('The Desk\'s answers without a stamp: off, in flight (409), an older Desk (404), not the live Desk, no answer, refused', async () => {
-  const cases = [[[200, { status: 'off' }], 'off'], [[409, { detail: 'asking' }], 'asking'], [[404, { detail: 'Not Found' }], 'none'], [[409, { detail: 'This Desk is not the live Desk (THEDESK_LIVE is not set)' }], 'none'], [[400, { detail: 'context too large' }], 'refused']];
+  const cases = [[[200, { status: 'off' }], 'off'], [[409, { status: 'asking', detail: 'asking' }], 'asking'], [[404, { detail: 'Not Found' }], 'none'], [[409, { detail: 'This Desk is not the live Desk (THEDESK_LIVE is not set)' }], 'none'],
+    [[409, { detail: 'plan #9 already ended (cancel): not asked' }], 'refused'], [[409, { detail: 'uid is already another event' }], 'refused'], [[400, { detail: 'context too large' }], 'refused']];
   for (const [ans, state] of cases) {
     const x = await rig(() => ans);
     x.planner.test.submit(UID);
@@ -266,4 +267,29 @@ test('The Desk\'s two further no-opinion stamps: refused (the service answered 4
   /* the stamped `refused` is the service's; The Desk refusing the page's own ask (no stamp) still says so in its own words */
   assert.equal(PC.opinionView(null, { state: 'refused', why: 'x' }, T0, t).head, 'No opinion: The Desk refused the ask');
   assert.equal(PC.opinionView(stamp('refused'), { state: 'refused', why: 'x' }, T0, t).head, 'No opinion: the service refused the request', 'the stamp wins');
+});
+
+test('the review\'s C-a: a 409 that is not "asking" (an ended plan, a reused uid) says The Desk refused the ask at once', async () => {
+  const x = await rig(() => [409, { detail: 'plan #9 already ended (cancel): not asked' }]);
+  x.planner.test.submit(UID);
+  await x.settle();
+  const a = x.planner.state().asks[UID];
+  assert.deepEqual([a.state, a.why], ['refused', 'plan #9 already ended (cancel): not asked']);
+  const v = PC.opinionView(null, a, a.since + 1000, () => '');
+  assert.deepEqual([v.head, v.reasons], ['No opinion: The Desk refused the ask', ['plan #9 already ended (cancel): not asked']], 'at once, never "Asking Opus..." until the 45 seconds');
+  x.planner.destroy();
+  const y = await rig(() => [409, { status: 'asking', detail: 'asking' }]);
+  y.planner.test.submit(UID);
+  await y.settle();
+  assert.equal(y.planner.state().asks[UID].state, 'asking', 'only The Desk\'s status "asking" keeps the card asking');
+  y.planner.destroy();
+});
+
+test('the review\'s C-b: a level whose name holds "account" or is pc / pc_* is left out of the context (The Desk would refuse the whole ask)', () => {
+  for (const name of ['PC', 'pc', 'PC 2', 'pc_high', 'PC-Low', 'My account high', 'ACCOUNT', 'accountlow']) assert.equal(PC.opinionLevelName({ name, price: 25000 }), '', name);
+  for (const [name, want] of [['PCX high', 'pcx_high'], ['Epic high', 'epic_high'], ['Prior close', 'prior_close'], ['VWAP', 'vwap']]) assert.equal(PC.opinionLevelName({ name, price: 25000 }), want, name);
+  assert.equal(PC.opinionLevelName({ key: 'pc', name: 'Prior close', price: 25000 }), 'prior_close', 'the prior close by its key is prior_close');
+  const c = PC.opinionContext({ now: T0, levels: [{ name: 'PC high', price: 25010 }, { name: 'account low', price: 24990 }, { name: 'Round', price: 25000 }] });
+  assert.deepEqual(c.levels, { round: 25000 });
+  assert.ok(!Object.keys(c.levels).some(k => /account/.test(k) || /^pc(_\w*)?$/.test(k)));
 });
