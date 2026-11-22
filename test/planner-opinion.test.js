@@ -111,7 +111,8 @@ test('opinionView: what the card says, reported, each no-opinion, asking and the
   const op = { status: 'reported', verdict: 'agree', grade: 'A', reasons: ['a', 'b'], wrongIf: 'it loses the level', why: '', at: T0, latency: 7.2, cost: 0.0193, afterArm: false, edited: false, late: false };
   assert.deepEqual(PC.opinionView(op, null, T0, t), { head: 'Opus: agree · A', reasons: ['a', 'b'], wrongIf: 'it loses the level', meta: 'stamped 14:05:09 · 7.2 s · $0.02', tags: [], quiet: false });
   assert.deepEqual(PC.opinionView(Object.assign({}, op, { afterArm: true, edited: true, late: true }), null, T0, t).tags, ['(after Arm)', 'on the plan before your edit', 'late']);
-  const words = { budget: 'No opinion: budget', 'day cap': 'No opinion: day cap', 'month cap': 'No opinion: month cap', declined: 'No opinion: the model declined', off: 'No opinion: the service is off' };
+  const words = { budget: 'No opinion: budget', 'day cap': 'No opinion: day cap', 'month cap': 'No opinion: month cap', declined: 'No opinion: the model declined', off: 'No opinion: the service is off',
+    refused: 'No opinion: the service refused the request', 'bad answer': 'No opinion: the answer could not be read' };
   for (const [status, head] of Object.entries(words)) {
     const v = PC.opinionView(Object.assign({}, op, { status, verdict: '', grade: '', reasons: [], wrongIf: '', latency: null, cost: 0 }), null, T0, t);
     assert.deepEqual([v.head, v.quiet, v.meta], [head, true, 'stamped 14:05:09 · $0.00']);
@@ -253,4 +254,16 @@ test('the source: Arm\'s enable condition and the order calls are as before; the
 test('trade.js is untouched by the opinion (ready() and the plan\'s order calls)', () => {
   const t = read('live/trade.js');
   assert.doesNotMatch(t, /opinion/i);
+});
+
+test('The Desk\'s two further no-opinion stamps: refused (the service answered 400 or 403) and bad answer', () => {
+  const t = () => '14:05:09';
+  const stamp = status => PC.opinionOf({ loggedAt: T0, events: [{ kind: 'opinion', seq: 10, at: T0 + 3000, detail: { status, cost_usd: 0, latency_s: null } }] });
+  const refused = PC.opinionView(stamp('refused'), null, T0, t);
+  assert.deepEqual([refused.head, refused.quiet, refused.reasons, refused.meta], ['No opinion: the service refused the request', true, [], 'stamped 14:05:09 · $0.00']);
+  const bad = PC.opinionView(stamp('bad answer'), null, T0, t);
+  assert.deepEqual([bad.head, bad.quiet, bad.reasons, bad.meta], ['No opinion: the answer could not be read', true, [], 'stamped 14:05:09 · $0.00']);
+  /* the stamped `refused` is the service's; The Desk refusing the page's own ask (no stamp) still says so in its own words */
+  assert.equal(PC.opinionView(null, { state: 'refused', why: 'x' }, T0, t).head, 'No opinion: The Desk refused the ask');
+  assert.equal(PC.opinionView(stamp('refused'), { state: 'refused', why: 'x' }, T0, t).head, 'No opinion: the service refused the request', 'the stamp wins');
 });

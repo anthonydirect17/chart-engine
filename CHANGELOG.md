@@ -80,6 +80,9 @@ settings (the caps, the bars, the timeouts) wait for Anthony's word.
   "No opinion: the service is off" (The Desk asks no one, nothing stamped), "No opinion: The Desk did not answer", or The Desk's
   refusal; a Desk without the route (404) shows no block. Every text is escaped and cut; quiet text with a gold hairline, never
   green or red.
+- **The no-opinion words** (`OPINION_WORDS`, by The Desk's stamped status): budget, day cap, month cap, the model declined, the
+  service is off, busy, failed, cut, capped, too large, no answer in time, could not be reached, "No opinion: the service refused
+  the request" (`refused`: the service answered 400 or 403) and "No opinion: the answer could not be read" (`bad answer`).
 - **The context** (the page's own, `opinionContext`): the last 60 one minute and 24 five minute bars as `[minutes_before, open,
   high, low, close, volume]` (whole minutes before the Submit, oldest first), from the planner's own line of the instrument (its
   history, then grown from the trades, kept in `L.m1` apart from the bars and trades the watches and resume read); the levels on
