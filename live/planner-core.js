@@ -18,6 +18,8 @@
  *   The Desk         deskApi: the plan log's endpoints (TheDesk docs/API.md "Plans"); an older Desk with none: `none`
  *   the leader       createLeader: one window per PC places entries and runs watches (Web Lock "chartbridge-planner", queued)
  *   the shared state createShared: every window shows every plan (BroadcastChannel "chartbridge-planner-v1" + live-planner-v1)
+ *   the opinion      opinionContext, opinionOf, opinionView (1.64.0): the page's context for the planner's opinion, and what the
+ *                    card shows of the one The Desk stamped (information only; nothing waits on it)
  *
  * Nothing here sends an order: the page hands sendPlanOrder the plan, and ChartBridge decides as for any order.
  */
@@ -46,7 +48,10 @@ const CONFIRM_LAG_MS = 250;                    // a minute's close is checked th
 const QTY_MAX = 50;                            // a sanity bound; ChartBridge's maxQty decides
 const JOURNAL_KEEP_MS = 3 * 86400000;
 const QUEUE_MAX = 500;
-const EVENT_KINDS = ['edit', 'arm', 'cancel', 'sent', 'placed', 'refused', 'touched', 'confirmed', 'filled', 'closed', 'expired', 'stop_through', 'missed', 'override', 'owner', 'ended'];
+/* 'opinion' (1.64.0, phase 6 part B): the planner's opinion, stamped by The Desk only (never queued or sent by the page); phaseOf
+   ignores it (information only) */
+const EVENT_KINDS = ['edit', 'arm', 'cancel', 'sent', 'placed', 'refused', 'touched', 'confirmed', 'filled', 'closed', 'expired', 'stop_through', 'missed', 'override', 'owner', 'ended', 'opinion'];
+const DESK_ONLY_KINDS = ['opinion'];
 /* the facts that end a plan before (or without) a fill, and after it */
 const END_KINDS = ['cancel', 'refused', 'expired', 'stop_through', 'missed', 'closed', 'ended'];
 const OVERRIDES = ['armed_on', 'manual_order', 'flatten', 'flatten_all', 'cut_half', 'moved_outside', 'cancelled_outside', 'position_outside'];
@@ -260,7 +265,7 @@ function fromDesk(v) {
   if (!v || typeof v !== 'object' || !Number.isInteger(v.seq) || !DESK_UID_RX.test(v.uid || '') || !ROOTS.includes(v.root)) return null;
   const num = x => (typeof x === 'number' && isFinite(x) ? x : null);
   const events = (Array.isArray(v.events) ? v.events : []).filter(e => e && EVENT_KINDS.includes(e.kind))
-    .map(e => ({ kind: e.kind, at: num(e.logged_at_ms), detail: e.detail && typeof e.detail === 'object' ? e.detail : {}, uid: typeof e.uid === 'string' ? e.uid : '' }));
+    .map(e => ({ kind: e.kind, at: num(e.logged_at_ms), detail: e.detail && typeof e.detail === 'object' ? e.detail : {}, uid: typeof e.uid === 'string' ? e.uid : '', seq: Number.isInteger(e.seq) ? e.seq : null }));
   const ph = phaseOf({ events });
   const armEv = events.find(e => e.kind === 'arm'), cl = armEv && armEv.detail ? (armEv.detail.client && typeof armEv.detail.client === 'object' ? armEv.detail.client : armEv.detail) : {};
   return { entryKind: typeof cl.entry_kind === 'string' ? cl.entry_kind : null, lineAbove: typeof cl.line_above === 'boolean' ? cl.line_above : null, seq: v.seq, uid: v.uid, root: v.root, side: v.side === 'short' ? 'short' : 'long', entry: num(v.entry), stop: num(v.stop), target: num(v.target),
@@ -385,7 +390,7 @@ function createQueue(storage, now, rand) {
   let busy = false, addSeq = 0;
   const q = {
     add(seq, kind, detail) {
-      if (!Number.isInteger(seq) || !EVENT_KINDS.includes(kind)) return null;
+      if (!Number.isInteger(seq) || !EVENT_KINDS.includes(kind) || DESK_ONLY_KINDS.includes(kind)) return null;
       const s = read(), item = { uid: 'pe' + newUid(rand).slice(2, 12) + clock().toString(36).slice(-4) + (++addSeq).toString(36), seq, kind, detail: detail || {}, at: clock() };
       s.items.push(item);
       while (s.items.length > QUEUE_MAX) { s.items.shift(); s.lost++; }
@@ -438,6 +443,10 @@ function deskApi(env) {
     /* detail (1.63.0): what the page knew at the press ({ last, last_u, at_ms }), for The Desk's late cancels (TheDesk Stats, Plans) */
     cancel: (seq, uid, reason, detail) => call('POST', '/api/plans/' + seq + '/cancel', Object.assign({ uid }, reason ? { reason } : {}, detail ? { detail } : {})),
     event: item => call('POST', '/api/plans/' + item.seq + '/events', { uid: item.uid, kind: item.kind, detail: item.detail }),
+    /* 1.64.0 (phase 6 part B): ask for the planner's opinion of a submitted plan; The Desk asks, waits and stamps it (an
+       `opinion` fact), and answers with the plan; `{ status: 'off' }` when it asks no one (nothing stamped); 409 while an ask
+       of this plan is in flight. context: opinionContext's { bars_1m, bars_5m, levels, lines }. Information only. */
+    opinion: (seq, uid, context) => call('POST', '/api/plans/' + seq + '/opinion', { uid, context }),
   };
 }
 
@@ -507,8 +516,117 @@ function overridesFor(what, on, plans, extra) {
     .map(p => ({ seq: p.seq, detail: Object.assign({ what, account: on && on.account ? on.account : p.account, root: on && on.root ? on.root : p.root }, extra || {}) }));
 }
 
+/* ---------------------------------------------------------------- the planner's opinion (1.64.0, phase 6 part B) */
+/*
+ * After a Submit, the submitting window asks The Desk for the planner's opinion of the plan (deskApi.opinion); The Desk asks,
+ * waits and stamps what came back as one `opinion` fact on the plan. Information only: Arm never waits on it, nothing here
+ * reaches the order path, and the page only shows what The Desk returns (it holds no rule, prompt or model of its own).
+ */
+const OPINION_WAIT_MS = 45000;                  // the page's own limit: then "no answer in 45 seconds" (a later stamp still shows, late)
+const OPINION_BARS_1M = 60, OPINION_BARS_5M = 24, OPINION_LINES_MAX = 40;
+/* the levels the charts draw (ChartEngine levelLines, onLines, ibLines), by their key, as the opinion's names (letters and _ only) */
+const OPINION_LEVEL_NAMES = { pdh: 'prior_high', pdl: 'prior_low', pc: 'prior_close', vah: 'prior_value_high', val: 'prior_value_low', poc: 'prior_poc',
+  onh: 'overnight_high', onl: 'overnight_low', ibh: 'ib_high', ibl: 'ib_low' };
+/* what the card says for an opinion The Desk stamped without an answer, by its status */
+const OPINION_WORDS = { budget: 'No opinion: budget', 'day cap': 'No opinion: day cap', 'month cap': 'No opinion: month cap',
+  declined: 'No opinion: the model declined', off: 'No opinion: the service is off', busy: 'No opinion: the service was busy with another plan',
+  failed: 'No opinion: the call failed', cut: 'No opinion: the answer was cut off', capped: 'No opinion: the call reached its cap',
+  'too large': 'No opinion: the plan was too large to send', timeout: 'No opinion: the service did not answer in time',
+  'no answer': 'No opinion: the service did not answer in time', unreachable: 'No opinion: the service could not be reached',
+  refused: 'No opinion: the service refused the request', 'bad answer': 'No opinion: the answer could not be read' };
+const okBar = b => b && [b.t, b.o, b.h, b.l, b.c].every(isNum) && b.o > 0 && b.l > 0 && b.h >= Math.max(b.o, b.c, b.l) && b.l <= Math.min(b.o, b.c);
+/** A level's name for the opinion: its key's name, else its own name in a-z and _ only (no digit: never a price or a time), or ''.
+ *  A name The Desk refuses the whole ask for (one holding "account", or pc / pc_*: never an account or a PC) is left out. */
+function opinionLevelName(L) {
+  if (L && typeof L.key === 'string' && OPINION_LEVEL_NAMES[L.key]) return OPINION_LEVEL_NAMES[L.key];
+  const n = L && typeof L.name === 'string' ? L.name.toLowerCase().replace(/[^a-z]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 32).replace(/_+$/, '') : '';
+  return /^[a-z][a-z_]*$/.test(n) && !/account/.test(n) && !/^pc(_\w*)?$/.test(n) ? n : '';
+}
+/**
+ * The page's part of an opinion's context, from what this window has: o { m1 (its one minute bars of the plan's instrument,
+ * [{ t: UTC ms of the minute's start, o, h, l, c, v }]), now (UTC ms, the Submit), entry (the plan's entry: the lines nearest it
+ * are kept), levels (the charts' level lines [{ key, name, price }]), lines (Anthony's drawn lines and zone edges, prices),
+ * session { start, end } (UTC ms: the regular session so far, or null) }. Returns { bars_1m, bars_5m, levels, lines }: bars as
+ * [minutes_before, open, high, low, close, volume] (whole minutes from the bar's start to the Submit; the last 60 one minute and
+ * 24 five minute bars, oldest first), levels { name: price }, lines [price]. Prices are as the chart has them; The Desk and the
+ * service turn them into points from the entry. No date, no clock time, no account.
+ */
+function opinionContext(o) {
+  const c = o || {}, now = isNum(c.now) ? c.now : 0;
+  const m1 = (Array.isArray(c.m1) ? c.m1 : []).filter(b => okBar(b) && b.t <= now).slice().sort((a, b) => a.t - b.t);
+  const vol = v => (isNum(v) && v > 0 ? Math.round(v) : 0);
+  const row = b => [Math.max(0, Math.floor((now - b.t) / 60000)), b.o, b.h, b.l, b.c, vol(b.v)];
+  const five = [];
+  for (const b of m1) {
+    const t = Math.floor(b.t / 300000) * 300000, f = five[five.length - 1];
+    if (f && f.t === t) { f.h = Math.max(f.h, b.h); f.l = Math.min(f.l, b.l); f.c = b.c; f.v += vol(b.v); } else five.push({ t, o: b.o, h: b.h, l: b.l, c: b.c, v: vol(b.v) });
+  }
+  const levels = {};
+  for (const L of Array.isArray(c.levels) ? c.levels : []) {
+    const name = opinionLevelName(L);
+    if (name && !(name in levels) && isNum(L.price) && L.price > 0) levels[name] = L.price;
+  }
+  const s = c.session;
+  if (s && isNum(s.start) && m1.length && m1[0].t <= s.start) {   // only when this window has the whole session so far
+    const ss = m1.filter(b => b.t >= s.start && (!isNum(s.end) || b.t < s.end));
+    if (ss.length) { levels.session_high = Math.max(...ss.map(b => b.h)); levels.session_low = Math.min(...ss.map(b => b.l)); }
+  }
+  const seen = new Set(), lines = [];
+  for (const p of Array.isArray(c.lines) ? c.lines : []) {
+    if (!isNum(p) || !(p > 0)) continue;
+    const k = Math.round(p * 1e6);
+    if (!seen.has(k)) { seen.add(k); lines.push(p); }
+  }
+  if (isNum(c.entry)) lines.sort((a, b) => Math.abs(a - c.entry) - Math.abs(b - c.entry) || a - b);
+  return { bars_1m: m1.slice(-OPINION_BARS_1M).map(row), bars_5m: five.slice(-OPINION_BARS_5M).map(row), levels, lines: lines.slice(0, OPINION_LINES_MAX) };
+}
+/**
+ * The opinion The Desk stamped on a plan (fromDesk's shape; the last `opinion` fact), or null: { status, verdict, grade, reasons,
+ * wrongIf, why, at (The Desk's stamp, UTC ms), latency (s), cost ($), afterArm (stamped after the plan's Arm), edited (the plan
+ * was edited after the values it judged), late (stamped more than OPINION_WAIT_MS after the plan was submitted) }. Its answer is
+ * read flat or under `answer`, as The Desk keeps it; every text is cut, never trusted as markup (the card escapes it).
+ */
+function opinionOf(p) {
+  const ev = p && Array.isArray(p.events) ? p.events : [];
+  let i = -1;
+  for (let k = ev.length - 1; k >= 0; k--) if (ev[k] && ev[k].kind === 'opinion') { i = k; break; }
+  if (i < 0) return null;
+  const e = ev[i], d = e.detail && typeof e.detail === 'object' ? e.detail : {}, a = d.answer && typeof d.answer === 'object' ? d.answer : d;
+  const txt = (v, n) => { if (typeof v !== 'string') return ''; const t = v.replace(/\s+/g, ' ').trim(); return t.length > n ? t.slice(0, n - 3).trimEnd() + '...' : t; };
+  const arm = ev.find(x => x && x.kind === 'arm');
+  const afterArm = !!arm && (ev.indexOf(arm) < i || (isNum(arm.seq) && isNum(e.seq) && arm.seq < e.seq));
+  const onSeq = Number.isInteger(d.on_seq) ? d.on_seq : null;
+  const edited = ev.some((x, k) => x && x.kind === 'edit' && (onSeq !== null && isNum(x.seq) ? x.seq > onSeq : k > i));
+  return { status: txt(d.status, 24) || (txt(a.verdict, 24) ? 'reported' : ''), verdict: txt(a.verdict, 24), grade: txt(a.grade, 12),
+    reasons: (Array.isArray(a.reasons) ? a.reasons : []).map(r => txt(r, 220)).filter(Boolean).slice(0, 4), wrongIf: txt(a.wrong_if, 220), why: txt(d.why, 160),
+    at: isNum(e.at) ? e.at : null, latency: isNum(d.latency_s) ? d.latency_s : null, cost: isNum(d.cost_usd) ? d.cost_usd : null,
+    afterArm, edited, late: isNum(e.at) && isNum(p.loggedAt) && e.at - p.loggedAt > OPINION_WAIT_MS };
+}
+/**
+ * What the plan card's opinion block says: op (opinionOf) wins; with none, ask (this window's own ask: { state: 'asking' |
+ * 'off' | 'down' | 'refused' | 'none', since, why }) at nowMs. fmtTime(ms) -> 'hh:mm:ss'. Returns null (no block) or { head,
+ * reasons, wrongIf, meta, tags, quiet (true: a no-opinion or a wait) }.
+ */
+function opinionView(op, ask, nowMs, fmtTime) {
+  const hhmmss = typeof fmtTime === 'function' ? fmtTime : ms => new Date(ms).toLocaleTimeString();
+  if (op) {
+    const tags = [op.afterArm ? '(after Arm)' : '', op.edited ? 'on the plan before your edit' : '', op.late ? 'late' : ''].filter(Boolean);
+    const meta = [op.at !== null ? 'stamped ' + hhmmss(op.at) : '', op.latency !== null ? op.latency.toFixed(1) + ' s' : '', op.cost !== null ? '$' + op.cost.toFixed(2) : ''].filter(Boolean).join(' · ');
+    if (op.verdict && (op.status === 'reported' || !op.status)) return { head: 'Opus: ' + op.verdict + (op.grade ? ' · ' + op.grade : ''), reasons: op.reasons, wrongIf: op.wrongIf, meta, tags, quiet: false };
+    return { head: OPINION_WORDS[op.status] || 'No opinion' + (op.status ? ' (' + op.status + ')' : ''), reasons: op.why ? [op.why] : [], wrongIf: '', meta, tags, quiet: true };
+  }
+  if (!ask || ask.state === 'none') return null;
+  if (ask.state === 'asking') return isNum(ask.since) && nowMs - ask.since >= OPINION_WAIT_MS
+    ? { head: 'No opinion: no answer in ' + Math.round(OPINION_WAIT_MS / 1000) + ' seconds', reasons: [], wrongIf: '', meta: '', tags: [], quiet: true }
+    : { head: 'Asking Opus...', reasons: [], wrongIf: '', meta: '', tags: [], quiet: true };
+  if (ask.state === 'off') return { head: OPINION_WORDS.off, reasons: [], wrongIf: '', meta: '', tags: [], quiet: true };
+  if (ask.state === 'down') return { head: 'No opinion: The Desk did not answer', reasons: [], wrongIf: '', meta: '', tags: [], quiet: true };
+  return { head: 'No opinion: The Desk refused the ask', reasons: typeof ask.why === 'string' && ask.why ? [ask.why.slice(0, 160)] : [], wrongIf: '', meta: '', tags: [], quiet: true };
+}
+
 return { LOCK, CHANNEL, STORE_KEY, JOURNAL_KEY, QUEUE_KEY, OFF_KEY, ROOTS, SIDES, ENTRY_TYPES, ENTRY_WORDS, ENTRY_SHORT, GRADES, GRADE_DEFAULT,
-  DESK_UID_RX, EXPIRY_MIN, EXPIRY_MAX, EXPIRY_DEFAULT, CONFIRM_LAG_MS, EVENT_KINDS, END_KINDS, OVERRIDES, WHY_WORDS,
+  DESK_UID_RX, EXPIRY_MIN, EXPIRY_MAX, EXPIRY_DEFAULT, CONFIRM_LAG_MS, EVENT_KINDS, DESK_ONLY_KINDS, END_KINDS, OVERRIDES, WHY_WORDS,
+  OPINION_WAIT_MS, OPINION_BARS_1M, OPINION_BARS_5M, OPINION_LINES_MAX, OPINION_LEVEL_NAMES, OPINION_WORDS, opinionLevelName, opinionContext, opinionOf, opinionView,
   newUid, entryCid, uidOfCid, cleanDraft, validate, bracketTicks, submitBody, entryFor, bracketFor, throughStop, touches, closesBack,
   createWatch, armDetail, armClosedWhy, phaseOf, expiresOf, fromDesk, viewOf, reconcile, createJournal, createQueue, deskApi, createLeader, cleanStore, createShared,
   offIn, setOff, overridesFor, onGrid, roundTo };

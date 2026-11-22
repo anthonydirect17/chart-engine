@@ -116,7 +116,7 @@ export async function startDesk(port, seed) {
   const types = JSON.parse(JSON.stringify((seed && seed.types) || [])), accounts = JSON.parse(JSON.stringify((seed && seed.accounts) || []));
   const floors = (seed && seed.floors) || null, league = (seed && seed.league) || null;
   delete docs.types; delete docs.accounts; delete docs.floors; delete docs.league;
-  const desk = { docs, types, accounts, floors, league, tags: [], log: [], down: false, refuseTags: null, plans: [], chain: 0, planFlags: [], noPlans: false, notLive: false, closed: false, expiryMs: 0, bump(which) { docs[which].rev++; }, close: () => new Promise(r => server.close(r)),
+  const desk = { docs, types, accounts, floors, league, tags: [], log: [], down: false, refuseTags: null, plans: [], chain: 0, planFlags: [], opinion: null, opinionAsks: [], noPlans: false, notLive: false, closed: false, expiryMs: 0, bump(which) { docs[which].rev++; }, close: () => new Promise(r => server.close(r)),
     editType(id, change) { const t = types.find(x => x.id === id); Object.assign(t, change, { version: t.version + 1, status: 'not_checked', updated_at: new Date().toISOString() }); } };
   const typeLink = id => { const t = types.find(x => x.id === id); return t ? { id: t.id, firm: t.firm, name: t.name, version: t.version, status: t.status } : null; };
   const server = http.createServer((req, res) => {
@@ -139,7 +139,7 @@ export async function startDesk(port, seed) {
        Desk allows its two 8765 origins only. Sample data only. */
     if (/^\/api\/plans(\/|$)/.test(urlPath)) {
       if (desk.noPlans) return send(404, { detail: 'Not Found' });
-      const pm = /^\/api\/plans(?:\/(\d+)(?:\/(arm|cancel|edit|events))?)?$/.exec(urlPath);
+      const pm = /^\/api\/plans(?:\/(\d+)(?:\/(arm|cancel|edit|events|opinion))?)?$/.exec(urlPath);
       if (!pm) return send(404, { detail: 'Not Found' });
       const seq = pm[1] ? +pm[1] : null, act = pm[2] || null, P = seq ? desk.plans.find(x => x.seq === seq) : null;
       const view = v => planView(v);
@@ -170,6 +170,25 @@ export async function startDesk(port, seed) {
         }
         if (!P) return send(404, { detail: 'no plan #' + seq });
         const st = view(P);
+        /* chart 1.64.0 (phase 6 part B): POST /{seq}/opinion { uid, context: { bars_1m, bars_5m, levels, lines } }, as the contract
+           of TheDesk's claude/planner-opinion-desk: desk.opinion null: a Desk without it (404); { off: true }: { status: 'off' },
+           nothing stamped; else after delayMs one `opinion` fact stamped by The Desk (its detail: desk.opinion.detail and on_seq)
+           and { plan }; idempotent (a second ask answers the plan as it is), 409 { status: 'asking' } while one is in flight. Every ask is kept
+           in desk.opinionAsks. Sample answers only: no model is asked here. */
+        if (act === 'opinion') {
+          if (Object.keys(d).some(k => !['uid', 'context'].includes(k)) || !uidOk(d.uid) || !d.context || typeof d.context !== 'object') return send(400, { detail: 'send {"uid": ..., "context": {...}}' });
+          if (Object.keys(d.context).sort().join(',') !== 'bars_1m,bars_5m,levels,lines') return send(400, { detail: 'context is {bars_1m, bars_5m, levels, lines}' });
+          desk.opinionAsks.push({ seq, body: d, at: Date.now() });
+          const O = desk.opinion;
+          if (!O) return send(404, { detail: 'Not Found' });
+          if (O.off) return send(200, { status: 'off' });
+          if (P.events.some(e => e.kind === 'opinion')) return send(200, { plan: view(P), duplicate: true });
+          if (P.asking) return send(409, { status: 'asking', detail: 'asking' });
+          P.asking = true;
+          const onSeq = [P.seq].concat(P.events.filter(e => e.kind === 'edit').map(e => e.seq)).pop();
+          setTimeout(() => { P.asking = false; ev(P, 'opinion', Object.assign({ on_seq: onSeq }, JSON.parse(JSON.stringify(O.detail || {})))); send(200, { plan: view(P), duplicate: false }); }, O.delayMs || 0);
+          return;
+        }
         if (act === 'events') {
           const FACTS = ['sent', 'placed', 'refused', 'touched', 'confirmed', 'filled', 'closed', 'expired', 'stop_through', 'missed', 'override', 'owner', 'ended'];
           if (Object.keys(d).some(k => !['uid', 'kind', 'detail'].includes(k)) || !uidOk(d.uid)) return send(400, { detail: 'send {"uid": ..., "kind": ..., "detail": {...}}' });

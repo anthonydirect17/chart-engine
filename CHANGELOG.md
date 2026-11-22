@@ -63,6 +63,46 @@
   `test/pc-updater.test.js`: the allowed git subcommands, the box job's name, useHttpPath read before the one ask, the
   token only after a 404 or 401 and then through the Actions API, one place that asks for it and one that sends it.
 
+## chart 1.64.0 (2026-11-22): the planner's opinion on the plan card (phase 6, part B) (page only, no F5)
+
+In plain words: when Anthony submits a plan, the window he submitted it in asks The Desk once for Opus's opinion of it, and the
+plan card shows what The Desk stamped under the buttons: "Opus: agree · A", its reasons, "Wrong if ...", and "stamped hh:mm:ss ·
+7.2 s · $0.02". It is information only: Arm works before, during and after it exactly as before, nothing waits on it, and no order
+code changed. The page holds no rule, prompt or model: The Desk asks the planner's service and the card shows what comes back.
+The Desk's side (`POST /api/plans/{seq}/opinion`, the `opinion` fact in its plan log) is TheDesk's, in the same held update. Its
+settings (the caps, the bars, the timeouts) wait for Anthony's word.
+
+- **`live/planner.js`:** after a successful Submit, `askOpinion` sends `POST /api/plans/{seq}/opinion` with `{ uid, context }` once
+  (never again by itself) and the card says "Asking Opus..."; the answer's plan is taken as any other (its `opinion` fact is then
+  on the plan for every window, through the 5 second refresh). The card's block shows the stamp; "(after Arm)" when it was stamped
+  after the plan's Arm, "on the plan before your edit" when the plan was edited after the values it judged, "late" when stamped
+  more than 45 seconds after the Submit. With nothing stamped: "No opinion: no answer in 45 seconds" (the page's own limit),
+  "No opinion: the service is off" (The Desk asks no one, nothing stamped), "No opinion: The Desk did not answer", or The Desk's
+  refusal (any 409 but The Desk's `{status: 'asking'}`, which keeps "Asking Opus..." while an ask is in flight, says it at once);
+  a Desk without the route (404) shows no block. Every text is escaped and cut; quiet text with a gold hairline, never
+  green or red.
+- **The no-opinion words** (`OPINION_WORDS`, by The Desk's stamped status): budget, day cap, month cap, the model declined, the
+  service is off, busy, failed, cut, capped, too large, no answer in time, could not be reached, "No opinion: the service refused
+  the request" (`refused`: the service answered 400 or 403) and "No opinion: the answer could not be read" (`bad answer`).
+- **The context** (the page's own, `opinionContext`): the last 60 one minute and 24 five minute bars as `[minutes_before, open,
+  high, low, close, volume]` (whole minutes before the Submit, oldest first), from the planner's own line of the instrument (its
+  history, then grown from the trades, kept in `L.m1` apart from the bars and trades the watches and resume read); the levels on
+  its charts by name in letters and `_` only (`prior_high`, `overnight_low`, `ib_high`, ...; a name is never a digit, so never a
+  price or a time; a name holding "account", or `pc` / `pc_*`, is left out, as The Desk would refuse the whole ask), and the regular session's high and low so far (from 09:30 New York) when this window has the whole session;
+  Anthony's drawn lines and zone edges (up to 40, the nearest to the entry first). Prices as the chart has them; no date, clock
+  time, account or PC.
+- **`live/planner-core.js`:** `'opinion'` in `EVENT_KINDS` (`phaseOf` ignores it; it is in `DESK_ONLY_KINDS`, so the page's
+  queue never takes or sends one); `fromDesk` keeps each fact's `seq`; `deskApi.opinion(seq, uid, context)`; `opinionContext`,
+  `opinionOf`, `opinionView` (pure). `OPINION_WAIT_MS` 45 s, `OPINION_BARS_1M` 60, `OPINION_BARS_5M` 24.
+- **Not changed:** `live/trade.js` (`ready()`, `readyPlan`, `sendPlanOrder`, `cancelPlanOrder`), Arm's enable condition
+  (`phase === 'submitted'`), the watches, the journal and resume. ChartBridge unchanged; `minChartBridge` stays 0.6.2.
+- **Tests:** `test/planner-opinion.test.js` (the event kind, the queue, `deskApi.opinion`, the context, the stamp's reading and
+  the card's words, the real page on a fake Desk: one ask with the page's context, nothing reaches TradeCore, each answer without
+  a stamp; the source: Arm's condition and the order calls unchanged). `test/planner-opinion-smoke.mjs` (`npm run
+  smoke:planner-opinion`): the ask's context, "Asking Opus..." with Arm enabled, the stamp on the card, Arm while it asks (one
+  order at once, the opinion then "(after Arm)"), a day cap stamp, The Desk's off, never a page-sent opinion. The fake Desk
+  answers `POST /api/plans/{seq}/opinion` as the contract says (sample answers only).
+
 ## chart 1.63.0 (2026-11-21): the planner's records: Cancel tells The Desk the last trade it knew (page only, no F5)
 
 In plain words: when Anthony cancels a plan on its card, The Desk now learns how close price was to his line at that moment, so

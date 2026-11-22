@@ -699,3 +699,13 @@ body.ws-tight .ws-body > .chart-live { padding: 2px 3px 2px; }
 .chart-live .pl-card .pl-off { display: inline-flex; gap: 4px; align-items: center; font: 400 11px var(--ws-sans); color: var(--ws-text2); margin-left: auto; }
 .chart-live .pl-card .seg { flex: none; flex-wrap: nowrap; }
 .chart-live .pl-card .seg button { min-height: 26px; padding: 3px 9px; }
+/* 1.64.0 (phase 6 part B): the planner's opinion under the plan card's buttons, information only: quiet text, a gold hairline at
+   its left (trim only); never green or red (those are for trade sides and P&L), and never a control */
+.chart-live .pl-card .pl-op { border-left: 2px solid var(--ws-gold-hair); padding: 2px 0 2px 8px; font: 400 11px/1.35 var(--ws-sans); color: var(--ws-text); max-height: 132px; overflow-y: auto; }
+.chart-live .pl-card .pl-op.quiet { color: var(--ws-text2); }
+.chart-live .pl-card .pl-op-head { display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; font: 500 12px var(--ws-sans); }
+.chart-live .pl-card .pl-op.quiet .pl-op-head { font-weight: 400; }
+.chart-live .pl-card .pl-op-tag { font: 400 11px var(--ws-sans); color: var(--ws-gold-text); }
+.chart-live .pl-card .pl-op-reasons { margin: 2px 0 0; padding-left: 14px; }
+.chart-live .pl-card .pl-op-wrong { margin-top: 2px; color: var(--ws-text2); }
+.chart-live .pl-card .pl-op-meta { margin-top: 2px; font: 400 10px var(--ws-mono); color: var(--ws-text2); }
