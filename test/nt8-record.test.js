@@ -317,7 +317,7 @@ test('0.6.18: entry rules per trader: ChartBridgeOrders.cs differs from 0.6.17 i
    this file does not know now FAILS, so each release re-pins on purpose (add the version below with its listed changes). */
 test('the pin tests know this ChartBridge version (a new release re-pins on purpose)', () => {
   const v = (/public const string Version = "([0-9.]+)";/.exec(read('ChartBridge.cs')) || [])[1];
-  assert.ok(['0.6.19', '0.6.20', '0.6.21', '0.6.22', '0.6.23', '0.6.24', '0.6.25'].includes(v), 'ChartBridge ' + v + ' is not pinned here: re-pin test/nt8-record.test.js for it');
+  assert.ok(['0.6.19', '0.6.20', '0.6.21', '0.6.22', '0.6.23', '0.6.24', '0.6.25', '0.6.26'].includes(v), 'ChartBridge ' + v + ' is not pinned here: re-pin test/nt8-record.test.js for it');
 });
 
 test('0.6.19: the day\'s profit stop: only ChartBridgeAgents.cs changed; every other add-on file but ChartBridge.cs (its version) is the 0.6.18 file byte for byte, the groups and the order path included', () => {

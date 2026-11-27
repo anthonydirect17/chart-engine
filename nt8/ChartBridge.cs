@@ -2610,7 +2610,7 @@ namespace NinjaTrader.NinjaScript.AddOns
     // ------------------------------------------------------------------ the server
     public static class ChartBridgeServer
     {
-        public const string Version = "0.6.25";   // 0.6.25: the combined release with chart 1.58.0 (one hand install while flat, after the page): the go-live guards (plan step 3.5, law 9.2 and 9.3): the firms read once a minute from The Desk's GET /api/legion/cohorts, one direction per firm (every prop account of a firm on this PC one way, NQ, MNQ, ES and MES one market, a new entry against it refused from every source, nothing closed or cancelled, an exit always goes, the personal account never bound), one PC per firm (the pick, Auto, its restore and every new entry of a trader or the bot on a prop account), a firm not known holds a trader's or the bot's new prop entry, the GO size is the roster file's, the groups message's firmGuard; Legion's commands (plan step 3.2): agentStopAll (every bot and agent on a prop account by its own rule and the account ledger, a mixed trader's prop seats latched until 18:00 ET) and agentFlattenOff (Shadow and the trader's own flatten in one command), their status lines carry the press's cid; the delta table (buy, sell and unknown volume and the largest single trade per second from 18:00 ET, served before ready with the held-trade seam when a subscribe asks with deltaTable, saved per session and read back at a start, the served window's live trades with their sides; hello features deltaTable); the floor fix (every prop account's end-of-day high kept at every close, in a group or not, through a leave, a deleted group, Hide and a restart; a join with no highest close starts from the kept high, the size or the balance, the larger; the lane join carries The Desk's highClose, never below the balance; the accounts entry's highEod). 0.6.24: release 1 (Anthony 2026-11-16 and 2026-11-17, one hand install): the personal bot brought up to current standards (step 1.6b): the personal account only, every rail set on the Bot tab and all required (fail closed), the size capped only by the hard ceiling (2 minis or 20 micros), the day's loss and profit stops (realized plus open) close the bot's own contracts at once and latch the day until 18:00 ET, an open bot trade followed again after a restart only by its own stop or target; bot only (decision 3a): the day stop and the bot's flatten cancel only the bot's own orders and close only its own share, never Anthony's contracts or orders on the personal account; the owner guard (decision 3b): no bot entry while Anthony holds his own position or working orders on the bot's account and root, a bot entry resting then is cancelled (ruling A) and the Bot tab says it waits (ruling B); a close that cannot go is an error and a voice call (BotNotClosed); executions from before the run are never counted again by the bot; the voice-4 files ship with the page into www\voice, the default voiceFolder now; Cut half (step 1.6c, cutHalf): half the position closed at market, the smaller part on an odd size, the stops and targets there shrunk to the size left in the same step, an exit like Flatten. 0.6.23: a hand move is the move (Anthony 2026-11-13): a removal from a lane by hand (the page's Remove or Hide) is kept in lane-hand.txt and the lane rule leaves it out; putting it in a group by hand clears it; any outcome on The Desk leaves; the groups message's laneRule says the rule's state and the accounts kept out. 0.6.22: the lanes run themselves (Anthony 2026-11-13): once a minute The Desk's GET /api/lane-accounts; a typed eval or funded prop account in no group joins the one group of its Type on the bench, a blown, passed or archived member or one of the other kind leaves once flat; each move a line in the groups message's laneLog; laneRule = off stops it; a lane trader kept through the 17:00 reset; the plan's dayLossDollars, the day's loss stop (answers 31); the voice calls, listen and play only, off unless voice = on (answers 30); the order path gains three listen-only lines. 0.6.21: for the lanes and the runner (build answers 7 part D2 and the review backlog): the pick, the roster file a trader's runner runs, set on the page (agentPick), saved in agent-<id>-pick.txt and sent in welcome and agent, refused in Auto and while exposed; accountState's profitToday and profitWhy, the day's number as the profit stop reads it (the larger realized figure after a late start); the roster reader tightened: the format is the top-level key (D1), rosterFolder a drive-letter full path only (D3), one 2 MB cap for an answer (D4); no order path change. 0.6.20: the Lab's roster files served read only at GET /roster from the folder config.txt's rosterFolder names (build answers 7, part C2; ChartBridgeRoster in ChartBridgeAgents.cs): only by the localhost name, plain *.json files of a plain name directly in that folder, no link, at most 200 files of at most 256 KB, each valid JSON of format specrunner.roster/1 or specrunner.lineup/1, served as it is, a file that is not listed with why; never the folder's path; nothing decided from them. 0.6.19: the day's profit stop (Anthony 2026-11-10, decision 8, and 2026-11-11): a dollar mark per account, realized plus open, for the 18:00 session: the smaller of the day stop a runner sends with its plan (dayStopDollars) and, on an account that is not funded, its consistency percent of its profit target; reached while the trader holds something there, its own flatten starts and it stands down until the roll; once reached the account is refused new entries for the rest of the session by every trader, whatever a later plan names; after a late start the larger realized figure counts, and a day not known is said once (ChartBridgeAgents.cs, and one field in ChartBridgeGroups.cs). The 0.6.18 fix round: an order resting by hand no longer holds back the agent's own close; Kill all puts the kill switch on first and stops a saved Auto that waits with no seats; Auto ends with its trading day on every pass and plan check, for every kind of account. 0.6.18: entry rules per trader (Anthony 2026-11-11: many bots to come, most with a stop and a target): an agent's rules gain marketEntry and noTarget, both off by default and set on the Agent tab; with marketEntry a plan may be kind market (its price within 20 ticks of ChartBridge's own last trade), with noTarget its targetTicks may be 0; a stop is always required; the order path asks the agent's rules for both; a trader with neither behaves as in 0.6.17; 0.6.17: Kill all for the prop accounts (Anthony 2026-11-11): the page message agentKillAllProp flattens what each agent on prop accounts owns (its own flatten), puts its kill switch on and its mode to Shadow, and removes its saved Auto; an agent on the personal account, a Sim account or a group with a member that is not prop, the bot, the copier and manual orders are never touched; refused with no personal account picked; 0.6.16: prop accounts (Anthony 2026-11-10 and 2026-11-11): the personal account is picked once on the chart page (accountPersonal, saved in personal-account.txt), every other account that is not Sim, Backtest or Playback is prop; an agent in Auto on prop accounts kept its account and Auto through the 17:00 ET reset until 0.6.18 ended Auto with the trading day for every agent (agent-<id>-auto.txt) and gets Auto back once after a restart, only when its account is the same, prop, known, flat and idle and the kill switch is off; the accounts message's personalNamed and each row's personal and prop; with no personal account picked nothing is prop and every path is the 0.6.15 one; no order path file changes; 0.6.15: the 1 second pull retired (Anthony 2026-11-03: everything is built from the ticks; The Desk builds its 1 second bars from the master tick day): no 1 second request, no bars1s/ queue and no POST /api/bars-1s; a bars1s or bars1sRoots line does nothing (one Output line per such config line); the files it left are never read, sent or deleted (one Output line a start); /diag bars has no oneSecond; the NQ tick file is unchanged (its window, its time limit and the gate as before), and its final pull no longer waits for a pass where the 1 second pull asked nothing; 0.6.14: the NQ tick file's day check (Anthony 2026-11-03): failed only when history has no trades or under 90 percent of the live trades in the span the live capture covered; a new passing status short (history has fewer in some seconds); holes listed in the check, never failing the day: 60,000 ms or more between two history trades (or from the session's open, or to its close) with a live trade inside more than 1,000 ms from both ends (wider than the measured 4 ms early / 106 ms late skew on purpose), or over a known capture gap (inGap, never at the close), not second-aligned; the whole first to last span when the gaps leave under 600 seconds or 1,000 live trades; a day failed under the old rule with its raw kept checked again (every start lists each failed rule 1 day, tickdays.txt's rule column); a day set aside never resent in a loop; 0.6.13: the NQ tick file's final pull catches up on weekday mornings before 09:15 New York (Anthony 2026-11-03: a request starts before 09:15:00 or not at all, BarsTicket.MayStart asked at the gate, the session still open never pulled), the raw deleted once packed (a stored day not packed yet keeps only its last part, .day.last, sent again at most once a New York day in the final pull's windows until The Desk says packed, then the raw, its state and the part are deleted; /diag tickFile.packWait); 0.6.12: the bar trail follow-ups (an Order Strategy fill's session from its own execution time, NinjaTrader's Execution.Time, an execution of the session before a trade already seen ending the bar trail at once; managed.txt's session: and barEnded only for a bar trail entry); 0.6.11: the bar trail exit option of an Order Strategy (Anthony 2026-11-01: minute or NinjaTrader range bars ChartBridge builds from its live trades, phantom range bars ignored, range bars proven or "not proven yet", the trail ends at the session close, at most 16 bar kinds a market and a 17th refused at placement), the 1 second bars' narrower tick request (12:00 AM of the session's own date, from the open itself when that answer misses the open); 0.6.10: the account lifecycle (Anthony 2026-10-30): remove-only changes for an account NinjaTrader no longer lists (leave its group, a copier follower off then removed, Hide with no stale hold), Hide takes a member out of its group in the same step, a member not in NinjaTrader no longer blocks an agent's group, a group preview sizes only the members gate 2 lets trade, the accounts message's notListed, kept what The Desk rejects inside a 200; also an entry being placed is not a restart (the Placing mark), the NQ tick file to The Desk (ChartBridgeTicks.cs), the 1 second request from the session's open, a tick chart with no history at the open asks again once (historyLate), /diag's pc and every 1 second contract; 0.6.9: the stats suite's Phase 2 (recording only): 1 second bars to The Desk, the order record (every order type, POST /api/order-events), a decision id on a group entry's orders and fills; 0.6.8: the minute book (minute and tick charts' history up to now from every live trade ChartBridge saw), a hole recorded in /diag and history.log (never shown), 20 s limits on a load's minute history and last trades; 0.6.7: the bench (memberBench), no hedging always on, a group's own rules optional and never sizing a member
+        public const string Version = "0.6.26";   // 0.6.26: after a cold start (HOME 2026-11-27): a 4h, 1D or 1W page left with no bars is asked again by ChartBridge once when the gate frees or 60 s after the failure; a tick chart left with no history is told to load again when the late answer frees the gate, in trading hours too; the prior settlement falls back to the latest one kept before the session when the prior session has none (Thanksgiving), said with "missing". 0.6.25: the combined release with chart 1.58.0 (one hand install while flat, after the page): the go-live guards (plan step 3.5, law 9.2 and 9.3): the firms read once a minute from The Desk's GET /api/legion/cohorts, one direction per firm (every prop account of a firm on this PC one way, NQ, MNQ, ES and MES one market, a new entry against it refused from every source, nothing closed or cancelled, an exit always goes, the personal account never bound), one PC per firm (the pick, Auto, its restore and every new entry of a trader or the bot on a prop account), a firm not known holds a trader's or the bot's new prop entry, the GO size is the roster file's, the groups message's firmGuard; Legion's commands (plan step 3.2): agentStopAll (every bot and agent on a prop account by its own rule and the account ledger, a mixed trader's prop seats latched until 18:00 ET) and agentFlattenOff (Shadow and the trader's own flatten in one command), their status lines carry the press's cid; the delta table (buy, sell and unknown volume and the largest single trade per second from 18:00 ET, served before ready with the held-trade seam when a subscribe asks with deltaTable, saved per session and read back at a start, the served window's live trades with their sides; hello features deltaTable); the floor fix (every prop account's end-of-day high kept at every close, in a group or not, through a leave, a deleted group, Hide and a restart; a join with no highest close starts from the kept high, the size or the balance, the larger; the lane join carries The Desk's highClose, never below the balance; the accounts entry's highEod). 0.6.24: release 1 (Anthony 2026-11-16 and 2026-11-17, one hand install): the personal bot brought up to current standards (step 1.6b): the personal account only, every rail set on the Bot tab and all required (fail closed), the size capped only by the hard ceiling (2 minis or 20 micros), the day's loss and profit stops (realized plus open) close the bot's own contracts at once and latch the day until 18:00 ET, an open bot trade followed again after a restart only by its own stop or target; bot only (decision 3a): the day stop and the bot's flatten cancel only the bot's own orders and close only its own share, never Anthony's contracts or orders on the personal account; the owner guard (decision 3b): no bot entry while Anthony holds his own position or working orders on the bot's account and root, a bot entry resting then is cancelled (ruling A) and the Bot tab says it waits (ruling B); a close that cannot go is an error and a voice call (BotNotClosed); executions from before the run are never counted again by the bot; the voice-4 files ship with the page into www\voice, the default voiceFolder now; Cut half (step 1.6c, cutHalf): half the position closed at market, the smaller part on an odd size, the stops and targets there shrunk to the size left in the same step, an exit like Flatten. 0.6.23: a hand move is the move (Anthony 2026-11-13): a removal from a lane by hand (the page's Remove or Hide) is kept in lane-hand.txt and the lane rule leaves it out; putting it in a group by hand clears it; any outcome on The Desk leaves; the groups message's laneRule says the rule's state and the accounts kept out. 0.6.22: the lanes run themselves (Anthony 2026-11-13): once a minute The Desk's GET /api/lane-accounts; a typed eval or funded prop account in no group joins the one group of its Type on the bench, a blown, passed or archived member or one of the other kind leaves once flat; each move a line in the groups message's laneLog; laneRule = off stops it; a lane trader kept through the 17:00 reset; the plan's dayLossDollars, the day's loss stop (answers 31); the voice calls, listen and play only, off unless voice = on (answers 30); the order path gains three listen-only lines. 0.6.21: for the lanes and the runner (build answers 7 part D2 and the review backlog): the pick, the roster file a trader's runner runs, set on the page (agentPick), saved in agent-<id>-pick.txt and sent in welcome and agent, refused in Auto and while exposed; accountState's profitToday and profitWhy, the day's number as the profit stop reads it (the larger realized figure after a late start); the roster reader tightened: the format is the top-level key (D1), rosterFolder a drive-letter full path only (D3), one 2 MB cap for an answer (D4); no order path change. 0.6.20: the Lab's roster files served read only at GET /roster from the folder config.txt's rosterFolder names (build answers 7, part C2; ChartBridgeRoster in ChartBridgeAgents.cs): only by the localhost name, plain *.json files of a plain name directly in that folder, no link, at most 200 files of at most 256 KB, each valid JSON of format specrunner.roster/1 or specrunner.lineup/1, served as it is, a file that is not listed with why; never the folder's path; nothing decided from them. 0.6.19: the day's profit stop (Anthony 2026-11-10, decision 8, and 2026-11-11): a dollar mark per account, realized plus open, for the 18:00 session: the smaller of the day stop a runner sends with its plan (dayStopDollars) and, on an account that is not funded, its consistency percent of its profit target; reached while the trader holds something there, its own flatten starts and it stands down until the roll; once reached the account is refused new entries for the rest of the session by every trader, whatever a later plan names; after a late start the larger realized figure counts, and a day not known is said once (ChartBridgeAgents.cs, and one field in ChartBridgeGroups.cs). The 0.6.18 fix round: an order resting by hand no longer holds back the agent's own close; Kill all puts the kill switch on first and stops a saved Auto that waits with no seats; Auto ends with its trading day on every pass and plan check, for every kind of account. 0.6.18: entry rules per trader (Anthony 2026-11-11: many bots to come, most with a stop and a target): an agent's rules gain marketEntry and noTarget, both off by default and set on the Agent tab; with marketEntry a plan may be kind market (its price within 20 ticks of ChartBridge's own last trade), with noTarget its targetTicks may be 0; a stop is always required; the order path asks the agent's rules for both; a trader with neither behaves as in 0.6.17; 0.6.17: Kill all for the prop accounts (Anthony 2026-11-11): the page message agentKillAllProp flattens what each agent on prop accounts owns (its own flatten), puts its kill switch on and its mode to Shadow, and removes its saved Auto; an agent on the personal account, a Sim account or a group with a member that is not prop, the bot, the copier and manual orders are never touched; refused with no personal account picked; 0.6.16: prop accounts (Anthony 2026-11-10 and 2026-11-11): the personal account is picked once on the chart page (accountPersonal, saved in personal-account.txt), every other account that is not Sim, Backtest or Playback is prop; an agent in Auto on prop accounts kept its account and Auto through the 17:00 ET reset until 0.6.18 ended Auto with the trading day for every agent (agent-<id>-auto.txt) and gets Auto back once after a restart, only when its account is the same, prop, known, flat and idle and the kill switch is off; the accounts message's personalNamed and each row's personal and prop; with no personal account picked nothing is prop and every path is the 0.6.15 one; no order path file changes; 0.6.15: the 1 second pull retired (Anthony 2026-11-03: everything is built from the ticks; The Desk builds its 1 second bars from the master tick day): no 1 second request, no bars1s/ queue and no POST /api/bars-1s; a bars1s or bars1sRoots line does nothing (one Output line per such config line); the files it left are never read, sent or deleted (one Output line a start); /diag bars has no oneSecond; the NQ tick file is unchanged (its window, its time limit and the gate as before), and its final pull no longer waits for a pass where the 1 second pull asked nothing; 0.6.14: the NQ tick file's day check (Anthony 2026-11-03): failed only when history has no trades or under 90 percent of the live trades in the span the live capture covered; a new passing status short (history has fewer in some seconds); holes listed in the check, never failing the day: 60,000 ms or more between two history trades (or from the session's open, or to its close) with a live trade inside more than 1,000 ms from both ends (wider than the measured 4 ms early / 106 ms late skew on purpose), or over a known capture gap (inGap, never at the close), not second-aligned; the whole first to last span when the gaps leave under 600 seconds or 1,000 live trades; a day failed under the old rule with its raw kept checked again (every start lists each failed rule 1 day, tickdays.txt's rule column); a day set aside never resent in a loop; 0.6.13: the NQ tick file's final pull catches up on weekday mornings before 09:15 New York (Anthony 2026-11-03: a request starts before 09:15:00 or not at all, BarsTicket.MayStart asked at the gate, the session still open never pulled), the raw deleted once packed (a stored day not packed yet keeps only its last part, .day.last, sent again at most once a New York day in the final pull's windows until The Desk says packed, then the raw, its state and the part are deleted; /diag tickFile.packWait); 0.6.12: the bar trail follow-ups (an Order Strategy fill's session from its own execution time, NinjaTrader's Execution.Time, an execution of the session before a trade already seen ending the bar trail at once; managed.txt's session: and barEnded only for a bar trail entry); 0.6.11: the bar trail exit option of an Order Strategy (Anthony 2026-11-01: minute or NinjaTrader range bars ChartBridge builds from its live trades, phantom range bars ignored, range bars proven or "not proven yet", the trail ends at the session close, at most 16 bar kinds a market and a 17th refused at placement), the 1 second bars' narrower tick request (12:00 AM of the session's own date, from the open itself when that answer misses the open); 0.6.10: the account lifecycle (Anthony 2026-10-30): remove-only changes for an account NinjaTrader no longer lists (leave its group, a copier follower off then removed, Hide with no stale hold), Hide takes a member out of its group in the same step, a member not in NinjaTrader no longer blocks an agent's group, a group preview sizes only the members gate 2 lets trade, the accounts message's notListed, kept what The Desk rejects inside a 200; also an entry being placed is not a restart (the Placing mark), the NQ tick file to The Desk (ChartBridgeTicks.cs), the 1 second request from the session's open, a tick chart with no history at the open asks again once (historyLate), /diag's pc and every 1 second contract; 0.6.9: the stats suite's Phase 2 (recording only): 1 second bars to The Desk, the order record (every order type, POST /api/order-events), a decision id on a group entry's orders and fills; 0.6.8: the minute book (minute and tick charts' history up to now from every live trade ChartBridge saw), a hole recorded in /diag and history.log (never shown), 20 s limits on a load's minute history and last trades; 0.6.7: the bench (memberBench), no hedging always on, a group's own rules optional and never sizing a member
         private static readonly object Gate = new object();
         private static HttpListener listener;
         private static CancellationTokenSource cts;
@@ -2676,7 +2676,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     ChartBridgeOrders.WatchConnections();
                     try { ChartBridgeOrders.Resume(); } catch (Exception ex) { Log("bracket resume error: " + ex.Message); }   // entries that filled while stopped
                     accountTimer = new System.Threading.Timer(delegate { try { WatchAccounts(); } catch (Exception) { } try { ChartBridgeDesk.Flush(); } catch (Exception) { } try { ChartBridgeStops.Flush(); } catch (Exception) { } try { ChartBridgeOrderRecord.Flush(); } catch (Exception) { } try { ChartBridgeDecisions.SaveIfDirty(); } catch (Exception) { } try { SweepBooks(); } catch (Exception) { } Task.Run(() => SaveDeltas()); }, null, 10000, 10000);
-                    htfTimer = new System.Threading.Timer(delegate { try { HtfPush(); HtfExpire(); } catch (Exception ex) { Log("higher-timeframe push error: " + ex.Message); } try { SettlementTick(); } catch (Exception ex) { Log("settlement error: " + ex.Message); } }, null, HtfPushMs, HtfPushMs);   // 0.3.7
+                    htfTimer = new System.Threading.Timer(delegate { try { HtfPush(); HtfExpire(); HtfReask(false); } catch (Exception ex) { Log("higher-timeframe push error: " + ex.Message); } try { SettlementTick(); } catch (Exception ex) { Log("settlement error: " + ex.Message); } }, null, HtfPushMs, HtfPushMs);   // 0.3.7
                     pollTimer = new System.Threading.Timer(delegate { try { PollExecutions(); } catch (Exception) { } try { ChartBridgeOrders.CheckLegs(); } catch (Exception ex) { Log("legs check error: " + ex.Message); } try { ChartBridgeBranches.Poll(); } catch (Exception ex) { Log("daily reset error: " + ex.Message); } try { ChartBridgeGroups.LanePoll(); } catch (Exception ex) { Log("lane rule error: " + ex.Message); } }, null, 2000, 2000);   // 0.5.7: the 17:00 ET reset to None
                     listener = new HttpListener();
                     listener.Prefixes.Add("http://localhost:" + ChartBridgeConfig.Port + "/");
@@ -4521,15 +4521,17 @@ namespace NinjaTrader.NinjaScript.AddOns
             foreach (GateJob b in backfills) BackfillWaits(b.Book, null);   // back to the state they had; they run as usual
             GateKick();
             WindowLateRetry();   // item 12: the loads that got no tick window meanwhile are told once to load again
+            try { HtfReask(true); } catch (Exception ex) { Log("higher-timeframe re-ask error: " + ex.Message); }   // 0.6.26: the 4h, 1D and 1W pages left with no bars
         }
 
         // Sunday 11-01, item 12 (decided 2026-11-01): a tick chart load whose served window got nothing because NinjaTrader had not
         // answered a tick request (its own window timed out, or the gate was stuck on an earlier request; typical at the session
         // open) is told ONCE to load again ("historyLate", as 0.6.8's minute history) when that late answer frees the gate. The new
-        // load asks through the gate as every load does (the failure's retry delay does not hold it back). Never 09:30 to 16:00 New
-        // York time on a weekday (no new tick request in trading hours from this); at most once a page and instrument in
-        // WindowLateGapMs; a load no longer the page's is skipped. The quiet time starts at 09:25 (5 minutes before the open), so a new ask
-        // can never land just after 09:30.
+        // load asks through the gate as every load does (the failure's retry delay does not hold it back). At most once a page and
+        // instrument in WindowLateGapMs; a load no longer the page's is skipped. 0.6.10 to 0.6.25 never told a page from 09:25 to
+        // 16:00 New York on a weekday (InWindowLateQuiet); 0.6.26 (HOME 2026-11-27: a cold start at 09:39, NinjaTrader's late tick
+        // answer at 09:49 left the Range chart with no history until a hand reload) tells it then too: the one new ask is what
+        // that reload would make, and the gate still sends one tick request at a time.
         public static int WindowLateGapMs = 300000;
         private static readonly List<Load> WindowLateLoads = new List<Load>();
         private static readonly Dictionary<string, double> WindowLateAt = new Dictionary<string, double>();
@@ -4538,6 +4540,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (L == null || !L.Window || L.Agent) return;
             lock (WindowLateLoads) { if (!WindowLateLoads.Contains(L)) WindowLateLoads.Add(L); if (WindowLateLoads.Count > 500) WindowLateLoads.RemoveAt(0); }
         }
+        // The time 0.6.10 to 0.6.25 held the message back (09:25 to 16:00 ET on a weekday); since 0.6.26 only the history note's label.
         public static bool InWindowLateQuiet(DateTime et)
         {
             if (et.DayOfWeek == DayOfWeek.Saturday || et.DayOfWeek == DayOfWeek.Sunday) return false;
@@ -4550,11 +4553,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (WindowLateLoads) { loads = new List<Load>(WindowLateLoads); WindowLateLoads.Clear(); }
             if (loads.Count == 0) return;
             DateTime et = TimeZoneInfo.ConvertTimeFromUtc(ChartBridgeTime.ToUtc(NowNt()), ChartBridgeTime.Eastern);
-            if (InWindowLateQuiet(et))
-            {
-                foreach (string root in loads.Select(x => x.Root).Distinct()) HistoryNote(root, "the late tick answer freed the gate inside 09:25 to 16:00 ET: tick charts are not told to load again (they load again on a reload)");
-                return;
-            }
+            string when = InWindowLateQuiet(et) ? " (inside 09:25 to 16:00 ET, 0.6.26)" : "";
             double now = ChartBridgeTime.NowUtcMs(), was;
             foreach (Load L in loads)
             {
@@ -4569,7 +4568,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                 RootBook book = BookOf(L.Root, L.Inst);
                 lock (book.Sync) book.WindowFailedMs = -1;   // the failure's retry delay does not hold back the one new ask
                 L.Client.SendData("{\"type\":\"historyLate\",\"root\":" + CbJson.Str(L.Root) + L.SubJson + "}");
-                HistoryNote(L.Root, "NinjaTrader's late tick answer freed the gate: the page that got no tick history was told to load again (once)");
+                HistoryNote(L.Root, "NinjaTrader's late tick answer freed the gate: the page that got no tick history was told to load again (once)" + when);
             }
         }
         // A queued backfill's label while the gate is stuck (review 4 S2; a queued retry too, review 5 S1): it waits, it is not
@@ -5478,7 +5477,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             public string Contract;                  // the contract the values are for (a new one starts over)
             public readonly SortedDictionary<DateTime, double> ByDate = new SortedDictionary<DateTime, double>();   // trading day -> settlement
             public double RawP = double.NaN; public DateTime RawNt; public string RawFrom; public DateTime? RawDay; public double RawAtUtcMs = -1;
-            public bool Sent; public DateTime SentDay; public double SentP = double.NaN;   // the prior the pages were last told
+            public bool Sent; public DateTime SentDay, SentFrom; public double SentP = double.NaN;   // the prior the pages were last told
         }
         private static readonly Dictionary<string, SettleRoot> Settlements = new Dictionary<string, SettleRoot>();
         private static readonly object SettleFileLock = new object(), SettleTickLock = new object();
@@ -5549,13 +5548,39 @@ namespace NinjaTrader.NinjaScript.AddOns
             return "is stamped " + EtText(ntTime) + " ET, after the next session's settlement time (or before any): which session it settles is not known, so it is not used";
         }
         // The prior settlement for the session running at NinjaTrader time now: its day, and the value (NaN when none).
-        private static void PriorSettlement(string root, DateTime nowNt, out DateTime day, out double p)
+        private static void PriorSettlement(string root, DateTime nowNt, out DateTime day, out double p) { DateTime from; PriorSettlement(root, nowNt, out day, out p, out from); }
+        // 0.6.26 (HOME 2026-11-27): from is the day the value is of. When the prior session's day has no settlement (Thanksgiving
+        // 2026-11-26: the shared CME calendar's "halt" row, "CME derives no settlement prices that day", its trades booked to the
+        // next trade date, so the session after it measures from 11-25's), the latest settlement kept for a day before the session
+        // running now is the value, and from is its day: the pages say so ("missing"), never as if it were the prior session's.
+        // A market that did settle that day (GC and SI on 11-26) has its own. None kept: NaN, as before.
+        private static void PriorSettlement(string root, DateTime nowNt, out DateTime day, out double p, out DateTime from)
         {
-            day = ChartBridgeCme.PreviousSession(ChartBridgeCme.CurrentSession(TimeZoneInfo.ConvertTimeFromUtc(ChartBridgeTime.ToUtc(nowNt), ChartBridgeTime.Eastern)));
+            DateTime cur = ChartBridgeCme.CurrentSession(TimeZoneInfo.ConvertTimeFromUtc(ChartBridgeTime.ToUtc(nowNt), ChartBridgeTime.Eastern));
+            day = ChartBridgeCme.PreviousSession(cur);
+            from = day;
             p = double.NaN;
             Instrument inst = ServedInstrumentFor(root);
             string contract = inst != null ? inst.FullName : null;
-            lock (Settlements) { SettleRoot s; double v; if (Settlements.TryGetValue(root, out s) && s.Contract == contract && s.ByDate.TryGetValue(day, out v)) p = v; }
+            lock (Settlements)
+            {
+                SettleRoot s; double v;
+                if (!Settlements.TryGetValue(root, out s) || s.Contract != contract) return;
+                if (s.ByDate.TryGetValue(day, out v)) { p = v; return; }
+                foreach (KeyValuePair<DateTime, double> kv in s.ByDate) if (kv.Key < cur) { from = kv.Key; p = kv.Value; }   // oldest first: the latest before the session
+            }
+        }
+        // 0.6.26: the settlement fields of hello ("settlement", "settlementDate", and "settlementMissing" when the value is an
+        // earlier day's) and of the "settlement" message ("p", "date", "missing").
+        private static string SettlementFields(DateTime day, double p, DateTime from, bool hello)
+        {
+            bool earlier = !double.IsNaN(p) && from != day;
+            return "," + (hello ? "\"settlement\":" : "\"p\":") + (double.IsNaN(p) ? "null" : CbJson.Num(p)) + "," + (hello ? "\"settlementDate\":" : "\"date\":") + CbJson.Str(Day(earlier ? from : day)) +
+                   (earlier ? "," + (hello ? "\"settlementMissing\":" : "\"missing\":") + CbJson.Str(Day(day)) : "");
+        }
+        private static string SettlementMessage(string root, DateTime day, double p, DateTime from)
+        {
+            return "{\"type\":\"settlement\",\"root\":" + CbJson.Str(root) + SettlementFields(day, p, from, false) + "}";
         }
 
         public static void NoteSettlement(string root, double price, DateTime ntTime, string from) { NoteSettlement(root, null, price, ntTime, from); }
@@ -5654,27 +5679,27 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (Settlements) foreach (string r in Settlements.Keys) if (!roots.Contains(r)) roots.Add(r);
             foreach (string root in roots)
             {
-                DateTime day; double p;
-                PriorSettlement(root, now, out day, out p);
+                DateTime day, from; double p;
+                PriorSettlement(root, now, out day, out p, out from);
                 lock (Settlements)
                 {
                     SettleRoot s;
                     if (!Settlements.TryGetValue(root, out s)) { s = new SettleRoot(); Settlements[root] = s; }
-                    if (s.Sent && s.SentDay == day && SameP(s.SentP, p)) continue;
+                    if (s.Sent && s.SentDay == day && s.SentFrom == from && SameP(s.SentP, p)) continue;
                     bool first = !s.Sent;
-                    s.Sent = true; s.SentDay = day; s.SentP = p;
+                    s.Sent = true; s.SentDay = day; s.SentFrom = from; s.SentP = p;
                     if (first && double.IsNaN(p)) continue;   // nothing known yet: hello already says null
                 }
-                string json = "{\"type\":\"settlement\",\"root\":" + CbJson.Str(root) + ",\"p\":" + (double.IsNaN(p) ? "null" : CbJson.Num(p)) + ",\"date\":" + CbJson.Str(Day(day)) + "}";
+                string json = SettlementMessage(root, day, p, from);
                 foreach (ChartBridgeClient c in Clients.Values) c.Send(json);
             }
         }
         // hello's fields for one instrument: the prior settlement for the session running now, and its day.
         private static string SettlementHelloFields(string root, Dictionary<string, string> seen)
         {
-            DateTime day; double p;
-            PriorSettlement(root, NowNt(), out day, out p);
-            string f = ",\"settlement\":" + (double.IsNaN(p) ? "null" : CbJson.Num(p)) + ",\"settlementDate\":" + CbJson.Str(Day(day));
+            DateTime day, from; double p;
+            PriorSettlement(root, NowNt(), out day, out p, out from);
+            string f = SettlementFields(day, p, from, true);
             if (seen != null) seen[root] = f;
             return f;
         }
@@ -5689,11 +5714,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                 DateTime now = NowNt();
                 foreach (KeyValuePair<string, string> kv in seen)
                 {
-                    DateTime day; double p;
-                    PriorSettlement(kv.Key, now, out day, out p);
-                    string f = ",\"settlement\":" + (double.IsNaN(p) ? "null" : CbJson.Num(p)) + ",\"settlementDate\":" + CbJson.Str(Day(day));
-                    if (f != kv.Value)
-                        client.Send("{\"type\":\"settlement\",\"root\":" + CbJson.Str(kv.Key) + ",\"p\":" + (double.IsNaN(p) ? "null" : CbJson.Num(p)) + ",\"date\":" + CbJson.Str(Day(day)) + "}");
+                    DateTime day, from; double p;
+                    PriorSettlement(kv.Key, now, out day, out p, out from);
+                    if (SettlementFields(day, p, from, true) != kv.Value) client.Send(SettlementMessage(kv.Key, day, p, from));
                 }
             }
             catch (Exception ex) { Log("settlement after hello: " + ex.Message); }
@@ -5776,13 +5799,16 @@ namespace NinjaTrader.NinjaScript.AddOns
             StringBuilder b = new StringBuilder("{");
             foreach (string root in roots)
             {
-                DateTime day; double p;
-                PriorSettlement(root, now, out day, out p);
+                DateTime day, from; double p;
+                PriorSettlement(root, now, out day, out p, out from);
+                bool earlier = !double.IsNaN(p) && from != day;
                 lock (Settlements)
                 {
                     SettleRoot s = Settlements[root];
                     if (b.Length > 1) b.Append(',');
-                    b.Append(CbJson.Str(root)).Append(":{\"prior\":{\"date\":").Append(CbJson.Str(Day(day))).Append(",\"p\":").Append(double.IsNaN(p) ? "null" : CbJson.Num(p)).Append('}');
+                    b.Append(CbJson.Str(root)).Append(":{\"prior\":{\"date\":").Append(CbJson.Str(Day(day))).Append(",\"p\":").Append(double.IsNaN(p) || earlier ? "null" : CbJson.Num(p));
+                    if (earlier) b.Append(",\"fallback\":{\"date\":").Append(CbJson.Str(Day(from))).Append(",\"p\":").Append(CbJson.Num(p)).Append('}');   // 0.6.26
+                    b.Append('}');
                     b.Append(",\"byDate\":{").Append(string.Join(",", s.ByDate.Select(kv => CbJson.Str(Day(kv.Key)) + ":" + CbJson.Num(kv.Value)).ToArray())).Append('}');
                     b.Append(",\"last\":");
                     if (double.IsNaN(s.RawP)) b.Append("null");
@@ -5817,6 +5843,12 @@ namespace NinjaTrader.NinjaScript.AddOns
             public readonly List<KeyValuePair<ChartBridgeClient, string>> Waiters = new List<KeyValuePair<ChartBridgeClient, string>>();   // one per page (its latest id)
             public int Gen;                          // bumped when Bars is replaced by a new answer
             public string PrefixKey, PrefixText;     // the closed bars' text (they never change), cached; only the forming bar is new each time
+            // 0.6.26 (HOME 2026-11-27, a cold start in trading hours): a page answered with no bars and a reason is asked again by
+            // ChartBridge once: when the gate frees (RetryOnFree: NinjaTrader was not asked because an earlier request was
+            // stuck) or HtfRetryMs after the failure. One re-ask per page request that failed; the pages still connected only.
+            public bool Retry, RetryOnFree, ReaskOut; public int Reasks; public double ReaskedMs = -1;
+            public readonly HashSet<ChartBridgeClient> Joined = new HashSet<ChartBridgeClient>();   // pages that asked themselves while a re-ask was out
+            public readonly List<KeyValuePair<ChartBridgeClient, string>> RetryPages = new List<KeyValuePair<ChartBridgeClient, string>>();
         }
         // A page's series: HasHistory once it was sent bars (only then does it get "htfBar", review B2 N5).
         public class HtfWatch { public string Root, Tf; public int Version = -1; public double LastT = double.MinValue; public bool HasHistory; }
@@ -5864,11 +5896,21 @@ namespace NinjaTrader.NinjaScript.AddOns
             if (n == null || n.Last == null) return;
             lock (c.Htf) { HtfWatch w; if (c.Htf.TryGetValue(root + " " + tf, out w)) { w.HasHistory = true; w.Version = n.Version; w.LastT = n.Last[0]; } }
         }
-        private static void AddWaiter(HtfSeries s, ChartBridgeClient client, string id)
+        private static void AddWaiter(HtfSeries s, ChartBridgeClient client, string id) { AddPage(s.Waiters, client, id); }
+        private static void AddPage(List<KeyValuePair<ChartBridgeClient, string>> pages, ChartBridgeClient client, string id)
         {
-            for (int i = 0; i < s.Waiters.Count; i++)
-                if (s.Waiters[i].Key == client) { s.Waiters[i] = new KeyValuePair<ChartBridgeClient, string>(client, id); return; }   // one per page: its latest id
-            s.Waiters.Add(new KeyValuePair<ChartBridgeClient, string>(client, id));
+            for (int i = 0; i < pages.Count; i++)
+                if (pages[i].Key == client) { pages[i] = new KeyValuePair<ChartBridgeClient, string>(client, id); return; }   // one per page: its latest id
+            pages.Add(new KeyValuePair<ChartBridgeClient, string>(client, id));
+        }
+        // Under HtfLock (0.6.26): a page answered with no bars and a reason is asked again once (HtfReask). onFree: when the gate
+        // frees; else HtfRetryMs after the failure.
+        private static void ArmRetry(HtfSeries s, ChartBridgeClient client, string id, bool onFree)
+        {
+            if (s.Bars != null || client == null) return;
+            AddPage(s.RetryPages, client, id);
+            if (!s.Retry) s.RetryOnFree = onFree; else if (onFree) s.RetryOnFree = true;
+            s.Retry = true;
         }
         private static readonly object HtfLock = new object();
         private static readonly Dictionary<string, HtfSeries> Htf = new Dictionary<string, HtfSeries>();
@@ -5971,9 +6013,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                 bool fresh = s.Bars != null && !s.Stale && s.Day == today;
                 bool backoff = s.FailedMs >= 0 && ChartBridgeTime.NowUtcMs() - s.FailedMs < HtfRetryMs;
                 if (fresh || (s.Bars != null && (backoff || stuck != null) && !s.Asking)) { snap = HtfSnapLocked(s); s.Served++; }
-                else if (s.Asking) AddWaiter(s, client, id);
-                else if (stuck != null) error = "NinjaTrader has not answered an earlier request (" + stuck + ") yet; asked again once it has";
-                else if (backoff) error = "the last request failed (" + s.Error + "); asked again " + (HtfRetryMs / 1000) + " s after it at the earliest";
+                else if (s.Asking) { AddWaiter(s, client, id); if (s.ReaskOut) s.Joined.Add(client); }
+                else if (stuck != null) { error = "NinjaTrader has not answered an earlier request (" + stuck + ") yet; asked again once it has"; ArmRetry(s, client, id, true); }   // 0.6.26: and it is
+                else if (backoff) { error = "the last request failed (" + s.Error + "); asked again " + (HtfRetryMs / 1000) + " s after it at the earliest"; ArmRetry(s, client, id, false); }
                 else { s.Asking = true; s.Name = inst.FullName; AddWaiter(s, client, id); ask = true; }
             }
             if (snap != null) { client.Send(HtfJson(root, tf, id, snap.Name, HtfBarsText(s, snap), null)); HtfHasHistory(client, root, tf, snap); return; }
@@ -5996,7 +6038,7 @@ namespace NinjaTrader.NinjaScript.AddOns
             double queuedMs = ChartBridgeTime.NowUtcMs();
             j.Start = done => HtfRun(s, inst, today, j, done);
             j.OnTimeout = () => HtfFailed(s, "NinjaTrader did not answer within " + (HtfTimeoutMs / 1000) + " s");
-            j.OnStuck = stuck => HtfFailed(s, "NinjaTrader has not answered an earlier request (" + stuck + ") yet");
+            j.OnStuck = stuck => HtfFailed(s, "NinjaTrader has not answered an earlier request (" + stuck + ") yet", true);   // 0.6.26: asked again once it has
             j.OnDropped = () => HtfFailed(s, "ChartBridge stopped before the request went out");
             j.OnExpire = why => HtfFailed(s, why);
             j.QueuedMs = queuedMs;
@@ -6062,7 +6104,7 @@ namespace NinjaTrader.NinjaScript.AddOns
                     foreach (SeamTick h in s.Collect) HtfApply(s, et.Seconds(h.Time), h.Price, h.Volume);
                     s.Collect = null;
                 }
-                s.Asking = false; s.Version++;
+                s.Asking = false; s.Version++; s.ReaskOut = false; s.Joined.Clear(); s.Retry = false; s.RetryOnFree = false; s.RetryPages.Clear();
                 waiters = new List<KeyValuePair<ChartBridgeClient, string>>(s.Waiters); s.Waiters.Clear();
                 s.Served += waiters.Count;
                 snap = HtfSnapLocked(s);
@@ -6071,19 +6113,25 @@ namespace NinjaTrader.NinjaScript.AddOns
             foreach (KeyValuePair<ChartBridgeClient, string> w in waiters) { w.Key.Send(HtfJson(s.Root, s.Tf, w.Value, snap.Name, text, null)); HtfHasHistory(w.Key, s.Root, s.Tf, snap); }
         }
 
-        // A request that failed: its pages get the bars ChartBridge already has (kept live), or none and the reason.
-        private static void HtfFailed(HtfSeries s, string why)
+        // A request that failed: its pages get the bars ChartBridge already has (kept live), or none and the reason. 0.6.26: a page
+        // left with no bars is asked again once by ChartBridge (ArmRetry, HtfReask), not only when it asks again itself.
+        private static void HtfFailed(HtfSeries s, string why) { HtfFailed(s, why, false); }
+        // onGate (0.6.26): NinjaTrader was not asked, because an earlier request is stuck at the gate: no wait of HtfRetryMs (the
+        // series was not asked), and its pages are asked again as soon as that request is answered (GateUnstuck).
+        private static void HtfFailed(HtfSeries s, string why, bool onGate)
         {
             // A failure blocks a new request for HtfRetryMs (review: say when it can be asked again, not just "ask again").
-            why += "; it can be asked again in " + (HtfRetryMs / 1000) + " s (from " + EtText(NowNt()) + " ET)";
+            why += onGate ? "; asked again once it has" : "; it can be asked again in " + (HtfRetryMs / 1000) + " s (from " + EtText(NowNt()) + " ET)";
             List<KeyValuePair<ChartBridgeClient, string>> waiters;
             HtfSnap snap = null;
             lock (HtfLock)
             {
                 if (!s.Asking) return;
-                s.Asking = false; s.Collect = null; s.Error = why; s.FailedMs = ChartBridgeTime.NowUtcMs();
+                s.Asking = false; s.Collect = null; s.Error = why; s.FailedMs = onGate ? -1 : ChartBridgeTime.NowUtcMs();
                 waiters = new List<KeyValuePair<ChartBridgeClient, string>>(s.Waiters); s.Waiters.Clear();
                 if (s.Bars != null) snap = HtfSnapLocked(s);
+                else foreach (KeyValuePair<ChartBridgeClient, string> w in waiters) if (!s.ReaskOut || s.Joined.Contains(w.Key)) ArmRetry(s, w.Key, w.Value, onGate);   // a failed re-ask is not re-armed (no storm)
+                s.ReaskOut = false; s.Joined.Clear();
             }
             Log("higher-timeframe bars " + s.Root + " " + s.Tf + ": " + why);
             string text = snap != null ? HtfBarsText(s, snap) : null;
@@ -6139,6 +6187,47 @@ namespace NinjaTrader.NinjaScript.AddOns
             lock (GateLock) { old = GateHtfJobs.Where(x => now - x.QueuedMs > HtfQueueMs).ToList(); foreach (GateJob x in old) GateHtfJobs.Remove(x); }
             foreach (GateJob x in old) { try { if (x.OnExpire != null) x.OnExpire("not asked: the chart's own requests kept NinjaTrader busy for " + (HtfQueueMs / 1000) + " s"); } catch (Exception) { } }
         }
+        // 0.6.26 (HOME 2026-11-27): the series a page is still waiting on with no bars, asked again by ChartBridge (the page's
+        // own retry 60 s after a failure, and a reload, are no longer the only ways back). gateFreed: an earlier request NinjaTrader
+        // had not answered just was (GateUnstuck): the series that failed on it go at once. Else (every HtfPushMs): a series that
+        // failed on a stuck gate, once the gate is free, and any other HtfRetryMs after its failure. Each failed page request
+        // arms one re-ask (no storm: a re-ask that fails is not asked again by ChartBridge until a page asks again); the request
+        // goes through the gate as every htf request does (last, never beside a chart load); only pages still connected.
+        private static void HtfReask(bool gateFreed)
+        {
+            lock (GateLock) if (gateStuck != null || gateStopped) return;
+            double now = ChartBridgeTime.NowUtcMs();
+            List<HtfSeries> due = new List<HtfSeries>();
+            lock (HtfLock)
+                foreach (HtfSeries s in Htf.Values)
+                {
+                    if (!s.Retry) continue;
+                    if (s.Bars != null || s.Asking) { s.Retry = false; s.RetryOnFree = false; s.RetryPages.Clear(); continue; }   // answered, or asked meanwhile
+                    if (!(s.RetryOnFree || (!gateFreed && s.FailedMs >= 0 && now - s.FailedMs >= HtfRetryMs))) continue;
+                    due.Add(s);
+                }
+            if (due.Count == 0) return;
+            DateTime today = ChartBridgeCme.TradingDay(TimeZoneInfo.ConvertTimeFromUtc(ChartBridgeTime.ToUtc(NowNt()), ChartBridgeTime.Eastern));
+            foreach (HtfSeries s in due)
+            {
+                Instrument inst = ServedInstrumentFor(s.Root);
+                int pages = 0;
+                lock (HtfLock)
+                {
+                    if (!s.Retry || s.Bars != null || s.Asking) continue;
+                    foreach (KeyValuePair<ChartBridgeClient, string> w in s.RetryPages)
+                    {
+                        ChartBridgeClient c;
+                        if (Clients.TryGetValue(w.Key.Id, out c) && c == w.Key) { AddWaiter(s, w.Key, w.Value); pages++; }   // still connected
+                    }
+                    s.Retry = false; s.RetryOnFree = false; s.RetryPages.Clear();
+                    if (pages == 0 || inst == null) { s.Waiters.Clear(); continue; }
+                    s.Asking = true; s.ReaskOut = true; s.Joined.Clear(); s.Name = inst.FullName; s.Reasks++; s.ReaskedMs = now;
+                }
+                Log("higher-timeframe bars " + s.Root + " " + s.Tf + ": asked again by ChartBridge for " + pages + " page(s) with no bars" + (gateFreed ? " (NinjaTrader answered the earlier request)" : ""));
+                HtfAsk(s, inst, today);
+            }
+        }
         private static string HtfDiagJson()
         {
             StringBuilder b = new StringBuilder("{");
@@ -6153,7 +6242,9 @@ namespace NinjaTrader.NinjaScript.AddOns
                      .Append(",\"askedAtUtcMs\":").Append(s.AskedMs >= 0 ? CbJson.Num3(s.AskedMs) : "null")
                      .Append(",\"answerMs\":").Append(s.AnsweredMs >= 0 && s.AskedMs >= 0 ? CbJson.Num3(s.AnsweredMs - s.AskedMs) : "null")
                      .Append(",\"callbackMs\":").Append(s.CallbackMs >= 0 ? CbJson.Num3(s.CallbackMs) : "null")
-                     .Append(",\"lastError\":").Append(s.Error != null ? CbJson.Str(s.Error) : "null").Append('}');
+                     .Append(",\"lastError\":").Append(s.Error != null ? CbJson.Str(s.Error) : "null")
+                     .Append(",\"reaskArmed\":").Append(s.Retry ? (s.RetryOnFree ? "\"when the gate frees\"" : "\"60 s after the failure\"") : "null")
+                     .Append(",\"reasks\":").Append(s.Reasks).Append(",\"reaskedAtUtcMs\":").Append(s.ReaskedMs >= 0 ? CbJson.Num3(s.ReaskedMs) : "null").Append('}');
                 }
             return b.Append('}').ToString();
         }
@@ -6161,7 +6252,7 @@ namespace NinjaTrader.NinjaScript.AddOns
         {
             lock (HtfLock)
             {
-                foreach (HtfSeries s in Htf.Values) { s.Asking = false; s.Waiters.Clear(); s.Collect = null; }
+                foreach (HtfSeries s in Htf.Values) { s.Asking = false; s.Waiters.Clear(); s.Collect = null; s.Retry = false; s.RetryPages.Clear(); s.ReaskOut = false; s.Joined.Clear(); }
                 Htf.Clear();
             }
         }

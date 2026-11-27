@@ -247,6 +247,14 @@ try {
     const n = s => +s.replace(/,/g, '');
     check(n(qRow.high) >= 31053.75 && n(qRow.low) <= 31053.75, 'NQ: the session high ' + qRow.high + ' and low ' + qRow.low + ' hold the last');
   }
+  // 1.60.1 (ChartBridge 0.6.26, Thanksgiving 2026-11-26): the prior session has no settlement, the change is from an earlier one: said on the row
+  check(qRow && qRow.vs === '', 'NQ: a change from the prior session\'s own settlement carries no note');
+  await control(PORT, 'settlement', { root: 'NQ', p: 30700, date: '2026-09-30', missing: '2026-10-01' });
+  const vRow = await until(async () => { const r = await page.evaluate(() => { const row = document.querySelector('.ws-panel.quotes [data-root="NQ"]'); const v = row && row.querySelector('[data-q="vs"]'); return v && !v.hidden ? { vs: v.textContent, chg: row.querySelector('[data-q="chg"]').textContent, tip: row.title } : null; }); return r; }, 'the NQ row\'s note', 8000);
+  check(!!vRow && vRow.vs === 'vs 09-30 settle' && vRow.chg === '+353.75' && /from the 2026-09-30 settlement \(none for 2026-10-01\)/.test(vRow.tip), 'NQ: the change from 09-30\'s settlement, said on the row and in its tooltip: ' + JSON.stringify(vRow));
+  await shot(page, 'h1-quotes-settle-fallback-1920.png', await page.locator('.ws-panel.quotes').first().boundingBox());
+  await control(PORT, 'settlement', { root: 'NQ', p: nqSet, date: '2026-10-01' });
+  check(!!await until(async () => page.evaluate(() => { const v = document.querySelector('.ws-panel.quotes [data-root="NQ"] [data-q="vs"]'); return v && v.hidden && v.textContent === ''; }), 'the note gone', 8000), 'NQ: back on the prior session\'s own settlement the note goes');
 
   /* ================================================================ orders on MNQ: the ticket armed, a bracket */
   console.log('orders: compact labels, the ring and Shift+click');

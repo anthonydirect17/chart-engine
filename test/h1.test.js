@@ -179,6 +179,12 @@ test('fills today: from 18:00 ET the day before, on the account asked for', () =
 });
 
 /* ---------------- the Quote board */
+test('quote board (1.60.1, ChartBridge 0.6.26): a change from an earlier settlement than the prior session\'s says so on the row', () => {
+  assert.equal(W.settleNote('2026-11-25', '2026-11-26'), 'vs 11-25 settle', 'Thanksgiving 2026-11-26 had no index settlement: the 11-27 session measures from 11-25');
+  assert.equal(W.settleNote('2026-11-26', ''), '', 'the prior session\'s own settlement: no note');
+  assert.equal(W.settleNote('2026-11-26', undefined), '', 'an older ChartBridge (no missing): no note');
+  for (const bad of [['2026-11-26', '2026-11-26'], ['2026-11-27', '2026-11-26'], ['11-25', '2026-11-26'], [null, '2026-11-26'], ['2026-11-25', 'x']]) assert.equal(W.settleNote(bad[0], bad[1]), '', JSON.stringify(bad));
+});
 test('quote board: change and percent from the prior settlement, blank without one; the session\'s high and low', () => {
   const q = W.quoteChange(31053.75, 30760.5);
   assert.equal(q.chg, 293.25);

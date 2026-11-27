@@ -266,9 +266,9 @@ function create(options) {
       queueFlush(L);
       return;
     }
-    // 0.3.7: the prior settlement changed: a panel that joins later gets it in the line's hello
+    // 0.3.7: the prior settlement changed: a panel that joins later gets it in the line's hello (0.6.26: with missing)
     if (t === 'settlement' && L.hello && Array.isArray(L.hello.instruments)) {
-      L.hello = Object.assign({}, L.hello, { instruments: L.hello.instruments.map(i => i && i.root === m.root ? Object.assign({}, i, { settlement: m.p === undefined ? null : m.p, settlementDate: m.date }) : i) });
+      L.hello = Object.assign({}, L.hello, { instruments: L.hello.instruments.map(i => i && i.root === m.root ? Object.assign({}, i, { settlement: m.p === undefined ? null : m.p, settlementDate: m.date, settlementMissing: m.missing || '' }) : i) });
     }
     if (t === 'execs') { L.fills.clear(); for (const f of m.list || []) if (f && f.id) L.fills.set(f.account + '|' + f.id, f); }
     else if (t === 'exec' && m.id) L.fills.set(m.account + '|' + m.id, m);

@@ -773,7 +773,10 @@ countdown 400 10px). IBM Plex Sans Condensed 600 10px for level names. Legend te
   one opens without it, quietly. The Account page has its figures.
 - **Quote board (1.15.0):** NQ and ES (1.16.0, Anthony 2026-10-05: the MNQ and MES rows went; display only): last, change and % from the prior settlement (buy green or sell red; blank
   without one), the session's high and low, in the same rows; under 400 px the change and %, and the high and low,
-  stack; a 2 x 1 board shows the last, change and % (at 1366 px the last and %), the rest in the row's tooltip.
+  stack; a 2 x 1 board shows the last, change and % (at 1366 px the last and %), the rest in the row's tooltip. 1.60.1: the
+  wide rows give the prices more room than the change and % (9, 7, 6, 9, 9), and a board under 240 px narrows the name
+  column and the gaps, so NQ's and ES's figures fit from 200 px; a change from an earlier settlement than the prior
+  session's (that session has none, as Thanksgiving) says so in a small grey line under its row, "vs 11-25 settle".
 - **Trade tags (1.34.0, Anthony 2026-10-21):** a placeable panel (+ Add panel) following the order ticket's account and
   instrument. One line says which trade it tags ("Next trade · MNQ · flat", "Open trade · LONG 2 MNQ since 10:31:05", "Last trade
   · closed ..."), with a Next trade / Last trade switch while flat; then four rows of 22 px pill chips (Setup, Grade, Context,
