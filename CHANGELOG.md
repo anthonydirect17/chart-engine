@@ -63,6 +63,26 @@
   `test/pc-updater.test.js`: the allowed git subcommands, the box job's name, useHttpPath read before the one ask, the
   token only after a 404 or 401 and then through the Actions API, one place that asks for it and one that sends it.
 
+## chart 1.61.0 (2026-11-27): the chart page installs as an app window, Aureus Imperium with the gold A (page only, no F5)
+
+In plain words: the workspace (ChartBridge's page, `live/index.html`) can be installed once on each PC as its own app
+window with its own icon, the gold A on black, named Aureus Imperium (plan step 7). ChartBridge is unchanged;
+`live/COMPAT.json` `minChartBridge` stays 0.6.2.
+
+- **The manifest** (`live/manifest.json`): name Aureus Imperium, short name Aureus, its own window (`standalone`),
+  black (#050506) behind it, and `id`, `start_url` and `scope` all `./`, so it names no host or port. It is a `.json`
+  file on purpose: ChartBridge already serves `.json` as JSON and `.png` as PNG, so no add-on change is needed.
+- **The icons** (`live/icons/`): 192 and 512 (the tile with its gold trim), a maskable 512 (full bleed, the A inside the
+  safe circle) and a 32 px favicon for the tab, all made by `tools/app_icons.py` from the page's own Cinzel Bold.
+  `index.html` links the manifest and the favicon; the window title stays the page's own.
+- **Updates reach the installed app by themselves:** ChartBridge sends every page file with `Cache-Control: no-cache`,
+  and the browser checks the manifest again on its own, so a later icon or name change shows in the installed app
+  (Chromium browsers may ask once to accept it). There is no service worker: nothing keeps an old copy of the page.
+- **On the install list** (`nt8/install-files.json`): the manifest and the four icons, so the PC updater puts them in
+  `www` with the page.
+- **Once per PC (Anthony):** open the workspace in Brave and install it (the install button at the right of the address
+  bar, or the install item in the browser's menu). It opens in its own window from then on.
+
 ## chart 1.60.0 (2026-11-19): finished prop accounts hidden on Legion; Arm claims the firm's PC (page only, no F5)
 
 In plain words: Legion stops showing the old dead prop accounts, and pressing Arm (Auto) for a trader on a firm's prop

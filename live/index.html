@@ -4,6 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Aureus · Imperium</title>
+<!-- 1.61.0 (plan step 7): the app window, Aureus Imperium with the gold A, installed once per PC from the browser's menu.
+     The browser checks the manifest again by itself, so a later icon or name change reaches the installed app (it may
+     ask once to accept). No service worker: every file still comes from ChartBridge on every load, as before.
+     manifest.json (not .webmanifest) so ChartBridge serves it as JSON with no add-on change. -->
+<link rel="manifest" href="manifest.json">
+<link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+<meta name="theme-color" content="#050506">
 <!-- IBM Plex from this PC (1.16.0): nothing is loaded from the internet -->
 <link rel="stylesheet" href="fonts/plex.css">
 <!-- 1.17.0: the Agent tab's own fonts (Chakra Petch, JetBrains Mono; 1.23.0 Orbitron for its headers), from this PC too; used inside the Agent tab and (1.38.0) Orbitron in the Agents panel's Drone sky -->
