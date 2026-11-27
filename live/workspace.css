@@ -370,10 +370,10 @@ body.ws-busy[data-edge="nw"], body.ws-busy[data-edge="se"], body.ws-busy[data-ed
 .gr .r, .gr .pr.r > * { text-align: right; }
 .gr .b { font-family: var(--ws-sans); font-weight: 600; }
 .gr .up { color: var(--ws-buy); } .gr .dn { color: var(--ws-sell); } .gr .mut { color: var(--ws-muted); }
-/* 1.60.1 (HOME 2026-11-27: NQ's and ES's last and high cut to "26,305..." on a 400 px board): the prices get the room, the change
+/* 1.61.1 (HOME 2026-11-27: NQ's and ES's last and high cut to "26,305..." on a 400 px board): the prices get the room, the change
    and percent less (9, 7, 6, 9, 9 against five equal columns) */
 .gr-qb .gr-row { grid-template-columns: 34px minmax(0, 9fr) minmax(0, 7fr) minmax(0, 6fr) minmax(0, 9fr) minmax(0, 9fr); }
-/* 1.60.1 (ChartBridge 0.6.26): "vs 11-25 settle" under a row whose change is from an earlier settlement than the prior session's */
+/* 1.61.1 (ChartBridge 0.6.26): "vs 11-25 settle" under a row whose change is from an earlier settlement than the prior session's */
 .gr-qb .qb-vs { grid-column: 2 / -1; text-align: right; font: 10px var(--ws-sans); color: var(--ws-muted); }
 .ws-panel.gr-narrow .gr .pr { display: flex; flex-direction: column; min-width: 0; }
 .ws-panel.gr-narrow .gr-row { column-gap: 6px; padding: 2px 6px; }
@@ -384,7 +384,7 @@ body.ws-busy[data-edge="nw"], body.ws-busy[data-edge="se"], body.ws-busy[data-ed
 .ws-panel.gr-narrow .gr.gr-qb { font-size: 10px; }
 .ws-panel.gr-narrow .gr-qb .gr-row { grid-template-columns: 30px minmax(0, 9fr) minmax(0, 7fr) minmax(0, 9fr); }
 .ws-panel.gr-narrow .gr-qb .pr > :last-child { font-size: 10px; }
-/* 1.60.1 (HOME 2026-11-27): a 2-column board under 240 px (1240 to 1366 px screens) cut NQ's 9-figure prices: less room for the
+/* 1.61.1 (HOME 2026-11-27): a 2-column board under 240 px (1240 to 1366 px screens) cut NQ's 9-figure prices: less room for the
    name and the gaps, more for the figures */
 .ws-panel.gr-slim .gr-qb .gr-row { grid-template-columns: 26px minmax(0, 10fr) minmax(0, 8fr) minmax(0, 10fr); column-gap: 4px; padding-left: 4px; padding-right: 4px; }
 /* a 2 x 1 board: one line, the last, the change and the percent (the high and low in the row's tooltip); at 1366 px only

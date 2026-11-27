@@ -247,7 +247,7 @@ try {
     const n = s => +s.replace(/,/g, '');
     check(n(qRow.high) >= 31053.75 && n(qRow.low) <= 31053.75, 'NQ: the session high ' + qRow.high + ' and low ' + qRow.low + ' hold the last');
   }
-  // 1.60.1 (ChartBridge 0.6.26, Thanksgiving 2026-11-26): the prior session has no settlement, the change is from an earlier one: said on the row
+  // 1.61.1 (ChartBridge 0.6.26, Thanksgiving 2026-11-26): the prior session has no settlement, the change is from an earlier one: said on the row
   check(qRow && qRow.vs === '', 'NQ: a change from the prior session\'s own settlement carries no note');
   await control(PORT, 'settlement', { root: 'NQ', p: 30700, date: '2026-09-30', missing: '2026-10-01' });
   const vRow = await until(async () => { const r = await page.evaluate(() => { const row = document.querySelector('.ws-panel.quotes [data-root="NQ"]'); const v = row && row.querySelector('[data-q="vs"]'); return v && !v.hidden ? { vs: v.textContent, chg: row.querySelector('[data-q="chg"]').textContent, tip: row.title } : null; }); return r; }, 'the NQ row\'s note', 8000);

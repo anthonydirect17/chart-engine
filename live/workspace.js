@@ -356,7 +356,7 @@ function quoteChange(last, settle) {
   const ok = typeof last === 'number' && typeof settle === 'number' && isFinite(last) && isFinite(settle) && settle > 0;
   return ok ? { chg: last - settle, pct: (last - settle) / settle * 100 } : { chg: null, pct: null };
 }
-/** 1.60.1 (ChartBridge 0.6.26, HOME 2026-11-27): the row's note when the change is measured from an earlier settlement than the
+/** 1.61.1 (ChartBridge 0.6.26, HOME 2026-11-27): the row's note when the change is measured from an earlier settlement than the
     prior session's (that session has none, as Thanksgiving 2026-11-26): "vs 11-25 settle"; '' when it is the prior session's own. */
 function settleNote(date, missing) {
   const ok = d => typeof d === 'string' && /^\d{4}-\d\d-\d\d$/.test(d);
@@ -2673,7 +2673,7 @@ function mountQuotes(v) {
       set(c.pct, x.pct === null ? '' : W.fmtSignedNum(x.pct, 2) + '%', cls);
       set(c.high, q && q.high !== null ? qPx(r, q.high) : '');
       set(c.low, q && q.low !== null ? qPx(r, q.low) : '');
-      const vs = q && x.chg !== null ? W.settleNote(q.settleDate, q.settleMissing) : '';   // 1.60.1: said on the row
+      const vs = q && x.chg !== null ? W.settleNote(q.settleDate, q.settleMissing) : '';   // 1.61.1: said on the row
       set(c.vs, vs, 'qb-vs'); if (c.vs.hidden !== !vs) c.vs.hidden = !vs;
       if (q && q.last !== null && q.settle === null) noSettle++;
     }
@@ -2698,7 +2698,7 @@ function mountQuotes(v) {
   v.quotes = { render, sync: () => { if (quoteRowsOf(v.panel).join() !== roots.join()) { build(); render(); } }, roots: () => roots.slice() };
   /* wide: one line per instrument; narrow (under 400 px): the change and percent, and the high and low, stack; a board
      with no room for that either (a 2 x 1 panel): the last and percent only, the rest in the row's tooltip */
-  const unfit = fitPanel(v, (w, h) => ({ 'gr-narrow': w < 400, 'gr-slim': w < 240, 'gr-tight': w < 400 && h < 4 * 30 + 26 + 30, 'gr-tiny': w < 280 && h < 4 * 30 + 26 + 30 }));   // 1.60.1: gr-slim
+  const unfit = fitPanel(v, (w, h) => ({ 'gr-narrow': w < 400, 'gr-slim': w < 240, 'gr-tight': w < 400 && h < 4 * 30 + 26 + 30, 'gr-tiny': w < 280 && h < 4 * 30 + 26 + 30 }));   // 1.61.1: gr-slim
   v.destroy = () => { unfit(); quoteSubs.delete(render); for (const f of offs) f(); };
 }
 /* ---------------- the Data Box (1.16.0, Anthony): the bar under the cursor on any chart (its open, high, low, close, range,

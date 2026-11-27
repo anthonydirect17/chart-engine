@@ -63,7 +63,7 @@
   `test/pc-updater.test.js`: the allowed git subcommands, the box job's name, useHttpPath read before the one ask, the
   token only after a 404 or 401 and then through the Actions API, one place that asks for it and one that sends it.
 
-## ChartBridge 0.6.26 and chart 1.60.1 (2026-11-27): after a cold start, the higher-timeframe bars and the tick charts come back by themselves; the Quote board after a holiday
+## ChartBridge 0.6.26 and chart 1.61.1 (2026-11-27): after a cold start, the higher-timeframe bars and the tick charts come back by themselves; the Quote board after a holiday
 
 In plain words: HOME started cold at 09:39 ET on 2026-11-27, NinjaTrader at 09:42 with no session data. The Range 40 chart got
 no tick history and the 1D and 4h charts said NinjaTrader had not answered an earlier request; nothing asked again, even
@@ -97,7 +97,7 @@ ChartBridge 0.6.26 is one hand install (compile in NinjaTrader); the page works 
   `settlements.<root>.prior` keeps its own day with `p` null and adds `fallback` (`date`, `p`). A market that settled that
   day (GC and SI on 11-26) keeps its own; with none kept the value is null as before, never an estimate. The calendar copy
   in `shared/` is unchanged.
-- **The Quote board says so on the row** (chart 1.60.1, `live/workspace.js`): "vs 11-25 settle" under the row (and "from the
+- **The Quote board says so on the row** (chart 1.61.1, `live/workspace.js`): "vs 11-25 settle" under the row (and "from the
   2026-11-25 settlement (none for 2026-11-26)" in its tooltip) when the change is from an earlier settlement than the prior
   session's (`settleNote`). With an older ChartBridge nothing changes.
 - **The Quote board's prices fit** (`live/workspace.css`): NQ's and ES's last and high were cut ("26,305...") on a board just
@@ -111,6 +111,26 @@ ChartBridge 0.6.26 is one hand install (compile in NinjaTrader); the page works 
   settled on 11-26 keeps its own, none kept is null, told once at the 18:00 roll, a later 11-26 value replaces it);
   `nt8/check/WindowHarness.cs` (the late answer at 11:00, 09:28 and 09:49:08 ET tells the page once);
   `test/h1.test.js` (`settleNote`); `test/h1-smoke.mjs` (the row's note against the fake bridge's new `missing`).
+
+## chart 1.61.0 (2026-11-27): the chart page installs as an app window, Aureus Imperium with the gold A (page only, no F5)
+
+In plain words: the workspace (ChartBridge's page, `live/index.html`) can be installed once on each PC as its own app
+window with its own icon, the gold A on black, named Aureus Imperium (plan step 7). ChartBridge is unchanged;
+`live/COMPAT.json` `minChartBridge` stays 0.6.2.
+
+- **The manifest** (`live/manifest.json`): name Aureus Imperium, short name Aureus, its own window (`standalone`),
+  black (#050506) behind it, and `id`, `start_url` and `scope` all `./`, so it names no host or port. It is a `.json`
+  file on purpose: ChartBridge already serves `.json` as JSON and `.png` as PNG, so no add-on change is needed.
+- **The icons** (`live/icons/`): 192 and 512 (the tile with its gold trim), a maskable 512 (full bleed, the A inside the
+  safe circle) and a 32 px favicon for the tab, all made by `tools/app_icons.py` from the page's own Cinzel Bold.
+  `index.html` links the manifest and the favicon; the window title stays the page's own.
+- **Updates reach the installed app by themselves:** ChartBridge sends every page file with `Cache-Control: no-cache`,
+  and the browser checks the manifest again on its own, so a later icon or name change shows in the installed app
+  (Chromium browsers may ask once to accept it). There is no service worker: nothing keeps an old copy of the page.
+- **On the install list** (`nt8/install-files.json`): the manifest and the four icons, so the PC updater puts them in
+  `www` with the page.
+- **Once per PC (Anthony):** open the workspace in Brave and install it (the install button at the right of the address
+  bar, or the install item in the browser's menu). It opens in its own window from then on.
 
 ## chart 1.60.0 (2026-11-19): finished prop accounts hidden on Legion; Arm claims the firm's PC (page only, no F5)
 
