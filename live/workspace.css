@@ -370,9 +370,9 @@ body.ws-busy[data-edge="nw"], body.ws-busy[data-edge="se"], body.ws-busy[data-ed
 .gr .r, .gr .pr.r > * { text-align: right; }
 .gr .b { font-family: var(--ws-sans); font-weight: 600; }
 .gr .up { color: var(--ws-buy); } .gr .dn { color: var(--ws-sell); } .gr .mut { color: var(--ws-muted); }
-/* 1.61.1 (HOME 2026-11-27: NQ's and ES's last and high cut to "26,305..." on a 400 px board): the prices get the room, the change
-   and percent less (9, 7, 6, 9, 9 against five equal columns) */
-.gr-qb .gr-row { grid-template-columns: 34px minmax(0, 9fr) minmax(0, 7fr) minmax(0, 6fr) minmax(0, 9fr) minmax(0, 9fr); }
+/* 1.61.1 (HOME 2026-11-27: NQ's and ES's last and high cut to "26,305..." on a 400 px board): the prices and the change get the room, the
+   percent less (9, 9, 7, 9, 9 against five equal columns; a change like -3,672.75 is as wide as a price) */
+.gr-qb .gr-row { grid-template-columns: 34px minmax(0, 9fr) minmax(0, 9fr) minmax(0, 7fr) minmax(0, 9fr) minmax(0, 9fr); }
 /* 1.61.1 (ChartBridge 0.6.26): "vs 11-25 settle" under a row whose change is from an earlier settlement than the prior session's */
 .gr-qb .qb-vs { grid-column: 2 / -1; text-align: right; font: 10px var(--ws-sans); color: var(--ws-muted); }
 .ws-panel.gr-narrow .gr .pr { display: flex; flex-direction: column; min-width: 0; }

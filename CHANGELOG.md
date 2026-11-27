@@ -101,7 +101,7 @@ ChartBridge 0.6.26 is one hand install (compile in NinjaTrader); the page works 
   2026-11-25 settlement (none for 2026-11-26)" in its tooltip) when the change is from an earlier settlement than the prior
   session's (`settleNote`). With an older ChartBridge nothing changes.
 - **The Quote board's prices fit** (`live/workspace.css`): NQ's and ES's last and high were cut ("26,305...") on a board just
-  over 400 px. The wide rows now give the prices the room (9, 7, 6, 9, 9 against five equal columns), and a 2-column board
+  over 400 px. The wide rows now give the prices the room (9, 9, 7, 9, 9 against five equal columns: the change can be as wide as a price, -3,672.75), and a 2-column board
   under 240 px (`gr-slim`) gives the name and the gaps less: measured with IBM Plex Mono at 1240, 1300, 1366, 1650 and 1700
   px screens, no NQ or ES figure is cut on a board of 200 px or more (below 200 px, 1100 px screens, they still are).
 - Tests: `nt8/check/DataHarness.cs` `HtfReaskAfterColdStart` (HOME's sequence: the window not answered, 1D and 4h failed on
