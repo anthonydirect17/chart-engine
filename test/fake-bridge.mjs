@@ -605,7 +605,7 @@ function onMessage(c, text) {
   else if (['order', 'change', 'plan', 'cancel', 'flatten', 'cutHalf'].includes(m.type)) desk.handle(c, m);   // plan: ChartBridge 0.3.7 (prices), 0.3.8 (ticks); cutHalf: release 1 (1.6c)
 }
 /* ---------------- --data-037: settlement, higher-timeframe bars, the weekly profile (sample data) */
-const settlement = {}, settlementDate = {};       // the prior session's settlement and its trading date (sample: its last close)
+const settlement = {}, settlementDate = {}, settlementMissing = {};   // the prior session's settlement and its trading date (sample: its last close); 0.6.26: the prior session with none, when the value is an earlier one's
 for (const r of Object.keys(INSTR)) {
   const b = data[r], day = CE.util.tradeDay(b[b.length - 1].t, 64800), prior = b.filter(x => CE.util.tradeDay(x.t, 64800) < day);
   settlement[r] = prior.length ? prior[prior.length - 1].c : null;
@@ -878,7 +878,8 @@ const server = http.createServer((req, res) => {
     }
     else if (p === '/test/settlement' && DATA_037) {
       settlement[r] = q.get('p') === 'null' ? null : +q.get('p'); if (q.get('date')) settlementDate[r] = q.get('date');
-      for (const c of clients) send(c, { type: 'settlement', root: r, p: settlement[r], date: settlementDate[r] });
+      settlementMissing[r] = q.get('missing') || '';   // 0.6.26: ?missing=2026-11-26 sends "missing" (the value is settlementDate's)
+      for (const c of clients) send(c, Object.assign({ type: 'settlement', root: r, p: settlement[r], date: settlementDate[r] }, settlementMissing[r] ? { missing: settlementMissing[r] } : {}));
     }
     else if (p === '/test/drop') { for (const c of clients) c.sock.destroy(); }
     else if (p === '/test/received') { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify(received)); }
@@ -981,7 +982,7 @@ server.on('upgrade', (req, sock) => {
   if (liveFirstOn) { hello.features = ['liveFirst', 'profile']; hello.version = 'fake-0.3.5'; }
   if (liveFirstOn && DELTA_TABLE) hello.features.push('deltaTable');   // 0.6.25
   if (DATA_037) {                                   // 0.3.7: the prior settlement per instrument (sample), and the new features
-    for (const i of hello.instruments) { i.settlement = settlement[i.root]; i.settlementDate = settlementDate[i.root]; }
+    for (const i of hello.instruments) { i.settlement = settlement[i.root]; i.settlementDate = settlementDate[i.root]; if (settlementMissing[i.root]) i.settlementMissing = settlementMissing[i.root]; }
     hello.features = (hello.features || []).concat(['settlement', 'htf', 'weekProfile']); hello.version = 'fake-0.3.7';
   }
   if (V3) { hello.features = (hello.features || []).concat(['v3', 'cutHalf']);   // release 1 (1.6c): Cut half

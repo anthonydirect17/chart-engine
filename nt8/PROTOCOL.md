@@ -199,7 +199,7 @@ Bars are stamped with their **start** time. NinjaTrader stamps bars at their clo
 
 | type | fields | when |
 |---|---|---|
-| `hello` | `version`, `now` (UTC ms), `instruments`: `[{root, name, tick, pointValue, settlement, settlementDate}]` (0.3.7: `settlement` the prior session's settlement for that contract, null when ChartBridge has no dated value for it; `settlementDate` the trading date it settles, `yyyy-MM-dd`), `accounts`: `[name]`, `trading` (0.3.0 and later: the `trading` object below, always with `enabled` false until the page signs in), `features` (0.3.5: `["liveFirst", "profile"]`, see Served window and session table; 0.3.7 adds `"settlement"`, `"htf"`, `"weekProfile"`; 0.6.25 adds `"deltaTable"`, see The delta table), `pcClock` (0.5.6: this PC's clock against a time server, see Delay readout) | on connect |
+| `hello` | `version`, `now` (UTC ms), `instruments`: `[{root, name, tick, pointValue, settlement, settlementDate}]` (0.3.7: `settlement` the prior session's settlement for that contract, null when ChartBridge has no dated value for it; `settlementDate` the trading date it settles, `yyyy-MM-dd`; 0.6.26: `settlementMissing`, only when the value is an earlier day's because the prior session has none, that session's date), `accounts`: `[name]`, `trading` (0.3.0 and later: the `trading` object below, always with `enabled` false until the page signs in), `features` (0.3.5: `["liveFirst", "profile"]`, see Served window and session table; 0.3.7 adds `"settlement"`, `"htf"`, `"weekProfile"`; 0.6.25 adds `"deltaTable"`, see The delta table), `pcClock` (0.5.6: this PC's clock against a time server, see Delay readout) | on connect |
 | `history` | `root`, `name`, `barSeconds` (60), `sub` (0.3.3), `bars`: `[[t,o,h,l,c,v], ...]`, `done` (bool) | after `subscribe`, chunked. Since 0.3.3 the history is split: the chunks before the last minute (the last of them now says `done` false), then the last (forming) minute in its own message with `done` true, rebuilt from trades when it can be (see Backfill and live below) |
 | `ticks` | `root`, `sub` (0.3.3), `ticks`: `[[t,p,v], ...]`, since 0.3.4 `[[t,p,v,s,sm], ...]` (side and method, see Trade side; the first three keep their places); 0.3.7 sends `[t,p,v]` again; since 0.3.8 a trade with a known Time and Sales category is `[t,p,v,null,null,q]` (see Time and Sales category), `done` (bool) | after `history`, the current session's trades, chunked |
 | `ready` | `root`, `sub` (0.3.3), `filled` (0.6.8, minute and hour loads only: how many of the history's bars came from ChartBridge's minute book, 0 when none; see The minute book below), `minuteTimedOut`, `minuteFailed`, `standIn`, `tailTimedOut`, `historyFrom` (0.6.8, see The minute book) | history and tick backfill complete; live ticks follow (since 0.3.3 only those not already in the backfill; see Backfill and live below) |
@@ -210,8 +210,8 @@ Bars are stamped with their **start** time. NinjaTrader stamps bars at their clo
 | `exec` | `account`, `name` (e.g. `MNQ 12-26`), `root`, `side` (`buy`/`sell`), `qty`, `p`, `t`, `u`, `id`, `order` | each new fill, live (see Fills below) |
 | `pcClock` | the fields of hello's `pcClock` (0.5.6, see Delay readout): `checked`, then `offsetMs`, `rttMs`, `atUtcMs`, `server`, or `why`, `server` | to every page when a check of this PC's clock answers (every 5 minutes), when it changes to no answer, and when the PC clock steps by more than 250 ms; in the order lane. A page can get one before its `hello` (a page is told from the moment it connects); `hello` then carries the state as it is, and a check that ends while `hello` is built is sent again after it |
 | `status` | `level` (`info`/`warn`/`error`), `text` | problems worth showing on the page; since 0.3.7 also a refused `htf` or `weekProfile` request (`warn`, "ChartBridge refused a htf message: why") |
-| `historyLate` | `root`, `sub` (0.6.8) | once, when a load that went ready on stand-in history gets NinjaTrader's minute answer after all: the page subscribes again (see The minute book); also (0.6.10) once when a tick chart load got no tick history because NinjaTrader had not answered and that late answer has freed the gate, outside 09:25 to 16:00 ET (see One unanswered request) |
-| `settlement` | `root`, `p` (null when none is known), `date` (the trading date it settles, `yyyy-MM-dd`) (0.3.7) | when the prior settlement changes: a value for that date comes in, or a new session starts at 18:00 ET and the day before becomes the prior |
+| `historyLate` | `root`, `sub` (0.6.8) | once, when a load that went ready on stand-in history gets NinjaTrader's minute answer after all: the page subscribes again (see The minute book); also (0.6.10) once when a tick chart load got no tick history because NinjaTrader had not answered and that late answer has freed the gate (0.6.10 to 0.6.25 outside 09:25 to 16:00 ET only; 0.6.26 at any time) (see One unanswered request) |
+| `settlement` | `root`, `p` (null when none is known), `date` (the trading date it settles, `yyyy-MM-dd`) (0.3.7), `missing` (0.6.26: only when `p` is an earlier day's because the prior session, `missing`, has none) | when the prior settlement changes: a value for that date comes in, or a new session starts at 18:00 ET and the day before becomes the prior |
 | `htf` | `root`, `tf` (`4h`, `1D`, `1W`), `id` (the request's, or null), `name` (the contract, or null with an error), `bars`: `[[t,o,h,l,c,v], ...]` oldest first, the last one forming, `error` (null, or why there are no bars) (0.3.7) | the answer to an `htf` request |
 | `htfBar` | `root`, `tf`, `bars`: one or two `[t,o,h,l,c,v]` (0.3.7) | while a page has asked for that root and timeframe, at most once a second when its forming bar changed: the forming bar, after the closed bar's final values when a new bar began |
 | `weekProfile` | `root`, `id` (or null), `tick`, `sessions`: `[{date, from, whole, coveredFrom, drop, rows: [[priceTicks, v], ...]}` or `{date, missing}]` oldest first, `rows` (the sessions present, added up), `error` (null, or why there is nothing) (0.3.7) | the answer to a `weekProfile` request |
@@ -706,9 +706,10 @@ until the copy ends. Minute charts load as usual.
 **Asked again once (0.6.10, item 12).** A Range or seconds load that went live with no tick history because NinjaTrader
 had not answered (its own window timed out, or the gate was stuck on an earlier request; typical at the session open) is told
 once to load again (`historyLate`, its `sub`) when that late answer frees the gate; the page subscribes again and the new load
-asks through the gate as every load does (the failed window's 60 s retry delay does not hold it back). Never from 09:25 to
-16:00 New York on a weekday (5 minutes before the open, so no ask lands just after 09:30) (a history note says so; a reload loads again as usual), at most once a page and instrument in 5
-minutes, and only a load that is still the page's: no reload loop.
+asks through the gate as every load does (the failed window's 60 s retry delay does not hold it back). 0.6.10 to 0.6.25 never
+told a page from 09:25 to 16:00 New York on a weekday; since 0.6.26 (HOME 2026-11-27: a cold start at 09:39 left the Range chart
+with no history until a hand reload) it is told then too (its history note says "inside 09:25 to 16:00 ET, 0.6.26"). At most once
+a page and instrument in 5 minutes, and only a load that is still the page's: no reload loop.
 Orders and Flatten are never affected. `/diag` `gate.stuck` names the request, `stuckSinceUtcMs` says since when, and a
 waiting backfill's `state` starts "waiting:". Only the request that made the gate stuck frees it. Stopping ChartBridge (a
 compile, or closing NinjaTrader) clears the stuck request and marks the gate stopped until the next start: no tick request
@@ -963,13 +964,20 @@ serve is answered with an `error` and no bars.
   updates are handled one at a time, in the order NinjaTrader sent them. A day with no Globex session, or a value
   that cannot be placed, is not used (one Output line says so; `/diag` shows it with `day` null), and with no other dated
   value the prior is null rather than a wrong one.
+- **No settlement for the prior session (0.6.26):** when the prior session's day has no dated value (Thanksgiving
+  2026-11-26: the shared CME calendar's `halt` row says CME derives no settlement that day and books its trades to the next
+  trade date, so the 11-27 session measures from 11-25's), the latest value kept for a day before the session running now is
+  used and said: `settlementDate` and `date` are its day, and `settlementMissing` (hello) and `missing` (the message) the
+  prior session's day. A market that settled that day (GC and SI on 11-26) keeps its own. With no value kept it is null as
+  before. The Quote board shows "vs 11-25 settle" on the row.
 - **Today's settlement after the afternoon close** (in from about 16:15 ET) is kept and shown in `/diag`, but the prior
   stays the day before's until the next session starts at 18:00 ET; then today's becomes the prior and every page gets a
   `settlement` message. ChartBridge checks every second, so the roll reaches pages within a second of 18:00.
 - **To pages:** in `hello`, per instrument, `settlement` (or null) and `settlementDate`; and
   `{"type":"settlement","root":"MNQ","p":21456.25,"date":"2026-09-28"}` to every page whenever the prior changes (`p` null
   when ChartBridge has no value for that date). Each new dated value is noted in the Output window with NinjaTrader's stamp.
-  `/diag` `settlements`: per root, `prior` (`date`, `p`), `byDate` (the dated values kept), `last` (the latest value
+  `/diag` `settlements`: per root, `prior` (`date`, `p`; 0.6.26: `p` null and `fallback` (`date`, `p`) when the value is an
+  earlier day's), `byDate` (the dated values kept), `last` (the latest value
   NinjaTrader gave: `p`, `ntTime`, `day` or null, `from` `snapshot` or `update`, `receivedUtcMs`).
 - **Restarts:** the last two dated values per root are kept in `settlements.txt` in ChartBridge's folder (`ROOT yyyy-MM-dd
   price CONTRACT`, replaced through a temp file, written off NinjaTrader's thread, one write at a time), read at the start off
@@ -999,7 +1007,14 @@ serve is answered with an `error` and no bars.
   that root and timeframe is asked again no sooner than 60 s later. A request still queued after 120 s (the chart's requests
   kept going first) is taken back ("not asked: the chart's own requests kept NinjaTrader busy for 120 s; it can be asked
   again in 60 s (from ...)"). While the gate is stuck on an unanswered window or backfill, a
-  request is answered at once with the reason. After a failure the same root and timeframe is not asked again for 60 s.
+  request is answered at once with the reason. After a failure the same root and timeframe is not asked again for 60 s
+  (0.6.26: except a failure on a stuck gate, where NinjaTrader was not asked).
+- **Asked again by ChartBridge (0.6.26, HOME 2026-11-27):** a page answered with no bars and a reason is asked again once for
+  it, without a new page request: at once when NinjaTrader's late answer frees a stuck gate (the reason then ends "asked again
+  once it has"), otherwise 60 s after the failure. Through the gate as above, only for pages still connected, each with its
+  latest `id`. Each page request that failed arms one; a re-ask that fails is not asked again by ChartBridge until a page asks
+  again. `/diag` `htf` per series: `reaskArmed` ("when the gate frees", "60 s after the failure" or null), `reasks`,
+  `reaskedAtUtcMs`.
 - **The answer:** `{"type":"htf","root","tf","id","name","bars":[[t,o,h,l,c,v],...],"error":null}`, oldest first, the last
   bar forming, prices and volume as NinjaTrader has them. `t` is the bar's start in bar-time seconds (New York wall clock),
   as every bar here: a 4h bar is one of 18:00, 22:00, 02:00, 06:00, 10:00 and 14:00 ET, from the session's 18:00 open (the

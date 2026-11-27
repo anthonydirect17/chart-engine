@@ -356,6 +356,12 @@ function quoteChange(last, settle) {
   const ok = typeof last === 'number' && typeof settle === 'number' && isFinite(last) && isFinite(settle) && settle > 0;
   return ok ? { chg: last - settle, pct: (last - settle) / settle * 100 } : { chg: null, pct: null };
 }
+/** 1.61.1 (ChartBridge 0.6.26, HOME 2026-11-27): the row's note when the change is measured from an earlier settlement than the
+    prior session's (that session has none, as Thanksgiving 2026-11-26): "vs 11-25 settle"; '' when it is the prior session's own. */
+function settleNote(date, missing) {
+  const ok = d => typeof d === 'string' && /^\d{4}-\d\d-\d\d$/.test(d);
+  return ok(date) && ok(missing) && date < missing ? 'vs ' + date.slice(5) + ' settle' : '';
+}
 /** The session's high and low (from 18:00 ET) at bar time `now` from 1-minute bars [{ t, h, l }], or nulls. */
 function sessionRange(bars, now) {
   const d = tradeDayOf(now);
@@ -508,7 +514,7 @@ return { groupTagMembers, COLS, ROWS, MIN_W, MIN_H, MAX_PANELS, MAX_LAYOUTS, NAM
   layoutName, parseRange, cleanPanel, cleanLayout, cleanStore, overlaps, fits, largestFree, findSpot, reflow, metrics, snapMove, snapResize, snapResizeEdge, EDGES,
   isRth, cleanFloors, floorAt, fmtClock, fmtPrice, decimalsOf, tfLabel, newId, defaultLayout, LAPTOP_TABS, GAP, GAP_TIGHT, VIEW_KEYS, cleanViewKeys, fmtSpan,
   readStore, saveLayout, deleteLayout, renameLayout, readFloors, setFloor, HTF_TFS,
-  GROUPS_ALARM, roundTrips, fillsToday, QUOTE_ROOTS, cleanHide, quoteChange, sessionRange, fmtSignedNum, fmtUsd, tradeDayOf,
+  GROUPS_ALARM, roundTrips, fillsToday, QUOTE_ROOTS, cleanHide, quoteChange, settleNote, sessionRange, fmtSignedNum, fmtUsd, tradeDayOf,
   TAPE_CATS, cleanTapeColors, tapeClass, readTapeColors, setTapeColor, resetTapeColors };
 });
 
@@ -2566,7 +2572,7 @@ function quoteChanged() {
 function watchQuote(root) {
   let q = QT.get(root);
   if (!q) {
-    q = { root, sock: null, users: 0, last: null, high: null, low: null, day: null, settle: null, settleDate: '', timer: 0, tries: 0, bars: [], name: '' };
+    q = { root, sock: null, users: 0, last: null, high: null, low: null, day: null, settle: null, settleDate: '', settleMissing: '', timer: 0, tries: 0, bars: [], name: '' };
     QT.set(root, q);
     quoteOpen(q);
   }
@@ -2592,7 +2598,7 @@ function quoteOpen(q) {
     if (m.type === 'ready') q.tries = 0;
     if (m.type === 'hello') {
       const i = (m.instruments || []).find(x => x && x.root === q.root);
-      if (i) { q.settle = typeof i.settlement === 'number' ? i.settlement : null; q.settleDate = i.settlementDate || ''; }
+      if (i) { q.settle = typeof i.settlement === 'number' ? i.settlement : null; q.settleDate = i.settlementDate || ''; q.settleMissing = i.settlementMissing || ''; }
       q.high = q.low = q.day = null; q.bars = [];
       sock.send({ type: 'subscribe', root: q.root, days: 1, tickHours: 0 });
     } else if (m.type === 'history' && m.root === q.root && Array.isArray(m.bars)) {
@@ -2608,7 +2614,7 @@ function quoteOpen(q) {
     } else if (m.type === 'tick' && m.root === q.root) {
       q.last = +m.p; range(+m.p, +m.p, +m.t); quoteBar(q, +m.t, +m.p); quoteChanged();
     } else if (m.type === 'settlement' && m.root === q.root) {
-      q.settle = typeof m.p === 'number' ? m.p : null; q.settleDate = m.date || ''; quoteChanged();
+      q.settle = typeof m.p === 'number' ? m.p : null; q.settleDate = m.date || ''; q.settleMissing = m.missing || ''; quoteChanged();   // 0.6.26: missing
     }
   };
   sock.onclose = () => { if (q.sock !== sock) return; q.sock = null; if (q.users > 0) { const n = ++q.tries; q.timer = setTimeout(() => { if (q.users > 0 && !q.sock) quoteOpen(q); }, n === 1 ? 0 : Math.min(5000, 500 * n)); } };
@@ -2647,9 +2653,9 @@ function mountQuotes(v) {
     roots = quoteRowsOf(v.panel);
     const qo = r => !QUOTE_ROOTS.includes(r);
     v.body.innerHTML = '<div class="qb-wrap gr gr-qb' + (roots.some(qo) ? ' qb-more' : '') + '" role="table" aria-label="Quote board"><div class="gr-row gr-h" role="row"><span role="columnheader"><span class="visually-hidden">Instrument</span></span><span class="r" role="columnheader">Last</span>' +
-      '<span class="pr r"><span role="columnheader">Chg</span><span role="columnheader">%</span></span><span class="pr r"><span role="columnheader">High</span><span role="columnheader">Low</span></span></div>' +
+      '<span class="pr r"><span role="columnheader">Chg</span><span role="columnheader">%</span></span><span class="pr r qb-hl"><span role="columnheader">High</span><span role="columnheader">Low</span></span></div>' +
       (roots.length ? '' : '<p class="qb-empty" role="note">No markets shown: pick some in the menu</p>') +
-      roots.map((r, i) => `<div class="gr-row${qo(r) ? ' qb-q' + (i && !qo(roots[i - 1]) ? ' qb-first' : '') : ''}" role="row" data-root="${esc(r)}"><span class="b" role="cell">${esc(r)}</span><span class="r" role="cell" data-q="last"></span><span class="pr r"><span role="cell" data-q="chg"></span><span role="cell" data-q="pct"></span></span><span class="pr r"><span role="cell" data-q="high"></span><span role="cell" data-q="low"></span></span></div>`).join('') +
+      roots.map((r, i) => `<div class="gr-row${qo(r) ? ' qb-q' + (i && !qo(roots[i - 1]) ? ' qb-first' : '') : ''}" role="row" data-root="${esc(r)}"><span class="b" role="cell">${esc(r)}</span><span class="r" role="cell" data-q="last"></span><span class="pr r"><span role="cell" data-q="chg"></span><span role="cell" data-q="pct"></span></span><span class="pr r qb-hl"><span role="cell" data-q="high"></span><span role="cell" data-q="low"></span></span><span class="qb-vs" role="note" data-q="vs" hidden></span></div>`).join('') +
       '<p class="qb-foot" data-q="foot"></p></div>';
     offs = roots.map(watchQuote);
     cells = {};
@@ -2667,13 +2673,16 @@ function mountQuotes(v) {
       set(c.pct, x.pct === null ? '' : W.fmtSignedNum(x.pct, 2) + '%', cls);
       set(c.high, q && q.high !== null ? qPx(r, q.high) : '');
       set(c.low, q && q.low !== null ? qPx(r, q.low) : '');
+      const vs = q && x.chg !== null ? W.settleNote(q.settleDate, q.settleMissing) : '';   // 1.61.1: said on the row
+      set(c.vs, vs, 'qb-vs'); if (c.vs.hidden !== !vs) c.vs.hidden = !vs;
       if (q && q.last !== null && q.settle === null) noSettle++;
     }
     const foot = noSettle ? 'Change from the prior settlement: blank until ChartBridge 0.3.7 or newer gives one.' : '';
     for (const r of roots) {                               // a tight board shows the last and percent: the rest in the row's tooltip
       const q = quoteOf(r), x = q ? W.quoteChange(q.last, q.settle) : { chg: null };
       if (!cells[r]) continue;
-      const tip = r + (q && q.last !== null ? ' ' + qPx(r, q.last) : '') + (x.chg !== null ? ', ' + qChg(r, x.chg) + ' from the prior settlement' : '') +
+      const vs = q && x.chg !== null ? W.settleNote(q.settleDate, q.settleMissing) : '';
+      const tip = r + (q && q.last !== null ? ' ' + qPx(r, q.last) : '') + (x.chg !== null ? ', ' + qChg(r, x.chg) + (vs ? ' from the ' + q.settleDate + ' settlement (none for ' + q.settleMissing + ')' : ' from the prior settlement') : '') +
         (q && q.high !== null ? ', high ' + qPx(r, q.high) + ', low ' + qPx(r, q.low) : '') + (instruments[r] && instruments[r].quoteOnly ? ' (quote only: ChartBridge takes no order for it)' : '');
       const tr = cells[r].last.parentElement;
       if (tr.title !== tip) tr.title = tip;
@@ -2689,7 +2698,7 @@ function mountQuotes(v) {
   v.quotes = { render, sync: () => { if (quoteRowsOf(v.panel).join() !== roots.join()) { build(); render(); } }, roots: () => roots.slice() };
   /* wide: one line per instrument; narrow (under 400 px): the change and percent, and the high and low, stack; a board
      with no room for that either (a 2 x 1 panel): the last and percent only, the rest in the row's tooltip */
-  const unfit = fitPanel(v, (w, h) => ({ 'gr-narrow': w < 400, 'gr-tight': w < 400 && h < 4 * 30 + 26 + 30, 'gr-tiny': w < 280 && h < 4 * 30 + 26 + 30 }));
+  const unfit = fitPanel(v, (w, h) => ({ 'gr-narrow': w < 400, 'gr-slim': w < 240, 'gr-tight': w < 400 && h < 4 * 30 + 26 + 30, 'gr-tiny': w < 280 && h < 4 * 30 + 26 + 30 }));   // 1.61.1: gr-slim
   v.destroy = () => { unfit(); quoteSubs.delete(render); for (const f of offs) f(); };
 }
 /* ---------------- the Data Box (1.16.0, Anthony): the bar under the cursor on any chart (its open, high, low, close, range,

@@ -409,7 +409,8 @@ public static partial class WindowHarness   // 0.6.25: the delta table's cases a
             BackfillWaitsAndRetries();
             GateAfterTimeout();
             GateLateAtOpen(Et(2026, 9, 29, 18, 5, 0), true);
-            GateLateAtOpen(Et(2026, 9, 29, 9, 28, 0), false);   // re-review 3: 09:28 is inside the quiet time (from 09:25)
+            GateLateAtOpen(Et(2026, 9, 29, 9, 28, 0), true);    // 0.6.26 (HOME 2026-11-27): inside 09:25 to 16:00 the page is told too (0.6.10 to 0.6.25: not)
+            GateLateAtOpen(Et(2026, 9, 29, 9, 49, 8), true);    // HOME's 2026-11-27 time: the late tick answer at 09:49:08 ET
             WindowLateQuietTimes();
             StuckStrandsNothing();
             WindowCap();
@@ -780,7 +781,11 @@ public static partial class WindowHarness   // 0.6.25: the delta table's cases a
         BarsRequest bf = null;
         Check(cb < 0 && !Books().Contains("\"stuck\":\"window") && WaitFor(() => (bf = Find(m0, r => IsTrades(r) && ByDate(r))) != null, 3000),
             "X1: its late answer is dropped at once (not copied: no callback time), and then the queued backfill goes");
-        Check(!Sent().Any(x => x.Contains("\"type\":\"historyLate\"")), "item 12: the late answer at 11:00 ET (inside 09:25 to 16:00): the page is NOT told to load again");
+        // 0.6.26 (HOME 2026-11-27): inside 09:25 to 16:00 too, the page's current load (802, which got no tick history while the
+        // window was still at NinjaTrader) is told once to load again; the load it replaced (801) is not
+        Check(WaitFor(() => Sent().Count(x => x.Contains("\"type\":\"historyLate\"")) == 1, 3000) && Sent().Any(x => x.Contains("{\"type\":\"historyLate\",\"root\":\"MNQ\",\"sub\":802}")),
+              "item 12, 0.6.26: the late answer at 11:00 ET (inside 09:25 to 16:00): the page's current load is told once to load again (historyLate, sub 802), not the one it replaced");
+        lock (WindowLateAtMap()) WindowLateAtMap().Clear();   // the next cases start with no message sent
         if (bf != null) bf.Answer(Answer(tape, 0, 800), ErrorCode.NoError);
         WaitFor(() => Books().Contains("\"state\":\"done\""), 3000);
         ChartBridgeServer.BackfillOn = false; ChartBridgeServer.WindowTimeoutMs = 120000; ChartBridgeServer.WindowFirstGuess = 200000;
@@ -791,11 +796,12 @@ public static partial class WindowHarness   // 0.6.25: the delta table's cases a
     // history; NinjaTrader's late answer frees the gate and the page is told ONCE to load again ("historyLate", its sub); its new
     // load asks through the gate at once (the failure's retry delay does not hold it back) and gets the trades. A second late
     // answer within 5 minutes does not tell the page again.
+    static System.Collections.IDictionary WindowLateAtMap() { return (System.Collections.IDictionary)typeof(ChartBridgeServer).GetField("WindowLateAt", BindingFlags.NonPublic | BindingFlags.Static).GetValue(null); }
     static void WindowLateQuietTimes()
     {
         Func<int, int, int, bool> q = (d, h, mi) => ChartBridgeServer.InWindowLateQuiet(new DateTime(2026, 9, d, h, mi, 0));
         Check(!q(29, 9, 24) && q(29, 9, 25) && q(29, 9, 28) && q(29, 15, 59) && !q(29, 16, 0) && !q(29, 18, 5) && !q(26, 9, 28),
-              "item 12: no reload message 09:25 to 16:00 ET on a weekday (5 minutes before the open), any time on the weekend or outside");
+              "item 12: 09:25 to 16:00 ET on a weekday is the old quiet time (since 0.6.26 only the history note's label), not the weekend or outside");
     }
 
     static void GateLateAtOpen(DateTime t0, bool told)
@@ -806,6 +812,7 @@ public static partial class WindowHarness   // 0.6.25: the delta table's cases a
         ChartBridgeServer.BackfillOn = false;
         int retryWas = ChartBridgeServer.WindowRetryMs;
         ChartBridgeServer.WindowTimeoutMs = 300; ChartBridgeServer.WindowFirstGuess = 30000; ChartBridgeServer.WindowRetryMs = 600000;
+        lock (WindowLateAtMap()) WindowLateAtMap().Clear();   // each case starts with no message sent to this page (the 5 minute gap is real time)
         try
         {
             lock (sent) sent.Clear();

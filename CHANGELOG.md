@@ -63,6 +63,55 @@
   `test/pc-updater.test.js`: the allowed git subcommands, the box job's name, useHttpPath read before the one ask, the
   token only after a 404 or 401 and then through the Actions API, one place that asks for it and one that sends it.
 
+## ChartBridge 0.6.26 and chart 1.61.1 (2026-11-27): after a cold start, the higher-timeframe bars and the tick charts come back by themselves; the Quote board after a holiday
+
+In plain words: HOME started cold at 09:39 ET on 2026-11-27, NinjaTrader at 09:42 with no session data. The Range 40 chart got
+no tick history and the 1D and 4h charts said NinjaTrader had not answered an earlier request; nothing asked again, even
+after NinjaTrader's late answer at 09:49:08, until a page reload (HOME's report FROM_HOME_2026-11-27_chartbridge_htf_no_retry,
+ChartBridge 0.6.25). Now ChartBridge asks again by itself. And on the day after Thanksgiving the Quote board's change was
+blank for NQ and ES because CME made no index settlement on 11-26; it now measures from 11-25's and says so on the row.
+ChartBridge 0.6.26 is one hand install (compile in NinjaTrader); the page works with any ChartBridge from 0.6.2
+(`live/COMPAT.json` `minChartBridge` stays 0.6.2).
+
+- **The 4h, 1D and 1W bars are asked again by ChartBridge** (`HtfReask`, `ArmRetry`): a page answered with no bars and a
+  reason (a stuck gate, "not asked: the chart's own requests kept NinjaTrader busy", a timeout, a refusal) is asked again
+  once for it: at once when NinjaTrader's late answer frees the gate (the failure was "NinjaTrader has not answered an
+  earlier request (...) yet; asked again once it has", which 0.6.25 promised and never did), otherwise 60 s after the
+  failure (checked every second with the forming-bar push). The request goes through the gate as every htf request does
+  (last, never beside a chart load), only for pages still connected, with each page's latest id so the page takes the
+  answer. No storm: each page request that failed arms one re-ask; a re-ask that fails is not asked again by ChartBridge
+  until a page asks again. A failure on a stuck gate no longer starts the 60 s wait (NinjaTrader was never asked for that
+  series). `/diag` `htf` per series gains `reaskArmed` ("when the gate frees", "60 s after the failure" or null), `reasks` and
+  `reaskedAtUtcMs`. The page's own retry 60 s after a failure is unchanged.
+- **A tick chart left with no tick history is told to load again in trading hours too** (`WindowLateRetry`): when
+  NinjaTrader's late tick answer frees the gate, a Range or seconds load that got no history while it waited is told once
+  (`historyLate`) from 09:25 to 16:00 New York on a weekday as well. **This reverses item 12's quiet time of 2026-11-01**
+  (0.6.10 to 0.6.25 never told a page then, "no new tick request in trading hours from this"): the one new ask is the one a
+  hand reload makes, it goes through the gate one tick request at a time, and at most once a page and instrument in 5
+  minutes, only for the load still the page's. The history note says "(inside 09:25 to 16:00 ET, 0.6.26)".
+- **The prior settlement falls back to the latest one kept** (`PriorSettlement`): when the prior session's day has no
+  settlement (Thanksgiving 2026-11-26: the shared CME calendar's `halt` row, "CME derives no settlement prices that day",
+  its trades booked to the next trade date, so the 11-27 session measures from 11-25), the latest settlement ChartBridge
+  keeps for a day before the session running now is the value, and it is said: hello's `settlementDate` is that day and
+  `settlementMissing` the prior session's day; the `settlement` message's `date` and `missing` the same; `/diag`
+  `settlements.<root>.prior` keeps its own day with `p` null and adds `fallback` (`date`, `p`). A market that settled that
+  day (GC and SI on 11-26) keeps its own; with none kept the value is null as before, never an estimate. The calendar copy
+  in `shared/` is unchanged.
+- **The Quote board says so on the row** (chart 1.61.1, `live/workspace.js`): "vs 11-25 settle" under the row (and "from the
+  2026-11-25 settlement (none for 2026-11-26)" in its tooltip) when the change is from an earlier settlement than the prior
+  session's (`settleNote`). With an older ChartBridge nothing changes.
+- **The Quote board's prices fit** (`live/workspace.css`): NQ's and ES's last and high were cut ("26,305...") on a board just
+  over 400 px. The wide rows now give the prices the room (9, 9, 7, 9, 9 against five equal columns: the change can be as wide as a price, -3,672.75), and a 2-column board
+  under 240 px (`gr-slim`) gives the name and the gaps less: measured with IBM Plex Mono at 1240, 1300, 1366, 1650 and 1700
+  px screens, no NQ or ES figure is cut on a board of 200 px or more (below 200 px, 1100 px screens, they still are).
+- Tests: `nt8/check/DataHarness.cs` `HtfReaskAfterColdStart` (HOME's sequence: the window not answered, 1D and 4h failed on
+  the stuck gate, asked again while stuck, then the late answer: both asked again at once and answered with the page's ids;
+  fails on 0.6.25), `HtfReaskNoStorm` (taken back after its time in the queue, asked again once 60 s later, a failed re-ask
+  not asked again, a page gone asks nothing) and `SettlementFallback` (Thanksgiving: 11-25's for MNQ with `missing`, a root
+  settled on 11-26 keeps its own, none kept is null, told once at the 18:00 roll, a later 11-26 value replaces it);
+  `nt8/check/WindowHarness.cs` (the late answer at 11:00, 09:28 and 09:49:08 ET tells the page once);
+  `test/h1.test.js` (`settleNote`); `test/h1-smoke.mjs` (the row's note against the fake bridge's new `missing`).
+
 ## chart 1.61.0 (2026-11-27): the chart page installs as an app window, Aureus Imperium with the gold A (page only, no F5)
 
 In plain words: the workspace (ChartBridge's page, `live/index.html`) can be installed once on each PC as its own app

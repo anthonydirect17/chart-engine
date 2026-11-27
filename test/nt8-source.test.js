@@ -713,7 +713,7 @@ test('0.3.7: settlement only from NinjaTrader, higher-timeframe bars only throug
   const note = bodyOf(code, 'public static void NoteSettlement(string root, string contract,');
   assert.match(note, /!\(price > 0\)\) return;/, 'only a real price');
   assert.match(note, /DateTime\? day = SettlementDay\(ntTime, NowNt\(\), out provisional, root\);/, 'every value dated from NinjaTrader\'s time on it (0.3.8: and whether it is in the 16:00 to 17:00 buffer)');
-  assert.match(bodyOf(code, 'private static void PriorSettlement('), /ChartBridgeCme\.PreviousSession\(ChartBridgeCme\.CurrentSession\(/);
+  assert.match(bodyOf(code, 'private static void PriorSettlement(string root, DateTime nowNt, out DateTime day, out double p, out DateTime from)'), /day = ChartBridgeCme\.PreviousSession\(cur\);/);   // 0.6.26: cur is ChartBridgeCme.CurrentSession(...)
   assert.match(bodyOf(code, 'public static bool Start('), /LoadSettlementsSoon\(\);[^\n]*\n\s*SubscribeMarketData\(\);/);   // read off NinjaTrader's thread
   // review B2: answers built outside HtfLock, one waiter per page, the 15 s limit
   assert.match(code, /HtfTimeoutMs = 15000/);
@@ -721,7 +721,8 @@ test('0.3.7: settlement only from NinjaTrader, higher-timeframe bars only throug
     const b = bodyOf(code, f), lockAt = b.indexOf('lock (HtfLock)'), lockBody = b.slice(lockAt, b.indexOf('\n            }', lockAt));
     assert.ok(!/HtfJson\(|HtfBarsText\(/.test(lockBody), f + ' formats nothing under HtfLock');
   }
-  assert.match(bodyOf(code, 'private static void AddWaiter('), /if \(s\.Waiters\[i\]\.Key == client\)/);
+  assert.match(bodyOf(code, 'private static void AddWaiter('), /AddPage\(s\.Waiters, client, id\);/);   // 0.6.26: one list helper for the waiters and the re-ask's pages
+  assert.match(bodyOf(code, 'private static void AddPage('), /if \(pages\[i\]\.Key == client\) \{ pages\[i\] = new KeyValuePair<ChartBridgeClient, string>\(client, id\); return; \}/);
   assert.match(bodyOf(code, 'private static void SubscribeMarketData('), /MarketDataEventArgs st = md\.Settlement;/);
   const md = bodyOf(code, 'private static void OnMarketData(');
   assert.ok(md.indexOf('if (e.IsReset)') < md.indexOf('MarketDataType.Settlement'), 'a reset is never a settlement');
@@ -1311,7 +1312,7 @@ test('0.4.0 B1: order calls only where the gates and the upkeep are; legs GTC; n
 
 test('ChartBridge 0.5.1: connected accounts only; the accounts line no longer filters; accounts.txt keeps 0.5.0\'s format', () => {
   const asrc = fs.readFileSync(path.join(__dirname, '..', 'nt8', 'ChartBridgeAccounts.cs'), 'utf8');
-  assert.match(code, /public const string Version = "0\.(5\.[1-8]|6\.([0-9]|1[0-9]|2[0-5]))";/);   // 0.6.25: the combined release
+  assert.match(code, /public const string Version = "0\.(5\.[1-8]|6\.([0-9]|1[0-9]|2[0-6]))";/);   // 0.6.25: the combined release
   // the 10 s watch (fills to The Desk) takes only accounts seen Connected this NinjaTrader session
   assert.match(bodyOf(code, 'private static void WatchAccounts()'), /fresh = fresh\.Where\(ChartBridgeAccounts\.SeenConnected\)\.ToList\(\);/);
   // AccountAllowed is never Backtest or Playback and reads no list
@@ -1340,7 +1341,7 @@ test('ChartBridge 0.5.5: the accounts line\'s one-time conversion and notConnect
 });
 
 test('ChartBridge 0.5.6: the time check (build list #77) only measures, on its own thread, and tells hello, the pages and /diag', () => {
-  assert.match(code, /public const string Version = "0\.(5\.[6-8]|6\.([0-9]|1[0-9]|2[0-5]))";/);   // 0.6.25: the combined release
+  assert.match(code, /public const string Version = "0\.(5\.[6-8]|6\.([0-9]|1[0-9]|2[0-6]))";/);   // 0.6.25: the combined release
   const clk = code.slice(code.indexOf('public static class ChartBridgeClock'));
   assert.ok(code.indexOf('public static class ChartBridgeClock') > code.indexOf('public static class ChartBridgeServer') && clk.length > 1000, 'ChartBridgeClock is the last class of ChartBridge.cs');
   // never sets the clock or a setting: no Win32 time call, no w32tm, no process, no registry, in any add-on file

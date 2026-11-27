@@ -92,6 +92,9 @@ public static class DataHarness
             HtfPure();
             HtfThroughGate();
             HtfTimeoutAndStuck();
+            HtfReaskAfterColdStart();   // 0.6.26 (HOME 2026-11-27)
+            HtfReaskNoStorm();          // 0.6.26
+            SettlementFallback();       // 0.6.26 (Thanksgiving 2026-11-26)
             WeekProfile();
             StopLoadRestart();      // lf7 N1
             TimedOutAfterStop();    // lf7 N2
@@ -666,6 +669,164 @@ public static class DataHarness
             finally { SetField("gateStuck", null); }
         }
         finally { Drop(a); Drop(load); ChartBridgeServer.HtfTimeoutMs = toWas; ChartBridgeServer.WindowFirstGuess = fgWas; ChartBridgeServer.ResetBooks(DateTime.MinValue); }
+    }
+
+    // 0.6.26, HOME's report of 2026-11-27 (ChartBridge 0.6.25, a cold start in trading hours): a Range chart's tick window is not
+    // answered in time, so the gate is stuck on it; the 1D and 4h requests a page made meanwhile fail with "NinjaTrader has not
+    // answered an earlier request (window MNQ) yet", and the page asks 1D again while it is stuck. 0.6.25 then asked nothing (asks 0,
+    // the page's lastError kept) until a reload, also after the late answer freed the gate. Now the late answer frees the gate and
+    // ChartBridge asks both series again at once, for the page, through the gate; the page gets the bars with its latest id.
+    static void HtfReaskAfterColdStart()
+    {
+        ChartBridgeServer.StopGate(); Priv("StartGate");   // a fresh gate: the case before left a window out at its stand-in NinjaTrader
+        DateTime t0 = Et(2026, 9, 29, 9, 46, 0);
+        simNow = t0;
+        ChartBridgeServer.ResetBooks(ChartBridgeTime.ToUtc(t0).AddHours(-20));
+        int toWas = ChartBridgeServer.WindowTimeoutMs, fgWas = ChartBridgeServer.WindowFirstGuess;
+        ChartBridgeServer.WindowTimeoutMs = 400; ChartBridgeServer.WindowFirstGuess = 1000;
+        List<string> la = new List<string>(), ll = new List<string>();
+        ChartBridgeClient a = Page(5401, la), load = Page(5402, ll);
+        try
+        {
+            for (int i = 0; i < 20; i++) Trade(mnq, t0.AddSeconds(i), 25012, 1);
+            int m0 = MadeCount();
+            Msg(load, "{\"type\":\"subscribe\",\"root\":\"MNQ\",\"days\":5,\"tickHours\":2,\"sub\":1,\"liveFirst\":true}");
+            foreach (BarsRequest r in Made(m0).Where(IsMinute1)) r.Answer(new Bars(), ErrorCode.NoError);
+            BarsRequest win = null;
+            Check(WaitFor(() => (win = Made(m0).FirstOrDefault(IsWin)) != null), "htf re-ask: the Range chart's window goes out (it is never answered in time)");
+            if (win == null) return;
+            Msg(a, "{\"type\":\"htf\",\"root\":\"MNQ\",\"tf\":\"1D\",\"id\":7}");
+            Msg(a, "{\"type\":\"htf\",\"root\":\"MNQ\",\"tf\":\"4h\",\"id\":8}");
+            Check(WaitFor(() => Of(la, "htf").Count == 2, 4000) && Of(la, "htf").All(x => x.Contains("\"bars\":[],\"error\":\"NinjaTrader has not answered an earlier request (window MNQ) yet; asked again once it has\"")),
+                "htf re-ask: the window times out, the gate is stuck, and the queued 1D and 4h requests are answered with the reason: " + string.Join(" | ", Of(la, "htf")));
+            Msg(a, "{\"type\":\"htf\",\"root\":\"MNQ\",\"tf\":\"1D\",\"id\":9}");   // the page asks again while it is stuck
+            Check(WaitFor(() => Of(la, "htf").Count == 3) && Of(la, "htf")[2].Contains("\"id\":9,") && Of(la, "htf")[2].Contains("asked again once it has"), "htf re-ask: asked again while the gate is stuck: answered at once, nothing asked");
+            string d0 = (string)Priv("HtfDiagJson");
+            Check(!Made(m0).Any(IsHtf) && d0.Contains("\"MNQ 1D\":{\"bars\":0,\"asking\":false") && d0.Contains("\"asks\":0") && d0.Contains("\"reaskArmed\":\"when the gate frees\",\"reasks\":0"),
+                "htf re-ask: HOME's state: bars 0, asking false, asks 0, a lastError, and (0.6.26) a re-ask armed for when the gate frees: " + d0);
+            int m1 = MadeCount();
+            simNow = Et(2026, 9, 29, 9, 49, 8);
+            win.Answer(new Bars(), ErrorCode.NoError);   // NinjaTrader's late tick answer frees the gate
+            BarsRequest hd = null, h4 = null;
+            // one request at a time through the gate: the first goes at once, the second once the first is answered
+            Check(WaitFor(() => (hd = Made(m1).FirstOrDefault(r => IsHtf(r) && r.BarsPeriod.BarsPeriodType == BarsPeriodType.Day)) != null),
+                "htf re-ask: the late answer frees the gate and ChartBridge asks NinjaTrader for the 1D bars again, with no new page request (0.6.25: none until a reload)");
+            Check(((string)Priv("HtfDiagJson")).Contains("\"MNQ 4h\":{\"bars\":0,\"asking\":true,\"waiting\":1,"), "htf re-ask: ... and the 4h request is queued behind it at the gate (one at a time)");
+            if (hd != null) { Bars days = new Bars(); days.Add(new DateTime(2026, 9, 28), 1, 2, 0.5, 1.5, 100); hd.Answer(days, ErrorCode.NoError); }
+            Check(WaitFor(() => (h4 = Made(m1).FirstOrDefault(r => IsHtf(r) && r.BarsPeriod.BarsPeriodType == BarsPeriodType.Minute)) != null), "htf re-ask: then the 4h bars are asked for");
+            if (h4 != null) h4.Answer(FourHours(), ErrorCode.NoError);
+            Check(WaitFor(() => Of(la, "htf").Count == 5), "htf re-ask: the page gets both answers");
+            List<string> got = Of(la, "htf").Skip(3).ToList();
+            Check(got.Any(x => x.Contains("\"tf\":\"1D\",\"id\":9,\"name\":\"MNQ 12-26\",\"bars\":[[") && x.EndsWith(",\"error\":null}")) && got.Any(x => x.Contains("\"tf\":\"4h\",\"id\":8,\"name\":\"MNQ 12-26\",\"bars\":[[") && x.EndsWith(",\"error\":null}")),
+                "htf re-ask: bars, each with the page's latest id (1D 9, 4h 8), so the page takes them: " + string.Join(" | ", got.Select(x => x.Substring(0, Math.Min(90, x.Length)))));
+            string d1 = (string)Priv("HtfDiagJson");
+            Check(Made(m1).Count(IsHtf) == 2 && d1.Contains("\"MNQ 1D\":{\"bars\":1,") && System.Text.RegularExpressions.Regex.Matches(d1, "\"asks\":1,").Count == 2 && System.Text.RegularExpressions.Regex.Matches(d1, "\"lastError\":null,\"reaskArmed\":null,\"reasks\":1,").Count == 2,
+                "htf re-ask: one request per series, asks 1, reasks 1, no error left: " + d1);
+        }
+        finally { Drop(a); Drop(load); ChartBridgeServer.WindowTimeoutMs = toWas; ChartBridgeServer.WindowFirstGuess = fgWas; ChartBridgeServer.StopGate(); Priv("StartGate"); ChartBridgeServer.ResetBooks(DateTime.MinValue); }
+    }
+
+    // 0.6.26: a request taken back after HtfQueueMs (the chart's own requests kept the gate busy: HOME's 1D, "not asked: ...") is
+    // asked again by ChartBridge HtfRetryMs after it, once; that re-ask failing too is not asked again by ChartBridge (no storm)
+    // until the page asks again; a page that left asks nothing.
+    static void HtfReaskNoStorm()
+    {
+        ChartBridgeServer.StopGate(); Priv("StartGate");
+        DateTime t0 = Et(2026, 9, 29, 10, 0, 0);
+        simNow = t0;
+        ChartBridgeServer.ResetBooks(ChartBridgeTime.ToUtc(t0).AddHours(-20));
+        int qWas = ChartBridgeServer.HtfQueueMs, rWas = ChartBridgeServer.HtfRetryMs;
+        ChartBridgeServer.HtfQueueMs = 300; ChartBridgeServer.HtfRetryMs = 500;
+        List<string> lb = new List<string>(), ll = new List<string>(), lc = new List<string>();
+        ChartBridgeClient b = Page(5501, lb), load = Page(5502, ll), c = null;
+        try
+        {
+            for (int i = 0; i < 20; i++) Trade(es, t0.AddSeconds(i), 6000, 1);
+            int m0 = MadeCount();
+            Msg(load, "{\"type\":\"subscribe\",\"root\":\"NQ\",\"days\":5,\"tickHours\":0,\"sub\":1}");   // a chart loading: htf waits
+            Msg(b, "{\"type\":\"htf\",\"root\":\"ES\",\"tf\":\"1W\",\"id\":1}");
+            Thread.Sleep(400);
+            Priv("HtfExpire");
+            Check(WaitFor(() => Of(lb, "htf").Count == 1) && Of(lb, "htf")[0].Contains("\"error\":\"not asked: the chart's own requests kept NinjaTrader busy for 0 s; it can be asked again in 0 s (from "),
+                "htf no storm: taken back after its time in the queue, the page told why: " + string.Join(" ", Of(lb, "htf")));
+            Check(((string)Priv("HtfDiagJson")).Contains("\"reaskArmed\":\"60 s after the failure\",\"reasks\":0"), "htf no storm: a re-ask is armed for HtfRetryMs after it");
+            Priv("HtfReask", false);
+            Check(!((string)Priv("HtfDiagJson")).Contains("\"asking\":true"), "htf no storm: not before HtfRetryMs");
+            Thread.Sleep(550);
+            Priv("HtfReask", false);
+            Priv("HtfReask", false);
+            Check(((string)Priv("HtfDiagJson")).Contains("\"ES 1W\":{\"bars\":0,\"asking\":true,\"waiting\":1,") && ((string)Priv("HtfDiagJson")).Contains("\"reasks\":1,"), "htf no storm: HtfRetryMs after the failure ChartBridge asks once for the page (queued at the gate as every htf request)");
+            Thread.Sleep(400);
+            Priv("HtfExpire");   // the chart still loading: taken back again
+            Check(WaitFor(() => Of(lb, "htf").Count == 2) && Of(lb, "htf")[1].Contains("\"id\":1,") && Of(lb, "htf")[1].Contains("not asked"), "htf no storm: the re-ask taken back too, its page told (its id)");
+            Thread.Sleep(550);
+            Priv("HtfReask", false);
+            string d = (string)Priv("HtfDiagJson");
+            Check(d.Contains("\"asking\":false") && d.Contains("\"reaskArmed\":null,\"reasks\":1,") && !Made(m0).Any(IsHtf), "htf no storm: a failed re-ask is not asked again by ChartBridge: " + d);
+            // the page asks again itself: its request waits at the gate (the chart still loading), is taken back, and arms one re-ask
+            Msg(b, "{\"type\":\"htf\",\"root\":\"ES\",\"tf\":\"1W\",\"id\":2}");
+            Thread.Sleep(400);
+            Priv("HtfExpire");
+            Check(WaitFor(() => Of(lb, "htf").Count == 3) && Of(lb, "htf")[2].Contains("\"id\":2,") && Of(lb, "htf")[2].Contains("not asked"), "htf no storm: the page's own request, taken back too, is told why");
+            Check(((string)Priv("HtfDiagJson")).Contains("\"reaskArmed\":\"60 s after the failure\""), "htf no storm: and that request arms one re-ask");
+            // a page that left: nothing asked for it
+            Drop(b); b = null;
+            Thread.Sleep(550);
+            Priv("HtfReask", false);
+            d = (string)Priv("HtfDiagJson");
+            Check(d.Contains("\"asking\":false") && d.Contains("\"reaskArmed\":null,\"reasks\":1,") && !Made(m0).Any(IsHtf), "htf no storm: its page gone, nothing is asked: " + d);
+            // the chart loaded: a page's own ask goes to NinjaTrader as before
+            Drop(load); load = null;
+            c = Page(5503, lc);
+            Msg(c, "{\"type\":\"htf\",\"root\":\"ES\",\"tf\":\"1W\",\"id\":3}");
+            BarsRequest hw = null;
+            Check(WaitFor(() => (hw = Made(m0).FirstOrDefault(IsHtf)) != null) && hw.BarsPeriod.BarsPeriodType == BarsPeriodType.Week, "htf no storm: once the gate is free a page's own request goes as before");
+            if (hw != null) { Bars wk = new Bars(); wk.Add(new DateTime(2026, 9, 25), 6000, 6010, 5990, 6005, 10); hw.Answer(wk, ErrorCode.NoError); }
+            Check(WaitFor(() => Of(lc, "htf").Count == 1) && Of(lc, "htf")[0].Contains("\"id\":3,") && Of(lc, "htf")[0].EndsWith(",\"error\":null}"), "htf no storm: and is answered");
+        }
+        finally { Drop(b); Drop(load); Drop(c); ChartBridgeServer.HtfQueueMs = qWas; ChartBridgeServer.HtfRetryMs = rWas; ChartBridgeServer.ResetBooks(DateTime.MinValue); }
+    }
+
+    // 0.6.26, HOME's report of 2026-11-27: on Thanksgiving 2026-11-26 CME derived no equity settlement (the shared calendar's "halt"
+    // row: its trades are booked to the next trade date), so on 11-27 every index root's prior was 11-26 with p null and the Quote
+    // board's change was blank, while GC and SI, settled on 11-26, showed theirs. Now the latest settlement kept before the session
+    // is the value, said as such ("settlementMissing" in hello, "missing" in the message, "fallback" in /diag); a root with its own
+    // value for the day keeps it; none kept is null as before.
+    static void SettlementFallback()
+    {
+        ChartBridgeServer.ResetBooks(DateTime.MinValue);
+        ResetSettlements(true);
+        List<string> la = new List<string>();
+        ChartBridgeClient pa = null;
+        try
+        {
+            simNow = Et(2026, 11, 26, 13, 30, 0);   // Thanksgiving, after the 13:00 halt: the values of 11-24 and 11-25 are known
+            ChartBridgeServer.NoteSettlement("MNQ", 21000, new DateTime(2026, 11, 24), "update");
+            ChartBridgeServer.NoteSettlement("MNQ", 21100, new DateTime(2026, 11, 25), "update");
+            ChartBridgeServer.NoteSettlement("NQ", 25000, new DateTime(2026, 11, 25), "update");
+            ChartBridgeServer.NoteSettlement("NQ", 25050, new DateTime(2026, 11, 26), "update");   // stands for GC and SI: settled on 11-26
+            Check(HelloOf("MNQ").EndsWith(SetOf("MNQ", "21100", "2026-11-25")), "settlement fallback: in the Thanksgiving session the prior is 11-25's, as before: " + HelloOf("MNQ"));
+            pa = Page(5601, la);
+            Priv("SettlementTick");
+            int before = Of(la, "settlement").Count;
+            simNow = Et(2026, 11, 26, 18, 0, 1);    // the 11-27 session: its prior session is 11-26, which has no index settlement
+            Priv("SettlementTick");
+            Check(HelloOf("MNQ").EndsWith(",\"settlement\":21100,\"settlementDate\":\"2026-11-25\",\"settlementMissing\":\"2026-11-26\"}"),
+                "settlement fallback: on 11-27 MNQ's prior session (11-26) has no settlement: 11-25's is the value, its date, and the day with none (0.6.25: null): " + HelloOf("MNQ"));
+            Check(HelloOf("NQ").EndsWith(SetOf("NQ", "25050", "2026-11-26")) && HelloOf("ES").EndsWith(SetOf("ES", "null", "2026-11-26")),
+                "settlement fallback: a root settled on 11-26 keeps its own (as GC and SI did); one with none kept is null, never a guess: " + HelloOf("NQ") + " " + HelloOf("ES"));
+            List<string> sent = Of(la, "settlement").Skip(before).ToList();
+            Check(sent.Contains("{\"type\":\"settlement\",\"root\":\"MNQ\",\"p\":21100,\"date\":\"2026-11-25\",\"missing\":\"2026-11-26\"}") && sent.Contains(Msg("NQ", "25050", "2026-11-26")),
+                "settlement fallback: at the 18:00 roll the pages are told (MNQ with missing): " + string.Join(" ", sent));
+            Check(((string)Priv("DiagJson")).Contains("\"MNQ\":{\"prior\":{\"date\":\"2026-11-26\",\"p\":null,\"fallback\":{\"date\":\"2026-11-25\",\"p\":21100}},\"byDate\":{\"2026-11-24\":21000,\"2026-11-25\":21100}"),
+                "settlement fallback: /diag keeps the prior's own day and p null, and names the fallback");
+            Priv("SettlementTick");
+            Check(Of(la, "settlement").Count == before + sent.Count, "settlement fallback: told once, not every second");
+            ChartBridgeServer.NoteSettlement("MNQ", 21150, new DateTime(2026, 11, 26), "update");   // a value for 11-26 after all: it is the prior
+            Check(WaitFor(() => Of(la, "settlement").Contains(Msg("MNQ", "21150", "2026-11-26"))) && HelloOf("MNQ").EndsWith(SetOf("MNQ", "21150", "2026-11-26")),
+                "settlement fallback: a value dated 11-26 replaces the fallback, with no missing");
+        }
+        finally { Drop(pa); ResetSettlements(true); ChartBridgeServer.ResetBooks(DateTime.MinValue); }
     }
 
     // ------------------------------------------------------------ the weekly profile
