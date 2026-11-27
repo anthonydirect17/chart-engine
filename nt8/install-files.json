@@ -20,6 +20,11 @@
   ],
   "www": [
     { "from": "live/index.html", "to": "index.html" },
+    { "from": "live/manifest.json", "to": "manifest.json" },
+    { "from": "live/icons/app-192.png", "to": "icons/app-192.png" },
+    { "from": "live/icons/app-512.png", "to": "icons/app-512.png" },
+    { "from": "live/icons/app-maskable-512.png", "to": "icons/app-maskable-512.png" },
+    { "from": "live/icons/favicon-32.png", "to": "icons/favicon-32.png" },
     { "from": "live/single.html", "to": "single.html" },
     { "from": "live/live.js", "to": "live.js" },
     { "from": "live/live.css", "to": "live.css" },
